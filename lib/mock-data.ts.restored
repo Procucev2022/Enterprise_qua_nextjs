@@ -1,0 +1,1020 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+];
+
+export const INITIAL_VENDOR_OPPORTUNITIES: VendorOpportunity[] = [
+  {
+    id: 'opp-1',
+    rfqNumber: 'RFQ-2026-00421',
+    title: 'Centrifugal Water Pumps (500 GPM) & Flanged Valves',
+    buyer: 'Procucev Global Client (Energy & Utilities Division)',
+    deadline: '2026-08-25',
+    daysRemaining: 1,
+    type: 'direct_invitation',
+    estimatedValue: '$130,000 - $150,000',
+    deliveryLocation: 'Navi Mumbai Industrial Zone / CIF Site',
+    status: 'pending_bid',
+    lineItems: [
+      {
+        id: 'li-1',
+        description: 'Centrifugal Water Pump 500 GPM (15 HP Motor, ANSI Flanged)',
+        quantity: 12,
+        unitPrice: 10950,
+        leadTimeDays: 10,
+        uploadedDocument: 'Datasheet_Pump_500GPM_Apex.pdf',
+        complianceDoc: 'ANSI_B73_Compliance_Cert.pdf',
+        marketBandStatus: 'optimal',
+        paymentTerms: 'Net 30 Days',
+      },
+      {
+        id: 'li-2',
+        description: 'Flanged Gate Valve 4-inch Class 150 (ASTM A216 WCB)',
+        quantity: 24,
+        unitPrice: 850,
+        leadTimeDays: 5,
+        uploadedDocument: 'Datasheet_GateValve_4in.pdf',
+        complianceDoc: 'API_600_Inspection_Report.pdf',
+        marketBandStatus: 'optimal',
+        paymentTerms: 'Net 30 Days',
+      },
+    ],
+  },
+  {
+    id: 'opp-2',
+    rfqNumber: 'RFQ-2026-00420',
+    title: 'HVAC Microprocessor Digital Control Systems',
+    buyer: 'Procucev Real Estate & Infrastructure Consortium',
+    deadline: '2026-08-28',
+    daysRemaining: 4,
+    type: 'direct_invitation',
+    deliveryLocation: 'Bengaluru Tech Park Phase 2',
+    status: 'pending_bid',
+    lineItems: [
+      {
+        id: 'li-3',
+        description: 'BACnet IP Direct Digital Controller DDC-400',
+        quantity: 8,
+        unitPrice: 8200,
+        leadTimeDays: 12,
+        marketBandStatus: 'optimal',
+        paymentTerms: 'Net 30 Days',
+      },
+    ],
+  },
+  {
+    id: 'opp-3',
+    rfqNumber: 'RFQ-2026-00415',
+    title: 'Structural High-Tensile Steel Beams & Columns (IS 2062 E350)',
+    buyer: 'Procucev Network Marketplace',
+    deadline: '2026-09-05',
+    daysRemaining: 12,
+    type: 'network_marketplace',
+    deliveryLocation: 'Mumbai Port Logistics Terminal',
+    status: 'pending_bid',
+    lineItems: [
+      {
+        id: 'li-4',
+        description: 'Heavy Structural H-Beams 300x300mm',
+        quantity: 150,
+        unitPrice: 1600,
+        leadTimeDays: 15,
+        marketBandStatus: 'optimal',
+        paymentTerms: 'LC at sight / Net 30',
+      },
+    ],
+  },
+];
+
+export const INITIAL_AUDIT_LOG: AuditLogEntry[] = [
+  {
+    id: 'aud-101',
+    timestamp: '2026-08-19 11:30:10 UTC',
+    user: 'client@procucev.com (Enterprise Approver)',
+    action: 'Approved PO Generation & Dispatched Contract for RFQ-2026-00421 ($131,400.00)',
+    rfqNumber: 'RFQ-2026-00421',
+    shaSignature: 'c7d1e3a985f621b0e49c812d4a7f55e0921bc3d49f018a7c2b53e6144f5592a1',
+    status: 'VERIFIED',
+    ipAddress: '104.42.189.44',
+  },
+  {
+    id: 'aud-102',
+    timestamp: '2026-08-19 11:02:45 UTC',
+    user: 'vendor@apex.com (Apex Supplies Ltd.)',
+    action: 'Submitted Line-Item Quotation & Technical Compliance Sheet ($10,950/unit)',
+    rfqNumber: 'RFQ-2026-00421',
+    shaSignature: 'f4e2b09a41c2847d819e652a901bb432c7104f981e7d824a0b25c8908a9011de',
+    status: 'VERIFIED',
+    ipAddress: '49.36.120.18',
+  },
+  {
+    id: 'aud-103',
+    timestamp: '2026-08-19 10:15:22 UTC',
+    user: 'client@procucev.com (Enterprise Buyer)',
+    action: 'Created RFQ-2026-00421 (Mode 2: Hybrid Sourced Pool Selected)',
+    rfqNumber: 'RFQ-2026-00421',
+    shaSignature: 'a8f9c10427de83f5b01859c240938b21ca52093e4f1837d92840ac3b210087fe',
+    status: 'VERIFIED',
+    ipAddress: '104.42.189.44',
+  },
+  {
+    id: 'aud-104',
+    timestamp: '2026-08-19 09:15:00 UTC',
+    user: 'ai-engine@procucev.internal (Azure Function)',
+    action: 'OCR Document Ingestion completed with 98.4% entity confidence',
+    rfqNumber: 'RFQ-2026-00425',
+    shaSignature: '2b73f8a01948ce7139a04f21e548d901a5b820cd3948ef01746201ba8314ff90',
+    status: 'VERIFIED',
+    ipAddress: '10.0.4.12',
+  },

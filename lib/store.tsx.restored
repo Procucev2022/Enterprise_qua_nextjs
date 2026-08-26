@@ -1,0 +1,500 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  setCurrentRole: (role: UserRole) => void;
+  isLoggedIn: boolean;
+  setIsLoggedIn: (loggedIn: boolean) => void;
+  currentMode: SourcingMode;
+  setCurrentMode: (mode: SourcingMode) => void;
+  activeTab: string;
+  setActiveTab: (tab: string) => void;
+  rfqs: RFQItem[];
+  aiFeed: AIBotFeedItem[];
+  vendorOpportunities: VendorOpportunity[];
+  auditLogs: AuditLogEntry[];
+  azureHealth: AzureServiceHealth[];
+  systemConfig: SystemConfig;
+  setSystemConfig: React.Dispatch<React.SetStateAction<SystemConfig>>;
+  
+  // Actions
+  addNewRFQ: (rfq: Omit<RFQItem, 'id' | 'createdAt' | 'quotes' | 'quotesCount' | 'status' | 'chasingActive'>) => RFQItem;
+  triggerWhatsAppChaser: (rfqNumber: string, vendorName?: string) => void;
+  triggerChannelChaser: (rfqNumber: string, channel: 'call' | 'whatsapp' | 'sms', vendorName?: string, customNote?: string) => void;
+  triggerBatchChannelChaser: (rfqNumber: string, channels: ('call' | 'whatsapp' | 'sms')[]) => void;
+  submitVendorBid: (rfqNumber: string, unitPrice: number, leadTimeDays: number, remarks: string) => void;
+  approvePO: (rfqNumber: string, vendorName: string, amount: number) => void;
+  addAuditLog: (action: string, rfqNumber?: string, user?: string) => void;
+  addFeedItem: (title: string, message: string, type: AIBotFeedItem['type'], rfqNumber?: string, recipient?: string, channel?: 'call' | 'whatsapp' | 'sms', channelDetails?: AIBotFeedItem['channelDetails']) => void;
+  selectedRFQForMatrix: RFQItem | null;
+  setSelectedRFQForMatrix: (rfq: RFQItem | null) => void;
+  selectedRFQForDeepDive: RFQItem | null;
+  setSelectedRFQForDeepDive: (rfq: RFQItem | null) => void;
+  deepDiveModalOpen: boolean;
+  setDeepDiveModalOpen: (open: boolean) => void;
+  vendorEvaluations: VendorEvaluationRecord[];
+  addVendorEvaluation: (record: VendorEvaluationRecord) => void;
+  selectedVendorEvaluation: VendorEvaluationRecord | null;
+  setSelectedVendorEvaluation: (evalRecord: VendorEvaluationRecord | null) => void;
+  evaluationModalOpen: boolean;
+  setEvaluationModalOpen: (open: boolean) => void;
+  openVendorEvaluationSummary: (evalRecord: VendorEvaluationRecord) => void;
+
+  // Theme
+  theme: 'light' | 'dark';
+  setTheme: (theme: 'light' | 'dark') => void;
+  toggleTheme: () => void;
+
+  // Toast notifications
+  toastMessage: { title: string; description: string; type: 'success' | 'info' | 'warning' } | null;
+  showToast: (title: string, description: string, type?: 'success' | 'info' | 'warning') => void;
+  dismissToast: () => void;
+
+  // Subscription and Quotas
+  remainingFreeRFQs: number;
+  setRemainingFreeRFQs: React.Dispatch<React.SetStateAction<number>>;
+  activeSubscription: 'free_trial' | 'version_1' | 'version_2' | 'version_3';
+  setActiveSubscription: React.Dispatch<React.SetStateAction<'free_trial' | 'version_1' | 'version_2' | 'version_3'>>;
+  vendorSubscription: VendorSubscriptionPlan;
+  setVendorSubscription: React.Dispatch<React.SetStateAction<VendorSubscriptionPlan>>;
+  vendorRfqDownloadsUsed: number;
+  setVendorRfqDownloadsUsed: React.Dispatch<React.SetStateAction<number>>;
+  vendorCatalogue: any[];
+  setVendorCatalogue: React.Dispatch<React.SetStateAction<any[]>>;
+}
+
+const AppContext = createContext<AppContextType | undefined>(undefined);
+
+// Helper to generate realistic SHA-256 format strings
+function generateShaHash(): string {
+  const chars = '0123456789abcdef';
+  let hash = '';
+  for (let i = 0; i < 64; i++) {
+    hash += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return hash;
+}
+
+export function AppProvider({ children }: { children: React.ReactNode }) {
+  const [currentRole, setCurrentRole] = useState<UserRole>('buyer');
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
+  const [currentMode, setCurrentMode] = useState<SourcingMode>('mode_2');
+  const [activeTab, setActiveTab] = useState<string>('command_center');
+  const [theme, setTheme] = useState<'light' | 'dark'>('light');
+
+  // Subscription State
+  const [remainingFreeRFQs, setRemainingFreeRFQs] = useState<number>(5);
+  const [activeSubscription, setActiveSubscription] = useState<'free_trial' | 'version_1' | 'version_2' | 'version_3'>('free_trial');
+  const [vendorSubscription, setVendorSubscription] = useState<VendorSubscriptionPlan>('premium');
+  const [vendorRfqDownloadsUsed, setVendorRfqDownloadsUsed] = useState<number>(3);
+
+  const toggleTheme = () => {
+    setTheme((prev) => {
+      const next = prev === 'light' ? 'dark' : 'light';
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('procucev_theme', next);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+      'Multi-Channel Batch Broadcast Active!',
+      `AI chasing dispatched across ${channels.map((c) => c.toUpperCase()).join(' + ')} for ${rfqNumber}.`,
+      'success'
+    );
+  };
+
+  const triggerWhatsAppChaser = (rfqNumber: string, vendorName = 'Apex Supplies Ltd.') => {
+    triggerChannelChaser(rfqNumber, 'whatsapp', vendorName);
+  };
+
+  const submitVendorBid = (
+    rfqNumber: string,
+    unitPrice: number,
+    leadTimeDays: number,
+    remarks: string
+  ) => {
+    const newQuote: QuoteComparison = {
+      vendorId: `v-${Date.now()}`,
+      vendorName: 'Apex Supplies Ltd. (Verified)',
+      vendorCategory: 'Procucev - AI Rec',
+      unitPrice,
+      totalPrice: unitPrice * 12,
+      leadTimeDays,
+      aiMatchScore: 95,
+      isBestPrice: true,
+      isPreferred: true,
+      warrantyYears: 3,
+      complianceStatus: 'Fully Compliant',
+      paymentTerms: 'Net 30 Days',
+      remarks,
+    };
+
+    setRfqs((prev) =>
+      prev.map((r) => {
+        if (r.rfqNumber === rfqNumber) {
+          const updatedQuotes = [...r.quotes.map(q => ({ ...q, isBestPrice: false, isPreferred: false })), newQuote];
+          return {
+            ...r,
+            quotesCount: updatedQuotes.length,
+            status: 'AI Recommended',
+            quotes: updatedQuotes,
+            aiScore: 95,
+          };
+        }
+        return r;
+      })
+    );
+
+    setVendorOpportunities((prev) =>
+      prev.map((o) => (o.rfqNumber === rfqNumber ? { ...o, status: 'submitted' } : o))
+    );
+
+    addFeedItem(
+      `Bid Submitted by Apex Supplies Ltd.`,
+      `Apex Supplies submitted line-item quotation ($${unitPrice.toLocaleString()}/unit, ${leadTimeDays}d lead time). AI Score: 95%.`,
+      'scoring',
+      rfqNumber,
+      'Apex Supplies Ltd.'
+    );
+
+    addAuditLog(
+      `Apex Supplies Ltd. submitted verified quotation for ${rfqNumber} ($${unitPrice.toLocaleString()})`,
+      rfqNumber,
+      'vendor@apex.com'
+    );
+
+    showToast(
+      'Quotation Submitted Successfully!',
+      `Your bid for ${rfqNumber} has been validated and injected into the Buyer Comparative Matrix.`,
+      'success'
+    );
+  };
+
+  const approvePO = (rfqNumber: string, vendorName: string, amount: number) => {
+    setRfqs((prev) =>
+      prev.map((r) => (r.rfqNumber === rfqNumber ? { ...r, status: 'PO Generated' } : r))
+    );
+
+    addFeedItem(
+      `Purchase Order Generated: ${rfqNumber}`,
+      `Approved PO generated for ${vendorName} totaling $${amount.toLocaleString()}. Dispatched to ERP & Vendor Portal.`,
+      'approval',
+      rfqNumber
+    );
+
+    addAuditLog(
+      `Approved PO Generation & Dispatched Contract for ${rfqNumber} to ${vendorName} ($${amount.toLocaleString()})`,
+      rfqNumber
+    );
+
+    showToast(
+      'Purchase Order Issued!',
+      `Official PO contract generated and signed with SHA-256 digital stamp for ${vendorName}.`,
+      'success'
+    );
+  };
+
+  const addNewRFQ = (
+    rfqData: Omit<RFQItem, 'id' | 'createdAt' | 'quotes' | 'quotesCount' | 'status' | 'chasingActive'>
+  ) => {
+    // Subscription Limits Validation
+    if (activeSubscription === 'none') {
+      showToast('Subscription Upgrade Required', 'Your organization domain has already claimed its free trial. You must subscribe to a sourcing mode to dispatch RFQs.', 'warning');
+      throw new Error('Subscription required');
+    }
+
+    if (activeSubscription === 'free_trial') {
+      if (rfqData.sourcingMode !== 'mode_1') {
+        showToast('Subscription Upgrade Required', 'Your Free Trial is restricted strictly to Version 1 (Mode 1) sourcing. Please upgrade to a paid subscription to access other modes.', 'warning');
+        throw new Error('Subscription required');
+      }
+      if (remainingFreeRFQs <= 0) {
+        showToast('Free Trial Expired', 'You have used all 5 free Version 1 RFQs. Please subscribe to a paid plan to continue.', 'warning');
+        throw new Error('Free trial limits reached');
+      }
+      setRemainingFreeRFQs(prev => prev - 1);
+    } else {
+      // Paid subscription check
+      if (rfqData.sourcingMode === 'mode_2' && activeSubscription === 'version_1') {
+        showToast('Upgrade Required', 'Version 2 (Mode 2) Sourcing requires a Version 2 (Hybrid Network) Plan subscription.', 'warning');
+        throw new Error('Subscription required');
+      }
+      if (rfqData.sourcingMode === 'mode_3' && activeSubscription !== 'version_3') {
+        showToast('Upgrade Required', 'Version 3 (Mode 3) Sourcing requires a Version 3 (Autonomous AI) Plan subscription.', 'warning');
+        throw new Error('Subscription required');
+      }
