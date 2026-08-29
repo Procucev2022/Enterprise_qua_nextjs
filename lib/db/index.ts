@@ -2,13 +2,23 @@ import { Pool, PoolConfig, QueryResult, QueryResultRow } from 'pg';
 import fs from 'fs';
 import path from 'path';
 
+function sanitizeConnectionString(raw: string): string {
+  if (!raw) return '';
+  if (raw.includes('sslmode=require') && !raw.includes('uselibpqcompat=')) {
+    const separator = raw.includes('?') ? '&' : '?';
+    return `${raw}${separator}uselibpqcompat=true`;
+  }
+  return raw;
+}
+
 // Get database connection string from standard environment variables
-const connectionString =
+const connectionString = sanitizeConnectionString(
   process.env.DATABASE_URL ||
   process.env.POSTGRES_URL ||
   process.env.POSTGRES_PRISMA_URL ||
   process.env.POSTGRES_URL_NON_POOLING ||
-  '';
+  ''
+);
 
 export type DBProvider = 'vercel_postgres' | 'neon' | 'supabase' | 'azure_postgres' | 'aws_rds' | 'local_postgres' | 'in_memory_mock';
 
