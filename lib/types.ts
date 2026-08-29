@@ -159,8 +159,8 @@ export interface AIBotFeedItem {
   id: string;
   timestamp: string;
   timeAgo: string;
-  type: 'call' | 'whatsapp' | 'sms' | 'email' | 'scoring' | 'ingestion' | 'escalation' | 'approval' | 'system';
-  channel?: 'call' | 'whatsapp' | 'sms' | 'email' | 'system';
+  type: 'call' | 'whatsapp' | 'sms' | 'email' | 'scoring' | 'ingestion' | 'escalation' | 'approval' | 'system' | 'invitation' | 'reminder';
+  channel?: 'call' | 'whatsapp' | 'sms' | 'email' | 'system' | 'invitation' | 'reminder';
   title: string;
   message: string;
   recipient?: string;

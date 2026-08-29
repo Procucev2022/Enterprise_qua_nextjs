@@ -368,12 +368,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const emailId = `EML-ONBOARD-${Date.now().toString().slice(-6)}-${vendor.id}`;
     const nextDate = vendor.nextReminderDate || new Date(Date.now() + 3 * 86400000).toISOString().substring(0, 10) + ' (Day 3)';
 
-    const hasMappedCategories =
+    const hasMappedCategories = Boolean(
       vendor.majorCategory &&
       vendor.majorCategory !== 'Uncategorized (No Past POs)' &&
       vendor.majorCategory !== '(None Assigned by Buyer)' &&
       vendor.minorCategories &&
-      vendor.minorCategories.length > 0;
+      vendor.minorCategories.length > 0
+    );
 
     const assignedMajor = hasMappedCategories ? vendor.majorCategory! : '(None Assigned by Buyer)';
     const assignedMinors = hasMappedCategories ? vendor.minorCategories! : [];
@@ -1472,7 +1473,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         showToast('Free RFQ Dispatched', `Used 1 Free RFQ via ${modeName}. You have ${next} free RFQs remaining across all versions.`, 'success');
         return next;
       });
-    } else if (activeSubscription !== 'none') {
+    } else {
       if (rfqData.sourcingMode === 'mode_2' && activeSubscription === 'version_1') {
         showToast('Upgrade Required', 'Version 2 (Mode 2) Sourcing requires a Version 2 (Hybrid Network) Plan subscription.', 'warning');
         throw new Error('Subscription required');

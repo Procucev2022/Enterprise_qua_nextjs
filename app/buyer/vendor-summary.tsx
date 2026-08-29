@@ -421,7 +421,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     </div>
                     <button
                       type="button"
-                      onClick={() => openRatingRevisionEmailModal(vendor.latestRatingRevision)}
+                      onClick={() => vendor.latestRatingRevision && openRatingRevisionEmailModal(vendor.latestRatingRevision)}
                       className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 shrink-0"
                     >
                       <Mail size={11} /> View Dispatched Email Notice

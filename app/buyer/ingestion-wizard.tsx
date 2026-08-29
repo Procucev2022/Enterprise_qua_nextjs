@@ -669,6 +669,32 @@ export default function IngestionWizard({ onComplete, onCancel }: IngestionWizar
     );
   };
 
+  const autoCategorizeItem = (name: string, specs?: string): { majorCategory: string; minorCategory: string } => {
+    const text = `${name} ${specs || ''}`.toLowerCase();
+    if (text.includes('pump') || text.includes('impeller')) {
+      return { majorCategory: 'Engineering Spares - Mechanical', minorCategory: 'Pumps & Accessories' };
+    }
+    if (text.includes('valve') || text.includes('fitting') || text.includes('hose')) {
+      return { majorCategory: 'Engineering Spares - Mechanical', minorCategory: 'Hoses, Valves & Fittings' };
+    }
+    if (text.includes('compressor')) {
+      return { majorCategory: 'Engineering Spares - Mechanical', minorCategory: 'Compressors & Accessories' };
+    }
+    if (text.includes('pipe') || text.includes('flange')) {
+      return { majorCategory: 'Engineering Spares - Mechanical', minorCategory: 'Pipes & Pipe Fittings' };
+    }
+    if (text.includes('panel') || text.includes('breaker') || text.includes('transformer') || text.includes('switchgear')) {
+      return { majorCategory: 'Engineering Spares - Electrical', minorCategory: 'Panels' };
+    }
+    if (text.includes('motor')) {
+      return { majorCategory: 'Engineering Spares - Electrical', minorCategory: 'Motors' };
+    }
+    if (text.includes('bearing')) {
+      return { majorCategory: 'Engineering Spares - Mechanical', minorCategory: 'Bearings' };
+    }
+    return { majorCategory: 'Engineering Spares - Mechanical', minorCategory: 'Machinery Parts' };
+  };
+
   const handleAutoCategorizeAll = () => {
     setEntities((prev) =>
       prev.map((item) => {
@@ -725,7 +751,7 @@ export default function IngestionWizard({ onComplete, onCancel }: IngestionWizar
           majorCategory: v.majorCategory,
           minorCategories: v.minorCategories,
           location: v.location,
-          rating: v.rating || undefined,
+          rating: v.rating || 4.5,
           source: 'procucev_network' as const,
           matchReason: v.rating
             ? `Mode 3 Double-Blind AI Matched (${v.matchScore}%)`
