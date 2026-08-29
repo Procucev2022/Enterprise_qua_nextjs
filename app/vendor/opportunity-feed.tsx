@@ -45,6 +45,7 @@ export default function OpportunityFeed({
     vendorSelfEvaluationCompleted,
     vendorSelfEvaluationScore,
     isVendorEvaluationFeeWaived,
+    buyerAccounts,
   } = useApp();
 
   const [showUpgradeModal, setShowUpgradeModal] = React.useState(false);
@@ -75,38 +76,34 @@ export default function OpportunityFeed({
   const [rfqSearchTermNet, setRfqSearchTermNet] = React.useState('');
   const [filterCatalogueMatchesNet, setFilterCatalogueMatchesNet] = React.useState(false);
 
-  // Buyer Companies Roster Ingestion Status
-  const BUYER_ROSTER_UPLOAD_STATUS: Record<string, boolean> = {
-    'Larsen & Toubro Ltd. (L&T)': true,
-    'Tata Steel Procurement': true,
-    'Reliance Industries Ltd. (RIL)': false,
-    'Adani Group Sourcing': false,
-  };
-
+  // Dynamic Buyer Organization & Owner Lookups from Database
   const getParentCompany = (buyerName: string) => {
-    if (buyerName.includes('Energy') || buyerName.includes('Global Client')) {
-      return 'Larsen & Toubro Ltd. (L&T)';
-    }
-    if (buyerName.includes('Consortium') || buyerName.includes('Real Estate')) {
-      return 'Reliance Industries Ltd. (RIL)';
-    }
-    if (buyerName.includes('Marketplace') || buyerName.includes('Network')) {
-      return 'Tata Steel Procurement';
-    }
-    return 'Larsen & Toubro Ltd. (L&T)'; // Default
+    if (!buyerAccounts || buyerAccounts.length === 0) return buyerName;
+    const match = buyerAccounts.find((a) =>
+      a.organizationName.toLowerCase().includes(buyerName.toLowerCase()) ||
+      buyerName.toLowerCase().includes(a.organizationName.toLowerCase()) ||
+      a.contactPerson.toLowerCase().includes(buyerName.toLowerCase())
+    );
+    return match ? match.organizationName : buyerName;
   };
 
   const getBuyerName = (buyerName: string) => {
-    if (buyerName.includes('Energy') || buyerName.includes('Global Client')) {
-      return 'Rajesh Nair';
-    }
-    if (buyerName.includes('Consortium') || buyerName.includes('Real Estate')) {
-      return 'Sunita Sharma';
-    }
-    if (buyerName.includes('Marketplace') || buyerName.includes('Network')) {
-      return 'Amit Kumar Tata';
-    }
-    return 'Rajesh Nair'; // Default
+    if (!buyerAccounts || buyerAccounts.length === 0) return buyerName;
+    const match = buyerAccounts.find((a) =>
+      a.organizationName.toLowerCase().includes(buyerName.toLowerCase()) ||
+      buyerName.toLowerCase().includes(a.organizationName.toLowerCase()) ||
+      a.contactPerson.toLowerCase().includes(buyerName.toLowerCase())
+    );
+    return match ? match.contactPerson : buyerName;
+  };
+
+  const isBuyerRosterActive = (parentCompany: string) => {
+    if (!buyerAccounts || buyerAccounts.length === 0) return true;
+    const match = buyerAccounts.find((a) =>
+      a.organizationName.toLowerCase().includes(parentCompany.toLowerCase()) ||
+      parentCompany.toLowerCase().includes(a.organizationName.toLowerCase())
+    );
+    return match ? (match.totalRFQsCreated ?? 0) > 0 || match.status === 'ACTIVE_VERIFIED' : true;
   };
 
   // Helper to map RFQs to Major and Minor Sourcing categories dynamically
@@ -219,7 +216,7 @@ export default function OpportunityFeed({
     const cats = getOpportunityCategories(opp);
     
     // Check roster upload status first
-    if (!BUYER_ROSTER_UPLOAD_STATUS[parentCompany]) {
+    if (!isBuyerRosterActive(parentCompany)) {
       return false; 
     }
 
@@ -259,7 +256,7 @@ export default function OpportunityFeed({
     const cats = getOpportunityCategories(opp);
     
     // Check roster upload status first
-    if (!BUYER_ROSTER_UPLOAD_STATUS[parentCompany]) {
+    if (!isBuyerRosterActive(parentCompany)) {
       return false; 
     }
 
@@ -473,13 +470,11 @@ export default function OpportunityFeed({
                   className="select py-1 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-gray-200"
                 >
                   <option value="all">🌐 All Eligible Companies</option>
-                  {Object.keys(BUYER_ROSTER_UPLOAD_STATUS)
-                    .filter((company) => BUYER_ROSTER_UPLOAD_STATUS[company])
-                    .map((company) => (
-                      <option key={company} value={company}>
-                        🏢 {company.split(' ')[0]}
-                      </option>
-                    ))}
+                  {(buyerAccounts || []).map((acc) => (
+                    <option key={acc.id} value={acc.organizationName}>
+                      🏢 {acc.organizationName.split(' ')[0]}
+                    </option>
+                  ))}
                 </select>
               </div>
 

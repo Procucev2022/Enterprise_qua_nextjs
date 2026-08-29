@@ -11,6 +11,13 @@ export async function GET() {
       return NextResponse.json({ success: true, source: 'default', data: INITIAL_SYSTEM_CONFIG });
     }
     const res = await query(`SELECT value FROM system_config WHERE key = 'main_config' LIMIT 1`);
+    if (res.rows.length === 0) {
+      await query(
+        `INSERT INTO system_config (id, key, value, updated_at) VALUES ('sys-cfg-1', 'main_config', $1, CURRENT_TIMESTAMP) ON CONFLICT (key) DO NOTHING`,
+        [JSON.stringify(INITIAL_SYSTEM_CONFIG)]
+      );
+      return NextResponse.json({ success: true, source: 'postgresql', data: INITIAL_SYSTEM_CONFIG });
+    }
     const config = res.rows[0]?.value || INITIAL_SYSTEM_CONFIG;
     return NextResponse.json({ success: true, source: 'postgresql', data: config });
   } catch (error: any) {

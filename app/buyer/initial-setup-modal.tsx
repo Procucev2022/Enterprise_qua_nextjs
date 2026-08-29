@@ -36,207 +36,6 @@ import {
   Database,
 } from 'lucide-react';
 
-// Sample Master Vendors File (ERP Vendor Master Dump)
-const SAMPLE_VENDOR_MASTER: VendorMasterUploadRecord[] = [
-  {
-    id: 'vm-1',
-    vendorCode: 'VND-1001',
-    companyName: 'Apex Supplies Ltd.',
-    contactPerson: 'Rajesh Nair',
-    email: 'rajesh@apexsupplies.in',
-    phone: '+91 98201 44820',
-    address: 'Plot 42, MIDC Industrial Area, Thane, Mumbai, MH',
-    gstNumber: '27AAACA1928K1Z4',
-    vendorRatingScore: 95,
-  },
-  {
-    id: 'vm-2',
-    vendorCode: 'VND-1002',
-    companyName: 'Kiran Valve Industries',
-    contactPerson: 'Amit Kumar',
-    email: 'amit@kiranvalves.com',
-    phone: '+91 97653 21098',
-    address: 'Sector 7, Bhosari Industrial Estate, Pune, MH',
-    gstNumber: '27AAACK3921P1Z9',
-    vendorRatingScore: 78,
-  },
-  {
-    id: 'vm-3',
-    vendorCode: 'VND-1003',
-    companyName: 'TechnoForce Engineering Ltd',
-    contactPerson: 'Sunita Reddy',
-    email: 'sunita@technoforce.in',
-    phone: '+91 87654 32109',
-    address: 'TSIIC Industrial Park, Phase II, Hyderabad, TS',
-    gstNumber: '36AAACT9920P1Z8',
-    vendorRatingScore: 92,
-  },
-  {
-    id: 'vm-4',
-    vendorCode: 'VND-1004',
-    companyName: 'Precision Pumps & Motors Pvt Ltd',
-    contactPerson: 'Vikram Shah',
-    email: 'vikram@precisionpumps.co.in',
-    phone: '+91 99876 54321',
-    address: 'GIDC Industrial Estate, Vatva, Ahmedabad, GJ',
-    gstNumber: '24AAACP4912J1Z2',
-    vendorRatingScore: 84,
-  },
-  {
-    id: 'vm-5',
-    vendorCode: 'VND-1005',
-    companyName: 'Everest Steel & Infra Structures',
-    contactPerson: 'Harish Mehta',
-    email: 'harish@evereststeel.in',
-    phone: '+91 98111 22334',
-    address: 'Plot 18, Sanand Industrial Area, Ahmedabad, GJ',
-    gstNumber: '24AAACE8891N1Z0',
-    vendorRatingScore: 88,
-  },
-  {
-    id: 'vm-6',
-    vendorCode: 'VND-1006',
-    companyName: 'Delta Valve Systems Ltd.',
-    contactPerson: 'Vikram Joshi',
-    email: 'v.joshi@deltavalves.in',
-    phone: '+91 98220 18492',
-    address: 'MIDC Chakan Industrial Corridor, Pune, MH',
-    gstNumber: '27AABCD3920M1Z8',
-    vendorRatingScore: 96,
-  },
-  // Vendors with contact details in Vendor Master BUT NO matching PO history in PO dump
-  {
-    id: 'vm-7',
-    vendorCode: 'VND-1007',
-    companyName: 'Vortex Hydraulic & Pneumatic Systems',
-    contactPerson: 'Nikhil Rane',
-    email: 'nikhil@vortexhydraulics.in',
-    phone: '+91 98450 11920',
-    address: 'Peenya Industrial Area, Phase III, Bangalore, KA',
-    gstNumber: '29AAACV8841P1Z5',
-    vendorRatingScore: 82, // Optional rating
-  },
-  {
-    id: 'vm-8',
-    vendorCode: 'VND-1008',
-    companyName: 'Nova Electrical Spares & Cable Trays',
-    contactPerson: 'Pooja Deshmukh',
-    email: 'sales@novaelectricals.com',
-    phone: '+91 97230 44510',
-    address: 'Makarpura GIDC Industrial Area, Vadodara, GJ',
-    gstNumber: '24AAACN4419K1Z1',
-    vendorRatingScore: undefined, // Rating not provided (optional)
-  },
-];
-
-// Sample Historical Purchase Orders (PO Line Items Dump)
-const SAMPLE_PO_LINE_ITEMS: PurchaseOrderLineItemRecord[] = [
-  {
-    id: 'po-1',
-    poNumber: 'PO-2025-00891',
-    poDate: '2025-04-12',
-    vendorIdentifier: 'Apex Supplies Ltd.',
-    itemName: 'Centrifugal Water Pump 500 GPM (15 HP Motor)',
-    specs: 'SS316 Impeller, ANSI Flanged, 150 PSI',
-    quantity: 12,
-    unit: 'Units',
-    unitPrice: 12500,
-    totalSpend: 150000,
-    department: 'Mechanical Maintenance',
-  },
-  {
-    id: 'po-2',
-    poNumber: 'PO-2025-01042',
-    poDate: '2025-06-20',
-    vendorIdentifier: 'Apex Supplies Ltd.',
-    itemName: 'Heavy Duty Industrial Compressors & Air Receivers',
-    specs: 'Screw compressor 25 CFM 8 Bar',
-    quantity: 4,
-    unit: 'Sets',
-    unitPrice: 28000,
-    totalSpend: 112000,
-    department: 'Plant Utilities',
-  },
-  {
-    id: 'po-3',
-    poNumber: 'PO-2025-01156',
-    poDate: '2025-08-04',
-    vendorIdentifier: 'Kiran Valve Industries',
-    itemName: 'Flanged Gate Valve 4-inch Class 150',
-    specs: 'ASTM A216 WCB Cast Carbon Steel Body',
-    quantity: 24,
-    unit: 'Units',
-    unitPrice: 3800,
-    totalSpend: 91200,
-    department: 'Piping & Flow Control',
-  },
-  {
-    id: 'po-4',
-    poNumber: 'PO-2025-01290',
-    poDate: '2025-09-18',
-    vendorIdentifier: 'Kiran Valve Industries',
-    itemName: 'High-Pressure Hydraulic Flexible Hoses & Fittings',
-    specs: '2-Wire Braid EN 853 2SN, 350 Bar Rating',
-    quantity: 60,
-    unit: 'Meters',
-    unitPrice: 1200,
-    totalSpend: 72000,
-    department: 'Hydraulics Workshop',
-  },
-  {
-    id: 'po-5',
-    poNumber: 'PO-2025-01431',
-    poDate: '2025-10-10',
-    vendorIdentifier: 'TechnoForce Engineering Ltd',
-    itemName: 'LV Switchgear Modular Panels with Drawout MCCB',
-    specs: '415V 3-Phase 50Hz, Form 4b separation',
-    quantity: 3,
-    unit: 'Panels',
-    unitPrice: 85000,
-    totalSpend: 255000,
-    department: 'Electrical Engineering',
-  },
-  {
-    id: 'po-6',
-    poNumber: 'PO-2025-01580',
-    poDate: '2025-11-25',
-    vendorIdentifier: 'Precision Pumps & Motors Pvt Ltd',
-    itemName: 'Submersible Dewatering Pumps & Induction Motors 7.5kW',
-    specs: 'Non-clog impeller, Cast Iron Body, IP68',
-    quantity: 8,
-    unit: 'Units',
-    unitPrice: 14500,
-    totalSpend: 116000,
-    department: 'Drainage & Utility',
-  },
-  {
-    id: 'po-7',
-    poNumber: 'PO-2025-01740',
-    poDate: '2025-12-05',
-    vendorIdentifier: 'Everest Steel & Infra Structures',
-    itemName: 'Fe500D TMT High-Yield Reinforcement Bars & PEB Frames',
-    specs: 'IS 1786 Grade Fe500D structural steel',
-    quantity: 120,
-    unit: 'Metric Tons',
-    unitPrice: 620,
-    totalSpend: 744000,
-    department: 'Civil Projects',
-  },
-  {
-    id: 'po-8',
-    poNumber: 'PO-2026-00120',
-    poDate: '2026-01-14',
-    vendorIdentifier: 'Delta Valve Systems Ltd.',
-    itemName: 'API 600 Cast Steel Gate Valves & Cryogenic Globe Valves',
-    specs: 'API 600 / ASME B16.34 compliant Class 300',
-    quantity: 16,
-    unit: 'Units',
-    unitPrice: 18500,
-    totalSpend: 296000,
-    department: 'Refinery Spares',
-  },
-];
-
 export default function InitialSetupModal() {
   const {
     initialSetupModalOpen,
@@ -245,6 +44,7 @@ export default function InitialSetupModal() {
     setHistoricalPurchaseDataPeriod,
     processHistoricalPurchaseData,
     activeBuyerAccount,
+    buyerVendors,
     showToast,
   } = useApp();
 
@@ -252,17 +52,37 @@ export default function InitialSetupModal() {
   const [selectedPeriod, setSelectedPeriod] = useState<'1_year' | '2_years' | '3_years'>(historicalPurchaseDataPeriod || '2_years');
 
   // Separate Upload States & File Handlers
-  const [storedVendors, setStoredVendors] = useState<VendorMasterUploadRecord[]>(SAMPLE_VENDOR_MASTER);
+  const [storedVendors, setStoredVendors] = useState<VendorMasterUploadRecord[]>([]);
   const [vendorMasterUploaded, setVendorMasterUploaded] = useState(true);
-  const [vendorFileName, setVendorFileName] = useState<string>('Sample_Vendor_Master_Database.xlsx');
+  const [vendorFileName, setVendorFileName] = useState<string>('Vendor_Master_Database.xlsx');
   const [isDraggingVendor, setIsDraggingVendor] = useState<boolean>(false);
   const [isParsingVendor, setIsParsingVendor] = useState<boolean>(false);
 
-  const [poLineItems, setPoLineItems] = useState<PurchaseOrderLineItemRecord[]>(SAMPLE_PO_LINE_ITEMS);
-  const [poDataUploaded, setPoDataUploaded] = useState(true);
-  const [poFileName, setPoFileName] = useState<string>(`Sample_PO_Purchase_Dump_${selectedPeriod}.xlsx`);
+  const [poLineItems, setPoLineItems] = useState<PurchaseOrderLineItemRecord[]>([]);
+  const [poDataUploaded, setPoDataUploaded] = useState(false);
+  const [poFileName, setPoFileName] = useState<string>(`PO_Purchase_Dump_${selectedPeriod}.xlsx`);
   const [isDraggingPo, setIsDraggingPo] = useState<boolean>(false);
   const [isParsingPo, setIsParsingPo] = useState<boolean>(false);
+
+  // Hydrate storedVendors from live PostgreSQL database
+  React.useEffect(() => {
+    if (buyerVendors && buyerVendors.length > 0) {
+      setStoredVendors((prev) => {
+        if (prev.length > 0 && vendorFileName !== 'Vendor_Master_Database.xlsx') return prev;
+        return buyerVendors.map((v, i) => ({
+          id: v.id || `vm-${i + 1}`,
+          vendorCode: (v as any).vendorCode || `VND-${1000 + i + 1}`,
+          companyName: v.name,
+          contactPerson: v.contactPerson || 'Procurement Lead',
+          email: v.email,
+          phone: v.phone || '+91 98000 00000',
+          address: v.location || 'Industrial Area, India',
+          gstNumber: (v as any).gstNumber || (v as any).gstin || '27AAACA0000A1Z0',
+          vendorRatingScore: (v as any).vendorRatingScore || (v.score ? Math.round(v.score) : v.rating ? Math.round(v.rating * 20) : undefined),
+        }));
+      });
+    }
+  }, [buyerVendors, vendorFileName]);
 
   const vendorFileInputRef = useRef<HTMLInputElement>(null);
   const poFileInputRef = useRef<HTMLInputElement>(null);
@@ -441,15 +261,30 @@ export default function InitialSetupModal() {
   };
 
   const resetToSampleVendorData = () => {
-    setStoredVendors(SAMPLE_VENDOR_MASTER);
-    setVendorFileName('Sample_Vendor_Master_Database.xlsx');
-    showToast('Reset Complete', 'Vendor Master reset to standard template data.', 'info');
+    if (buyerVendors && buyerVendors.length > 0) {
+      setStoredVendors(
+        buyerVendors.map((v, i) => ({
+          id: v.id || `vm-${i + 1}`,
+          vendorCode: (v as any).vendorCode || `VND-${1000 + i + 1}`,
+          companyName: v.name,
+          contactPerson: v.contactPerson || 'Procurement Lead',
+          email: v.email,
+          phone: v.phone || '+91 98000 00000',
+          address: v.location || 'Industrial Area, India',
+          gstNumber: (v as any).gstNumber || (v as any).gstin || '27AAACA0000A1Z0',
+          vendorRatingScore: (v as any).vendorRatingScore || (v.score ? Math.round(v.score) : v.rating ? Math.round(v.rating * 20) : undefined),
+        }))
+      );
+    }
+    setVendorFileName('Vendor_Master_Database.xlsx');
+    showToast('Reset Complete', 'Vendor Master reset to live database records.', 'info');
   };
 
   const resetToSamplePoData = () => {
-    setPoLineItems(SAMPLE_PO_LINE_ITEMS);
-    setPoFileName(`Sample_PO_Purchase_Dump_${selectedPeriod}.xlsx`);
-    showToast('Reset Complete', 'PO Dump reset to standard template data.', 'info');
+    setPoLineItems([]);
+    setPoFileName(`PO_Purchase_Dump_${selectedPeriod}.xlsx`);
+    setPoDataUploaded(false);
+    showToast('Reset Complete', 'PO Dump line items cleared. Please upload your spreadsheet.', 'info');
   };
 
   // Correlate and Join PO line items against stored Vendor Master

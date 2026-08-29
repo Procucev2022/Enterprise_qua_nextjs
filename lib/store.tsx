@@ -415,13 +415,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return created.length;
   };
 
-  const [vendorCatalogue, setVendorCatalogue] = useState<any[]>([
-    { id: 'prod-1', name: 'Centrifugal Water Pump (Model: ANSI-500)', category: 'Pumps & Fluid Dynamics', sku: 'SKU-FLUID-P500', specs: '500 GPM flow rate, 15 HP heavy-duty motor, ANSI Class 150 flanged connection.', unitPrice: 10950, leadTimeDays: 10, moq: 2 },
-    { id: 'prod-2', name: 'Flanged Gate Valve (4-inch, Class 150)', category: 'Valves & Flow Control', sku: 'SKU-VALVE-G150', specs: 'Cast steel body, wedge gate, flanged ends, API 600 standards compliant.', unitPrice: 850, leadTimeDays: 5, moq: 10 },
-    { id: 'prod-3', name: 'High-Pressure Ball Valve (2-inch, Class 300)', category: 'Valves & Flow Control', sku: 'SKU-VALVE-B300', specs: 'Stainless steel SS316 body, floating ball, threaded ends, PTFE seals.', unitPrice: 420, leadTimeDays: 4, moq: 15 },
-    { id: 'prod-4', name: 'Flexible Metal Expansion Joint (6-inch)', category: 'Pipes & Fittings', sku: 'SKU-PIPE-J006', specs: 'Stainless steel bellows, carbon steel flanges, absorbs thermal expansion and vibration.', unitPrice: 310, leadTimeDays: 7, moq: 5 },
-    { id: 'prod-5', name: 'Industrial Flow Sensor (Digital, BACnet)', category: 'Sensors & Instrumentation', sku: 'SKU-SENS-F200', specs: 'Electromagnetic flow meter, digital LCD readout, BACnet MS/TP integration.', unitPrice: 1250, leadTimeDays: 3, moq: 1 },
-  ]);
+  const [vendorCatalogue, setVendorCatalogue] = useState<any[]>([]);
 
   const openRFQDeepDive = (rfq: RFQItem) => {
     setSelectedRFQForDeepDive(rfq);
@@ -681,20 +675,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     );
   };
 
-  const [clientMappedCategories, setClientMappedCategories] = useState<string[]>([
-    'Pumps & Accessories',
-    'Hoses, Valves & Fittings',
-  ]);
-
-  const [vendorSelectedCategories, setVendorSelectedCategories] = useState<string[]>([
-    'Bearings & Accessories',
-    'Pumps & Accessories',
-    'Pipes & Pipe Fittings',
-    'Hoses, Valves & Fittings',
-    'Fasteners',
-    'Cables',
-    'Panels',
-  ]);
+  const [clientMappedCategories, setClientMappedCategories] = useState<string[]>([]);
+  const [vendorSelectedCategories, setVendorSelectedCategories] = useState<string[]>([]);
 
   const saveVendorProfileCategories = (email: string, clientCats: string[], vendorCats: string[]) => {
     // Limit to max 10 categories
