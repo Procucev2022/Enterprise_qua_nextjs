@@ -1,0 +1,37 @@
+{
+  "name": "procucev-enterprise-node",
+  "version": "2.0.0",
+  "description": "Procucev Enterprise (QUA AI 2.0) - Autonomous Sourcing & Procurement Intelligence Node.js Platform",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "seed": "node src/db/seed.js"
+  },
+  "keywords": [
+    "procurement",
+    "enterprise",
+    "sourcing",
+    "ai-agent",
+    "nodejs",
+    "express",
+    "rfq",
+    "qua-ai"
+  ],
+  "author": "Procucev Enterprise",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "pg": "^8.12.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nodemon": "^3.1.4",
+    "supertest": "^7.0.0"
+  }
+}
