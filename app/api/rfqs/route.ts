@@ -1,22 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getRFQsFromDB, upsertRFQInDB } from '@/lib/db/queries';
 import { pool } from '@/lib/db';
-import { INITIAL_RFQS } from '@/lib/mock-data';
 import { RFQItem } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    if (pool) {
-      const dbRfqs = await getRFQsFromDB();
-      if (dbRfqs && dbRfqs.length > 0) {
-        return NextResponse.json({ success: true, source: 'postgres', data: dbRfqs });
-      }
+    if (!pool) {
+      return NextResponse.json({ success: false, error: 'DATABASE_URL is not configured.' }, { status: 500 });
     }
-    return NextResponse.json({ success: true, source: 'memory_fallback', data: INITIAL_RFQS });
+    const dbRfqs = await getRFQsFromDB();
+    return NextResponse.json({ success: true, source: 'postgresql', data: dbRfqs });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message, data: INITIAL_RFQS });
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
 
@@ -29,10 +26,10 @@ export async function POST(req: NextRequest) {
 
     if (pool) {
       await upsertRFQInDB(body);
-      return NextResponse.json({ success: true, source: 'postgres', data: body });
+      return NextResponse.json({ success: true, source: 'postgresql', data: body });
     }
 
-    return NextResponse.json({ success: true, source: 'memory_fallback', data: body });
+    return NextResponse.json({ success: false, error: 'No database connection' }, { status: 500 });
   } catch (error: any) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }

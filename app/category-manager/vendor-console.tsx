@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQItem } from '@/lib/types';
-import { SOURCING_MODES } from '@/lib/mock-data';
+import { SOURCING_MODES } from '@/lib/constants';
 import {
   Building2,
   Users,

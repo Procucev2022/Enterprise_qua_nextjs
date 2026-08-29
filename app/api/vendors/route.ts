@@ -1,22 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getVendorsFromDB, upsertVendorInDB } from '@/lib/db/queries';
+import { getVendorsFromDB, upsertVendorInDB, insertRatingRevisionInDB } from '@/lib/db/queries';
 import { pool } from '@/lib/db';
-import { INITIAL_BUYER_VENDORS } from '@/lib/mock-data';
-import { VendorEntry } from '@/lib/types';
+import { VendorEntry, VendorRatingRevisionRecord } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    if (pool) {
-      const dbVendors = await getVendorsFromDB();
-      if (dbVendors && dbVendors.length > 0) {
-        return NextResponse.json({ success: true, source: 'postgres', data: dbVendors });
-      }
+    if (!pool) {
+      return NextResponse.json({ success: false, error: 'DATABASE_URL is not configured.' }, { status: 500 });
     }
-    return NextResponse.json({ success: true, source: 'memory_fallback', data: INITIAL_BUYER_VENDORS });
+    const dbVendors = await getVendorsFromDB();
+    return NextResponse.json({ success: true, source: 'postgresql', data: dbVendors });
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message, data: INITIAL_BUYER_VENDORS });
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
 
@@ -29,10 +26,34 @@ export async function POST(req: NextRequest) {
 
     if (pool) {
       await upsertVendorInDB(body);
-      return NextResponse.json({ success: true, source: 'postgres', data: body });
+      return NextResponse.json({ success: true, source: 'postgresql', data: body });
     }
 
-    return NextResponse.json({ success: true, source: 'memory_fallback', data: body });
+    return NextResponse.json({ success: false, error: 'No database connection' }, { status: 500 });
+  } catch (error: any) {
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const { action, vendor, revision } = body;
+
+    if (action === 'rating_revision' && revision) {
+      await insertRatingRevisionInDB(revision as VendorRatingRevisionRecord);
+      if (vendor) {
+        await upsertVendorInDB(vendor as VendorEntry);
+      }
+      return NextResponse.json({ success: true, source: 'postgresql' });
+    }
+
+    if (vendor) {
+      await upsertVendorInDB(vendor as VendorEntry);
+      return NextResponse.json({ success: true, source: 'postgresql', data: vendor });
+    }
+
+    return NextResponse.json({ success: false, error: 'Invalid action payload' }, { status: 400 });
   } catch (error: any) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }

@@ -25,17 +25,9 @@ import {
 } from './types';
 import {
   SOURCING_MODES,
-  INITIAL_RFQS,
-  INITIAL_AI_FEED,
-  INITIAL_VENDOR_OPPORTUNITIES,
-  INITIAL_AUDIT_LOG,
-  INITIAL_AZURE_HEALTH,
   INITIAL_SYSTEM_CONFIG,
-  INITIAL_VENDOR_EVALUATIONS,
-  INITIAL_BUYER_VENDORS,
-  INITIAL_BUYER_ACCOUNTS,
-  MASTER_PLATFORM_VENDORS,
-} from './mock-data';
+  INITIAL_AZURE_HEALTH,
+} from './constants';
 
 interface AppContextType {
   currentRole: UserRole;
@@ -53,6 +45,9 @@ interface AppContextType {
   azureHealth: AzureServiceHealth[];
   systemConfig: SystemConfig;
   setSystemConfig: React.Dispatch<React.SetStateAction<SystemConfig>>;
+  isLoadingDB: boolean;
+  dbConnected: boolean;
+  refreshFromDB: () => Promise<void>;
   
   // Integrated Buyer Accounts & Public System Database
   buyerAccounts: BuyerAccount[];
@@ -224,18 +219,107 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, [theme]);
   
-  const [rfqs, setRfqs] = useState<RFQItem[]>(INITIAL_RFQS);
-  const [aiFeed, setAiFeed] = useState<AIBotFeedItem[]>(INITIAL_AI_FEED);
-  const [vendorOpportunities, setVendorOpportunities] = useState<VendorOpportunity[]>(INITIAL_VENDOR_OPPORTUNITIES);
-  const [buyerVendors, setBuyerVendors] = useState<VendorEntry[]>(INITIAL_BUYER_VENDORS);
-  const [buyerAccounts, setBuyerAccounts] = useState<BuyerAccount[]>(INITIAL_BUYER_ACCOUNTS);
-  const [activeBuyerAccount, setActiveBuyerAccount] = useState<BuyerAccount | null>(INITIAL_BUYER_ACCOUNTS[0]);
+  // PostgreSQL Real Database Hydration & Telemetry State
+  const [isLoadingDB, setIsLoadingDB] = useState<boolean>(true);
+  const [dbConnected, setDbConnected] = useState<boolean>(false);
+
+  const [rfqs, setRfqs] = useState<RFQItem[]>([]);
+  const [aiFeed, setAiFeed] = useState<AIBotFeedItem[]>([]);
+  const [vendorOpportunities, setVendorOpportunities] = useState<VendorOpportunity[]>([]);
+  const [buyerVendors, setBuyerVendors] = useState<VendorEntry[]>([]);
+  const [buyerAccounts, setBuyerAccounts] = useState<BuyerAccount[]>([]);
+  const [activeBuyerAccount, setActiveBuyerAccount] = useState<BuyerAccount | null>(null);
   const [selectedEmailForModal, setSelectedEmailForModal] = useState<StandardRFQEmailPayload | null>(null);
   const [emailModalOpen, setEmailModalOpen] = useState<boolean>(false);
 
   // Vendor 360° AI Self-Evaluation & Infra Fee State
   const [vendorSelfEvaluationCompleted, setVendorSelfEvaluationCompleted] = useState<boolean>(false);
   const [vendorSelfEvaluationScore, setVendorSelfEvaluationScore] = useState<number>(94.5);
+
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [azureHealth, setAzureHealth] = useState<AzureServiceHealth[]>(INITIAL_AZURE_HEALTH);
+  const [systemConfig, setSystemConfig] = useState<SystemConfig>(INITIAL_SYSTEM_CONFIG);
+  const [selectedRFQForMatrix, setSelectedRFQForMatrix] = useState<RFQItem | null>(null);
+  const [selectedRFQForDeepDive, setSelectedRFQForDeepDive] = useState<RFQItem | null>(null);
+  const [deepDiveModalOpen, setDeepDiveModalOpen] = useState<boolean>(false);
+
+  const [vendorEvaluations, setVendorEvaluations] = useState<VendorEvaluationRecord[]>([]);
+  const [selectedVendorEvaluation, setSelectedVendorEvaluation] = useState<VendorEvaluationRecord | null>(null);
+  const [evaluationModalOpen, setEvaluationModalOpen] = useState<boolean>(false);
+
+  // Hydrate all platform data directly from PostgreSQL database
+  const refreshFromDB = async () => {
+    setIsLoadingDB(true);
+    try {
+      const res = await fetch('/api/bootstrap');
+      const json = await res.json();
+      if (json.success && json.data) {
+        const d = json.data;
+        if (d.buyerAccounts && d.buyerAccounts.length > 0) {
+          setBuyerAccounts(d.buyerAccounts);
+          setActiveBuyerAccount((prev) => {
+            if (!prev) return d.buyerAccounts[0];
+            const matched = d.buyerAccounts.find((a: BuyerAccount) => a.id === prev.id);
+            return matched || d.buyerAccounts[0];
+          });
+        }
+        if (d.vendors && d.vendors.length > 0) {
+          setBuyerVendors(d.vendors);
+        }
+        if (d.rfqs && d.rfqs.length > 0) {
+          setRfqs(d.rfqs);
+          setSelectedRFQForMatrix((prev) => prev || d.rfqs[0]);
+          setSelectedRFQForDeepDive((prev) => prev || d.rfqs[0]);
+
+          const mappedOpps: VendorOpportunity[] = d.rfqs.map((rfq: RFQItem) => ({
+            id: `opp-${rfq.id}`,
+            rfqNumber: rfq.rfqNumber,
+            title: rfq.title,
+            buyer: 'Enterprise Procurement Division',
+            deadline: rfq.targetDeliveryDate || '2026-09-15',
+            daysRemaining: 7,
+            type: rfq.sourcingMode === 'mode_3' ? 'network_marketplace' : 'direct_invitation',
+            estimatedValue: rfq.budget ? `$${rfq.budget.toLocaleString()}` : '$150,000',
+            deliveryLocation: 'Pune / Mumbai Plant Site',
+            status: rfq.quotes && rfq.quotes.length > 0 ? 'under_review' : 'pending_bid',
+            lineItems: (rfq.extractedEntities || []).map((ent: ExtractedEntity, idx: number) => ({
+              id: ent.id || `item-${idx}`,
+              description: ent.itemName,
+              quantity: ent.quantity,
+              unitPrice: 0,
+              leadTimeDays: 14,
+              marketBandStatus: 'optimal',
+              paymentTerms: '45 Days Net',
+            })),
+          }));
+          setVendorOpportunities(mappedOpps);
+        }
+        if (d.evaluations && d.evaluations.length > 0) {
+          setVendorEvaluations(d.evaluations);
+          setSelectedVendorEvaluation((prev) => prev || d.evaluations[0]);
+        }
+        if (d.auditLogs && d.auditLogs.length > 0) {
+          setAuditLogs(d.auditLogs);
+        }
+        if (d.aiFeed && d.aiFeed.length > 0) {
+          setAiFeed(d.aiFeed);
+        }
+        if (d.systemConfig) {
+          setSystemConfig(d.systemConfig);
+        }
+        setDbConnected(true);
+      }
+    } catch (err) {
+      console.error('Failed to load data from PostgreSQL DB:', err);
+      setDbConnected(false);
+    } finally {
+      setIsLoadingDB(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshFromDB();
+  }, []);
 
   // Integrated Buyer Accounts Management & Public Database Sync
   const addBuyerAccount = (account: Omit<BuyerAccount, 'id' | 'syncTimestamp' | 'createdDate'>): BuyerAccount => {
@@ -248,22 +332,41 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       createdDate: new Date().toISOString().substring(0, 10),
     };
     setBuyerAccounts((prev) => [newAcc, ...prev]);
+
+    // Persist to PostgreSQL
+    fetch('/api/buyer-accounts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newAcc),
+    }).catch((e) => console.error('Failed to save buyer account to DB:', e));
+
     addAuditLog(`Created buyer account for ${newAcc.organizationName} (${newAcc.corporateEmail}) with source ${newAcc.accountSource}`);
     showToast('Buyer Account Created', `${newAcc.organizationName} registered and added to buyer master database.`, 'success');
     return newAcc;
   };
 
   const updateBuyerAccount = (id: string, updates: Partial<BuyerAccount>) => {
+    let updatedAcc: BuyerAccount | null = null;
     setBuyerAccounts((prev) =>
       prev.map((acc) => {
         if (acc.id !== id) return acc;
         const updated = { ...acc, ...updates, syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC' };
+        updatedAcc = updated;
         if (activeBuyerAccount?.id === id) {
           setActiveBuyerAccount(updated);
         }
         return updated;
       })
     );
+
+    if (updatedAcc) {
+      fetch('/api/buyer-accounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedAcc),
+      }).catch((e) => console.error('Failed to update buyer account in DB:', e));
+    }
+
     addAuditLog(`Updated account specifications for buyer ID ${id}`);
     showToast('Account Updated', 'Buyer account details successfully saved.', 'info');
   };
@@ -297,10 +400,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       createdDate: dateStr,
     }));
     setBuyerAccounts((prev) => [...created, ...prev]);
+
+    // Persist batch to DB
+    created.forEach((acc) => {
+      fetch('/api/buyer-accounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(acc),
+      }).catch((e) => console.error('Failed to sync buyer account to DB:', e));
+    });
+
     addAuditLog(`Synced and imported ${created.length} legacy buyer accounts from Public System Database.`);
     showToast('Database Synced', `${created.length} existing buyer accounts aligned from public system.`, 'success');
     return created.length;
   };
+
   const [vendorCatalogue, setVendorCatalogue] = useState<any[]>([
     { id: 'prod-1', name: 'Centrifugal Water Pump (Model: ANSI-500)', category: 'Pumps & Fluid Dynamics', sku: 'SKU-FLUID-P500', specs: '500 GPM flow rate, 15 HP heavy-duty motor, ANSI Class 150 flanged connection.', unitPrice: 10950, leadTimeDays: 10, moq: 2 },
     { id: 'prod-2', name: 'Flanged Gate Valve (4-inch, Class 150)', category: 'Valves & Flow Control', sku: 'SKU-VALVE-G150', specs: 'Cast steel body, wedge gate, flanged ends, API 600 standards compliant.', unitPrice: 850, leadTimeDays: 5, moq: 10 },
@@ -308,16 +422,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     { id: 'prod-4', name: 'Flexible Metal Expansion Joint (6-inch)', category: 'Pipes & Fittings', sku: 'SKU-PIPE-J006', specs: 'Stainless steel bellows, carbon steel flanges, absorbs thermal expansion and vibration.', unitPrice: 310, leadTimeDays: 7, moq: 5 },
     { id: 'prod-5', name: 'Industrial Flow Sensor (Digital, BACnet)', category: 'Sensors & Instrumentation', sku: 'SKU-SENS-F200', specs: 'Electromagnetic flow meter, digital LCD readout, BACnet MS/TP integration.', unitPrice: 1250, leadTimeDays: 3, moq: 1 },
   ]);
-  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(INITIAL_AUDIT_LOG);
-  const [azureHealth, setAzureHealth] = useState<AzureServiceHealth[]>(INITIAL_AZURE_HEALTH);
-  const [systemConfig, setSystemConfig] = useState<SystemConfig>(INITIAL_SYSTEM_CONFIG);
-  const [selectedRFQForMatrix, setSelectedRFQForMatrix] = useState<RFQItem | null>(INITIAL_RFQS[0]);
-  const [selectedRFQForDeepDive, setSelectedRFQForDeepDive] = useState<RFQItem | null>(INITIAL_RFQS[0]);
-  const [deepDiveModalOpen, setDeepDiveModalOpen] = useState<boolean>(false);
-  
-  const [vendorEvaluations, setVendorEvaluations] = useState<VendorEvaluationRecord[]>(INITIAL_VENDOR_EVALUATIONS);
-  const [selectedVendorEvaluation, setSelectedVendorEvaluation] = useState<VendorEvaluationRecord | null>(INITIAL_VENDOR_EVALUATIONS[0]);
-  const [evaluationModalOpen, setEvaluationModalOpen] = useState<boolean>(false);
 
   const openRFQDeepDive = (rfq: RFQItem) => {
     setSelectedRFQForDeepDive(rfq);
@@ -331,19 +435,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const addVendorEvaluation = (record: VendorEvaluationRecord) => {
     setVendorEvaluations((prev) => [record, ...prev.filter((r) => r.id !== record.id)]);
+    fetch('/api/evaluations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(record),
+    }).catch((e) => console.error('Failed to save evaluation to DB:', e));
   };
 
-  // Helper to check if vendor exists in platform central master database
+  // Helper to check if vendor exists in platform central database
   const checkVendorInPlatformDatabase = (v: { email?: string; phone?: string; name?: string }): boolean => {
     const emailKey = (v.email || '').trim().toLowerCase();
     const phoneKey = (v.phone || '').trim();
     const nameKey = (v.name || '').trim().toLowerCase();
 
-    return MASTER_PLATFORM_VENDORS.some(
+    return buyerVendors.some(
       (m) =>
-        m.email.toLowerCase() === emailKey ||
-        (phoneKey && m.phone.replace(/\D/g, '').includes(phoneKey.replace(/\D/g, ''))) ||
-        m.name.toLowerCase() === nameKey
+        (m.email && m.email.toLowerCase() === emailKey) ||
+        (phoneKey && m.phone && m.phone.replace(/\D/g, '').includes(phoneKey.replace(/\D/g, ''))) ||
+        (m.name && m.name.toLowerCase() === nameKey)
     );
   };
 
@@ -759,22 +868,34 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
 
     // Update in buyerVendors list (accessible across all buyer accounts & directories)
+    const updatedTargetVendor: VendorEntry = {
+      ...targetVendor,
+      rating: newRating,
+      score: newCompositeScore,
+      status: newStatus,
+      latestRatingRevision: revisionRecord,
+      ratingRevisionHistory: [revisionRecord, ...(targetVendor.ratingRevisionHistory || [])],
+    };
+
     setBuyerVendors((prev) =>
       prev.map((v) => {
         if (v.id === vendorId || v.name === targetVendor?.name) {
-          const history = v.ratingRevisionHistory || [];
-          return {
-            ...v,
-            rating: newRating,
-            score: newCompositeScore,
-            status: newStatus,
-            latestRatingRevision: revisionRecord,
-            ratingRevisionHistory: [revisionRecord, ...history],
-          };
+          return updatedTargetVendor;
         }
         return v;
       })
     );
+
+    // Persist rating revision to PostgreSQL
+    fetch('/api/vendors', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'rating_revision',
+        vendor: updatedTargetVendor,
+        revision: revisionRecord,
+      }),
+    }).catch((e) => console.error('Failed to save rating revision to DB:', e));
 
     // Update in vendorEvaluations list as well
     setVendorEvaluations((prev) =>
@@ -1200,6 +1321,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       ipAddress: '104.42.189.44',
     };
     setAuditLogs((prev) => [newLog, ...prev]);
+
+    fetch('/api/audit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newLog),
+    }).catch((e) => console.error('Failed to save audit log to DB:', e));
   };
 
   const addFeedItem = (
@@ -1226,6 +1353,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       channelDetails,
     };
     setAiFeed((prev) => [newFeed, ...prev]);
+
+    fetch('/api/ai-feed', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newFeed),
+    }).catch((e) => console.error('Failed to save AI feed item to DB:', e));
   };
 
   const triggerChannelChaser = (
@@ -1610,6 +1743,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
 
     setRfqs((prev) => [newRFQ, ...prev]);
+
+    // Persist new RFQ to PostgreSQL
+    fetch('/api/rfqs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newRFQ),
+    }).catch((e) => console.error('Failed to save RFQ to DB:', e));
     
     // Create opportunity in vendor portal
     const newOpp: VendorOpportunity = {
@@ -1915,6 +2055,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         azureHealth,
         systemConfig,
         setSystemConfig,
+        isLoadingDB,
+        dbConnected,
+        refreshFromDB,
         addNewRFQ,
         triggerWhatsAppChaser,
         triggerChannelChaser,

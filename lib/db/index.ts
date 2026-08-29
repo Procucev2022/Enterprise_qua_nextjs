@@ -67,9 +67,9 @@ function createPool(): Pool | null {
 
   const poolConfig: PoolConfig = {
     connectionString,
-    max: process.env.DB_POOL_MAX ? parseInt(process.env.DB_POOL_MAX, 10) : 15,
+    max: process.env.DB_POOL_MAX ? parseInt(process.env.DB_POOL_MAX, 10) : 20,
     idleTimeoutMillis: process.env.DB_POOL_IDLE_TIMEOUT_MS ? parseInt(process.env.DB_POOL_IDLE_TIMEOUT_MS, 10) : 30000,
-    connectionTimeoutMillis: process.env.DB_CONNECTION_TIMEOUT_MS ? parseInt(process.env.DB_CONNECTION_TIMEOUT_MS, 10) : 8000,
+    connectionTimeoutMillis: process.env.DB_CONNECTION_TIMEOUT_MS ? parseInt(process.env.DB_CONNECTION_TIMEOUT_MS, 10) : 30000,
     ssl: isLocal
       ? false
       : {
@@ -87,11 +87,12 @@ if (process.env.NODE_ENV !== 'production' && pool) {
 }
 
 /**
- * Execute a SQL query against PostgreSQL with automated fallback handling
+ * Execute a SQL query against PostgreSQL with automated fallback handling & retry
  */
 export async function query<T extends QueryResultRow = any>(
   text: string,
-  params?: any[]
+  params?: any[],
+  retries = 2
 ): Promise<QueryResult<T>> {
   if (!pool) {
     throw new Error('DATABASE_URL is not configured. Running in memory fallback mode.');
@@ -106,6 +107,11 @@ export async function query<T extends QueryResultRow = any>(
     }
     return res;
   } catch (error: any) {
+    if (retries > 0 && (error.message?.includes('timeout') || error.message?.includes('Connection terminated') || error.message?.includes('ECONNRESET'))) {
+      console.warn(`[PostgreSQL Retrying Query after ${error.message}]: ${text.slice(0, 80)}...`);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      return query<T>(text, params, retries - 1);
+    }
     console.error('[PostgreSQL Query Error]:', error.message, '\nQuery:', text);
     throw error;
   }

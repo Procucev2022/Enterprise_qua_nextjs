@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { BuyerAccount, SourcingMode } from '@/lib/types';
 import categoriesData from '@/lib/categories.json';
-import { SOURCING_MODES } from '@/lib/mock-data';
+import { SOURCING_MODES } from '@/lib/constants';
 import {
   Building2,
   Users,
