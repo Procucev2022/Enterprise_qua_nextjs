@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
+import * as XLSX from 'xlsx';
 import { useApp } from '@/lib/store';
 import {
   VendorMasterUploadRecord,
@@ -250,17 +251,206 @@ export default function InitialSetupModal() {
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1);
   const [selectedPeriod, setSelectedPeriod] = useState<'1_year' | '2_years' | '3_years'>(historicalPurchaseDataPeriod || '2_years');
 
-  // Separate Upload States
+  // Separate Upload States & File Handlers
   const [storedVendors, setStoredVendors] = useState<VendorMasterUploadRecord[]>(SAMPLE_VENDOR_MASTER);
   const [vendorMasterUploaded, setVendorMasterUploaded] = useState(true);
+  const [vendorFileName, setVendorFileName] = useState<string>('Sample_Vendor_Master_Database.xlsx');
+  const [isDraggingVendor, setIsDraggingVendor] = useState<boolean>(false);
+  const [isParsingVendor, setIsParsingVendor] = useState<boolean>(false);
 
   const [poLineItems, setPoLineItems] = useState<PurchaseOrderLineItemRecord[]>(SAMPLE_PO_LINE_ITEMS);
   const [poDataUploaded, setPoDataUploaded] = useState(true);
+  const [poFileName, setPoFileName] = useState<string>(`Sample_PO_Purchase_Dump_${selectedPeriod}.xlsx`);
+  const [isDraggingPo, setIsDraggingPo] = useState<boolean>(false);
+  const [isParsingPo, setIsParsingPo] = useState<boolean>(false);
+
+  const vendorFileInputRef = useRef<HTMLInputElement>(null);
+  const poFileInputRef = useRef<HTMLInputElement>(null);
 
   const [isProcessingPOJoin, setIsProcessingPOJoin] = useState(false);
   const [activeReviewTab, setActiveReviewTab] = useState<'all' | 'mapped' | 'unmapped'>('all');
 
   if (!initialSetupModalOpen) return null;
+
+  // Real File Upload & SheetJS/CSV Parsing for File 1: Vendor Master
+  const handleVendorFileUpload = (file: File) => {
+    if (!file) return;
+    setIsParsingVendor(true);
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        const rawJson: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+
+        if (!rawJson || rawJson.length === 0) {
+          showToast('Empty File', 'The uploaded file has no readable data rows.', 'warning');
+          setIsParsingVendor(false);
+          return;
+        }
+
+        const parsedVendors: VendorMasterUploadRecord[] = rawJson.map((row, idx) => {
+          const keys = Object.keys(row);
+          const getVal = (possibleKeys: string[]): string => {
+            for (const pk of possibleKeys) {
+              const matchedKey = keys.find((k) => k.toLowerCase().trim().replace(/[^a-z0-9]/g, '') === pk.toLowerCase().replace(/[^a-z0-9]/g, ''));
+              if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
+                return String(row[matchedKey]).trim();
+              }
+            }
+            return '';
+          };
+
+          const vendorCode = getVal(['vendorcode', 'vendor code', 'code', 'vendor id', 'supplier code', 'id']) || `VND-${1000 + idx + 1}`;
+          const companyName = getVal(['companyname', 'company name', 'vendor name', 'supplier', 'name', 'vendor', 'supplier name']) || `Supplier ${idx + 1}`;
+          const contactPerson = getVal(['contactperson', 'contact person', 'contact', 'person', 'representative']) || 'Operations Lead';
+          const email = getVal(['email', 'email id', 'email_id', 'mail', 'corporate email']) || `contact@${companyName.toLowerCase().replace(/[^a-z0-9]/g, '') || 'vendor'}.com`;
+          const phone = getVal(['phone', 'mobile', 'contact number', 'phone number', 'telephone', 'mobile number']) || '+91 98000 00000';
+          const address = getVal(['address', 'location', 'city', 'plant location', 'street', 'office address']) || 'Industrial Zone, India';
+          const gstNumber = getVal(['gstnumber', 'gstin', 'gst', 'gst number', 'tax id', 'gst no']) || '27AAACA0000A1Z0';
+          
+          const ratingRaw = getVal(['vendorratingscore', 'rating', 'score', 'vendor rating', 'rating 0 100', 'performance score']);
+          const vendorRatingScore = ratingRaw && !isNaN(Number(ratingRaw)) ? Math.min(100, Math.max(0, Math.round(Number(ratingRaw)))) : undefined;
+
+          return {
+            id: `vm-upload-${Date.now()}-${idx}`,
+            vendorCode,
+            companyName,
+            contactPerson,
+            email,
+            phone,
+            address,
+            gstNumber,
+            vendorRatingScore,
+          };
+        });
+
+        setStoredVendors(parsedVendors);
+        setVendorMasterUploaded(true);
+        setVendorFileName(file.name);
+        showToast('Vendor Master Uploaded', `Successfully parsed & loaded ${parsedVendors.length} vendors from ${file.name}.`, 'success');
+      } catch (err: any) {
+        console.error('Vendor Master Parse Error:', err);
+        showToast('Parsing Error', `Could not parse file: ${err.message || 'Unknown format'}`, 'warning');
+      } finally {
+        setIsParsingVendor(false);
+      }
+    };
+
+    reader.onerror = () => {
+      showToast('File Read Error', 'Failed to read file from disk.', 'warning');
+      setIsParsingVendor(false);
+    };
+
+    reader.readAsArrayBuffer(file);
+  };
+
+  // Real File Upload & SheetJS/CSV Parsing for File 2: PO Purchase Dump
+  const handlePODataFileUpload = (file: File) => {
+    if (!file) return;
+    setIsParsingPo(true);
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        const rawJson: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+
+        if (!rawJson || rawJson.length === 0) {
+          showToast('Empty PO File', 'The uploaded PO dump has no readable rows.', 'warning');
+          setIsParsingPo(false);
+          return;
+        }
+
+        const parsedPOs: PurchaseOrderLineItemRecord[] = rawJson.map((row, idx) => {
+          const keys = Object.keys(row);
+          const getVal = (possibleKeys: string[]): string => {
+            for (const pk of possibleKeys) {
+              const matchedKey = keys.find((k) => k.toLowerCase().trim().replace(/[^a-z0-9]/g, '') === pk.toLowerCase().replace(/[^a-z0-9]/g, ''));
+              if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
+                return String(row[matchedKey]).trim();
+              }
+            }
+            return '';
+          };
+
+          const poNumber = getVal(['ponumber', 'po number', 'po #', 'po no', 'order id', 'order number']) || `PO-2025-${(1000 + idx).toString()}`;
+          const poDate = getVal(['podate', 'po date', 'date', 'order date', 'creation date']) || '2025-06-15';
+          const vendorIdentifier = getVal(['vendoridentifier', 'vendor', 'vendor name', 'supplier', 'company name', 'vendor code']) || 'Apex Supplies Ltd.';
+          const itemName = getVal(['itemname', 'item description', 'description', 'item', 'material', 'product name']) || 'Industrial Mechanical Spares';
+          const specs = getVal(['specs', 'specification', 'technical specs', 'details', 'item specs', 'grade']) || 'Standard Plant Specifications';
+          
+          const qtyRaw = getVal(['quantity', 'qty', 'units', 'count', 'ordered qty']);
+          const quantity = qtyRaw && !isNaN(Number(qtyRaw)) ? Math.max(1, Math.round(Number(qtyRaw))) : 10;
+          
+          const unit = getVal(['unit', 'uom', 'unit of measure']) || 'Units';
+
+          const unitPriceRaw = getVal(['unitprice', 'unit price', 'rate', 'price', 'item price']);
+          const totalSpendRaw = getVal(['totalspend', 'total spend', 'total amount', 'spend', 'amount', 'total value', 'po amount']);
+
+          let unitPrice = unitPriceRaw && !isNaN(Number(unitPriceRaw.replace(/[^0-9.]/g, ''))) ? Number(unitPriceRaw.replace(/[^0-9.]/g, '')) : 500;
+          let totalSpend = totalSpendRaw && !isNaN(Number(totalSpendRaw.replace(/[^0-9.]/g, ''))) ? Number(totalSpendRaw.replace(/[^0-9.]/g, '')) : unitPrice * quantity;
+
+          if (totalSpend === 0 && unitPrice > 0) {
+            totalSpend = unitPrice * quantity;
+          } else if (unitPrice === 0 && totalSpend > 0 && quantity > 0) {
+            unitPrice = Math.round(totalSpend / quantity);
+          }
+
+          const department = getVal(['department', 'dept', 'cost center', 'plant', 'division', 'category']) || 'Maintenance & Utilities';
+
+          return {
+            id: `po-upload-${Date.now()}-${idx}`,
+            poNumber,
+            poDate,
+            vendorIdentifier,
+            itemName,
+            specs,
+            quantity,
+            unit,
+            unitPrice,
+            totalSpend,
+            department,
+          };
+        });
+
+        setPoLineItems(parsedPOs);
+        setPoDataUploaded(true);
+        setPoFileName(file.name);
+        showToast('PO Dump Uploaded', `Successfully parsed & loaded ${parsedPOs.length} PO line items from ${file.name}.`, 'success');
+      } catch (err: any) {
+        console.error('PO Dump Parse Error:', err);
+        showToast('Parsing Error', `Could not parse PO file: ${err.message || 'Unknown format'}`, 'warning');
+      } finally {
+        setIsParsingPo(false);
+      }
+    };
+
+    reader.onerror = () => {
+      showToast('File Read Error', 'Failed to read file from disk.', 'warning');
+      setIsParsingPo(false);
+    };
+
+    reader.readAsArrayBuffer(file);
+  };
+
+  const resetToSampleVendorData = () => {
+    setStoredVendors(SAMPLE_VENDOR_MASTER);
+    setVendorFileName('Sample_Vendor_Master_Database.xlsx');
+    showToast('Reset Complete', 'Vendor Master reset to standard template data.', 'info');
+  };
+
+  const resetToSamplePoData = () => {
+    setPoLineItems(SAMPLE_PO_LINE_ITEMS);
+    setPoFileName(`Sample_PO_Purchase_Dump_${selectedPeriod}.xlsx`);
+    showToast('Reset Complete', 'PO Dump reset to standard template data.', 'info');
+  };
 
   // Correlate and Join PO line items against stored Vendor Master
   const computeJoinedRecords = (): HistoricalPurchaseVendorRecord[] => {
@@ -538,6 +728,18 @@ export default function InitialSetupModal() {
         {/* STEP 2: FILE 1 — VENDOR MASTER DATA INGESTION */}
         {step === 2 && (
           <div className="space-y-4 animate-fade-in">
+            {/* Hidden native file input */}
+            <input
+              type="file"
+              ref={vendorFileInputRef}
+              className="hidden"
+              accept=".xlsx,.xls,.csv,.tsv,.txt"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleVendorFileUpload(file);
+              }}
+            />
+
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <div className="flex items-center gap-2">
@@ -551,33 +753,88 @@ export default function InitialSetupModal() {
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={handleDownloadVendorMasterCsv}
-                className="btn btn-secondary btn-xs font-bold text-[11px] flex items-center gap-1 shrink-0"
-              >
-                <Download size={12} /> Download Vendor Master CSV
-              </button>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={handleDownloadVendorMasterCsv}
+                  className="btn btn-secondary btn-xs font-bold text-[11px] flex items-center gap-1 shrink-0"
+                >
+                  <Download size={12} /> Download CSV Template
+                </button>
+                <button
+                  type="button"
+                  onClick={resetToSampleVendorData}
+                  className="text-[11px] text-slate-500 hover:text-slate-700 dark:text-gray-400 dark:hover:text-gray-200 underline font-medium"
+                >
+                  Reset Template
+                </button>
+              </div>
             </div>
 
             {/* Drag & Drop Vendor Master Area */}
-            <div className="border-2 border-dashed border-indigo-300 dark:border-indigo-500/50 hover:border-indigo-600 rounded-2xl p-5 text-center bg-indigo-50/40 dark:bg-indigo-950/20 transition-all cursor-pointer">
-              <div className="w-10 h-10 rounded-2xl bg-indigo-100 dark:bg-indigo-600/20 flex items-center justify-center mx-auto text-indigo-600 dark:text-indigo-400">
-                <Database size={20} />
+            <div
+              onClick={() => vendorFileInputRef.current?.click()}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setIsDraggingVendor(true);
+              }}
+              onDragLeave={() => setIsDraggingVendor(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setIsDraggingVendor(false);
+                const file = e.dataTransfer.files?.[0];
+                if (file) handleVendorFileUpload(file);
+              }}
+              className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all cursor-pointer group ${
+                isDraggingVendor
+                  ? 'border-indigo-600 bg-indigo-100/70 dark:bg-indigo-900/50 scale-[1.01]'
+                  : 'border-indigo-300 dark:border-indigo-500/50 hover:border-indigo-600 bg-indigo-50/40 dark:bg-indigo-950/20 hover:bg-indigo-50/80'
+              }`}
+            >
+              <div className="w-12 h-12 rounded-2xl bg-indigo-100 dark:bg-indigo-600/20 flex items-center justify-center mx-auto text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
+                <UploadCloud size={24} />
               </div>
-              <h4 className="text-xs font-black text-slate-800 dark:text-white mt-1.5">
-                Vendor Master Upload Ready ({storedVendors.length} Suppliers Loaded)
+              <h4 className="text-sm font-black text-slate-800 dark:text-white mt-2">
+                {isParsingVendor
+                  ? 'Reading and Parsing Vendor Records...'
+                  : `Click to Browse or Drag & Drop Vendor Master (.xlsx, .csv, .xls)`}
               </h4>
-              <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                Stored successfully in platform backend. Ready for PO data cross-referencing.
+              <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-1 max-w-md mx-auto">
+                Upload your ERP vendor master sheet or use our sample template with {storedVendors.length} loaded records.
               </p>
+
+              <div className="mt-3 flex items-center justify-center gap-2 flex-wrap">
+                <div className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-700 dark:text-indigo-300 px-3 py-1 rounded-full bg-white dark:bg-gray-800 border border-indigo-200 dark:border-indigo-800 shadow-sm">
+                  <Database size={12} className="text-indigo-500" />
+                  <span>Active File:</span>
+                  <span className="font-mono text-indigo-600 dark:text-indigo-400">{vendorFileName}</span>
+                  <span className="text-slate-400">({storedVendors.length} Suppliers)</span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    vendorFileInputRef.current?.click();
+                  }}
+                  className="btn btn-primary btn-xs font-bold text-[11px] flex items-center gap-1"
+                >
+                  <UploadCloud size={12} /> Choose Another File
+                </button>
+              </div>
             </div>
 
             {/* Table of Stored Vendor Master */}
             <div className="space-y-2">
-              <span className="text-[10px] uppercase font-bold text-slate-400 block">
-                Stored Vendor Master Records ({storedVendors.length} Suppliers):
-              </span>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                  Stored Vendor Master Records ({storedVendors.length} Suppliers):
+                </span>
+                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
+                  <CheckCircle2 size={11} /> Ready for PO Cross-Referencing
+                </span>
+              </div>
+
               <div className="border border-slate-200 dark:border-gray-800 rounded-xl overflow-hidden max-h-48 overflow-y-auto text-xs">
                 <table className="w-full text-left">
                   <thead className="bg-slate-100 dark:bg-gray-800 text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 sticky top-0">
@@ -636,52 +893,115 @@ export default function InitialSetupModal() {
         {/* STEP 3: FILE 2 — PO PURCHASE DATA INGESTION */}
         {step === 3 && (
           <div className="space-y-4 animate-fade-in">
+            {/* Hidden native file input */}
+            <input
+              type="file"
+              ref={poFileInputRef}
+              className="hidden"
+              accept=".xlsx,.xls,.csv,.tsv,.txt"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handlePODataFileUpload(file);
+              }}
+            />
+
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <div className="flex items-center gap-2">
                   <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
                     Step 3: Upload File 2 — Historical PO Purchase Dump
                   </h3>
-                  <span className="badge badge-purple font-bold text-[10px]">{selectedPeriod === '1_year' ? '1 Year' : selectedPeriod === '2_years' ? '2 Years' : '3 Years'}</span>
+                  <span className="badge badge-purple font-bold text-[10px]">
+                    {selectedPeriod === '1_year' ? '1 Year' : selectedPeriod === '2_years' ? '2 Years' : '3 Years'}
+                  </span>
                 </div>
                 <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
                   Contains: PO Number, PO Date, Vendor Name / Code, Line Item Description, Quantity, Spend, Department.
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={handleDownloadPoDataCsv}
-                className="btn btn-secondary btn-xs font-bold text-[11px] flex items-center gap-1 shrink-0"
-              >
-                <Download size={12} /> Download PO Data CSV
-              </button>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={handleDownloadPoDataCsv}
+                  className="btn btn-secondary btn-xs font-bold text-[11px] flex items-center gap-1 shrink-0"
+                >
+                  <Download size={12} /> Download CSV Template
+                </button>
+                <button
+                  type="button"
+                  onClick={resetToSamplePoData}
+                  className="text-[11px] text-slate-500 hover:text-slate-700 dark:text-gray-400 dark:hover:text-gray-200 underline font-medium"
+                >
+                  Reset Template
+                </button>
+              </div>
             </div>
 
             {/* Drag & Drop PO Dump Area */}
             <div
-              onClick={handleSimulatePOJoin}
-              className="border-2 border-dashed border-purple-300 dark:border-purple-500/50 hover:border-purple-600 rounded-2xl p-5 text-center bg-purple-50/40 dark:bg-purple-950/20 hover:bg-purple-50/80 transition-all cursor-pointer group"
+              onClick={() => poFileInputRef.current?.click()}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setIsDraggingPo(true);
+              }}
+              onDragLeave={() => setIsDraggingPo(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setIsDraggingPo(false);
+                const file = e.dataTransfer.files?.[0];
+                if (file) handlePODataFileUpload(file);
+              }}
+              className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all cursor-pointer group ${
+                isDraggingPo
+                  ? 'border-purple-600 bg-purple-100/70 dark:bg-purple-900/50 scale-[1.01]'
+                  : 'border-purple-300 dark:border-purple-500/50 hover:border-purple-600 bg-purple-50/40 dark:bg-purple-950/20 hover:bg-purple-50/80'
+              }`}
             >
-              <div className="w-10 h-10 rounded-2xl bg-purple-100 dark:bg-purple-600/20 flex items-center justify-center mx-auto text-purple-600 dark:text-purple-400 group-hover:scale-110 transition-transform">
-                <FileSpreadsheet size={20} />
+              <div className="w-12 h-12 rounded-2xl bg-purple-100 dark:bg-purple-600/20 flex items-center justify-center mx-auto text-purple-600 dark:text-purple-400 group-hover:scale-110 transition-transform">
+                <FileSpreadsheet size={24} />
               </div>
-              <h4 className="text-xs font-black text-slate-800 dark:text-white mt-1.5">
-                Click to Run AI Cross-Match with Vendor Master ({poLineItems.length} PO Records)
+              <h4 className="text-sm font-black text-slate-800 dark:text-white mt-2">
+                {isParsingPo
+                  ? 'Reading and Parsing PO Dump Records...'
+                  : `Click to Browse or Drag & Drop PO Purchase Dump (.xlsx, .csv, .xls)`}
               </h4>
-              <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                Extracts item taxonomy and joins line items with stored vendor master records.
+              <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-1 max-w-md mx-auto">
+                Upload your historical purchase orders to automatically extract purchased items and map vendor categories.
               </p>
-              <div className="mt-2 inline-flex items-center gap-1 text-[11px] font-bold text-purple-700 dark:text-purple-300 px-3 py-0.5 rounded-full bg-white dark:bg-gray-800 border border-purple-200">
-                <Zap size={11} /> 1-Click Join & Auto-Categorize
+
+              <div className="mt-3 flex items-center justify-center gap-2 flex-wrap">
+                <div className="inline-flex items-center gap-1 text-[11px] font-bold text-purple-700 dark:text-purple-300 px-3 py-1 rounded-full bg-white dark:bg-gray-800 border border-purple-200 dark:border-purple-800 shadow-sm">
+                  <FileSpreadsheet size={12} className="text-purple-500" />
+                  <span>Active File:</span>
+                  <span className="font-mono text-purple-600 dark:text-purple-400">{poFileName}</span>
+                  <span className="text-slate-400">({poLineItems.length} PO Lines)</span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    poFileInputRef.current?.click();
+                  }}
+                  className="btn btn-primary btn-xs font-bold text-[11px] flex items-center gap-1"
+                >
+                  <UploadCloud size={12} /> Choose Another File
+                </button>
               </div>
             </div>
 
             {/* PO Line Items Preview */}
             <div className="space-y-2">
-              <span className="text-[10px] uppercase font-bold text-slate-400 block">
-                PO Line Items Sample ({poLineItems.length} Line Items):
-              </span>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                  PO Line Items Preview ({poLineItems.length} Line Items):
+                </span>
+                <span className="text-[10px] text-purple-600 dark:text-purple-400 font-bold">
+                  Total Spend: ${poLineItems.reduce((acc, p) => acc + p.totalSpend, 0).toLocaleString()}
+                </span>
+              </div>
+
               <div className="border border-slate-200 dark:border-gray-800 rounded-xl overflow-hidden max-h-48 overflow-y-auto text-xs">
                 <table className="w-full text-left">
                   <thead className="bg-slate-100 dark:bg-gray-800 text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 sticky top-0">
@@ -722,7 +1042,7 @@ export default function InitialSetupModal() {
                 onClick={handleSimulatePOJoin}
                 className="btn btn-primary font-bold text-xs py-2.5 px-5 flex items-center gap-1.5"
               >
-                Run AI Category Cross-Match <ArrowRight size={14} />
+                {isProcessingPOJoin ? 'Processing Join...' : 'Run AI Category Cross-Match'} <ArrowRight size={14} />
               </button>
             </div>
           </div>

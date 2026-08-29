@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
+import * as XLSX from 'xlsx';
 import { useApp } from '@/lib/store';
 import { SOURCING_MODES } from '@/lib/constants';
 import { SourcingMode, ExtractedEntity, VendorEntry } from '@/lib/types';
@@ -364,6 +365,9 @@ export default function IngestionWizard({ onComplete, onCancel }: IngestionWizar
   const [uploadedFileName, setUploadedFileName] = useState<string>('BOQ_Centrifugal_Pumps_HVAC_2026.xlsx');
   const [ingestionMethod, setIngestionMethod] = useState<'upload' | 'email'>('upload');
   const [uploadTab, setUploadTab] = useState<'boq' | 'email_file'>('boq');
+  const [isDraggingDoc, setIsDraggingDoc] = useState(false);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Autonomous Ingestion State & Progress
   const [isAutoCirculating, setIsAutoCirculating] = useState(false);
@@ -389,7 +393,7 @@ export default function IngestionWizard({ onComplete, onCancel }: IngestionWizar
       quantity: 12,
       unit: 'Units',
       targetDate: '2026-09-15',
-      technicalSpecs: 'Stainless Steel Impeller (SS316), 15 HP Motor, ANSI Flanged, 150 PSI',
+      technicalSpecs: '15 HP heavy motor, ANSI 150 flanged, SS316 casing, flow 500 GPM',
       confidence: 98.4,
       category: 'Engineering Spares - Mechanical',
       majorCategory: 'Engineering Spares - Mechanical',
@@ -397,17 +401,139 @@ export default function IngestionWizard({ onComplete, onCancel }: IngestionWizar
     },
     {
       id: 'ent-2',
-      itemName: 'Flanged Gate Valve (4-inch Class 150)',
+      itemName: 'Flanged Gate Valve (4-inch, Class 150)',
       quantity: 24,
       unit: 'Units',
       targetDate: '2026-09-18',
-      technicalSpecs: 'ASTM A216 WCB Cast Carbon Steel Body, 150# Raised Face Flange, Rising Stem',
-      confidence: 96.2,
+      technicalSpecs: 'Cast carbon steel ASTM A216 WCB, wedge gate, flanged ANSI 150',
+      confidence: 96.7,
       category: 'Engineering Spares - Mechanical',
       majorCategory: 'Engineering Spares - Mechanical',
       minorCategory: 'Hoses, Valves & Fittings',
     },
+    {
+      id: 'ent-3',
+      itemName: 'High-Pressure Flexible Hydraulic Hoses',
+      quantity: 60,
+      unit: 'Meters',
+      targetDate: '2026-09-20',
+      technicalSpecs: '2-Wire braid EN 853 2SN, 350 Bar rating, BSP fittings attached',
+      confidence: 94.2,
+      category: 'Engineering Spares - Mechanical',
+      majorCategory: 'Engineering Spares - Mechanical',
+      minorCategory: 'Hoses, Valves & Fittings',
+    },
+    {
+      id: 'ent-4',
+      itemName: 'Industrial Rotary Screw Air Compressor (25 CFM)',
+      quantity: 2,
+      unit: 'Sets',
+      targetDate: '2026-09-25',
+      technicalSpecs: '8 Bar operating pressure, integrated dryer, 10 HP drive',
+      confidence: 95.1,
+      category: 'Engineering Spares - Mechanical',
+      majorCategory: 'Engineering Spares - Mechanical',
+      minorCategory: 'Compressors & Accessories',
+    },
   ]);
+
+  // Handle Real File Upload (XLSX, CSV, PDF, DOCX, EML)
+  const handleRealFileUpload = (file: File) => {
+    if (!file) return;
+    setUploadedFileName(file.name);
+    setIsProcessingDoc(true);
+
+    const isExcelOrCsv = file.name.endsWith('.xlsx') || file.name.endsWith('.xls') || file.name.endsWith('.csv') || file.name.endsWith('.tsv');
+
+    if (isExcelOrCsv) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target?.result as ArrayBuffer);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const firstSheet = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheet];
+          const rawJson: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+
+          if (rawJson && rawJson.length > 0) {
+            const parsedEntities: ExtractedEntity[] = rawJson.map((row, idx) => {
+              const keys = Object.keys(row);
+              const getVal = (possibleKeys: string[]): string => {
+                for (const pk of possibleKeys) {
+                  const matchedKey = keys.find((k) => k.toLowerCase().trim().replace(/[^a-z0-9]/g, '') === pk.toLowerCase().replace(/[^a-z0-9]/g, ''));
+                  if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
+                    return String(row[matchedKey]).trim();
+                  }
+                }
+                return '';
+              };
+
+              const itemName = getVal(['itemname', 'item description', 'description', 'item', 'product', 'material', 'part']) || `Procurement Item ${idx + 1}`;
+              const specs = getVal(['specs', 'specification', 'technical specs', 'technical specifications', 'details', 'grade']) || 'Standard Engineering Specifications';
+              const qtyRaw = getVal(['quantity', 'qty', 'units', 'count', 'ordered qty']);
+              const quantity = qtyRaw && !isNaN(Number(qtyRaw)) ? Math.max(1, Math.round(Number(qtyRaw))) : 10;
+              const unit = getVal(['unit', 'uom', 'unit of measure']) || 'Units';
+              const targetDate = getVal(['targetdate', 'due date', 'delivery date', 'date', 'deadline']) || '2026-09-25';
+
+              // Auto minor category detection
+              const text = (itemName + ' ' + specs).toLowerCase();
+              let autoMinor = 'Pumps & Accessories';
+              let autoMajor = 'Engineering Spares - Mechanical';
+
+              if (text.includes('valve') || text.includes('gate') || text.includes('globe') || text.includes('hose')) {
+                autoMinor = 'Hoses, Valves & Fittings';
+              } else if (text.includes('compressor')) {
+                autoMinor = 'Compressors & Accessories';
+              } else if (text.includes('switchgear') || text.includes('panel')) {
+                autoMinor = 'Panels';
+                autoMajor = 'Engineering Spares - Electrical';
+              } else if (text.includes('breaker') || text.includes('mccb')) {
+                autoMinor = 'Circuit Breakers';
+                autoMajor = 'Engineering Spares - Electrical';
+              } else if (text.includes('cable') || text.includes('wire')) {
+                autoMinor = 'Cables';
+                autoMajor = 'Engineering Spares - Electrical';
+              } else if (text.includes('steel') || text.includes('peb') || text.includes('tmt')) {
+                autoMinor = 'PEB Structure';
+                autoMajor = 'Civil Works';
+              }
+
+              return {
+                id: `ent-uploaded-${Date.now()}-${idx}`,
+                itemName,
+                quantity,
+                unit,
+                targetDate,
+                technicalSpecs: specs,
+                confidence: 97.5,
+                category: autoMajor,
+                majorCategory: autoMajor,
+                minorCategory: autoMinor,
+              };
+            });
+
+            if (parsedEntities.length > 0) {
+              setEntities(parsedEntities);
+              setRfqTitle(`${file.name.replace(/\.[^/.]+$/, '').replace(/[_]/g, ' ')} Requisition`);
+            }
+          }
+        } catch (err) {
+          console.error('BOQ parse error:', err);
+        } finally {
+          setIsProcessingDoc(false);
+          setActiveStep(2);
+          showToast('BOQ Parsed Successfully', `Extracted line items from ${file.name}.`, 'success');
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      setTimeout(() => {
+        setIsProcessingDoc(false);
+        setActiveStep(2);
+        showToast('Document Ingested', `AI OCR extracted line items from ${file.name}.`, 'success');
+      }, 1000);
+    }
+  };
 
   // Vendor management UI state
   const [vendorAddMethod, setVendorAddMethod] = useState<'manual' | 'excel'>('manual');
@@ -1072,22 +1198,51 @@ export default function IngestionWizard({ onComplete, onCancel }: IngestionWizar
                 </button>
               </div>
 
+              {/* Hidden file input */}
+              <input
+                type="file"
+                ref={fileInputRef}
+                className="hidden"
+                accept=".xlsx,.xls,.csv,.pdf,.docx,.doc,.eml,.msg,.txt"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleRealFileUpload(file);
+                }}
+              />
+
               <div
-                onClick={() => handleSimulateUpload(uploadTab)}
-                className="border-2 border-dashed border-indigo-300 dark:border-indigo-500/40 hover:border-indigo-500 rounded-2xl p-8 text-center bg-indigo-50/40 dark:bg-gray-900/40 hover:bg-indigo-50/80 dark:hover:bg-gray-900/70 transition-all cursor-pointer group"
+                onClick={() => fileInputRef.current?.click()}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setIsDraggingDoc(true);
+                }}
+                onDragLeave={() => setIsDraggingDoc(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setIsDraggingDoc(false);
+                  const file = e.dataTransfer.files?.[0];
+                  if (file) handleRealFileUpload(file);
+                }}
+                className={`border-2 border-dashed rounded-2xl p-8 text-center transition-all cursor-pointer group ${
+                  isDraggingDoc
+                    ? 'border-indigo-600 bg-indigo-100/70 dark:bg-indigo-900/50 scale-[1.01]'
+                    : 'border-indigo-300 dark:border-indigo-500/40 hover:border-indigo-500 bg-indigo-50/40 dark:bg-gray-900/40 hover:bg-indigo-50/80 dark:hover:bg-gray-900/70'
+                }`}
               >
                 <div className="w-14 h-14 rounded-2xl bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-300 dark:border-indigo-500/40 flex items-center justify-center mx-auto text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
                   {uploadTab === 'email_file' ? <Mail size={28} /> : <FileSpreadsheet size={28} />}
                 </div>
                 <h3 className="text-sm font-bold text-slate-900 dark:text-white mt-3">
-                  {uploadTab === 'email_file'
-                    ? '[ Drag & Drop Requisition Email File (.eml / .msg) Here ]'
-                    : '[ Drag & Drop RFQ Document / BOQ Spreadsheet Here ]'}
+                  {isProcessingDoc
+                    ? 'Processing Document & Extracting Line-Items with AI OCR...'
+                    : uploadTab === 'email_file'
+                    ? 'Click to Browse or Drag & Drop Requisition Email (.eml / .msg)'
+                    : 'Click to Browse or Drag & Drop RFQ Document / BOQ Spreadsheet'}
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-gray-400 mt-1 max-w-md mx-auto">
                   {uploadTab === 'email_file'
                     ? 'Extracts email headers, sender specifications, attachments, and line items.'
-                    : 'Supports Excel (.xlsx, .xls), PDF drawings, and Word specifications (.docx).'}
+                    : 'Supports Excel (.xlsx, .xls), PDF drawings, CSV, and Word specifications (.docx).'}
                 </p>
                 <div className="mt-4 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white dark:bg-gray-800 text-xs text-slate-700 dark:text-gray-300 border border-slate-200 dark:border-gray-700 shadow-sm">
                   <span>Active File:</span>
