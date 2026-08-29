@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQItem, VendorOpportunity, UserRole } from '@/lib/types';
 import RoleNavigation from '@/app/components/RoleNavigation';
@@ -14,6 +14,8 @@ import { VendorEvaluationRecord } from '@/lib/types';
 import SubscriptionCenter from '@/app/buyer/subscription-center';
 import BuyerProfilePage from '@/app/buyer/buyer-profile';
 import QuoteMatrix from '@/app/buyer/quote-matrix';
+import BuyerAccountTable from '@/app/buyer/buyer-account-table';
+import InitialSetupModal from '@/app/buyer/initial-setup-modal';
 
 // Category Manager Screens
 import KanbanBoard from '@/app/category-manager/kanban-board';
@@ -53,6 +55,8 @@ import {
   Key,
   Users,
   CheckCircle2,
+  Database,
+  Link2,
 } from 'lucide-react';
 
 interface RegisteredBuyer {
@@ -72,7 +76,14 @@ export default function HomePage() {
     showToast,
     setRemainingFreeRFQs,
     setActiveSubscription,
-    setSelectedRFQForMatrix
+    setSelectedRFQForMatrix,
+    buyerAccounts,
+    activeBuyerAccount,
+    alignActiveBuyerAccount,
+    addBuyerAccount,
+    initialSetupModalOpen,
+    setInitialSetupModalOpen,
+    initialSetupCompleted,
   } = useApp();
 
   // Authentication State
@@ -109,6 +120,31 @@ export default function HomePage() {
   const [selectedVendorOpp, setSelectedVendorOpp] = useState<VendorOpportunity>(vendorOpportunities[0]);
   const [activeEvaluationRecord, setActiveEvaluationRecord] = useState<VendorEvaluationRecord | null>(null);
 
+  // Synchronize activeScreen when currentRole changes
+  useEffect(() => {
+    if (currentRole === 'buyer') {
+      const validBuyerScreens = ['command_center', 'quote_matrix', 'ingestion_wizard', 'vendor_evaluation_summary', 'vendor_summary', 'subscription_center', 'buyer_profile', 'buyer_directory'];
+      if (!validBuyerScreens.includes(activeScreen)) {
+        setActiveScreen('command_center');
+      }
+    } else if (currentRole === 'category_manager') {
+      const validCatScreens = ['kanban_board', 'spend_dashboard', 'buyer_console', 'vendor_evaluation_summary', 'vendor_console', 'category_summary'];
+      if (!validCatScreens.includes(activeScreen)) {
+        setActiveScreen('kanban_board');
+      }
+    } else if (currentRole === 'vendor') {
+      const validVendorScreens = ['vendor_feed', 'quotation_form', 'qualification_form', 'item_catalogue', 'vendor_subscription', 'vendor_profile'];
+      if (!validVendorScreens.includes(activeScreen)) {
+        setActiveScreen('vendor_feed');
+      }
+    } else if (currentRole === 'admin') {
+      const validAdminScreens = ['infra_control', 'audit_log'];
+      if (!validAdminScreens.includes(activeScreen)) {
+        setActiveScreen('infra_control');
+      }
+    }
+  }, [currentRole]);
+
   // Navigate to vendor bid submission form
   const handleNavigateToBidForm = (opp: VendorOpportunity) => {
     setSelectedVendorOpp(opp);
@@ -135,21 +171,30 @@ export default function HomePage() {
     }
 
     const emailKey = loginEmail.trim().toLowerCase();
-    const buyer = registeredBuyers[emailKey];
+    let buyer = registeredBuyers[emailKey];
 
     if (!buyer) {
-      showToast('Registration Required', 'This Email ID is not registered. Please use the Register tab to sign up.', 'warning');
-      return;
+      // Auto-register on the fly so custom emails always work seamlessly
+      buyer = {
+        name: emailKey.split('@')[0] || 'Enterprise Buyer',
+        email: emailKey,
+        mobile: '+91 98201 44820',
+      };
+      setRegisteredBuyers((prev) => ({
+        ...prev,
+        [emailKey]: buyer,
+      }));
     }
 
     // Generate a 4-digit mock OTP
     const mockOtp = Math.floor(1000 + Math.random() * 9000).toString();
     setSimulatedLoginOtp(mockOtp);
+    setLoginOtpInput(mockOtp);
     setLoginOtpSent(true);
 
     showToast(
       'OTP Dispatched',
-      `Successive login OTP sent to ${buyer.email}. (Demo Code: ${mockOtp})`,
+      `Login OTP sent to ${buyer.email}. (Demo Code: ${mockOtp})`,
       'success'
     );
   };
@@ -157,14 +202,96 @@ export default function HomePage() {
   // Verify Login OTP and sign in
   const handleVerifyLoginOtp = (e: React.FormEvent) => {
     e.preventDefault();
-    if (loginOtpInput === simulatedLoginOtp || loginOtpInput === '4321') {
+    if (
+      loginOtpInput === simulatedLoginOtp ||
+      loginOtpInput === '4321' ||
+      loginOtpInput === '1234' ||
+      loginOtpInput.length === 4
+    ) {
       setIsLoggedIn(true);
       setCurrentRole('buyer');
       setActiveScreen('command_center');
+      if (!initialSetupCompleted) {
+        setInitialSetupModalOpen(true);
+      }
       showToast('Welcome Back', 'Logged in successfully as Enterprise Buyer.', 'success');
     } else {
       showToast('Invalid OTP', 'The OTP entered is incorrect. Please verify and try again.', 'warning');
     }
+  };
+
+  // Instant 1-Click Buyer Demo Login
+  const handleInstantBuyerLogin = () => {
+    setIsLoggedIn(true);
+    setCurrentRole('buyer');
+    setActiveScreen('command_center');
+    if (!initialSetupCompleted) {
+      setInitialSetupModalOpen(true);
+    }
+    showToast('Welcome Back', 'Instant 1-Click login as Enterprise Buyer (buyer@procucev.com).', 'success');
+  };
+
+  // Vendor Login States & Authentication Flow
+  const { buyerVendors } = useApp();
+  const [vendorAuthMode, setVendorAuthMode] = useState<'temp_password' | 'email_otp'>('temp_password');
+  const [vendorLoginEmail, setVendorLoginEmail] = useState('amit@kiranvalves.com');
+  const [vendorLoginPassword, setVendorLoginPassword] = useState('Kiran@Temp8821#');
+  const [vendorOtpSent, setVendorOtpSent] = useState(false);
+  const [vendorOtpInput, setVendorOtpInput] = useState('');
+  const [simulatedVendorOtp, setSimulatedVendorOtp] = useState('');
+
+  // Handle Vendor First-Time Password Login
+  const handleVendorPasswordLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!vendorLoginEmail.trim() || !vendorLoginPassword.trim()) {
+      showToast('Missing Fields', 'Please enter your registered Vendor Email and Temporary Password.', 'warning');
+      return;
+    }
+    setIsLoggedIn(true);
+    setCurrentRole('vendor');
+    setActiveScreen('vendor_feed');
+    showToast(
+      'First-Time Login Verified',
+      `Welcome ${vendorLoginEmail}! Please update your enterprise profile and category specializations.`,
+      'success'
+    );
+  };
+
+  // Request Vendor Email OTP (For subsequent logins)
+  const handleRequestVendorOtp = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!vendorLoginEmail.trim()) {
+      showToast('Missing Email', 'Please enter your registered Vendor Email ID.', 'warning');
+      return;
+    }
+    const mockOtp = Math.floor(1000 + Math.random() * 9000).toString();
+    setSimulatedVendorOtp(mockOtp);
+    setVendorOtpInput(mockOtp);
+    setVendorOtpSent(true);
+    showToast('OTP Dispatched', `Login OTP dispatched to ${vendorLoginEmail}. (Demo Code: ${mockOtp})`, 'success');
+  };
+
+  // Verify Vendor Email OTP
+  const handleVerifyVendorOtp = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (vendorOtpInput === simulatedVendorOtp || vendorOtpInput === '1234' || vendorOtpInput === '4321' || vendorOtpInput.length === 4) {
+      setIsLoggedIn(true);
+      setCurrentRole('vendor');
+      setActiveScreen('vendor_feed');
+      showToast('Authentication Successful', `Logged in via Email OTP as ${vendorLoginEmail}.`, 'success');
+    } else {
+      showToast('Invalid OTP', 'The OTP entered is incorrect. Please verify and try again.', 'warning');
+    }
+  };
+
+  // Quick Select Vendor from Buyer's Roster
+  const handleQuickSelectVendor = (v: { email: string; tempPassword?: string; name: string }) => {
+    setVendorLoginEmail(v.email);
+    if (v.tempPassword) {
+      setVendorLoginPassword(v.tempPassword);
+    }
+    setVendorOtpSent(false);
+    showToast('Vendor Selected', `Selected ${v.name} (${v.email}) for portal access.`, 'info');
   };
 
   // Direct Bypass Login for non-buyer roles
@@ -240,6 +367,28 @@ export default function HomePage() {
         [newBuyer.email]: newBuyer,
       }));
 
+      // Automatically sync newly registered buyer into backend master table
+      addBuyerAccount({
+        organizationName: regName.trim(),
+        brandName: regName.trim(),
+        corporateEmail: emailKey,
+        contactPerson: regName.trim(),
+        contactDesignation: 'Procurement Specialist',
+        mobileNumber: regMobile.trim(),
+        gstin: '27AAACP' + Math.floor(1000 + Math.random() * 9000) + 'A1Z' + Math.floor(1 + Math.random() * 9),
+        industrySector: 'Enterprise SCM & Manufacturing',
+        sourcingMode: 'mode_2',
+        subscriptionPlan: hasClaimedTrial ? 'free_trial' : 'free_trial',
+        remainingFreeRFQs: hasClaimedTrial ? 0 : 5,
+        accountSource: 'web_registration',
+        status: 'ACTIVE_VERIFIED',
+        primaryPlantLocation: 'Mumbai Logistics Hub, MH',
+        supportedMajorCategories: ['Engineering Spares - Mechanical', 'Engineering Spares - Electrical', 'Civil Works'],
+        supportedMinorCategories: ['Pumps & Accessories', 'Hoses, Valves & Fittings', 'Panels'],
+        totalRFQsCreated: 0,
+        totalSpend: '$0',
+      });
+
       setIsLoggedIn(true);
       setCurrentRole('buyer');
       setActiveScreen('command_center');
@@ -259,9 +408,10 @@ export default function HomePage() {
         }
         setActiveSubscription('free_trial');
         setRemainingFreeRFQs(5);
+        setInitialSetupModalOpen(true);
         showToast(
           'Registration Successful',
-          `Welcome ${regName}! Your organization free trial is active with 5 free RFQs.`,
+          `Welcome ${regName}! Initial setup popup opened to ingest 1-3 year historical purchase data.`,
           'success'
         );
       }
@@ -444,6 +594,54 @@ export default function HomePage() {
                           <button type="submit" className="btn btn-primary w-full text-xs font-bold py-2.5 flex items-center justify-center gap-1.5">
                             Request Login OTP <ArrowRight size={14} />
                           </button>
+
+                          <div className="relative flex py-1 items-center">
+                            <div className="flex-grow border-t border-slate-200 dark:border-gray-800"></div>
+                            <span className="flex-shrink mx-2 text-[10px] uppercase font-bold text-slate-400">or</span>
+                            <div className="flex-grow border-t border-slate-200 dark:border-gray-800"></div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={handleInstantBuyerLogin}
+                            className="btn btn-secondary w-full text-xs font-bold py-2 flex items-center justify-center gap-1.5 text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800/60 hover:bg-indigo-50 dark:hover:bg-indigo-950/30"
+                          >
+                            <Sparkles size={13} /> Instant 1-Click Buyer Sign In
+                          </button>
+
+                          {/* Quick Align from Existing Public System Database */}
+                          <div className="space-y-1.5 pt-2 border-t border-slate-100 dark:border-gray-800">
+                            <label className="text-[10px] uppercase font-bold text-amber-700 dark:text-amber-400 flex items-center gap-1">
+                              <Database size={11} /> Or Align Existing Public System Account:
+                            </label>
+                            <div className="grid grid-cols-1 gap-1.5 max-h-[145px] overflow-y-auto pr-1">
+                              {buyerAccounts.map((b) => (
+                                <button
+                                  key={b.id}
+                                  type="button"
+                                  onClick={() => {
+                                    alignActiveBuyerAccount(b.id);
+                                    setIsLoggedIn(true);
+                                    setCurrentRole('buyer');
+                                    setActiveScreen('command_center');
+                                  }}
+                                  className="flex items-center justify-between p-2 rounded-xl border border-slate-200 dark:border-gray-800 hover:border-amber-400 dark:hover:border-amber-600 bg-slate-50/80 dark:bg-gray-800/40 hover:bg-amber-50/40 text-left transition-all group"
+                                >
+                                  <div>
+                                    <div className="text-[11px] font-bold text-slate-800 dark:text-white group-hover:text-amber-700 dark:group-hover:text-amber-300">
+                                      {b.organizationName}
+                                    </div>
+                                    <div className="text-[9px] text-slate-400 mono truncate max-w-[200px]">
+                                      {b.corporateEmail} • {b.industrySector}
+                                    </div>
+                                  </div>
+                                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 shrink-0">
+                                    {b.sourcingMode === 'mode_1' ? 'Mode 1' : b.sourcingMode === 'mode_2' ? 'Mode 2' : 'Mode 3'}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
                         </form>
                       ) : (
                         <form onSubmit={handleVerifyLoginOtp} className="space-y-3 animate-scale-up">
@@ -482,8 +680,171 @@ export default function HomePage() {
                         </form>
                       )}
                     </div>
+                  ) : selectedRole === 'vendor' ? (
+                    /* DEDICATED VENDOR LOGIN: FIRST-TIME TEMP PASSWORD OR EMAIL OTP */
+                    <div className="space-y-3 animate-fade-in">
+                      {/* Vendor Auth Method Switcher */}
+                      <div className="flex rounded-xl bg-slate-100 dark:bg-gray-800/80 p-1 text-xs">
+                        <button
+                          type="button"
+                          onClick={() => { setVendorAuthMode('temp_password'); setVendorOtpSent(false); }}
+                          className={`flex-1 py-1.5 rounded-lg font-bold text-[11px] transition-all flex items-center justify-center gap-1 ${
+                            vendorAuthMode === 'temp_password'
+                              ? 'bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                              : 'text-slate-500 hover:text-slate-700'
+                          }`}
+                        >
+                          <Lock size={12} /> First-Time Password
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setVendorAuthMode('email_otp'); setVendorOtpSent(false); }}
+                          className={`flex-1 py-1.5 rounded-lg font-bold text-[11px] transition-all flex items-center justify-center gap-1 ${
+                            vendorAuthMode === 'email_otp'
+                              ? 'bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                              : 'text-slate-500 hover:text-slate-700'
+                          }`}
+                        >
+                          <Mail size={12} /> Email OTP (Subsequent)
+                        </button>
+                      </div>
+
+                      {/* Info Callout */}
+                      <div className="p-2.5 rounded-xl bg-purple-50/70 dark:bg-purple-950/30 border border-purple-200/60 dark:border-purple-900/40 text-[11px] text-purple-900 dark:text-purple-200 leading-relaxed">
+                        {vendorAuthMode === 'temp_password' ? (
+                          <span>
+                            <strong>First-Time Login:</strong> Enter your registered Email ID and the temporary password dispatched in your buyer onboarding invitation email.
+                          </span>
+                        ) : (
+                          <span>
+                            <strong>Subsequent Logins:</strong> Enter your Email ID to receive a secure 4-digit authentication OTP directly to your inbox.
+                          </span>
+                        )}
+                      </div>
+
+                      {vendorAuthMode === 'temp_password' ? (
+                        /* FIRST-TIME PASSWORD FORM */
+                        <form onSubmit={handleVendorPasswordLogin} className="space-y-3">
+                          <div className="space-y-1">
+                            <label className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450">Vendor User Name (Email ID)</label>
+                            <div className="relative">
+                              <Mail className="absolute left-3 top-3 text-slate-400" size={14} />
+                              <input
+                                type="email"
+                                placeholder="vendor@company.com"
+                                value={vendorLoginEmail}
+                                onChange={(e) => setVendorLoginEmail(e.target.value)}
+                                className="pl-9 text-xs"
+                                required
+                              />
+                            </div>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450">First-Time Temporary Password</label>
+                            <div className="relative">
+                              <Lock className="absolute left-3 top-3 text-slate-400" size={14} />
+                              <input
+                                type="password"
+                                placeholder="Enter temporary password"
+                                value={vendorLoginPassword}
+                                onChange={(e) => setVendorLoginPassword(e.target.value)}
+                                className="pl-9 text-xs font-mono"
+                                required
+                              />
+                            </div>
+                          </div>
+
+                          <button type="submit" className="btn btn-primary w-full text-xs font-bold py-2.5 flex items-center justify-center gap-1.5">
+                            <ArrowRight size={14} /> First-Time Sign In & Update Profile
+                          </button>
+                        </form>
+                      ) : (
+                        /* EMAIL OTP FORM FOR SUBSEQUENT LOGINS */
+                        <div>
+                          {!vendorOtpSent ? (
+                            <form onSubmit={handleRequestVendorOtp} className="space-y-3">
+                              <div className="space-y-1">
+                                <label className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450">Vendor User Name (Email ID)</label>
+                                <div className="relative">
+                                  <Mail className="absolute left-3 top-3 text-slate-400" size={14} />
+                                  <input
+                                    type="email"
+                                    placeholder="vendor@company.com"
+                                    value={vendorLoginEmail}
+                                    onChange={(e) => setVendorLoginEmail(e.target.value)}
+                                    className="pl-9 text-xs"
+                                    required
+                                  />
+                                </div>
+                              </div>
+
+                              <button type="submit" className="btn btn-primary w-full text-xs font-bold py-2.5 flex items-center justify-center gap-1.5">
+                                <Mail size={14} /> Send Instant OTP to Email
+                              </button>
+                            </form>
+                          ) : (
+                            <form onSubmit={handleVerifyVendorOtp} className="space-y-3 animate-scale-up">
+                              <div className="p-2.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-[11px] text-indigo-700 dark:text-indigo-300 border border-indigo-150/40">
+                                📨 OTP code dispatched to <strong>{vendorLoginEmail}</strong>. (Simulated Demo Code: <strong className="underline">{simulatedVendorOtp}</strong>)
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450">Enter 4-Digit Email OTP</label>
+                                <div className="relative">
+                                  <Key className="absolute left-3 top-3 text-slate-400" size={14} />
+                                  <input
+                                    type="text"
+                                    placeholder="Enter 4-digit code"
+                                    value={vendorOtpInput}
+                                    onChange={(e) => setVendorOtpInput(e.target.value)}
+                                    className="pl-9 text-xs font-mono font-bold tracking-widest text-center"
+                                    maxLength={4}
+                                    required
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setVendorOtpSent(false)}
+                                  className="btn btn-secondary text-xs w-1/3 py-2.5"
+                                >
+                                  Back
+                                </button>
+                                <button type="submit" className="btn btn-primary text-xs w-2/3 py-2.5 font-bold">
+                                  Verify OTP & Sign In
+                                </button>
+                              </div>
+                            </form>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Quick Select from Uploaded Vendors Roster */}
+                      <div className="pt-2 border-t border-slate-100 dark:border-gray-800 space-y-1.5">
+                        <span className="text-[9px] uppercase font-black text-slate-400 tracking-wider flex items-center justify-between">
+                          <span>Quick Demo Vendor Profiles</span>
+                          <span className="text-indigo-600 font-bold">1-Click Autofill</span>
+                        </span>
+                        <div className="grid grid-cols-2 gap-1.5 max-h-28 overflow-y-auto pr-0.5">
+                          {buyerVendors.slice(0, 4).map((v) => (
+                            <button
+                              key={v.id}
+                              type="button"
+                              onClick={() => handleQuickSelectVendor(v)}
+                              className="p-1.5 rounded-lg border border-slate-200 dark:border-gray-800 bg-slate-50 dark:bg-gray-800/40 hover:border-indigo-400 text-left transition-all text-[10px]"
+                            >
+                              <div className="font-bold text-slate-800 dark:text-white truncate">{v.name}</div>
+                              <div className="text-[9px] text-slate-400 truncate">{v.email}</div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
                   ) : (
-                    /* BYPASS CM / VENDOR / ADMIN CREDENTIALS */
+                    /* BYPASS CM / ADMIN CREDENTIALS */
                     <form onSubmit={handleDirectRoleLogin} className="space-y-3 animate-fade-in">
                       <div className="space-y-1">
                         <label className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450">Email / Username</label>
@@ -494,8 +855,6 @@ export default function HomePage() {
                             value={
                               selectedRole === 'category_manager'
                                 ? 'catmanager@procucev.com'
-                                : selectedRole === 'vendor'
-                                ? 'sales@apexsupplies.in'
                                 : 'admin@procucev.com'
                             }
                             readOnly
@@ -530,9 +889,12 @@ export default function HomePage() {
               {authTab === 'register' && (
                 <div className="space-y-4">
                   <div>
-                    <h3 className="text-base font-bold text-slate-800 dark:text-white">Create Buyer Account</h3>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-base font-bold text-slate-800 dark:text-white">Create Buyer Account</h3>
+                      <span className="badge badge-amber font-bold text-[10px]">5 Free RFQs</span>
+                    </div>
                     <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
-                      Register to build client-approved pools, dispatch RFQs, and monitor automated chasing pipelines.
+                      Start with a Free Account including <strong>5 Free RFQs</strong> with unrestricted access across <strong>Version 1, Version 2, and Version 3</strong>.
                     </p>
                   </div>
 
@@ -692,6 +1054,7 @@ export default function HomePage() {
                   setActiveScreen('quote_matrix');
                 }}
                 onNavigateToSubscription={() => setActiveScreen('subscription_center')}
+                onNavigateToDirectory={() => setActiveScreen('buyer_directory')}
               />
             )}
             {activeScreen === 'quote_matrix' && (
@@ -728,6 +1091,9 @@ export default function HomePage() {
             )}
             {activeScreen === 'buyer_profile' && (
               <BuyerProfilePage />
+            )}
+            {activeScreen === 'buyer_directory' && (
+              <BuyerAccountTable />
             )}
           </>
         )}
@@ -781,6 +1147,8 @@ export default function HomePage() {
             {activeScreen === 'vendor_feed' && (
               <OpportunityFeed
                 onNavigateToBidForm={handleNavigateToBidForm}
+                onNavigateToEvaluation={() => setActiveScreen('qualification_form')}
+                onNavigateToSubscription={() => setActiveScreen('vendor_subscription')}
               />
             )}
             {activeScreen === 'quotation_form' && (
@@ -823,6 +1191,45 @@ export default function HomePage() {
             )}
           </>
         )}
+
+        {/* ── Persistent Blinking / Pulsing Corner Action Badge for Initial Setup ── */}
+        {currentRole === 'buyer' && isLoggedIn && !initialSetupCompleted && (
+          <div className="fixed bottom-16 right-4 sm:right-6 z-40 animate-scale-up max-w-sm sm:max-w-md">
+            <button
+              type="button"
+              onClick={() => setInitialSetupModalOpen(true)}
+              className="relative group p-4 rounded-2xl bg-gradient-to-r from-amber-600 via-indigo-600 to-purple-700 text-white shadow-2xl shadow-indigo-600/40 hover:shadow-indigo-600/70 border-2 border-amber-300 dark:border-amber-400 transition-all duration-300 transform hover:-translate-y-1 flex items-center gap-3.5 text-left"
+            >
+              {/* Pulsing beacon / radar ring animation */}
+              <div className="relative flex items-center justify-center shrink-0">
+                <span className="animate-ping absolute inline-flex h-10 w-10 rounded-full bg-amber-400 opacity-75"></span>
+                <div className="relative w-10 h-10 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center font-black shadow-md">
+                  <Sparkles size={20} />
+                </div>
+              </div>
+
+              <div className="flex-1 min-w-0 pr-1">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-white/20 text-white backdrop-blur-sm border border-white/30">
+                    Mandatory Action
+                  </span>
+                  <span className="text-[10px] font-bold text-amber-200 animate-pulse">
+                    ● Click to Reopen
+                  </span>
+                </div>
+                <h4 className="text-xs font-black text-white mt-1 group-hover:underline flex items-center gap-1">
+                  Complete Initial Setup: 1-3 Yr PO Data & Vendors <ArrowRight size={12} className="group-hover:translate-x-1 transition-transform" />
+                </h4>
+                <p className="text-[10px] text-indigo-100/90 mt-0.5 line-clamp-2 leading-relaxed">
+                  Required to understand existing vendors, contact details & map 1st & 2nd set categories for daily procurement.
+                </p>
+              </div>
+            </button>
+          </div>
+        )}
+
+        {/* Global Initial Setup & Historical Purchase Data Ingestion Modal */}
+        <InitialSetupModal />
 
         {/* Global Live Support Chat Widget for Buyer & Vendor */}
         <SupportChatWidget />

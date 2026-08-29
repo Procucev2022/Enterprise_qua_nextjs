@@ -7,12 +7,9 @@ import {
   X,
   Send,
   Sparkles,
-  CheckCircle2,
-  HelpCircle,
-  Phone,
   Bot,
-  UserCheck,
   Headphones,
+  Minimize2,
 } from 'lucide-react';
 
 interface ChatMessage {
@@ -31,7 +28,7 @@ export default function SupportChatWidget() {
     {
       id: 'msg-1',
       sender: 'ai',
-      text: `Hello! 👋 Welcome to Procucev QUA AI Support. I can help you with sourcing modes, RFQ downloads, vendor subscription tiers, or technical questions. How can I help you today?`,
+      text: `Hello! 👋 How can I help you today with RFQs, sourcing modes, or subscriptions?`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     },
   ]);
@@ -45,10 +42,10 @@ export default function SupportChatWidget() {
   }, [messages, isOpen]);
 
   const quickQuestions = [
-    { label: '📦 Vendor Subscriptions & Quotas', prompt: 'Explain vendor subscription plans and RFQ download quotas.' },
-    { label: '⚡ Mode 1, 2, 3 Sourcing Engines', prompt: 'What is the difference between Mode 1, Mode 2, and Mode 3 sourcing?' },
-    { label: '📄 RFQ Download & Quote Submission', prompt: 'How do vendors download RFQ specifications and submit quotes?' },
-    { label: '🎧 Connect with Support Agent', prompt: 'I am not happy with the automated chat, I need further agent support.' },
+    { label: '📦 Subscriptions', prompt: 'Explain vendor subscription plans and RFQ quotas.' },
+    { label: '⚡ Sourcing Modes', prompt: 'What is the difference between Mode 1, 2, and 3?' },
+    { label: '📄 RFQ Download', prompt: 'How do vendors download RFQs and submit quotes?' },
+    { label: '🎧 Agent Support', prompt: 'Connect me with a support agent.' },
   ];
 
   const dissatisfactionKeywords = [
@@ -71,7 +68,6 @@ export default function SupportChatWidget() {
   const silentPushToSupportEmail = (prompt: string, currentMessages: ChatMessage[]) => {
     const ticketId = `TK-${Math.floor(100000 + Math.random() * 900000)}`;
     const userRoleStr = currentRole === 'buyer' ? 'Buyer' : currentRole === 'vendor' ? 'Vendor' : 'Category Manager';
-    const transcript = currentMessages.map((m) => `[${m.timestamp}] ${m.sender.toUpperCase()}: ${m.text}`).join('\n');
 
     // Silent background dispatch to support@procucev.com
     addAuditLog(
@@ -104,19 +100,18 @@ export default function SupportChatWidget() {
     const isUnhappy = dissatisfactionKeywords.some((kw) => prompt.toLowerCase().includes(kw));
 
     if (isUnhappy) {
-      // Trigger silent background push to support@procucev.com
       silentPushToSupportEmail(prompt, updatedMessages);
 
       setTimeout(() => {
         const agentReply: ChatMessage = {
           id: `msg-${Date.now() + 1}`,
           sender: 'ai',
-          text: `Our agent will connect with you shortly and provide further support to resolve your request. Thank you for your patience!`,
+          text: `Our support agent will connect with you shortly to assist you. Thank you for your patience!`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           isEscalated: true,
         };
         setMessages((prev) => [...prev, agentReply]);
-      }, 500);
+      }, 400);
       return;
     }
 
@@ -126,13 +121,13 @@ export default function SupportChatWidget() {
       const text = prompt.toLowerCase();
 
       if (text.includes('subscription') || text.includes('quota') || text.includes('connect') || text.includes('select')) {
-        aiText = `Our Vendor Subscriptions feature 3 tiers:\n1. Premium Model (Free): Unlimited access to direct buyer RFQs.\n2. Connect Model ($149 / 3 mo): Up to 50 RFQ downloads in 3 months.\n3. Select Model ($349 / 3 mo): Item Catalogue (100 products) + 100 RFQ downloads in 3 months.`;
+        aiText = `Vendor Subscriptions:\n1. Premium (Free): Direct buyer RFQs\n2. Connect ($149 / 3mo): 50 RFQ downloads ($0 self-eval)\n3. Select ($349 / 3mo): 100 SKUs catalogue + 100 RFQs ($0 self-eval).`;
       } else if (text.includes('mode') || text.includes('engine') || text.includes('sourcing')) {
-        aiText = `Procucev provides 3 Sourcing Modes:\n• Mode 1: Private Client Roster\n• Mode 2: Hybrid Base Network\n• Mode 3: 360° AI Evaluated Roster (open marketplace with OCR parsing and multi-tier capability scoring).`;
+        aiText = `3 Sourcing Modes:\n• Mode 1: Private Client Roster\n• Mode 2: Hybrid Base Network\n• Mode 3: 360° AI Evaluated Roster.`;
       } else if (text.includes('download') || text.includes('quote') || text.includes('boq')) {
-        aiText = `Vendors can click "Download RFQ" on any open opportunity to receive the specifications directly via email. Quotations are submitted easily via email reply or 1-click submission.`;
+        aiText = `Click "Download RFQ" on any open opportunity to receive technical specs via email. Quotes are submitted via email reply or 1-click portal.`;
       } else {
-        aiText = `Thank you for reaching out! Procucev AI Sourcing streamlines multi-channel vendor chasing and automated quote evaluation. Let me know if you have specific questions or need support.`;
+        aiText = `Procucev QUA AI streamlines multi-channel vendor chasing and automated quote evaluation. Let me know if you need more details!`;
       }
 
       const aiMsg: ChatMessage = {
@@ -142,58 +137,63 @@ export default function SupportChatWidget() {
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
       setMessages((prev) => [...prev, aiMsg]);
-    }, 600);
+    }, 500);
   };
 
   return (
     <>
-      {/* Floating Trigger Button */}
-      <div className="fixed bottom-5 right-5 z-50">
+      {/* Compact Floating Trigger Button */}
+      <div className="fixed bottom-4 right-4 z-50">
         <button
+          type="button"
           onClick={() => setIsOpen(!isOpen)}
-          className="bg-indigo-600 hover:bg-indigo-700 text-white p-3.5 sm:px-4 sm:py-3 rounded-full shadow-2xl flex items-center gap-2.5 transition-all duration-200 hover:scale-105 border-2 border-white/20 dark:border-indigo-400/30 group"
+          className="w-10 h-10 sm:w-11 sm:h-11 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-full shadow-lg flex items-center justify-center transition-all duration-200 hover:scale-105 border border-white/20 relative group"
+          title="Support / Need Help?"
+          aria-label="Open support chat"
         >
-          <div className="relative">
-            <MessageSquare size={20} className="shrink-0" />
-            <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-emerald-400 rounded-full animate-pulse border border-white" />
-          </div>
-          <span className="hidden sm:inline font-black text-xs tracking-wide">
-            Support / Need Help?
+          <MessageSquare size={17} className="shrink-0" />
+          <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-emerald-400 rounded-full animate-pulse border border-white" />
+
+          {/* Micro hover tooltip */}
+          <span className="absolute right-full mr-2 px-2 py-1 rounded-md bg-slate-900 text-white text-[10px] font-bold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-md">
+            Need Help?
           </span>
         </button>
       </div>
 
-      {/* Floating Chat Modal */}
+      {/* Compact Floating Chat Modal */}
       {isOpen && (
-        <div className="fixed bottom-20 right-4 sm:right-6 z-50 w-[92vw] sm:w-[380px] h-[500px] max-h-[85vh] bg-white dark:bg-gray-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-fade-in">
-          {/* Header */}
-          <div className="bg-gradient-to-r from-indigo-700 via-indigo-800 to-slate-900 text-white p-4 flex items-center justify-between shadow-sm shrink-0">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-indigo-200">
-                {agentConnected ? <Headphones size={18} /> : <Bot size={18} />}
+        <div className="fixed bottom-16 right-4 z-50 w-[300px] sm:w-[330px] h-[380px] max-h-[70vh] bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-scale-up">
+          {/* Compact Header */}
+          <div className="bg-gradient-to-r from-indigo-700 to-indigo-900 text-white px-3.5 py-2.5 flex items-center justify-between shadow-sm shrink-0">
+            <div className="flex items-center gap-2">
+              <div className="w-6 h-6 rounded-full bg-white/15 flex items-center justify-center text-indigo-100 shrink-0">
+                {agentConnected ? <Headphones size={13} /> : <Bot size={13} />}
               </div>
               <div>
                 <div className="flex items-center gap-1.5">
-                  <h3 className="text-xs font-black tracking-tight">
-                    {agentConnected ? 'Procucev Support Desk' : 'QUA AI Support Assistant'}
+                  <h3 className="text-[11px] font-bold tracking-tight leading-none">
+                    {agentConnected ? 'Support Desk' : 'QUA AI Support'}
                   </h3>
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                 </div>
-                <p className="text-[10px] text-indigo-200 font-medium">
-                  {agentConnected ? 'Agent Escalation Active' : `Active for ${currentRole.toUpperCase()} Desk`}
+                <p className="text-[9px] text-indigo-200/80 font-mono leading-tight mt-0.5">
+                  {agentConnected ? 'Escalation Active' : `${currentRole.toUpperCase()} Assistant`}
                 </p>
               </div>
             </div>
             <button
+              type="button"
               onClick={() => setIsOpen(false)}
               className="text-indigo-200 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors"
+              title="Close chat"
             >
-              <X size={18} />
+              <X size={15} />
             </button>
           </div>
 
           {/* Chat Messages Body */}
-          <div className="flex-1 p-4 overflow-y-auto space-y-3 bg-slate-50/50 dark:bg-gray-950/50 text-xs">
+          <div className="flex-1 p-3 overflow-y-auto space-y-2.5 bg-slate-50/60 dark:bg-gray-950/60 text-xs">
             {messages.map((m) => (
               <div
                 key={m.id}
@@ -202,7 +202,7 @@ export default function SupportChatWidget() {
                 }`}
               >
                 <div
-                  className={`max-w-[85%] p-3 rounded-2xl space-y-1 ${
+                  className={`max-w-[88%] px-2.5 py-2 rounded-xl space-y-0.5 ${
                     m.sender === 'user'
                       ? 'bg-indigo-600 text-white rounded-br-none shadow-xs'
                       : m.isEscalated
@@ -212,7 +212,7 @@ export default function SupportChatWidget() {
                 >
                   <p className="whitespace-pre-line leading-relaxed text-[11px] font-medium">{m.text}</p>
                   <span
-                    className={`text-[9px] block text-right font-mono ${
+                    className={`text-[8px] block text-right font-mono ${
                       m.sender === 'user'
                         ? 'text-indigo-200'
                         : m.isEscalated
@@ -228,41 +228,43 @@ export default function SupportChatWidget() {
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Quick Prompts Strip */}
-          <div className="px-3 py-2 border-t border-slate-100 dark:border-gray-800/80 bg-white dark:bg-gray-900 overflow-x-auto flex items-center gap-1.5 shrink-0">
+          {/* Compact Quick Prompts Strip */}
+          <div className="px-2.5 py-1.5 border-t border-slate-100 dark:border-gray-800/80 bg-white dark:bg-gray-900 overflow-x-auto flex items-center gap-1 shrink-0">
             {quickQuestions.map((q, idx) => (
               <button
                 key={idx}
+                type="button"
                 onClick={() => handleSendMessage(q.prompt)}
-                className="px-2.5 py-1 rounded-full text-[10px] font-semibold bg-slate-100 dark:bg-gray-800 text-slate-700 dark:text-gray-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 hover:text-indigo-700 dark:hover:text-indigo-300 border border-slate-200 dark:border-gray-700 shrink-0 transition-colors"
+                className="px-2 py-0.5 rounded-full text-[9px] font-semibold bg-slate-100 dark:bg-gray-800 text-slate-700 dark:text-gray-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 hover:text-indigo-700 dark:hover:text-indigo-300 border border-slate-200 dark:border-gray-700 shrink-0 transition-colors"
               >
                 {q.label}
               </button>
             ))}
           </div>
 
-          {/* Standard Input Footer */}
-          <div className="p-3 bg-white dark:bg-gray-900 border-t border-slate-100 dark:border-gray-800 shrink-0">
+          {/* Compact Input Footer */}
+          <div className="p-2 bg-white dark:bg-gray-900 border-t border-slate-100 dark:border-gray-800 shrink-0">
             <form
               onSubmit={(e) => {
                 e.preventDefault();
                 handleSendMessage();
               }}
-              className="flex items-center gap-2"
+              className="flex items-center gap-1.5"
             >
               <input
                 type="text"
                 value={inputMsg}
                 onChange={(e) => setInputMsg(e.target.value)}
-                placeholder="Type your message..."
-                className="flex-1 px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
+                placeholder="Ask a question..."
+                className="flex-1 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-[11px] bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
               />
               <button
                 type="submit"
                 disabled={!inputMsg.trim()}
-                className="p-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40 transition-colors shrink-0"
+                className="p-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40 transition-colors shrink-0"
+                title="Send"
               >
-                <Send size={14} />
+                <Send size={12} />
               </button>
             </form>
           </div>

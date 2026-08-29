@@ -33,8 +33,8 @@ export default function SubscriptionCenter() {
     setActiveSubscription('free_trial');
     setRemainingFreeRFQs(5);
     showToast(
-      'Trial Restored',
-      'Free trial reset: 5 remaining Version 1 RFQs granted.',
+      'Free Account Restored',
+      'Free starter account reset: 5 Free RFQs available across Version 1, Version 2, and Version 3.',
       'info'
     );
   };
@@ -42,62 +42,62 @@ export default function SubscriptionCenter() {
   const plans = [
     {
       id: 'version_1' as const,
-      name: 'Version 1 Sourcing',
-      subtext: 'Roster-Based Chasing',
+      name: 'Version 1 Plan',
+      subtext: 'Features of Version 1 Only',
       price: '$199',
       billing: 'per user / month',
-      description: 'Streamline procurement across your pre-approved roster with automated working-hour follow-up pipelines.',
+      description: 'Streamline procurement across your private pre-approved vendor roster (Mode 1 only) with working-hour multi-channel follow-ups.',
       colorClass: 'from-indigo-650 to-indigo-750 text-indigo-600 border-indigo-200 dark:border-indigo-900',
       shadowClass: 'shadow-indigo-500/10',
-      badge: 'Basic Roster',
+      badge: 'Version 1 Only',
       features: [
-        'Direct Sourcing from uploaded Excel/Manual buyer rosters',
-        'SMS outreach sent exactly 5 mins after email dispatch',
-        'Automatic Call chasing placed after 6 working hours',
-        'WhatsApp chaser interactive prompts after 12 working hours',
+        '✓ Features of Version 1 ONLY (Mode 1: Private Preferred Vendor Network)',
+        'Direct sourcing from uploaded Excel/Manual buyer rosters',
+        'Working-hour multi-channel follow-ups (SMS 5m, Call +6h, WA +12h)',
         'Skips Sundays and operates strictly 8 AM - 7 PM IST Mon-Sat',
         'OCR Quote extraction parsed directly from incoming vendor emails',
         'Automatic halt of chasing sequence upon quote ingestion',
+        '🛡️ Zero Repetition: Strict single-dispatch guarantee per vendor',
       ],
     },
     {
       id: 'version_2' as const,
-      name: 'Version 2 Sourcing',
-      subtext: 'Hybrid Sourced Network',
+      name: 'Version 2 Plan',
+      subtext: 'Features of Version 1 & 2 Included',
       price: '$499',
       billing: 'per user / month',
-      description: 'Expand your pool to Procucev Base Network suppliers. Evaluate vendors immediately post-quote.',
+      description: 'Cumulative plan giving you full access to BOTH Version 1 and Version 2 (Mode 1 & Mode 2) with hybrid platform network discovery.',
       colorClass: 'from-sky-600 to-blue-600 text-sky-600 border-sky-200 dark:border-sky-900',
       shadowClass: 'shadow-sky-500/10',
-      badge: 'Recommended',
+      badge: '⭐ Cumulative (V1 + V2)',
       features: [
-        'All features in Version 1 included',
-        'RFQ broadcast matches Procucev Pool network partners',
-        'Intelligent RFQ Category matching & Location proximity filter',
-        'Automatic classification of Buyer Upload vs. Network pool',
-        'Vendor evaluation triggers unlocked strictly after quote receipt',
-        'Interactive evaluation surveys to verify quality metrics post-bid',
-        'Real-time proximity-based targeted pool preview in Wizard',
+        '✓ CUMULATIVE: Full access to BOTH Version 1 AND Version 2 features',
+        'Version 1: Private approved roster sourcing & automated working-hour chasers',
+        'Version 2: AI Hybrid Sourcing with Procucev verified network matching',
+        'Intelligent RFQ Minor Category matching (280+ taxonomy) & proximity filter',
+        'Automatic classification of Buyer Upload vs. Network Pool',
+        'Post-bid vendor evaluation surveys to verify quality metrics',
+        '🛡️ Zero Repetition: Cross-roster deduplication prevents duplicate emails',
       ],
     },
     {
       id: 'version_3' as const,
-      name: 'Version 3 Sourcing',
-      subtext: 'Autonomous Sourcing Desk',
+      name: 'Version 3 Plan',
+      subtext: 'Features of Version 1, 2 & 3 Included',
       price: '$999',
       billing: 'per user / month',
-      description: 'Fully autonomous category manager desk. Full 360-degree audits and matrices active immediately.',
+      description: 'Ultimate all-inclusive tier giving you full access to Version 1, Version 2, AND Version 3 (Mode 1, Mode 2 & Mode 3) with autonomous AI governance.',
       colorClass: 'from-purple-600 to-indigo-650 text-purple-600 border-purple-200 dark:border-purple-900',
       shadowClass: 'shadow-purple-500/10',
-      badge: 'Enterprise AI',
+      badge: '🏆 All 3 Versions Unlocked',
       features: [
-        'All features in Version 1 & 2 included',
-        'Immediate 360-degree Vendor Audits active for all pool partners',
-        'Detailed remarks & documents OCR checked against each criteria',
-        'Interactive Comparative Quote Evaluation Matrices',
-        'Automatic PO generation & contract digital signature creation',
-        'Immutable Compliance Audit Log (SHA-256 integrity checkers)',
-        'Autonomous category agent operational monitoring Kanban desk',
+        '✓ ALL-INCLUSIVE: Full access to Version 1, Version 2, AND Version 3 features',
+        'Version 1: Private buyer roster sourcing & automated working-hour chasers',
+        'Version 2: AI Hybrid Verified Supplier matching & post-bid evaluations',
+        'Version 3: Autonomous Category Desk & AI Discovery (Select Max 5 out of 10)',
+        'Pre-bid 360° Vendor Audits & "Evaluate & Send RFQ" for unrated suppliers',
+        'Interactive Comparative Quote Evaluation Matrices & PO generation',
+        '🛡️ Zero Repetition: Unified single-email dispatch per unique supplier',
       ],
     },
   ];
@@ -111,27 +111,37 @@ export default function SubscriptionCenter() {
             Procurement Sourcing Mode Subscriptions
           </h1>
           <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-            Compare subscription models, check trial quotas, and activate Version 1, 2, or 3 features.
+            Compare subscription models, check free starter account quotas, and activate Version 1, 2, or 3 features.
           </p>
         </div>
         <button
           onClick={handleResetTrial}
           className="btn btn-secondary btn-sm flex items-center gap-1 shrink-0"
         >
-          <RefreshCw size={12} /> Reset to Trial (5 Free V1 RFQs)
+          <RefreshCw size={12} /> Reset to Free Account (5 Free RFQs)
         </button>
       </div>
 
       {/* Trial Quota Info Alert */}
       {activeSubscription === 'free_trial' ? (
-        <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/60 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-3 shadow-sm">
-          <AlertCircle className="text-amber-500 shrink-0 mt-0.5" size={16} />
-          <div className="space-y-1">
-            <span className="font-extrabold block">🎁 Active Free Trial Status</span>
-            <p>
-              Your account has access to <strong>Version 1 (Roster Sourcing)</strong> for exactly <strong>{remainingFreeRFQs} remaining RFQs</strong>.
-              Sourcing via Version 2 (Hybrid Pool) or Version 3 (AI Autonomous) requires activating their respective subscriptions.
-            </p>
+        <div className="p-5 rounded-2xl bg-gradient-to-r from-amber-50/80 via-orange-50/60 to-indigo-50/80 dark:from-amber-950/30 dark:via-orange-950/20 dark:to-indigo-950/30 border border-amber-300 dark:border-amber-700/60 text-xs text-amber-900 dark:text-amber-200 space-y-2 shadow-sm">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2 font-black text-sm">
+              <Sparkles className="text-amber-600 dark:text-amber-400 shrink-0" size={18} />
+              <span>🎁 Free Starter Account Active — 5 Free RFQs Included</span>
+            </div>
+            <span className="px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-amber-200/60 dark:bg-amber-900/60 text-amber-900 dark:text-amber-100 border border-amber-300">
+              {remainingFreeRFQs} of 5 Free RFQs Left
+            </span>
+          </div>
+          <p className="text-xs leading-relaxed text-slate-700 dark:text-gray-300">
+            Every new buyer starts with a <strong>Free Account</strong> with <strong>5 Free RFQs</strong>. You can use <strong>ANY version (Version 1: Client Roster, Version 2: Hybrid Sourcing, or Version 3: Autonomous AI)</strong> for each of your 5 free RFQs without restrictions.
+          </p>
+          <div className="w-full bg-amber-200/50 dark:bg-gray-800 rounded-full h-2 overflow-hidden mt-1">
+            <div
+              className="bg-gradient-to-r from-amber-500 to-emerald-500 h-full transition-all duration-300"
+              style={{ width: `${(remainingFreeRFQs / 5) * 100}%` }}
+            />
           </div>
         </div>
       ) : (

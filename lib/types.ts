@@ -22,6 +22,8 @@ export interface ExtractedEntity {
   technicalSpecs: string;
   confidence: number;
   category: string;
+  majorCategory?: string;
+  minorCategory?: string;
 }
 
 export interface LineItemBid {
@@ -128,6 +130,8 @@ export interface RFQFollowUpBreakdown {
   autoChasingEnabled: boolean;
 }
 
+export type RFQSource = 'email_gateway' | 'web_portal' | 'email_upload' | 'manual_entry';
+
 export interface RFQItem {
   id: string;
   rfqNumber: string;
@@ -144,6 +148,10 @@ export interface RFQItem {
   chasingActive: boolean;
   chaserMethod?: 'WhatsApp' | 'Email' | 'SMS' | 'Call' | 'Multi-Channel';
   aiScore?: number;
+  source?: RFQSource;
+  sourceEmail?: string;
+  sourceFileName?: string;
+  autoCirculated?: boolean;
   followUpData?: RFQFollowUpBreakdown;
 }
 
@@ -297,4 +305,261 @@ export interface OrganizationProfile {
   };
   selectedMajorCategories: string[];
   selectedMinorCategories: Record<string, string[]>;
+}
+
+export interface VendorEntry {
+  id: string;
+  name: string;
+  contactPerson: string;
+  phone: string;
+  email: string;
+  majorCategory: string;
+  minorCategories: string[];
+  location: string;
+  rating: number;
+  source: 'buyer_manual' | 'buyer_excel' | 'procucev_network' | 'manual' | 'excel';
+  status?: 'PREFERRED ENTERPRISE SUPPLIER' | 'CONDITIONAL / UNDER REVIEW' | 'REGISTERED / NOT EVALUATED';
+  score?: number | null;
+  evaluated?: boolean;
+  hasRecord?: boolean;
+  matchReason?: string;
+  proximity?: string;
+  proximityMatch?: boolean;
+
+  // Database Availability & Onboarding Credentials
+  isExistingInDatabase?: boolean;
+  onboardingEmailStatus?: 'sent' | 'pending' | 'delivered';
+  onboardingEmailDispatchedAt?: string;
+  tempPassword?: string;
+  firstLoginCompleted?: boolean;
+  reminderCadence?: 'every_3_days';
+  nextReminderDate?: string;
+  remindersSentCount?: number;
+  addedByBuyerCompany?: string;
+  addedByBuyerName?: string;
+  profileCompletionStatus?: 'pending' | 'completed';
+
+  // Dual-Stream Category Mapping & Reconciliation (Client-Mapped vs Vendor-Selected)
+  clientMappedCategories?: string[]; // Categories assigned by buyer (from PO / vendor master upload)
+  vendorSelectedCategories?: string[]; // Categories chosen by vendor from profile page (max 10)
+  isCategoryAligned?: boolean; // True if vendor selected matches client mapped
+  categoryMismatchDetails?: {
+    clientOnly: string[];
+    vendorOnly: string[];
+    common: string[];
+  };
+  categoryMatchSource?: 'Aligned Buyer & Vendor Category Match' | 'Buyer Empanelled Category Match' | 'Vendor Profile Self-Declared Category Match';
+
+  // Buyer Performance Ratings & Revisions
+  latestRatingRevision?: VendorRatingRevisionRecord;
+  ratingRevisionHistory?: VendorRatingRevisionRecord[];
+}
+
+export interface VendorRatingRevisionRecord {
+  id: string;
+  vendorId: string;
+  vendorName: string;
+  buyerCompany: string;
+  buyerName: string;
+  buyerEmail: string;
+  timestamp: string;
+  qualityScore: number; // 0-100
+  costScore: number; // 0-100
+  deliveryScore: number; // 0-100
+  buyerAverage: number; // (Q + C + D) / 3
+  previousScore: number;
+  newCompositeScore: number; // Math.round((previousScore + buyerAverage) / 2)
+  previousRating: number;
+  newRating: number; // newCompositeScore / 20
+  remarks: string;
+  emailDispatched: boolean;
+  shaSignature: string;
+}
+
+export interface VendorRatingRevisionEmailPayload {
+  vendorName: string;
+  vendorEmail: string;
+  vendorContactPerson: string;
+  buyerCompany: string;
+  buyerContactName: string;
+  buyerContactEmail: string;
+  dispatchedAt: string;
+  qualityScore: number;
+  costScore: number;
+  deliveryScore: number;
+  buyerAverage: number;
+  previousScore: number;
+  newCompositeScore: number;
+  newRating: number;
+  remarks: string;
+  shaSignature: string;
+}
+
+export interface VendorMasterUploadRecord {
+  id: string;
+  vendorCode?: string;
+  companyName: string;
+  contactPerson: string;
+  email: string;
+  phone: string;
+  address: string;
+  gstNumber: string;
+  vendorRatingScore?: number; // 0 to 100 (Optional)
+}
+
+export interface PurchaseOrderLineItemRecord {
+  id: string;
+  poNumber: string;
+  poDate: string;
+  vendorIdentifier: string; // Matches vendor code, company name or email
+  itemName: string;
+  specs?: string;
+  quantity: number;
+  unit: string;
+  unitPrice: number;
+  totalSpend: number;
+  department?: string;
+}
+
+export interface HistoricalPurchaseVendorRecord {
+  id: string;
+  vendorCode?: string;
+  companyName: string;
+  email: string;
+  contactPerson?: string;
+  phone: string;
+  address: string;
+  gstNumber: string;
+  vendorRatingScore?: number; // 0 to 100 (Optional)
+  hasPoHistory: boolean; // True if PO line items were found in PO dump
+  categoriesMappedByBuyer: boolean; // True if buyer mapped 1st & 2nd set categories from POs
+  itemsSupplied: string[]; // List of items purchased in the past
+  pastPoSpend?: string;
+  poCount?: number;
+  firstSetMajorCategory: string; // 1st Set: Primary Major Category
+  secondSetMinorCategories: string[]; // 2nd Set: Minor Categories
+  secondSetSecondaryMajors?: string[]; // 2nd Set: Secondary Major Categories
+  isExistingInDatabase?: boolean;
+  tempPassword?: string;
+}
+
+export interface VendorOnboardingEmailPayload {
+  emailId: string;
+  vendorId: string;
+  vendorName: string;
+  recipientEmail: string;
+  contactPerson: string;
+  buyerCompanyName: string;
+  buyerContactName: string;
+  buyerContactEmail: string;
+  isExistingInDatabase: boolean;
+  subject: string;
+  username: string;
+  tempPassword: string;
+  authInstructions: string;
+  profileUpdateInstructions: string;
+  categoryUpdateInstructions: string;
+  
+  // Categorization status
+  hasPoHistory: boolean;
+  categoriesMappedByBuyer: boolean;
+  unmappedSelfServiceMessage?: string;
+  
+  // Highlighted Assigned Categories by Buyer (1st Set Major & 2nd Set Minor Categories)
+  assignedMajorCategory: string;
+  assignedMinorCategories: string[];
+  assignedSecondaryMajors?: string[];
+  
+  reminderScheduleNote: string;
+  dispatchedAt: string;
+  nextReminderDate: string;
+  portalLoginUrl: string;
+  shaSignature: string;
+  reminderCount: number;
+}
+
+export interface VendorProfileReminderPayload {
+  reminderId: string;
+  vendorId: string;
+  vendorName: string;
+  recipientEmail: string;
+  buyerCompanyName: string;
+  buyerContactName: string;
+  dayNumber: number; // 3, 6, 9, etc.
+  subject: string;
+  message: string;
+  username: string;
+  dispatchedAt: string;
+  nextReminderDate: string;
+  shaSignature: string;
+}
+
+export interface StandardRFQEmailPayload {
+  emailId: string;
+  rfqNumber: string;
+  rfqTitle: string;
+  sourcingMode: SourcingMode;
+  sourcingModeName: string;
+  sourcingModeCode: string;
+  buyerCompany: string;
+  buyerContactName: string;
+  buyerContactEmail: string;
+  buyerContactPhone: string;
+  recipientVendorName: string;
+  recipientContactPerson: string;
+  recipientEmail: string;
+  subject: string;
+  matchedMajorCategory: string;
+  matchedMinorCategories: string[];
+  requisitionDate: string;
+  submissionDeadline: string;
+  targetDeliveryDate: string;
+  deliveryLocation: string;
+  paymentTerms: string;
+  lineItems: Array<{
+    itemNumber: number;
+    itemName: string;
+    technicalSpecs: string;
+    quantity: number;
+    unit: string;
+    minorCategory: string;
+    targetDate: string;
+  }>;
+  specialInstructions: string;
+  complianceChecklist: string[];
+  replyInstructions: string;
+  replyToEmail: string;
+  shaSignature: string;
+  dispatchedAt: string;
+}
+
+export interface BuyerAccount {
+  id: string;
+  organizationName: string;
+  brandName?: string;
+  corporateEmail: string;
+  contactPerson: string;
+  contactDesignation?: string;
+  mobileNumber: string;
+  gstin: string;
+  panNumber?: string;
+  cinNumber?: string;
+  industrySector: string;
+  sourcingMode: SourcingMode;
+  subscriptionPlan: 'free_trial' | 'version_1' | 'version_2' | 'version_3';
+  remainingFreeRFQs: number;
+  accountSource: 'public_system' | 'web_registration' | 'enterprise_sso';
+  status: 'ACTIVE_VERIFIED' | 'PENDING_ALIGNMENT' | 'SYNCED_LEGACY';
+  primaryPlantLocation: string;
+  supportedMajorCategories: string[];
+  supportedMinorCategories?: string[];
+  totalRFQsCreated: number;
+  totalSpend: string;
+  syncTimestamp: string;
+  createdDate: string;
+  
+  // Historical purchase data ingestion & initial setup tracking
+  initialSetupCompleted?: boolean;
+  historicalDataPeriod?: '1_year' | '2_years' | '3_years';
+  historicalVendorsCount?: number;
 }

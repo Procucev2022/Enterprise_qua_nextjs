@@ -79,6 +79,7 @@ export default function VendorSubscriptionCenter() {
       features: [
         'All Premium Client-Uploaded features included',
         'Download up to 50 RFQs within 3 months (90-day period)',
+        '🎁 360° AI Self-Evaluation Fee: $0 FREE (Waived from $5)',
         'Access to full Open Network Marketplace RFQs',
         'Instant email dispatch of technical BOQ spreadsheets & specifications',
         'Automated category & location proximity matching alerts',
@@ -99,6 +100,7 @@ export default function VendorSubscriptionCenter() {
       colorClass: 'border-purple-300 dark:border-purple-800 shadow-purple-500/10',
       features: [
         'All Premium & Connect Model features included',
+        '🎁 360° AI Self-Evaluation Fee: $0 FREE (Waived from $5)',
         'Vendor Item Catalogue: Host up to 100 products (SKUs, MOQs & Specs)',
         'Download up to 100 RFQs within 3 months (90-day period)',
         'Bidirectional Cross-Highlighting (📦 Catalogue Match & 🔔 RFQs Available)',

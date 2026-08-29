@@ -422,3 +422,87 @@ input[type="range"] {
   accent-color: var(--primary);
   cursor: pointer;
 }
+
+/* ═══════════════════════════════════════════════════════════════ */
+/* PRINT MEDIA STYLES (Isolates modal document & hides background) */
+/* ═══════════════════════════════════════════════════════════════ */
+@media print {
+  html, body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-size: 11pt !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Hide background elements, navigation, buttons, footers, headers */
+  header,
+  footer,
+  nav,
+  main,
+  aside,
+  button,
+  .no-print {
+    display: none !important;
+  }
+
+  /* Expand active modal overlay and content */
+  .modal-overlay {
+    position: static !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    display: block !important;
+    width: 100% !important;
+    height: auto !important;
+    z-index: 9999 !important;
+  }
+
+  .modal-content {
+    position: static !important;
+    max-height: none !important;
+    height: auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-shadow: none !important;
+    border: none !important;
+    padding: 10mm !important;
+    margin: 0 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    overflow: visible !important;
+  }
+
+  .overflow-y-auto,
+  .overflow-x-auto {
+    overflow: visible !important;
+    max-height: none !important;
+    height: auto !important;
+  }
+
+  /* Keep tables and sections clean and together */
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    page-break-inside: auto;
+  }
+
+  tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+
+  th, td {
+    border: 1px solid #cbd5e1 !important;
+    color: #000000 !important;
+  }
+
+  .rounded-xl, .rounded-2xl, .p-4, .p-5 {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    border-color: #cbd5e1 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+}
+

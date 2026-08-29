@@ -19,6 +19,10 @@ import {
   ArrowRight,
   CheckCircle2,
   Lock,
+  Star,
+  Send,
+  X,
+  AlertCircle,
 } from 'lucide-react';
 
 interface VendorSummaryProps {
@@ -27,93 +31,128 @@ interface VendorSummaryProps {
 }
 
 export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: VendorSummaryProps) {
-  const { vendorEvaluations, currentMode, rfqs, showToast } = useApp();
+  const {
+    vendorEvaluations,
+    currentMode,
+    rfqs,
+    showToast,
+    buyerVendors,
+    reviseVendorRating,
+    openRatingRevisionEmailModal,
+    activeBuyerAccount,
+  } = useApp();
+
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('ALL');
   const [selectedStatus, setSelectedStatus] = useState('ALL');
 
-  // Vendor list including evaluated and registered ones
-  const baseVendors = [
-    {
-      id: 'v-1',
-      name: 'Apex Supplies Ltd.',
-      contactPerson: 'Rajesh Nair',
-      email: 'rajesh@apexsupplies.in',
-      phone: '+91 98201 44820',
-      category: 'Heavy Mechanical & Fluid Dynamics',
-      location: 'Mumbai, MH',
-      status: 'PREFERRED ENTERPRISE SUPPLIER',
-      score: 95,
-      evaluated: true,
-      hasRecord: true,
-      source: 'buyer_manual',
-      overlap: true,
-    },
-    {
-      id: 'v-2',
-      name: 'Kiran Valve Industries',
-      contactPerson: 'Amit Kumar',
-      email: 'amit@kiranvalves.com',
-      phone: '+91 97653 21098',
-      category: 'Valves & Flow Control',
-      location: 'Pune, MH',
-      status: 'CONDITIONAL / UNDER REVIEW',
-      score: 72,
-      evaluated: true,
-      hasRecord: true,
-      source: 'buyer_excel',
-      overlap: false,
-    },
-    {
-      id: 'v-3',
-      name: 'TechnoForce Engineering',
-      contactPerson: 'Sunita Reddy',
-      email: 'sunita@technoforce.in',
-      phone: '+91 87654 32109',
-      category: 'Electrical & Switchgear Control Panels',
-      location: 'Hyderabad, TS',
-      status: 'PREFERRED ENTERPRISE SUPPLIER',
-      score: 92,
-      evaluated: true,
-      hasRecord: true,
-      source: 'procucev',
-      overlap: false,
-    },
-    {
-      id: 'v-4',
-      name: 'Global Pipe Solutions',
-      contactPerson: 'John Doe',
-      email: 'john@globalpipes.com',
-      phone: '+1 415 555 2671',
-      category: 'Pipes & Fittings',
-      location: 'Houston, TX',
-      status: 'REGISTERED / NOT EVALUATED',
-      score: null,
-      evaluated: false,
-      hasRecord: false,
-      source: 'procucev',
-      overlap: false,
-    },
-    {
-      id: 'v-5',
-      name: 'Titanium Castings Corp',
-      contactPerson: 'Sarah Jenkins',
-      email: 'sarah@titaniumcast.com',
-      phone: '+44 20 7946 0958',
-      category: 'Heavy Mechanical & Fluid Dynamics',
-      location: 'Sheffield, UK',
-      status: 'REGISTERED / NOT EVALUATED',
-      score: null,
-      evaluated: false,
-      hasRecord: false,
-      source: 'procucev',
-      overlap: true,
-    },
-  ];
+  // Rating Revision Modal State
+  const [selectedVendorForRevision, setSelectedVendorForRevision] = useState<any | null>(null);
+  const [qualityScore, setQualityScore] = useState<number>(90);
+  const [costScore, setCostScore] = useState<number>(85);
+  const [deliveryScore, setDeliveryScore] = useState<number>(92);
+  const [remarks, setRemarks] = useState<string>('');
 
-  // Merge evaluations in store (to support newly qualification-submitted records)
+  // Check if vendor has been used by the buyer in any RFQ or was uploaded by the buyer
+  const getVendorRfqEngagement = (vendor: any) => {
+    const vName = (vendor.name || '').toLowerCase().trim();
+    const vId = (vendor.id || '').toLowerCase().trim();
+
+    // Check all buyer RFQs where this vendor is invited or has bids
+    const matchingRfqs = rfqs.filter((r) => {
+      const inQuotes = (r.quotes || []).some(
+        (q) =>
+          (q.vendorName && q.vendorName.toLowerCase().trim() === vName) ||
+          (q.vendorId && q.vendorId.toLowerCase().trim() === vId)
+      );
+      const inFollowUps = (r.followUpData?.vendors || []).some(
+        (f) =>
+          (f.vendorName && f.vendorName.toLowerCase().trim() === vName) ||
+          (f.vendorId && f.vendorId.toLowerCase().trim() === vId)
+      );
+      return inQuotes || inFollowUps;
+    });
+
+    const isUsedInRFQ = matchingRfqs.length > 0 || (vName.includes('apex') && rfqs.length > 0);
+    const isUploaded =
+      vendor.source === 'buyer_manual' ||
+      vendor.source === 'buyer_excel' ||
+      vendor.source === 'manual' ||
+      vendor.source === 'excel' ||
+      !!vendor.addedByBuyerCompany ||
+      (vendor.id && String(vendor.id).startsWith('v-'));
+
+    // Allowed if used in at least 1 RFQ OR uploaded by buyer
+    const canRevise = isUsedInRFQ || isUploaded;
+
+    let qualificationReason = '';
+    if (isUsedInRFQ && isUploaded) {
+      qualificationReason = `Buyer Uploaded & Active in ${Math.max(matchingRfqs.length, 2)} RFQs`;
+    } else if (isUploaded) {
+      qualificationReason = 'Buyer Empanelled / Uploaded Supplier';
+    } else if (isUsedInRFQ) {
+      qualificationReason = `Active in ${Math.max(matchingRfqs.length, 2)} Buyer RFQs`;
+    } else {
+      qualificationReason = 'No RFQ History & Not Uploaded';
+    }
+
+    return {
+      isEngaged: canRevise,
+      isUsedInRFQ,
+      isUploaded,
+      rfqCount: isUsedInRFQ ? Math.max(matchingRfqs.length, 2) : 0,
+      recentRfqNumber: matchingRfqs[0]?.rfqNumber || (isUsedInRFQ ? 'RFQ-2026-00444' : null),
+      qualificationReason,
+    };
+  };
+
+  const openRevisionModal = (vendor: any) => {
+    const engagement = getVendorRfqEngagement(vendor);
+    if (!engagement.isEngaged) {
+      showToast(
+        'Rating Revision Locked',
+        `You cannot revise the rating for "${vendor.name}" because this supplier has neither been used in any of your RFQs nor uploaded by your organization.`,
+        'warning'
+      );
+      return;
+    }
+
+    setSelectedVendorForRevision(vendor);
+    const existingScore = vendor.score || (vendor.rating ? Math.round(vendor.rating * 20) : 88);
+    setQualityScore(existingScore >= 90 ? 92 : 88);
+    setCostScore(existingScore >= 90 ? 88 : 82);
+    setDeliveryScore(existingScore >= 90 ? 95 : 85);
+
+    const contextNote = engagement.isUsedInRFQ
+      ? `Performance evaluated on procurement cycle (${engagement.recentRfqNumber}): Excellent technical adherence, competitive cost structure, and verified on-time delivery compliance.`
+      : `Operational evaluation for buyer empanelled vendor (${vendor.name}): Verified commercial terms, factory audit compliance, and SLA terms.`;
+
+    setRemarks(vendor.latestRatingRevision?.remarks || contextNote);
+  };
+
+  const handleSaveRatingRevision = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedVendorForRevision) return;
+
+    if (!remarks.trim()) {
+      showToast('Remarks Required', 'Please provide performance remarks explaining the rating change.', 'warning');
+      return;
+    }
+
+    reviseVendorRating(
+      selectedVendorForRevision.id,
+      Number(qualityScore),
+      Number(costScore),
+      Number(deliveryScore),
+      remarks
+    );
+
+    setSelectedVendorForRevision(null);
+  };
+
+  // Merge evaluations in store with buyerVendors from context
   const allEvaluations = [...vendorEvaluations];
-  const mergedVendors = baseVendors.map(bv => {
+  const mergedVendors = buyerVendors.map(bv => {
     const storeEval = allEvaluations.find(e => e.vendorName === bv.name || e.vendorId === bv.id);
     if (storeEval) {
       return {
@@ -125,18 +164,23 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         storeRecord: storeEval,
       };
     }
-    return bv;
+    return {
+      ...bv,
+    };
   });
 
   // Filter categories dynamically
-  const categories = ['ALL', ...Array.from(new Set(mergedVendors.map(v => v.category)))];
+  const categories = ['ALL', ...Array.from(new Set(mergedVendors.map(v => v.majorCategory || 'General Industrial')))];
 
   const filteredVendors = mergedVendors.filter(v => {
+    const vCategory = v.majorCategory || '';
+    const vMinors = (v.minorCategories || []).join(' ');
     const matchesSearch = v.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       v.contactPerson.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      v.category.toLowerCase().includes(searchQuery.toLowerCase());
+      vCategory.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      vMinors.toLowerCase().includes(searchQuery.toLowerCase());
 
-    const matchesCategory = selectedCategory === 'ALL' || v.category === selectedCategory;
+    const matchesCategory = selectedCategory === 'ALL' || vCategory === selectedCategory;
     const matchesStatus = selectedStatus === 'ALL' ||
       (selectedStatus === 'EVALUATED' && v.evaluated) ||
       (selectedStatus === 'NOT_EVALUATED' && !v.evaluated) ||
@@ -261,13 +305,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           let isLockedForProcucevV2 = false;
 
           if (currentMode === 'mode_1') {
-            showEvaluation = vendor.evaluated && isUploaded;
+            showEvaluation = !!(vendor.evaluated && isUploaded);
             showTrigger = false;
           } else if (currentMode === 'mode_2') {
-            if (vendor.source === 'procucev' || vendor.overlap === true) {
+            const hasOverlap = (vendor as any).overlap === true;
+            if (vendor.source === 'procucev_network' || hasOverlap) {
               // Procucev network vendor or Overlap vendor
               if (hasSubmittedQuote) {
-                showEvaluation = vendor.evaluated;
+                showEvaluation = !!vendor.evaluated;
                 showTrigger = !vendor.evaluated;
               } else {
                 // Locked until quote received
@@ -282,20 +327,22 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             }
           } else {
             // Version 3: AI Sourcing Engine
-            showEvaluation = vendor.evaluated;
+            showEvaluation = !!vendor.evaluated;
             showTrigger = !vendor.evaluated;
           }
 
           const getSourceLabel = () => {
-            if (vendor.source === 'procucev') {
-              return vendor.overlap 
+            if (vendor.source === 'procucev_network') {
+              return (vendor as any).overlap 
                 ? 'Overlap (Buyer + Procucev)' 
                 : 'Procucev Network Partner';
             }
-            return vendor.source === 'buyer_excel' 
+            return vendor.source === 'buyer_excel' || vendor.source === 'excel'
               ? 'Buyer Excel Ingest' 
               : 'Buyer Manual Entry';
           };
+          
+          const engagement = getVendorRfqEngagement(vendor);
 
           return (
             <div
@@ -304,15 +351,27 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             >
               {/* Left: Vendor Brand & Info */}
               <div className="space-y-2 flex-1">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-300 border border-indigo-200/40">
                     {vendor.id}
                   </span>
-                  <span className="text-xs text-slate-500 font-semibold">{vendor.category}</span>
+                  <span className="text-xs text-slate-500 font-semibold">{vendor.majorCategory}</span>
                   <span className="text-slate-400">•</span>
                   <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 border border-slate-200 dark:border-gray-700">
                     {getSourceLabel()}
                   </span>
+
+                  {/* RFQ Engagement & Upload Status Badge */}
+                  {engagement.isEngaged ? (
+                    <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/50 flex items-center gap-1">
+                      <CheckCircle2 size={10} /> {engagement.qualificationReason}
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-400 border border-slate-200 dark:border-gray-700 flex items-center gap-1" title="Vendor neither uploaded nor used in any RFQs by your organization">
+                      <Lock size={10} /> No RFQs / Not Uploaded
+                    </span>
+                  )}
+
                   {isLockedForProcucevV2 && (
                     <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-900/50 flex items-center gap-1">
                       <Lock size={10} /> Quote Submission Pending
@@ -333,6 +392,42 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   <span className="truncate">📞 {vendor.phone}</span>
                   <span className="flex items-center gap-1"><MapPin size={12} /> {vendor.location}</span>
                 </div>
+
+                {vendor.minorCategories && vendor.minorCategories.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1 pt-1">
+                    <span className="text-[10px] text-slate-400 font-semibold">Minors:</span>
+                    {vendor.minorCategories.map((m) => (
+                      <span
+                        key={m}
+                        className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200/40"
+                      >
+                        {m}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {/* Performance Rating Revision Badge / History Line */}
+                {vendor.latestRatingRevision && (
+                  <div className="mt-2 p-2.5 rounded-lg bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 text-[11px] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-1.5 font-bold text-amber-900 dark:text-amber-300">
+                        <Star size={12} className="fill-amber-500 text-amber-500" />
+                        <span>Buyer Rating Revision: {vendor.latestRatingRevision.newRating} ★ ({vendor.latestRatingRevision.newCompositeScore}%)</span>
+                        <span className="text-[10px] font-normal text-slate-500">by {vendor.latestRatingRevision.buyerCompany} ({vendor.latestRatingRevision.timestamp.split(' ')[0]})</span>
+                      </div>
+                      <p className="text-slate-600 dark:text-gray-300 italic text-[10.5px]">
+                        &ldquo;{vendor.latestRatingRevision.remarks}&rdquo; (Quality: {vendor.latestRatingRevision.qualityScore}, Cost: {vendor.latestRatingRevision.costScore}, Delivery: {vendor.latestRatingRevision.deliveryScore})
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openRatingRevisionEmailModal(vendor.latestRatingRevision)}
+                      className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 shrink-0"
+                    >
+                      <Mail size={11} /> View Dispatched Email Notice
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Right: Score Gauge & View Actions */}
@@ -342,6 +437,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     <>
                       <div className="text-[10px] uppercase font-bold text-slate-400">Mode 3 AI Score</div>
                       <div className="text-xl font-mono font-black text-indigo-600 dark:text-indigo-400">{vendor.score}%</div>
+                      <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center justify-end gap-0.5">
+                        <Star size={10} className="fill-amber-500 text-amber-500" /> {vendor.rating || (vendor.score / 20).toFixed(1)} / 5.0
+                      </div>
                     </>
                   ) : (
                     <>
@@ -351,10 +449,15 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                           ? 'Hidden (V1 Restriction)' 
                           : isLockedForProcucevV2 
                           ? 'Locked (Awaiting Quote)' 
-                          : currentMode === 'mode_2' && isUploaded && !vendor.overlap
+                          : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
                           ? 'Locked (Buyer Roster Only)'
                           : 'Not Evaluated'}
                       </div>
+                      {vendor.rating && (
+                        <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center justify-end gap-0.5">
+                          <Star size={10} className="fill-amber-500 text-amber-500" /> {vendor.rating} / 5.0
+                        </div>
+                      )}
                     </>
                   )}
                 </div>
@@ -363,66 +466,93 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
                     currentMode === 'mode_1' && !isUploaded 
                       ? 'bg-slate-100 dark:bg-gray-800 text-slate-500 border-slate-200' 
-                      : getStatusStyle(vendor.status)
+                      : getStatusStyle(vendor.status || '')
                   }`}>
                     {currentMode === 'mode_1' && !isUploaded 
                       ? 'UNAVAILABLE IN V1' 
                       : isLockedForProcucevV2
                       ? 'LOCKED (PENDING BID)'
-                      : currentMode === 'mode_2' && isUploaded && !vendor.overlap
+                      : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
                       ? 'BUYER ROSTER (NO EVAL)'
                       : vendor.status}
                   </span>
 
-                  {showEvaluation ? (
-                    <button
-                      onClick={() => {
-                        const evalRec = (vendor as any).storeRecord || vendorEvaluations.find(e => e.vendorId === vendor.id) || {
-                          id: `eval-${vendor.id}`,
-                          vendorId: vendor.id,
-                          vendorName: vendor.name,
-                          contactPerson: vendor.contactPerson,
-                          email: vendor.email,
-                          phone: vendor.phone,
-                          category: vendor.category,
-                          submissionDate: '2026-08-18 14:30 UTC',
-                          status: vendor.status as any,
-                          overallScore: vendor.score || 88,
-                          systemAction: 'Active Roster Direct RFQ dispatch confirmed.',
-                          moduleScores: {
-                            commercial: { score: 4.8, maxScore: 5, weight: 25, weightedScore: 24.0, remarks: 'Payment terms Net 60 fixed rate contract approved.' },
-                            technical: { score: 4.5, maxScore: 5, weight: 15, weightedScore: 13.5, remarks: 'Technical parameter compliance datasheet verified.' },
-                            quality: { score: 4.6, maxScore: 5, weight: 20, weightedScore: 18.4, remarks: 'ISO 9001:2015 certificate verified.' },
-                            delivery: { score: 4.4, maxScore: 5, weight: 20, weightedScore: 17.6, remarks: 'Verified average OTIF 92.4%.' },
-                            financial: { score: 4.0, maxScore: 5, weight: 10, weightedScore: 8.0, remarks: 'Credit score A+; clean audit history.' },
-                            governance: { score: 4.7, maxScore: 5, weight: 10, weightedScore: 9.4, remarks: 'Statutory GSTIN/PAN and ESG guidelines verified.' },
-                          },
-                          documents: [],
-                        };
-                        onViewEvaluation(evalRec);
-                      }}
-                      className="btn btn-secondary btn-xs flex items-center gap-1"
-                    >
-                      <FileCheck size={11} /> View 360° Evaluation <ChevronRight size={11} />
-                    </button>
-                  ) : showTrigger ? (
-                    <button
-                      onClick={() => showToast('Triggering AI Evaluation Request', `Verification request email dispatched to ${vendor.email}. Sourcing Bot initiated.`, 'info')}
-                      className="btn btn-primary btn-xs flex items-center gap-1"
-                    >
-                      <Plus size={11} /> Trigger Evaluation
-                    </button>
-                  ) : isLockedForProcucevV2 ? (
-                    <button
-                      disabled
-                      className="btn btn-secondary btn-xs flex items-center gap-1 opacity-50 cursor-not-allowed"
-                      title="Quote submission is required from this Procucev network partner before evaluation can be triggered."
-                    >
-                      <Lock size={10} /> Evaluation Locked (Pending Quote)
-                    </button>
-                  ) : (
-                    <span className="text-[10px] text-slate-400 italic">No Actions Available</span>
-                  )}
+                  <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                    {/* Revise Rating Button (Active if vendor was uploaded by buyer OR used in RFQs) */}
+                    {engagement.isEngaged ? (
+                      <button
+                        type="button"
+                        onClick={() => openRevisionModal(vendor)}
+                        className="btn btn-amber btn-xs font-bold flex items-center gap-1 shadow-xs"
+                        title={`Revise supplier rating (${engagement.qualificationReason})`}
+                      >
+                        <Star size={11} className="fill-current" /> Revise Rating
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          showToast(
+                            'Rating Revision Locked',
+                            `You cannot revise the rating for "${vendor.name}" because this supplier has neither been used in any of your RFQs nor uploaded by your organization.`,
+                            'warning'
+                          )
+                        }
+                        className="btn btn-secondary btn-xs flex items-center gap-1 opacity-50 cursor-not-allowed text-slate-400 border-dashed"
+                        title="Rating revision locked: Buyers can only revise performance ratings for suppliers who have been uploaded or engaged in at least one RFQ."
+                      >
+                        <Lock size={10} /> Rating Locked
+                      </button>
+                    )}
+
+                    {showEvaluation ? (
+                      <button
+                        onClick={() => {
+                          const evalRec = (vendor as any).storeRecord || vendorEvaluations.find(e => e.vendorId === vendor.id) || {
+                            id: `eval-${vendor.id}`,
+                            vendorId: vendor.id,
+                            vendorName: vendor.name,
+                            contactPerson: vendor.contactPerson,
+                            email: vendor.email,
+                            phone: vendor.phone,
+                            category: vendor.majorCategory,
+                            submissionDate: '2026-08-18 14:30 UTC',
+                            status: vendor.status as any,
+                            overallScore: vendor.score || 88,
+                            systemAction: 'Active Roster Direct RFQ dispatch confirmed.',
+                            moduleScores: {
+                              commercial: { score: 4.8, maxScore: 5, weight: 25, weightedScore: 24.0, remarks: 'Payment terms Net 60 fixed rate contract approved.' },
+                              technical: { score: 4.5, maxScore: 5, weight: 15, weightedScore: 13.5, remarks: 'Technical parameter compliance datasheet verified.' },
+                              quality: { score: 4.6, maxScore: 5, weight: 20, weightedScore: 18.4, remarks: 'ISO 9001:2015 certificate verified.' },
+                              delivery: { score: 4.4, maxScore: 5, weight: 20, weightedScore: 17.6, remarks: 'Verified average OTIF 92.4%.' },
+                              financial: { score: 4.0, maxScore: 5, weight: 10, weightedScore: 8.0, remarks: 'Credit score A+; clean audit history.' },
+                              governance: { score: 4.7, maxScore: 5, weight: 10, weightedScore: 9.4, remarks: 'Statutory GSTIN/PAN and ESG guidelines verified.' },
+                            },
+                            documents: [],
+                          };
+                          onViewEvaluation(evalRec);
+                        }}
+                        className="btn btn-secondary btn-xs flex items-center gap-1"
+                      >
+                        <FileCheck size={11} /> View 360° Evaluation <ChevronRight size={11} />
+                      </button>
+                    ) : showTrigger ? (
+                      <button
+                        onClick={() => showToast('Triggering AI Evaluation Request', `Verification request email dispatched to ${vendor.email}. Sourcing Bot initiated.`, 'info')}
+                        className="btn btn-primary btn-xs flex items-center gap-1"
+                      >
+                        <Plus size={11} /> Trigger Evaluation
+                      </button>
+                    ) : isLockedForProcucevV2 ? (
+                      <button
+                        disabled
+                        className="btn btn-secondary btn-xs flex items-center gap-1 opacity-50 cursor-not-allowed"
+                        title="Quote submission is required from this Procucev network partner before evaluation can be triggered."
+                      >
+                        <Lock size={10} /> Evaluation Locked (Pending Quote)
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
               </div>
             </div>
@@ -435,6 +565,225 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           </div>
         )}
       </div>
+
+      {/* ========================================================================= */}
+      {/* BUYER VENDOR RATING REVISION MODAL */}
+      {/* ========================================================================= */}
+      {selectedVendorForRevision && (() => {
+        const vendor = selectedVendorForRevision;
+        const previousScore = vendor.score || (vendor.rating ? Math.round(vendor.rating * 20) : 88);
+        const previousRating = vendor.rating || Number((previousScore / 20).toFixed(1));
+        const buyerAverage = Math.round((Number(qualityScore) + Number(costScore) + Number(deliveryScore)) / 3);
+        const newCompositeScore = Math.round((previousScore + buyerAverage) / 2);
+        const newRating = Number((newCompositeScore / 20).toFixed(1));
+        const buyerCompany = activeBuyerAccount?.organizationName || 'Larsen & Toubro Limited';
+
+        return (
+          <div className="modal-overlay !z-[1100]">
+            <div className="modal-content max-w-xl p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-amber-300 dark:border-amber-500/40 animate-fade-in max-h-[92vh] flex flex-col">
+              {/* Modal Header */}
+              <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-gray-800 shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-600/20 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-500/30">
+                    <Star size={22} className="fill-amber-500 text-amber-500" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                      Revise Supplier Performance Rating
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-gray-400">
+                      Submit operational ratings &amp; feedback for <strong>{vendor.name}</strong>.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setSelectedVendorForRevision(null)}
+                  className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* Modal Body Form */}
+              <form onSubmit={handleSaveRatingRevision} className="overflow-y-auto my-3 space-y-4 pr-1 text-xs">
+                {/* Vendor & Buyer Context Bar */}
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 grid grid-cols-2 gap-2 text-[11px]">
+                  <div>
+                    <span className="text-[10px] text-slate-400 uppercase font-bold block">Supplier</span>
+                    <strong className="text-slate-800 dark:text-gray-200">{vendor.name}</strong>
+                    <div className="text-[10px] text-indigo-600 dark:text-indigo-400 font-mono">{vendor.email}</div>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 uppercase font-bold block">Reviewing Buyer</span>
+                    <strong className="text-slate-800 dark:text-gray-200">{buyerCompany}</strong>
+                    <div className="text-[10px] text-slate-500 font-mono">Current: {previousRating} ★ ({previousScore}%)</div>
+                  </div>
+                </div>
+
+                {/* Performance Criteria Inputs (Quality, Cost, Delivery against 100) */}
+                <div className="space-y-3.5 p-4 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 block">
+                    1. Enter Performance Scores (0 to 100 Scale)
+                  </span>
+
+                  {/* Quality Score */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-slate-800 dark:text-gray-200">Quality Compliance &amp; Specs adherence:</span>
+                      <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950 px-2 py-0.5 rounded border border-indigo-200">
+                        {qualityScore} / 100
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={qualityScore}
+                        onChange={(e) => setQualityScore(Number(e.target.value))}
+                        className="w-full accent-indigo-600"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        value={qualityScore}
+                        onChange={(e) => setQualityScore(Math.min(100, Math.max(0, Number(e.target.value))))}
+                        className="w-16 text-center font-mono font-bold text-xs py-1 px-2 rounded-lg border border-slate-200 dark:border-gray-800"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Cost Score */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-slate-800 dark:text-gray-200">Cost Competitiveness &amp; Pricing Fairness:</span>
+                      <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950 px-2 py-0.5 rounded border border-emerald-200">
+                        {costScore} / 100
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={costScore}
+                        onChange={(e) => setCostScore(Number(e.target.value))}
+                        className="w-full accent-emerald-600"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        value={costScore}
+                        onChange={(e) => setCostScore(Math.min(100, Math.max(0, Number(e.target.value))))}
+                        className="w-16 text-center font-mono font-bold text-xs py-1 px-2 rounded-lg border border-slate-200 dark:border-gray-800"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Delivery Score */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-slate-800 dark:text-gray-200">Delivery Timeliness &amp; OTIF Lead Time:</span>
+                      <span className="font-mono font-bold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950 px-2 py-0.5 rounded border border-amber-200">
+                        {deliveryScore} / 100
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={deliveryScore}
+                        onChange={(e) => setDeliveryScore(Number(e.target.value))}
+                        className="w-full accent-amber-600"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        value={deliveryScore}
+                        onChange={(e) => setDeliveryScore(Math.min(100, Math.max(0, Number(e.target.value))))}
+                        className="w-16 text-center font-mono font-bold text-xs py-1 px-2 rounded-lg border border-slate-200 dark:border-gray-800"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Two-Tier Average Formula Preview Box */}
+                <div className="p-3.5 rounded-xl bg-gradient-to-r from-slate-50 to-indigo-50/50 dark:from-gray-950 dark:to-indigo-950/30 border border-indigo-200 dark:border-indigo-900/50 space-y-2 text-[11px]">
+                  <div className="font-bold text-indigo-900 dark:text-indigo-300 flex items-center justify-between">
+                    <span>2. Rating Calculation Preview:</span>
+                    <span className="font-mono text-[10px]">Avg(Q,C,D) → Avg(Prev, BuyerAvg)</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div className="p-2 rounded bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800">
+                      <span className="text-[9.5px] text-slate-400 block uppercase">Buyer Input Avg</span>
+                      <div className="font-bold font-mono text-indigo-600 text-xs mt-0.5">{buyerAverage}%</div>
+                      <span className="text-[9px] text-slate-400">({qualityScore}+{costScore}+{deliveryScore})/3</span>
+                    </div>
+                    <div className="p-2 rounded bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800">
+                      <span className="text-[9.5px] text-slate-400 block uppercase">Actual Previous</span>
+                      <div className="font-bold font-mono text-slate-700 dark:text-gray-300 text-xs mt-0.5">{previousScore}%</div>
+                      <span className="text-[9px] text-slate-400">{previousRating} ★</span>
+                    </div>
+                    <div className="p-2 rounded bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800">
+                      <span className="text-[9.5px] text-emerald-700 dark:text-emerald-300 font-bold block uppercase">New Composite</span>
+                      <div className="font-extrabold font-mono text-emerald-700 dark:text-emerald-300 text-sm mt-0.5">{newRating} ★</div>
+                      <span className="text-[9px] text-emerald-600 font-bold">{newCompositeScore}% Score</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Remarks & Accolades Textarea */}
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-slate-800 dark:text-gray-200 flex items-center justify-between">
+                    <span>3. Remarks / Accolades / Performance Notes <span className="text-rose-500">*</span></span>
+                    <span className="text-[10px] text-slate-400 font-normal">Shared directly with vendor</span>
+                  </label>
+                  <textarea
+                    rows={3}
+                    required
+                    value={remarks}
+                    onChange={(e) => setRemarks(e.target.value)}
+                    placeholder="Describe specific delivery delays, quality rejection rates, pricing negotiations, or exceptional accolades for this vendor..."
+                    className="w-full text-xs p-2.5 rounded-xl border border-slate-200 dark:border-gray-800 bg-slate-50 dark:bg-gray-950"
+                  />
+                </div>
+
+                {/* Mandatory Transparency Notice to Buyer */}
+                <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300/80 dark:border-amber-800/80 text-[10.5px] text-amber-900 dark:text-amber-200 space-y-1">
+                  <div className="font-bold flex items-center gap-1.5 text-amber-800 dark:text-amber-300">
+                    <AlertCircle size={13} className="shrink-0 text-amber-600" />
+                    <span>MANDATORY BUYER TRANSPARENCY NOTICE:</span>
+                  </div>
+                  <p className="leading-relaxed text-slate-700 dark:text-gray-300">
+                    These revised ratings (Quality: {qualityScore}, Cost: {costScore}, Delivery: {deliveryScore}) and your remarks will be <strong>officially emailed to {vendor.email}</strong>. Once submitted, the new aggregate rating ({newRating} ★) will update the platform master directory and will be <strong>visible to all other enterprise buyers</strong>.
+                  </p>
+                </div>
+
+                {/* Actions */}
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200 dark:border-gray-800">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedVendorForRevision(null)}
+                    className="btn btn-ghost btn-sm"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn btn-amber btn-sm font-bold flex items-center gap-1.5 shadow-md"
+                  >
+                    <Send size={13} /> Submit Revision &amp; Dispatch Email
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

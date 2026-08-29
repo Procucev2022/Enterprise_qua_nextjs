@@ -1,0 +1,963 @@
+'use client';
+
+import React, { useState } from 'react';
+import { useApp } from '@/lib/store';
+import {
+  VendorMasterUploadRecord,
+  PurchaseOrderLineItemRecord,
+  HistoricalPurchaseVendorRecord,
+} from '@/lib/types';
+import {
+  UploadCloud,
+  FileSpreadsheet,
+  CheckCircle2,
+  Sparkles,
+  ArrowRight,
+  ShieldCheck,
+  Building2,
+  Mail,
+  Phone,
+  MapPin,
+  FileText,
+  Star,
+  Clock,
+  Download,
+  AlertCircle,
+  Tag,
+  Zap,
+  X,
+  Layers,
+  ChevronRight,
+  Plus,
+  Trash2,
+  SlidersHorizontal,
+  Check,
+  Database,
+} from 'lucide-react';
+
+// Sample Master Vendors File (ERP Vendor Master Dump)
+const SAMPLE_VENDOR_MASTER: VendorMasterUploadRecord[] = [
+  {
+    id: 'vm-1',
+    vendorCode: 'VND-1001',
+    companyName: 'Apex Supplies Ltd.',
+    contactPerson: 'Rajesh Nair',
+    email: 'rajesh@apexsupplies.in',
+    phone: '+91 98201 44820',
+    address: 'Plot 42, MIDC Industrial Area, Thane, Mumbai, MH',
+    gstNumber: '27AAACA1928K1Z4',
+    vendorRatingScore: 95,
+  },
+  {
+    id: 'vm-2',
+    vendorCode: 'VND-1002',
+    companyName: 'Kiran Valve Industries',
+    contactPerson: 'Amit Kumar',
+    email: 'amit@kiranvalves.com',
+    phone: '+91 97653 21098',
+    address: 'Sector 7, Bhosari Industrial Estate, Pune, MH',
+    gstNumber: '27AAACK3921P1Z9',
+    vendorRatingScore: 78,
+  },
+  {
+    id: 'vm-3',
+    vendorCode: 'VND-1003',
+    companyName: 'TechnoForce Engineering Ltd',
+    contactPerson: 'Sunita Reddy',
+    email: 'sunita@technoforce.in',
+    phone: '+91 87654 32109',
+    address: 'TSIIC Industrial Park, Phase II, Hyderabad, TS',
+    gstNumber: '36AAACT9920P1Z8',
+    vendorRatingScore: 92,
+  },
+  {
+    id: 'vm-4',
+    vendorCode: 'VND-1004',
+    companyName: 'Precision Pumps & Motors Pvt Ltd',
+    contactPerson: 'Vikram Shah',
+    email: 'vikram@precisionpumps.co.in',
+    phone: '+91 99876 54321',
+    address: 'GIDC Industrial Estate, Vatva, Ahmedabad, GJ',
+    gstNumber: '24AAACP4912J1Z2',
+    vendorRatingScore: 84,
+  },
+  {
+    id: 'vm-5',
+    vendorCode: 'VND-1005',
+    companyName: 'Everest Steel & Infra Structures',
+    contactPerson: 'Harish Mehta',
+    email: 'harish@evereststeel.in',
+    phone: '+91 98111 22334',
+    address: 'Plot 18, Sanand Industrial Area, Ahmedabad, GJ',
+    gstNumber: '24AAACE8891N1Z0',
+    vendorRatingScore: 88,
+  },
+  {
+    id: 'vm-6',
+    vendorCode: 'VND-1006',
+    companyName: 'Delta Valve Systems Ltd.',
+    contactPerson: 'Vikram Joshi',
+    email: 'v.joshi@deltavalves.in',
+    phone: '+91 98220 18492',
+    address: 'MIDC Chakan Industrial Corridor, Pune, MH',
+    gstNumber: '27AABCD3920M1Z8',
+    vendorRatingScore: 96,
+  },
+  // Vendors with contact details in Vendor Master BUT NO matching PO history in PO dump
+  {
+    id: 'vm-7',
+    vendorCode: 'VND-1007',
+    companyName: 'Vortex Hydraulic & Pneumatic Systems',
+    contactPerson: 'Nikhil Rane',
+    email: 'nikhil@vortexhydraulics.in',
+    phone: '+91 98450 11920',
+    address: 'Peenya Industrial Area, Phase III, Bangalore, KA',
+    gstNumber: '29AAACV8841P1Z5',
+    vendorRatingScore: 82, // Optional rating
+  },
+  {
+    id: 'vm-8',
+    vendorCode: 'VND-1008',
+    companyName: 'Nova Electrical Spares & Cable Trays',
+    contactPerson: 'Pooja Deshmukh',
+    email: 'sales@novaelectricals.com',
+    phone: '+91 97230 44510',
+    address: 'Makarpura GIDC Industrial Area, Vadodara, GJ',
+    gstNumber: '24AAACN4419K1Z1',
+    vendorRatingScore: undefined, // Rating not provided (optional)
+  },
+];
+
+// Sample Historical Purchase Orders (PO Line Items Dump)
+const SAMPLE_PO_LINE_ITEMS: PurchaseOrderLineItemRecord[] = [
+  {
+    id: 'po-1',
+    poNumber: 'PO-2025-00891',
+    poDate: '2025-04-12',
+    vendorIdentifier: 'Apex Supplies Ltd.',
+    itemName: 'Centrifugal Water Pump 500 GPM (15 HP Motor)',
+    specs: 'SS316 Impeller, ANSI Flanged, 150 PSI',
+    quantity: 12,
+    unit: 'Units',
+    unitPrice: 12500,
+    totalSpend: 150000,
+    department: 'Mechanical Maintenance',
+  },
+  {
+    id: 'po-2',
+    poNumber: 'PO-2025-01042',
+    poDate: '2025-06-20',
+    vendorIdentifier: 'Apex Supplies Ltd.',
+    itemName: 'Heavy Duty Industrial Compressors & Air Receivers',
+    specs: 'Screw compressor 25 CFM 8 Bar',
+    quantity: 4,
+    unit: 'Sets',
+    unitPrice: 28000,
+    totalSpend: 112000,
+    department: 'Plant Utilities',
+  },
+  {
+    id: 'po-3',
+    poNumber: 'PO-2025-01156',
+    poDate: '2025-08-04',
+    vendorIdentifier: 'Kiran Valve Industries',
+    itemName: 'Flanged Gate Valve 4-inch Class 150',
+    specs: 'ASTM A216 WCB Cast Carbon Steel Body',
+    quantity: 24,
+    unit: 'Units',
+    unitPrice: 3800,
+    totalSpend: 91200,
+    department: 'Piping & Flow Control',
+  },
+  {
+    id: 'po-4',
+    poNumber: 'PO-2025-01290',
+    poDate: '2025-09-18',
+    vendorIdentifier: 'Kiran Valve Industries',
+    itemName: 'High-Pressure Hydraulic Flexible Hoses & Fittings',
+    specs: '2-Wire Braid EN 853 2SN, 350 Bar Rating',
+    quantity: 60,
+    unit: 'Meters',
+    unitPrice: 1200,
+    totalSpend: 72000,
+    department: 'Hydraulics Workshop',
+  },
+  {
+    id: 'po-5',
+    poNumber: 'PO-2025-01431',
+    poDate: '2025-10-10',
+    vendorIdentifier: 'TechnoForce Engineering Ltd',
+    itemName: 'LV Switchgear Modular Panels with Drawout MCCB',
+    specs: '415V 3-Phase 50Hz, Form 4b separation',
+    quantity: 3,
+    unit: 'Panels',
+    unitPrice: 85000,
+    totalSpend: 255000,
+    department: 'Electrical Engineering',
+  },
+  {
+    id: 'po-6',
+    poNumber: 'PO-2025-01580',
+    poDate: '2025-11-25',
+    vendorIdentifier: 'Precision Pumps & Motors Pvt Ltd',
+    itemName: 'Submersible Dewatering Pumps & Induction Motors 7.5kW',
+    specs: 'Non-clog impeller, Cast Iron Body, IP68',
+    quantity: 8,
+    unit: 'Units',
+    unitPrice: 14500,
+    totalSpend: 116000,
+    department: 'Drainage & Utility',
+  },
+  {
+    id: 'po-7',
+    poNumber: 'PO-2025-01740',
+    poDate: '2025-12-05',
+    vendorIdentifier: 'Everest Steel & Infra Structures',
+    itemName: 'Fe500D TMT High-Yield Reinforcement Bars & PEB Frames',
+    specs: 'IS 1786 Grade Fe500D structural steel',
+    quantity: 120,
+    unit: 'Metric Tons',
+    unitPrice: 620,
+    totalSpend: 744000,
+    department: 'Civil Projects',
+  },
+  {
+    id: 'po-8',
+    poNumber: 'PO-2026-00120',
+    poDate: '2026-01-14',
+    vendorIdentifier: 'Delta Valve Systems Ltd.',
+    itemName: 'API 600 Cast Steel Gate Valves & Cryogenic Globe Valves',
+    specs: 'API 600 / ASME B16.34 compliant Class 300',
+    quantity: 16,
+    unit: 'Units',
+    unitPrice: 18500,
+    totalSpend: 296000,
+    department: 'Refinery Spares',
+  },
+];
+
+export default function InitialSetupModal() {
+  const {
+    initialSetupModalOpen,
+    setInitialSetupModalOpen,
+    historicalPurchaseDataPeriod,
+    setHistoricalPurchaseDataPeriod,
+    processHistoricalPurchaseData,
+    activeBuyerAccount,
+    showToast,
+  } = useApp();
+
+  const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1);
+  const [selectedPeriod, setSelectedPeriod] = useState<'1_year' | '2_years' | '3_years'>(historicalPurchaseDataPeriod || '2_years');
+
+  // Separate Upload States
+  const [storedVendors, setStoredVendors] = useState<VendorMasterUploadRecord[]>(SAMPLE_VENDOR_MASTER);
+  const [vendorMasterUploaded, setVendorMasterUploaded] = useState(true);
+
+  const [poLineItems, setPoLineItems] = useState<PurchaseOrderLineItemRecord[]>(SAMPLE_PO_LINE_ITEMS);
+  const [poDataUploaded, setPoDataUploaded] = useState(true);
+
+  const [isProcessingPOJoin, setIsProcessingPOJoin] = useState(false);
+  const [activeReviewTab, setActiveReviewTab] = useState<'all' | 'mapped' | 'unmapped'>('all');
+
+  if (!initialSetupModalOpen) return null;
+
+  // Correlate and Join PO line items against stored Vendor Master
+  const computeJoinedRecords = (): HistoricalPurchaseVendorRecord[] => {
+    return storedVendors.map((v) => {
+      // Find matching POs
+      const matchingPOs = poLineItems.filter(
+        (po) =>
+          po.vendorIdentifier.toLowerCase().includes(v.companyName.toLowerCase()) ||
+          v.companyName.toLowerCase().includes(po.vendorIdentifier.toLowerCase()) ||
+          (v.vendorCode && po.vendorIdentifier.toLowerCase().includes(v.vendorCode.toLowerCase()))
+      );
+
+      const hasMatchingPOs = matchingPOs.length > 0;
+      const items = matchingPOs.map((p) => p.itemName);
+      const totalAmount = matchingPOs.reduce((acc, p) => acc + p.totalSpend, 0);
+
+      let firstSetMajor = '';
+      let secondSetMinors: string[] = [];
+
+      if (hasMatchingPOs) {
+        // AI Category mapping based on purchased items
+        const itemText = items.join(' ').toLowerCase();
+        if (itemText.includes('pump') || itemText.includes('valve') || itemText.includes('hose') || itemText.includes('compressor')) {
+          firstSetMajor = 'Engineering Spares - Mechanical';
+          if (itemText.includes('pump')) secondSetMinors.push('Pumps & Accessories');
+          if (itemText.includes('valve') || itemText.includes('gate') || itemText.includes('globe')) secondSetMinors.push('Hoses, Valves & Fittings');
+          if (itemText.includes('hose')) secondSetMinors.push('Hoses, Valves & Fittings');
+          if (itemText.includes('compressor')) secondSetMinors.push('Compressors & Accessories');
+          if (itemText.includes('motor')) secondSetMinors.push('Machinery Parts');
+        } else if (itemText.includes('switchgear') || itemText.includes('panel') || itemText.includes('breaker') || itemText.includes('cable')) {
+          firstSetMajor = 'Engineering Spares - Electrical';
+          if (itemText.includes('panel') || itemText.includes('switchgear')) secondSetMinors.push('Panels');
+          if (itemText.includes('breaker') || itemText.includes('mccb')) secondSetMinors.push('Circuit Breakers');
+        } else if (itemText.includes('tmt') || itemText.includes('steel') || itemText.includes('civil') || itemText.includes('peb')) {
+          firstSetMajor = 'Civil Works';
+          if (itemText.includes('peb')) secondSetMinors.push('PEB Structure');
+          if (itemText.includes('tmt')) secondSetMinors.push('TMT BARS');
+          secondSetMinors.push('Roofing Sheets');
+        } else {
+          firstSetMajor = 'General Spares & Consumables';
+          secondSetMinors.push('Customised Parts');
+        }
+
+        // Deduplicate
+        secondSetMinors = Array.from(new Set(secondSetMinors));
+      }
+
+      return {
+        id: v.id,
+        vendorCode: v.vendorCode,
+        companyName: v.companyName,
+        email: v.email,
+        contactPerson: v.contactPerson,
+        phone: v.phone,
+        address: v.address,
+        gstNumber: v.gstNumber,
+        vendorRatingScore: v.vendorRatingScore,
+        hasPoHistory: hasMatchingPOs,
+        categoriesMappedByBuyer: hasMatchingPOs,
+        itemsSupplied: items,
+        pastPoSpend: hasMatchingPOs ? `$${totalAmount.toLocaleString()} (${matchingPOs.length} POs)` : 'No PO History in Dump',
+        poCount: matchingPOs.length,
+        firstSetMajorCategory: firstSetMajor,
+        secondSetMinorCategories: secondSetMinors,
+        secondSetSecondaryMajors: hasMatchingPOs ? ['Engineering Spares - Electrical', 'Civil Works'] : [],
+      };
+    });
+  };
+
+  const joinedVendors = computeJoinedRecords();
+  const mappedVendors = joinedVendors.filter((v) => v.categoriesMappedByBuyer);
+  const unmappedVendors = joinedVendors.filter((v) => !v.categoriesMappedByBuyer);
+
+  // Download Sample Vendor Master CSV
+  const handleDownloadVendorMasterCsv = () => {
+    const csv =
+      'Vendor Code,Company Name,Contact Person,Email ID,Phone,Address,GSTIN,Rating (0-100 Optional)\n' +
+      'VND-1001,Apex Supplies Ltd.,Rajesh Nair,rajesh@apexsupplies.in,+91 98201 44820,"MIDC Thane, Mumbai, MH",27AAACA1928K1Z4,95\n' +
+      'VND-1002,Kiran Valve Industries,Amit Kumar,amit@kiranvalves.com,+91 97653 21098,"Bhosari, Pune, MH",27AAACK3921P1Z9,78\n' +
+      'VND-1007,Vortex Hydraulic Systems,Nikhil Rane,nikhil@vortexhydraulics.in,+91 98450 11920,"Peenya, Bangalore, KA",29AAACV8841P1Z5,82\n' +
+      'VND-1008,Nova Electrical Spares,Pooja Deshmukh,sales@novaelectricals.com,+91 97230 44510,"Makarpura, Vadodara, GJ",24AAACN4419K1Z1,\n';
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'Procucev_Template_1_Vendor_Master.csv';
+    link.click();
+    showToast('Template Downloaded', 'Sample Vendor Master CSV template downloaded.', 'success');
+  };
+
+  // Download Sample PO Data CSV
+  const handleDownloadPoDataCsv = () => {
+    const csv =
+      'PO Number,PO Date,Vendor Name / Code,Item Name & Description,Quantity,Unit,Unit Price,Total Spend,Department\n' +
+      'PO-2025-00891,2025-04-12,Apex Supplies Ltd.,Centrifugal Water Pump 500 GPM (15 HP Motor),12,Units,12500,150000,Mechanical\n' +
+      'PO-2025-01156,2025-08-04,Kiran Valve Industries,Flanged Gate Valve 4-inch Class 150,24,Units,3800,91200,Piping\n' +
+      'PO-2025-01431,2025-10-10,TechnoForce Engineering Ltd,LV Switchgear Modular Panels with Drawout MCCB,3,Panels,85000,255000,Electrical\n' +
+      'PO-2025-01740,2025-12-05,Everest Steel & Infra Structures,Fe500D TMT High-Yield Reinforcement Bars,120,Tons,620,744000,Civil\n';
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Procucev_Template_2_PO_Purchase_Dump_${selectedPeriod}.csv`;
+    link.click();
+    showToast('Template Downloaded', 'Sample PO Purchase Order Dump CSV downloaded.', 'success');
+  };
+
+  const handleSimulatePOJoin = () => {
+    setIsProcessingPOJoin(true);
+    setTimeout(() => {
+      setIsProcessingPOJoin(false);
+      setStep(4);
+      showToast(
+        'Cross-Match Complete',
+        `Matched PO data against ${storedVendors.length} stored vendors. ${mappedVendors.length} categorized, ${unmappedVendors.length} flagged for self-mapping.`,
+        'success'
+      );
+    }, 800);
+  };
+
+  const handleConfirmFinalIngestion = () => {
+    processHistoricalPurchaseData(selectedPeriod, joinedVendors);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
+      <div className="glass-panel w-full max-w-4xl max-h-[92vh] overflow-y-auto rounded-3xl p-6 sm:p-8 bg-white dark:bg-gray-900 border-2 border-indigo-500/30 dark:border-indigo-500/40 shadow-2xl space-y-6 animate-scale-up">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-4 border-b border-slate-100 dark:border-gray-800 pb-5">
+          <div className="flex items-center gap-3.5">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-600 via-purple-600 to-amber-600 flex items-center justify-center text-white shadow-lg shadow-indigo-600/30 shrink-0">
+              <Building2 size={24} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white">
+                  Buyer Initial Setup: Vendor Master & PO Data Ingestion
+                </h2>
+                <span className="badge badge-amber font-mono font-bold text-[10px] uppercase">
+                  Dual-File ERP Setup
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-gray-400 mt-1 leading-relaxed">
+                Organization: <strong>{activeBuyerAccount?.organizationName || 'Larsen & Toubro Limited'}</strong> · Upload Vendor Master and PO purchase dump separately for AI category cross-mapping.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setInitialSetupModalOpen(false)}
+            className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-gray-800 transition-colors"
+            title="Dismiss setup (you can resume from the blinking corner badge)"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        {/* Informative Why This is Required Box */}
+        <div className="p-4 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 text-xs text-indigo-950 dark:text-indigo-200 space-y-2">
+          <div className="font-bold text-indigo-900 dark:text-indigo-300 flex items-center gap-2">
+            <Sparkles size={16} className="text-indigo-600 shrink-0" />
+            <span>Dual-Stream ERP Ingestion Architecture</span>
+          </div>
+          <p className="text-[11px] leading-relaxed text-slate-700 dark:text-gray-300">
+            Because combined data is rarely available in enterprise systems, you can upload <strong>File 1 (Vendor Master Coordinates)</strong> first, followed by <strong>File 2 (Historical PO Spend Dump)</strong>. The system saves the vendor master, extracts purchased items from POs, and maps categories against each vendor profile. If a vendor is in the master but has no PO history, they receive an email notifying them to <strong>self-map their categories upon login</strong> in order to receive enquiries.
+          </p>
+        </div>
+
+        {/* Step Progress Indicators */}
+        <div className="grid grid-cols-5 gap-1.5 text-center text-[11px] font-bold">
+          {[
+            { num: 1, label: '1. Time Horizon' },
+            { num: 2, label: '2. Vendor Master' },
+            { num: 3, label: '3. PO Dump' },
+            { num: 4, label: '4. AI Category Join' },
+            { num: 5, label: '5. Dispatch Emails' },
+          ].map((s) => (
+            <button
+              key={s.num}
+              type="button"
+              onClick={() => setStep(s.num as any)}
+              className={`p-2 rounded-xl border transition-all ${
+                step === s.num
+                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-600/20'
+                  : step > s.num
+                  ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 border-emerald-200'
+                  : 'bg-slate-50 dark:bg-gray-800/60 text-slate-400 dark:text-gray-500 border-slate-200 dark:border-gray-800'
+              }`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+
+        {/* STEP 1: CHOOSE TIME HORIZON */}
+        {step === 1 && (
+          <div className="space-y-4 animate-fade-in">
+            <div>
+              <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
+                Step 1: Choose Historical Purchase Period
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+                Select the time horizon of PO data you wish to cross-reference against your vendor master.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {[
+                {
+                  id: '1_year' as const,
+                  title: 'Last 1 Year (12 Months)',
+                  desc: 'Fast bootstrap focusing on recent high-velocity procurement spares.',
+                  badge: 'Quick Ingestion',
+                },
+                {
+                  id: '2_years' as const,
+                  title: 'Last 2 Years (24 Months)',
+                  desc: 'Recommended baseline covering seasonal maintenance & capex cycles.',
+                  badge: '⭐ Recommended',
+                },
+                {
+                  id: '3_years' as const,
+                  title: 'Last 3 Years (36 Months)',
+                  desc: 'Complete historical enterprise audit and comprehensive supplier discovery.',
+                  badge: 'Full Enterprise Audit',
+                },
+              ].map((opt) => (
+                <div
+                  key={opt.id}
+                  onClick={() => {
+                    setSelectedPeriod(opt.id);
+                    setHistoricalPurchaseDataPeriod(opt.id);
+                  }}
+                  className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between space-y-3 ${
+                    selectedPeriod === opt.id
+                      ? 'border-indigo-600 bg-indigo-50/60 dark:bg-indigo-950/40 ring-2 ring-indigo-500/20 shadow-md'
+                      : 'border-slate-200 dark:border-gray-800 hover:border-slate-300 dark:hover:border-gray-700 bg-slate-50/50 dark:bg-gray-850/40'
+                  }`}
+                >
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                          selectedPeriod === opt.id
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-slate-200 dark:bg-gray-800 text-slate-700 dark:text-gray-300'
+                        }`}
+                      >
+                        {opt.badge}
+                      </span>
+                      <Clock size={15} className={selectedPeriod === opt.id ? 'text-indigo-600' : 'text-slate-400'} />
+                    </div>
+                    <h4 className="text-xs font-black text-slate-900 dark:text-white mt-1">{opt.title}</h4>
+                    <p className="text-[11px] text-slate-500 dark:text-gray-400 leading-relaxed">{opt.desc}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex justify-end pt-4 border-t border-slate-100 dark:border-gray-800">
+              <button
+                type="button"
+                onClick={() => setStep(2)}
+                className="btn btn-primary font-bold text-xs py-2.5 px-5 flex items-center gap-1.5"
+              >
+                Continue to File 1: Vendor Master <ArrowRight size={14} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 2: FILE 1 — VENDOR MASTER DATA INGESTION */}
+        {step === 2 && (
+          <div className="space-y-4 animate-fade-in">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
+                    Step 2: Upload File 1 — Vendor Master Database
+                  </h3>
+                  <span className="badge badge-indigo font-bold text-[10px]">Stored First</span>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+                  Contains: Vendor Code, Company Name, Contact Person, Email, Phone, Address, GSTIN, and Optional Rating (0-100).
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleDownloadVendorMasterCsv}
+                className="btn btn-secondary btn-xs font-bold text-[11px] flex items-center gap-1 shrink-0"
+              >
+                <Download size={12} /> Download Vendor Master CSV
+              </button>
+            </div>
+
+            {/* Drag & Drop Vendor Master Area */}
+            <div className="border-2 border-dashed border-indigo-300 dark:border-indigo-500/50 hover:border-indigo-600 rounded-2xl p-5 text-center bg-indigo-50/40 dark:bg-indigo-950/20 transition-all cursor-pointer">
+              <div className="w-10 h-10 rounded-2xl bg-indigo-100 dark:bg-indigo-600/20 flex items-center justify-center mx-auto text-indigo-600 dark:text-indigo-400">
+                <Database size={20} />
+              </div>
+              <h4 className="text-xs font-black text-slate-800 dark:text-white mt-1.5">
+                Vendor Master Upload Ready ({storedVendors.length} Suppliers Loaded)
+              </h4>
+              <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
+                Stored successfully in platform backend. Ready for PO data cross-referencing.
+              </p>
+            </div>
+
+            {/* Table of Stored Vendor Master */}
+            <div className="space-y-2">
+              <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                Stored Vendor Master Records ({storedVendors.length} Suppliers):
+              </span>
+              <div className="border border-slate-200 dark:border-gray-800 rounded-xl overflow-hidden max-h-48 overflow-y-auto text-xs">
+                <table className="w-full text-left">
+                  <thead className="bg-slate-100 dark:bg-gray-800 text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 sticky top-0">
+                    <tr>
+                      <th className="p-2.5">Code</th>
+                      <th className="p-2.5">Company Name</th>
+                      <th className="p-2.5">Email & Phone</th>
+                      <th className="p-2.5">GSTIN / Address</th>
+                      <th className="p-2.5">Rating (0-100)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-gray-800 bg-white dark:bg-gray-900/60">
+                    {storedVendors.map((v) => (
+                      <tr key={v.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/40">
+                        <td className="p-2.5 font-mono text-[10px] text-slate-500">{v.vendorCode || 'VND-AUTO'}</td>
+                        <td className="p-2.5 font-bold text-slate-800 dark:text-white">{v.companyName}</td>
+                        <td className="p-2.5">
+                          <span className="font-mono text-indigo-600 dark:text-indigo-400 font-semibold block">{v.email}</span>
+                          <span className="text-slate-400 text-[10px]">{v.phone}</span>
+                        </td>
+                        <td className="p-2.5">
+                          <span className="mono text-[10px] text-slate-600 dark:text-gray-300 font-bold block">{v.gstNumber}</span>
+                          <span className="text-slate-400 text-[10px] truncate max-w-[120px] block">{v.address}</span>
+                        </td>
+                        <td className="p-2.5 font-bold">
+                          {v.vendorRatingScore ? (
+                            <span className="text-amber-600 dark:text-amber-400 flex items-center gap-0.5">
+                              <Star size={11} fill="currentColor" /> {v.vendorRatingScore}/100
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 text-[10px]">Optional (N/A)</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-gray-800">
+              <button type="button" onClick={() => setStep(1)} className="btn btn-secondary btn-sm">
+                Back to Period
+              </button>
+              <button
+                type="button"
+                onClick={() => setStep(3)}
+                className="btn btn-primary font-bold text-xs py-2.5 px-5 flex items-center gap-1.5"
+              >
+                Proceed to File 2: PO Dump <ArrowRight size={14} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 3: FILE 2 — PO PURCHASE DATA INGESTION */}
+        {step === 3 && (
+          <div className="space-y-4 animate-fade-in">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
+                    Step 3: Upload File 2 — Historical PO Purchase Dump
+                  </h3>
+                  <span className="badge badge-purple font-bold text-[10px]">{selectedPeriod === '1_year' ? '1 Year' : selectedPeriod === '2_years' ? '2 Years' : '3 Years'}</span>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+                  Contains: PO Number, PO Date, Vendor Name / Code, Line Item Description, Quantity, Spend, Department.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleDownloadPoDataCsv}
+                className="btn btn-secondary btn-xs font-bold text-[11px] flex items-center gap-1 shrink-0"
+              >
+                <Download size={12} /> Download PO Data CSV
+              </button>
+            </div>
+
+            {/* Drag & Drop PO Dump Area */}
+            <div
+              onClick={handleSimulatePOJoin}
+              className="border-2 border-dashed border-purple-300 dark:border-purple-500/50 hover:border-purple-600 rounded-2xl p-5 text-center bg-purple-50/40 dark:bg-purple-950/20 hover:bg-purple-50/80 transition-all cursor-pointer group"
+            >
+              <div className="w-10 h-10 rounded-2xl bg-purple-100 dark:bg-purple-600/20 flex items-center justify-center mx-auto text-purple-600 dark:text-purple-400 group-hover:scale-110 transition-transform">
+                <FileSpreadsheet size={20} />
+              </div>
+              <h4 className="text-xs font-black text-slate-800 dark:text-white mt-1.5">
+                Click to Run AI Cross-Match with Vendor Master ({poLineItems.length} PO Records)
+              </h4>
+              <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
+                Extracts item taxonomy and joins line items with stored vendor master records.
+              </p>
+              <div className="mt-2 inline-flex items-center gap-1 text-[11px] font-bold text-purple-700 dark:text-purple-300 px-3 py-0.5 rounded-full bg-white dark:bg-gray-800 border border-purple-200">
+                <Zap size={11} /> 1-Click Join & Auto-Categorize
+              </div>
+            </div>
+
+            {/* PO Line Items Preview */}
+            <div className="space-y-2">
+              <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                PO Line Items Sample ({poLineItems.length} Line Items):
+              </span>
+              <div className="border border-slate-200 dark:border-gray-800 rounded-xl overflow-hidden max-h-48 overflow-y-auto text-xs">
+                <table className="w-full text-left">
+                  <thead className="bg-slate-100 dark:bg-gray-800 text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 sticky top-0">
+                    <tr>
+                      <th className="p-2.5">PO Number</th>
+                      <th className="p-2.5">Vendor</th>
+                      <th className="p-2.5">Purchased Item & Specs</th>
+                      <th className="p-2.5">Qty / Unit</th>
+                      <th className="p-2.5">Total Spend</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-gray-800 bg-white dark:bg-gray-900/60">
+                    {poLineItems.map((p) => (
+                      <tr key={p.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/40">
+                        <td className="p-2.5 font-mono text-[10px] text-slate-500">{p.poNumber}</td>
+                        <td className="p-2.5 font-bold text-slate-800 dark:text-white">{p.vendorIdentifier}</td>
+                        <td className="p-2.5">
+                          <span className="font-semibold text-slate-800 dark:text-gray-200 block">{p.itemName}</span>
+                          <span className="text-slate-400 text-[10px]">{p.specs}</span>
+                        </td>
+                        <td className="p-2.5 text-slate-600 dark:text-gray-400">{p.quantity} {p.unit}</td>
+                        <td className="p-2.5 font-mono font-bold text-indigo-700 dark:text-indigo-300">
+                          ${p.totalSpend.toLocaleString()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-gray-800">
+              <button type="button" onClick={() => setStep(2)} className="btn btn-secondary btn-sm">
+                Back to Vendor Master
+              </button>
+              <button
+                type="button"
+                onClick={handleSimulatePOJoin}
+                className="btn btn-primary font-bold text-xs py-2.5 px-5 flex items-center gap-1.5"
+              >
+                Run AI Category Cross-Match <ArrowRight size={14} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 4: AI CATEGORY JOIN & CROSS-MATCH AUDIT */}
+        {step === 4 && (
+          <div className="space-y-4 animate-fade-in">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
+                  Step 4: AI Cross-Match & Category Assignment Audit
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+                  Review vendors with buyer-mapped categories vs vendors requiring self-mapping.
+                </p>
+              </div>
+
+              {/* Filter Tabs */}
+              <div className="flex items-center gap-1 bg-slate-100 dark:bg-gray-800 p-1 rounded-xl text-xs font-bold shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setActiveReviewTab('all')}
+                  className={`px-2.5 py-1 rounded-lg transition-all ${
+                    activeReviewTab === 'all' ? 'bg-white dark:bg-gray-900 text-indigo-600 shadow-sm' : 'text-slate-500'
+                  }`}
+                >
+                  All ({joinedVendors.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveReviewTab('mapped')}
+                  className={`px-2.5 py-1 rounded-lg transition-all ${
+                    activeReviewTab === 'mapped' ? 'bg-white dark:bg-gray-900 text-emerald-600 shadow-sm' : 'text-slate-500'
+                  }`}
+                >
+                  ✓ Mapped ({mappedVendors.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveReviewTab('unmapped')}
+                  className={`px-2.5 py-1 rounded-lg transition-all ${
+                    activeReviewTab === 'unmapped' ? 'bg-white dark:bg-gray-900 text-amber-600 shadow-sm' : 'text-slate-500'
+                  }`}
+                >
+                  ⚠️ Unmapped ({unmappedVendors.length})
+                </button>
+              </div>
+            </div>
+
+            {/* List of Correlated Vendors */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-80 overflow-y-auto pr-1 text-xs">
+              {joinedVendors
+                .filter((v) => {
+                  if (activeReviewTab === 'mapped') return v.categoriesMappedByBuyer;
+                  if (activeReviewTab === 'unmapped') return !v.categoriesMappedByBuyer;
+                  return true;
+                })
+                .map((v) => (
+                  <div
+                    key={v.id}
+                    className={`p-4 rounded-2xl border transition-all space-y-2.5 ${
+                      v.categoriesMappedByBuyer
+                        ? 'bg-slate-50/80 dark:bg-gray-800/50 border-slate-200 dark:border-gray-800'
+                        : 'bg-amber-50/50 dark:bg-amber-950/20 border-amber-300/80 dark:border-amber-800/60'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <h4 className="font-black text-slate-900 dark:text-white text-xs">{v.companyName}</h4>
+                          {v.vendorCode && (
+                            <span className="font-mono text-[9px] px-1.5 py-0.5 rounded bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-gray-300">
+                              {v.vendorCode}
+                            </span>
+                          )}
+                        </div>
+                        <span className="font-mono text-[10px] text-slate-500">{v.email} · {v.phone}</span>
+                      </div>
+
+                      {v.categoriesMappedByBuyer ? (
+                        <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 shrink-0 flex items-center gap-0.5">
+                          <Check size={10} /> PO Mapped ({v.poCount} POs)
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300 shrink-0 flex items-center gap-0.5">
+                          <AlertCircle size={10} /> No POs · Self-Map
+                        </span>
+                      )}
+                    </div>
+
+                    {v.categoriesMappedByBuyer ? (
+                      <>
+                        {/* 1st Set Category */}
+                        <div className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200/60 dark:border-indigo-800/50">
+                          <span className="text-[9px] uppercase font-black text-indigo-700 dark:text-indigo-300 block">
+                            1st Set: Primary Major Category
+                          </span>
+                          <span className="font-bold text-indigo-950 dark:text-white text-xs block mt-0.5">
+                            {v.firstSetMajorCategory}
+                          </span>
+                        </div>
+
+                        {/* 2nd Set Minor Categories */}
+                        <div className="space-y-1">
+                          <span className="text-[9px] uppercase font-bold text-slate-400 block">
+                            2nd Set: Minor Categories & Product Lines
+                          </span>
+                          <div className="flex flex-wrap gap-1">
+                            {v.secondSetMinorCategories.map((m) => (
+                              <span
+                                key={m}
+                                className="px-2 py-0.5 rounded-lg bg-white dark:bg-gray-900 text-slate-700 dark:text-gray-300 border border-slate-200 dark:border-gray-700 text-[10px] font-semibold"
+                              >
+                                {m}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      /* Unmapped Fallback Notice Box */
+                      <div className="p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-amber-200 dark:border-amber-900/60 text-[11px] text-amber-900 dark:text-amber-200 space-y-1">
+                        <div className="font-bold flex items-center gap-1 text-amber-800 dark:text-amber-300 text-[10px] uppercase">
+                          <AlertCircle size={12} />
+                          Dispatched Notification Protocol:
+                        </div>
+                        <p className="text-[10px] leading-relaxed">
+                          The onboarding email will explicitly notify <strong>{v.companyName}</strong> that <em>&quot;the buyer didn&apos;t map any categories for you, so please map yourself in order to receive enquiries.&quot;</em>
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                ))}
+            </div>
+
+            <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-gray-800">
+              <button type="button" onClick={() => setStep(3)} className="btn btn-secondary btn-sm">
+                Back to PO Dump
+              </button>
+              <button
+                type="button"
+                onClick={() => setStep(5)}
+                className="btn btn-primary font-bold text-xs py-2.5 px-5 flex items-center gap-1.5"
+              >
+                Review Email Dispatch & Finalize <ArrowRight size={14} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 5: FINAL CONFIRMATION & TAILORED EMAIL PREVIEWS */}
+        {step === 5 && (
+          <div className="space-y-4 animate-fade-in">
+            <div>
+              <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
+                Step 5: Confirm Ingestion & Dispatch Tailored Onboarding Emails
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+                The platform will dispatch tailored credentials and category notices based on PO correlation.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              {/* Template A Preview: PO-Mapped Suppliers */}
+              <div className="p-3.5 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/60 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-indigo-900 dark:text-indigo-200 text-[11px] flex items-center gap-1">
+                    <CheckCircle2 size={13} className="text-emerald-600" />
+                    Template A: Suppliers With PO History ({mappedVendors.length})
+                  </span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-indigo-100 dark:border-indigo-900 text-[10px] space-y-1 font-mono text-slate-700 dark:text-gray-300">
+                  <p><strong>Subject:</strong> [Action Required] Welcome: {activeBuyerAccount?.organizationName || 'Larsen & Toubro'} mapped your categories</p>
+                  <p className="text-emerald-700 dark:text-emerald-400 font-bold">
+                    • 1st Set: Engineering Spares - Mechanical<br />
+                    • 2nd Set: Pumps, Valves, Hoses, Machinery Parts
+                  </p>
+                  <p className="text-slate-400">• User: [Email] | Pass: [TempPass] | OTP Ready</p>
+                </div>
+              </div>
+
+              {/* Template B Preview: Unmapped Suppliers */}
+              <div className="p-3.5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-amber-900 dark:text-amber-200 text-[11px] flex items-center gap-1">
+                    <AlertCircle size={13} className="text-amber-600" />
+                    Template B: Suppliers With NO POs ({unmappedVendors.length})
+                  </span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-amber-200 dark:border-amber-900 text-[10px] space-y-1 font-mono text-slate-700 dark:text-gray-300">
+                  <p><strong>Subject:</strong> [Action Required] Set Up Categories: {activeBuyerAccount?.organizationName || 'Larsen & Toubro'} added you</p>
+                  <p className="text-amber-700 dark:text-amber-400 font-bold">
+                    • &quot;Buyer didn&apos;t map any categories for you, so please map yourself in order to receive enquiries.&quot;
+                  </p>
+                  <p className="text-slate-400">• User: [Email] | Pass: [TempPass] | OTP Ready</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Ingestion Totals Grid */}
+            <div className="grid grid-cols-4 gap-2.5 text-center text-xs">
+              <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-gray-800 border border-slate-200 dark:border-gray-700">
+                <span className="text-[10px] text-slate-400 block">Total Stored</span>
+                <span className="font-black text-slate-900 dark:text-white text-sm">{joinedVendors.length} Vendors</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/50">
+                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 block">PO Mapped</span>
+                <span className="font-black text-emerald-700 dark:text-emerald-300 text-sm">{mappedVendors.length} Suppliers</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/50">
+                <span className="text-[10px] text-amber-600 dark:text-amber-400 block">Self-Map Required</span>
+                <span className="font-black text-amber-700 dark:text-amber-300 text-sm">{unmappedVendors.length} Suppliers</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/50">
+                <span className="text-[10px] text-purple-600 dark:text-purple-400 block">3-Day Reminders</span>
+                <span className="font-black text-purple-700 dark:text-purple-300 text-sm">Active (Day 3)</span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-gray-800">
+              <button type="button" onClick={() => setStep(4)} className="btn btn-secondary btn-sm">
+                Back to Category Join
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmFinalIngestion}
+                className="btn btn-primary font-bold text-xs py-3 px-6 shadow-lg shadow-indigo-600/30 flex items-center gap-2"
+              >
+                <CheckCircle2 size={16} /> [ COMPLETE SETUP & INGEST {joinedVendors.length} VENDORS ]
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

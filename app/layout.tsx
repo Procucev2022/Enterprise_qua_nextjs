@@ -3,6 +3,8 @@ import './globals.css';
 import { AppProvider } from '@/lib/store';
 import Header from '@/app/components/Header';
 import NotificationToast from '@/app/components/NotificationToast';
+import StandardRFQEmailModal from '@/app/components/StandardRFQEmailModal';
+import VendorRatingRevisionModal from '@/app/components/VendorRatingRevisionModal';
 
 export const metadata: Metadata = {
   title: 'PROCUCEV ENTERPRISE | Enterprise Procurement Platform (QUA AI 2.0)',
@@ -25,6 +27,8 @@ export default function RootLayout({
               {children}
             </main>
             <NotificationToast />
+            <StandardRFQEmailModal />
+            <VendorRatingRevisionModal />
             <footer className="border-t border-slate-200 dark:border-slate-800/80 bg-white/80 dark:bg-[#0b0f19]/80 py-4 text-center text-xs text-slate-500 dark:text-gray-500">
               <div className="max-w-[1600px] mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
                 <div>

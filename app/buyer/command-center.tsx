@@ -21,15 +21,18 @@ import {
   Phone,
   Smartphone,
   Mail,
+  Database,
+  FileSpreadsheet,
 } from 'lucide-react';
 
 interface CommandCenterProps {
   onNavigateToWizard: () => void;
   onNavigateToMatrix: (rfq: RFQItem) => void;
   onNavigateToSubscription?: () => void;
+  onNavigateToDirectory?: () => void;
 }
 
-export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, onNavigateToSubscription }: CommandCenterProps) {
+export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, onNavigateToSubscription, onNavigateToDirectory }: CommandCenterProps) {
   const {
     rfqs,
     aiFeed,
@@ -43,6 +46,9 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
     openRFQDeepDive,
     remainingFreeRFQs,
     activeSubscription,
+    activeBuyerAccount,
+    setInitialSetupModalOpen,
+    initialSetupCompleted,
   } = useApp();
 
   const [feedChannelFilter, setFeedChannelFilter] = useState<'all' | 'call' | 'whatsapp' | 'sms' | 'email' | 'system'>('all');
@@ -52,9 +58,16 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
     vendorName: 'Apex Supplies Ltd.',
   });
 
+  const [rfqSourceFilter, setRfqSourceFilter] = useState<'all' | 'email_gateway' | 'web_portal' | 'email_upload'>('all');
+
   const totalActiveRFQs = rfqs.length;
   const totalPendingQuotes = rfqs.reduce((acc, r) => acc + (r.quotesCount || 0), 0) + 24;
   const totalSpend = '$1.24M';
+
+  // Intake Source Counts
+  const emailGatewayRFQs = rfqs.filter(r => r.source === 'email_gateway');
+  const webPortalRFQs = rfqs.filter(r => r.source === 'web_portal' || !r.source);
+  const emailUploadRFQs = rfqs.filter(r => r.source === 'email_upload');
 
   // Multi-channel totals calculation
   const totalCalls = rfqs.reduce((acc, r) => acc + (r.followUpData?.callStats.total || 0), 0);
@@ -63,6 +76,37 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   const readWhatsApp = rfqs.reduce((acc, r) => acc + (r.followUpData?.whatsappStats.read || 0), 0);
   const totalSMS = rfqs.reduce((acc, r) => acc + (r.followUpData?.smsStats.total || 0), 0);
   const totalFollowupsToday = totalCalls + totalWhatsApp + totalSMS;
+
+  const getSourceBadge = (source?: string, autoCirculated?: boolean) => {
+    if (source === 'email_gateway') {
+      return (
+        <span className="px-2 py-0.5 rounded-md text-[9px] font-bold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 flex items-center gap-1 shrink-0">
+          <Mail size={10} className="text-amber-600 dark:text-amber-400" />
+          <span>Email Gateway (Autonomous)</span>
+        </span>
+      );
+    }
+    if (source === 'email_upload') {
+      return (
+        <span className="px-2 py-0.5 rounded-md text-[9px] font-bold bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 flex items-center gap-1 shrink-0">
+          <FileText size={10} className="text-purple-600 dark:text-purple-400" />
+          <span>Email File Upload</span>
+        </span>
+      );
+    }
+    return (
+      <span className="px-2 py-0.5 rounded-md text-[9px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 flex items-center gap-1 shrink-0">
+        <UploadCloud size={10} className="text-indigo-600 dark:text-indigo-400" />
+        <span>Web App Portal</span>
+      </span>
+    );
+  };
+
+  const filteredRFQs = rfqs.filter((rfq) => {
+    if (rfqSourceFilter === 'all') return true;
+    if (rfqSourceFilter === 'web_portal') return rfq.source === 'web_portal' || !rfq.source;
+    return rfq.source === rfqSourceFilter;
+  });
 
   const getModeBadge = (modeId: string) => {
     const mode = SOURCING_MODES.find((m) => m.id === modeId);
@@ -125,12 +169,35 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
             Buyer Command Center
           </h1>
           <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-            Pipeline overview · Multi-channel follow-ups · Spend metrics
+            Intake sources summary · Multi-mode sourcing · Chaser follow-ups
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={onNavigateToWizard} className="btn btn-primary btn-sm">
-            <Plus size={14} /> New RFQ
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => setInitialSetupModalOpen(true)}
+            className={`btn btn-sm font-bold flex items-center gap-1.5 shadow-sm transition-all ${
+              initialSetupCompleted
+                ? 'btn-secondary text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700 bg-emerald-50/50 dark:bg-emerald-950/30'
+                : 'btn-secondary text-indigo-700 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700 bg-indigo-50/70 dark:bg-indigo-950/40 animate-pulse'
+            }`}
+            title="Upload 1-3 Year Purchase Orders to extract approved vendors, contact details & categorize into 1st/2nd sets"
+          >
+            <FileSpreadsheet size={13} className={initialSetupCompleted ? 'text-emerald-600' : 'text-indigo-600'} />
+            <span>{initialSetupCompleted ? '✓ PO History Ingested' : '⚡ 1-3 Yr Purchase Setup'}</span>
+          </button>
+
+          {onNavigateToDirectory && (
+            <button
+              onClick={onNavigateToDirectory}
+              className="btn btn-secondary btn-sm flex items-center gap-1.5 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800/60 hover:bg-amber-50 dark:hover:bg-amber-950/40"
+              title="View Integrated Buyer Directory & Public System Database"
+            >
+              <Database size={13} />
+              <span>Public Buyer DB ({activeBuyerAccount?.organizationName || 'L&T'})</span>
+            </button>
+          )}
+          <button onClick={onNavigateToWizard} className="btn btn-primary btn-sm font-bold shadow-md">
+            <Plus size={14} /> Create / Ingest RFQ
           </button>
           <button
             onClick={() => {
@@ -151,23 +218,23 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
       </div>
 
       {/* Subscription Quota Banner */}
-      <div className="glass-panel p-4 rounded-2xl border border-indigo-200/40 dark:border-indigo-950/40 bg-gradient-to-r from-indigo-50/50 to-purple-50/50 dark:from-indigo-950/20 dark:to-purple-950/20 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm">
+      <div className="glass-panel p-4 rounded-2xl border border-indigo-200/40 dark:border-indigo-950/40 bg-gradient-to-r from-indigo-50/50 via-purple-50/40 to-amber-50/50 dark:from-indigo-950/20 dark:via-purple-950/20 dark:to-amber-950/20 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-indigo-600/10 dark:bg-indigo-400/10 flex items-center justify-center text-indigo-600 dark:text-indigo-400 shrink-0">
             <Sparkles size={20} />
           </div>
           <div>
-            <div className="text-xs font-bold text-slate-800 dark:text-gray-200 flex items-center gap-2">
-              Sourcing Plan: {activeSubscription === 'free_trial' ? 'Free Trial (Version 1)' : activeSubscription === 'version_1' ? 'Version 1 (Client Roster)' : activeSubscription === 'version_2' ? 'Version 2 (Hybrid Sourcing)' : 'Version 3 (AI Autonomous Sourcing)'}
+            <div className="text-xs font-bold text-slate-800 dark:text-gray-200 flex items-center gap-2 flex-wrap">
+              <span>Sourcing Plan: {activeSubscription === 'free_trial' ? 'Free Starter Account (All Versions Unlocked)' : activeSubscription === 'version_1' ? 'Version 1 (Client Roster Plan)' : activeSubscription === 'version_2' ? 'Version 2 (Hybrid Sourcing Plan)' : 'Version 3 (AI Autonomous Sourcing Plan)'}</span>
               {activeSubscription === 'free_trial' && (
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-300">
-                  {remainingFreeRFQs} of 5 free V1 RFQs left
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300">
+                  {remainingFreeRFQs} of 5 Free RFQs Left (Usable on V1, V2, V3)
                 </span>
               )}
             </div>
             <p className="text-[10px] text-slate-500 dark:text-gray-400 mt-0.5">
               {activeSubscription === 'free_trial' 
-                ? 'Your free trial lets you experience Version 1 (Client Roster sourcing) for up to 5 RFQs. Upgrade to subscribe to other modes.' 
+                ? 'Your Free Account includes 5 free RFQs to use with full flexibility across Version 1 (Client Roster), Version 2 (Hybrid), and Version 3 (AI Autonomous).' 
                 : 'Your premium sourcing plan is active. All dispatch features for this mode are fully unlocked.'}
             </p>
           </div>
@@ -175,82 +242,119 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
         {onNavigateToSubscription && (
           <button
             onClick={onNavigateToSubscription}
-            className="btn btn-primary btn-xs flex items-center gap-1 shrink-0"
+            className="btn btn-primary btn-xs flex items-center gap-1 shrink-0 font-bold"
           >
             Manage Subscription <ChevronRight size={10} />
           </button>
         )}
       </div>
 
-      {/* ── KPI Cards ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      {/* ── KPI Cards (4 Column Grid with RFQ Intake Source Breakdown) ── */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Active RFQs */}
-        <div className="rounded-2xl p-5 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 relative overflow-hidden hover:border-indigo-400 dark:hover:border-indigo-500 transition-all shadow-xs flex flex-col justify-between min-h-[124px]">
+        <div className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 relative overflow-hidden hover:border-indigo-400 dark:hover:border-indigo-500 transition-all shadow-xs flex flex-col justify-between min-h-[124px]">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">Active RFQs</span>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">Active Pipeline</span>
             <FileText size={16} className="text-indigo-500 dark:text-indigo-400" />
           </div>
-          <div className="flex items-baseline justify-between mt-3">
+          <div className="flex items-baseline justify-between mt-2">
             <div className="flex items-baseline gap-2">
-              <span className="text-3xl font-black text-slate-900 dark:text-white mono">{totalActiveRFQs}</span>
-              <span className="text-xs text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-0.5 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
-                <TrendingUp size={11} /> +3 this week
+              <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mono">{totalActiveRFQs}</span>
+              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-950/60 px-1.5 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
+                100% On Schedule
               </span>
             </div>
           </div>
+          <span className="text-[10px] text-slate-400">Total live requisitions across modes</span>
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-indigo-500 to-cyan-500" />
         </div>
 
-        {/* Pending Quotes */}
-        <div className="rounded-2xl p-5 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 relative overflow-hidden hover:border-sky-400 dark:hover:border-sky-500 transition-all shadow-xs flex flex-col justify-between min-h-[124px]">
+        {/* Requisitions by Intake Source */}
+        <div className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-amber-200 dark:border-amber-900/50 relative overflow-hidden hover:border-amber-400 dark:hover:border-amber-500 transition-all shadow-xs flex flex-col justify-between min-h-[124px]">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">Pending Quotes</span>
-            <Clock size={16} className="text-sky-500 dark:text-cyan-400" />
+            <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">Intake Sources</span>
+            <div className="p-1 rounded bg-amber-50 dark:bg-amber-950 text-amber-600 dark:text-amber-400">
+              <Mail size={14} />
+            </div>
           </div>
-          <div className="flex items-baseline justify-between mt-3">
-            <div className="flex items-baseline gap-2">
-              <span className="text-3xl font-black text-slate-900 dark:text-white mono">{totalPendingQuotes}</span>
-              <span className="text-xs text-sky-600 dark:text-cyan-400 font-bold bg-sky-50 dark:bg-cyan-950/60 px-2 py-0.5 rounded-full border border-sky-200 dark:border-cyan-800">
-                8 in review
+          <div className="space-y-1 my-1">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-slate-600 dark:text-gray-400 flex items-center gap-1 font-medium">
+                <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" /> 📧 Email Gateway:
+              </span>
+              <span className="font-bold text-amber-700 dark:text-amber-300 font-mono">
+                {emailGatewayRFQs.length} ({Math.round((emailGatewayRFQs.length / (totalActiveRFQs || 1)) * 100)}%)
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-slate-600 dark:text-gray-400 flex items-center gap-1 font-medium">
+                <span className="w-2 h-2 rounded-full bg-indigo-500 inline-block" /> 🌐 Web App Portal:
+              </span>
+              <span className="font-bold text-indigo-700 dark:text-indigo-300 font-mono">
+                {webPortalRFQs.length} ({Math.round((webPortalRFQs.length / (totalActiveRFQs || 1)) * 100)}%)
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-slate-600 dark:text-gray-400 flex items-center gap-1 font-medium">
+                <span className="w-2 h-2 rounded-full bg-purple-500 inline-block" /> 📄 Email Upload:
+              </span>
+              <span className="font-bold text-purple-700 dark:text-purple-300 font-mono">
+                {emailUploadRFQs.length} ({Math.round((emailUploadRFQs.length / (totalActiveRFQs || 1)) * 100)}%)
               </span>
             </div>
           </div>
+          <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-500 via-indigo-500 to-purple-500" />
+        </div>
+
+        {/* Pending Quotes */}
+        <div className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 relative overflow-hidden hover:border-sky-400 dark:hover:border-sky-500 transition-all shadow-xs flex flex-col justify-between min-h-[124px]">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">Supplier Quotes</span>
+            <Clock size={16} className="text-sky-500 dark:text-cyan-400" />
+          </div>
+          <div className="flex items-baseline justify-between mt-2">
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mono">{totalPendingQuotes}</span>
+              <span className="text-[10px] text-sky-600 dark:text-cyan-400 font-bold bg-sky-50 dark:bg-cyan-950/60 px-1.5 py-0.5 rounded-full border border-sky-200 dark:border-cyan-800">
+                8 in evaluation
+              </span>
+            </div>
+          </div>
+          <span className="text-[10px] text-slate-400">Replies received via unmodified subject lines</span>
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-sky-500 to-blue-500" />
         </div>
 
         {/* Follow Ups Today */}
         <div
           onClick={() => openRFQDeepDive(rfqs[0])}
-          className="rounded-2xl p-5 bg-white dark:bg-gray-900/80 border border-emerald-200 dark:border-emerald-500/30 relative overflow-hidden hover:border-emerald-400 dark:hover:border-emerald-400 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[124px]"
+          className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-emerald-200 dark:border-emerald-500/30 relative overflow-hidden hover:border-emerald-400 dark:hover:border-emerald-400 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[124px]"
           title="Click to open multi-channel deep dive"
         >
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">Follow Ups Today</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">Live Outreach</span>
               <span className="live-dot" style={{ width: 6, height: 6 }} />
             </div>
-            <div className="flex items-center gap-1 text-[11px] text-indigo-600 dark:text-indigo-400 font-bold hover:underline">
+            <div className="flex items-center gap-1 text-[10px] text-indigo-600 dark:text-indigo-400 font-bold hover:underline">
               <span>Deep Dive</span>
-              <ChevronRight size={12} />
+              <ChevronRight size={11} />
             </div>
           </div>
-          <div className="flex items-center justify-between mt-3">
-            <span className="text-3xl font-black text-slate-900 dark:text-white mono">{totalFollowupsToday || 31}</span>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-300 border border-purple-200 dark:border-purple-800 flex items-center gap-1">
+          <div className="flex items-center justify-between mt-2">
+            <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mono">{totalFollowupsToday || 31}</span>
+            <div className="flex items-center gap-1 flex-wrap">
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
                 📞 {totalCalls || 9}
               </span>
-              <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1">
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
                 💬 {totalWhatsApp || 14}
               </span>
-              <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-sky-50 dark:bg-cyan-950/60 text-sky-600 dark:text-cyan-300 border border-sky-200 dark:border-cyan-800 flex items-center gap-1">
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-sky-50 dark:bg-cyan-950/60 text-sky-600 dark:text-cyan-300 border border-sky-200 dark:border-cyan-800">
                 📱 {totalSMS || 6}
-              </span>
-              <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-300 border border-amber-200 dark:border-amber-800 flex items-center gap-1">
-                ✉️ 2
               </span>
             </div>
           </div>
+          <span className="text-[10px] text-slate-400">Automated sequence running in IST</span>
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-purple-500 via-emerald-500 to-amber-500" />
         </div>
       </div>
@@ -259,35 +363,77 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
 
         {/* ── Left: Pipeline Table (3 cols) ── */}
-        <div className="lg:col-span-3 rounded-2xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
-          {/* Table Header */}
-          <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 dark:border-gray-800">
-            <div className="flex items-center gap-2">
-              <Layers size={16} className="text-indigo-600 dark:text-indigo-400" />
-              <h2 className="text-sm font-bold text-slate-800 dark:text-gray-200">Active Procurement Pipeline</h2>
+        <div className="lg:col-span-3 rounded-2xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col">
+          {/* Table Header & Intake Source Filter Tabs */}
+          <div className="p-4 border-b border-slate-100 dark:border-gray-800 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Layers size={16} className="text-indigo-600 dark:text-indigo-400" />
+                <h2 className="text-sm font-bold text-slate-800 dark:text-gray-200">Active Procurement Pipeline</h2>
+              </div>
+              <span className="text-[10px] font-mono text-slate-400 dark:text-gray-500">{filteredRFQs.length} shown</span>
             </div>
-            <span className="text-[10px] text-slate-400 dark:text-gray-500">{rfqs.length} events</span>
+
+            {/* Source Filter Tabs */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 text-xs">
+              <button
+                onClick={() => setRfqSourceFilter('all')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all shrink-0 ${
+                  rfqSourceFilter === 'all'
+                    ? 'bg-slate-800 dark:bg-white text-white dark:text-slate-900 shadow-xs'
+                    : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 hover:bg-slate-200'
+                }`}
+              >
+                All Sources ({rfqs.length})
+              </button>
+              <button
+                onClick={() => setRfqSourceFilter('email_gateway')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all shrink-0 flex items-center gap-1 ${
+                  rfqSourceFilter === 'email_gateway'
+                    ? 'bg-amber-600 text-white shadow-xs'
+                    : 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-900/40 hover:bg-amber-100'
+                }`}
+              >
+                <Mail size={11} /> 📧 Email Gateway ({emailGatewayRFQs.length})
+              </button>
+              <button
+                onClick={() => setRfqSourceFilter('web_portal')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all shrink-0 flex items-center gap-1 ${
+                  rfqSourceFilter === 'web_portal'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-900/40 hover:bg-indigo-100'
+                }`}
+              >
+                <UploadCloud size={11} /> 🌐 Web Portal ({webPortalRFQs.length})
+              </button>
+              <button
+                onClick={() => setRfqSourceFilter('email_upload')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all shrink-0 flex items-center gap-1 ${
+                  rfqSourceFilter === 'email_upload'
+                    ? 'bg-purple-600 text-white shadow-xs'
+                    : 'bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-900/40 hover:bg-purple-100'
+                }`}
+              >
+                <FileText size={11} /> 📄 Email Upload ({emailUploadRFQs.length})
+              </button>
+            </div>
           </div>
 
           {/* Pipeline Cards */}
-          <div className="divide-y divide-slate-100 dark:divide-gray-800/60">
-            {rfqs.map((rfq) => (
+          <div className="divide-y divide-slate-100 dark:divide-gray-800/60 overflow-y-auto max-h-[520px]">
+            {filteredRFQs.map((rfq) => (
               <div
                 key={rfq.id}
-                className="px-5 py-3.5 hover:bg-slate-50/80 dark:hover:bg-gray-800/30 transition-colors cursor-pointer group"
+                className="p-4 hover:bg-slate-50/80 dark:hover:bg-gray-800/30 transition-colors cursor-pointer group space-y-2"
                 onClick={() => openRFQDeepDive(rfq)}
               >
-                {/* Row 1: RFQ Number + Status + Actions */}
-                <div className="flex items-center justify-between mb-1.5">
-                  <div className="flex items-center gap-2">
+                {/* Row 1: RFQ Number + Source Badge + Status + Actions */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-xs font-bold text-slate-900 dark:text-white mono group-hover:text-indigo-600 dark:group-hover:text-indigo-300 transition-colors">
                       {rfq.rfqNumber}
                     </span>
-                    {rfq.aiScore && (
-                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-500/30">
-                        {rfq.aiScore}%
-                      </span>
-                    )}
+                    {getSourceBadge(rfq.source, rfq.autoCirculated)}
                     {getModeBadge(rfq.sourcingMode)}
                   </div>
                   <div className="flex items-center gap-2">
@@ -310,21 +456,39 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                           e.stopPropagation();
                           openRFQDeepDive(rfq);
                         }}
-                        className="text-slate-400 dark:text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+                        className="text-slate-400 dark:text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors p-1"
                       >
-                        <ChevronRight size={14} />
+                        <ChevronRight size={15} />
                       </button>
                     )}
                   </div>
                 </div>
 
-                {/* Row 2: Title & Category */}
-                <p className="text-xs text-slate-700 dark:text-gray-300 font-medium leading-snug">{rfq.title}</p>
-                <p className="text-[10px] text-slate-400 dark:text-gray-500 mt-0.5">{rfq.category}</p>
+                {/* Row 2: Title, Category & Origin Metadata */}
+                <div>
+                  <p className="text-xs text-slate-800 dark:text-gray-200 font-bold leading-snug">{rfq.title}</p>
+                  <div className="flex items-center gap-2 text-[10px] text-slate-400 dark:text-gray-500 mt-0.5">
+                    <span>{rfq.category}</span>
+                    <span>•</span>
+                    {rfq.source === 'email_gateway' ? (
+                      <span className="text-amber-600 dark:text-amber-400 font-mono">
+                        Origin: {rfq.sourceEmail || 'client@procucev.com'} (Auto-Circulated)
+                      </span>
+                    ) : rfq.source === 'email_upload' ? (
+                      <span className="text-purple-600 dark:text-purple-400 font-mono">
+                        File: {rfq.sourceFileName || 'Requisition_Email.eml'}
+                      </span>
+                    ) : (
+                      <span className="text-indigo-600 dark:text-indigo-400 font-mono">
+                        Intake: {rfq.sourceFileName || 'Web Portal Ingest'}
+                      </span>
+                    )}
+                  </div>
+                </div>
 
                 {/* Row 3: Channel stats + Quotes */}
-                <div className="flex items-center justify-between mt-2">
-                  <div className="flex items-center gap-1.5">
+                <div className="flex items-center justify-between pt-1 border-t border-slate-100/80 dark:border-gray-800/40">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     {rfq.followUpData ? (
                       <>
                         <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-purple-50 dark:bg-purple-950/50 text-purple-600 dark:text-purple-300 border border-purple-100 dark:border-purple-800">
@@ -344,7 +508,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                       <span className="text-[10px] text-slate-300 dark:text-gray-600 italic">Queued</span>
                     )}
                   </div>
-                  <span className="text-[10px] font-bold text-slate-500 dark:text-gray-400 mono bg-slate-100 dark:bg-gray-800 px-2 py-0.5 rounded">
+                  <span className="text-[10px] font-bold text-slate-600 dark:text-gray-300 mono bg-slate-100 dark:bg-gray-800 px-2 py-0.5 rounded">
                     {rfq.quotesCount} quotes
                   </span>
                 </div>

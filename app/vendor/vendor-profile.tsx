@@ -26,7 +26,17 @@ import {
 } from 'lucide-react';
 
 export default function VendorProfilePage() {
-  const { addAuditLog, showToast, vendorSubscription } = useApp();
+  const {
+    addAuditLog,
+    showToast,
+    vendorSubscription,
+    completeVendorProfile,
+    clientMappedCategories,
+    vendorSelectedCategories,
+    saveVendorProfileCategories,
+  } = useApp();
+
+  const MAX_CATEGORIES = 10;
 
   // Vendor Organization State
   const [companyName, setCompanyName] = useState('Apex Supplies & Contracting Ltd.');
@@ -51,25 +61,25 @@ export default function VendorProfilePage() {
   const [contactEmail, setContactEmail] = useState('vendor@apex.com');
   const [contactPhone, setContactPhone] = useState('+91 98920 11420');
 
-  // Category Selection State: Selected Major Categories and Minor Categories
+  // Category Selection State: Selected Major Categories and Minor Categories (Max 10)
   const [selectedMajor, setSelectedMajor] = useState<string[]>([
     'Engineering Spares - Mechanical',
     'Engineering Spares - Electrical',
-    'Packing Material',
   ]);
 
   const [selectedMinor, setSelectedMinor] = useState<Record<string, string[]>>({
-    'Engineering Spares - Mechanical': ['Bearings & Accessories', 'Pumps & Accessories', 'Pipes & Pipe Fittings', 'Valves & Fittings', 'Fasteners'],
-    'Engineering Spares - Electrical': ['Cables', 'Panels', 'Motors', 'Circuit Breakers'],
-    'Packing Material': ['Corrugated Boxes', 'Pallets', 'Plastic Packaging'],
+    'Engineering Spares - Mechanical': ['Bearings & Accessories', 'Pumps & Accessories', 'Pipes & Pipe Fittings', 'Hoses, Valves & Fittings', 'Fasteners'],
+    'Engineering Spares - Electrical': ['Cables', 'Panels'],
   });
 
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedMajor, setExpandedMajor] = useState<Record<string, boolean>>({
     'Engineering Spares - Mechanical': true,
     'Engineering Spares - Electrical': true,
-    'Packing Material': true,
   });
+
+  // Calculate totals
+  const totalSelectedMinorCount = Object.values(selectedMinor).reduce((acc, curr) => acc + curr.length, 0);
 
   // PAN Validation Helper
   const isPanValid = (pan: string) => /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(pan.toUpperCase());
@@ -88,52 +98,51 @@ export default function VendorProfilePage() {
     } else {
       setSelectedMajor((prev) => [...prev, majorName]);
       const allMinor = categoriesData.find((c) => c.majorCategory === majorName)?.minorCategories || [];
-      setSelectedMinor((prev) => ({ ...prev, [majorName]: allMinor }));
+      const remainingSlots = MAX_CATEGORIES - totalSelectedMinorCount;
+      if (remainingSlots <= 0) {
+        showToast('Limit Reached', `Maximum ${MAX_CATEGORIES} categories allowed. Please uncheck some categories first.`, 'warning');
+        return;
+      }
+      const allowedMinors = allMinor.slice(0, remainingSlots);
+      setSelectedMinor((prev) => ({ ...prev, [majorName]: allowedMinors }));
     }
   };
 
-  // Toggle Minor Category
+  // Toggle Minor Category (Strict Max 10 Check)
   const toggleMinorCategory = (majorName: string, minorName: string) => {
-    if (!selectedMajor.includes(majorName)) {
-      setSelectedMajor((prev) => [...prev, majorName]);
-    }
-
     const currentList = selectedMinor[majorName] || [];
-    let updated: string[] = [];
-    if (currentList.includes(minorName)) {
-      updated = currentList.filter((m) => m !== minorName);
+    const isCurrentlyChecked = currentList.includes(minorName);
+
+    if (!isCurrentlyChecked) {
+      if (totalSelectedMinorCount >= MAX_CATEGORIES) {
+        showToast(
+          'Maximum 10 Categories Reached',
+          `You have selected ${totalSelectedMinorCount}/${MAX_CATEGORIES} categories. Please uncheck a category to add "${minorName}".`,
+          'warning'
+        );
+        return;
+      }
+
+      if (!selectedMajor.includes(majorName)) {
+        setSelectedMajor((prev) => [...prev, majorName]);
+      }
+
+      setSelectedMinor((prev) => ({
+        ...prev,
+        [majorName]: [...(prev[majorName] || []), minorName],
+      }));
     } else {
-      updated = [...currentList, minorName];
-    }
-
-    setSelectedMinor((prev) => ({ ...prev, [majorName]: updated }));
-
-    if (updated.length === 0) {
-      setSelectedMajor((prev) => prev.filter((m) => m !== majorName));
+      setSelectedMinor((prev) => {
+        const updated = currentList.filter((m) => m !== minorName);
+        const next = { ...prev, [majorName]: updated };
+        if (updated.length === 0) {
+          delete next[majorName];
+          setSelectedMajor((majors) => majors.filter((m) => m !== majorName));
+        }
+        return next;
+      });
     }
   };
-
-  // Select all minor for a major
-  const selectAllMinorInMajor = (majorName: string) => {
-    const allMinor = categoriesData.find((c) => c.majorCategory === majorName)?.minorCategories || [];
-    if (!selectedMajor.includes(majorName)) {
-      setSelectedMajor((prev) => [...prev, majorName]);
-    }
-    setSelectedMinor((prev) => ({ ...prev, [majorName]: allMinor }));
-  };
-
-  // Clear minor for a major
-  const clearMinorInMajor = (majorName: string) => {
-    setSelectedMinor((prev) => {
-      const next = { ...prev };
-      delete next[majorName];
-      return next;
-    });
-    setSelectedMajor((prev) => prev.filter((m) => m !== majorName));
-  };
-
-  // Calculate totals
-  const totalSelectedMinorCount = Object.values(selectedMinor).reduce((acc, curr) => acc + curr.length, 0);
 
   // Filtered Categories based on search
   const filteredCategories = categoriesData.filter((cat) => {
@@ -144,6 +153,20 @@ export default function VendorProfilePage() {
     return matchesMajor || matchesMinor;
   });
 
+  // Reconciled Dual Stream Categories
+  const flatSelectedCategories = Object.values(selectedMinor).flat();
+  const clientLower = clientMappedCategories.map((c) => c.toLowerCase().trim());
+  const vendorLower = flatSelectedCategories.map((c) => c.toLowerCase().trim());
+
+  const commonCategories = flatSelectedCategories.filter((v) => clientLower.includes(v.toLowerCase().trim()));
+  const vendorOnlyCategories = flatSelectedCategories.filter((v) => !clientLower.includes(v.toLowerCase().trim()));
+  const clientOnlyCategories = clientMappedCategories.filter((c) => !vendorLower.includes(c.toLowerCase().trim()));
+  const isAligned =
+    clientLower.length > 0 &&
+    vendorLower.length > 0 &&
+    clientLower.every((c) => vendorLower.includes(c)) &&
+    vendorLower.every((v) => clientLower.includes(v));
+
   const handleSaveProfile = (e: React.FormEvent) => {
     e.preventDefault();
     if (!companyName.trim() || !panNumber.trim() || !gstNumber.trim()) {
@@ -151,12 +174,8 @@ export default function VendorProfilePage() {
       return;
     }
 
+    saveVendorProfileCategories(contactEmail, clientMappedCategories, flatSelectedCategories);
     addAuditLog(`Updated Vendor Supplier Profile & Manufacturing Capabilities for ${companyName}`);
-    showToast(
-      'Profile Saved Successfully',
-      `Vendor profile and ${totalSelectedMinorCount} supply categories updated for opportunity matching.`,
-      'success'
-    );
   };
 
   return (
@@ -439,22 +458,146 @@ export default function VendorProfilePage() {
           </div>
         </div>
 
-        {/* Section 3: Consolidated Major & Minor Categories Selector */}
+        {/* Section 3: Consolidated Major & Minor Categories Selector & Dual-Stream Reconciliation */}
         <div className="glass-panel p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-gray-800 pb-3">
             <div>
-              <h2 className="text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
-                <Sliders className="text-emerald-600 dark:text-emerald-400" size={18} /> Section 3: Supply Capability Categories (13 Major & 120+ Minor)
-              </h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
+                  <Sliders className="text-emerald-600 dark:text-emerald-400" size={18} /> Section 3: Dual-Stream Category Reconciliation &amp; Taxonomy (Max 10 Categories)
+                </h2>
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/50">
+                  Backend Dual-Stream Active
+                </span>
+              </div>
               <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                Select items you manufacture or supply. This unlocks relevant RFQ opportunity feeds &amp; buyer invitations.
+                Manage your self-selected supply capabilities (up to 10 categories). The system reconciles buyer-mapped categories and routes RFQs across both streams.
               </p>
             </div>
 
             <div className="flex items-center gap-2">
-              <span className="badge badge-emerald font-mono text-xs">
-                {selectedMajor.length} Major • {totalSelectedMinorCount} Minor Capabilities
+              <span className={`text-xs font-mono font-bold px-3 py-1 rounded-full border ${
+                totalSelectedMinorCount >= MAX_CATEGORIES
+                  ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-300'
+                  : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200'
+              }`}>
+                {totalSelectedMinorCount} / {MAX_CATEGORIES} Categories Selected
               </span>
+            </div>
+          </div>
+
+          {/* DUAL-STREAM CATEGORY RECONCILIATION SUMMARY DASHBOARD */}
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 space-y-3.5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 dark:border-gray-800/80 pb-2.5">
+              <div className="flex items-center gap-2">
+                <Layers className="text-indigo-600 dark:text-indigo-400" size={16} />
+                <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
+                  Category Alignment &amp; Backend Storage Status
+                </h3>
+              </div>
+              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1.5 ${
+                isAligned
+                  ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300'
+                  : 'bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300 border border-indigo-300'
+              }`}>
+                {isAligned ? '✓ 100% Categories Aligned' : '🛡️ Dual-Category Backend Storage Active'}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {/* Card 1: Client Mapped Categories (from PO / Historical Data) */}
+              <div className="p-3 rounded-lg bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-700 dark:text-gray-300 flex items-center gap-1.5">
+                    🏢 Client Mapped Categories <span className="text-slate-400 text-[10px] font-normal">(Buyer Empanelled)</span>
+                  </span>
+                  <span className="text-[10px] font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                    {clientMappedCategories.length} Categories
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5 min-h-[36px]">
+                  {clientMappedCategories.length > 0 ? (
+                    clientMappedCategories.map((c) => (
+                      <span
+                        key={c}
+                        className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/50"
+                      >
+                        {c}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-[10px] text-slate-400 italic">No buyer-mapped categories assigned yet.</span>
+                  )}
+                </div>
+                <p className="text-[9.5px] text-slate-400">
+                  Extracted from historical buyer purchase orders &amp; master records (Larsen &amp; Toubro).
+                </p>
+              </div>
+
+              {/* Card 2: Vendor Profile Self-Selected Categories */}
+              <div className="p-3 rounded-lg bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-700 dark:text-gray-300 flex items-center gap-1.5">
+                    ⚙️ Vendor Self-Selected <span className="text-slate-400 text-[10px] font-normal">(Max 10)</span>
+                  </span>
+                  <span className="text-[10px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                    {flatSelectedCategories.length} / {MAX_CATEGORIES} Selected
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5 min-h-[36px]">
+                  {flatSelectedCategories.length > 0 ? (
+                    flatSelectedCategories.map((c) => {
+                      const isCommon = commonCategories.includes(c);
+                      return (
+                        <span
+                          key={c}
+                          className={`px-2 py-0.5 rounded-md text-[10px] font-semibold flex items-center gap-1 ${
+                            isCommon
+                              ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200'
+                              : 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200'
+                          }`}
+                        >
+                          {isCommon && <span className="text-[9px]">✓</span>}
+                          {c}
+                        </span>
+                      );
+                    })
+                  ) : (
+                    <span className="text-[10px] text-slate-400 italic">No categories selected. Pick up to 10 below.</span>
+                  )}
+                </div>
+                <p className="text-[9.5px] text-slate-400">
+                  Selected directly by vendor. Chips with ✓ indicate common match with buyer roster.
+                </p>
+              </div>
+            </div>
+
+            {/* Reconciliation Breakdown & Dispatch Policy */}
+            <div className="p-3 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200/60 dark:border-indigo-900/40 text-[11px] space-y-1.5">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <span className="font-bold text-indigo-900 dark:text-indigo-300 flex items-center gap-1.5">
+                  <ShieldCheck size={14} className="text-indigo-600 dark:text-indigo-400" />
+                  Backend Storage &amp; Dual RFQ Dispatch Policy:
+                </span>
+                <div className="flex items-center gap-1.5 text-[10px]">
+                  <span className="px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 font-bold">
+                    {commonCategories.length} Aligned
+                  </span>
+                  <span className="px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300 font-bold">
+                    +{vendorOnlyCategories.length} Vendor-Extended
+                  </span>
+                  {clientOnlyCategories.length > 0 && (
+                    <span className="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 font-bold">
+                      +{clientOnlyCategories.length} Client-Only
+                    </span>
+                  )}
+                </div>
+              </div>
+              <p className="text-slate-600 dark:text-gray-300 text-[10.5px] leading-relaxed">
+                {isAligned
+                  ? 'All categories perfectly match between buyer roster and your self-selection. RFQs are fully aligned.'
+                  : 'If there is any discrepancy between client-mapped categories and your self-selected categories, our backend permanently saves BOTH category sets. The matching engine routes RFQs corresponding to both streams to your opportunity feed so you never miss an opportunity.'}
+              </p>
             </div>
           </div>
 
@@ -504,7 +647,7 @@ export default function VendorProfilePage() {
 
                     <div className="flex items-center gap-2">
                       <span className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300 mono bg-white dark:bg-gray-900 px-2 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800">
-                        {selectedMinorsInCat.length} / {cat.minorCategories.length} Selected
+                        {selectedMinorsInCat.length} Selected
                       </span>
                       <button
                         type="button"
@@ -523,30 +666,17 @@ export default function VendorProfilePage() {
                     <div className="p-3.5 pt-0 border-t border-slate-200/60 dark:border-gray-800/80 space-y-2.5">
                       <div className="flex items-center justify-between text-[11px] pt-2">
                         <span className="font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wider">
-                          Minor Supply Items
+                          Minor Supply Items (Click to select/unselect)
                         </span>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => selectAllMinorInMajor(cat.majorCategory)}
-                            className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 hover:underline"
-                          >
-                            Select All
-                          </button>
-                          <span className="text-slate-300">|</span>
-                          <button
-                            type="button"
-                            onClick={() => clearMinorInMajor(cat.majorCategory)}
-                            className="text-[10px] font-bold text-slate-500 hover:text-slate-700 dark:hover:text-gray-300 hover:underline"
-                          >
-                            Clear
-                          </button>
-                        </div>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          {totalSelectedMinorCount} / {MAX_CATEGORIES} total profile limit
+                        </span>
                       </div>
 
                       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
                         {cat.minorCategories.map((minor) => {
                           const isMinorChecked = selectedMinorsInCat.includes(minor);
+                          const isClientMapped = clientMappedCategories.includes(minor);
                           return (
                             <label
                               key={minor}
@@ -565,7 +695,12 @@ export default function VendorProfilePage() {
                               <div className={`w-3.5 h-3.5 rounded flex items-center justify-center shrink-0 border ${isMinorChecked ? 'bg-white text-emerald-600 border-white' : 'border-slate-400'}`}>
                                 {isMinorChecked && <span className="text-[10px] font-bold">✓</span>}
                               </div>
-                              <span className="truncate" title={minor}>{minor}</span>
+                              <span className="truncate flex-1" title={minor}>{minor}</span>
+                              {isClientMapped && (
+                                <span className={`text-[9px] px-1 py-0.2 rounded font-bold uppercase shrink-0 ${isMinorChecked ? 'bg-white/20 text-white' : 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'}`} title="Mapped by buyer">
+                                  Buyer
+                                </span>
+                              )}
                             </label>
                           );
                         })}
@@ -584,7 +719,7 @@ export default function VendorProfilePage() {
             type="submit"
             className="btn btn-emerald btn-lg shadow-xl shadow-emerald-600/20 font-bold flex items-center gap-2 px-8"
           >
-            <Save size={18} /> Save Vendor Supplier Profile
+            <Save size={18} /> Save &amp; Reconcile Vendor Profile
           </button>
         </div>
       </form>

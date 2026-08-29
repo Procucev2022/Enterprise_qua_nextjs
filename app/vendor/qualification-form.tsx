@@ -60,7 +60,16 @@ const MODULE_TABS = [
 ] as const;
 
 export default function VendorQualificationForm({ onBack, onSuccess }: VendorQualificationFormProps) {
-  const { addVendorEvaluation, addAuditLog, addFeedItem, showToast } = useApp();
+  const {
+    addVendorEvaluation,
+    addAuditLog,
+    addFeedItem,
+    showToast,
+    vendorSubscription,
+    isVendorEvaluationFeeWaived,
+    setVendorSelfEvaluationCompleted,
+    setVendorSelfEvaluationScore,
+  } = useApp();
 
   const [activeTab, setActiveTab] = useState<'M1' | 'M2' | 'M3' | 'M4' | 'M5' | 'M6'>('M1');
   const [submitting, setSubmitting] = useState(false);
@@ -398,6 +407,8 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
       );
 
       setSubmitting(false);
+      setVendorSelfEvaluationCompleted(true);
+      setVendorSelfEvaluationScore(totalScorePercent);
       setEvaluationResult(record);
       onSuccess(record);
 
@@ -420,12 +431,12 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
-              Mode 3 360-Degree Vendor Qualification Questionnaire
+              ⭐ Premium Vendor: 360-Degree AI Self-Evaluation
             </h1>
-            <span className="badge badge-emerald">Screen 3.3 (24 Criteria Checklist)</span>
+            <span className="badge badge-emerald">Multi-Buyer Certified</span>
           </div>
           <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
-            Enterprise QUA AI Autonomous Capability Evaluation & Direct RFQ Dispatch Gate (≥ 80% Benchmark Required).
+            Complete your 360° AI Self-Evaluation (Commercial, Technical, Quality, Delivery, Financial & ESG) to get certified and receive RFQs from all enterprise buyers.
           </p>
         </div>
         <button onClick={onBack} className="btn btn-secondary btn-sm">
@@ -461,6 +472,35 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
             {currentStatus}
           </span>
         </div>
+      </div>
+
+      {/* Infra & AI Evaluation Fee Banner ($5 or $0 with Connect/Select) */}
+      <div className="p-3.5 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 flex items-center justify-between gap-3 text-xs flex-wrap">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-300 flex items-center justify-center font-black">
+            💳
+          </div>
+          <div>
+            <span className="font-bold text-slate-900 dark:text-white">
+              360° AI Self-Evaluation Infrastructure Fee:
+            </span>{' '}
+            {isVendorEvaluationFeeWaived ? (
+              <span className="text-emerald-700 dark:text-emerald-300 font-bold">
+                $0 FREE (100% Waived under your active {vendorSubscription === 'connect' ? 'Connect' : 'Select'} Tier)
+              </span>
+            ) : (
+              <span className="text-amber-800 dark:text-amber-300 font-bold">
+                $5 Nominal Fee (Towards Cloud Infrastructure & AI Compute Costs) • Fee is $0 if you take any subscription (Connect or Select)
+              </span>
+            )}
+          </div>
+        </div>
+
+        {!isVendorEvaluationFeeWaived && (
+          <span className="text-[11px] font-bold text-indigo-700 dark:text-indigo-300 bg-white dark:bg-gray-800 px-3 py-1 rounded-full border border-indigo-200 dark:border-indigo-800">
+            Cost = $0 with Connect / Select Plan
+          </span>
+        )}
       </div>
 
       {/* ── MODULE TABS BAR ── */}

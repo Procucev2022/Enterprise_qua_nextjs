@@ -16,16 +16,97 @@ import {
   Building2,
   Truck,
   SlidersHorizontal,
-  FileCheck,
   Sun,
   Moon,
+  LogOut,
+  Key,
+  Mail,
+  Check,
+  ArrowRight,
+  UserCheck,
+  Building,
 } from 'lucide-react';
+
+interface UserPersona {
+  role: UserRole;
+  name: string;
+  designation: string;
+  organization: string;
+  email: string;
+  authMethod: string;
+  avatarGradient: string;
+  initials: string;
+  screensCount: number;
+  badge: string;
+  badgeClass: string;
+  scopeSummary: string;
+}
+
+const USER_PERSONAS: Record<UserRole, UserPersona> = {
+  buyer: {
+    role: 'buyer',
+    name: 'Rajesh Sharma',
+    designation: 'Chief Procurement Officer (CPO)',
+    organization: 'Larsen & Toubro Limited',
+    email: 'buyer@procucev.com',
+    authMethod: 'Azure AD SSO • Enterprise Gateway',
+    avatarGradient: 'from-indigo-600 to-indigo-800 text-white',
+    initials: 'RS',
+    screensCount: 7,
+    badge: 'Enterprise Buyer',
+    badgeClass: 'bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800',
+    scopeSummary: '5 Free RFQs Available across all versions • 7 Modules',
+  },
+  category_manager: {
+    role: 'category_manager',
+    name: 'Priya Sen',
+    designation: 'Lead Category Manager (Mechanical)',
+    organization: 'Procucev Category Desk',
+    email: 'catmanager@procucev.com',
+    authMethod: 'Internal SSO • Level 3 Approver',
+    avatarGradient: 'from-sky-600 to-blue-700 text-white',
+    initials: 'PS',
+    screensCount: 6,
+    badge: 'Category Desk',
+    badgeClass: 'bg-sky-100 dark:bg-sky-950 text-sky-800 dark:text-sky-300 border-sky-200 dark:border-sky-800',
+    scopeSummary: 'Autonomous AI Kanban Desk & Analytics • 6 Modules',
+  },
+  vendor: {
+    role: 'vendor',
+    name: 'Rajesh Nair',
+    designation: 'Managing Director',
+    organization: 'Apex Supplies Ltd.',
+    email: 'rajesh@apexsupplies.in',
+    authMethod: 'Password + Email OTP Verified',
+    avatarGradient: 'from-emerald-600 to-teal-700 text-white',
+    initials: 'RN',
+    screensCount: 6,
+    badge: '⭐ Premium Vendor',
+    badgeClass: 'bg-amber-100 dark:bg-amber-950 text-amber-900 dark:text-amber-300 border-amber-300 dark:border-amber-700',
+    scopeSummary: 'Empanelled by L&T • 360° AI Self-Evaluation • 6 Modules',
+  },
+  admin: {
+    role: 'admin',
+    name: 'Arun Mehta',
+    designation: 'Chief Compliance Officer',
+    organization: 'Platform Governance & Security',
+    email: 'admin@procucev.com',
+    authMethod: 'MFA Hardware Key Verified',
+    avatarGradient: 'from-purple-600 to-indigo-800 text-white',
+    initials: 'AM',
+    screensCount: 2,
+    badge: 'Admin & Auditor',
+    badgeClass: 'bg-purple-100 dark:bg-purple-950 text-purple-800 dark:text-purple-300 border-purple-200 dark:border-purple-800',
+    scopeSummary: 'SHA-256 Compliance Logs & Azure Health • 2 Modules',
+  },
+};
 
 export default function Header() {
   const {
     currentRole,
     setCurrentRole,
     isLoggedIn,
+    setIsLoggedIn,
     currentMode,
     setCurrentMode,
     vendorSubscription,
@@ -35,18 +116,25 @@ export default function Header() {
     theme,
     toggleTheme,
     showToast,
+    addAuditLog,
+    activeBuyerAccount,
   } = useApp();
 
   const [modeDropdownOpen, setModeDropdownOpen] = useState(false);
-  const [roleDropdownOpen, setRoleDropdownOpen] = useState(false);
+  const [userProfileDropdownOpen, setUserProfileDropdownOpen] = useState(false);
   const [notifDropdownOpen, setNotifDropdownOpen] = useState(false);
 
   // Account Settings Modal State
   const [accountModalOpen, setAccountModalOpen] = useState(false);
-  const [userDisplayName, setUserDisplayName] = useState('Rajesh Sharma (Lead Procurement)');
+  const [userDisplayName, setUserDisplayName] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+
+  const activePersona = USER_PERSONAS[currentRole] || USER_PERSONAS.buyer;
+  const currentOrgName = currentRole === 'buyer' && activeBuyerAccount?.organizationName 
+    ? activeBuyerAccount.organizationName 
+    : activePersona.organization;
 
   const handleUpdateDisplayName = (e: React.FormEvent) => {
     e.preventDefault();
@@ -93,49 +181,23 @@ export default function Header() {
     showToast('Vendor Tier Switched', `Active vendor access model set to: ${tierName}`, 'success');
   };
 
-  const handleRoleSelect = (role: UserRole) => {
+  const handleSwitchPersona = (role: UserRole) => {
     setCurrentRole(role);
-    setRoleDropdownOpen(false);
-    showToast('Role Switched', `Now viewing platform as: ${getRoleTitle(role)}`, 'info');
+    setUserProfileDropdownOpen(false);
+    const persona = USER_PERSONAS[role];
+    addAuditLog(`Switched operational demo persona to ${persona.name} (${persona.organization})`, undefined, persona.email);
+    showToast(
+      'Session Switched',
+      `Now logged in as ${persona.name} (${persona.organization}) • ${persona.email}`,
+      'success'
+    );
   };
 
-  const getRoleTitle = (role: UserRole) => {
-    switch (role) {
-      case 'buyer':
-        return 'Larsen & Toubro Limited';
-      case 'category_manager':
-        return 'Procucev Category Desk';
-      case 'vendor':
-        return 'Apex Supplies Ltd.';
-      case 'admin':
-        return 'Procucev Platform Admin';
-    }
-  };
-
-  const getRoleIcon = (role: UserRole) => {
-    switch (role) {
-      case 'buyer':
-        return <Building2 size={16} className="text-indigo-600 dark:text-indigo-400" />;
-      case 'category_manager':
-        return <SlidersHorizontal size={16} className="text-sky-600 dark:text-cyan-400" />;
-      case 'vendor':
-        return <Truck size={16} className="text-emerald-600 dark:text-emerald-400" />;
-      case 'admin':
-        return <Cpu size={16} className="text-purple-600 dark:text-purple-400" />;
-    }
-  };
-
-  const getUserEmail = () => {
-    switch (currentRole) {
-      case 'buyer':
-        return 'client@procucev.com';
-      case 'category_manager':
-        return 'catmanager@procucev.com';
-      case 'vendor':
-        return 'vendor@apex.com';
-      case 'admin':
-        return 'admin@procucev.com';
-    }
+  const handleLogout = () => {
+    setUserProfileDropdownOpen(false);
+    setIsLoggedIn(false);
+    addAuditLog('User logged out of session');
+    showToast('Logged Out', 'You have been safely signed out.', 'info');
   };
 
   if (!isLoggedIn) {
@@ -186,7 +248,7 @@ export default function Header() {
   }
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b border-slate-200 dark:border-slate-800 bg-white/90 dark:bg-[#0b0f19]/90 backdrop-blur-xl transition-colors">
+    <header className="sticky top-0 z-50 w-full border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-[#0b0f19]/95 backdrop-blur-xl transition-colors">
       <div className="max-w-[1600px] mx-auto px-4 lg:px-6 h-16 flex items-center justify-between gap-4">
         {/* Brand & Logo */}
         <div className="flex items-center gap-3 py-1">
@@ -195,7 +257,7 @@ export default function Header() {
             <div className="h-7 w-[1px] bg-slate-200 shrink-0" />
             <img src="/qua-ai-logo.jpeg" alt="Qua AI Logo" className="h-10 sm:h-11 w-auto object-contain rounded shrink-0" />
           </div>
-          <span className="px-2.5 py-1 text-[11px] font-bold rounded-full bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/30 shrink-0 self-center">
+          <span className="px-2.5 py-1 text-[11px] font-bold rounded-full bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/30 shrink-0 self-center hidden sm:inline-block">
             QUA AI 2.0
           </span>
         </div>
@@ -207,10 +269,10 @@ export default function Header() {
             <button
               onClick={() => {
                 setModeDropdownOpen(!modeDropdownOpen);
-                setRoleDropdownOpen(false);
+                setUserProfileDropdownOpen(false);
                 setNotifDropdownOpen(false);
               }}
-              className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-700/60 hover:border-emerald-500 transition-all text-xs font-medium text-emerald-900 dark:text-emerald-200 shadow-sm"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-700/60 hover:border-emerald-500 transition-all text-xs font-medium text-emerald-900 dark:text-emerald-200 shadow-sm"
               title="Vendor Subscription Access Model"
             >
               <Sparkles size={14} className="text-emerald-600 dark:text-emerald-400" />
@@ -229,10 +291,10 @@ export default function Header() {
             <button
               onClick={() => {
                 setModeDropdownOpen(!modeDropdownOpen);
-                setRoleDropdownOpen(false);
+                setUserProfileDropdownOpen(false);
                 setNotifDropdownOpen(false);
               }}
-              className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-gray-900/80 border border-slate-300 dark:border-gray-700/60 hover:border-indigo-500 transition-all text-xs font-medium text-slate-800 dark:text-gray-200 shadow-sm"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-gray-900/80 border border-slate-300 dark:border-gray-700/60 hover:border-indigo-500 transition-all text-xs font-medium text-slate-800 dark:text-gray-200 shadow-sm"
               title="Switch Sourcing Mode"
             >
               <Layers size={14} className="text-indigo-600 dark:text-indigo-400" />
@@ -246,7 +308,7 @@ export default function Header() {
 
           {/* Mode Dropdown Menu */}
           {modeDropdownOpen && (
-            <div className="absolute top-full mt-2 w-80 sm:w-96 left-0 sm:left-auto sm:right-0 bg-white dark:bg-gray-900/95 border border-slate-200 dark:border-gray-700 rounded-xl shadow-2xl p-2 z-50 backdrop-blur-xl animate-fade-in">
+            <div className="absolute top-full mt-2 w-80 sm:w-96 left-0 sm:left-auto sm:right-0 bg-white dark:bg-gray-900/95 border border-slate-200 dark:border-gray-700 rounded-2xl shadow-2xl p-2 z-50 backdrop-blur-xl animate-fade-in">
               {currentRole === 'vendor' ? (
                 /* Vendor Subscription Tier Options */
                 <>
@@ -257,7 +319,7 @@ export default function Header() {
                   <div className="mt-1 space-y-1">
                     <button
                       onClick={() => handleVendorSubscriptionSelect('premium')}
-                      className={`w-full text-left p-2.5 rounded-lg transition-all flex items-start gap-2.5 ${
+                      className={`w-full text-left p-2.5 rounded-xl transition-all flex items-start gap-2.5 ${
                         vendorSubscription === 'premium'
                           ? 'bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-600 text-emerald-900 dark:text-white'
                           : 'hover:bg-slate-50 dark:hover:bg-gray-800/60 text-slate-700 dark:text-gray-300 border border-transparent'
@@ -272,7 +334,7 @@ export default function Header() {
 
                     <button
                       onClick={() => handleVendorSubscriptionSelect('connect')}
-                      className={`w-full text-left p-2.5 rounded-lg transition-all flex items-start gap-2.5 ${
+                      className={`w-full text-left p-2.5 rounded-xl transition-all flex items-start gap-2.5 ${
                         vendorSubscription === 'connect'
                           ? 'bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-600 text-emerald-900 dark:text-white'
                           : 'hover:bg-slate-50 dark:hover:bg-gray-800/60 text-slate-700 dark:text-gray-300 border border-transparent'
@@ -281,13 +343,13 @@ export default function Header() {
                       <CheckCircle2 size={16} className={vendorSubscription === 'connect' ? 'text-emerald-600' : 'text-slate-300'} />
                       <div>
                         <div className="font-bold text-xs">Connect Model ($149 / 3 Months)</div>
-                        <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">50 RFQ downloads in 3 months ({vendorRfqDownloadsUsed}/50 used)</div>
+                        <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">50 RFQ downloads in 3 months ({vendorRfqDownloadsUsed}/50 used) • $0 Self-Evaluation Fee</div>
                       </div>
                     </button>
 
                     <button
                       onClick={() => handleVendorSubscriptionSelect('select')}
-                      className={`w-full text-left p-2.5 rounded-lg transition-all flex items-start gap-2.5 ${
+                      className={`w-full text-left p-2.5 rounded-xl transition-all flex items-start gap-2.5 ${
                         vendorSubscription === 'select'
                           ? 'bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-600 text-emerald-900 dark:text-white'
                           : 'hover:bg-slate-50 dark:hover:bg-gray-800/60 text-slate-700 dark:text-gray-300 border border-transparent'
@@ -296,7 +358,7 @@ export default function Header() {
                       <CheckCircle2 size={16} className={vendorSubscription === 'select' ? 'text-emerald-600' : 'text-slate-300'} />
                       <div>
                         <div className="font-bold text-xs">Select Model ($349 / 3 Months)</div>
-                        <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">Item Catalogue (Max 100 SKUs) + 100 RFQ downloads</div>
+                        <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">Item Catalogue (Max 100 SKUs) + 100 RFQs • $0 Self-Evaluation Fee</div>
                       </div>
                     </button>
                   </div>
@@ -313,7 +375,7 @@ export default function Header() {
                       <button
                         key={mode.id}
                         onClick={() => handleModeSelect(mode.id)}
-                        className={`w-full text-left p-2.5 rounded-lg transition-all flex items-start gap-2.5 ${
+                        className={`w-full text-left p-2.5 rounded-xl transition-all flex items-start gap-2.5 ${
                           currentMode === mode.id
                             ? 'bg-indigo-50 dark:bg-indigo-600/20 border border-indigo-300 dark:border-indigo-500/40 text-indigo-900 dark:text-white'
                             : 'hover:bg-slate-50 dark:hover:bg-gray-800/60 text-slate-700 dark:text-gray-300 border border-transparent'
@@ -339,12 +401,12 @@ export default function Header() {
           )}
         </div>
 
-        {/* Role Quick Selector, Theme Toggle & Profile */}
+        {/* Right Section: Theme Toggle, Notifications, and Sleek Corner User Profile Box */}
         <div className="flex items-center gap-2 sm:gap-3">
           {/* Theme Toggle (Light / Dark) */}
           <button
             onClick={toggleTheme}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-slate-700 dark:text-gray-200 hover:bg-slate-200 dark:hover:bg-gray-700 transition-all text-xs font-semibold shadow-sm"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-slate-700 dark:text-gray-200 hover:bg-slate-200 dark:hover:bg-gray-700 transition-all text-xs font-semibold shadow-sm"
             title={`Switch to ${theme === 'light' ? 'Dark' : 'Light'} Mode`}
           >
             {theme === 'light' ? (
@@ -360,60 +422,15 @@ export default function Header() {
             )}
           </button>
 
-          {/* Quick Role Switcher */}
-          <div className="relative">
-            <button
-              onClick={() => {
-                setRoleDropdownOpen(!roleDropdownOpen);
-                setModeDropdownOpen(false);
-                setNotifDropdownOpen(false);
-              }}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-gray-800/70 border border-slate-300 dark:border-gray-700 hover:border-slate-400 dark:hover:border-gray-600 text-xs font-semibold text-slate-800 dark:text-gray-200 transition-all shadow-sm"
-            >
-              {getRoleIcon(currentRole)}
-              <span className="hidden lg:inline">{getRoleTitle(currentRole)}</span>
-              <span className="lg:hidden text-xs">Role</span>
-              <ChevronDown size={14} className="text-slate-400 dark:text-gray-400" />
-            </button>
-
-            {roleDropdownOpen && (
-              <div className="absolute top-full mt-2 w-64 right-0 bg-white dark:bg-gray-900/95 border border-slate-200 dark:border-gray-700 rounded-xl shadow-2xl p-2 z-50 backdrop-blur-xl animate-fade-in">
-                <div className="px-3 py-2 border-b border-slate-100 dark:border-gray-800">
-                  <p className="text-xs font-semibold text-slate-800 dark:text-gray-300 uppercase tracking-wider">Switch Operational Role</p>
-                  <p className="text-[11px] text-slate-500 dark:text-gray-400">Preview 4 specification personas</p>
-                </div>
-                <div className="mt-1 space-y-1">
-                  {(['buyer', 'category_manager', 'vendor', 'admin'] as UserRole[]).map((r) => (
-                    <button
-                      key={r}
-                      onClick={() => handleRoleSelect(r)}
-                      className={`w-full text-left px-3 py-2 rounded-lg text-xs font-medium flex items-center justify-between ${
-                        currentRole === r
-                          ? 'bg-indigo-50 dark:bg-indigo-600/20 text-indigo-700 dark:text-indigo-300 font-bold border border-indigo-200 dark:border-indigo-500/30'
-                          : 'text-slate-700 dark:text-gray-300 hover:bg-slate-100 dark:hover:bg-gray-800'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        {getRoleIcon(r)}
-                        <span>{getRoleTitle(r)}</span>
-                      </div>
-                      {currentRole === r && <CheckCircle2 size={14} className="text-indigo-600 dark:text-indigo-400" />}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
           {/* AI Notifications / Live Bell */}
           <div className="relative">
             <button
               onClick={() => {
                 setNotifDropdownOpen(!notifDropdownOpen);
                 setModeDropdownOpen(false);
-                setRoleDropdownOpen(false);
+                setUserProfileDropdownOpen(false);
               }}
-              className="relative p-2 rounded-lg bg-slate-100 dark:bg-gray-800/70 border border-slate-300 dark:border-gray-700 hover:bg-slate-200 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-300 transition-all shadow-sm"
+              className="relative p-2 rounded-xl bg-slate-100 dark:bg-gray-800/70 border border-slate-300 dark:border-gray-700 hover:bg-slate-200 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-300 transition-all shadow-sm"
               title="Real-time AI Chaser Alerts"
             >
               <Bell size={16} />
@@ -422,7 +439,7 @@ export default function Header() {
             </button>
 
             {notifDropdownOpen && (
-              <div className="absolute top-full mt-2 w-80 sm:w-96 right-0 bg-white dark:bg-gray-900/95 border border-slate-200 dark:border-gray-700 rounded-xl shadow-2xl p-3 z-50 backdrop-blur-xl animate-fade-in max-h-96 overflow-y-auto">
+              <div className="absolute top-full mt-2 w-80 sm:w-96 right-0 bg-white dark:bg-gray-900/95 border border-slate-200 dark:border-gray-700 rounded-2xl shadow-2xl p-3 z-50 backdrop-blur-xl animate-fade-in max-h-96 overflow-y-auto">
                 <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-gray-800">
                   <div className="flex items-center gap-2">
                     <span className="live-dot" />
@@ -432,7 +449,7 @@ export default function Header() {
                 </div>
                 <div className="mt-2 space-y-2">
                   {aiFeed.slice(0, 6).map((item) => (
-                    <div key={item.id} className="p-2.5 rounded-lg bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700/50 text-xs">
+                    <div key={item.id} className="p-2.5 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700/50 text-xs">
                       <div className="flex items-center justify-between text-slate-500 dark:text-gray-400 text-[10px] mb-1">
                         <span className="font-semibold text-indigo-700 dark:text-indigo-300 flex items-center gap-1">
                           {item.type === 'call' || item.channel === 'call' ? (
@@ -456,32 +473,155 @@ export default function Header() {
             )}
           </div>
 
-          {/* User SSO Badge & Account Settings Trigger */}
-          <div className="relative pl-2 border-l border-slate-200 dark:border-gray-800">
+          {/* ═══════════════════════════════════════════════════════════════ */}
+          {/* SLEEK CORNER USER PROFILE BOX & PERSONA SWITCHER */}
+          {/* ═══════════════════════════════════════════════════════════════ */}
+          <div className="relative pl-1 border-l border-slate-200 dark:border-gray-800">
             <button
               onClick={() => {
-                setAccountModalOpen(true);
+                setUserProfileDropdownOpen(!userProfileDropdownOpen);
                 setModeDropdownOpen(false);
-                setRoleDropdownOpen(false);
                 setNotifDropdownOpen(false);
               }}
-              className="flex items-center gap-2 p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-gray-800/80 transition-all border border-transparent hover:border-slate-200 dark:hover:border-gray-700 text-left"
-              title="Click to Manage Display Name, Change Password & Account Security"
+              className="flex items-center gap-2.5 p-1.5 pr-2.5 rounded-2xl hover:bg-slate-100 dark:hover:bg-gray-800/80 transition-all border border-slate-200/80 dark:border-gray-700/60 bg-slate-50/50 dark:bg-gray-900/50 shadow-xs text-left group"
+              title="Click to Switch Persona / User Login Details"
             >
-              <div className="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-gradient-to-br dark:from-indigo-900 dark:to-gray-800 border border-indigo-200 dark:border-indigo-700/50 flex items-center justify-center text-xs font-bold text-indigo-700 dark:text-indigo-200 shadow-xs">
-                {userDisplayName.slice(0, 2).toUpperCase()}
+              {/* Dynamic Avatar with Active Indicator */}
+              <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${activePersona.avatarGradient} flex items-center justify-center text-xs font-black shadow-sm shrink-0 relative`}>
+                {activePersona.initials}
+                <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-white dark:border-gray-900" />
               </div>
-              <div className="hidden xl:block text-left">
-                <p className="text-xs font-bold text-slate-900 dark:text-gray-200 leading-tight flex items-center gap-1">
-                  <span>{userDisplayName}</span>
-                  <ChevronDown size={12} className="text-slate-400" />
+
+              {/* User Identity Details */}
+              <div className="hidden lg:block text-left max-w-[150px]">
+                <p className="text-xs font-black text-slate-900 dark:text-white leading-tight truncate">
+                  {activePersona.name}
                 </p>
-                <div className="flex items-center gap-1 text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">
-                  <ShieldCheck size={11} />
-                  <span>Azure SSO Verified</span>
+                <p className="text-[10px] text-slate-500 dark:text-gray-400 truncate leading-tight mt-0.5 font-medium">
+                  {currentOrgName}
+                </p>
+              </div>
+
+              <ChevronDown size={14} className={`text-slate-400 group-hover:text-slate-600 dark:group-hover:text-gray-200 transition-transform ${userProfileDropdownOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {/* Corner Box Popover: User Details & Role Persona Switcher */}
+            {userProfileDropdownOpen && (
+              <div className="absolute top-full mt-2 w-84 sm:w-96 right-0 bg-white dark:bg-gray-900 border-2 border-slate-200 dark:border-gray-700 rounded-3xl shadow-2xl p-4 z-50 backdrop-blur-2xl animate-scale-up space-y-4">
+                {/* Active Persona Header Card */}
+                <div className="p-3.5 rounded-2xl bg-gradient-to-br from-slate-50 to-indigo-50/50 dark:from-gray-800/80 dark:to-indigo-950/40 border border-indigo-100 dark:border-indigo-900/60 space-y-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-11 h-11 rounded-2xl bg-gradient-to-br ${activePersona.avatarGradient} flex items-center justify-center text-sm font-black shadow-md shrink-0`}>
+                        {activePersona.initials}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <h4 className="text-xs font-black text-slate-900 dark:text-white">{activePersona.name}</h4>
+                          <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded-full border ${activePersona.badgeClass}`}>
+                            {activePersona.badge}
+                          </span>
+                        </div>
+                        <p className="text-[11px] font-semibold text-slate-600 dark:text-gray-300 mt-0.5">{activePersona.designation}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Active Login Details & Organization Box */}
+                  <div className="p-2.5 rounded-xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-gray-800 text-[11px] space-y-1.5">
+                    <div className="flex items-center justify-between text-slate-500 dark:text-gray-400 text-[10px]">
+                      <span>Organization:</span>
+                      <strong className="text-slate-900 dark:text-white">{currentOrgName}</strong>
+                    </div>
+                    <div className="flex items-center justify-between text-slate-500 dark:text-gray-400 text-[10px]">
+                      <span>User Name (Login ID):</span>
+                      <strong className="mono font-bold text-indigo-600 dark:text-indigo-400">{activePersona.email}</strong>
+                    </div>
+                    <div className="flex items-center justify-between text-slate-500 dark:text-gray-400 text-[10px] pt-1 border-t border-slate-100 dark:border-gray-800/80">
+                      <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold">
+                        <ShieldCheck size={12} /> {activePersona.authMethod}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Persona Switcher Section */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between px-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 dark:text-gray-500">
+                      Switch Active User / Demo Persona
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono">4 Specification Roles</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-1.5">
+                    {(['buyer', 'category_manager', 'vendor', 'admin'] as UserRole[]).map((r) => {
+                      const p = USER_PERSONAS[r];
+                      const isSelected = currentRole === r;
+                      return (
+                        <button
+                          key={r}
+                          type="button"
+                          onClick={() => handleSwitchPersona(r)}
+                          className={`w-full text-left p-2.5 rounded-2xl transition-all flex items-center justify-between border ${
+                            isSelected
+                              ? 'bg-indigo-50/90 dark:bg-indigo-950/60 border-indigo-300 dark:border-indigo-600 ring-2 ring-indigo-500/20'
+                              : 'bg-slate-50/60 dark:bg-gray-800/40 border-slate-200/70 dark:border-gray-800 hover:bg-slate-100 dark:hover:bg-gray-800 hover:border-slate-300'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <div className={`w-8 h-8 rounded-xl bg-gradient-to-br ${p.avatarGradient} flex items-center justify-center text-[11px] font-black shrink-0`}>
+                              {p.initials}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-bold text-xs text-slate-900 dark:text-white">{p.name}</span>
+                                <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded border ${p.badgeClass}`}>
+                                  {p.badge}
+                                </span>
+                              </div>
+                              <p className="text-[10px] text-slate-500 dark:text-gray-400 font-mono mt-0.5">
+                                {p.email} · {p.screensCount} Screens
+                              </p>
+                            </div>
+                          </div>
+
+                          {isSelected ? (
+                            <div className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center shrink-0">
+                              <Check size={12} />
+                            </div>
+                          ) : (
+                            <ArrowRight size={14} className="text-slate-300 dark:text-gray-600" />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Session Actions Footer */}
+                <div className="pt-2 border-t border-slate-100 dark:border-gray-800 flex items-center justify-between gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUserProfileDropdownOpen(false);
+                      setAccountModalOpen(true);
+                    }}
+                    className="btn btn-ghost btn-xs font-bold text-slate-600 dark:text-gray-300 flex items-center gap-1"
+                  >
+                    <Key size={12} /> Account &amp; Security
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    className="btn btn-ghost btn-xs font-bold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 flex items-center gap-1"
+                  >
+                    <LogOut size={12} /> Logout
+                  </button>
                 </div>
               </div>
-            </button>
+            )}
           </div>
         </div>
       </div>
@@ -493,12 +633,12 @@ export default function Header() {
             {/* Modal Header */}
             <div className="p-5 border-b border-slate-100 dark:border-gray-800 flex items-center justify-between bg-slate-50/50 dark:bg-gray-950/40">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-indigo-100 dark:bg-indigo-950/80 border border-indigo-200 dark:border-indigo-800 flex items-center justify-center text-indigo-600 dark:text-indigo-300 font-bold text-sm">
-                  {userDisplayName.slice(0, 2).toUpperCase()}
+                <div className={`w-10 h-10 rounded-2xl bg-gradient-to-br ${activePersona.avatarGradient} flex items-center justify-center font-black text-sm`}>
+                  {activePersona.initials}
                 </div>
                 <div>
                   <h3 className="text-base font-extrabold text-slate-900 dark:text-white">Account &amp; Security Settings</h3>
-                  <p className="text-xs text-slate-500 dark:text-gray-400">{getUserEmail()} • {getRoleTitle(currentRole)}</p>
+                  <p className="text-xs text-slate-500 dark:text-gray-400">{activePersona.email} • {currentOrgName}</p>
                 </div>
               </div>
               <button
@@ -522,7 +662,7 @@ export default function Header() {
                 <div className="flex items-center gap-2">
                   <input
                     type="text"
-                    value={userDisplayName}
+                    defaultValue={activePersona.name}
                     onChange={(e) => setUserDisplayName(e.target.value)}
                     placeholder="Enter your full display name..."
                     className="flex-1 px-3.5 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-semibold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
@@ -609,11 +749,11 @@ export default function Header() {
                 <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-600 dark:text-gray-300">
                   <div>
                     <span className="text-slate-400 block text-[10px]">Connected Entity</span>
-                    <strong className="text-slate-900 dark:text-white">{getRoleTitle(currentRole)}</strong>
+                    <strong className="text-slate-900 dark:text-white">{currentOrgName}</strong>
                   </div>
                   <div>
                     <span className="text-slate-400 block text-[10px]">Verified Email</span>
-                    <strong className="text-slate-900 dark:text-white font-mono">{getUserEmail()}</strong>
+                    <strong className="text-slate-900 dark:text-white font-mono">{activePersona.email}</strong>
                   </div>
                 </div>
               </div>
