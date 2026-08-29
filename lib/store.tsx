@@ -346,18 +346,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const updateBuyerAccount = (id: string, updates: Partial<BuyerAccount>) => {
-    let updatedAcc: BuyerAccount | null = null;
+    const target = buyerAccounts.find((a) => a.id === id);
+    const updatedAcc = target
+      ? { ...target, ...updates, syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC' }
+      : null;
+
     setBuyerAccounts((prev) =>
       prev.map((acc) => {
         if (acc.id !== id) return acc;
-        const updated = { ...acc, ...updates, syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC' };
-        updatedAcc = updated;
-        if (activeBuyerAccount?.id === id) {
-          setActiveBuyerAccount(updated);
-        }
-        return updated;
+        return updatedAcc || { ...acc, ...updates };
       })
     );
+
+    if (activeBuyerAccount?.id === id && updatedAcc) {
+      setActiveBuyerAccount(updatedAcc);
+    }
 
     if (updatedAcc) {
       fetch('/api/buyer-accounts', {
@@ -451,8 +454,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   // Helper to generate a realistic first-time temporary password
-  const generateTempPassword = (name: string): string => {
-    const clean = name.replace(/[^a-zA-Z]/g, '').slice(0, 5) || 'Vendor';
+  const generateTempPassword = (name?: string): string => {
+    const clean = (name || 'Vendor').replace(/[^a-zA-Z]/g, '').slice(0, 5) || 'Vendor';
     const rand = Math.floor(1000 + Math.random() * 9000);
     return `${clean}@Procucev${rand}#`;
   };
@@ -856,7 +859,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       score: newCompositeScore,
       status: newStatus,
       latestRatingRevision: revisionRecord,
-      ratingRevisionHistory: [revisionRecord, ...(targetVendor.ratingRevisionHistory || [])],
+      ratingRevisionHistory: [revisionRecord, ...(targetVendor?.ratingRevisionHistory || [])],
     };
 
     setBuyerVendors((prev) =>
@@ -883,15 +886,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setVendorEvaluations((prev) =>
       prev.map((e) => {
         if (e.vendorId === vendorId || e.vendorName === targetVendor?.name) {
+          const modScores = e.moduleScores || {
+            commercial: { score: 20, weightedScore: 20, maxScore: 25, weight: 25, remarks: '' },
+            technical: { score: 20, weightedScore: 20, maxScore: 25, weight: 25, remarks: '' },
+            quality: { score: 20, weightedScore: 20, maxScore: 25, weight: 25, remarks: '' },
+            delivery: { score: 20, weightedScore: 20, maxScore: 25, weight: 25, remarks: '' },
+            financial: { score: 20, weightedScore: 20, maxScore: 25, weight: 25, remarks: '' },
+            governance: { score: 20, weightedScore: 20, maxScore: 25, weight: 25, remarks: '' },
+          };
           return {
             ...e,
             overallScore: newCompositeScore,
             status: newStatus,
             moduleScores: {
-              ...e.moduleScores,
-              quality: { ...e.moduleScores.quality, score: Number((qualityScore / 20).toFixed(1)), remarks: `Buyer Score: ${qualityScore}/100` },
-              commercial: { ...e.moduleScores.commercial, score: Number((costScore / 20).toFixed(1)), remarks: `Buyer Score: ${costScore}/100` },
-              delivery: { ...e.moduleScores.delivery, score: Number((deliveryScore / 20).toFixed(1)), remarks: `Buyer Score: ${deliveryScore}/100` },
+              ...modScores,
+              quality: { ...modScores.quality, score: Number((qualityScore / 20).toFixed(1)), remarks: `Buyer Score: ${qualityScore}/100` },
+              commercial: { ...modScores.commercial, score: Number((costScore / 20).toFixed(1)), remarks: `Buyer Score: ${costScore}/100` },
+              delivery: { ...modScores.delivery, score: Number((deliveryScore / 20).toFixed(1)), remarks: `Buyer Score: ${deliveryScore}/100` },
             },
           };
         }
@@ -1129,19 +1140,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         (v.source === 'buyer_manual' || v.source === 'buyer_excel' || v.source === 'manual' || v.source === 'excel') &&
         isCategoryMatch(v)
       );
-      return (matched.length > 0 ? matched : vendorPool.slice(0, 3)).map(v => ({
-        ...v,
-        matchReason: 'Buyer Approved Roster (Minor Category Match)',
-        proximity: v.location.includes('MH') || v.location.includes('Mumbai') || v.location.includes('Pune') ? 'Local Hub (<250km)' : 'Regional Hub (<600km)',
-        proximityMatch: true,
-      }));
+      return (matched.length > 0 ? matched : vendorPool.slice(0, 3)).map(v => {
+        const loc = v.location || '';
+        return {
+          ...v,
+          matchReason: 'Buyer Approved Roster (Minor Category Match)',
+          proximity: loc.includes('MH') || loc.includes('Mumbai') || loc.includes('Pune') ? 'Local Hub (<250km)' : 'Regional Hub (<600km)',
+          proximityMatch: true,
+        };
+      });
     } else if (mode === 'mode_2') {
-      const matchedBuyer = vendorPool.filter(v => isCategoryMatch(v)).map(v => ({
-        ...v,
-        matchReason: 'Buyer Roster (Minor Category Match)',
-        proximity: v.location.includes('MH') || v.location.includes('Mumbai') || v.location.includes('Pune') ? 'Local Hub (<250km)' : 'Regional Hub (<600km)',
-        proximityMatch: true,
-      }));
+      const matchedBuyer = vendorPool.filter(v => isCategoryMatch(v)).map(v => {
+        const loc = v.location || '';
+        return {
+          ...v,
+          matchReason: 'Buyer Roster (Minor Category Match)',
+          proximity: loc.includes('MH') || loc.includes('Mumbai') || loc.includes('Pune') ? 'Local Hub (<250km)' : 'Regional Hub (<600km)',
+          proximityMatch: true,
+        };
+      });
 
       const networkVendors: VendorEntry[] = [
         { id: 'v-net-1', name: 'Global Pipe Solutions', contactPerson: 'John Doe', email: 'john@globalpipes.com', phone: '+1 415 555 2671', majorCategory: 'Engineering Spares - Mechanical', minorCategories: ['Pipes & Pipe Fittings', 'Hoses, Valves & Fittings'], location: 'Houston, TX', rating: 4.5, source: 'procucev_network' as const, matchReason: 'Procucev Base Network (Minor Category Match)', proximity: 'International / US Hub', proximityMatch: false },
@@ -1171,12 +1188,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         (v.source === 'buyer_manual' || v.source === 'buyer_excel' || v.source === 'manual' || v.source === 'excel') &&
         isCategoryMatch(v)
       );
-      const rawList = (matched.length > 0 ? matched : vendorPool.slice(0, 3)).map(v => ({
-        ...v,
-        matchReason: 'Buyer Approved Roster (360° Qualification & RFQ)',
-        proximity: v.location.includes('MH') || v.location.includes('Mumbai') || v.location.includes('Pune') ? 'Local Hub (<250km)' : 'Regional Hub (<600km)',
-        proximityMatch: true,
-      }));
+      const rawList = (matched.length > 0 ? matched : vendorPool.slice(0, 3)).map(v => {
+        const loc = v.location || '';
+        return {
+          ...v,
+          matchReason: 'Buyer Approved Roster (360° Qualification & RFQ)',
+          proximity: loc.includes('MH') || loc.includes('Mumbai') || loc.includes('Pune') ? 'Local Hub (<250km)' : 'Regional Hub (<600km)',
+          proximityMatch: true,
+        };
+      });
       const seen = new Set<string>();
       const deduplicated = rawList.filter((v) => {
         const key = (v.email || v.name).toLowerCase().trim();
@@ -1621,11 +1641,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       let remainingHours = hoursToAdd;
       while (remainingHours > 0) {
-        if (currentDate.getDay() === 0) {
-          currentDate.setDate(currentDate.getDate() + 1);
-          currentDate.setHours(START_HOUR, 0, 0, 0);
-        }
-
         const currentHour = currentDate.getHours();
         const currentMinutes = currentDate.getMinutes();
         const remainingWorkHoursInDay = (END_HOUR - currentHour) - (currentMinutes / 60);
@@ -1906,7 +1921,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               };
 
               const updatedVendors = r.followUpData ? r.followUpData.vendors.map((v) => {
-                if (v.vendorName === 'Apex Supplies Ltd.') {
+                if (v.vendorName === 'Apex Supplies Ltd.' || v.vendorName.includes('Apex')) {
                   return {
                     ...v,
                     bidStatus: 'Submitted' as const,

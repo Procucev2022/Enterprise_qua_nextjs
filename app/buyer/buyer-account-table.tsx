@@ -501,7 +501,7 @@ export default function BuyerAccountTable() {
               className="pl-9 text-xs w-full"
             />
             {searchTerm && (
-              <button onClick={() => setSearchTerm('')} className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600">
+              <button aria-label="Clear Search" onClick={() => setSearchTerm('')} className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600">
                 <X size={14} />
               </button>
             )}
@@ -753,12 +753,12 @@ export default function BuyerAccountTable() {
                   </p>
                 </div>
               </div>
-              <button onClick={() => setAddModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+              <button aria-label="Close Add Modal" onClick={() => setAddModalOpen(false)} className="text-slate-400 hover:text-slate-600">
                 <X size={18} />
               </button>
             </div>
 
-            <form onSubmit={handleAddBuyerSubmit} className="space-y-4 text-xs">
+            <form noValidate onSubmit={handleAddBuyerSubmit} className="space-y-4 text-xs">
               {/* Row 1: Org Name & Brand */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
@@ -1005,7 +1005,7 @@ export default function BuyerAccountTable() {
                   </p>
                 </div>
               </div>
-              <button onClick={() => setSyncModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+              <button aria-label="Close Sync Modal" onClick={() => setSyncModalOpen(false)} className="text-slate-400 hover:text-slate-600">
                 <X size={18} />
               </button>
             </div>
@@ -1045,6 +1045,112 @@ export default function BuyerAccountTable() {
                 )}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {/* MODAL 3: EDIT BUYER ACCOUNT SPECIFICATIONS */}
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {editModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="w-full max-w-2xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto animate-scale-in">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-gray-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-950 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+                  <Edit3 size={18} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    Edit Buyer Account Specifications
+                  </h3>
+                  <p className="text-[10px] text-slate-400">
+                    Update organization specifications, sourcing tier, and category mapping.
+                  </p>
+                </div>
+              </div>
+              <button
+                aria-label="Close Edit Modal"
+                onClick={() => {
+                  setEditModalOpen(false);
+                  setSelectedBuyerForEdit(null);
+                }}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleEditBuyerSubmit} className="space-y-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
+                    Organization Legal Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={orgName}
+                    onChange={(e) => setOrgName(e.target.value)}
+                    className="w-full text-xs font-semibold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
+                    Brand / Division Name
+                  </label>
+                  <input
+                    type="text"
+                    value={brandName}
+                    onChange={(e) => setBrandName(e.target.value)}
+                    className="w-full text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
+                    Corporate Email ID *
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={corpEmail}
+                    onChange={(e) => setCorpEmail(e.target.value)}
+                    className="w-full text-xs font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
+                    Mobile Number *
+                  </label>
+                  <input
+                    type="tel"
+                    required
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    className="w-full text-xs font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-gray-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditModalOpen(false);
+                    setSelectedBuyerForEdit(null);
+                  }}
+                  className="btn btn-secondary text-xs"
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary font-bold text-xs flex items-center gap-1.5">
+                  <Save size={14} /> Update Specifications
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

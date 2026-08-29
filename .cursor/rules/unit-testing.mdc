@@ -1,0 +1,15 @@
+---
+description: Unit testing instructions and 90% coverage enforcement across all files
+globs: **/*.ts, **/*.tsx, **/*.js
+alwaysApply: true
+---
+
+# Cursor Rule: 90% Unit Test Code Coverage Enforcement
+
+- Maintain >= 90% unit test code coverage file-wise across:
+  - Statements
+  - Branches
+  - Functions
+  - Lines
+- Every single application file must be covered without skipping.
+- Run `npm run test:coverage` to validate before finishing any modification.

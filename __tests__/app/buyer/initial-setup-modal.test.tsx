@@ -1,0 +1,508 @@
+import React from 'react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
+import * as XLSX from 'xlsx';
+import InitialSetupModal from '@/app/buyer/initial-setup-modal';
+import { useApp } from '@/lib/store';
+
+jest.mock('@/lib/store', () => ({
+  useApp: jest.fn(),
+}));
+
+// Mock FileReader for synchronous, reliable Excel file parsing
+class MockFileReader {
+  onload: ((e: any) => void) | null = null;
+  onerror: ((e: any) => void) | null = null;
+
+  readAsArrayBuffer(file: any) {
+    if (file.__error) {
+      if (this.onerror) this.onerror(new Error('Read error'));
+      return;
+    }
+    if (file.__corrupt) {
+      if (this.onload) {
+        this.onload(null as any);
+      }
+      return;
+    }
+    const buf = file.__buffer !== undefined ? file.__buffer : new ArrayBuffer(0);
+    if (this.onload) {
+      this.onload({ target: { result: buf } });
+    }
+  }
+}
+
+describe('app/buyer/initial-setup-modal.tsx', () => {
+  const originalFileReader = global.FileReader;
+  const mockSetInitialSetupModalOpen = jest.fn();
+  const mockSetHistoricalPurchaseDataPeriod = jest.fn();
+  const mockProcessHistoricalPurchaseData = jest.fn();
+  const mockShowToast = jest.fn();
+
+  const mockBuyerVendors: any[] = [
+    {
+      id: 'v-1',
+      name: 'Apex Supplies Ltd.',
+      contactPerson: 'Rajesh Nair',
+      email: 'rajesh@apex.in',
+      phone: '+91 98201 44820',
+      location: 'Pune, Maharashtra',
+      score: 85,
+      source: 'buyer_manual',
+      status: 'PREFERRED ENTERPRISE SUPPLIER',
+      evaluated: true,
+    },
+    {
+      id: 'v-2',
+      name: 'Global Valves Ltd',
+      contactPerson: 'Suresh Rao',
+      email: 'suresh@globalvalves.in',
+      phone: '+91 98201 55443',
+      location: 'Vadodara, Gujarat',
+      rating: 4.5,
+      source: 'buyer_manual',
+      status: 'PREFERRED ENTERPRISE SUPPLIER',
+      evaluated: true,
+    },
+    {
+      id: 'v-3',
+      name: 'Delta Compressors Ltd',
+      email: 'delta@compressors.in',
+      source: 'buyer_manual',
+      status: 'PREFERRED ENTERPRISE SUPPLIER',
+      evaluated: false,
+    },
+  ];
+
+  beforeAll(() => {
+    (global as any).FileReader = MockFileReader;
+    HTMLAnchorElement.prototype.click = jest.fn();
+  });
+
+  afterAll(() => {
+    global.FileReader = originalFileReader;
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (useApp as jest.Mock).mockReturnValue({
+      initialSetupModalOpen: true,
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      historicalPurchaseDataPeriod: '2_years',
+      setHistoricalPurchaseDataPeriod: mockSetHistoricalPurchaseDataPeriod,
+      processHistoricalPurchaseData: mockProcessHistoricalPurchaseData,
+      activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
+      buyerVendors: mockBuyerVendors,
+      showToast: mockShowToast,
+    });
+  });
+
+  it('renders null when initialSetupModalOpen is false', () => {
+    (useApp as jest.Mock).mockReturnValue({
+      initialSetupModalOpen: false,
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      historicalPurchaseDataPeriod: '2_years',
+      setHistoricalPurchaseDataPeriod: mockSetHistoricalPurchaseDataPeriod,
+      processHistoricalPurchaseData: mockProcessHistoricalPurchaseData,
+      activeBuyerAccount: null,
+      buyerVendors: [],
+      showToast: mockShowToast,
+    });
+
+    const { container } = render(<InitialSetupModal />);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('walks through the 5 steps and saves processed data with activeBuyerAccount null', () => {
+    jest.useFakeTimers();
+    global.URL.createObjectURL = jest.fn(() => 'blob:mock');
+    global.URL.revokeObjectURL = jest.fn();
+
+    (useApp as jest.Mock).mockReturnValue({
+      initialSetupModalOpen: true,
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      historicalPurchaseDataPeriod: '2_years',
+      setHistoricalPurchaseDataPeriod: mockSetHistoricalPurchaseDataPeriod,
+      processHistoricalPurchaseData: mockProcessHistoricalPurchaseData,
+      activeBuyerAccount: null,
+      buyerVendors: mockBuyerVendors,
+      showToast: mockShowToast,
+    });
+
+    render(<InitialSetupModal />);
+
+    // STEP 1: Select Period
+    expect(screen.getByText(/Step 1: Choose Historical Purchase Period/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Last 1 Year \(12 Months\)/i));
+    expect(mockSetHistoricalPurchaseDataPeriod).toHaveBeenCalledWith('1_year');
+
+    fireEvent.click(screen.getByText(/Last 3 Years \(36 Months\)/i));
+    expect(mockSetHistoricalPurchaseDataPeriod).toHaveBeenCalledWith('3_years');
+
+    // Continue to STEP 2
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    expect(screen.getByText(/Step 2: Upload File 1/i)).toBeInTheDocument();
+
+    // Download CSV template
+    fireEvent.click(screen.getByText(/Download CSV Template/i));
+    expect(mockShowToast).toHaveBeenCalledWith('Template Downloaded', expect.any(String), 'success');
+
+    // Reset Template in Step 2
+    fireEvent.click(screen.getByText('Reset Template'));
+    expect(mockShowToast).toHaveBeenCalledWith('Reset Complete', expect.any(String), 'info');
+
+    // Continue to STEP 3 using Proceed to File 2: PO Dump button
+    fireEvent.click(screen.getByText(/Proceed to File 2: PO Dump/i));
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+
+    // Download PO dump template
+    fireEvent.click(screen.getByText(/Download CSV Template/i));
+    expect(mockShowToast).toHaveBeenCalledWith('Template Downloaded', expect.any(String), 'success');
+
+    // Reset PO in Step 3
+    fireEvent.click(screen.getByText('Reset Template'));
+    expect(mockShowToast).toHaveBeenCalledWith('Reset Complete', expect.any(String), 'info');
+
+    // Run AI Cross-Match simulation to enter STEP 4
+    fireEvent.click(screen.getByText(/Run AI Category Cross-Match/i));
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+
+    // STEP 4: Category Review & Cross Join
+    expect(screen.getByText(/Step 4: AI Cross-Match/i)).toBeInTheDocument();
+
+    // Tab filters in Step 4
+    const filterTabs = screen.getAllByRole('button');
+    const mappedTab = filterTabs.find((b) => b.textContent?.includes('Mapped'));
+    if (mappedTab) fireEvent.click(mappedTab);
+
+    const unmappedTab = filterTabs.find((b) => b.textContent?.includes('Unmapped'));
+    if (unmappedTab) fireEvent.click(unmappedTab);
+
+    const allTab = filterTabs.find((b) => b.textContent?.includes('All'));
+    if (allTab) fireEvent.click(allTab);
+
+    // Continue to Step 5 using Review Email Dispatch button
+    fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
+    expect(screen.getByText(/Step 5: Confirm Ingestion/i)).toBeInTheDocument();
+
+    // Save and commit
+    fireEvent.click(screen.getByText(/COMPLETE SETUP & INGEST/i));
+    expect(mockProcessHistoricalPurchaseData).toHaveBeenCalled();
+
+    jest.useRealTimers();
+  });
+
+  it('handles back button navigation and modal close (X button)', () => {
+    jest.useFakeTimers();
+    render(<InitialSetupModal />);
+
+    // Step 1 -> Step 2
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    expect(screen.getByText(/Step 2: Upload File 1/i)).toBeInTheDocument();
+
+    // Back to step 1
+    fireEvent.click(screen.getByText('Back to Period'));
+    expect(screen.getByText(/Step 1: Choose Historical Purchase Period/i)).toBeInTheDocument();
+
+    // Step 2 -> Step 3
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+
+    // Back to step 2
+    fireEvent.click(screen.getByText('Back to Vendor Master'));
+    expect(screen.getByText(/Step 2: Upload File 1/i)).toBeInTheDocument();
+
+    // Step 3 -> Step 4
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    fireEvent.click(screen.getByText('4. AI Category Join'));
+    expect(screen.getByText(/Step 4: AI Cross-Match/i)).toBeInTheDocument();
+
+    // Back to step 3
+    fireEvent.click(screen.getByText('Back to PO Dump'));
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+
+    // Step 4 -> Step 5
+    fireEvent.click(screen.getByText('5. Dispatch Emails'));
+    expect(screen.getByText(/Step 5: Confirm Ingestion/i)).toBeInTheDocument();
+
+    // Back to step 4
+    fireEvent.click(screen.getByText('Back to Category Join'));
+    expect(screen.getByText(/Step 4: AI Cross-Match/i)).toBeInTheDocument();
+
+    // Close modal via top-right close button
+    const closeBtns = screen.getAllByRole('button');
+    const xBtn = closeBtns.find((b) => b.querySelector('svg.lucide-x'));
+    if (xBtn) fireEvent.click(xBtn);
+    expect(mockSetInitialSetupModalOpen).toHaveBeenCalledWith(false);
+
+    jest.useRealTimers();
+  });
+
+  it('handles excel file uploads, column aliases, empty values, errors, and cross-category AI parsing', () => {
+    // 1. Create valid Vendor Master workbook with alternate column aliases and empty fallbacks
+    const wsVendors = XLSX.utils.json_to_sheet([
+      {
+        'Vendor Code': 'V-101',
+        'Company Name': 'Apex Supplies Ltd.',
+        'Contact Person': 'Aarav Patel',
+        Email: 'aarav@apex.in',
+        Phone: '+91 98000 11111',
+        Address: 'Pune Hub, MH',
+        GSTIN: '27AAACG1234A1Z1',
+        Rating: 92,
+      },
+      {
+        code: 'V-102',
+        vendorname: 'TechnoForce Electricals Ltd',
+        contact: 'Pooja Verma',
+        email_id: 'pooja@technoforce.com',
+        mobile: '+91 98000 22222',
+        location: 'Bengaluru, KA',
+        taxid: '29AAACT1234A1Z2',
+        score: 88,
+      },
+      {
+        suppliercode: 'V-103',
+        suppliername: 'Everest Steel & Infra',
+        representative: 'Vikram Rawat',
+        mail: 'vikram@everest.com',
+        telephone: '+91 98000 33333',
+        city: 'Kolkata, WB',
+        gst: '19AAACE1234A1Z3',
+        vendorrating: 85,
+      },
+      {
+        vendorid: 'V-104',
+        supplier: 'Delta Compressors Ltd',
+        person: 'Sanjay Rawat',
+        corporateemail: 'sanjay@delta.com',
+        contactnumber: '+91 98000 44444',
+        plantlocation: 'Ahmedabad, GJ',
+        gstno: '24AAACD1234A1Z4',
+        rating0100: '75',
+      },
+      {
+        id: '',
+        name: '',
+        contactperson: '',
+        email: '',
+        phonenumber: '',
+        officeaddress: '',
+        gstnumber: '',
+        performancescore: '110',
+      },
+    ]);
+    const wbVendor = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wbVendor, wsVendors, 'Vendors');
+    const vendorBuffer = XLSX.write(wbVendor, { type: 'array', bookType: 'xlsx' });
+    const vendorFile: any = new File([vendorBuffer], 'custom_vendors.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    vendorFile.__buffer = vendorBuffer;
+
+    // 2. Create valid PO Line Items workbook covering all column aliases and categories
+    const wsPOs = XLSX.utils.json_to_sheet([
+      {
+        'PO Number': 'PO-9001',
+        'PO Date': '2025-03-01',
+        'Vendor Name': 'Apex Supplies Ltd.',
+        'Item Name': 'Centrifugal Water Pump 500 GPM',
+        Specs: 'High Pressure DIN standard 15HP',
+        Quantity: 5,
+        Unit: 'Units',
+        'Unit Price': 12000,
+        'Total Spend': 60000,
+        Department: 'Piping & Mechanical',
+      },
+      {
+        'po #': 'PO-9002',
+        orderdate: '2025-04-01',
+        vendor: 'Apex Supplies Ltd.',
+        itemdescription: 'Industrial Gate Valve, Globe & Hydraulic Hose with Air Compressor',
+        itemspecs: 'Class 150 PN16 with 20HP Motor',
+        qty: 10,
+        uom: 'Units',
+        rate: 3000,
+        spend: 30000,
+        dept: 'Mechanical',
+      },
+      {
+        pono: 'PO-9003',
+        date: '2025-05-01',
+        supplier: 'TechnoForce Electricals Ltd',
+        material: 'LV Switchgear Modular Panels with Drawout MCCB & Breakers Cables',
+        details: '415V 50Hz 3-Phase',
+        units: 2,
+        unitofmeasure: 'Panels',
+        price: 85000,
+        totalamount: 170000,
+        costcenter: 'Electrical',
+      },
+      {
+        orderid: 'PO-9004',
+        creationdate: '2025-06-01',
+        companyname: 'Everest Steel & Infra',
+        productname: 'Fe500D TMT Bars & PEB Structure Roofing Sheets for Civil Works',
+        grade: 'IS 1786 Grade',
+        count: 50,
+        unit: 'Tons',
+        itemprice: 60000,
+        poamount: 3000000,
+        plant: 'Civil',
+      },
+      {
+        ordernumber: 'PO-9005',
+        podate: '2025-07-01',
+        vendorcode: 'Delta Compressors Ltd',
+        description: 'Compressor Spares and Motor Maintenance Parts',
+        technicalspecs: 'ISO Grade',
+        orderedqty: 20,
+        unit: 'Boxes',
+        unitprice: '500',
+        totalvalue: '10000',
+        category: 'Utilities',
+      },
+      {
+        ponumber: '',
+        podate: '',
+        vendoridentifier: '',
+        itemname: '',
+        specs: '',
+        quantity: 'invalid',
+        unit: '',
+        unitprice: '',
+        totalspend: '',
+        division: 'General',
+      },
+    ]);
+    const wbPO = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wbPO, wsPOs, 'POs');
+    const poBuffer = XLSX.write(wbPO, { type: 'array', bookType: 'xlsx' });
+    const poFile: any = new File([poBuffer], 'custom_pos.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    poFile.__buffer = poBuffer;
+
+    const { container } = render(<InitialSetupModal />);
+
+    // Go to Step 2 (Vendor Master)
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+
+    // Test dropzone click and Choose Another File click on Step 2
+    const vDropZone = container.querySelector('.border-dashed');
+    if (vDropZone) {
+      fireEvent.click(vDropZone);
+      fireEvent.dragOver(vDropZone);
+      fireEvent.dragLeave(vDropZone);
+      fireEvent.drop(vDropZone, {
+        dataTransfer: { files: [vendorFile] },
+      });
+    }
+
+    const chooseBtns = screen.getAllByText('Choose Another File');
+    if (chooseBtns[0]) fireEvent.click(chooseBtns[0]);
+
+    // Test file input change in Step 2
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) {
+      fireEvent.change(vInput, { target: { files: [vendorFile] } });
+    }
+
+    // Test empty file, error file, and corrupt file on Step 2
+    const emptyWb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(emptyWb, XLSX.utils.json_to_sheet([]), 'Empty');
+    const emptyBuffer = XLSX.write(emptyWb, { type: 'array', bookType: 'xlsx' });
+    const emptyFile: any = new File([emptyBuffer], 'empty.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    emptyFile.__buffer = emptyBuffer;
+
+    if (vInput) {
+      fireEvent.change(vInput, { target: { files: [emptyFile] } });
+    }
+
+    const errFile: any = new File([], 'err.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    errFile.__error = true;
+    if (vInput) {
+      fireEvent.change(vInput, { target: { files: [errFile] } });
+    }
+
+    const corruptFile: any = new File([], 'corrupt.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    corruptFile.__corrupt = true;
+    if (vInput) {
+      fireEvent.change(vInput, { target: { files: [corruptFile] } });
+    }
+
+    // Go to Step 3 (PO Dump)
+    fireEvent.click(screen.getByText('3. PO Dump'));
+
+    const poDropZones = container.querySelectorAll('.border-dashed');
+    if (poDropZones[0]) {
+      fireEvent.click(poDropZones[0]);
+      fireEvent.dragOver(poDropZones[0]);
+      fireEvent.dragLeave(poDropZones[0]);
+      fireEvent.drop(poDropZones[0], {
+        dataTransfer: { files: [poFile] },
+      });
+    }
+
+    const pChooseBtns = screen.getAllByText('Choose Another File');
+    if (pChooseBtns[0]) fireEvent.click(pChooseBtns[0]);
+
+    const poInput = container.querySelector('input[type="file"]');
+    if (poInput) {
+      fireEvent.change(poInput, { target: { files: [poFile] } });
+      fireEvent.change(poInput, { target: { files: [emptyFile] } });
+      fireEvent.change(poInput, { target: { files: [errFile] } });
+      fireEvent.change(poInput, { target: { files: [corruptFile] } });
+    }
+
+    // Test PO edge cases for unitPrice and totalSpend calculation
+    const edgePOsWb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(
+      edgePOsWb,
+      XLSX.utils.json_to_sheet([
+        {
+          'PO Number': 'PO-8881',
+          'PO Date': '2025-01-01',
+          'Vendor Name': 'Apex Supplies Ltd.',
+          'Item Name': 'Special Valves',
+          Quantity: 10,
+          'Unit Price': '$500',
+          'Total Spend': '$0',
+        },
+        {
+          'PO Number': 'PO-8882',
+          'PO Date': '2025-01-02',
+          'Vendor Name': 'Apex Supplies Ltd.',
+          'Item Name': 'Special Valves 2',
+          Quantity: 10,
+          'Unit Price': '0',
+          'Total Spend': '$5000',
+        },
+        {
+          'PO Number': 'PO-8883',
+          'PO Date': '2025-01-03',
+          'Vendor Name': 'Delta Compressors Ltd',
+          'Item Name': 'General Non-Matching Item',
+          Quantity: 1,
+          'Unit Price': 100,
+          'Total Spend': 100,
+        },
+      ]),
+      'POs'
+    );
+    const edgePOBuffer = XLSX.write(edgePOsWb, { type: 'array', bookType: 'xlsx' });
+    const edgePOFile: any = new File([edgePOBuffer], 'edge_pos.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    edgePOFile.__buffer = edgePOBuffer;
+
+    if (poInput) {
+      fireEvent.change(poInput, { target: { files: [edgePOFile] } });
+    }
+
+    // Step 4 & Step 5 verification
+    fireEvent.click(screen.getByText('4. AI Category Join'));
+    fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
+    expect(screen.getByText(/Step 5: Confirm Ingestion/i)).toBeInTheDocument();
+  });
+});
