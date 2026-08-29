@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '@/lib/store';
 import { RbacModal } from '@/app/components/Modals';
+import { DBHealthStatus } from '@/lib/db';
 import {
   Cpu,
   Database,
@@ -13,11 +14,15 @@ import {
   SlidersHorizontal,
   RefreshCw,
   CheckCircle2,
+  AlertCircle,
   HardDrive,
   MessageSquare,
   Sparkles,
   Server,
   Lock,
+  Layers,
+  ArrowUpDown,
+  Zap,
 } from 'lucide-react';
 
 interface InfraControlProps {
@@ -31,11 +36,90 @@ export default function InfraControl({ onNavigateToAuditLog }: InfraControlProps
   const [backingUp, setBackingUp] = useState(false);
   const [secretsModalOpen, setSecretsModalOpen] = useState(false);
 
+  // PostgreSQL Database Telemetry & Migration State
+  const [dbHealth, setDbHealth] = useState<DBHealthStatus | null>(null);
+  const [loadingHealth, setLoadingHealth] = useState(false);
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [migratingDb, setMigratingDb] = useState(false);
+  const [syncingDb, setSyncingDb] = useState(false);
+
+  const fetchDbHealth = async (notify = false) => {
+    setLoadingHealth(true);
+    try {
+      const res = await fetch('/api/db/status');
+      const data = await res.json();
+      if (data.success) {
+        setDbHealth(data.data);
+        if (notify) {
+          showToast(
+            data.data.isConnected ? 'PostgreSQL Connected' : 'Database Status Checked',
+            data.data.isConnected
+              ? `Connected to ${data.data.providerLabel} with ${data.data.latencyMs}ms latency.`
+              : `Operating in fallback mode: ${data.data.errorMessage || 'No DATABASE_URL configured'}`,
+            data.data.isConnected ? 'success' : 'info'
+          );
+        }
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch DB status:', err);
+    } finally {
+      setLoadingHealth(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchDbHealth(false);
+  }, []);
+
+  const handleTestConnection = async () => {
+    setTestingConnection(true);
+    await fetchDbHealth(true);
+    setTestingConnection(false);
+  };
+
+  const handleRunMigrations = async () => {
+    setMigratingDb(true);
+    try {
+      const res = await fetch('/api/db/init', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setDbHealth(data.health);
+        addAuditLog(`Executed PostgreSQL DDL schema migration: ${data.tablesCreated?.length || 0} tables verified`);
+        showToast('Schema Initialized', data.message, 'success');
+      } else {
+        showToast('Migration Error', data.error || data.message, 'warning');
+      }
+    } catch (err: any) {
+      showToast('Migration Failed', err.message, 'warning');
+    } finally {
+      setMigratingDb(false);
+    }
+  };
+
+  const handleSyncData = async () => {
+    setSyncingDb(true);
+    try {
+      const res = await fetch('/api/db/sync', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setDbHealth(data.health);
+        addAuditLog(`Synchronized active procurement datasets to PostgreSQL`);
+        showToast('Data Synchronized', data.message, 'success');
+      } else {
+        showToast('Sync Warning', data.error || data.message, 'warning');
+      }
+    } catch (err: any) {
+      showToast('Sync Failed', err.message, 'warning');
+    } finally {
+      setSyncingDb(false);
+    }
+  };
+
   const handleBackup = () => {
     setBackingUp(true);
     setTimeout(() => {
       setBackingUp(false);
-      addAuditLog('Executed manual snapshot backup of Azure SQL Master and Cosmos DB collections');
+      addAuditLog('Executed manual snapshot backup of Azure PostgreSQL and Cosmos DB collections');
       showToast('Database Backup Completed', 'Point-in-time snapshot committed to Azure Geo-Redundant Storage (GRS).', 'success');
     }, 1500);
   };
@@ -193,6 +277,124 @@ export default function InfraControl({ onNavigateToAuditLog }: InfraControlProps
                 </select>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Panel 3: PostgreSQL Enterprise Database Engine & Telemetry */}
+      <div className="glass-panel p-6 rounded-2xl space-y-5 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-gray-800 pb-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 shadow-sm">
+              <Database size={20} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-black uppercase tracking-wider text-slate-900 dark:text-white">
+                  POSTGRESQL ENTERPRISE DATABASE ENGINE
+                </h2>
+                <span className="badge badge-blue">SQL v16 Relational Cluster</span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+                {dbHealth?.providerLabel || 'Detecting PostgreSQL connection...'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {dbHealth?.isConnected ? (
+              <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-500/30 flex items-center gap-1.5 shadow-sm">
+                <span className="live-dot" /> Live Connected ({dbHealth.latencyMs}ms)
+              </span>
+            ) : (
+              <span className="px-3 py-1 rounded-full text-xs font-bold bg-amber-50 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-500/30 flex items-center gap-1.5 shadow-sm">
+                <AlertCircle size={13} /> {dbHealth?.isConfigured ? 'Connection Error' : 'In-Memory Fallback Active'}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Database Metric Grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800">
+            <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-gray-500 block">Active Tables</span>
+            <span className="text-base font-black text-indigo-600 dark:text-indigo-400 mt-0.5 block">
+              {dbHealth?.tablesCount ?? 8} Tables
+            </span>
+          </div>
+
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800">
+            <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-gray-500 block">Buyer Accounts</span>
+            <span className="text-base font-black text-slate-900 dark:text-white mt-0.5 block">
+              {dbHealth?.totalRecords.buyerAccounts ?? 6}
+            </span>
+          </div>
+
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800">
+            <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-gray-500 block">Vendor Master</span>
+            <span className="text-base font-black text-slate-900 dark:text-white mt-0.5 block">
+              {dbHealth?.totalRecords.vendors ?? 15}
+            </span>
+          </div>
+
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800">
+            <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-gray-500 block">RFQs Persisted</span>
+            <span className="text-base font-black text-slate-900 dark:text-white mt-0.5 block">
+              {dbHealth?.totalRecords.rfqs ?? 12}
+            </span>
+          </div>
+
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800">
+            <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-gray-500 block">360° Evaluations</span>
+            <span className="text-base font-black text-slate-900 dark:text-white mt-0.5 block">
+              {dbHealth?.totalRecords.evaluations ?? 7}
+            </span>
+          </div>
+
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800">
+            <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-gray-500 block">Audit Signatures</span>
+            <span className="text-base font-black text-emerald-600 dark:text-emerald-400 mt-0.5 block">
+              {dbHealth?.totalRecords.auditLogs ?? 24}
+            </span>
+          </div>
+        </div>
+
+        {/* Database Quick Actions Bar */}
+        <div className="p-4 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-gray-400">
+            <Zap size={14} className="text-amber-500" />
+            <span>
+              Supports <strong>Vercel Postgres</strong>, <strong>Neon</strong>, <strong>Supabase</strong>, <strong>Azure Flexible Server</strong>, <strong>AWS RDS</strong> & <strong>Local Postgres</strong> via standard <code className="mono text-indigo-600 dark:text-indigo-400 font-bold">DATABASE_URL</code>.
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={handleTestConnection}
+              disabled={testingConnection || loadingHealth}
+              className="btn btn-secondary btn-sm"
+            >
+              <RefreshCw size={13} className={testingConnection || loadingHealth ? 'animate-spin' : ''} />
+              {testingConnection ? 'Testing...' : 'Test Connection'}
+            </button>
+
+            <button
+              onClick={handleRunMigrations}
+              disabled={migratingDb}
+              className="btn btn-secondary btn-sm"
+            >
+              <Layers size={13} className={migratingDb ? 'animate-spin' : ''} />
+              {migratingDb ? 'Running Migrations...' : 'Run Schema Migrations'}
+            </button>
+
+            <button
+              onClick={handleSyncData}
+              disabled={syncingDb}
+              className="btn btn-primary btn-sm"
+            >
+              <ArrowUpDown size={13} className={syncingDb ? 'animate-spin' : ''} />
+              {syncingDb ? 'Syncing...' : 'Sync Data to Postgres'}
+            </button>
           </div>
         </div>
       </div>
