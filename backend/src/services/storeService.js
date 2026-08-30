@@ -27,6 +27,7 @@ const {
   upsertSystemConfigInDB,
 } = require('../db/queries');
 const poolModule = require('../db/pool');
+const { logger } = require('./loggerService');
 
 class StoreService {
   constructor() {
@@ -454,6 +455,8 @@ class StoreService {
     const previousHash = this.auditLogs.length > 0 ? this.auditLogs[0].shaSignature : '';
     const entry = createAuditEntry({ userEmail, action, rfqNumber, ipAddress, previousHash });
     this.auditLogs.unshift(entry);
+
+    logger.audit(action, userEmail || 'system@procucev.ai', { rfqNumber, ipAddress, shaSignature: entry.shaSignature }, rfqNumber);
 
     if (poolModule.pool) {
       insertAuditLogInDB(entry).catch((e) => console.error('DB audit log save error:', e.message));

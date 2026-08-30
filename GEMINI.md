@@ -1,6 +1,6 @@
 # Antigravity & Gemini Agent Guidelines
 
-## Mandatory Unit Testing & Coverage Rules
+## 1. Mandatory Unit Testing & Coverage Rules
 - **Benchmark**: Achieve and maintain **>= 90% Unit Test Coverage per file** on Lines, Statements, Branches, and Functions across all code files in `frontend/` and `backend/`.
 - **Global Timeout**: 20,000 ms.
 - **Verification Command**:
@@ -10,3 +10,16 @@
   ```
 - **Strict Error Enforcement**: If any single file falls below 90% in statements, branches, functions, or lines, the coverage verifier script will exit with error code 1.
 - **AI Agent Obligation**: Before concluding any task or reporting completion to the user, run `npm run test:coverage` and ensure 0 failures and 90%+ coverage on every single file.
+
+---
+
+## 2. User Prompt History Maintenance (`prompts.md`)
+- Maintain a file in the workspace root named `prompts.md`.
+- **Strict Requirement**: Save **ONLY** user-provided prompts in `prompts.md`. Do **NOT** include AI-generated conversational output.
+- Update `prompts.md` whenever new user prompts are provided.
+
+---
+
+## 3. Logs Storage & Detailed Application Logging
+- **Centralized Structured Logging**: Persist logs in local file system under `backend/logs/` (`app.log`, `error.log`, `audit.log`) with automatic purging policies and searchability.
+- **Detailed Logs**: Log detailed contextual information (actions, parameters, state changes, errors) across backend controllers, services, database middleware, and frontend store actions.

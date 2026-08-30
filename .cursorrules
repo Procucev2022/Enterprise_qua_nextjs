@@ -1,7 +1,14 @@
 # Cursor AI Guidelines
 
-## Mandatory Unit Testing & Coverage Rules
+## 1. Mandatory Unit Testing & Coverage Rules
 - Benchmark: Achieve and maintain >= 90% Unit Test Coverage per file on Lines, Statements, Branches, and Functions across all code files in `frontend/` and `backend/`.
 - Global Timeout: 20,000 ms.
-- Verification Command: `npm run test:coverage`
+- Verification Command: `npm run test:coverage && npm run check:coverage`
 - Strict Error Enforcement: If any single file falls below 90% in statements, branches, functions, or lines, the coverage verifier script will exit with error code 1.
+
+## 2. User Prompt History (`prompts.md`)
+- Maintain `prompts.md` in workspace root. Save ONLY user-provided prompts (never AI-generated responses).
+
+## 3. Logs Storage & Detailed Application Logging
+- Structured centralized logging persisted to `backend/logs/` with automatic purging and searchability.
+- Add detailed logs across backend controllers/services and frontend store actions.

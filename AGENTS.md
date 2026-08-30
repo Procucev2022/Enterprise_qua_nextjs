@@ -1,6 +1,8 @@
-# Universal AI Coding Agent Instructions & Unit Testing Standards
+# Universal AI Coding Agent Instructions & Engineering Standards
 
-All AI coding assistants (including Antigravity, Gemini, Cursor, Claude, Codex, GitHub Copilot, Kiro, etc.) working on this repository **MUST** adhere to the following mandatory testing protocols:
+All AI coding assistants (including Antigravity, Gemini, Cursor, Claude, Codex, GitHub Copilot, Kiro, etc.) working on this repository **MUST** strictly adhere to the following mandatory protocols:
+
+---
 
 ## 1. 90% Unit Test Code Coverage Benchmark (Strict Per-File Enforcement)
 - Every single application code file in `frontend/` and `backend/` **MUST** achieve at least **90% unit test coverage** individually across all four metrics:
@@ -9,7 +11,9 @@ All AI coding assistants (including Antigravity, Gemini, Cursor, Claude, Codex, 
   - **Functions: >= 90%**
   - **Lines: >= 90%**
 - **Zero file exclusions**: Do not skip or exclude any application file from testing or coverage thresholds.
-- If even a single file falls below 90% in any of the four parameters, the test run fails, an error is thrown, and it must be corrected before finishing the task.
+- If even a single file falls below 90% in any of the four parameters, the test run fails, an error is thrown, and it must be corrected before concluding the task.
+
+---
 
 ## 2. Automated Test Verification on Every Change
 Whenever making any code changes or adding new features:
@@ -28,12 +32,30 @@ Whenever making any code changes or adding new features:
    ```
 4. Verify that all unit tests pass with zero errors and that the coverage report shows `>= 90%` across all parameters for each individual file.
 
+---
+
 ## 3. Global Test Timeout
 - All tests must respect the global timeout of **20,000 ms** (20 seconds) defined in `jest.config.js`.
 - Async tests and API mock calls must settle quickly and reliably without hanging.
 
-## 4. Test Structure and Practices
-- Place test files in `__tests__/`, mirroring the project source directory structure (e.g. `frontend/__tests__/app/buyer/command-center.test.tsx`, `backend/__tests__/rfqController.test.js`).
-- Clean up mocks, timers, and DOM nodes in `beforeEach` / `afterEach`.
-- Use `@testing-library/react` and `fireEvent` / `userEvent` for component testing.
-- Test edge cases, validation error branches, loading states, and fallback states to ensure comprehensive branch and line coverage.
+---
+
+## 4. User Prompt History Maintenance (`prompts.md`)
+- Maintain a file in the workspace root named `prompts.md` for saving user-provided prompts.
+- **Rule**: Save **ONLY** user-provided prompts in `prompts.md`. Do **NOT** record AI-generated conversations or assistant responses in this file.
+- Each user prompt must be appended with its timestamp and exact user prompt text.
+
+---
+
+## 5. Structured Centralized Logging & Logs Storage
+- Implement and maintain a structured, centralized logging system for persistence, searchability, and automatic purging to manage storage and compliance.
+- When running locally, all logs must be persisted in the file system under `backend/logs/` (e.g. `app.log`, `error.log`, `audit.log`) for future reference and debugging.
+- Implement automatic purging with retention policies (e.g. max age, max size) to manage disk space and compliance.
+
+---
+
+## 6. Detailed Application Logging Standard
+- Apply detailed, structured logging across all layers of the application:
+  - **Backend**: Log controller entries, service operations, database query executions, incoming HTTP requests, and error traces with structured metadata (timestamps, levels, categories, request IDs).
+  - **Frontend**: Log user actions, store state changes, API calls, and error handling via the centralized frontend logger.
+- Never strip or bypass logging when adding or refactoring features.

@@ -12,6 +12,7 @@ const dbRoutes = require('./db');
 const bootstrapRoutes = require('./bootstrap');
 const supportChatRoutes = require('./supportChat');
 const catalogueRoutes = require('./catalogue');
+const logsRoutes = require('./logs');
 
 // Mount sub-routers
 router.use('/bootstrap', bootstrapRoutes);
@@ -25,5 +26,6 @@ router.use('/system-config', systemConfigRoutes);
 router.use('/db', dbRoutes);
 router.use('/support-chat', supportChatRoutes);
 router.use('/catalogue', catalogueRoutes);
+router.use('/logs', logsRoutes);
 
 module.exports = router;
