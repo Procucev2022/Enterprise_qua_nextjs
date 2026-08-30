@@ -34,3 +34,10 @@
 
 ## 5. GraphQL Integration & Streamlined Fetching
 - Provide a robust `/graphql` interface to enable fine-grained field selection, batched fetching, and prevent over-fetching across all enterprise domains.
+
+---
+
+## 6. Tech Stack LTS/Stable Version Upgrade & Dependency Maintenance Protocol
+- Regularly audit, upgrade, and maintain all runtime environments, frameworks, dependencies, and libraries to their latest Long-Term Support (LTS) or stable releases.
+- Systematically refactor breaking changes, deprecation warnings, and API updates.
+- Verify stability and backward compatibility via full unit tests, linting, typecheck, and coverage verification.

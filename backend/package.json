@@ -1,6 +1,6 @@
 {
   "name": "procucev-enterprise-node",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Procucev Enterprise (QUA AI 2.0) - Autonomous Sourcing & Procurement Intelligence Node.js Platform",
   "main": "src/server.js",
   "scripts": {
@@ -26,14 +26,14 @@
   "license": "ISC",
   "dependencies": {
     "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
     "graphql": "^17.0.2",
-    "pg": "^8.12.0"
+    "pg": "^8.13.3"
   },
   "devDependencies": {
     "jest": "^29.7.0",
-    "nodemon": "^3.1.4",
+    "nodemon": "^3.1.9",
     "supertest": "^7.0.0"
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "procucev-enterprise-frontend",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000",
@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "lucide-react": "^0.453.0",
-    "next": "^14.2.15",
+    "next": "^14.2.35",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "xlsx": "^0.18.5"
@@ -25,15 +25,15 @@
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.6",
     "@types/jest": "^30.0.0",
-    "@types/node": "^20.14.10",
-    "@types/react": "^18.3.3",
-    "@types/react-dom": "^18.3.0",
+    "@types/node": "^20.19.43",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
     "autoprefixer": "^10.5.4",
     "jest": "^30.5.0",
     "jest-environment-jsdom": "^30.5.0",
     "postcss": "^8.5.26",
-    "tailwindcss": "^3.4.1",
-    "typescript": "^5.5.3",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^5.8.2",
     "whatwg-fetch": "^3.6.20"
   }
 }

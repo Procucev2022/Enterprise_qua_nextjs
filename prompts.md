@@ -47,3 +47,14 @@ Additionally, implement optimizations to minimize database compute hours, reduce
 ```
 
 ---
+
+### Prompt 5
+**Timestamp**: 2026-08-30T03:56:39Z
+
+```text
+Tech Stack upgrade to latest long term stable version, along with latest dependencies or libraries: Add a comprehensive configuration in assistant instructions to regularly audit, upgrade, and maintain all core tech stack components, runtime environments, framework dependencies, and third-party libraries to their latest Long-Term Support (LTS) or stable versions. Ensure that all breaking changes, deprecation warnings, and API updates from upgraded packages are systematically refactored across the entire codebase. Validate the upgrade by running the full test suite, linting, and typechecks to guarantee backward compatibility, operational stability, and optimal performance.
+
+Also, Please proceed with tech stack upgradation.
+```
+
+---

@@ -21,3 +21,7 @@
 
 6. GraphQL Integration & Streamlined Fetching
 - Provide a unified `/graphql` endpoint for fine-grained field selection and batched data retrieval across enterprise entities.
+
+7. Tech Stack LTS/Stable Version Upgrade & Dependency Maintenance Protocol
+- Regularly audit, upgrade, and maintain all core tech stack components, runtime environments, framework dependencies, and libraries to latest LTS/stable releases.
+- Systematically refactor breaking changes and deprecations, validating via full test suite, linting, typechecks, and 90% per-file coverage.

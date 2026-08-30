@@ -74,3 +74,10 @@ Whenever making any code changes or adding new features:
 ## 8. GraphQL Integration & Streamlined Data Fetching Standard
 - **Unified & Streamlined Fetching**: Integrate and maintain a GraphQL API layer (`/graphql`) allowing frontend clients and microservices to request exactly the required fields, eliminating over-fetching and under-fetching.
 - **Batched & Composite Queries**: Support batched queries across multiple domain entities (RFQs, Vendors, Buyer Accounts, Evaluations, Audit Logs, System Config, Catalogue, and Infrastructure Health) in a single roundtrip to maximize network and compute efficiency.
+
+---
+
+## 9. Tech Stack LTS/Stable Version Upgrade & Dependency Maintenance Protocol
+- **Regular Stack & Dependency Auditing**: Regularly audit, upgrade, and maintain all core tech stack components, runtime environments, framework dependencies, and third-party libraries to their latest Long-Term Support (LTS) or stable versions.
+- **Refactoring Breaking Changes & Deprecations**: Ensure that all breaking changes, deprecation warnings, and API updates from upgraded packages are systematically refactored across the entire codebase.
+- **Verification & Compatibility Gate**: Validate all upgrades by executing the full test suite, linting, typechecks, and the per-file 90% coverage benchmark to guarantee backward compatibility, operational stability, and optimal performance.
