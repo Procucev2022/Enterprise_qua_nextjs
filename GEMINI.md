@@ -23,3 +23,14 @@
 ## 3. Logs Storage & Detailed Application Logging
 - **Centralized Structured Logging**: Persist logs in local file system under `backend/logs/` (`app.log`, `error.log`, `audit.log`) with automatic purging policies and searchability.
 - **Detailed Logs**: Log detailed contextual information (actions, parameters, state changes, errors) across backend controllers, services, database middleware, and frontend store actions.
+
+---
+
+## 4. Database Optimization & Query Efficiency Standard
+- **Query Auditing**: Continuously audit database queries to ensure indexing, prevent full table scans, and log slow queries with execution timings.
+- **Compute Hours & Resource Minimization**: Utilize intelligent query caching (TTL/LRU) to eliminate redundant compute load and tune connection pooling to promptly reclaim idle connections.
+
+---
+
+## 5. GraphQL Integration & Streamlined Fetching
+- Provide a robust `/graphql` interface to enable fine-grained field selection, batched fetching, and prevent over-fetching across all enterprise domains.

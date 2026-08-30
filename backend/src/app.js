@@ -6,6 +6,7 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const apiRoutes = require('./routes');
+const graphqlRoutes = require('./routes/graphql');
 const requestLogger = require('./middleware/logger');
 const errorHandler = require('./middleware/errorHandler');
 
@@ -35,6 +36,7 @@ app.get('/', (req, res) => {
     endpoints: {
       health: '/health',
       apiBase: '/api',
+      graphql: '/graphql',
       rfqs: '/api/rfqs',
       vendors: '/api/vendors',
       evaluations: '/api/evaluations',
@@ -43,9 +45,13 @@ app.get('/', (req, res) => {
       systemConfig: '/api/system-config',
       catalogue: '/api/catalogue',
       supportChat: '/api/support-chat',
+      logs: '/api/logs',
     },
   });
 });
+
+// Mount GraphQL root route
+app.use('/graphql', graphqlRoutes);
 
 // Mount Main API Routes
 app.use('/api', apiRoutes);

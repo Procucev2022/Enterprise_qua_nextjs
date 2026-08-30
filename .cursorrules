@@ -1,14 +1,23 @@
-# Cursor AI Guidelines
+# Universal AI Coding Agent Instructions & Engineering Standards
 
-## 1. Mandatory Unit Testing & Coverage Rules
-- Benchmark: Achieve and maintain >= 90% Unit Test Coverage per file on Lines, Statements, Branches, and Functions across all code files in `frontend/` and `backend/`.
-- Global Timeout: 20,000 ms.
-- Verification Command: `npm run test:coverage && npm run check:coverage`
-- Strict Error Enforcement: If any single file falls below 90% in statements, branches, functions, or lines, the coverage verifier script will exit with error code 1.
+1. 90% Unit Test Code Coverage Benchmark (Strict Per-File Enforcement)
+- Maintain >= 90% coverage on Statements, Branches, Functions, and Lines on every file in frontend/ and backend/.
+- Verify via `npm run test:coverage` and `npm run check:coverage`.
 
-## 2. User Prompt History (`prompts.md`)
-- Maintain `prompts.md` in workspace root. Save ONLY user-provided prompts (never AI-generated responses).
+2. Global Test Timeout: 20,000 ms.
 
-## 3. Logs Storage & Detailed Application Logging
-- Structured centralized logging persisted to `backend/logs/` with automatic purging and searchability.
-- Add detailed logs across backend controllers/services and frontend store actions.
+3. User Prompt History Maintenance (`prompts.md`)
+- Maintain `prompts.md` in workspace root.
+- Store ONLY user-provided prompts with timestamps and prompt text. Do NOT record AI-generated output.
+
+4. Structured Centralized Logging & Logs Storage
+- Store persistent logs in `backend/logs/` (`app.log`, `error.log`, `audit.log`) with auto-purging and searchability.
+- Apply detailed structured logging across all backend and frontend layers.
+
+5. Database Optimization & Query Efficiency Standard
+- Audit database queries for optimal execution paths, avoiding full table scans and redundant roundtrips.
+- Implement intelligent query caching with TTL and automatic write-through invalidation to minimize cloud database compute hours.
+- Tune connection pool lifecycle to reclaim idle connections and minimize compute usage.
+
+6. GraphQL Integration & Streamlined Fetching
+- Provide a unified `/graphql` endpoint for fine-grained field selection and batched data retrieval across enterprise entities.

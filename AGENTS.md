@@ -59,3 +59,18 @@ Whenever making any code changes or adding new features:
   - **Backend**: Log controller entries, service operations, database query executions, incoming HTTP requests, and error traces with structured metadata (timestamps, levels, categories, request IDs).
   - **Frontend**: Log user actions, store state changes, API calls, and error handling via the centralized frontend logger.
 - Never strip or bypass logging when adding or refactoring features.
+
+---
+
+## 7. Database Optimization & Query Efficiency Standard
+- **Query Auditing & Efficiency**: Continuously audit database queries for execution efficiency. Ensure appropriate indexing on frequently filtered columns (e.g., `rfq_number`, `corporate_email`, `major_category`, `sourcing_mode`), prevent N+1 queries, eliminate full-table scans, and profile query latencies.
+- **Minimizing Compute Hours & Resource Usage**:
+  - Implement an intelligent query caching layer (TTL & LRU eviction with write-through invalidation) to minimize redundant database compute hours and eliminate unnecessary network roundtrips.
+  - Optimize connection pool lifecycle (`idleTimeoutMillis`, `max`, `min`) to aggressively release idle database connections, reducing active instance compute billing on managed and serverless database providers (Azure PostgreSQL Flexible Server, AWS RDS, Neon, Supabase).
+  - Profile and log slow queries with execution timings to identify potential optimization bottlenecks.
+
+---
+
+## 8. GraphQL Integration & Streamlined Data Fetching Standard
+- **Unified & Streamlined Fetching**: Integrate and maintain a GraphQL API layer (`/graphql`) allowing frontend clients and microservices to request exactly the required fields, eliminating over-fetching and under-fetching.
+- **Batched & Composite Queries**: Support batched queries across multiple domain entities (RFQs, Vendors, Buyer Accounts, Evaluations, Audit Logs, System Config, Catalogue, and Infrastructure Health) in a single roundtrip to maximize network and compute efficiency.

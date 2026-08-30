@@ -1,6 +1,8 @@
 const { Pool } = require('pg');
 const fs = require('fs');
 const path = require('path');
+const { queryAuditor } = require('./queryAuditor');
+const { queryCache } = require('./queryCache');
 
 function sanitizeConnectionString(raw) {
   if (!raw) return '';
@@ -39,14 +41,17 @@ function detectDBProvider(connStr) {
   return { provider: 'local_postgres', label: 'Dedicated / Local PostgreSQL Cluster' };
 }
 
+/**
+ * Creates connection pool with tuned idle timeout to reduce active compute hours
+ */
 function createPool(connStr = connectionString) {
   if (!connStr) return null;
   const isLocal = connStr.includes('localhost') || connStr.includes('127.0.0.1');
   return new Pool({
     connectionString: connStr,
-    max: process.env.DB_POOL_MAX ? parseInt(process.env.DB_POOL_MAX, 10) : 20,
-    idleTimeoutMillis: process.env.DB_POOL_IDLE_TIMEOUT_MS ? parseInt(process.env.DB_POOL_IDLE_TIMEOUT_MS, 10) : 30000,
-    connectionTimeoutMillis: process.env.DB_CONNECTION_TIMEOUT_MS ? parseInt(process.env.DB_CONNECTION_TIMEOUT_MS, 10) : 10000,
+    max: process.env.DB_POOL_MAX ? parseInt(process.env.DB_POOL_MAX, 10) : 10,
+    idleTimeoutMillis: process.env.DB_POOL_IDLE_TIMEOUT_MS ? parseInt(process.env.DB_POOL_IDLE_TIMEOUT_MS, 10) : 10000,
+    connectionTimeoutMillis: process.env.DB_CONNECTION_TIMEOUT_MS ? parseInt(process.env.DB_CONNECTION_TIMEOUT_MS, 10) : 5000,
     ssl: isLocal ? false : { rejectUnauthorized: false },
   });
 }
@@ -67,6 +72,7 @@ async function query(text, params, retries = 2) {
   try {
     const res = await activePool.query(text, params);
     const duration = Date.now() - start;
+    queryAuditor.auditQuery(text, params, duration, false);
     if (process.env.NODE_ENV === 'development' && duration > 500) {
       console.warn(`[Slow Query ${duration}ms]: ${text.slice(0, 100)}...`);
     }
@@ -212,11 +218,22 @@ async function initializeSchema() {
   }
 }
 
+function getOptimizationMetrics() {
+  const cacheMetrics = queryCache.getMetrics();
+  const auditReport = queryAuditor.getAuditReport();
+  return {
+    cache: cacheMetrics,
+    auditing: auditReport,
+    timestamp: new Date().toISOString(),
+  };
+}
+
 poolModule.createPool = createPool;
 poolModule.query = query;
 poolModule.detectDBProvider = detectDBProvider;
 poolModule.checkDBHealth = checkDBHealth;
 poolModule.initializeSchema = initializeSchema;
 poolModule.sanitizeConnectionString = sanitizeConnectionString;
+poolModule.getOptimizationMetrics = getOptimizationMetrics;
 
 module.exports = poolModule;

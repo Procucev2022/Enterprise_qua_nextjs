@@ -1,4 +1,5 @@
 const poolModule = require('./pool');
+const { queryCache } = require('./queryCache');
 
 // ==============================================================================
 // 1. BUYER ACCOUNTS QUERIES
@@ -6,6 +7,11 @@ const poolModule = require('./pool');
 
 async function getBuyerAccountsFromDB() {
   if (!poolModule.pool) return [];
+
+  const cacheKey = 'SELECT_ALL_BUYER_ACCOUNTS';
+  const cached = queryCache.get(cacheKey);
+  if (cached) return cached;
+
   const res = await poolModule.query(`
     SELECT
       id,
@@ -30,11 +36,14 @@ async function getBuyerAccountsFromDB() {
     FROM buyer_accounts
     ORDER BY created_at DESC
   `);
+
+  queryCache.set(cacheKey, [], res.rows, { tag: 'buyer_accounts', ttlMs: 60000 });
   return res.rows;
 }
 
 async function upsertBuyerAccountInDB(acc) {
   if (!poolModule.pool) return;
+  queryCache.invalidate('buyer_accounts');
   await poolModule.query(
     `
     INSERT INTO buyer_accounts (
@@ -84,6 +93,7 @@ async function upsertBuyerAccountInDB(acc) {
 
 async function deleteBuyerAccountInDB(id) {
   if (!poolModule.pool) return;
+  queryCache.invalidate('buyer_accounts');
   await poolModule.query('DELETE FROM buyer_accounts WHERE id = $1', [id]);
 }
 
@@ -93,6 +103,11 @@ async function deleteBuyerAccountInDB(id) {
 
 async function getVendorsFromDB() {
   if (!poolModule.pool) return [];
+
+  const cacheKey = 'SELECT_ALL_VENDORS';
+  const cached = queryCache.get(cacheKey);
+  if (cached) return cached;
+
   const res = await poolModule.query(`
     SELECT
       id,
@@ -117,16 +132,21 @@ async function getVendorsFromDB() {
     FROM vendors
     ORDER BY created_at DESC
   `);
-  return res.rows.map((row) => ({
+
+  const mapped = res.rows.map((row) => ({
     ...row,
     minorCategories: typeof row.minorCategories === 'string' ? JSON.parse(row.minorCategories) : row.minorCategories,
     clientMappedCategories: typeof row.clientMappedCategories === 'string' ? JSON.parse(row.clientMappedCategories) : row.clientMappedCategories,
     vendorSelectedCategories: typeof row.vendorSelectedCategories === 'string' ? JSON.parse(row.vendorSelectedCategories) : row.vendorSelectedCategories,
   }));
+
+  queryCache.set(cacheKey, [], mapped, { tag: 'vendors', ttlMs: 60000 });
+  return mapped;
 }
 
 async function upsertVendorInDB(v) {
   if (!poolModule.pool) return;
+  queryCache.invalidate('vendors');
   await poolModule.query(
     `
     INSERT INTO vendors (
@@ -175,6 +195,7 @@ async function upsertVendorInDB(v) {
 
 async function deleteVendorInDB(id) {
   if (!poolModule.pool) return;
+  queryCache.invalidate('vendors');
   await poolModule.query('DELETE FROM vendors WHERE id = $1', [id]);
 }
 
@@ -184,6 +205,11 @@ async function deleteVendorInDB(id) {
 
 async function getRFQsFromDB() {
   if (!poolModule.pool) return [];
+
+  const cacheKey = 'SELECT_ALL_RFQS';
+  const cached = queryCache.get(cacheKey);
+  if (cached) return cached;
+
   const res = await poolModule.query(`
     SELECT
       id,
@@ -215,17 +241,22 @@ async function getRFQsFromDB() {
     FROM rfqs
     ORDER BY created_at DESC
   `);
-  return res.rows.map((row) => ({
+
+  const mapped = res.rows.map((row) => ({
     ...row,
     lineItems: typeof row.lineItems === 'string' ? JSON.parse(row.lineItems) : row.lineItems,
     quotes: typeof row.quotes === 'string' ? JSON.parse(row.quotes) : row.quotes,
     assignedVendors: typeof row.assignedVendors === 'string' ? JSON.parse(row.assignedVendors) : row.assignedVendors,
     tags: typeof row.tags === 'string' ? JSON.parse(row.tags) : row.tags,
   }));
+
+  queryCache.set(cacheKey, [], mapped, { tag: 'rfqs', ttlMs: 60000 });
+  return mapped;
 }
 
 async function upsertRFQInDB(rfq) {
   if (!poolModule.pool) return;
+  queryCache.invalidate('rfqs');
   await poolModule.query(
     `
     INSERT INTO rfqs (
@@ -285,6 +316,11 @@ async function upsertRFQInDB(rfq) {
 
 async function getEvaluationsFromDB() {
   if (!poolModule.pool) return [];
+
+  const cacheKey = 'SELECT_ALL_EVALUATIONS';
+  const cached = queryCache.get(cacheKey);
+  if (cached) return cached;
+
   const res = await poolModule.query(`
     SELECT
       id,
@@ -298,15 +334,20 @@ async function getEvaluationsFromDB() {
     FROM vendor_evaluations
     ORDER BY created_at DESC
   `);
-  return res.rows.map((row) => ({
+
+  const mapped = res.rows.map((row) => ({
     ...row,
     moduleScores: typeof row.moduleScores === 'string' ? JSON.parse(row.moduleScores) : row.moduleScores,
     verifiedClaims: typeof row.verifiedClaims === 'string' ? JSON.parse(row.verifiedClaims) : row.verifiedClaims,
   }));
+
+  queryCache.set(cacheKey, [], mapped, { tag: 'evaluations', ttlMs: 60000 });
+  return mapped;
 }
 
 async function upsertEvaluationInDB(ev) {
   if (!poolModule.pool) return;
+  queryCache.invalidate('evaluations');
   await poolModule.query(
     `
     INSERT INTO vendor_evaluations (
@@ -339,6 +380,11 @@ async function upsertEvaluationInDB(ev) {
 
 async function getAuditLogsFromDB() {
   if (!poolModule.pool) return [];
+
+  const cacheKey = 'SELECT_ALL_AUDIT_LOGS';
+  const cached = queryCache.get(cacheKey);
+  if (cached) return cached;
+
   const res = await poolModule.query(`
     SELECT
       id,
@@ -354,14 +400,19 @@ async function getAuditLogsFromDB() {
     FROM audit_logs
     ORDER BY id DESC
   `);
-  return res.rows.map((row) => ({
+
+  const mapped = res.rows.map((row) => ({
     ...row,
     payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
   }));
+
+  queryCache.set(cacheKey, [], mapped, { tag: 'audit_logs', ttlMs: 30000 });
+  return mapped;
 }
 
 async function insertAuditLogInDB(log) {
   if (!poolModule.pool) return;
+  queryCache.invalidate('audit_logs');
   await poolModule.query(
     `
     INSERT INTO audit_logs (
@@ -391,12 +442,22 @@ async function insertAuditLogInDB(log) {
 
 async function getSystemConfigFromDB() {
   if (!poolModule.pool) return null;
+
+  const cacheKey = 'SELECT_MAIN_SYSTEM_CONFIG';
+  const cached = queryCache.get(cacheKey);
+  if (cached) return cached;
+
   const res = await poolModule.query(`SELECT value FROM system_config WHERE key = 'main_config' LIMIT 1`);
-  return res.rows[0]?.value || null;
+  const val = res.rows[0]?.value || null;
+  if (val) {
+    queryCache.set(cacheKey, [], val, { tag: 'config', ttlMs: 120000 });
+  }
+  return val;
 }
 
 async function upsertSystemConfigInDB(config) {
   if (!poolModule.pool) return;
+  queryCache.invalidate('config');
   await poolModule.query(
     `
     INSERT INTO system_config (id, key, value, updated_at)

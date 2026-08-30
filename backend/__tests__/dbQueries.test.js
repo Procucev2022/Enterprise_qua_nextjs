@@ -1,15 +1,18 @@
 const poolModule = require('../src/db/pool');
 const queries = require('../src/db/queries');
+const { queryCache } = require('../src/db/queryCache');
 
 describe('Database Queries Layer Unit Tests', () => {
   let originalPool;
 
   beforeEach(() => {
     originalPool = poolModule.pool;
+    queryCache.clear();
   });
 
   afterEach(() => {
     poolModule.pool = originalPool;
+    queryCache.clear();
     jest.restoreAllMocks();
   });
 
@@ -32,14 +35,24 @@ describe('Database Queries Layer Unit Tests', () => {
     expect(await queries.upsertSystemConfigInDB({})).toBeUndefined();
   });
 
-  test('Queries execute SQL statements when pool is active', async () => {
+  test('Queries execute SQL statements and utilize QueryCache on subsequent reads', async () => {
     poolModule.pool = {};
-    jest.spyOn(poolModule, 'query').mockImplementation(async (sql, params) => {
+    const querySpy = jest.spyOn(poolModule, 'query').mockImplementation(async (sql, params) => {
       if (sql.includes('buyer_accounts')) {
         return { rows: [{ id: 'buyer-1', organizationName: 'L&T' }] };
       }
       if (sql.includes('vendors')) {
-        return { rows: [{ id: 'vendor-1', name: 'Apex Supplies' }] };
+        return {
+          rows: [
+            {
+              id: 'vendor-1',
+              name: 'Apex Supplies',
+              minorCategories: JSON.stringify(['Pumps']),
+              clientMappedCategories: JSON.stringify(['Valves']),
+              vendorSelectedCategories: JSON.stringify(['Electrical']),
+            },
+          ],
+        };
       }
       if (sql.includes('rfqs')) {
         return {
@@ -67,7 +80,7 @@ describe('Database Queries Layer Unit Tests', () => {
         };
       }
       if (sql.includes('audit_logs')) {
-        return { rows: [{ id: 'log-1', action: 'CREATE_RFQ' }] };
+        return { rows: [{ id: 'log-1', action: 'CREATE_RFQ', payload: JSON.stringify({ rfq: 'RFQ-1' }) }] };
       }
       if (sql.includes('system_config')) {
         return {
@@ -77,8 +90,11 @@ describe('Database Queries Layer Unit Tests', () => {
       return { rows: [] };
     });
 
-    const buyers = await queries.getBuyerAccountsFromDB();
-    expect(buyers).toHaveLength(1);
+    // 1. Buyer accounts (First call DB query, Second call Cache hit)
+    const buyers1 = await queries.getBuyerAccountsFromDB();
+    expect(buyers1).toHaveLength(1);
+    const buyers2 = await queries.getBuyerAccountsFromDB();
+    expect(buyers2).toHaveLength(1);
 
     await queries.upsertBuyerAccountInDB({
       id: 'buyer-1',
@@ -86,8 +102,11 @@ describe('Database Queries Layer Unit Tests', () => {
     });
     await queries.deleteBuyerAccountInDB('buyer-1');
 
-    const vendors = await queries.getVendorsFromDB();
-    expect(vendors).toHaveLength(1);
+    // 2. Vendors (First call DB query, Second call Cache hit)
+    const vendors1 = await queries.getVendorsFromDB();
+    expect(vendors1).toHaveLength(1);
+    const vendors2 = await queries.getVendorsFromDB();
+    expect(vendors2).toHaveLength(1);
 
     await queries.upsertVendorInDB({
       id: 'vendor-1',
@@ -95,33 +114,49 @@ describe('Database Queries Layer Unit Tests', () => {
     });
     await queries.deleteVendorInDB('vendor-1');
 
-    const rfqs = await queries.getRFQsFromDB();
-    expect(rfqs).toHaveLength(1);
+    // 3. RFQs (First call DB query, Second call Cache hit)
+    const rfqs1 = await queries.getRFQsFromDB();
+    expect(rfqs1).toHaveLength(1);
+    const rfqs2 = await queries.getRFQsFromDB();
+    expect(rfqs2).toHaveLength(1);
 
     await queries.upsertRFQInDB({
       id: 'rfq-1',
       rfqNumber: 'RFQ-1',
     });
 
-    const evals = await queries.getEvaluationsFromDB();
-    expect(evals).toHaveLength(1);
+    // 4. Evaluations (First call DB query, Second call Cache hit)
+    const evals1 = await queries.getEvaluationsFromDB();
+    expect(evals1).toHaveLength(1);
+    const evals2 = await queries.getEvaluationsFromDB();
+    expect(evals2).toHaveLength(1);
 
     await queries.upsertEvaluationInDB({
       id: 'eval-1',
       vendorName: 'Apex',
     });
 
-    const logs = await queries.getAuditLogsFromDB();
-    expect(logs).toHaveLength(1);
+    // 5. Audit logs (First call DB query, Second call Cache hit)
+    const logs1 = await queries.getAuditLogsFromDB();
+    expect(logs1).toHaveLength(1);
+    const logs2 = await queries.getAuditLogsFromDB();
+    expect(logs2).toHaveLength(1);
 
     await queries.insertAuditLogInDB({
       id: 'log-1',
       action: 'LOGIN',
     });
 
-    const config = await queries.getSystemConfigFromDB();
-    expect(config).toBeDefined();
+    // 6. System Config (First call DB query, Second call Cache hit)
+    const config1 = await queries.getSystemConfigFromDB();
+    expect(config1).toBeDefined();
+    const config2 = await queries.getSystemConfigFromDB();
+    expect(config2).toBeDefined();
 
     await queries.upsertSystemConfigInDB({ activeMode: 'mode_2' });
+
+    // Verify query cache hit ratio increased
+    const metrics = queryCache.getMetrics();
+    expect(metrics.hits).toBeGreaterThanOrEqual(6);
   });
 });

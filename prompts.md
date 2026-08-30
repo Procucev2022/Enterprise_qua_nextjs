@@ -36,3 +36,14 @@ Detailed Logs: Add the configuration in assistant instructions to add detailed l
 ```
 
 ---
+
+### Prompt 4
+**Timestamp**: 2026-08-30T08:41:42Z
+
+```text
+Database Optimization & GraphQL Integration: Configure assistant instructions to audit database queries for efficiency and integrate GraphQL to streamline data fetching across the application. 
+
+Additionally, implement optimizations to minimize database compute hours, reduce resource usage, and enhance overall infrastructure efficiency.
+```
+
+---
