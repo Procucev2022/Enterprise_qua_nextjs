@@ -145,3 +145,14 @@ Whenever making any code changes or adding new features:
 - **Centralized `.env.example` Maintenance**: Maintain and regularly update `.env.example` at the workspace root, `backend/.env.example`, and `frontend/.env.example` with all configuration variables used across the application.
 - **Zero Hardcoded Secrets or Credentials**: Never hardcode sensitive data, API keys, passwords, database credentials, or secret tokens anywhere in the codebase. All runtime configuration values must be read from `process.env` with safe default fallbacks.
 - **Synchronization Gate**: Whenever new environment variables are introduced or refactored, immediately document them with descriptions and safe placeholder values in all `.env.example` files.
+
+---
+
+## 16. Comprehensive and Descriptive UI Error Messaging Standard
+- **Context-Rich, Actionable Error Messages**: Always implement user-facing error messages that clearly present actionable context, specific failure details, and recovery guidance rather than generic error codes or uninformative alerts.
+- **Categorized Error Architecture**:
+  - **Form & Validation Errors**: Highlight offending inputs, explain precise formatting or boundary violations (e.g. GSTIN regex, missing line items, invalid phone numbers), and provide correction examples.
+  - **Network & API Connectivity**: Clarify whether the network is offline or the backend service is unreachable, display retry countdowns/actions, and activate graceful local-cache fallback indicators.
+  - **Database & Sync Failures**: Indicate whether PostgreSQL synchronization failed, explain temporary operational mode (e.g., local state active), and provide a direct "Retry Sync" action.
+  - **Authentication & Permissions**: Provide explicit guidance for session timeouts, invalid credentials, or unauthorized role access with direct navigation to login or role-selection screens.
+  - **Business Logic & Workflow Constraints**: Detail exactly why an operation cannot proceed (e.g., budget exceeded, deadline expired, minimum vendor quote requirement unmet) and outline the specific remediation steps required.

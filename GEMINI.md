@@ -79,3 +79,8 @@
 ## 12. Environment Variables Example & Secrets Sanitation Standard
 - Maintain `.env.example`, `backend/.env.example`, and `frontend/.env.example` with all configuration variables without exposing secrets or credentials.
 - Read all configurable parameters from `process.env` with safe default fallbacks.
+
+---
+
+## 13. Comprehensive and Descriptive UI Error Messaging Standard
+- Implement user-facing error messages with specific failure details, clear context, and actionable resolution steps across all error categories (Form Validation, Network Failures, Database/Sync, Authentication, and Business Logic constraints).

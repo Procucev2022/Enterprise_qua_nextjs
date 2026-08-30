@@ -94,3 +94,12 @@ In case, there is any environment variable hardcoded in codebase, please add tha
 ```
 
 ---
+
+### Prompt 9
+**Timestamp**: 2026-08-30T04:29:55Z
+
+```text
+Comprehensive and Descriptive UI Error Messaging: Add a comprehensive configuration in assistant instructions to always Implement user-facing error messages that clearly present actionable context and specific failure details across different error categories.
+```
+
+---
