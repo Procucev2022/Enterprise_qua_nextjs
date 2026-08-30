@@ -120,3 +120,10 @@
 ## 19. Strict Declarative UI & Prohibition of Direct DOM Manipulation Standard
 - Prohibit direct DOM manipulation (e.g. `document.getElementById`, `document.querySelector`, `element.innerHTML`, `element.appendChild`, `element.removeChild`, `element.style.*`, jQuery).
 - Enforce declarative state management via React state (`useState`, `useReducer`, Context API, Zustand/store) as the single source of truth for all UI mutations.
+
+---
+
+## 20. i18n Language Internationalization & Centralized UI Strings Standard
+- Centralize all user-facing literal strings, screen titles, headings, action button labels, badge texts, modal descriptions, and notification messages in `frontend/lib/uiStrings.ts` and reference them via `UI_STRINGS`.
+- Prohibit hardcoded strings and use template placeholders with `formatString(template, values)` interpolation.
+- Enforce test assertions against `UI_STRINGS` constants instead of brittle hardcoded text.

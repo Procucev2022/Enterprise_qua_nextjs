@@ -150,3 +150,12 @@ DOM Manipulation: Add a comprehensive configuration in assistant instructions to
 ```
 
 ---
+
+### Prompt 14
+**Timestamp**: 2026-08-30T04:52:48Z
+
+```text
+i18 Language internationalisation: Add a comprehensive configuration in assistant instructions to implement internationalization (i18n) across the application. Ensure that all user-facing literal strings are moved from components into dedicated constants modules, and referenced via a centralized UI_STRINGS object. This configuration must enforce that no user-facing strings & literals are hardcoded or embedded directly in the code, using template placeholders for runtime substitution to ensure the application is fully i18n-ready. Additionally, update all tests to assert against these constants instead of hardcoded text to maintain consistency and prevent brittle matches during UI changes.
+```
+
+---

@@ -1,6 +1,6 @@
 /**
- * Centralized UI Strings & Screen Text Constants
- * Single source of truth for UI typography, headings, labels, and action text.
+ * Centralized UI Strings & Screen Text Constants (i18n Ready)
+ * Single source of truth for UI typography, headings, labels, actions, and template messages.
  */
 
 export const UI_STRINGS = {
@@ -34,6 +34,16 @@ export const UI_STRINGS = {
       screenTag: 'Screen 3.1',
       subtitle: 'Spend distribution, mode-allocation metrics, and buyer portfolio governance.',
     },
+    infraControl: {
+      title: 'Enterprise Infrastructure & Health Control Plane',
+      screenTag: 'Screen 4.1',
+      subtitle: 'Real-time Azure cloud telemetry, PostgreSQL pool monitoring, and AI inference latency tracking.',
+    },
+    auditLogs: {
+      title: 'Enterprise Audit Trail & Security Ledger',
+      screenTag: 'Screen 4.2',
+      subtitle: 'Immutable record of system changes, procurement actions, and user activities.',
+    },
   },
 
   actions: {
@@ -45,6 +55,10 @@ export const UI_STRINGS = {
     resumeChasing: 'Resume AI Chasing',
     saveChanges: 'Save Configuration',
     retrySync: 'Retry Synchronization',
+    submit: 'Submit',
+    cancel: 'Cancel',
+    confirm: 'Confirm',
+    downloadTemplate: 'Download CSV Template',
   },
 
   badges: {
@@ -53,5 +67,27 @@ export const UI_STRINGS = {
     fullyCompliant: 'Fully Compliant',
     preferredVendor: 'Preferred Vendor (AI Recommended)',
     liveTelemetry: 'Live Telemetry',
+    online: 'ONLINE',
+    healthy: 'HEALTHY',
+  },
+
+  templates: {
+    rfqDispatched: 'RFQ #{rfqNumber} successfully dispatched to {vendorCount} qualified vendors.',
+    poGenerated: 'Purchase Order #{poNumber} created and committed to ERP.',
+    ratingUpdated: 'Vendor rating for {vendorName} revised to {newScore}/100.',
+    welcomeUser: 'Welcome back, {userName} ({userRole})',
+    totalSpendSummary: 'Total analyzed spend: ₹{amount} across {categoryCount} categories.',
   },
 };
+
+/**
+ * Format string template with runtime parameter placeholders
+ * Example: formatString('Hello {name}, you have {count} messages', { name: 'Alex', count: 3 })
+ */
+export function formatString(template: string, values?: Record<string, string | number>): string {
+  if (!template) return '';
+  if (!values) return template;
+  return template.replace(/\{(\w+)\}/g, (match, key) => {
+    return values[key] !== undefined ? String(values[key]) : match;
+  });
+}

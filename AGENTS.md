@@ -218,3 +218,11 @@ Whenever making any code changes or adding new features:
 - **Prohibition of Low-Level DOM Manipulation**: Strictly prohibit direct DOM manipulation methods (e.g. `document.getElementById`, `document.querySelector`, `element.innerHTML`, `element.appendChild`, `element.removeChild`, `element.style.*`, jQuery, or low-level DOM mutation libraries) within application code.
 - **Framework State as Single Source of Truth**: All UI updates, animations, class changes, visibility toggles, and modal states **MUST** be driven declaratively through React state (`useState`, `useReducer`, Context API, Zustand/store) or standard CSS classes.
 - **Virtual DOM Integrity**: Preserving declarative state management guarantees that React's view engine remains the single source of truth, preventing virtual DOM desynchronization, layout thrashing, memory leaks, and hydration mismatch errors.
+
+---
+
+## 23. i18n Language Internationalization & Centralized UI Strings Standard
+- **Centralized `UI_STRINGS` Dictionary**: All user-facing literal strings, screen titles, headings, action button labels, badge texts, modal descriptions, and notification messages **MUST** reside in dedicated constants modules (`frontend/lib/uiStrings.ts` and `backend/src/config/constants.js`) and be referenced via a centralized `UI_STRINGS` object.
+- **Zero Hardcoded User-Facing Literals**: Prohibit embedding raw user-facing literal strings directly in JSX/TSX components, store actions, or handlers.
+- **Dynamic Template Placeholders & Interpolation**: Use template placeholders (e.g. `{param}`) and interpolation helper functions (`formatString(template, values)`) for runtime parameter substitution, ensuring the entire application is fully i18n-ready.
+- **Robust Constant-Driven Test Assertions**: All frontend unit tests **MUST** assert against `UI_STRINGS` constants rather than brittle hardcoded strings to guarantee test resiliency against copy and locale adjustments.
