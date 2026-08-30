@@ -618,3 +618,51 @@ export interface CryptoHealthStatus {
   timestamp: string;
 }
 
+// Authentication & Session Types
+export interface UserSession {
+  id: string;
+  email: string;
+  name: string;
+  role: UserRole;
+  orgId: string;
+  orgName: string;
+  mobile?: string;
+  authMethod?: 'PASSWORD' | 'EMAIL_OTP' | 'TEMP_PASSWORD' | 'INSTANT_DEMO';
+}
+
+export interface AuthResponse {
+  success: boolean;
+  message?: string;
+  token?: string;
+  user?: UserSession;
+  error?: string;
+  demoCode?: string;
+  expiresInSeconds?: number;
+}
+
+export interface LoginCredentials {
+  email: string;
+  password?: string;
+  code?: string;
+  role?: UserRole;
+}
+
+export interface OtpRequestPayload {
+  email: string;
+  roleHint?: UserRole;
+}
+
+export interface OtpVerifyPayload {
+  email: string;
+  code: string;
+}
+
+export interface RegisterPayload {
+  name: string;
+  email: string;
+  password?: string;
+  mobile?: string;
+  role?: UserRole;
+  orgName?: string;
+}
+

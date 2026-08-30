@@ -15,8 +15,10 @@ const catalogueRoutes = require('./catalogue');
 const logsRoutes = require('./logs');
 const graphqlRoutes = require('./graphql');
 const cryptoRoutes = require('./crypto');
+const authRoutes = require('./auth');
 
 // Mount sub-routers
+router.use('/auth', authRoutes);
 router.use('/bootstrap', bootstrapRoutes);
 router.use('/rfqs', rfqRoutes);
 router.use('/vendors', vendorRoutes);

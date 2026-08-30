@@ -22,7 +22,9 @@ import {
   BuyerAccount,
   VendorRatingRevisionRecord,
   VendorRatingRevisionEmailPayload,
+  UserSession,
 } from './types';
+import { authClient } from './authClient';
 import {
   SOURCING_MODES,
   INITIAL_SYSTEM_CONFIG,
@@ -34,6 +36,8 @@ interface AppContextType {
   setCurrentRole: (role: UserRole) => void;
   isLoggedIn: boolean;
   setIsLoggedIn: (loggedIn: boolean) => void;
+  currentUserSession: UserSession | null;
+  setCurrentUserSession: (session: UserSession | null) => void;
   currentMode: SourcingMode;
   setCurrentMode: (mode: SourcingMode) => void;
   activeTab: string;
@@ -237,6 +241,17 @@ const INITIAL_VENDOR_OPPORTUNITIES: VendorOpportunity[] = [
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [currentRole, setCurrentRole] = useState<UserRole>('buyer');
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(true);
+  const [currentUserSession, setCurrentUserSession] = useState<UserSession | null>(() => {
+    return authClient.getSessionUser() || {
+      id: 'usr-buyer-001',
+      email: 'buyer@procucev.com',
+      name: 'Procucev Buyer Desk',
+      role: 'buyer',
+      orgId: 'org-procucev-01',
+      orgName: 'Procucev Heavy Engineering',
+      authMethod: 'PASSWORD',
+    };
+  });
   const [currentMode, setCurrentMode] = useState<SourcingMode>('mode_2');
   const [activeTab, setActiveTab] = useState<string>('command_center');
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
@@ -2147,6 +2162,8 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
         setCurrentRole,
         isLoggedIn,
         setIsLoggedIn,
+        currentUserSession,
+        setCurrentUserSession,
         currentMode,
         setCurrentMode,
         activeTab,

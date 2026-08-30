@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQItem, VendorOpportunity, UserRole, VendorEvaluationRecord } from '@/lib/types';
+import { authClient } from '@/lib/authClient';
 import RoleNavigation from '@/app/components/RoleNavigation';
 
 // Buyer Screens
@@ -70,6 +71,8 @@ export default function HomePage() {
     setCurrentRole, 
     isLoggedIn,
     setIsLoggedIn,
+    currentUserSession,
+    setCurrentUserSession,
     rfqs, 
     vendorOpportunities, 
     showToast,
@@ -145,6 +148,14 @@ export default function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentRole]);
 
+  // Shared screen navigation helpers
+  const navigateToCommandCenter = () => setActiveScreen('command_center');
+  const navigateToSpendDashboard = (rfq?: any) => {
+    if (rfq) setSelectedRFQForMatrix(rfq);
+    setActiveScreen('spend_dashboard');
+  };
+  const navigateToVendorFeed = () => setActiveScreen('vendor_feed');
+
   // Navigate to vendor bid submission form
   const handleNavigateToBidForm = (opp: VendorOpportunity) => {
     setSelectedVendorOpp(opp);
@@ -153,7 +164,10 @@ export default function HomePage() {
 
   // Logout handler
   const handleLogout = () => {
+    const emailToLogout = loginEmail || currentUserSession?.email;
     setIsLoggedIn(false);
+    setCurrentUserSession(null);
+    authClient.logout(emailToLogout).catch(() => {});
     setLoginOtpSent(false);
     setRegOtpSent(false);
     setLoginOtpInput('');
@@ -186,6 +200,9 @@ export default function HomePage() {
       }));
     }
 
+    // Trigger background API call to backend auth controller
+    authClient.requestOtp(emailKey, 'buyer').catch(() => {});
+
     // Generate a 4-digit mock OTP
     const mockOtp = Math.floor(1000 + Math.random() * 9000).toString();
     setSimulatedLoginOtp(mockOtp);
@@ -208,6 +225,18 @@ export default function HomePage() {
       loginOtpInput === '1234' ||
       loginOtpInput.length === 4
     ) {
+      const emailKey = loginEmail.trim().toLowerCase();
+      const sessionUser = {
+        id: `usr-buyer-${Date.now()}`,
+        email: emailKey,
+        name: emailKey.split('@')[0].toUpperCase(),
+        role: 'buyer' as UserRole,
+        orgId: 'org-buyer-01',
+        orgName: 'Procucev Buyer Desk',
+        authMethod: 'EMAIL_OTP' as const,
+      };
+      authClient.verifyOtp(emailKey, loginOtpInput).catch(() => {});
+      setCurrentUserSession(sessionUser);
       setIsLoggedIn(true);
       setCurrentRole('buyer');
       setActiveScreen('command_center');
@@ -222,6 +251,16 @@ export default function HomePage() {
 
   // Instant 1-Click Buyer Demo Login
   const handleInstantBuyerLogin = () => {
+    const sessionUser = {
+      id: 'usr-buyer-001',
+      email: 'buyer@procucev.com',
+      name: 'Procucev Buyer Desk',
+      role: 'buyer' as UserRole,
+      orgId: 'org-procucev-01',
+      orgName: 'Procucev Heavy Engineering',
+      authMethod: 'INSTANT_DEMO' as const,
+    };
+    setCurrentUserSession(sessionUser);
     setIsLoggedIn(true);
     setCurrentRole('buyer');
     setActiveScreen('command_center');
@@ -247,6 +286,17 @@ export default function HomePage() {
       showToast('Missing Fields', 'Please enter your registered Vendor Email and Temporary Password.', 'warning');
       return;
     }
+    const sessionUser = {
+      id: `usr-vendor-${Date.now()}`,
+      email: vendorLoginEmail.trim().toLowerCase(),
+      name: vendorLoginEmail.split('@')[0].toUpperCase(),
+      role: 'vendor' as UserRole,
+      orgId: 'org-vendor-01',
+      orgName: 'Vendor Partner Organization',
+      authMethod: 'TEMP_PASSWORD' as const,
+    };
+    authClient.loginWithPassword(vendorLoginEmail, vendorLoginPassword).catch(() => {});
+    setCurrentUserSession(sessionUser);
     setIsLoggedIn(true);
     setCurrentRole('vendor');
     setActiveScreen('vendor_feed');
@@ -264,6 +314,7 @@ export default function HomePage() {
       showToast('Missing Email', 'Please enter your registered Vendor Email ID.', 'warning');
       return;
     }
+    authClient.requestOtp(vendorLoginEmail.trim().toLowerCase(), 'vendor').catch(() => {});
     const mockOtp = Math.floor(1000 + Math.random() * 9000).toString();
     setSimulatedVendorOtp(mockOtp);
     setVendorOtpInput(mockOtp);
@@ -275,6 +326,17 @@ export default function HomePage() {
   const handleVerifyVendorOtp = (e: React.FormEvent) => {
     e.preventDefault();
     if (vendorOtpInput === simulatedVendorOtp || vendorOtpInput === '1234' || vendorOtpInput === '4321' || vendorOtpInput.length === 4) {
+      const sessionUser = {
+        id: `usr-vendor-${Date.now()}`,
+        email: vendorLoginEmail.trim().toLowerCase(),
+        name: vendorLoginEmail.split('@')[0].toUpperCase(),
+        role: 'vendor' as UserRole,
+        orgId: 'org-vendor-01',
+        orgName: 'Vendor Partner Organization',
+        authMethod: 'EMAIL_OTP' as const,
+      };
+      authClient.verifyOtp(vendorLoginEmail, vendorOtpInput).catch(() => {});
+      setCurrentUserSession(sessionUser);
       setIsLoggedIn(true);
       setCurrentRole('vendor');
       setActiveScreen('vendor_feed');
@@ -297,6 +359,24 @@ export default function HomePage() {
   // Direct Bypass Login for non-buyer roles
   const handleDirectRoleLogin = (e: React.FormEvent) => {
     e.preventDefault();
+    const roleEmail = selectedRole === 'category_manager'
+      ? 'catmanager@procucev.com'
+      : selectedRole === 'admin'
+      ? 'admin@procucev.com'
+      : selectedRole === 'vendor'
+      ? 'vendor@apexsupplies.com'
+      : 'buyer@procucev.com';
+
+    const sessionUser = {
+      id: `usr-${selectedRole}-01`,
+      email: roleEmail,
+      name: roleEmail.split('@')[0].toUpperCase(),
+      role: selectedRole,
+      orgId: `org-${selectedRole}-01`,
+      orgName: `${selectedRole.toUpperCase()} Entity`,
+      authMethod: 'PASSWORD' as const,
+    };
+    setCurrentUserSession(sessionUser);
     setIsLoggedIn(true);
     setCurrentRole(selectedRole);
 
@@ -1056,13 +1136,13 @@ export default function HomePage() {
             )}
             {activeScreen === 'quote_matrix' && (
               <QuoteMatrix
-                onBackToDashboard={() => setActiveScreen('command_center')}
+                onBackToDashboard={navigateToCommandCenter}
               />
             )}
             {activeScreen === 'ingestion_wizard' && (
               <IngestionWizard
-                onComplete={() => setActiveScreen('command_center')}
-                onCancel={() => setActiveScreen('command_center')}
+                onComplete={navigateToCommandCenter}
+                onCancel={navigateToCommandCenter}
               />
             )}
             {activeScreen === 'vendor_evaluation_summary' && (
@@ -1100,8 +1180,8 @@ export default function HomePage() {
           <>
             {activeScreen === 'kanban_board' && (
               <KanbanBoard
-                onNavigateToMatrix={() => setActiveScreen('spend_dashboard')}
-                onNavigateToSpend={() => setActiveScreen('spend_dashboard')}
+                onNavigateToMatrix={navigateToSpendDashboard}
+                onNavigateToSpend={navigateToSpendDashboard}
               />
             )}
             {activeScreen === 'spend_dashboard' && (
@@ -1111,10 +1191,7 @@ export default function HomePage() {
             )}
             {activeScreen === 'buyer_console' && (
               <BuyerConsole
-                onNavigateToMatrix={(rfq) => {
-                  setSelectedRFQForMatrix(rfq);
-                  setActiveScreen('spend_dashboard');
-                }}
+                onNavigateToMatrix={navigateToSpendDashboard}
                 onNavigateToEvaluation={() => setActiveScreen('vendor_evaluation_summary')}
               />
             )}
@@ -1125,10 +1202,7 @@ export default function HomePage() {
             )}
             {activeScreen === 'vendor_console' && (
               <VendorConsole
-                onNavigateToMatrix={(rfq) => {
-                  setSelectedRFQForMatrix(rfq);
-                  setActiveScreen('spend_dashboard');
-                }}
+                onNavigateToMatrix={navigateToSpendDashboard}
               />
             )}
             {activeScreen === 'category_summary' && (
@@ -1150,14 +1224,14 @@ export default function HomePage() {
             {activeScreen === 'quotation_form' && (
               <QuotationForm
                 opportunity={selectedVendorOpp}
-                onBack={() => setActiveScreen('vendor_feed')}
-                onSubmitSuccess={() => setActiveScreen('vendor_feed')}
+                onBack={navigateToVendorFeed}
+                onSubmitSuccess={navigateToVendorFeed}
               />
             )}
             {activeScreen === 'qualification_form' && (
               <VendorQualificationForm
-                onBack={() => setActiveScreen('vendor_feed')}
-                onSuccess={() => setActiveScreen('vendor_feed')}
+                onBack={navigateToVendorFeed}
+                onSuccess={navigateToVendorFeed}
               />
             )}
             {activeScreen === 'item_catalogue' && (

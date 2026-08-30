@@ -694,5 +694,53 @@ describe('HomePage Comprehensive Suite', () => {
         fireEvent.click(setupBtn);
       }
     });
+
+    test('triggers all remaining in-screen callbacks (IngestionWizard, BuyerConsole, QuotationForm, QualificationForm)', async () => {
+      render(
+        <AppProvider>
+          <AuthTestWrapper />
+        </AppProvider>
+      );
+
+      // Ingestion Wizard onCancel & onComplete
+      fireEvent.click(screen.getByTestId('test-set-buyer'));
+      fireEvent.click(screen.getByRole('button', { name: /Screen 1\.2/i }));
+      expect(screen.getByText(/AI RFQ Ingestion & Multi-Mode Sourcing Dispatch/i)).toBeInTheDocument();
+
+      const cancelIngestBtn = screen.queryByRole('button', { name: /Cancel & Discard/i });
+      if (cancelIngestBtn) {
+        fireEvent.click(cancelIngestBtn);
+        expect(screen.getByText(/Buyer Command Center/i)).toBeInTheDocument();
+      }
+
+      // Re-enter IngestionWizard and complete
+      fireEvent.click(screen.getByRole('button', { name: /Screen 1\.2/i }));
+      const dispatchBtn = screen.queryByRole('button', { name: /Dispatch RFQ & Launch Autonomous Chasing/i });
+      if (dispatchBtn) {
+        fireEvent.click(dispatchBtn);
+      }
+
+      // BuyerConsole onNavigateToMatrix
+      fireEvent.click(screen.getByTestId('test-set-cm'));
+      fireEvent.click(screen.getByRole('button', { name: /Screen 2\.3/i }));
+      const viewMatrixBtns = screen.queryAllByRole('button', { name: /View Matrix/i });
+      if (viewMatrixBtns.length > 0) {
+        fireEvent.click(viewMatrixBtns[0]);
+      }
+
+      // QuotationForm onSubmitSuccess & VendorQualificationForm onSuccess
+      fireEvent.click(screen.getByTestId('test-set-vendor'));
+      fireEvent.click(screen.getByRole('button', { name: /Screen 3\.2/i }));
+      const submitBidFormBtn = screen.queryByRole('button', { name: /Submit Commercial & Technical Quotation/i });
+      if (submitBidFormBtn) {
+        fireEvent.click(submitBidFormBtn);
+      }
+
+      fireEvent.click(screen.getByRole('button', { name: /Screen 3\.3/i }));
+      const submitAuditBtn = screen.queryByRole('button', { name: /Submit 360° AI Evaluation Audit/i });
+      if (submitAuditBtn) {
+        fireEvent.click(submitAuditBtn);
+      }
+    });
   });
 });
