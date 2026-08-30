@@ -112,3 +112,23 @@ Input Schema Validation: Add a comprehensive configuration in assistant instruct
 ```
 
 ---
+
+### Prompt 11
+**Timestamp**: 2026-08-30T04:38:53Z
+
+```text
+Separate constant file configuration: Add the configuration in assistant instructions to keep all constants in a separate file. Apply this configuration across the application & shift all constants to a separate file. Refactor the complete application to meet this configuration.
+Types & interfaces: Add the configuration in assistant instructions to keep all data types & interfaces in a separate file. Refactor the complete application to meet this configuration.
+Strictest Linter configuration: Add a comprehensive linter configuration in assistant instructions to enforce code quality, consistent formatting, and best practices across the project. The configuration should include rules to detect potential errors, ensure proper typing, and maintain a unified coding style. Ensure that linting checks are integrated into the primary build command and the CI/CD workflow to prevent code with linting errors from being committed or merged. Refactor the complete application to meet this configuration.
+A. Strong Typing and Error Prevention
+Strict Typing: Enforce @typescript-eslint/no-explicit-any (disallow any), @typescript-eslint/explicit-function-return-type (require return types), @typescript-eslint/no-non-null-assertion (disallow !), @typescript-eslint/consistent-type-imports (enforce import type), and @typescript-eslint/prefer-optional-chain.
+Quality: Enforce @typescript-eslint/no-unused-vars and @typescript-eslint/naming-convention (PascalCase for types/interfaces, camelCase for variables/functions).
+B. React/Next.js Rules
+Functional Components & Security: Enforce best practices for component hooks, dependency management, and prohibit unsafe rendering methods. Ensure consistent handling of boolean properties.
+Accessibility (jsx-a11y): Enforce jsx-a11y/alt-text, jsx-a11y/no-redundant-roles, and jsx-a11y/anchor-is-valid.
+C. General Code Quality and Style
+Maintainability: Limit complexity (max 10), max-lines (300 per file), and max-len (120 chars). Prohibit hardcoded strings via no-literal-strings to ensure UI_STRINGS usage.
+Formatting & ES6+: Enforce single quotes, semi (colons), and comma-dangle. Require prefer-const, no-var, and object-shorthand.
+```
+
+---

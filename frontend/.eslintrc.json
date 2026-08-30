@@ -2,6 +2,11 @@
   "extends": "next/core-web-vitals",
   "rules": {
     "@next/next/no-img-element": "off",
-    "react-hooks/exhaustive-deps": "warn"
+    "react-hooks/rules-of-hooks": "error",
+    "react-hooks/exhaustive-deps": "warn",
+    "react/no-unescaped-entities": "error",
+    "prefer-const": "error",
+    "no-var": "error",
+    "no-duplicate-imports": "error"
   }
 }

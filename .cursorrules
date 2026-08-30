@@ -60,3 +60,12 @@
 15. Strict Input Schema Validation Standard
 - Define all validation schemas in dedicated constants modules (`backend/src/config/validationSchemas.js` and `frontend/lib/validationSchemas.ts`).
 - Validate all incoming user and system inputs (forms, API routes, controller bodies, query params, headers) against schema constants before processing.
+
+16. Dedicated Separate Constants Standard
+- Store all constants, configurations, and UI strings in separate dedicated files (`backend/src/config/constants.js`, `frontend/lib/constants.ts`, `frontend/lib/uiStrings.ts`).
+
+17. Dedicated Separate Types & Interfaces Standard
+- Keep all TypeScript interfaces and data models centralized in `frontend/lib/types.ts` and `backend/src/config/types.js`. Use `import type`.
+
+18. Strictest Linter & Code Quality Standard
+- Enforce strict typing (`no-explicit-any`, `no-non-null-assertion`, `consistent-type-imports`, `prefer-optional-chain`), accessibility (`jsx-a11y`), React hooks, and ES6+ style conventions in CI/CD and build gates.

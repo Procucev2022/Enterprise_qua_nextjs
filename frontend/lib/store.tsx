@@ -1736,7 +1736,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
         currentDate.setHours(START_HOUR, 0, 0, 0);
       }
 
-      let curHour = currentDate.getHours();
+      const curHour = currentDate.getHours();
       if (curHour >= END_HOUR) {
         currentDate.setDate(currentDate.getDate() + 1);
         if (currentDate.getDay() === 0) currentDate.setDate(currentDate.getDate() + 1);

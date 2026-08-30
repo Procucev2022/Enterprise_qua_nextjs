@@ -166,3 +166,33 @@ Whenever making any code changes or adding new features:
   1. Define or update the corresponding schema in the dedicated constants module.
   2. Enforce schema validation on incoming payloads, query parameters, and headers at the entry boundary before executing downstream business logic or database operations.
   3. Reject invalid inputs with structured, descriptive validation errors detailing the exact offending fields and formatting requirements.
+
+---
+
+## 18. Dedicated Separate Constants Standard
+- **Centralized Constants Modules**: Keep all constants, configuration values, enum mappings, taxonomy dictionaries, and UI strings strictly separated in dedicated constants files:
+  - Backend: `backend/src/config/constants.js` and `backend/src/config/validationSchemas.js`
+  - Frontend: `frontend/lib/constants.ts`, `frontend/lib/uiStrings.ts`, and `frontend/lib/validationSchemas.ts`
+- **Zero Hardcoded Constants**: Eliminate all magic numbers, hardcoded URLs, and inline literals across application controllers, models, React components, and services.
+
+---
+
+## 19. Dedicated Separate Types & Interfaces Standard
+- **Centralized Type Definitions**: All domain data models, payload types, state interfaces, and API response contracts **MUST** reside in dedicated type definition files:
+  - Frontend: `frontend/lib/types.ts`
+  - Backend: `backend/src/config/types.js` (or JSDoc typedef declarations)
+- **Zero Inline Type Declarations**: Prohibit inline interface/type definitions in pages, components, or routes. Use `import type` for explicit, isolated type imports.
+
+---
+
+## 20. Strictest Linter & Code Quality Standard
+- **A. Strong Typing and Error Prevention**:
+  - Enforce `@typescript-eslint/no-explicit-any` (disallow any), `@typescript-eslint/no-non-null-assertion` (disallow `!`), `@typescript-eslint/consistent-type-imports` (enforce `import type`), and `@typescript-eslint/prefer-optional-chain`.
+  - Enforce `@typescript-eslint/no-unused-vars` and `@typescript-eslint/naming-convention` (PascalCase for types/interfaces, camelCase for variables/functions).
+- **B. React & Next.js Rules**:
+  - Enforce React hooks rules (`react-hooks/rules-of-hooks`, `react-hooks/exhaustive-deps`), secure rendering practices, and consistent boolean property handling.
+  - Enforce accessibility rules via `jsx-a11y` (`jsx-a11y/alt-text`, `jsx-a11y/no-redundant-roles`, `jsx-a11y/anchor-is-valid`).
+- **C. General Code Quality, Style & Formatting**:
+  - ES6+ formatting: Enforce single quotes (`quotes: ['error', 'single']`), semicolons (`semi: ['error', 'always']`), `prefer-const`, `no-var`, `object-shorthand`, and `comma-dangle`.
+  - Maintainability: Enforce modular files, clean function structure, and UI string separation via `frontend/lib/uiStrings.ts`.
+  - Continuous Gate: Linter verification (`npm run lint`) is strictly integrated into primary build and CI/CD workflows, blocking any merges with warnings or errors.

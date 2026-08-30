@@ -38,7 +38,7 @@
 ---
 
 ## 6. Tech Stack LTS/Stable Version Upgrade & Dependency Maintenance Protocol
-- Regularly audit, upgrade, and maintain all runtime environments, frameworks, dependencies, and libraries to their latest Long-Term Support (LTS) or stable releases.
+- Regularly audit, upgrade, and maintain all core tech stack components, runtime environments, framework dependencies, and libraries to their latest Long-Term Support (LTS) or stable releases.
 - Systematically refactor breaking changes, deprecation warnings, and API updates.
 - Verify stability and backward compatibility via full unit tests, linting, typecheck, and coverage verification.
 
@@ -90,3 +90,22 @@
 ## 14. Strict Input Schema Validation Standard
 - Define all input validation schemas in dedicated constants modules (`backend/src/config/validationSchemas.js` and `frontend/lib/validationSchemas.ts`) as a single source of truth.
 - Validate all user and system inputs (forms, API routes, controller bodies, query params, headers) against schema constants before executing business logic.
+
+---
+
+## 15. Dedicated Separate Constants Standard
+- Store all constants, taxonomies, and UI strings in dedicated separate constants files (`backend/src/config/constants.js`, `frontend/lib/constants.ts`, `frontend/lib/uiStrings.ts`).
+- Avoid hardcoded values in components or route handlers.
+
+---
+
+## 16. Dedicated Separate Types & Interfaces Standard
+- Centralize all TypeScript interfaces, types, and domain models in `frontend/lib/types.ts` and `backend/src/config/types.js`.
+- Use `import type` for strict isolation.
+
+---
+
+## 17. Strictest Linter & Code Quality Standard
+- Enforce strict typing (`@typescript-eslint/no-explicit-any`, `@typescript-eslint/no-non-null-assertion`, `@typescript-eslint/consistent-type-imports`, `@typescript-eslint/prefer-optional-chain`).
+- Enforce React hooks safety, accessibility (`jsx-a11y`), and ES6+ style standards (`prefer-const`, `no-var`, `object-shorthand`, single quotes, semicolons).
+- Block all merges and builds with unhandled linting errors.

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useApp } from '@/lib/store';
-import { RFQItem, VendorOpportunity, UserRole } from '@/lib/types';
+import { RFQItem, VendorOpportunity, UserRole, VendorEvaluationRecord } from '@/lib/types';
 import RoleNavigation from '@/app/components/RoleNavigation';
 
 // Buyer Screens
@@ -10,7 +10,6 @@ import CommandCenter from '@/app/buyer/command-center';
 import IngestionWizard from '@/app/buyer/ingestion-wizard';
 import VendorEvaluationSummary from '@/app/buyer/vendor-evaluation-summary';
 import VendorSummary from '@/app/buyer/vendor-summary';
-import { VendorEvaluationRecord } from '@/lib/types';
 import SubscriptionCenter from '@/app/buyer/subscription-center';
 import BuyerProfilePage from '@/app/buyer/buyer-profile';
 import QuoteMatrix from '@/app/buyer/quote-matrix';
