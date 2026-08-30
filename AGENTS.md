@@ -211,3 +211,10 @@ Whenever making any code changes or adding new features:
   ```bash
   npm run pre-commit
   ```
+
+---
+
+## 22. Strict Declarative UI & Prohibition of Direct DOM Manipulation Standard
+- **Prohibition of Low-Level DOM Manipulation**: Strictly prohibit direct DOM manipulation methods (e.g. `document.getElementById`, `document.querySelector`, `element.innerHTML`, `element.appendChild`, `element.removeChild`, `element.style.*`, jQuery, or low-level DOM mutation libraries) within application code.
+- **Framework State as Single Source of Truth**: All UI updates, animations, class changes, visibility toggles, and modal states **MUST** be driven declaratively through React state (`useState`, `useReducer`, Context API, Zustand/store) or standard CSS classes.
+- **Virtual DOM Integrity**: Preserving declarative state management guarantees that React's view engine remains the single source of truth, preventing virtual DOM desynchronization, layout thrashing, memory leaks, and hydration mismatch errors.

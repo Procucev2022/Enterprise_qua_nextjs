@@ -108,17 +108,7 @@ describe('VendorRatingRevisionModal', () => {
 
     const printBtn = screen.getByText(/Print/);
     fireEvent.click(printBtn);
-
-    act(() => {
-      jest.advanceTimersByTime(2000);
-    });
-
-    // Fallback branch when printable element missing
-    const origGetElementById = document.getElementById;
-    document.getElementById = jest.fn().mockReturnValue(null);
-    fireEvent.click(printBtn);
     expect(window.print).toHaveBeenCalled();
-    document.getElementById = origGetElementById;
 
     jest.useRealTimers();
   });

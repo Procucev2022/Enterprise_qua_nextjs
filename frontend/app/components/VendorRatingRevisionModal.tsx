@@ -72,71 +72,7 @@ SHA-256 AUDIT SEAL: ${email.shaSignature}
   };
 
   const handlePrint = () => {
-    const printableArea = document.getElementById('printable-revision-email-content');
-    if (!printableArea) {
-      window.print();
-      return;
-    }
-
-    const printIframe = document.createElement('iframe');
-    printIframe.style.position = 'fixed';
-    printIframe.style.right = '0';
-    printIframe.style.bottom = '0';
-    printIframe.style.width = '0';
-    printIframe.style.height = '0';
-    printIframe.style.border = '0';
-    document.body.appendChild(printIframe);
-
-    const doc = printIframe.contentWindow?.document;
-    if (!doc) {
-      window.print();
-      return;
-    }
-
-    doc.open();
-    doc.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>${email.vendorName} - Rating Revision Notification</title>
-          <style>
-            @page { size: A4 portrait; margin: 12mm; }
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 10pt; line-height: 1.4; color: #0f172a; margin: 0; padding: 0; background: #fff; }
-            table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 9.5pt; }
-            th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; }
-            th { background-color: #f1f5f9; font-weight: bold; }
-            .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 10px 0; }
-            .card { border: 1px solid #cbd5e1; background: #f8fafc; padding: 10px; border-radius: 6px; }
-            .text-indigo { color: #074193; font-weight: bold; }
-            .text-emerald { color: #059669; font-weight: bold; }
-            .text-amber { color: #d97706; font-weight: bold; }
-            .no-print { display: none !important; }
-          </style>
-        </head>
-        <body>
-          <div style="margin-bottom: 12px; border-bottom: 2px solid #074193; padding-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
-            <div>
-              <strong style="font-size: 13pt; color: #074193;">PROCUCEV SUPPLIER GOVERNANCE</strong>
-              <div style="font-size: 8.5pt; color: #64748b;">Official Vendor Performance &amp; Rating Revision Notice</div>
-            </div>
-            <div style="font-size: 8.5pt; text-align: right; color: #64748b;">
-              <div>Date: ${email.dispatchedAt}</div>
-              <div>Audit: ${email.shaSignature.slice(0, 16)}</div>
-            </div>
-          </div>
-          ${printableArea.innerHTML}
-        </body>
-      </html>
-    `);
-    doc.close();
-
-    setTimeout(() => {
-      printIframe.contentWindow?.focus();
-      printIframe.contentWindow?.print();
-      setTimeout(() => {
-        document.body.removeChild(printIframe);
-      }, 1500);
-    }, 300);
+    window.print();
   };
 
   return (

@@ -72,3 +72,7 @@
 
 19. Pre-Commit Quality Gate & Git Hooks Protocol
 - Execute full quality checks (linting, typechecking, building, and unit tests with 90% per-file coverage) via `npm run pre-commit` or `.husky/pre-commit` before allowing git commits.
+
+20. Strict Declarative UI & Prohibition of Direct DOM Manipulation Standard
+- Prohibit direct DOM manipulation (`document.getElementById`, `document.querySelector`, `innerHTML`, `appendChild`, jQuery).
+- All UI state changes, animations, and renders must be handled declaratively through React state and component properties.
