@@ -1,4 +1,4 @@
-import { SourcingModeDetail, SystemConfig, AzureServiceHealth } from './types';
+import type { SourcingModeDetail, SystemConfig, AzureServiceHealth } from './types';
 
 export const SOURCING_MODES: SourcingModeDetail[] = [
   {
@@ -27,6 +27,47 @@ export const SOURCING_MODES: SourcingModeDetail[] = [
     description:
       'Autonomous Procucev Network Sourcing with double-blind supplier identity shielding, continuous AI evaluation, and best-fit routing.',
     badgeColor: 'border-purple-500/40 text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-500/10',
+  },
+];
+
+export const BUYER_SUBSCRIPTION_PLANS = [
+  {
+    id: 'buyer_starter',
+    name: 'Starter Enterprise',
+    rfqLimit: 50,
+    pricePerMonth: 4999,
+    features: ['Up to 50 active RFQs', 'Standard AI Chaser', 'Single Buyer Console'],
+  },
+  {
+    id: 'buyer_growth',
+    name: 'Growth Enterprise',
+    rfqLimit: 250,
+    pricePerMonth: 14999,
+    features: ['Up to 250 active RFQs', 'Multi-channel Voice & WhatsApp', 'Category Governance'],
+  },
+  {
+    id: 'buyer_custom',
+    name: 'Unlimited Enterprise',
+    rfqLimit: 99999,
+    pricePerMonth: 49999,
+    features: ['Unlimited RFQs', 'Dedicated Azure HSM Instance', 'Custom ERP Integrations'],
+  },
+];
+
+export const VENDOR_SUBSCRIPTION_PLANS = [
+  {
+    id: 'vendor_standard',
+    name: 'Verified Supplier',
+    pricePerMonth: 1999,
+    bidLimit: 30,
+    features: ['30 Quote Submissions / Month', 'Direct Telemetry Feedback'],
+  },
+  {
+    id: 'vendor_premium',
+    name: 'Preferred Partner',
+    pricePerMonth: 5999,
+    bidLimit: 99999,
+    features: ['Unlimited Quote Submissions', 'Top-tier AI Matching Priority', 'Dedicated Account Manager'],
   },
 ];
 
@@ -87,4 +128,3 @@ export {
   GSTIN_PATTERN,
   PHONE_PATTERN,
 } from './validationSchemas';
-

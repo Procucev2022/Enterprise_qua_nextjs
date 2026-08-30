@@ -2,6 +2,8 @@ import {
   SOURCING_MODES,
   INITIAL_SYSTEM_CONFIG,
   INITIAL_AZURE_HEALTH,
+  BUYER_SUBSCRIPTION_PLANS,
+  VENDOR_SUBSCRIPTION_PLANS,
   FORM_SCHEMAS,
   validateFormData,
   EMAIL_PATTERN,
@@ -26,6 +28,13 @@ describe('lib/constants', () => {
     const mode3 = SOURCING_MODES.find(m => m.id === 'mode_3');
     expect(mode3).toBeDefined();
     expect(mode3?.code).toBe('Version 3');
+  });
+
+  it('should export valid subscription plans', () => {
+    expect(Array.isArray(BUYER_SUBSCRIPTION_PLANS)).toBe(true);
+    expect(BUYER_SUBSCRIPTION_PLANS.length).toBeGreaterThan(0);
+    expect(Array.isArray(VENDOR_SUBSCRIPTION_PLANS)).toBe(true);
+    expect(VENDOR_SUBSCRIPTION_PLANS.length).toBeGreaterThan(0);
   });
 
   it('should export valid INITIAL_SYSTEM_CONFIG', () => {

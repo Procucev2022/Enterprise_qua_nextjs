@@ -159,3 +159,12 @@ i18 Language internationalisation: Add a comprehensive configuration in assistan
 ```
 
 ---
+
+### Prompt 15
+**Timestamp**: 2026-08-30T04:57:17Z
+
+```text
+Separate constant file configuration: Add the configuration in assistant instructions to keep all constants in a separate file. Apply this configuration across the application & shift all constants to a separate file. Refactor the complete application to meet this configuration.
+```
+
+---
