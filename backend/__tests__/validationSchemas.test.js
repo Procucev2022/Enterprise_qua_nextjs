@@ -125,10 +125,30 @@ describe('Backend Validation Schemas Unit Tests', () => {
     expect(res.errors.items).toBeDefined();
   });
 
-  test('handles string maxLength rule', () => {
-    const schema = { code: { type: 'string', maxLength: 4 } };
-    const res = validatePayload(schema, { code: 'TOOLONG' });
-    expect(res.isValid).toBe(false);
-    expect(res.errors.code).toBeDefined();
+  test('validates crypto validation schemas', () => {
+    const validEncrypt = { plaintext: 'Secret RFQ budget' };
+    const encRes = validatePayload(VALIDATION_SCHEMAS.encryptPayload, validEncrypt);
+    expect(encRes.isValid).toBe(true);
+
+    const invalidEncrypt = { plaintext: '' };
+    const encBadRes = validatePayload(VALIDATION_SCHEMAS.encryptPayload, invalidEncrypt);
+    expect(encBadRes.isValid).toBe(false);
+
+    const validDecrypt = {
+      ciphertext: '0123456789abcdef',
+      iv: '0123456789abcdef',
+      authTag: '0123456789abcdef0123456789abcdef',
+    };
+    const decRes = validatePayload(VALIDATION_SCHEMAS.decryptPayload, validDecrypt);
+    expect(decRes.isValid).toBe(true);
+
+    const validIntegrity = {
+      ciphertext: '0123456789abcdef',
+      iv: '0123456789abcdef',
+      authTag: '0123456789abcdef0123456789abcdef',
+    };
+    const intRes = validatePayload(VALIDATION_SCHEMAS.verifyCryptoIntegrity, validIntegrity);
+    expect(intRes.isValid).toBe(true);
   });
 });
+

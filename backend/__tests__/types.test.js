@@ -13,5 +13,10 @@ describe('Backend Domain Types Unit Tests', () => {
 
     expect(Array.isArray(DOMAIN_TYPES.AUDIT_CATEGORIES)).toBe(true);
     expect(DOMAIN_TYPES.AUDIT_CATEGORIES).toContain('SECURITY');
+    expect(DOMAIN_TYPES.AUDIT_CATEGORIES).toContain('CRYPTOGRAPHY');
+
+    expect(Array.isArray(DOMAIN_TYPES.CIPHER_ALGORITHMS)).toBe(true);
+    expect(DOMAIN_TYPES.CIPHER_ALGORITHMS).toContain('aes-256-gcm');
   });
 });
+

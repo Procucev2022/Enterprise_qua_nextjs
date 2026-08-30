@@ -337,6 +337,83 @@ describe('GraphQL API & Controller Integration Tests', () => {
     expect(res.body.data.emptyVendor).toBeNull();
   });
 
+  test('POST /graphql queries and mutations for AES cryptography', async () => {
+    const statusQuery = `
+      query {
+        cryptoStatus {
+          status
+          algorithm
+          keyLengthBits
+          roundtripVerified
+          tamperDetectionVerified
+        }
+      }
+    `;
+    const statusRes = await request(app).post('/graphql').send({ query: statusQuery }).expect(200);
+    expect(statusRes.body.data.cryptoStatus.status).toBe('HEALTHY');
+    expect(statusRes.body.data.cryptoStatus.algorithm).toBe('aes-256-gcm');
+
+    const encMutation = `
+      mutation Encrypt($input: EncryptDataInput!) {
+        encryptData(input: $input) {
+          ciphertext
+          iv
+          authTag
+          salt
+          algorithm
+          encoded
+        }
+      }
+    `;
+
+    const encRes = await request(app)
+      .post('/graphql')
+      .send({
+        query: encMutation,
+        variables: { input: { plaintext: 'Confidential ERP Quote' } },
+      })
+      .expect(200);
+
+    expect(encRes.body.data.encryptData.ciphertext).toBeDefined();
+    expect(encRes.body.data.encryptData.encoded).toMatch(/^enc:v1:aes-256-gcm:/);
+
+    const decQuery = `
+      query Decrypt($input: DecryptDataInput!) {
+        decryptData(input: $input) {
+          plaintext
+        }
+      }
+    `;
+    const decRes = await request(app)
+      .post('/graphql')
+      .send({
+        query: decQuery,
+        variables: { input: { token: encRes.body.data.encryptData.encoded } },
+      })
+      .expect(200);
+
+    expect(decRes.body.data.decryptData.plaintext).toBe('Confidential ERP Quote');
+
+    // Decrypt with structured input
+    const decStructRes = await request(app)
+      .post('/graphql')
+      .send({
+        query: decQuery,
+        variables: {
+          input: {
+            ciphertext: encRes.body.data.encryptData.ciphertext,
+            iv: encRes.body.data.encryptData.iv,
+            authTag: encRes.body.data.encryptData.authTag,
+            salt: encRes.body.data.encryptData.salt,
+          },
+        },
+      })
+      .expect(200);
+
+    expect(decStructRes.body.data.decryptData.plaintext).toBe('Confidential ERP Quote');
+
+  });
+
   test('handleGraphQL controller catches unhandled errors via next', async () => {
     const req = {
       method: 'POST',
@@ -351,3 +428,4 @@ describe('GraphQL API & Controller Integration Tests', () => {
     expect(next).toHaveBeenCalledWith(expect.any(Error));
   });
 });
+

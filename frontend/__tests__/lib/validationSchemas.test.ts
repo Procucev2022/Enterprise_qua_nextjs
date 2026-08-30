@@ -138,4 +138,24 @@ describe('Frontend validationSchemas Unit Tests', () => {
     const res = validateFormData(FORM_SCHEMAS.buyerAccount, validData);
     expect(res.isValid).toBe(true);
   });
+
+  test('validates cryptoEncryption and cryptoDecryption schemas', () => {
+    const validEnc = { plaintext: 'Confidential ERP item' };
+    const encRes = validateFormData(FORM_SCHEMAS.cryptoEncryption, validEnc);
+    expect(encRes.isValid).toBe(true);
+
+    const invalidEnc = { plaintext: '' };
+    const encBad = validateFormData(FORM_SCHEMAS.cryptoEncryption, invalidEnc);
+    expect(encBad.isValid).toBe(false);
+    expect(encBad.fieldErrors.plaintext).toBeDefined();
+
+    const validDec = {
+      ciphertext: '0123456789abcdef',
+      iv: '0123456789abcdef',
+      authTag: '0123456789abcdef0123456789abcdef',
+    };
+    const decRes = validateFormData(FORM_SCHEMAS.cryptoDecryption, validDec);
+    expect(decRes.isValid).toBe(true);
+  });
 });
+

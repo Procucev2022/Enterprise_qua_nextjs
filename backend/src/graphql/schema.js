@@ -253,6 +253,50 @@ const schema = buildSchema(`
     actionsApplied: [String]
   }
 
+  type CryptoEngineStatus {
+    status: String!
+    algorithm: String!
+    keyLengthBits: Int!
+    ivLengthBytes: Int!
+    authTagLengthBytes: Int!
+    iterations: Int!
+    roundtripVerified: Boolean!
+    tamperDetectionVerified: Boolean!
+    timestamp: String!
+  }
+
+  type EncryptedPayloadResult {
+    ciphertext: String!
+    iv: String!
+    authTag: String!
+    salt: String
+    algorithm: String!
+    version: String!
+    encoded: String
+  }
+
+  type DecryptedPayloadResult {
+    plaintext: String!
+  }
+
+  input EncryptDataInput {
+    plaintext: String!
+    secretKey: String
+    additionalData: String
+    encoding: String
+  }
+
+  input DecryptDataInput {
+    token: String
+    ciphertext: String
+    iv: String
+    authTag: String
+    salt: String
+    secretKey: String
+    additionalData: String
+    encoding: String
+  }
+
   input CreateRFQInput {
     title: String!
     category: String!
@@ -316,6 +360,8 @@ const schema = buildSchema(`
     optimizationMetrics: ComputeOptimizationMetrics
     diagnoseLogErrors: [DiagnosedIssue]
     auditPerformance: PerformanceAuditReport
+    cryptoStatus: CryptoEngineStatus
+    decryptData(input: DecryptDataInput!): DecryptedPayloadResult
   }
 
   type Mutation {
@@ -329,7 +375,9 @@ const schema = buildSchema(`
     purgeLogs(maxAgeDays: Int): PurgeReport
     autoResolveLogErrors(action: String): AutoResolveReport
     optimizePerformance(level: String): PerformanceOptimizationResult
+    encryptData(input: EncryptDataInput!): EncryptedPayloadResult
   }
 `);
+
 
 module.exports = schema;

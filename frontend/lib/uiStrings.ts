@@ -69,7 +69,11 @@ export const UI_STRINGS = {
     liveTelemetry: 'Live Telemetry',
     online: 'ONLINE',
     healthy: 'HEALTHY',
+    aesEncrypted: 'AES-256-GCM Encrypted',
+    aesGcmProtected: 'AES-256 AEAD Protected',
+    cryptoVerified: 'Cryptographically Verified',
   },
+
 
   templates: {
     rfqDispatched: 'RFQ #{rfqNumber} successfully dispatched to {vendorCount} qualified vendors.',

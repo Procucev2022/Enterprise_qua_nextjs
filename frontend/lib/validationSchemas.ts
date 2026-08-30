@@ -55,7 +55,19 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
     revisedScore: { required: true, type: 'number', min: 0, max: 100, message: 'Score must be between 0 and 100' },
     revisionReason: { required: true, minLength: 5, maxLength: 500, message: 'Revision reason must be between 5 and 500 characters' },
   },
+
+  cryptoEncryption: {
+    plaintext: { required: true, minLength: 1, message: 'Plaintext data is required for encryption' },
+    secretKey: { required: false, minLength: 8, message: 'Encryption key must be at least 8 characters' },
+  },
+
+  cryptoDecryption: {
+    ciphertext: { required: true, minLength: 1, message: 'Ciphertext is required for decryption' },
+    iv: { required: true, minLength: 12, message: 'Initialization vector is required' },
+    authTag: { required: true, minLength: 16, message: 'Authentication tag is required' },
+  },
 };
+
 
 /**
  * Universal Form Data Validator

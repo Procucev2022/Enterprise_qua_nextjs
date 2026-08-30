@@ -189,6 +189,20 @@ const QUALIFICATION_PILLARS = [
   { id: 'M6', name: 'Governance & ESG', weight: 10, color: '#f43f5e' },
 ];
 
+const AES_CONFIG = {
+  ALGORITHM: 'aes-256-gcm',
+  FALLBACK_ALGORITHM: 'aes-256-cbc',
+  KEY_LENGTH_BYTES: 32,
+  IV_LENGTH_BYTES: 12,
+  AUTH_TAG_LENGTH_BYTES: 16,
+  SALT_LENGTH_BYTES: 16,
+  PBKDF2_ITERATIONS: 100000,
+  PBKDF2_DIGEST: 'sha256',
+  VERSION: 'v1',
+  DEFAULT_ENCODING: 'hex',
+  SERIALIZATION_PREFIX: 'enc:v1:aes-256-gcm:',
+};
+
 const {
   EMAIL_REGEX,
   GSTIN_REGEX,
@@ -204,10 +218,12 @@ module.exports = {
   INITIAL_SYSTEM_CONFIG,
   INITIAL_AZURE_HEALTH,
   QUALIFICATION_PILLARS,
+  AES_CONFIG,
   EMAIL_REGEX,
   GSTIN_REGEX,
   PHONE_REGEX,
   VALIDATION_SCHEMAS,
   validatePayload,
 };
+
 

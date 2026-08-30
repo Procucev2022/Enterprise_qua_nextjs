@@ -14,6 +14,7 @@ const supportChatRoutes = require('./supportChat');
 const catalogueRoutes = require('./catalogue');
 const logsRoutes = require('./logs');
 const graphqlRoutes = require('./graphql');
+const cryptoRoutes = require('./crypto');
 
 // Mount sub-routers
 router.use('/bootstrap', bootstrapRoutes);
@@ -29,5 +30,7 @@ router.use('/support-chat', supportChatRoutes);
 router.use('/catalogue', catalogueRoutes);
 router.use('/logs', logsRoutes);
 router.use('/graphql', graphqlRoutes);
+router.use('/crypto', cryptoRoutes);
 
 module.exports = router;
+

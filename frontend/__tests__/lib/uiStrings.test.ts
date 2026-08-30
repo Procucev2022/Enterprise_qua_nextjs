@@ -22,7 +22,11 @@ describe('UI Strings Constants & i18n Format Tests', () => {
     expect(UI_STRINGS.actions.backToDashboard).toContain('Back');
     expect(UI_STRINGS.badges.aiChasingActive).toContain('Active');
     expect(UI_STRINGS.badges.fullyCompliant).toContain('Compliant');
+    expect(UI_STRINGS.badges.aesEncrypted).toContain('AES-256-GCM');
+    expect(UI_STRINGS.badges.aesGcmProtected).toContain('AES-256');
+    expect(UI_STRINGS.badges.cryptoVerified).toContain('Cryptographically');
   });
+
 
   test('formats strings with runtime placeholder substitution', () => {
     const formatted = formatString(UI_STRINGS.templates.rfqDispatched, {

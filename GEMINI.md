@@ -127,3 +127,12 @@
 - Centralize all user-facing literal strings, screen titles, headings, action button labels, badge texts, modal descriptions, and notification messages in `frontend/lib/uiStrings.ts` and reference them via `UI_STRINGS`.
 - Prohibit hardcoded strings and use template placeholders with `formatString(template, values)` interpolation.
 - Enforce test assertions against `UI_STRINGS` constants instead of brittle hardcoded text.
+
+---
+
+## 21. AES Encryption & Cryptographic Security Standard
+- Protect all sensitive application data, vendor banking/tax documents, budget ceilings, and private payload attachments with AES-256-GCM (Galois/Counter Mode) authenticated encryption.
+- Enforce 256-bit symmetric keys, PBKDF2 (SHA-256) key derivation, unique 96-bit random IVs per operation, and 128-bit authentication tags.
+- Provide searchable encryption through HMAC-SHA256 deterministic blind indexing.
+- Ensure cross-platform compatibility between Node.js `crypto` and Web Crypto API `crypto.subtle`.
+

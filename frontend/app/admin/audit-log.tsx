@@ -2,7 +2,8 @@
 
 import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
-import { AuditLogEntry } from '@/lib/types';
+import type { AuditLogEntry } from '@/lib/types';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import {
   ShieldCheck,
   Search,
@@ -15,6 +16,7 @@ import {
   ExternalLink,
   Lock,
 } from 'lucide-react';
+
 
 interface AuditLogProps {
   onBackToInfra: () => void;
@@ -82,13 +84,17 @@ export default function AuditLog({ onBackToInfra }: AuditLogProps) {
           <Search size={14} className="absolute left-2.5 top-2.5 text-slate-400" />
         </div>
 
-        <div className="flex items-center gap-3 text-slate-500 dark:text-gray-400 text-[11px] self-end sm:self-auto">
+        <div className="flex flex-wrap items-center gap-3 text-slate-500 dark:text-gray-400 text-[11px] self-end sm:self-auto">
           <span>Total Recorded Events: <span className="mono font-bold text-slate-900 dark:text-white">{auditLogs.length}</span></span>
           <span className="text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
             <ShieldCheck size={13} /> 100% Signatures Valid
           </span>
+          <span className="text-indigo-600 dark:text-indigo-400 font-semibold flex items-center gap-1 bg-indigo-50 dark:bg-indigo-950/50 px-2 py-0.5 rounded-full border border-indigo-200 dark:border-indigo-800/60">
+            <Lock size={11} /> {UI_STRINGS.badges.aesGcmProtected}
+          </span>
         </div>
       </div>
+
 
       {/* Audit Log Table */}
       <div className="glass-panel rounded-2xl overflow-hidden border border-slate-200 dark:border-gray-800 shadow-xl bg-white dark:bg-gray-900/80">

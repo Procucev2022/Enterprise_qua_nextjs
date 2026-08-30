@@ -1,9 +1,11 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useApp } from '@/lib/store';
 import { RbacModal } from '@/app/components/Modals';
-import { DBHealthStatus } from '@/lib/types';
+import type { DBHealthStatus } from '@/lib/types';
+import { UI_STRINGS } from '@/lib/uiStrings';
+
 import {
   Cpu,
   Database,
@@ -43,7 +45,7 @@ export default function InfraControl({ onNavigateToAuditLog }: InfraControlProps
   const [migratingDb, setMigratingDb] = useState(false);
   const [syncingDb, setSyncingDb] = useState(false);
 
-  const fetchDbHealth = async (notify = false) => {
+  const fetchDbHealth = useCallback(async (notify = false) => {
     setLoadingHealth(true);
     try {
       const res = await fetch('/api/db/status');
@@ -65,18 +67,23 @@ export default function InfraControl({ onNavigateToAuditLog }: InfraControlProps
     } finally {
       setLoadingHealth(false);
     }
-  };
+  }, [showToast]);
 
   useEffect(() => {
     fetchDbHealth(false);
+    const interval = setInterval(() => fetchDbHealth(false), 15000);
+    return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+
 
   const handleTestConnection = async () => {
     setTestingConnection(true);
     await fetchDbHealth(true);
     setTestingConnection(false);
   };
+
 
   const handleRunMigrations = async () => {
     setMigratingDb(true);
@@ -96,6 +103,7 @@ export default function InfraControl({ onNavigateToAuditLog }: InfraControlProps
       setMigratingDb(false);
     }
   };
+
 
   const handleSyncData = async () => {
     setSyncingDb(true);
@@ -141,7 +149,10 @@ export default function InfraControl({ onNavigateToAuditLog }: InfraControlProps
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="badge badge-emerald flex items-center gap-1">
+            <Lock size={12} /> {UI_STRINGS.badges.aesEncrypted}
+          </span>
           <button onClick={onNavigateToAuditLog} className="btn btn-secondary btn-sm">
             <ShieldCheck size={14} /> Immutable Audit Trail
           </button>

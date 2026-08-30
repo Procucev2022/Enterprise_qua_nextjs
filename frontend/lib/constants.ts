@@ -121,6 +121,17 @@ export const INITIAL_AZURE_HEALTH: AzureServiceHealth[] = [
   },
 ];
 
+export const AES_CONFIG = {
+  ALGORITHM: 'AES-GCM',
+  KEY_LENGTH_BITS: 256,
+  IV_LENGTH_BYTES: 12,
+  TAG_LENGTH_BITS: 128,
+  SALT_LENGTH_BYTES: 16,
+  PBKDF2_ITERATIONS: 100000,
+  VERSION: 'v1',
+  SERIALIZATION_PREFIX: 'enc:v1:aes-256-gcm:',
+};
+
 export {
   FORM_SCHEMAS,
   validateFormData,
@@ -128,3 +139,4 @@ export {
   GSTIN_PATTERN,
   PHONE_PATTERN,
 } from './validationSchemas';
+

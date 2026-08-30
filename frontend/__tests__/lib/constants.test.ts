@@ -4,12 +4,14 @@ import {
   INITIAL_AZURE_HEALTH,
   BUYER_SUBSCRIPTION_PLANS,
   VENDOR_SUBSCRIPTION_PLANS,
+  AES_CONFIG,
   FORM_SCHEMAS,
   validateFormData,
   EMAIL_PATTERN,
   GSTIN_PATTERN,
   PHONE_PATTERN,
 } from '@/lib/constants';
+
 
 describe('lib/constants', () => {
   it('should export valid SOURCING_MODES', () => {
@@ -75,4 +77,14 @@ describe('lib/constants', () => {
     });
     expect(result.isValid).toBe(true);
   });
+
+  it('should export valid AES_CONFIG constants', () => {
+    expect(AES_CONFIG).toBeDefined();
+    expect(AES_CONFIG.ALGORITHM).toBe('AES-GCM');
+    expect(AES_CONFIG.KEY_LENGTH_BITS).toBe(256);
+    expect(AES_CONFIG.IV_LENGTH_BYTES).toBe(12);
+    expect(AES_CONFIG.TAG_LENGTH_BITS).toBe(128);
+    expect(AES_CONFIG.PBKDF2_ITERATIONS).toBe(100000);
+  });
 });
+

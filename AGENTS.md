@@ -226,3 +226,15 @@ Whenever making any code changes or adding new features:
 - **Zero Hardcoded User-Facing Literals**: Prohibit embedding raw user-facing literal strings directly in JSX/TSX components, store actions, or handlers.
 - **Dynamic Template Placeholders & Interpolation**: Use template placeholders (e.g. `{param}`) and interpolation helper functions (`formatString(template, values)`) for runtime parameter substitution, ensuring the entire application is fully i18n-ready.
 - **Robust Constant-Driven Test Assertions**: All frontend unit tests **MUST** assert against `UI_STRINGS` constants rather than brittle hardcoded strings to guarantee test resiliency against copy and locale adjustments.
+
+---
+
+## 24. AES Encryption & Cryptographic Security Standard
+- **AES-256-GCM Authenticated Encryption**: All sensitive application data (e.g. vendor banking credentials, tax identifiers, confidential RFQ budget ceilings, quote notes, and private payload attachments) **MUST** be protected using AES-256-GCM (Galois/Counter Mode) authenticated encryption.
+- **Cryptographic Parameter Enforcement**:
+  - **Key Derivation**: 256-bit symmetric keys derived using PBKDF2 (HMAC-SHA256, >= 100,000 iterations, 16-byte random salt) or 32-byte cryptographically secure keys provided via environment variables (`AES_ENCRYPTION_KEY`).
+  - **Unique Initialization Vectors**: Every encryption operation **MUST** generate a fresh 96-bit (12-byte) cryptographically secure random IV (`crypto.randomBytes(12)`). IV reuse is strictly prohibited.
+  - **128-bit Authentication Tags**: Always generate and verify 128-bit (16-byte) authentication tags (`getAuthTag()` / `setAuthTag()`) to guarantee ciphertext integrity and AEAD tamper-resistance.
+- **Blind Indexing & Searchable Encryption**: Use deterministic HMAC-SHA256 blind indexing (`generateBlindIndex`) for searchable encrypted fields to enable database querying without exposing plaintexts.
+- **Cross-Platform Interoperability**: Maintain cross-platform encryption compatibility between Node.js `crypto` (backend) and Web Crypto API `crypto.subtle` (frontend).
+

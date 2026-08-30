@@ -53,7 +53,29 @@ const VALIDATION_SCHEMAS = {
     role: { type: 'string', required: true },
     department: { type: 'string', required: false },
   },
+
+  encryptPayload: {
+    plaintext: { type: 'string', required: true, minLength: 1 },
+    secretKey: { type: 'string', required: false, minLength: 8 },
+    encoding: { type: 'string', required: false, enum: ['hex', 'base64'] },
+  },
+
+  decryptPayload: {
+    ciphertext: { type: 'string', required: true, minLength: 1 },
+    iv: { type: 'string', required: true, minLength: 12 },
+    authTag: { type: 'string', required: true, minLength: 16 },
+    salt: { type: 'string', required: false },
+    secretKey: { type: 'string', required: false, minLength: 8 },
+    encoding: { type: 'string', required: false, enum: ['hex', 'base64'] },
+  },
+
+  verifyCryptoIntegrity: {
+    ciphertext: { type: 'string', required: true, minLength: 1 },
+    iv: { type: 'string', required: true, minLength: 12 },
+    authTag: { type: 'string', required: true, minLength: 16 },
+  },
 };
+
 
 /**
  * Universal Schema Validator

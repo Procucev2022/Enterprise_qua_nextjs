@@ -585,3 +585,36 @@ export interface DBHealthStatus {
   };
   uptime?: string;
 }
+
+export interface EncryptedPayload {
+  ciphertext: string;
+  iv: string;
+  authTag: string;
+  salt?: string;
+  algorithm: string;
+  version: string;
+  encoded?: string;
+}
+
+export interface AESEncryptionOptions {
+  secretKey?: string;
+  salt?: string;
+  additionalData?: string;
+  encoding?: 'hex' | 'base64';
+}
+
+export interface DecryptionResult<T = string> {
+  success: boolean;
+  data?: T;
+  error?: string;
+}
+
+export interface CryptoHealthStatus {
+  status: 'HEALTHY' | 'DEGRADED' | 'FAILED';
+  algorithm: string;
+  keyLengthBits: number;
+  roundtripVerified: boolean;
+  tamperDetectionVerified: boolean;
+  timestamp: string;
+}
+

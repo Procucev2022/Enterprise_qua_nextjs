@@ -4,11 +4,13 @@ const poolModule = require('../db/pool');
 const { logger } = require('../services/loggerService');
 const { logErrorResolver } = require('../services/logErrorResolver');
 const { performanceOptimizer } = require('../services/performanceOptimizer');
+const cryptoService = require('../services/cryptoService');
 
 /**
  * GraphQL Root Resolvers
  */
 const rootResolvers = {
+
   rfqs: (args = {}) => {
     const { category, sourcingMode, status, limit = 50, offset = 0 } = args;
     let result = storeService.getRFQs();
@@ -120,6 +122,26 @@ const rootResolvers = {
     return performanceOptimizer.auditPerformance();
   },
 
+  cryptoStatus: () => {
+    return cryptoService.verifyCryptoHealth();
+  },
+
+  decryptData: ({ input }) => {
+    if (input.token) {
+      const plaintext = cryptoService.decrypt(input.token, {
+        secretKey: input.secretKey,
+        additionalData: input.additionalData,
+      });
+      return { plaintext };
+    }
+    const plaintext = cryptoService.decrypt(input, {
+      secretKey: input.secretKey,
+      additionalData: input.additionalData,
+      encoding: input.encoding,
+    });
+    return { plaintext };
+  },
+
   createRFQ: ({ input }) => {
     logger.info('GraphQL Mutation: createRFQ', { title: input.title }, 'GRAPHQL_MUTATION');
     return storeService.createRFQ(input);
@@ -176,6 +198,24 @@ const rootResolvers = {
     const level = args.level || 'standard';
     return performanceOptimizer.optimizePerformance(level);
   },
+
+  encryptData: ({ input }) => {
+    const res = cryptoService.encrypt(input.plaintext, {
+      secretKey: input.secretKey,
+      additionalData: input.additionalData,
+      encoding: input.encoding,
+    });
+    return {
+      ciphertext: res.ciphertext,
+      iv: res.iv,
+      authTag: res.authTag,
+      salt: res.salt,
+      algorithm: res.algorithm,
+      version: res.version,
+      encoded: res.encoded,
+    };
+  },
 };
 
 module.exports = rootResolvers;
+
