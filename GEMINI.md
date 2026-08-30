@@ -41,3 +41,21 @@
 - Regularly audit, upgrade, and maintain all runtime environments, frameworks, dependencies, and libraries to their latest Long-Term Support (LTS) or stable releases.
 - Systematically refactor breaking changes, deprecation warnings, and API updates.
 - Verify stability and backward compatibility via full unit tests, linting, typecheck, and coverage verification.
+
+---
+
+## 7. Auto-Resolve Bugs & Errors in Logs Standard
+- Continuously monitor, parse, and analyze runtime log outputs, stack traces, and error codes in log files (`app.log`, `error.log`, `audit.log`) to diagnose root causes and implement verified fixes.
+- Enforce full test suite, linting, and coverage verification on all bug fixes to prevent regressions.
+
+---
+
+## 8. Auto-Resolve Warnings Standard
+- Proactively detect and resolve all compiler, linter, runtime, React hook, and dependency warnings across the entire repository.
+- Apply safe refactoring for deprecation notices, unused imports, type mismatches, and syntax warnings without disrupting core behavior.
+
+---
+
+## 9. Automated Performance Optimization Standard
+- Continuously profile and optimize critical paths, API payloads, database query latency, code-splitting, lazy-loading, and multi-tier resource caching.
+- Validate improvements against bundle size, load time, and compute consumption benchmarks.

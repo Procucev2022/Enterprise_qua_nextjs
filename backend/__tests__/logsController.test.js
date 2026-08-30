@@ -1,28 +1,38 @@
 const request = require('supertest');
 const app = require('../src/app');
 const { logger } = require('../src/services/loggerService');
+const { logErrorResolver } = require('../src/services/logErrorResolver');
+const { performanceOptimizer } = require('../src/services/performanceOptimizer');
+const logsController = require('../src/controllers/logsController');
 
 describe('Backend Logs Controller & Endpoints Suite', () => {
   beforeEach(() => {
     logger.clear();
   });
 
-  test('GET /api/logs returns queried logs and accepts filtering parameters', async () => {
+  test('GET /api/logs returns queried logs and accepts filtering parameters and default query', async () => {
     logger.info('System boot completed', { version: '2.0.0' }, 'BOOT');
     logger.error('Failed API call', new Error('Timeout'), 'API');
     logger.audit('Vendor modified', 'admin@procucev.com');
 
+    // Default call without query parameters
     const resAll = await request(app).get('/api/logs').expect(200);
     expect(resAll.body.success).toBe(true);
     expect(resAll.body.total).toBe(3);
 
-    // Query with filter
+    // Query with all filters including limit and offset
     const resFiltered = await request(app)
       .get('/api/logs?level=ERROR&category=API&search=Timeout&limit=10&offset=0')
       .expect(200);
     expect(resFiltered.body.success).toBe(true);
     expect(resFiltered.body.count).toBe(1);
     expect(resFiltered.body.logs[0].level).toBe('ERROR');
+
+    // Query with only search and from/to
+    const resDates = await request(app)
+      .get('/api/logs?from=2026-01-01&to=2026-12-31')
+      .expect(200);
+    expect(resDates.body.success).toBe(true);
   });
 
   test('POST /api/logs ingests valid log entries and rejects empty message', async () => {
@@ -34,7 +44,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     expect(resBad.body.success).toBe(false);
     expect(resBad.body.error).toMatch(/message is required/i);
 
-    // Valid log with default level and category
+    // Valid log with default level, category, and metadata
     const resDefaults = await request(app)
       .post('/api/logs')
       .send({ message: 'Default log test' })
@@ -87,6 +97,69 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     expect(res.body.stats.levelCounts.ERROR).toBe(1);
   });
 
+  test('GET /api/logs/diagnose and POST /api/logs/auto-resolve diagnose and resolve log errors', async () => {
+    const resDiag = await request(app).get('/api/logs/diagnose').expect(200);
+    expect(resDiag.body.success).toBe(true);
+    expect(Array.isArray(resDiag.body.issues)).toBe(true);
+
+    // Auto resolve all
+    const resResolveAll = await request(app).post('/api/logs/auto-resolve').send({}).expect(200);
+    expect(resResolveAll.body.success).toBe(true);
+    expect(resResolveAll.body.report).toBeDefined();
+
+    // Auto resolve specific action
+    const resResolveAction = await request(app)
+      .post('/api/logs/auto-resolve')
+      .send({ action: 'OPTIMIZE_QUERY_CACHE' })
+      .expect(200);
+    expect(resResolveAction.body.success).toBe(true);
+    expect(resResolveAction.body.remediation.actionType).toBe('OPTIMIZE_QUERY_CACHE');
+  });
+
+  test('GET /api/logs/performance and POST /api/logs/performance/optimize audit and optimize performance', async () => {
+    const resPerf = await request(app).get('/api/logs/performance').expect(200);
+    expect(resPerf.body.success).toBe(true);
+    expect(resPerf.body.audit).toBeDefined();
+
+    // Standard optimization (no body)
+    const resOptDefault = await request(app).post('/api/logs/performance/optimize').send().expect(200);
+    expect(resOptDefault.body.success).toBe(true);
+    expect(resOptDefault.body.result.status).toBe('OPTIMIZED');
+
+    // Level optimization (with body)
+    const resOptAggressive = await request(app)
+      .post('/api/logs/performance/optimize')
+      .send({ level: 'aggressive' })
+      .expect(200);
+    expect(resOptAggressive.body.success).toBe(true);
+    expect(resOptAggressive.body.result.level).toBe('aggressive');
+  });
+
+  test('direct controller function calls with null/empty parameters cover all optional branches', async () => {
+    const res = { json: jest.fn(), status: jest.fn().mockReturnThis() };
+    const next = jest.fn();
+
+    // 1. getLogs without query
+    logsController.getLogs({}, res, next);
+    expect(res.json).toHaveBeenCalled();
+
+    // 2. createLog with empty object
+    logsController.createLog({}, res, next);
+    expect(res.status).toHaveBeenCalledWith(400);
+
+    // 3. purgeLogs without body
+    logsController.purgeLogs({}, res, next);
+    expect(res.json).toHaveBeenCalled();
+
+    // 4. autoResolveLogErrors with null body
+    await logsController.autoResolveLogErrors({}, res, next);
+    expect(res.json).toHaveBeenCalled();
+
+    // 5. optimizePerformance with null body
+    logsController.optimizePerformance({}, res, next);
+    expect(res.json).toHaveBeenCalled();
+  });
+
   test('error handler branches when unexpected exception is thrown in logsController methods', async () => {
     // 1. getLogs error
     const origQueryLogs = logger.queryLogs;
@@ -127,5 +200,41 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     expect(resStats.body.success).toBe(false);
     expect(resStats.body.error).toBe('Unexpected Stats Failure');
     logger.getLogStats = origStats;
+
+    // 5. diagnoseLogErrors error
+    const origDiag = logErrorResolver.diagnoseErrors;
+    logErrorResolver.diagnoseErrors = () => {
+      throw new Error('Unexpected Diagnose Failure');
+    };
+    const resDiagErr = await request(app).get('/api/logs/diagnose').expect(500);
+    expect(resDiagErr.body.error).toBe('Unexpected Diagnose Failure');
+    logErrorResolver.diagnoseErrors = origDiag;
+
+    // 6. autoResolveLogErrors error
+    const origAutoResolve = logErrorResolver.autoResolveAll;
+    logErrorResolver.autoResolveAll = () => {
+      throw new Error('Unexpected AutoResolve Failure');
+    };
+    const resAutoResolveErr = await request(app).post('/api/logs/auto-resolve').send().expect(500);
+    expect(resAutoResolveErr.body.error).toBe('Unexpected AutoResolve Failure');
+    logErrorResolver.autoResolveAll = origAutoResolve;
+
+    // 7. getPerformanceAudit error
+    const origAudit = performanceOptimizer.auditPerformance;
+    performanceOptimizer.auditPerformance = () => {
+      throw new Error('Unexpected Perf Audit Failure');
+    };
+    const resAuditErr = await request(app).get('/api/logs/performance').expect(500);
+    expect(resAuditErr.body.error).toBe('Unexpected Perf Audit Failure');
+    performanceOptimizer.auditPerformance = origAudit;
+
+    // 8. optimizePerformance error
+    const origOpt = performanceOptimizer.optimizePerformance;
+    performanceOptimizer.optimizePerformance = () => {
+      throw new Error('Unexpected Optimize Failure');
+    };
+    const resOptErr = await request(app).post('/api/logs/performance/optimize').send().expect(500);
+    expect(resOptErr.body.error).toBe('Unexpected Optimize Failure');
+    performanceOptimizer.optimizePerformance = origOpt;
   });
 });

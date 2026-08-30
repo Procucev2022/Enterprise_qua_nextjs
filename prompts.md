@@ -58,3 +58,15 @@ Also, Please proceed with tech stack upgradation.
 ```
 
 ---
+
+### Prompt 6
+**Timestamp**: 2026-08-30T04:07:52Z
+
+```text
+Auto-resolve bugs & errors in logs: Configure assistant instructions to continuously monitor, analyze, and resolve application bugs and errors captured in log files. The system must automatically parse runtime log outputs, stack traces, and error codes to diagnose underlying issues, implement verified bug fixes, and prevent recurring failures. Validate all bug fixes through the quality check pipeline, including linting, typechecking, and test suite execution, ensuring no regressions are introduced.
+
+Auto resolve warnings: Configure assistant instructions to automatically identify, analyze, and resolve all compiler, linter, runtime, and dependency warnings across the entire project. Ensure that the assistant proactively applies safe refactoring and fixes for deprecation notices, unused imports, type mismatches, and syntax warnings without breaking core functionality or introducing regression issues. Validate all dynamic warning fixes by running the complete quality check pipeline, including linting, typechecking, and test suites.
+Auto performance optimization: Configure assistant instructions to continuously audit, identify, and apply automated performance optimizations across the entire codebase. Ensure the system proactively optimizes critical paths, implements efficient code-splitting, lazy-loading, and resource caching. Validate all performance improvements against established bundle size and latency benchmarks via the quality check pipeline.
+```
+
+---

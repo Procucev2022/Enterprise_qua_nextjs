@@ -25,3 +25,14 @@
 7. Tech Stack LTS/Stable Version Upgrade & Dependency Maintenance Protocol
 - Regularly audit, upgrade, and maintain all core tech stack components, runtime environments, framework dependencies, and libraries to latest LTS/stable releases.
 - Systematically refactor breaking changes and deprecations, validating via full test suite, linting, typechecks, and 90% per-file coverage.
+
+8. Auto-Resolve Bugs & Errors in Logs Standard
+- Continuously parse and diagnose runtime log outputs, stack traces, and error codes from `backend/logs/` and runtime streams to apply automated root-cause fixes.
+- Verify all fixes against the full quality pipeline with zero regressions.
+
+9. Auto-Resolve Warnings Standard
+- Proactively detect and resolve all compiler, linter, runtime, React hook, and dependency warnings across frontend and backend.
+- Apply safe refactoring for deprecation notices, unused imports, type mismatches, and non-standard syntax.
+
+10. Automated Performance Optimization Standard
+- Continuously audit and optimize critical execution paths, API payloads, query latencies, code-splitting, lazy-loading, and multi-tier resource caching.

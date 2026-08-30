@@ -69,6 +69,7 @@ export default function InfraControl({ onNavigateToAuditLog }: InfraControlProps
 
   useEffect(() => {
     fetchDbHealth(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleTestConnection = async () => {

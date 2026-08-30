@@ -94,7 +94,7 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
     expect(Array.isArray(bySearchSku)).toBe(true);
   });
 
-  test('aiFeed, systemConfig, dbHealth, and optimizationMetrics resolvers execute', async () => {
+  test('aiFeed, systemConfig, dbHealth, optimizationMetrics, diagnoseLogErrors, auditPerformance resolvers execute', async () => {
     const feed = rootResolvers.aiFeed({ limit: 5 });
     expect(feed.length).toBeLessThanOrEqual(5);
 
@@ -107,9 +107,15 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
     const metrics = rootResolvers.optimizationMetrics();
     expect(metrics).toBeDefined();
     expect(metrics.cache).toBeDefined();
+
+    const diag = rootResolvers.diagnoseLogErrors();
+    expect(Array.isArray(diag)).toBe(true);
+
+    const perf = rootResolvers.auditPerformance();
+    expect(perf.healthScore).toBeGreaterThanOrEqual(0);
   });
 
-  test('mutations execute properly', () => {
+  test('mutations execute properly', async () => {
     const createdRFQ = rootResolvers.createRFQ({
       input: { title: 'Direct Resolver RFQ', category: 'Raw Materials' },
     });
@@ -147,5 +153,19 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
 
     const purgeCustom = rootResolvers.purgeLogs({ maxAgeDays: 10 });
     expect(purgeCustom.success).toBe(true);
+
+    // Auto resolve log errors mutations
+    const autoResolveDefault = await rootResolvers.autoResolveLogErrors();
+    expect(autoResolveDefault).toBeDefined();
+
+    const autoResolveAction = await rootResolvers.autoResolveLogErrors({ action: 'OPTIMIZE_QUERY_CACHE' });
+    expect(autoResolveAction.remediationsApplied[0].actionType).toBe('OPTIMIZE_QUERY_CACHE');
+
+    // Optimize performance mutations
+    const optDefault = rootResolvers.optimizePerformance();
+    expect(optDefault.status).toBe('OPTIMIZED');
+
+    const optLevel = rootResolvers.optimizePerformance({ level: 'deep' });
+    expect(optLevel.level).toBe('deep');
   });
 });

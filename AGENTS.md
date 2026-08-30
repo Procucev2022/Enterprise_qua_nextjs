@@ -81,3 +81,24 @@ Whenever making any code changes or adding new features:
 - **Regular Stack & Dependency Auditing**: Regularly audit, upgrade, and maintain all core tech stack components, runtime environments, framework dependencies, and third-party libraries to their latest Long-Term Support (LTS) or stable versions.
 - **Refactoring Breaking Changes & Deprecations**: Ensure that all breaking changes, deprecation warnings, and API updates from upgraded packages are systematically refactored across the entire codebase.
 - **Verification & Compatibility Gate**: Validate all upgrades by executing the full test suite, linting, typechecks, and the per-file 90% coverage benchmark to guarantee backward compatibility, operational stability, and optimal performance.
+
+---
+
+## 10. Auto-Resolve Bugs & Errors in Logs Standard
+- **Continuous Log Auditing & Parsing**: Continuously monitor and analyze application bugs, uncaught exceptions, and error codes captured in log files (`app.log`, `error.log`, `audit.log`) and runtime console streams.
+- **Root-Cause Diagnosis & Automated Remediation**: Parse stack traces, error payloads, and fault origins to automatically diagnose underlying failure mechanisms, implement verified code fixes, and prevent recurring failures.
+- **Zero-Regression Verification**: Validate all bug fixes through the full quality pipeline (typechecking, linting, unit test suites, and the strict per-file 90% coverage threshold) to ensure complete stability without side effects.
+
+---
+
+## 11. Auto-Resolve Warnings Standard
+- **Comprehensive Warning Detection**: Automatically identify, inspect, and resolve all compiler, linter, runtime, React hook, and dependency warnings across frontend and backend codebases.
+- **Safe Proactive Refactoring**: Proactively refactor deprecation notices, unused imports, type mismatches, non-standard syntax, unhandled promises, and React DOM/hook warnings without disrupting business logic.
+- **Verification Gate**: Re-run the full test suite, build pipeline, and coverage verifier to confirm that all warnings are resolved cleanly with zero regressions.
+
+---
+
+## 12. Automated Performance Optimization Standard
+- **Continuous Performance Auditing**: Continuously profile and audit critical execution paths, database query latencies, API payload sizes, and frontend rendering performance across the entire codebase.
+- **Automated Optimizations**: Proactively implement code-splitting, lazy-loading, resource caching (HTTP cache headers, LRU query caching, client-side store memoization), and payload minification.
+- **Benchmark Validation**: Validate all optimizations against established bundle size and latency benchmarks via the quality check pipeline, ensuring optimal load times and minimal compute consumption.

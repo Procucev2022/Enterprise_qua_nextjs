@@ -2,6 +2,8 @@ const storeService = require('../services/storeService');
 const { queryCache } = require('../db/queryCache');
 const poolModule = require('../db/pool');
 const { logger } = require('../services/loggerService');
+const { logErrorResolver } = require('../services/logErrorResolver');
+const { performanceOptimizer } = require('../services/performanceOptimizer');
 
 /**
  * GraphQL Root Resolvers
@@ -110,6 +112,14 @@ const rootResolvers = {
     return poolModule.getOptimizationMetrics();
   },
 
+  diagnoseLogErrors: () => {
+    return logErrorResolver.diagnoseErrors();
+  },
+
+  auditPerformance: () => {
+    return performanceOptimizer.auditPerformance();
+  },
+
   createRFQ: ({ input }) => {
     logger.info('GraphQL Mutation: createRFQ', { title: input.title }, 'GRAPHQL_MUTATION');
     return storeService.createRFQ(input);
@@ -148,6 +158,23 @@ const rootResolvers = {
   purgeLogs: (args = {}) => {
     const maxAgeDays = args.maxAgeDays || 30;
     return logger.purgeExpiredLogs({ maxAgeDays });
+  },
+
+  autoResolveLogErrors: async (args = {}) => {
+    if (args.action) {
+      const res = await logErrorResolver.executeRemediation(args.action);
+      return {
+        diagnosedCount: 1,
+        issues: [],
+        remediationsApplied: [res],
+      };
+    }
+    return await logErrorResolver.autoResolveAll();
+  },
+
+  optimizePerformance: (args = {}) => {
+    const level = args.level || 'standard';
+    return performanceOptimizer.optimizePerformance(level);
   },
 };
 

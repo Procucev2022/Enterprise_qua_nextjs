@@ -488,7 +488,7 @@ export default function VendorEvaluationSummary({
                     +{q.weightedScore.toFixed(2)}%
                   </td>
                   <td className="py-3 px-3 text-[11px] text-slate-600 dark:text-gray-300 italic max-w-md">
-                    "{q.remarks}"
+                    &quot;{q.remarks}&quot;
                   </td>
                 </tr>
               ))}

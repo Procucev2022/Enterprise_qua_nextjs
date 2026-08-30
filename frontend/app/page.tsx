@@ -143,6 +143,7 @@ export default function HomePage() {
         setActiveScreen('infra_control');
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentRole]);
 
   // Navigate to vendor bid submission form

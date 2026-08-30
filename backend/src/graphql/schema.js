@@ -1,24 +1,23 @@
 const { buildSchema } = require('graphql');
 
 /**
- * Enterprise GraphQL Schema Definition for Procucev Enterprise Sourcing & Procurement Platform
+ * Enterprise GraphQL Schema Definition
  */
 const schema = buildSchema(`
-  scalar JSON
-
   type BuyerAccount {
     id: String!
     organizationName: String!
     corporateEmail: String!
-    contactPerson: String!
+    contactPerson: String
     mobileNumber: String
     industrySector: String
     accountSource: String
     subscriptionPlan: String
     totalRFQsCreated: Int
-    totalSpend: String
+    totalSpend: Float
     isVerified: Boolean
     createdDate: String
+    syncTimestamp: String
     sourcingMode: String
     status: String
     gstin: String
@@ -34,7 +33,7 @@ const schema = buildSchema(`
     contactPerson: String
     email: String!
     phone: String
-    majorCategory: String
+    majorCategory: String!
     minorCategories: [String]
     location: String
     rating: Float
@@ -43,38 +42,31 @@ const schema = buildSchema(`
     status: String
     evaluated: Boolean
     hasRecord: Boolean
-    whatsappSla: Int
-    awardedSpend: Float
-    leadTimeDays: Int
-    empanelledBy: String
-    isEmpanelled: Boolean
-    categoryCount: Int
+    isExistingInDatabase: Boolean
+    onboardingEmailStatus: String
     clientMappedCategories: [String]
     vendorSelectedCategories: [String]
   }
 
   type LineItem {
-    id: String
-    itemDescription: String
-    quantity: Float
-    uom: String
-    targetPrice: Float
-    targetSpend: Float
-    historicalPrice: Float
-    potentialSaving: Float
+    id: String!
+    sku: String
+    description: String!
+    quantity: Int!
+    unitPrice: Float
+    totalPrice: Float
+    specifications: String
   }
 
   type Quote {
-    id: String
-    vendorId: String
-    vendorName: String
-    quoteAmount: Float
+    id: String!
+    vendorId: String!
+    vendorName: String!
+    totalPrice: Float!
     unitPrice: Float
-    deliveryDays: Int
-    score: Float
-    rank: Int
-    evaluatedStatus: String
-    savingsPct: Float
+    leadTimeDays: Int
+    status: String
+    submittedAt: String
   }
 
   type RFQ {
@@ -82,20 +74,16 @@ const schema = buildSchema(`
     rfqNumber: String!
     title: String!
     category: String!
-    sourcingMode: String
-    buyerCompany: String
-    buyerContact: String
-    buyerEmail: String
-    createdDate: String
+    createdAt: String!
     deadline: String
-    budget: Float
-    status: String
+    status: String!
+    sourcingMode: String!
     quotesCount: Int
+    chasingActive: Boolean
+    buyerCompany: String
+    buyerEmail: String
+    budget: Float
     targetSavings: String
-    isDoubleBlind: Boolean
-    source: String
-    allocatedTime: String
-    elapsedTime: String
     lineItems: [LineItem]
     quotes: [Quote]
     assignedVendors: [Vendor]
@@ -158,43 +146,60 @@ const schema = buildSchema(`
 
   type SystemConfig {
     maintenanceMode: Boolean
-    multiChannelOutreach: Boolean
-    autoChaseSlaMinutes: Int
+    strictSecurityMode: Boolean
+    allowDirectNegotiations: Boolean
+    require2FAForPO: Boolean
+    autoApproveVendorUnderBudget: Boolean
+    aiAutonomousChasing: Boolean
+    auditLogRetentionDays: Int
+    maxSimultaneousMode2Events: Int
+    activeMode: String
+    chaserIntervalSeconds: Int
     aiModel: String
-    azureEndpointConfigured: Boolean
+    aiTemperature: Float
+    azurePostgresSyncInterval: Int
   }
 
   type DBHealthStatus {
-    isConfigured: Boolean
-    isConnected: Boolean
-    provider: String
-    providerLabel: String
+    isConfigured: Boolean!
+    isConnected: Boolean!
+    provider: String!
+    providerLabel: String!
+    poolStatus: String!
     latencyMs: Int
-    tablesCount: Int
+    activeConnections: Int
+    totalConnections: Int
+    idleConnections: Int
     errorMessage: String
+    timestamp: String
   }
 
-  type CacheMetrics {
+  type QueryCacheMetrics {
     activeEntries: Int
+    maxEntries: Int
     hits: Int
     misses: Int
     totalQueriesProcessed: Int
     cacheHitRatio: String
-    estimatedComputeMsSaved: Int
+    cacheHitRatioNumber: Float
+    invalidations: Int
+    estimatedComputeMsSaved: Float
     estimatedComputeHoursSaved: Float
   }
 
   type QueryAuditReport {
     totalQueriesExecuted: Int
-    totalExecutionTimeMs: Int
+    totalExecutionTimeMs: Float
     averageQueryDurationMs: Float
     slowQueryThresholdMs: Int
     slowQueriesCount: Int
   }
 
   type ComputeOptimizationMetrics {
-    cache: CacheMetrics
+    cache: QueryCacheMetrics
     auditing: QueryAuditReport
+    pool: DBHealthStatus
+    activeComputeSavingStrategy: String
     timestamp: String
   }
 
@@ -203,6 +208,49 @@ const schema = buildSchema(`
     purgedMemoryCount: Int
     diskFilesPurged: Int
     retentionCutoff: String
+  }
+
+  type DiagnosedIssue {
+    issueId: String!
+    issueType: String!
+    category: String!
+    severity: String!
+    suggestedAction: String!
+    count: Int!
+    firstSeen: String
+    lastSeen: String
+    sampleMessage: String
+  }
+
+  type RemediationResult {
+    remediationId: String!
+    actionType: String!
+    message: String!
+    timestamp: String!
+    durationMs: Int
+  }
+
+  type AutoResolveReport {
+    diagnosedCount: Int!
+    issues: [DiagnosedIssue]
+    remediationsApplied: [RemediationResult]
+  }
+
+  type PerformanceAuditReport {
+    timestamp: String!
+    healthScore: Int!
+    grade: String!
+    recommendations: [String]
+  }
+
+  type PerformanceOptimizationResult {
+    optimizationId: String!
+    level: String!
+    durationMs: Int!
+    timestamp: String!
+    beforeScore: Int!
+    status: String!
+    actionsApplied: [String]
   }
 
   input CreateRFQInput {
@@ -266,6 +314,8 @@ const schema = buildSchema(`
     systemConfig: SystemConfig
     dbHealth: DBHealthStatus
     optimizationMetrics: ComputeOptimizationMetrics
+    diagnoseLogErrors: [DiagnosedIssue]
+    auditPerformance: PerformanceAuditReport
   }
 
   type Mutation {
@@ -277,6 +327,8 @@ const schema = buildSchema(`
     createBuyerAccount(input: CreateBuyerAccountInput!): BuyerAccount
     clearQueryCache: Boolean
     purgeLogs(maxAgeDays: Int): PurgeReport
+    autoResolveLogErrors(action: String): AutoResolveReport
+    optimizePerformance(level: String): PerformanceOptimizationResult
   }
 `);
 
