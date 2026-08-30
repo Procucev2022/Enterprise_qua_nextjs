@@ -26,7 +26,7 @@ const {
   getSystemConfigFromDB,
   upsertSystemConfigInDB,
 } = require('../db/queries');
-const { pool } = require('../db/pool');
+const poolModule = require('../db/pool');
 
 class StoreService {
   constructor() {
@@ -75,7 +75,7 @@ class StoreService {
   }
 
   async hydrateFromDB() {
-    if (!pool) return;
+    if (!poolModule.pool) return;
     try {
       const [dbBuyers, dbVendors, dbRfqs, dbEvals, dbAudits, dbConfig] = await Promise.all([
         getBuyerAccountsFromDB(),
@@ -133,7 +133,7 @@ class StoreService {
       action: `Created buyer account for ${newAcc.organizationName} (${newAcc.corporateEmail})`,
     });
 
-    if (pool) {
+    if (poolModule.pool) {
       upsertBuyerAccountInDB(newAcc).catch((e) => console.error('DB buyer save error:', e.message));
     }
 
@@ -155,7 +155,7 @@ class StoreService {
       this.activeBuyerAccount = updated;
     }
 
-    if (pool) {
+    if (poolModule.pool) {
       upsertBuyerAccountInDB(updated).catch((e) => console.error('DB buyer update error:', e.message));
     }
 
@@ -169,7 +169,7 @@ class StoreService {
       if (this.activeBuyerAccount && this.activeBuyerAccount.id === id) {
         this.activeBuyerAccount = this.buyerAccounts[0] || null;
       }
-      if (pool) {
+      if (poolModule.pool) {
         deleteBuyerAccountInDB(id).catch((e) => console.error('DB buyer delete error:', e.message));
       }
       return true;
@@ -216,7 +216,7 @@ class StoreService {
       action: `Registered vendor ${newVendor.name} in category ${newVendor.majorCategory}`,
     });
 
-    if (pool) {
+    if (poolModule.pool) {
       upsertVendorInDB(newVendor).catch((e) => console.error('DB vendor save error:', e.message));
     }
 
@@ -230,7 +230,7 @@ class StoreService {
     const updated = { ...this.vendors[idx], ...updates };
     this.vendors[idx] = updated;
 
-    if (pool) {
+    if (poolModule.pool) {
       upsertVendorInDB(updated).catch((e) => console.error('DB vendor update error:', e.message));
     }
 
@@ -241,7 +241,7 @@ class StoreService {
     const beforeLen = this.vendors.length;
     this.vendors = this.vendors.filter((v) => v.id !== id);
     if (this.vendors.length < beforeLen) {
-      if (pool) {
+      if (poolModule.pool) {
         deleteVendorInDB(id).catch((e) => console.error('DB vendor delete error:', e.message));
       }
       return true;
@@ -361,7 +361,7 @@ class StoreService {
       });
     }
 
-    if (pool) {
+    if (poolModule.pool) {
       upsertRFQInDB(newRFQ).catch((e) => console.error('DB RFQ save error:', e.message));
     }
 
@@ -382,7 +382,7 @@ class StoreService {
     };
     this.rfqs[idx] = updated;
 
-    if (pool) {
+    if (poolModule.pool) {
       upsertRFQInDB(updated).catch((e) => console.error('DB RFQ update error:', e.message));
     }
 
@@ -395,6 +395,12 @@ class StoreService {
 
     const quotes = [...(rfq.quotes || []), quote];
     return this.updateRFQ(rfq.id, { quotes });
+  }
+
+  deleteRFQ(id) {
+    const beforeLen = this.rfqs.length;
+    this.rfqs = this.rfqs.filter((r) => r.id !== id && r.rfqNumber !== id);
+    return this.rfqs.length < beforeLen;
   }
 
   // ==========================================
@@ -430,7 +436,7 @@ class StoreService {
       action: `Executed 360° AI Supplier Audit for ${newEval.vendorName}: Score ${newEval.overallScore}% (${newEval.status})`,
     });
 
-    if (pool) {
+    if (poolModule.pool) {
       upsertEvaluationInDB(newEval).catch((e) => console.error('DB evaluation save error:', e.message));
     }
 
@@ -449,7 +455,7 @@ class StoreService {
     const entry = createAuditEntry({ userEmail, action, rfqNumber, ipAddress, previousHash });
     this.auditLogs.unshift(entry);
 
-    if (pool) {
+    if (poolModule.pool) {
       insertAuditLogInDB(entry).catch((e) => console.error('DB audit log save error:', e.message));
     }
 
@@ -496,7 +502,7 @@ class StoreService {
 
   updateSystemConfig(updates) {
     this.systemConfig = { ...this.systemConfig, ...updates };
-    if (pool) {
+    if (poolModule.pool) {
       upsertSystemConfigInDB(this.systemConfig).catch((e) => console.error('DB config save error:', e.message));
     }
     return this.systemConfig;
@@ -544,7 +550,7 @@ class StoreService {
         this.vendors.push(newVendor);
         importedCount++;
 
-        if (pool) {
+        if (poolModule.pool) {
           upsertVendorInDB(newVendor).catch((e) => console.error('DB vendor save error:', e.message));
         }
       }

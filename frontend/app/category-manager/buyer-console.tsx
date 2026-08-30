@@ -482,8 +482,7 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
                         
                         <span className={`badge text-[9px] ${
                           rfq.status === 'Parsing' ? 'badge-amber' : 
-                          rfq.status === 'In Evaluation' ? 'badge-blue' : 
-                          rfq.status === 'PO Generated' ? 'badge-purple' : 'badge-emerald'
+                          rfq.status === 'In Evaluation' ? 'badge-blue' : 'badge-emerald'
                         }`}>
                           {rfq.status}
                         </span>
@@ -535,7 +534,7 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
                               </span>
                             ) : (
                               <span className="block mt-1">
-                                Standard bidding is open. Chasing follow-up efficacy stands at {rfq.aiScore || 88}%.
+                                Standard bidding is open. Chasing follow-up efficacy stands at {rfq.aiScore}%.
                               </span>
                             )}
                           </div>

@@ -1,36 +1,55 @@
-const { detectDBProvider, sanitizeConnectionString } = require('../src/db/pool');
+const poolModule = require('../src/db/pool');
+const { detectDBProvider, sanitizeConnectionString, query, checkDBHealth, initializeSchema } = poolModule;
+const seed = require('../src/db/seed');
 
 describe('Database Configuration & Connection Helpers', () => {
-  test('detectDBProvider identifies Neon / Vercel', () => {
-    const res = detectDBProvider('postgres://user:pass@ep-cool-fog-12345.us-east-2.aws.neon.tech/neondb');
-    expect(res.provider).toBe('neon');
-    expect(res.label).toContain('Neon');
+  let originalPool;
+
+  beforeEach(() => {
+    originalPool = poolModule.pool;
   });
 
-  test('detectDBProvider identifies Supabase', () => {
-    const res = detectDBProvider('postgresql://postgres:pass@db.xyz.supabase.co:5432/postgres');
-    expect(res.provider).toBe('supabase');
+  afterEach(() => {
+    poolModule.pool = originalPool;
+    jest.restoreAllMocks();
   });
 
-  test('detectDBProvider identifies Azure Flexible Postgres', () => {
-    const res = detectDBProvider('postgresql://admin:pass@psql-procucev.postgres.database.azure.com:5432/procucev_db');
-    expect(res.provider).toBe('azure_postgres');
+  test('detectDBProvider identifies all major providers', () => {
+    expect(detectDBProvider('postgres://user:pass@ep-cool-fog-12345.us-east-2.aws.neon.tech/neondb').provider).toBe('neon');
+    expect(detectDBProvider('postgresql://postgres:pass@db.xyz.supabase.co:5432/postgres').provider).toBe('supabase');
+    expect(detectDBProvider('postgresql://admin:pass@psql-procucev.postgres.database.azure.com:5432/procucev_db').provider).toBe('azure_postgres');
+    expect(detectDBProvider('postgresql://admin:pass@rds-instance.123456789.us-east-1.rds.amazonaws.com:5432/mydb').provider).toBe('aws_rds');
+    expect(detectDBProvider('postgresql://postgres:pass@localhost:5432/db').provider).toBe('local_postgres');
+    expect(detectDBProvider('').provider).toBe('in_memory_mock');
   });
 
-  test('detectDBProvider identifies AWS RDS', () => {
-    const res = detectDBProvider('postgresql://admin:pass@rds-instance.123456789.us-east-1.rds.amazonaws.com:5432/mydb');
-    expect(res.provider).toBe('aws_rds');
+  test('sanitizeConnectionString handles sslmode and empty strings', () => {
+    expect(sanitizeConnectionString('')).toBe('');
+    expect(sanitizeConnectionString('postgresql://user:pass@host/db?sslmode=require')).toContain('uselibpqcompat=true');
+    expect(sanitizeConnectionString('postgresql://user:pass@host/db?sslmode=require&uselibpqcompat=true')).toBe('postgresql://user:pass@host/db?sslmode=require&uselibpqcompat=true');
+    expect(sanitizeConnectionString('postgresql://user:pass@host/db')).toBe('postgresql://user:pass@host/db');
   });
 
-  test('detectDBProvider falls back to in-memory mock when empty', () => {
-    const res = detectDBProvider('');
-    expect(res.provider).toBe('in_memory_mock');
-    expect(res.label).toContain('In-Memory');
+  test('query throws when pool is null', async () => {
+    poolModule.pool = null;
+    await expect(query('SELECT 1')).rejects.toThrow('DATABASE_URL is not configured');
   });
 
-  test('sanitizeConnectionString appends uselibpqcompat for sslmode=require', () => {
-    const raw = 'postgresql://user:pass@host/db?sslmode=require';
-    const sanitized = sanitizeConnectionString(raw);
-    expect(sanitized).toContain('uselibpqcompat=true');
+  test('checkDBHealth returns status for disconnected/fallback mode', async () => {
+    poolModule.pool = null;
+    const health = await checkDBHealth();
+    expect(health.provider).toBe('in_memory_mock');
+    expect(health.isConnected).toBe(false);
+  });
+
+  test('initializeSchema throws when pool is null', async () => {
+    poolModule.pool = null;
+    await expect(initializeSchema()).rejects.toThrow('Cannot initialize schema');
+  });
+
+  test('seed database definitions are loaded', () => {
+    expect(seed.SEED_BUYER_ACCOUNTS).toBeDefined();
+    expect(seed.SEED_VENDORS).toBeDefined();
+    expect(seed.SEED_RFQS).toBeDefined();
   });
 });

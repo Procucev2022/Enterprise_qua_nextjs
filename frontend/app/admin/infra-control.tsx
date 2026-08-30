@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '@/lib/store';
 import { RbacModal } from '@/app/components/Modals';
-import { DBHealthStatus } from '@/lib/db';
+import { DBHealthStatus } from '@/lib/types';
 import {
   Cpu,
   Database,
@@ -324,37 +324,37 @@ export default function InfraControl({ onNavigateToAuditLog }: InfraControlProps
           </div>
 
           <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800">
-            <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-gray-500 block">Buyer Accounts</span>
+            <span className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450 block">Buyer Accounts</span>
             <span className="text-base font-black text-slate-900 dark:text-white mt-0.5 block">
-              {dbHealth?.totalRecords.buyerAccounts ?? 6}
+              {dbHealth?.totalRecords?.buyerAccounts ?? 6}
             </span>
           </div>
 
           <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800">
-            <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-gray-500 block">Vendor Master</span>
+            <span className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450 block">Vendor Master</span>
             <span className="text-base font-black text-slate-900 dark:text-white mt-0.5 block">
-              {dbHealth?.totalRecords.vendors ?? 15}
+              {dbHealth?.totalRecords?.vendors ?? 15}
             </span>
           </div>
 
           <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800">
-            <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-gray-500 block">RFQs Persisted</span>
+            <span className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450 block">RFQs Persisted</span>
             <span className="text-base font-black text-slate-900 dark:text-white mt-0.5 block">
-              {dbHealth?.totalRecords.rfqs ?? 12}
+              {dbHealth?.totalRecords?.rfqs ?? 12}
             </span>
           </div>
 
           <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800">
-            <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-gray-500 block">360° Evaluations</span>
+            <span className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450 block">360° Evaluations</span>
             <span className="text-base font-black text-slate-900 dark:text-white mt-0.5 block">
-              {dbHealth?.totalRecords.evaluations ?? 7}
+              {dbHealth?.totalRecords?.evaluations ?? 7}
             </span>
           </div>
 
           <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800">
-            <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-gray-500 block">Audit Signatures</span>
+            <span className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450 block">Audit Signatures</span>
             <span className="text-base font-black text-emerald-600 dark:text-emerald-400 mt-0.5 block">
-              {dbHealth?.totalRecords.auditLogs ?? 24}
+              {dbHealth?.totalRecords?.auditLogs ?? 24}
             </span>
           </div>
         </div>

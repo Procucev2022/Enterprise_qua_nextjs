@@ -303,9 +303,6 @@ export default function HomePage() {
     if (selectedRole === 'category_manager') {
       setActiveScreen('kanban_board');
       showToast('Logged In', 'Successfully signed in as Category Manager.', 'success');
-    } else if (selectedRole === 'vendor') {
-      setActiveScreen('vendor_feed');
-      showToast('Logged In', 'Successfully signed in as Apex Supplies Ltd.', 'success');
     } else if (selectedRole === 'admin') {
       setActiveScreen('infra_control');
       showToast('Logged In', 'Successfully signed in as Infrastructure Admin.', 'success');
@@ -1132,7 +1129,6 @@ export default function HomePage() {
                   setSelectedRFQForMatrix(rfq);
                   setActiveScreen('spend_dashboard');
                 }}
-                onNavigateToEvaluation={() => setActiveScreen('vendor_evaluation_summary')}
               />
             )}
             {activeScreen === 'category_summary' && (

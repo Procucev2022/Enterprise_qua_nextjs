@@ -49,18 +49,8 @@ export default function OpportunityFeed({
   } = useApp();
 
   const [showUpgradeModal, setShowUpgradeModal] = React.useState(false);
-
-  // Cross-match: find catalogue products matching an RFQ by keyword comparison
-  const getCatalogueMatchesForRfq = (opp: VendorOpportunity) => {
-    const rfqText = `${opp.title} ${opp.lineItems?.map(li => li.description).join(' ') || ''}`.toLowerCase();
-    const matchKeywords = ['pump', 'valve', 'pipe', 'fitting', 'sensor', 'flow', 'expansion', 'joint', 'centrifugal', 'gate', 'ball', 'hvac', 'control', 'steel', 'beam', 'motor', 'meter', 'flanged', 'bellows'];
-
-    return vendorCatalogue.filter((prod: any) => {
-      const prodWords = `${prod.name} ${prod.category} ${prod.specs || ''}`.toLowerCase().split(/\W+/);
-      // Check if any product keyword appears in the RFQ text
-      return prodWords.some((word: string) => word.length > 3 && rfqText.includes(word));
-    });
-  };
+  const openUpgradeModal = () => setShowUpgradeModal(true);
+  const closeUpgradeModal = () => setShowUpgradeModal(false);
 
   // 1. Direct Invitations Filter States
   const [selectedBuyerCompanyDirect, setSelectedBuyerCompanyDirect] = React.useState('all');
@@ -69,56 +59,52 @@ export default function OpportunityFeed({
   const [selectedMinorCategoryDirect, setSelectedMinorCategoryDirect] = React.useState('all');
   const [rfqSearchTermDirect, setRfqSearchTermDirect] = React.useState('');
   const [filterCatalogueMatchesDirect, setFilterCatalogueMatchesDirect] = React.useState(false);
+  const toggleCatalogueMatchesDirect = () => setFilterCatalogueMatchesDirect((prev) => !prev);
+  const handleCompanyChangeDirect = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setSelectedBuyerCompanyDirect(e.target.value);
+    setSelectedBuyerNameDirect('all');
+  };
+  const handleBuyerNameDirect = (e: React.ChangeEvent<HTMLSelectElement>) => setSelectedBuyerNameDirect(e.target.value);
+  const handleMajorCategoryDirect = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setSelectedMajorCategoryDirect(e.target.value);
+    setSelectedMinorCategoryDirect('all');
+  };
+  const handleMinorCategoryDirect = (e: React.ChangeEvent<HTMLSelectElement>) => setSelectedMinorCategoryDirect(e.target.value);
+  const handleSearchDirect = (e: React.ChangeEvent<HTMLInputElement>) => setRfqSearchTermDirect(e.target.value);
+
+  const renderBuyerAccountOption = (acc: any) => (
+    <option key={acc.id} value={acc.organizationName}>
+      🏢 {acc.organizationName.split(' ')[0]}
+    </option>
+  );
+
+  const handleDirectReminderBid = () => {
+    onNavigateToBidForm(vendorOpportunities[0]);
+  };
 
   // 2. Open Network Marketplace Filter States (Buyers list removed as they are not applicable here)
   const [selectedMajorCategoryNet, setSelectedMajorCategoryNet] = React.useState('all');
   const [selectedMinorCategoryNet, setSelectedMinorCategoryNet] = React.useState('all');
   const [rfqSearchTermNet, setRfqSearchTermNet] = React.useState('');
   const [filterCatalogueMatchesNet, setFilterCatalogueMatchesNet] = React.useState(false);
-
-  // Dynamic Buyer Organization & Owner Lookups from Database
-  const getParentCompany = (buyerName: string) => {
-    if (!buyerAccounts || buyerAccounts.length === 0) return buyerName;
-    const match = buyerAccounts.find((a) =>
-      a.organizationName.toLowerCase().includes(buyerName.toLowerCase()) ||
-      buyerName.toLowerCase().includes(a.organizationName.toLowerCase()) ||
-      a.contactPerson.toLowerCase().includes(buyerName.toLowerCase())
-    );
-    return match ? match.organizationName : buyerName;
+  const toggleCatalogueMatchesNet = () => setFilterCatalogueMatchesNet((prev) => !prev);
+  const handleMajorCategoryNet = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setSelectedMajorCategoryNet(e.target.value);
+    setSelectedMinorCategoryNet('all');
   };
-
-  const getBuyerName = (buyerName: string) => {
-    if (!buyerAccounts || buyerAccounts.length === 0) return buyerName;
-    const match = buyerAccounts.find((a) =>
-      a.organizationName.toLowerCase().includes(buyerName.toLowerCase()) ||
-      buyerName.toLowerCase().includes(a.organizationName.toLowerCase()) ||
-      a.contactPerson.toLowerCase().includes(buyerName.toLowerCase())
-    );
-    return match ? match.contactPerson : buyerName;
-  };
-
-  const isBuyerRosterActive = (parentCompany: string) => {
-    if (!buyerAccounts || buyerAccounts.length === 0) return true;
-    const match = buyerAccounts.find((a) =>
-      a.organizationName.toLowerCase().includes(parentCompany.toLowerCase()) ||
-      parentCompany.toLowerCase().includes(a.organizationName.toLowerCase())
-    );
-    return match ? (match.totalRFQsCreated ?? 0) > 0 || match.status === 'ACTIVE_VERIFIED' : true;
-  };
+  const handleMinorCategoryNet = (e: React.ChangeEvent<HTMLSelectElement>) => setSelectedMinorCategoryNet(e.target.value);
+  const handleSearchNet = (e: React.ChangeEvent<HTMLInputElement>) => setRfqSearchTermNet(e.target.value);
 
   // Helper to map RFQs to Major and Minor Sourcing categories dynamically
   const getOpportunityCategories = (opp: VendorOpportunity) => {
     const title = opp.title.toLowerCase();
-    if (title.includes('pump') || title.includes('valve') || title.includes('fluid')) {
+    if (title.includes('pump') || title.includes('valve')) {
       return { major: 'Mechanical & Fluid Equipment', minor: 'Pumps & Valves' };
     }
-    if (title.includes('hvac') || title.includes('control') || title.includes('building')) {
+    if (title.includes('hvac') || title.includes('control')) {
       return { major: 'Building & Infrastructure', minor: 'Building Automation & HVAC' };
     }
-    if (title.includes('steel') || title.includes('beam') || title.includes('structure')) {
-      return { major: 'Mechanical & Fluid Equipment', minor: 'Structural Steel & Beams' };
-    }
-    return { major: 'Mechanical & Fluid Equipment', minor: 'Pumps & Valves' }; // Default
+    return { major: 'Mechanical & Fluid Equipment', minor: 'Structural Steel & Beams' };
   };
 
   // Rajesh Nair (L&T) uploaded Apex Supplies, so their RFQs are free to bid on.
@@ -127,102 +113,59 @@ export default function OpportunityFeed({
     return ['RFQ-2026-00421', 'RFQ-2026-00423', 'RFQ-2026-00425', 'RFQ-2026-00427'].includes(rfqNumber);
   };
 
-  const handleExpressInterest = (opp: VendorOpportunity) => {
-    if (!isOwnBuyerRfq(opp.rfqNumber) && vendorSubscription !== 'premium_network') {
-      setShowUpgradeModal(true);
-      return;
-    }
-    addAuditLog(`Apex Supplies Ltd. expressed interest in open marketplace opportunity ${opp.rfqNumber}`, opp.rfqNumber, 'vendor@apex.com');
-    showToast('Interest Expressed', `Express of interest submitted for ${opp.rfqNumber}. Buyer notified.`, 'success');
-  };
-
   const handleDownloadRfq = (opp: VendorOpportunity) => {
     const isDirect = isOwnBuyerRfq(opp.rfqNumber);
 
-    // 1. Premium Model (Client Uploaded)
-    if (vendorSubscription === 'premium') {
-      if (!isDirect) {
-        setShowUpgradeModal(true);
-        showToast('Upgrade Required', 'Marketplace RFQs outside client roster require Connect (50 RFQs/3mo) or Select (100 RFQs/3mo) plan.', 'info');
-        return;
-      }
-      addAuditLog(`Apex Supplies Ltd. downloaded technical BOQ specs for ${opp.rfqNumber} via email (Direct Buyer RFQ)`, opp.rfqNumber, 'vendor@apex.com');
-      showToast('Document Emailed', `📨 Technical specifications & BOQ Excel for ${opp.rfqNumber} sent to vendor@apex.com. (Unlimited Direct Buyer Access)`, 'success');
+    if (vendorSubscription === 'premium' && !isDirect) {
+      setShowUpgradeModal(true);
+      showToast('Upgrade Required', 'Marketplace RFQs outside client roster require Connect or Select plan.', 'info');
       return;
     }
 
-    // 2. Connect Model (50 RFQs / 3 Months)
-    if (vendorSubscription === 'connect') {
-      if (vendorRfqDownloadsUsed >= 50 && !isDirect) {
-        setShowUpgradeModal(true);
-        showToast('Quarterly Quota Reached', 'You have reached your limit of 50 RFQ downloads for this 3-month period. Upgrade to Select Model for 100 downloads.', 'warning');
-        return;
-      }
-
-      if (!isDirect) {
-        const nextUsed = vendorRfqDownloadsUsed + 1;
-        setVendorRfqDownloadsUsed(nextUsed);
-        addAuditLog(`Apex Supplies Ltd. downloaded technical BOQ specs for ${opp.rfqNumber} via email (${nextUsed}/50 used)`, opp.rfqNumber, 'vendor@apex.com');
-        showToast('Document Emailed', `📨 Specs & BOQ for ${opp.rfqNumber} sent to vendor@apex.com. Quota: ${nextUsed}/50 RFQs downloaded in 3 months.`, 'success');
-      } else {
-        addAuditLog(`Apex Supplies Ltd. downloaded direct buyer RFQ specs for ${opp.rfqNumber}`, opp.rfqNumber, 'vendor@apex.com');
-        showToast('Document Emailed', `📨 Specs & BOQ for ${opp.rfqNumber} sent to vendor@apex.com.`, 'success');
-      }
+    if (vendorSubscription === 'connect' && vendorRfqDownloadsUsed >= 50 && !isDirect) {
+      setShowUpgradeModal(true);
+      showToast('Quarterly Quota Reached', '50 RFQ download limit reached.', 'warning');
       return;
     }
 
-    // 3. Select Model (100 RFQs / 3 Months + Catalogue)
-    if (vendorSubscription === 'select') {
-      if (vendorRfqDownloadsUsed >= 100 && !isDirect) {
-        setShowUpgradeModal(true);
-        showToast('Quarterly Quota Reached', 'You have reached your limit of 100 RFQ downloads for this 3-month period.', 'warning');
-        return;
-      }
-
-      if (!isDirect) {
-        const nextUsed = vendorRfqDownloadsUsed + 1;
-        setVendorRfqDownloadsUsed(nextUsed);
-        addAuditLog(`Apex Supplies Ltd. downloaded technical BOQ specs for ${opp.rfqNumber} via email (${nextUsed}/100 used)`, opp.rfqNumber, 'vendor@apex.com');
-        showToast('Document Emailed', `📨 Specs & BOQ for ${opp.rfqNumber} sent to vendor@apex.com. Quota: ${nextUsed}/100 RFQs downloaded in 3 months.`, 'success');
-      } else {
-        addAuditLog(`Apex Supplies Ltd. downloaded direct buyer RFQ specs for ${opp.rfqNumber}`, opp.rfqNumber, 'vendor@apex.com');
-        showToast('Document Emailed', `📨 Specs & BOQ for ${opp.rfqNumber} sent to vendor@apex.com.`, 'success');
-      }
+    if (vendorSubscription === 'select' && vendorRfqDownloadsUsed >= 100 && !isDirect) {
+      setShowUpgradeModal(true);
+      showToast('Quarterly Quota Reached', '100 RFQ download limit reached.', 'warning');
       return;
     }
+
+    showToast('Spreadsheet Sent to Registered Email', `Downloaded BOQ Excel spreadsheet for ${opp.rfqNumber}.`, 'success');
+    addAuditLog(`Downloaded RFQ specifications for ${opp.rfqNumber}`, 'VN-APEX-4920', 'vendor@apex.com');
   };
 
-  // Reorder / Sort RFQs:
-  // RFQs pertaining to the vendor's primary category (Pumps & Valves / Mechanical Fluid Equipment) appear FIRST!
-  const sortOpportunitiesByCategoryMatch = (list: VendorOpportunity[]) => {
-    return [...list].sort((a, b) => {
-      const catA = getOpportunityCategories(a);
-      const catB = getOpportunityCategories(b);
-      
-      const matchA = catA.minor === 'Pumps & Valves' || catA.major === 'Mechanical & Fluid Equipment';
-      const matchB = catB.minor === 'Pumps & Valves' || catB.major === 'Mechanical & Fluid Equipment';
-      
-      if (matchA && !matchB) return -1;
-      if (!matchA && matchB) return 1;
-      return 0;
-    });
+  const handleDownloadClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const rfqNum = e.currentTarget.getAttribute('data-rfq');
+    let opp = vendorOpportunities[0];
+    for (let i = 0; i < vendorOpportunities.length; i++) {
+      if (vendorOpportunities[i].rfqNumber === rfqNum) {
+        opp = vendorOpportunities[i];
+        break;
+      }
+    }
+    handleDownloadRfq(opp);
+  };
+
+  const handleSubscriptionFeeClick = () => {
+    if (onNavigateToSubscription) {
+      onNavigateToSubscription();
+    } else {
+      openUpgradeModal();
+    }
   };
 
   // FILTER DIRECT INVITATIONS
   const eligibleDirectOpportunities = vendorOpportunities.filter((opp) => {
     if (opp.type !== 'direct_invitation') return false;
-    const parentCompany = getParentCompany(opp.buyer);
-    const buyerName = getBuyerName(opp.buyer);
     const cats = getOpportunityCategories(opp);
-    
-    // Check roster upload status first
-    if (!isBuyerRosterActive(parentCompany)) {
-      return false; 
-    }
 
     // Filter by buyer context (Direct)
-    const matchCompany = selectedBuyerCompanyDirect === 'all' || parentCompany === selectedBuyerCompanyDirect;
-    const matchBuyer = selectedBuyerNameDirect === 'all' || buyerName === selectedBuyerNameDirect;
+    const matchCompany = selectedBuyerCompanyDirect === 'all' || opp.buyer === selectedBuyerCompanyDirect;
+    const matchBuyer = selectedBuyerNameDirect === 'all' || opp.buyer === selectedBuyerNameDirect;
     if (!matchCompany || !matchBuyer) return false;
 
     // Filter by categories (Direct)
@@ -237,12 +180,20 @@ export default function OpportunityFeed({
       const inRfq = opp.rfqNumber.toLowerCase().includes(term);
       const inLoc = opp.deliveryLocation.toLowerCase().includes(term);
       const inCat = cats.major.toLowerCase().includes(term) || cats.minor.toLowerCase().includes(term);
-      const inItems = opp.lineItems?.some(li => li.description.toLowerCase().includes(term)) || false;
+      let inItems = false;
+      if (opp.lineItems) {
+        for (let i = 0; i < opp.lineItems.length; i++) {
+          if (opp.lineItems[i].description.toLowerCase().includes(term)) {
+            inItems = true;
+            break;
+          }
+        }
+      }
       if (!inTitle && !inRfq && !inLoc && !inCat && !inItems) return false;
     }
 
     // Filter by Catalogue Product Matches if summary button clicked
-    if (filterCatalogueMatchesDirect && getCatalogueMatchesForRfq(opp).length === 0) {
+    if (filterCatalogueMatchesDirect && (vendorCatalogue || []).length === 0) {
       return false;
     }
 
@@ -252,18 +203,12 @@ export default function OpportunityFeed({
   // FILTER NETWORK OPPORTUNITIES (OPEN MARKETPLACE)
   const eligibleNetworkOpportunities = vendorOpportunities.filter((opp) => {
     if (opp.type !== 'network_marketplace') return false;
-    const parentCompany = getParentCompany(opp.buyer);
     const cats = getOpportunityCategories(opp);
-    
-    // Check roster upload status first
-    if (!isBuyerRosterActive(parentCompany)) {
-      return false; 
-    }
 
     // Filter by categories (Net)
     const matchMajor = selectedMajorCategoryNet === 'all' || cats.major === selectedMajorCategoryNet;
     const matchMinor = selectedMinorCategoryNet === 'all' || cats.minor === selectedMinorCategoryNet;
-    if (!matchMajor || !matchMinor) return false;
+    if (!matchMinor || !matchMajor) return false;
 
     // Search query matching (Net)
     if (rfqSearchTermNet.trim()) {
@@ -272,12 +217,20 @@ export default function OpportunityFeed({
       const inRfq = opp.rfqNumber.toLowerCase().includes(term);
       const inLoc = opp.deliveryLocation.toLowerCase().includes(term);
       const inCat = cats.major.toLowerCase().includes(term) || cats.minor.toLowerCase().includes(term);
-      const inItems = opp.lineItems?.some(li => li.description.toLowerCase().includes(term)) || false;
+      let inItems = false;
+      if (opp.lineItems) {
+        for (let i = 0; i < opp.lineItems.length; i++) {
+          if (opp.lineItems[i].description.toLowerCase().includes(term)) {
+            inItems = true;
+            break;
+          }
+        }
+      }
       if (!inTitle && !inRfq && !inLoc && !inCat && !inItems) return false;
     }
 
     // Filter by Catalogue Product Matches if summary button clicked
-    if (filterCatalogueMatchesNet && getCatalogueMatchesForRfq(opp).length === 0) {
+    if (filterCatalogueMatchesNet && (vendorCatalogue || []).length === 0) {
       return false;
     }
 
@@ -285,16 +238,23 @@ export default function OpportunityFeed({
   });
 
   // Total summary counts of RFQs matching vendor's item catalogue
-  const directCatalogueMatchesCount = vendorOpportunities.filter(
-    (opp) => opp.type === 'direct_invitation' && getCatalogueMatchesForRfq(opp).length > 0
-  ).length;
+  const directCatalogueMatchesCount = (vendorCatalogue || []).length > 0 ? eligibleDirectOpportunities.length : 0;
+  const netCatalogueMatchesCount = (vendorCatalogue || []).length > 0 ? eligibleNetworkOpportunities.length : 0;
 
-  const netCatalogueMatchesCount = vendorOpportunities.filter(
-    (opp) => opp.type === 'network_marketplace' && getCatalogueMatchesForRfq(opp).length > 0
-  ).length;
+  const directInvites = eligibleDirectOpportunities;
+  const networkOpps = eligibleNetworkOpportunities;
 
-  const directInvites = sortOpportunitiesByCategoryMatch(eligibleDirectOpportunities);
-  const networkOpps = sortOpportunitiesByCategoryMatch(eligibleNetworkOpportunities);
+  const handleUpgradePlan = (plan: any) => {
+    setVendorSubscription(plan);
+    setShowUpgradeModal(false);
+    showToast(`${plan.toUpperCase()} Plan Activated!`, `Updated vendor subscription to ${plan}.`, 'success');
+    addAuditLog(`Apex Supplies upgraded to ${plan} plan`, 'VN-APEX-4920', 'vendor@apex.com');
+  };
+
+  const handleUpgradeClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const plan = e.currentTarget.getAttribute('data-plan') || 'premium';
+    handleUpgradePlan(plan);
+  };
 
   return (
     <div className="space-y-6 animate-fade-in pb-10">
@@ -364,15 +324,28 @@ export default function OpportunityFeed({
               <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-500/40 flex items-center gap-1">
                 <Star size={12} className="fill-amber-400 text-amber-400" /> 4.8 / 5.0 Rating
               </span>
-              <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold flex items-center gap-1 border ${
-                vendorSubscription === 'select'
-                  ? 'bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-500/40'
-                  : vendorSubscription === 'connect'
-                  ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-500/40'
-                  : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 border-slate-200'
-              }`}>
+              <button
+                type="button"
+                onClick={onNavigateToSubscription}
+                className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold flex items-center gap-1 border transition-all hover:scale-105 ${
+                  vendorSubscription === 'select'
+                    ? 'bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-500/40'
+                    : vendorSubscription === 'connect'
+                    ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-500/40'
+                    : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 border-slate-200'
+                }`}
+              >
                 {vendorSubscription === 'select' ? '👑 Select Partner' : vendorSubscription === 'connect' ? '🔗 Connect Partner' : '📋 Free Tier'}
-              </span>
+              </button>
+              {onNavigateToEvaluation && (
+                <button
+                  type="button"
+                  onClick={onNavigateToEvaluation}
+                  className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/40 hover:bg-indigo-100"
+                >
+                  <Sparkles size={11} /> 360° Audit
+                </button>
+              )}
             </div>
             <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
               Vendor ID: <span className="mono text-indigo-600 dark:text-indigo-300 font-semibold">VN-APEX-4920</span> • Primary Category: Heavy Industrial Fluid Dynamics & Valves • Empanelled by <strong>Larsen & Toubro Ltd.</strong>
@@ -402,10 +375,7 @@ export default function OpportunityFeed({
           </div>
         </div>
         <button
-          onClick={() => {
-            const opp = vendorOpportunities.find((o) => o.rfqNumber === 'RFQ-2026-00421') || vendorOpportunities[0];
-            onNavigateToBidForm(opp);
-          }}
+          onClick={handleDirectReminderBid}
           className="btn btn-amber btn-sm font-bold shrink-0"
         >
           Submit Quote Now
@@ -439,7 +409,7 @@ export default function OpportunityFeed({
               {/* Bidirectional Cross-Highlight Summary Filter Button */}
               <button
                 type="button"
-                onClick={() => setFilterCatalogueMatchesDirect(!filterCatalogueMatchesDirect)}
+                onClick={toggleCatalogueMatchesDirect}
                 className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all border shadow-sm cursor-pointer ${
                   filterCatalogueMatchesDirect
                     ? 'bg-violet-600 text-white border-violet-500 ring-2 ring-violet-400/30'
@@ -463,18 +433,11 @@ export default function OpportunityFeed({
                 <span className="text-[9px] uppercase font-bold text-slate-400">Buyer Company</span>
                 <select
                   value={selectedBuyerCompanyDirect}
-                  onChange={(e) => {
-                    setSelectedBuyerCompanyDirect(e.target.value);
-                    setSelectedBuyerNameDirect('all'); 
-                  }}
+                  onChange={handleCompanyChangeDirect}
                   className="select py-1 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-gray-200"
                 >
                   <option value="all">🌐 All Eligible Companies</option>
-                  {(buyerAccounts || []).map((acc) => (
-                    <option key={acc.id} value={acc.organizationName}>
-                      🏢 {acc.organizationName.split(' ')[0]}
-                    </option>
-                  ))}
+                  {(buyerAccounts || []).map(renderBuyerAccountOption)}
                 </select>
               </div>
 
@@ -483,7 +446,7 @@ export default function OpportunityFeed({
                 <span className="text-[9px] uppercase font-bold text-slate-400">Buyer Name</span>
                 <select
                   value={selectedBuyerNameDirect}
-                  onChange={(e) => setSelectedBuyerNameDirect(e.target.value)}
+                  onChange={handleBuyerNameDirect}
                   className="select py-1 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-gray-200"
                   disabled={selectedBuyerCompanyDirect === 'all'}
                 >
@@ -507,10 +470,7 @@ export default function OpportunityFeed({
                 <span className="text-[9px] uppercase font-bold text-slate-400">Major Category</span>
                 <select
                   value={selectedMajorCategoryDirect}
-                  onChange={(e) => {
-                    setSelectedMajorCategoryDirect(e.target.value);
-                    setSelectedMinorCategoryDirect('all'); 
-                  }}
+                  onChange={handleMajorCategoryDirect}
                   className="select py-1 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-gray-200"
                 >
                   <option value="all">🌐 All Major Categories</option>
@@ -524,7 +484,7 @@ export default function OpportunityFeed({
                 <span className="text-[9px] uppercase font-bold text-slate-400">Minor Category</span>
                 <select
                   value={selectedMinorCategoryDirect}
-                  onChange={(e) => setSelectedMinorCategoryDirect(e.target.value)}
+                  onChange={handleMinorCategoryDirect}
                   className="select py-1 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-gray-200"
                   disabled={selectedMajorCategoryDirect === 'all'}
                 >
@@ -556,8 +516,8 @@ export default function OpportunityFeed({
                     type="text"
                     placeholder="Specs, location, keywords..."
                     value={rfqSearchTermDirect}
-                    onChange={(e) => setRfqSearchTermDirect(e.target.value)}
-                    className="input pl-7 py-1 text-[11px] w-full bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-800 dark:text-white"
+                    onChange={handleSearchDirect}
+                    className="input pl-7 py-1 text-[11px] w-full bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-white"
                   />
                 </div>
               </div>
@@ -574,7 +534,7 @@ export default function OpportunityFeed({
                 const isLocked = !isOwnBuyerRfq(opp.rfqNumber) && vendorSubscription !== 'premium_network';
                 const categories = getOpportunityCategories(opp);
                 const isCategoryMatch = categories.minor === 'Pumps & Valves' || categories.major === 'Mechanical & Fluid Equipment';
-                const catalogueMatches = getCatalogueMatchesForRfq(opp);
+                const catalogueMatches = vendorCatalogue || [];
                 const hasCatalogueMatch = catalogueMatches.length > 0;
 
                 return (
@@ -600,7 +560,7 @@ export default function OpportunityFeed({
                           {hasCatalogueMatch && (
                             <span
                               className="px-1.5 py-0.25 rounded text-[8px] font-black bg-violet-500/20 text-violet-700 dark:text-violet-300 border border-violet-300 dark:border-violet-500/40 flex items-center gap-0.5 shrink-0"
-                              title={`Matching products: ${catalogueMatches.map((p: any) => p.sku).join(', ')}`}
+                              title="Matching products in catalogue"
                             >
                               <Package size={9} /> {catalogueMatches.length} Catalogue Match{catalogueMatches.length > 1 ? 'es' : ''}
                             </span>
@@ -656,7 +616,8 @@ export default function OpportunityFeed({
                       <div className="flex gap-2">
                         {/* Download RFQ on Email */}
                         <button
-                          onClick={() => handleDownloadRfq(opp)}
+                          data-rfq={opp.rfqNumber}
+                          onClick={handleDownloadClick}
                           className="btn btn-secondary btn-xs p-1.5 flex items-center justify-center gap-1 border border-slate-200 text-slate-700 dark:text-gray-355 hover:border-slate-300"
                           title="Download RFQ Technical BOQ Spreadsheet on Email"
                         >
@@ -666,7 +627,7 @@ export default function OpportunityFeed({
 
                         {isLocked && (
                           <button
-                            onClick={() => setShowUpgradeModal(true)}
+                            onClick={openUpgradeModal}
                             className="btn btn-amber btn-xs font-bold flex items-center gap-1 py-1.5 px-3 text-[11px]"
                           >
                             <span>🔒 Upgrade</span>
@@ -796,7 +757,7 @@ export default function OpportunityFeed({
               {!isVendorEvaluationFeeWaived && (
                 <button
                   type="button"
-                  onClick={onNavigateToSubscription || (() => setShowUpgradeModal(true))}
+                  onClick={handleSubscriptionFeeClick}
                   className="btn btn-secondary btn-sm text-xs font-bold"
                 >
                   View Connect / Select ($0 Fee)
@@ -840,7 +801,7 @@ export default function OpportunityFeed({
               {/* Bidirectional Cross-Highlight Summary Filter Button */}
               <button
                 type="button"
-                onClick={() => setFilterCatalogueMatchesNet(!filterCatalogueMatchesNet)}
+                onClick={toggleCatalogueMatchesNet}
                 className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all border shadow-sm cursor-pointer ${
                   filterCatalogueMatchesNet
                     ? 'bg-violet-600 text-white border-violet-500 ring-2 ring-violet-400/30'
@@ -864,10 +825,7 @@ export default function OpportunityFeed({
                 <span className="text-[9px] uppercase font-bold text-slate-400">Major Category</span>
                 <select
                   value={selectedMajorCategoryNet}
-                  onChange={(e) => {
-                    setSelectedMajorCategoryNet(e.target.value);
-                    setSelectedMinorCategoryNet('all'); 
-                  }}
+                  onChange={handleMajorCategoryNet}
                   className="select py-1 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-gray-200"
                 >
                   <option value="all">🌐 All Major Categories</option>
@@ -881,7 +839,7 @@ export default function OpportunityFeed({
                 <span className="text-[9px] uppercase font-bold text-slate-400">Minor Category</span>
                 <select
                   value={selectedMinorCategoryNet}
-                  onChange={(e) => setSelectedMinorCategoryNet(e.target.value)}
+                  onChange={handleMinorCategoryNet}
                   className="select py-1 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-gray-200"
                   disabled={selectedMajorCategoryNet === 'all'}
                 >
@@ -913,8 +871,8 @@ export default function OpportunityFeed({
                     type="text"
                     placeholder="Specs, location, keywords..."
                     value={rfqSearchTermNet}
-                    onChange={(e) => setRfqSearchTermNet(e.target.value)}
-                    className="input pl-7 py-1 text-[11px] w-full bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-800 dark:text-white"
+                    onChange={handleSearchNet}
+                    className="input pl-7 py-1 text-[11px] w-full bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-white"
                   />
                 </div>
               </div>
@@ -931,7 +889,7 @@ export default function OpportunityFeed({
                 const isLocked = !isOwnBuyerRfq(opp.rfqNumber) && vendorSubscription === 'premium';
                 const categories = getOpportunityCategories(opp);
                 const isCategoryMatch = categories.minor === 'Pumps & Valves' || categories.major === 'Mechanical & Fluid Equipment';
-                const catalogueMatches = getCatalogueMatchesForRfq(opp);
+                const catalogueMatches = vendorCatalogue || [];
                 const hasCatalogueMatch = catalogueMatches.length > 0;
 
                 return (
@@ -956,7 +914,7 @@ export default function OpportunityFeed({
                         {hasCatalogueMatch && (
                           <span
                             className="px-1.5 py-0.25 rounded text-[8px] font-black bg-violet-500/20 text-violet-700 dark:text-violet-300 border border-violet-300 dark:border-violet-500/40 flex items-center gap-0.5 shrink-0"
-                            title={`Matching products: ${catalogueMatches.map((p: any) => p.sku).join(', ')}`}
+                            title="Matching products in catalogue"
                           >
                             <Package size={9} /> {catalogueMatches.length} Catalogue Match{catalogueMatches.length > 1 ? 'es' : ''}
                           </span>
@@ -993,7 +951,8 @@ export default function OpportunityFeed({
                       <div className="flex gap-2">
                         {/* Download RFQ on Email */}
                         <button
-                          onClick={() => handleDownloadRfq(opp)}
+                          data-rfq={opp.rfqNumber}
+                          onClick={handleDownloadClick}
                           className="btn btn-secondary btn-xs p-1.5 flex items-center justify-center gap-1 border border-slate-200 text-slate-700 dark:text-gray-355 hover:border-slate-300"
                           title="Download RFQ Technical BOQ Spreadsheet on Email"
                         >
@@ -1003,7 +962,7 @@ export default function OpportunityFeed({
 
                         {isLocked && (
                           <button
-                            onClick={() => setShowUpgradeModal(true)}
+                            onClick={openUpgradeModal}
                             className="btn btn-amber btn-xs font-bold flex items-center gap-1 py-1.5 px-3 text-[11px]"
                           >
                             <span>🔒 Upgrade</span>
@@ -1034,7 +993,7 @@ export default function OpportunityFeed({
                 </p>
               </div>
               <button
-                onClick={() => setShowUpgradeModal(false)}
+                onClick={closeUpgradeModal}
                 className="text-slate-450 hover:text-slate-600 dark:hover:text-white font-extrabold text-sm border-none bg-transparent cursor-pointer"
               >
                 ✕
@@ -1060,11 +1019,8 @@ export default function OpportunityFeed({
                   <span className="text-[10px] font-bold text-emerald-600 bg-emerald-100 dark:bg-emerald-950 px-2 py-0.5 rounded">Active</span>
                 ) : (
                   <button
-                    onClick={() => {
-                      setVendorSubscription('premium');
-                      setShowUpgradeModal(false);
-                      showToast('Premium Model Selected', 'Client Uploaded Vendor Premium Plan active.', 'info');
-                    }}
+                    data-plan="premium"
+                    onClick={handleUpgradeClick}
                     className="btn btn-secondary text-[10px] font-bold py-1 px-2.5"
                   >
                     Select
@@ -1086,12 +1042,8 @@ export default function OpportunityFeed({
                   <span className="text-[10px] font-bold text-indigo-600 bg-indigo-100 dark:bg-indigo-950 px-2 py-0.5 rounded">Active</span>
                 ) : (
                   <button
-                    onClick={() => {
-                      setVendorSubscription('connect');
-                      setShowUpgradeModal(false);
-                      showToast('Connect Plan Activated!', 'Download up to 50 RFQs in 3 months.', 'success');
-                      addAuditLog('Apex Supplies upgraded to Connect Model Plan', 'VN-APEX-4920', 'vendor@apex.com');
-                    }}
+                    data-plan="connect"
+                    onClick={handleUpgradeClick}
                     className="btn btn-primary text-[10px] font-bold py-1 px-2.5 bg-indigo-600 hover:bg-indigo-700"
                   >
                     Upgrade
@@ -1113,12 +1065,8 @@ export default function OpportunityFeed({
                   <span className="text-[10px] font-bold text-purple-600 bg-purple-100 dark:bg-purple-950 px-2 py-0.5 rounded">Active</span>
                 ) : (
                   <button
-                    onClick={() => {
-                      setVendorSubscription('select');
-                      setShowUpgradeModal(false);
-                      showToast('Select Plan Activated!', 'Item Catalogue created & 100 RFQs/3mo unlocked.', 'success');
-                      addAuditLog('Apex Supplies upgraded to Select Model Plan', 'VN-APEX-4920', 'vendor@apex.com');
-                    }}
+                    data-plan="select"
+                    onClick={handleUpgradeClick}
                     className="btn btn-primary text-[10px] font-bold py-1 px-2.5 bg-purple-600 hover:bg-purple-700"
                   >
                     Upgrade
@@ -1129,7 +1077,7 @@ export default function OpportunityFeed({
 
             <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-gray-800">
               <button
-                onClick={() => setShowUpgradeModal(false)}
+                onClick={closeUpgradeModal}
                 className="btn btn-secondary btn-sm"
               >
                 Close

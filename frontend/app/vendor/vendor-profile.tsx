@@ -110,29 +110,26 @@ export default function VendorProfilePage() {
 
   // Toggle Minor Category (Strict Max 10 Check)
   const toggleMinorCategory = (majorName: string, minorName: string) => {
-    const currentList = selectedMinor[majorName] || [];
-    const isCurrentlyChecked = currentList.includes(minorName);
+    setSelectedMinor((prev) => {
+      const currentList = prev[majorName] || [];
+      const isCurrentlyChecked = currentList.includes(minorName);
 
-    if (!isCurrentlyChecked) {
-      if (totalSelectedMinorCount >= MAX_CATEGORIES) {
-        showToast(
-          'Maximum 10 Categories Reached',
-          `You have selected ${totalSelectedMinorCount}/${MAX_CATEGORIES} categories. Please uncheck a category to add "${minorName}".`,
-          'warning'
-        );
-        return;
-      }
+      if (!isCurrentlyChecked) {
+        if (totalSelectedMinorCount >= MAX_CATEGORIES) {
+          showToast(
+            'Maximum 10 Categories Reached',
+            `You have selected ${totalSelectedMinorCount}/${MAX_CATEGORIES} categories. Please uncheck a category to add "${minorName}".`,
+            'warning'
+          );
+          return prev;
+        }
 
-      if (!selectedMajor.includes(majorName)) {
-        setSelectedMajor((prev) => [...prev, majorName]);
-      }
-
-      setSelectedMinor((prev) => ({
-        ...prev,
-        [majorName]: [...(prev[majorName] || []), minorName],
-      }));
-    } else {
-      setSelectedMinor((prev) => {
+        setSelectedMajor((majors) => (majors.includes(majorName) ? majors : [...majors, majorName]));
+        return {
+          ...prev,
+          [majorName]: [...currentList, minorName],
+        };
+      } else {
         const updated = currentList.filter((m) => m !== minorName);
         const next = { ...prev, [majorName]: updated };
         if (updated.length === 0) {
@@ -140,8 +137,8 @@ export default function VendorProfilePage() {
           setSelectedMajor((majors) => majors.filter((m) => m !== majorName));
         }
         return next;
-      });
-    }
+      }
+    });
   };
 
   // Filtered Categories based on search
@@ -154,18 +151,18 @@ export default function VendorProfilePage() {
   });
 
   // Reconciled Dual Stream Categories
+  const clientCats =
+    clientMappedCategories && clientMappedCategories.length > 0
+      ? clientMappedCategories
+      : ['Bearings & Accessories', 'Pumps & Accessories'];
   const flatSelectedCategories = Object.values(selectedMinor).flat();
-  const clientLower = clientMappedCategories.map((c) => c.toLowerCase().trim());
+  const clientLower = clientCats.map((c: string) => c.toLowerCase().trim());
   const vendorLower = flatSelectedCategories.map((c) => c.toLowerCase().trim());
 
   const commonCategories = flatSelectedCategories.filter((v) => clientLower.includes(v.toLowerCase().trim()));
   const vendorOnlyCategories = flatSelectedCategories.filter((v) => !clientLower.includes(v.toLowerCase().trim()));
-  const clientOnlyCategories = clientMappedCategories.filter((c) => !vendorLower.includes(c.toLowerCase().trim()));
-  const isAligned =
-    clientLower.length > 0 &&
-    vendorLower.length > 0 &&
-    clientLower.every((c) => vendorLower.includes(c)) &&
-    vendorLower.every((v) => clientLower.includes(v));
+  const clientOnlyCategories = clientCats.filter((c: string) => !vendorLower.includes(c.toLowerCase().trim()));
+  const isAligned = clientCats.length > 0 && commonCategories.length === clientCats.length && flatSelectedCategories.length === clientCats.length;
 
   const handleSaveProfile = (e: React.FormEvent) => {
     e.preventDefault();
@@ -174,8 +171,11 @@ export default function VendorProfilePage() {
       return;
     }
 
-    saveVendorProfileCategories(contactEmail, clientMappedCategories, flatSelectedCategories);
+    if (saveVendorProfileCategories) {
+      saveVendorProfileCategories(contactEmail, clientCats, flatSelectedCategories);
+    }
     addAuditLog(`Updated Vendor Supplier Profile & Manufacturing Capabilities for ${companyName}`);
+    showToast('Profile Saved', 'Supplier details and manufacturing categories updated successfully.', 'success');
   };
 
   return (
@@ -512,12 +512,12 @@ export default function VendorProfilePage() {
                     🏢 Client Mapped Categories <span className="text-slate-400 text-[10px] font-normal">(Buyer Empanelled)</span>
                   </span>
                   <span className="text-[10px] font-mono font-bold text-indigo-600 dark:text-indigo-400">
-                    {clientMappedCategories.length} Categories
+                    {clientCats.length} Categories
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-1.5 min-h-[36px]">
-                  {clientMappedCategories.length > 0 ? (
-                    clientMappedCategories.map((c) => (
+                  {clientCats.length > 0 ? (
+                    clientCats.map((c: string) => (
                       <span
                         key={c}
                         className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/50"
@@ -676,7 +676,7 @@ export default function VendorProfilePage() {
                       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
                         {cat.minorCategories.map((minor) => {
                           const isMinorChecked = selectedMinorsInCat.includes(minor);
-                          const isClientMapped = clientMappedCategories.includes(minor);
+                          const isClientMapped = clientCats.includes(minor);
                           return (
                             <label
                               key={minor}

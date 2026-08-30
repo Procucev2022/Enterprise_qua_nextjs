@@ -1,5 +1,6 @@
 const request = require('supertest');
-const app = require('../src/app');
+const { app, bootstrapServer } = require('../src/server');
+const pool = require('../src/db/pool');
 
 describe('Server & Health Endpoints', () => {
   test('GET /health should return 200 and system health metadata', async () => {
@@ -22,5 +23,19 @@ describe('Server & Health Endpoints', () => {
     const res = await request(app).get('/unknown-route');
     expect(res.statusCode).toBe(404);
     expect(res.body.success).toBe(false);
+  });
+
+  test('bootstrapServer starts server instance', async () => {
+    jest.spyOn(pool, 'checkDBHealth').mockResolvedValueOnce({ isConnected: true });
+    const server = await bootstrapServer(0);
+    expect(server).toBeDefined();
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  test('bootstrapServer handles db health error fallback', async () => {
+    jest.spyOn(pool, 'checkDBHealth').mockRejectedValueOnce(new Error('Connection Failed'));
+    const server = await bootstrapServer(0);
+    expect(server).toBeDefined();
+    await new Promise((resolve) => server.close(resolve));
   });
 });

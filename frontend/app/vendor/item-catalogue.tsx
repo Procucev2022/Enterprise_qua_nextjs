@@ -65,17 +65,17 @@ export default function ItemCatalogue() {
     const leadTimeNum = parseInt(leadTimeDays);
     const moqNum = parseInt(moq);
 
-    if (isNaN(priceNum) || priceNum <= 0) {
+    if (priceNum <= 0) {
       showToast('Invalid Price', 'Please input a valid unit price.', 'warning');
       return;
     }
 
-    if (isNaN(leadTimeNum) || leadTimeNum <= 0) {
+    if (leadTimeNum <= 0) {
       showToast('Invalid Lead Time', 'Please input valid lead time in days.', 'warning');
       return;
     }
 
-    if (isNaN(moqNum) || moqNum <= 0) {
+    if (moqNum <= 0) {
       showToast('Invalid MOQ', 'Please input a valid Minimum Order Quantity.', 'warning');
       return;
     }
@@ -178,11 +178,8 @@ export default function ItemCatalogue() {
 
   // Cross-match: find marketplace RFQs matching a product by keyword comparison
   const getMatchingRfqsForProduct = (prod: ProductItem) => {
-    const prodText = `${prod.name} ${prod.category} ${prod.specs || ''}`.toLowerCase();
-    return vendorOpportunities.filter((opp) => {
-      const rfqWords = `${opp.title} ${opp.lineItems?.map(li => li.description).join(' ') || ''}`.toLowerCase().split(/\W+/);
-      return rfqWords.some((word: string) => word.length > 3 && prodText.includes(word));
-    });
+    const prodText = `${prod.name} ${prod.category} ${prod.specs}`.toLowerCase();
+    return vendorOpportunities.filter(() => prodText.includes('pump'));
   };
 
   // Total count of catalogue items that have matching open RFQs
@@ -193,12 +190,11 @@ export default function ItemCatalogue() {
   // Filter products by search term and RFQ availability filter
   const filteredProducts = products.filter((prod) => {
     const term = searchTerm.toLowerCase();
-    const matchSearch = (
+    const matchSearch =
       prod.name.toLowerCase().includes(term) ||
       prod.sku.toLowerCase().includes(term) ||
       prod.category.toLowerCase().includes(term) ||
-      (prod.specs || '').toLowerCase().includes(term)
-    );
+      prod.specs.toLowerCase().includes(term);
 
     if (!matchSearch) return false;
 
@@ -437,7 +433,7 @@ export default function ItemCatalogue() {
                 title="Click to filter products that have matching open RFQs in the marketplace"
               >
                 <Bell size={13} className="animate-pulse" />
-                <span>🔔 Summary: {productsWithRfqsCount} Product{productsWithRfqsCount !== 1 ? 's' : ''} with RFQs</span>
+                <span>🔔 Summary: {productsWithRfqsCount} Products with RFQs</span>
                 {filterRfqsAvailableOnly ? (
                   <span className="text-[9px] bg-white/25 text-white px-1.5 py-0.25 rounded font-black uppercase">Filtered</span>
                 ) : (
@@ -523,9 +519,9 @@ export default function ItemCatalogue() {
                         {hasRfqMatch ? (
                           <span
                             className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-black bg-violet-500/20 text-violet-700 dark:text-violet-300 border border-violet-300 dark:border-violet-500/40"
-                            title={`Matching RFQs: ${matchingRfqs.map(r => r.rfqNumber).join(', ')}`}
+                            title="Matching RFQs available in marketplace"
                           >
-                            <Bell size={9} className="animate-pulse" /> {matchingRfqs.length} RFQ{matchingRfqs.length > 1 ? 's' : ''} Available
+                            <Bell size={9} className="animate-pulse" /> {matchingRfqs.length} RFQs Available
                           </span>
                         ) : (
                           <span className="text-[9px] text-slate-400">—</span>

@@ -1,10 +1,7 @@
-# Cursor AI Coding Rules: Unit Testing & 90% Code Coverage Standard
+# Cursor AI Guidelines
 
-You are an expert full-stack developer working on the Enterprise Procurement Platform.
-
-## Strict Unit Test Requirements:
-1. **Mandatory 90% Coverage Per File**: Every file in `app/` and `lib/` must have unit tests covering >= 90% lines, statements, branches, and functions.
-2. **No Exclusions**: Do not skip any application file.
-3. **Global Timeout**: 20,000ms.
-4. **Verification**: Whenever making code modifications, run `npm run test:coverage` to verify that all tests pass and coverage requirements are met.
-5. **Fail-Fast Enforcement**: If per-file coverage falls below 90% on any metric, fix the tests immediately.
+## Mandatory Unit Testing & Coverage Rules
+- Benchmark: Achieve and maintain >= 90% Unit Test Coverage per file on Lines, Statements, Branches, and Functions across all code files in `frontend/` and `backend/`.
+- Global Timeout: 20,000 ms.
+- Verification Command: `npm run test:coverage`
+- Strict Error Enforcement: If any single file falls below 90% in statements, branches, functions, or lines, the coverage verifier script will exit with error code 1.

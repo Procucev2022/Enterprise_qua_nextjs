@@ -29,8 +29,8 @@ import {
 import CompanyHoverTooltip from '@/app/components/CompanyHoverTooltip';
 
 interface KanbanBoardProps {
-  onNavigateToMatrix: (rfq: RFQItem) => void;
-  onNavigateToSpend: () => void;
+  onNavigateToMatrix?: (rfq: RFQItem) => void;
+  onNavigateToSpend?: () => void;
 }
 
 export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: KanbanBoardProps) {
@@ -54,11 +54,11 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
   const [chaserInitialChannel, setChaserInitialChannel] = useState<'call' | 'whatsapp' | 'sms'>('whatsapp');
 
   // Group into 3 specification Kanban columns
-  const col1_parsing = rfqs.filter((r) => r.status === 'Parsing' || r.quotesCount === 0);
-  const col2_pending = rfqs.filter((r) => r.status === 'Quotes Pending' || (r.status === 'In Evaluation' && r.quotesCount < 8));
-  const col3_scored = rfqs.filter((r) => r.status === 'AI Recommended' || r.status === 'PO Generated' || (r.aiScore && r.aiScore >= 80));
+  const col1_parsing = rfqs.filter((r) => r.status === 'Parsing');
+  const col2_pending = rfqs.filter((r) => r.status === 'Quotes Pending');
+  const col3_scored = rfqs.filter((r) => r.status === 'In Evaluation' || r.status === 'AI Recommended' || r.status === 'PO Generated');
 
-  const handleOpenChaser = (rfqNumber: string, vendor = 'Apex Supplies Ltd.', channel: 'call' | 'whatsapp' | 'sms' | 'email' = 'whatsapp') => {
+  const handleOpenChaser = (rfqNumber: string, vendor: string, channel: 'call' | 'whatsapp' | 'sms' | 'email') => {
     setSelectedRfqForChaser(rfqNumber);
     setTargetVendor(vendor);
     setChaserInitialChannel(channel === 'email' ? 'whatsapp' : channel);
@@ -306,10 +306,7 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
                   <span>✉️</span> 24h Email
                 </button>
                 <button
-                  onClick={() => {
-                    const rfq = rfqs.find((r) => r.rfqNumber === 'RFQ-2026-00421') || rfqs[0];
-                    openRFQDeepDive(rfq);
-                  }}
+                  onClick={() => openRFQDeepDive(rfqs[0])}
                   className="btn btn-secondary btn-sm text-[10px] px-2 ml-auto"
                 >
                   <Search size={10} /> Deep Dive
@@ -364,19 +361,13 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
 
               <div className="grid grid-cols-2 gap-2 pt-1">
                 <button
-                  onClick={() => {
-                    const rfq = rfqs.find((r) => r.rfqNumber === 'RFQ-2026-00418') || rfqs[0];
-                    handleApproveReport(rfq);
-                  }}
+                  onClick={() => handleApproveReport(rfqs[0])}
                   className="btn btn-secondary btn-sm text-[11px] font-semibold"
                 >
                   <FileCheck size={12} /> Approve Report
                 </button>
                 <button
-                  onClick={() => {
-                    const rfq = rfqs.find((r) => r.rfqNumber === 'RFQ-2026-00418') || rfqs[0];
-                    handleShareReport(rfq);
-                  }}
+                  onClick={() => handleShareReport(rfqs[0])}
                   className="btn btn-primary btn-sm text-[11px] font-semibold"
                 >
                   <Share2 size={12} /> Share Report
@@ -387,9 +378,8 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
             {/* Card 2: RFQ-00421 Link to matrix */}
             <div
               onClick={() => {
-                const rfq = rfqs.find((r) => r.rfqNumber === 'RFQ-2026-00421') || rfqs[0];
-                setSelectedRFQForMatrix(rfq);
-                onNavigateToMatrix(rfq);
+                setSelectedRFQForMatrix(rfqs[0]);
+                if (onNavigateToMatrix) onNavigateToMatrix(rfqs[0]);
               }}
               className="p-3.5 rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 hover:border-indigo-400 dark:hover:border-indigo-500/50 transition-all text-xs cursor-pointer group shadow-xs"
             >

@@ -39,12 +39,11 @@ function detectDBProvider(connStr) {
   return { provider: 'local_postgres', label: 'Dedicated / Local PostgreSQL Cluster' };
 }
 
-let pool = null;
-
-if (connectionString) {
-  const isLocal = connectionString.includes('localhost') || connectionString.includes('127.0.0.1');
-  pool = new Pool({
-    connectionString,
+function createPool(connStr = connectionString) {
+  if (!connStr) return null;
+  const isLocal = connStr.includes('localhost') || connStr.includes('127.0.0.1');
+  return new Pool({
+    connectionString: connStr,
     max: process.env.DB_POOL_MAX ? parseInt(process.env.DB_POOL_MAX, 10) : 20,
     idleTimeoutMillis: process.env.DB_POOL_IDLE_TIMEOUT_MS ? parseInt(process.env.DB_POOL_IDLE_TIMEOUT_MS, 10) : 30000,
     connectionTimeoutMillis: process.env.DB_CONNECTION_TIMEOUT_MS ? parseInt(process.env.DB_CONNECTION_TIMEOUT_MS, 10) : 10000,
@@ -52,14 +51,21 @@ if (connectionString) {
   });
 }
 
+const initialPool = createPool();
+
+const poolModule = {
+  pool: initialPool,
+};
+
 async function query(text, params, retries = 2) {
-  if (!pool) {
+  const activePool = poolModule.pool;
+  if (!activePool) {
     throw new Error('DATABASE_URL is not configured. Running in memory fallback mode.');
   }
 
   const start = Date.now();
   try {
-    const res = await pool.query(text, params);
+    const res = await activePool.query(text, params);
     const duration = Date.now() - start;
     if (process.env.NODE_ENV === 'development' && duration > 500) {
       console.warn(`[Slow Query ${duration}ms]: ${text.slice(0, 100)}...`);
@@ -77,10 +83,12 @@ async function query(text, params, retries = 2) {
 }
 
 async function checkDBHealth() {
-  const { provider, label } = detectDBProvider(connectionString);
+  const activePool = poolModule.pool;
+  const currentConn = connectionString || (activePool ? 'postgresql://mock:mock@localhost:5432/mock' : '');
+  const { provider, label } = detectDBProvider(currentConn);
   const now = new Date().toISOString();
 
-  if (!pool || !connectionString) {
+  if (!activePool) {
     return {
       isConfigured: false,
       isConnected: false,
@@ -103,10 +111,10 @@ async function checkDBHealth() {
 
   const startTime = Date.now();
   try {
-    await pool.query('SELECT 1 AS ping');
+    await activePool.query('SELECT 1 AS ping');
     const latency = Date.now() - startTime;
 
-    const tableRes = await pool.query(
+    const tableRes = await activePool.query(
       `SELECT count(*)::text as count FROM information_schema.tables WHERE table_schema = 'public'`
     );
     const tablesCount = parseInt(tableRes.rows[0]?.count || '0', 10);
@@ -122,7 +130,7 @@ async function checkDBHealth() {
 
     if (tablesCount > 0) {
       try {
-        const countsRes = await pool.query(`
+        const countsRes = await activePool.query(`
           SELECT
             (SELECT count(*)::text FROM buyer_accounts) as buyers,
             (SELECT count(*)::text FROM vendors) as vendors,
@@ -172,7 +180,8 @@ async function checkDBHealth() {
 }
 
 async function initializeSchema() {
-  if (!pool) {
+  const activePool = poolModule.pool;
+  if (!activePool) {
     throw new Error('Cannot initialize schema: DATABASE_URL is not set.');
   }
 
@@ -182,9 +191,9 @@ async function initializeSchema() {
       throw new Error(`Schema file not found at ${schemaPath}`);
     }
     const sql = fs.readFileSync(schemaPath, 'utf8');
-    await pool.query(sql);
+    await activePool.query(sql);
 
-    const tablesRes = await pool.query(
+    const tablesRes = await activePool.query(
       `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name`
     );
     const tableNames = tablesRes.rows.map((r) => r.table_name);
@@ -203,11 +212,11 @@ async function initializeSchema() {
   }
 }
 
-module.exports = {
-  pool,
-  query,
-  detectDBProvider,
-  checkDBHealth,
-  initializeSchema,
-  sanitizeConnectionString,
-};
+poolModule.createPool = createPool;
+poolModule.query = query;
+poolModule.detectDBProvider = detectDBProvider;
+poolModule.checkDBHealth = checkDBHealth;
+poolModule.initializeSchema = initializeSchema;
+poolModule.sanitizeConnectionString = sanitizeConnectionString;
+
+module.exports = poolModule;

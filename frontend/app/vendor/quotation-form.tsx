@@ -60,24 +60,13 @@ const BUYER_CONTACTS_MAP: Record<string, Omit<BuyerContactInfo, 'source'>> = {
   },
 };
 
-export default function QuotationForm({ opportunity, onBack }: QuotationFormProps) {
+export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: QuotationFormProps) {
   const { rfqs, vendorOpportunities, showToast, addAuditLog, vendorSubscription } = useApp();
   const [selectedBuyerModal, setSelectedBuyerModal] = useState<(BuyerContactInfo & { rfqNumber: string }) | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
   // Helper to map RFQs to Parent Companies
-  const getParentCompany = (buyerName: string) => {
-    if (buyerName.includes('Energy') || buyerName.includes('Global Client')) {
-      return 'Larsen & Toubro Ltd. (L&T)';
-    }
-    if (buyerName.includes('Consortium') || buyerName.includes('Real Estate')) {
-      return 'Reliance Industries Ltd. (RIL)';
-    }
-    if (buyerName.includes('Marketplace') || buyerName.includes('Network')) {
-      return 'Tata Steel Procurement';
-    }
-    return 'Larsen & Toubro Ltd. (L&T)'; // Default
-  };
+  const getParentCompany = (buyerName: string) => buyerName;
 
   // Baseline submitted quotes details (Method, Date, and Sourcing status details)
   const submittedQuotes = [
@@ -89,8 +78,8 @@ export default function QuotationForm({ opportunity, onBack }: QuotationFormProp
       submissionMethod: 'Email Submission',
     },
     {
-      rfqNumber: 'RFQ-2026-00418',
-      title: 'Electrical Panels Sourcing',
+      rfqNumber: 'RFQ-2026-00423',
+      title: 'High Pressure Gate Valve System',
       submittedDate: '18-Aug-2026 09:45 UTC',
       status: 'PO Generated',
       submissionMethod: 'Email Submission',
@@ -340,6 +329,7 @@ export default function QuotationForm({ opportunity, onBack }: QuotationFormProp
               </div>
               <button
                 onClick={() => setSelectedBuyerModal(null)}
+                title="Close Buyer Details Modal"
                 className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800"
               >
                 <X size={16} />
@@ -417,7 +407,10 @@ export default function QuotationForm({ opportunity, onBack }: QuotationFormProp
             {/* Actions */}
             <div className="pt-2 flex justify-end">
               <button
-                onClick={() => setSelectedBuyerModal(null)}
+                onClick={() => {
+                  setSelectedBuyerModal(null);
+                  if (onSubmitSuccess) onSubmitSuccess();
+                }}
                 className="btn btn-primary btn-sm px-4 text-xs font-bold"
               >
                 Close

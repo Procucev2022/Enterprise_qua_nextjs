@@ -1,16 +1,11 @@
-# Claude Coding Guidelines & Testing Standards
+# CLAUDE Agent Guidelines
 
-## Testing Commands
-- Run all tests: `npm test`
-- Run tests with coverage and check 90% benchmark: `npm run test:coverage`
-- Run coverage checker independently: `npm run check:coverage`
-- Watch mode: `npm run test:watch`
-
-## Strict Testing Architecture & Coverage Requirements
-- **Framework**: Jest with `@testing-library/react` and Next.js SWC transforms.
-- **Coverage Target**: At least **90% coverage on every single file** for lines, statements, branches, and functions.
-- **Timeout**: Global timeout is configured to 20,000ms.
-- **Rules for changes**:
-  1. Whenever editing or writing code, update or add unit tests in `__tests__/`.
-  2. Always execute `npm run test:coverage` to confirm that all tests pass and that coverage for every touched and existing file remains >= 90%.
-  3. Never skip any application file.
+## Mandatory Unit Testing & Coverage Rules
+- **Benchmark**: Achieve and maintain **>= 90% Unit Test Coverage per file** on Lines, Statements, Branches, and Functions across all code files in `frontend/` and `backend/`.
+- **Global Timeout**: 20,000 ms.
+- **Verification Command**:
+  ```bash
+  npm run test:coverage
+  ```
+- **Strict Error Enforcement**: If any single file falls below 90% in statements, branches, functions, or lines, the coverage verifier script will exit with error code 1.
+- **AI Agent Obligation**: Before concluding any task or reporting completion to the user, run `npm run test:coverage` and ensure 0 failures and 90%+ coverage on every single file.

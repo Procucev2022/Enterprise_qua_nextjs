@@ -171,6 +171,69 @@ function generateShaHash(): string {
   return hash;
 }
 
+const INITIAL_VENDOR_OPPORTUNITIES: VendorOpportunity[] = [
+  {
+    id: 'opp-1',
+    rfqNumber: 'RFQ-2026-00421',
+    title: 'Centrifugal Water Pump Package (15 HP)',
+    buyer: 'Larsen & Toubro Ltd. (L&T)',
+    deadline: '2026-09-15',
+    daysRemaining: 7,
+    type: 'direct_invitation',
+    estimatedValue: '$150,000',
+    deliveryLocation: 'Navi Mumbai Hub',
+    status: 'pending_bid',
+    lineItems: [
+      { id: 'li-1', description: 'Centrifugal industrial water pump 15HP', quantity: 10, unitPrice: 0, leadTimeDays: 7, marketBandStatus: 'optimal', paymentTerms: 'Net 60' }
+    ]
+  },
+  {
+    id: 'opp-2',
+    rfqNumber: 'RFQ-2026-00423',
+    title: 'High Pressure Gate Valve System',
+    buyer: 'Tata Projects Ltd.',
+    deadline: '2026-09-20',
+    daysRemaining: 12,
+    type: 'direct_invitation',
+    estimatedValue: '$85,000',
+    deliveryLocation: 'Pune Facility',
+    status: 'pending_bid',
+    lineItems: [
+      { id: 'li-2', description: 'SS316 high pressure gate valves', quantity: 25, unitPrice: 0, leadTimeDays: 14, marketBandStatus: 'optimal', paymentTerms: 'Net 30' }
+    ]
+  },
+  {
+    id: 'opp-3',
+    rfqNumber: 'RFQ-2026-00501',
+    title: 'HVAC Air Handling Unit & Smart Chiller Control',
+    buyer: 'NTPC Limited',
+    deadline: '2026-09-25',
+    daysRemaining: 17,
+    type: 'network_marketplace',
+    estimatedValue: '$220,000',
+    deliveryLocation: 'Delhi Enterprise Logistics',
+    status: 'pending_bid',
+    lineItems: [
+      { id: 'li-3', description: 'Commercial building automation HVAC controller', quantity: 5, unitPrice: 0, leadTimeDays: 21, marketBandStatus: 'optimal', paymentTerms: 'Net 45' }
+    ]
+  },
+  {
+    id: 'opp-4',
+    rfqNumber: 'RFQ-2026-00502',
+    title: 'Structural Steel Beams & Pipe Fittings',
+    buyer: 'BHEL Power Sector',
+    deadline: '2026-09-30',
+    daysRemaining: 22,
+    type: 'network_marketplace',
+    estimatedValue: '$310,000',
+    deliveryLocation: 'Chennai Logistics Site',
+    status: 'pending_bid',
+    lineItems: [
+      { id: 'li-4', description: 'Standard carbon steel flanged connector pipe adapter fitting', quantity: 50, unitPrice: 0, leadTimeDays: 10, marketBandStatus: 'optimal', paymentTerms: 'Net 60' }
+    ]
+  }
+];
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [currentRole, setCurrentRole] = useState<UserRole>('buyer');
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(true);
@@ -218,16 +281,59 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
     }
   }, [theme]);
-  
+
   // PostgreSQL Real Database Hydration & Telemetry State
   const [isLoadingDB, setIsLoadingDB] = useState<boolean>(true);
   const [dbConnected, setDbConnected] = useState<boolean>(false);
 
+const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
+  {
+    id: 'ba-1',
+    organizationName: 'Larsen & Toubro Ltd. (L&T)',
+    contactPerson: 'Rajesh Nair',
+    corporateEmail: 'rajesh.nair@larsentoubro.com',
+    mobileNumber: '+919820011223',
+    gstin: '27AABCL1234F1Z5',
+    industrySector: 'Heavy Engineering',
+    sourcingMode: 'mode_2',
+    subscriptionPlan: 'version_2',
+    remainingFreeRFQs: 0,
+    accountSource: 'public_system',
+    status: 'ACTIVE_VERIFIED',
+    primaryPlantLocation: 'Mumbai',
+    supportedMajorCategories: ['Mechanical & Fluid Equipment'],
+    totalRFQsCreated: 12,
+    totalSpend: '$1,250,000',
+    syncTimestamp: '2026-08-30 00:00:00 UTC',
+    createdDate: '2026-01-01',
+  },
+  {
+    id: 'ba-2',
+    organizationName: 'Tata Projects Ltd.',
+    contactPerson: 'Amit Kumar Tata',
+    corporateEmail: 'amit.kumar@tataprojects.com',
+    mobileNumber: '+919820044556',
+    gstin: '27AABCT5678F1Z9',
+    industrySector: 'Infrastructure',
+    sourcingMode: 'mode_1',
+    subscriptionPlan: 'version_1',
+    remainingFreeRFQs: 0,
+    accountSource: 'public_system',
+    status: 'ACTIVE_VERIFIED',
+    primaryPlantLocation: 'Pune',
+    supportedMajorCategories: ['Mechanical & Fluid Equipment'],
+    totalRFQsCreated: 8,
+    totalSpend: '$850,000',
+    syncTimestamp: '2026-08-30 00:00:00 UTC',
+    createdDate: '2026-01-01',
+  }
+];
+
   const [rfqs, setRfqs] = useState<RFQItem[]>([]);
   const [aiFeed, setAiFeed] = useState<AIBotFeedItem[]>([]);
-  const [vendorOpportunities, setVendorOpportunities] = useState<VendorOpportunity[]>([]);
+  const [vendorOpportunities, setVendorOpportunities] = useState<VendorOpportunity[]>(INITIAL_VENDOR_OPPORTUNITIES);
   const [buyerVendors, setBuyerVendors] = useState<VendorEntry[]>([]);
-  const [buyerAccounts, setBuyerAccounts] = useState<BuyerAccount[]>([]);
+  const [buyerAccounts, setBuyerAccounts] = useState<BuyerAccount[]>(INITIAL_BUYER_ACCOUNTS);
   const [activeBuyerAccount, setActiveBuyerAccount] = useState<BuyerAccount | null>(null);
   const [selectedEmailForModal, setSelectedEmailForModal] = useState<StandardRFQEmailPayload | null>(null);
   const [emailModalOpen, setEmailModalOpen] = useState<boolean>(false);

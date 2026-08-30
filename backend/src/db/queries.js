@@ -1,12 +1,12 @@
-const { query, pool } = require('./pool');
+const poolModule = require('./pool');
 
 // ==============================================================================
 // 1. BUYER ACCOUNTS QUERIES
 // ==============================================================================
 
 async function getBuyerAccountsFromDB() {
-  if (!pool) return [];
-  const res = await query(`
+  if (!poolModule.pool) return [];
+  const res = await poolModule.query(`
     SELECT
       id,
       organization_name AS "organizationName",
@@ -34,8 +34,8 @@ async function getBuyerAccountsFromDB() {
 }
 
 async function upsertBuyerAccountInDB(acc) {
-  if (!pool) return;
-  await query(
+  if (!poolModule.pool) return;
+  await poolModule.query(
     `
     INSERT INTO buyer_accounts (
       id, organization_name, corporate_email, contact_person, contact_phone,
@@ -51,36 +51,40 @@ async function upsertBuyerAccountInDB(acc) {
       subscription = EXCLUDED.subscription,
       total_rfqs_created = EXCLUDED.total_rfqs_created,
       total_spend = EXCLUDED.total_spend,
+      sync_timestamp = CURRENT_TIMESTAMP,
+      sourcing_mode = EXCLUDED.sourcing_mode,
       status = EXCLUDED.status,
-      updated_at = CURRENT_TIMESTAMP
+      supported_major_categories = EXCLUDED.supported_major_categories,
+      supported_minor_categories = EXCLUDED.supported_minor_categories,
+      remaining_free_rfqs = EXCLUDED.remaining_free_rfqs
   `,
     [
       acc.id,
       acc.organizationName,
       acc.corporateEmail,
       acc.contactPerson,
-      acc.mobileNumber || null,
-      acc.industrySector || null,
-      acc.accountSource || 'public_system',
-      acc.subscriptionPlan || 'free_trial',
+      acc.mobileNumber || acc.contactPhone,
+      acc.industrySector || acc.industryVertical,
+      acc.accountSource,
+      acc.subscriptionPlan || acc.subscription,
       acc.totalRFQsCreated || 0,
       acc.totalSpend || '$0',
-      acc.status === 'ACTIVE_VERIFIED',
+      acc.isVerified || true,
       acc.createdDate || new Date().toISOString().substring(0, 10),
       acc.sourcingMode || 'mode_1',
       acc.status || 'ACTIVE_VERIFIED',
-      acc.gstin || '27AABCU9603R1ZN',
-      acc.primaryPlantLocation || 'Mumbai, Maharashtra',
+      acc.gstin,
+      acc.primaryPlantLocation,
       JSON.stringify(acc.supportedMajorCategories || []),
       JSON.stringify(acc.supportedMinorCategories || []),
-      acc.remainingFreeRFQs !== undefined ? acc.remainingFreeRFQs : 5,
+      acc.remainingFreeRFQs || 5,
     ]
   );
 }
 
 async function deleteBuyerAccountInDB(id) {
-  if (!pool) return;
-  await query(`DELETE FROM buyer_accounts WHERE id = $1`, [id]);
+  if (!poolModule.pool) return;
+  await poolModule.query('DELETE FROM buyer_accounts WHERE id = $1', [id]);
 }
 
 // ==============================================================================
@@ -88,129 +92,90 @@ async function deleteBuyerAccountInDB(id) {
 // ==============================================================================
 
 async function getVendorsFromDB() {
-  if (!pool) return [];
-  const res = await query(`
+  if (!poolModule.pool) return [];
+  const res = await poolModule.query(`
     SELECT
       id,
       name,
-      contact_person AS "contactPerson",
       email,
       phone,
+      location,
       major_category AS "majorCategory",
       minor_categories AS "minorCategories",
-      location,
       rating,
       score,
-      source,
+      whatsapp_sla AS "whatsappSla",
+      awarded_spend AS "awardedSpend",
+      lead_time_days AS "leadTimeDays",
+      empanelled_by AS "empanelledBy",
       status,
-      evaluated,
-      has_record AS "hasRecord",
-      match_reason AS "matchReason",
-      proximity,
-      proximity_match AS "proximityMatch",
-      is_existing_in_database AS "isExistingInDatabase",
-      onboarding_email_status AS "onboardingEmailStatus",
-      onboarding_email_dispatched_at AS "onboardingEmailDispatchedAt",
-      temp_password AS "tempPassword",
-      first_login_completed AS "firstLoginCompleted",
-      reminder_cadence AS "reminderCadence",
-      next_reminder_date AS "nextReminderDate",
-      reminders_sent_count AS "remindersSentCount",
-      added_by_buyer_company AS "addedByBuyerCompany",
-      added_by_buyer_name AS "addedByBuyerName",
-      profile_completion_status AS "profileCompletionStatus",
+      is_empanelled AS "isEmpanelled",
+      evaluation_id AS "evaluationId",
+      category_count AS "categoryCount",
       client_mapped_categories AS "clientMappedCategories",
-      vendor_selected_categories AS "vendorSelectedCategories",
-      is_category_aligned AS "isCategoryAligned",
-      category_mismatch_details AS "categoryMismatchDetails",
-      category_match_source AS "categoryMatchSource",
-      latest_rating_revision AS "latestRatingRevision",
-      rating_revision_history AS "ratingRevisionHistory"
+      vendor_selected_categories AS "vendorSelectedCategories"
     FROM vendors
-    ORDER BY score DESC
+    ORDER BY created_at DESC
   `);
-  return res.rows;
+  return res.rows.map((row) => ({
+    ...row,
+    minorCategories: typeof row.minorCategories === 'string' ? JSON.parse(row.minorCategories) : row.minorCategories,
+    clientMappedCategories: typeof row.clientMappedCategories === 'string' ? JSON.parse(row.clientMappedCategories) : row.clientMappedCategories,
+    vendorSelectedCategories: typeof row.vendorSelectedCategories === 'string' ? JSON.parse(row.vendorSelectedCategories) : row.vendorSelectedCategories,
+  }));
 }
 
 async function upsertVendorInDB(v) {
-  if (!pool) return;
-  await query(
+  if (!poolModule.pool) return;
+  await poolModule.query(
     `
     INSERT INTO vendors (
-      id, name, contact_person, email, phone, major_category, minor_categories,
-      location, rating, score, source, status, evaluated, has_record, match_reason,
-      proximity, proximity_match, is_existing_in_database, onboarding_email_status,
-      onboarding_email_dispatched_at, temp_password, first_login_completed, reminder_cadence,
-      next_reminder_date, reminders_sent_count, added_by_buyer_company, added_by_buyer_name,
-      profile_completion_status, client_mapped_categories, vendor_selected_categories,
-      is_category_aligned, category_mismatch_details, category_match_source,
-      latest_rating_revision, rating_revision_history
-    ) VALUES (
-      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-      $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35
-    )
+      id, name, email, phone, location, major_category, minor_categories,
+      rating, score, whatsapp_sla, awarded_spend, lead_time_days, empanelled_by,
+      status, is_empanelled, evaluation_id, category_count,
+      client_mapped_categories, vendor_selected_categories
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
     ON CONFLICT (id) DO UPDATE SET
       name = EXCLUDED.name,
-      contact_person = EXCLUDED.contact_person,
       email = EXCLUDED.email,
       phone = EXCLUDED.phone,
-      major_category = EXCLUDED.major_category,
-      minor_categories = EXCLUDED.minor_categories,
       rating = EXCLUDED.rating,
       score = EXCLUDED.score,
+      whatsapp_sla = EXCLUDED.whatsapp_sla,
+      awarded_spend = EXCLUDED.awarded_spend,
+      lead_time_days = EXCLUDED.lead_time_days,
       status = EXCLUDED.status,
-      evaluated = EXCLUDED.evaluated,
-      onboarding_email_status = EXCLUDED.onboarding_email_status,
-      profile_completion_status = EXCLUDED.profile_completion_status,
+      category_count = EXCLUDED.category_count,
       client_mapped_categories = EXCLUDED.client_mapped_categories,
-      vendor_selected_categories = EXCLUDED.vendor_selected_categories,
-      latest_rating_revision = EXCLUDED.latest_rating_revision,
-      rating_revision_history = EXCLUDED.rating_revision_history,
-      updated_at = CURRENT_TIMESTAMP
+      vendor_selected_categories = EXCLUDED.vendor_selected_categories
   `,
     [
       v.id,
       v.name,
-      v.contactPerson,
       v.email,
-      v.phone || null,
+      v.phone,
+      v.location,
       v.majorCategory,
       JSON.stringify(v.minorCategories || []),
-      v.location || 'Mumbai, MH',
       v.rating || 4.5,
-      v.score || 85.0,
-      v.source || 'buyer_manual',
-      v.status || 'PREFERRED ENTERPRISE SUPPLIER',
-      v.evaluated || false,
-      v.hasRecord || false,
-      v.matchReason || null,
-      v.proximity || null,
-      v.proximityMatch || false,
-      v.isExistingInDatabase || false,
-      v.onboardingEmailStatus || 'sent',
-      v.onboardingEmailDispatchedAt || null,
-      v.tempPassword || null,
-      v.firstLoginCompleted || false,
-      v.reminderCadence || 'every_3_days',
-      v.nextReminderDate || null,
-      v.remindersSentCount || 0,
-      v.addedByBuyerCompany || null,
-      v.addedByBuyerName || null,
-      v.profileCompletionStatus || 'pending',
+      v.score || 85,
+      v.whatsappSla || 90,
+      v.awardedSpend || 0,
+      v.leadTimeDays || 14,
+      v.empanelledBy,
+      v.status || 'Active',
+      v.isEmpanelled || false,
+      v.evaluationId,
+      v.categoryCount || 1,
       JSON.stringify(v.clientMappedCategories || []),
       JSON.stringify(v.vendorSelectedCategories || []),
-      v.isCategoryAligned !== false,
-      JSON.stringify(v.categoryMismatchDetails || {}),
-      v.categoryMatchSource || 'exact_match',
-      v.latestRatingRevision ? JSON.stringify(v.latestRatingRevision) : null,
-      JSON.stringify(v.ratingRevisionHistory || []),
     ]
   );
 }
 
 async function deleteVendorInDB(id) {
-  if (!pool) return;
-  await query(`DELETE FROM vendors WHERE id = $1`, [id]);
+  if (!poolModule.pool) return;
+  await poolModule.query('DELETE FROM vendors WHERE id = $1', [id]);
 }
 
 // ==============================================================================
@@ -218,75 +183,98 @@ async function deleteVendorInDB(id) {
 // ==============================================================================
 
 async function getRFQsFromDB() {
-  if (!pool) return [];
-  const res = await query(`
+  if (!poolModule.pool) return [];
+  const res = await poolModule.query(`
     SELECT
       id,
       rfq_number AS "rfqNumber",
       title,
       category,
-      created_at AS "createdAt",
-      deadline,
-      status,
-      line_items_count AS "lineItemsCount",
-      total_estimated_value AS "totalEstimatedValue",
       sourcing_mode AS "sourcingMode",
+      buyer_company AS "buyerCompany",
+      buyer_contact AS "buyerContact",
+      buyer_email AS "buyerEmail",
+      created_date AS "createdDate",
+      deadline,
+      budget,
+      status,
       quotes_count AS "quotesCount",
       target_savings AS "targetSavings",
-      chasing_active AS "chasingActive",
-      allocated_time AS "allocatedTime",
-      elapsed_time AS "elapsedTime",
-      assigned_vendors AS "assignedVendors",
+      is_double_blind AS "isDoubleBlind",
+      source,
       line_items AS "lineItems",
       quotes,
-      follow_up_data AS "followUpData"
+      assigned_vendors AS "assignedVendors",
+      tags,
+      po_number AS "poNumber",
+      po_amount AS "poAmount",
+      po_awarded_to AS "poAwardedTo",
+      po_award_date AS "poAwardDate",
+      po_status AS "poStatus",
+      po_approver_notes AS "poApproverNotes"
     FROM rfqs
-    ORDER BY db_created_at DESC
+    ORDER BY created_at DESC
   `);
-  return res.rows;
+  return res.rows.map((row) => ({
+    ...row,
+    lineItems: typeof row.lineItems === 'string' ? JSON.parse(row.lineItems) : row.lineItems,
+    quotes: typeof row.quotes === 'string' ? JSON.parse(row.quotes) : row.quotes,
+    assignedVendors: typeof row.assignedVendors === 'string' ? JSON.parse(row.assignedVendors) : row.assignedVendors,
+    tags: typeof row.tags === 'string' ? JSON.parse(row.tags) : row.tags,
+  }));
 }
 
 async function upsertRFQInDB(rfq) {
-  if (!pool) return;
-  await query(
+  if (!poolModule.pool) return;
+  await poolModule.query(
     `
     INSERT INTO rfqs (
-      id, rfq_number, title, category, created_at, deadline, status,
-      line_items_count, total_estimated_value, sourcing_mode, quotes_count,
-      target_savings, chasing_active, allocated_time, elapsed_time,
-      assigned_vendors, line_items, quotes, follow_up_data
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+      id, rfq_number, title, category, sourcing_mode, buyer_company, buyer_contact,
+      buyer_email, created_date, deadline, budget, status, quotes_count,
+      target_savings, is_double_blind, source, line_items, quotes, assigned_vendors,
+      tags, po_number, po_amount, po_awarded_to, po_award_date, po_status, po_approver_notes
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
     ON CONFLICT (id) DO UPDATE SET
       title = EXCLUDED.title,
-      category = EXCLUDED.category,
       status = EXCLUDED.status,
       quotes_count = EXCLUDED.quotes_count,
-      chasing_active = EXCLUDED.chasing_active,
-      assigned_vendors = EXCLUDED.assigned_vendors,
+      target_savings = EXCLUDED.target_savings,
       quotes = EXCLUDED.quotes,
-      follow_up_data = EXCLUDED.follow_up_data,
-      db_updated_at = CURRENT_TIMESTAMP
+      assigned_vendors = EXCLUDED.assigned_vendors,
+      po_number = EXCLUDED.po_number,
+      po_amount = EXCLUDED.po_amount,
+      po_awarded_to = EXCLUDED.po_awarded_to,
+      po_award_date = EXCLUDED.po_award_date,
+      po_status = EXCLUDED.po_status,
+      po_approver_notes = EXCLUDED.po_approver_notes
   `,
     [
       rfq.id,
       rfq.rfqNumber,
       rfq.title,
       rfq.category,
-      rfq.createdAt,
-      rfq.deadline,
-      rfq.status,
-      rfq.lineItemsCount || (rfq.lineItems ? rfq.lineItems.length : 1),
-      rfq.totalEstimatedValue || '$0',
       rfq.sourcingMode || 'mode_1',
+      rfq.buyerCompany,
+      rfq.buyerContact,
+      rfq.buyerEmail,
+      rfq.createdDate || new Date().toISOString().substring(0, 10),
+      rfq.deadline,
+      rfq.budget || 0,
+      rfq.status || 'In Evaluation',
       rfq.quotesCount || (rfq.quotes ? rfq.quotes.length : 0),
-      rfq.targetSavings || '12-18%',
-      rfq.chasingActive || false,
-      rfq.allocatedTime || '24 hrs',
-      rfq.elapsedTime || '0 hrs',
-      JSON.stringify(rfq.assignedVendors || []),
+      rfq.targetSavings || '14.8%',
+      rfq.isDoubleBlind || false,
+      rfq.source || 'web_portal',
       JSON.stringify(rfq.lineItems || []),
       JSON.stringify(rfq.quotes || []),
-      JSON.stringify(rfq.followUpData || {}),
+      JSON.stringify(rfq.assignedVendors || []),
+      JSON.stringify(rfq.tags || []),
+      rfq.poNumber || null,
+      rfq.poAmount || null,
+      rfq.poAwardedTo || null,
+      rfq.poAwardDate || null,
+      rfq.poStatus || null,
+      rfq.poApproverNotes || null,
     ]
   );
 }
@@ -296,58 +284,51 @@ async function upsertRFQInDB(rfq) {
 // ==============================================================================
 
 async function getEvaluationsFromDB() {
-  if (!pool) return [];
-  const res = await query(`
+  if (!poolModule.pool) return [];
+  const res = await poolModule.query(`
     SELECT
       id,
-      vendor_id AS "vendorId",
       vendor_name AS "vendorName",
-      contact_person AS "contactPerson",
-      email,
-      phone,
-      category,
-      submission_date AS "submissionDate",
-      status,
       overall_score AS "overallScore",
-      system_action AS "systemAction",
+      status,
+      submission_date AS "submissionDate",
+      audit_hash AS "auditHash",
       module_scores AS "moduleScores",
-      documents
+      verified_claims AS "verifiedClaims"
     FROM vendor_evaluations
-    ORDER BY overall_score DESC
+    ORDER BY created_at DESC
   `);
-  return res.rows;
+  return res.rows.map((row) => ({
+    ...row,
+    moduleScores: typeof row.moduleScores === 'string' ? JSON.parse(row.moduleScores) : row.moduleScores,
+    verifiedClaims: typeof row.verifiedClaims === 'string' ? JSON.parse(row.verifiedClaims) : row.verifiedClaims,
+  }));
 }
 
 async function upsertEvaluationInDB(ev) {
-  if (!pool) return;
-  await query(
+  if (!poolModule.pool) return;
+  await poolModule.query(
     `
     INSERT INTO vendor_evaluations (
-      id, vendor_id, vendor_name, contact_person, email, phone, category,
-      submission_date, status, overall_score, system_action, module_scores, documents
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      id, vendor_name, overall_score, status, submission_date, audit_hash,
+      module_scores, verified_claims
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     ON CONFLICT (id) DO UPDATE SET
       overall_score = EXCLUDED.overall_score,
       status = EXCLUDED.status,
-      system_action = EXCLUDED.system_action,
+      audit_hash = EXCLUDED.audit_hash,
       module_scores = EXCLUDED.module_scores,
-      documents = EXCLUDED.documents,
-      updated_at = CURRENT_TIMESTAMP
+      verified_claims = EXCLUDED.verified_claims
   `,
     [
       ev.id,
-      ev.vendorId,
       ev.vendorName,
-      ev.contactPerson || null,
-      ev.email || null,
-      ev.phone || null,
-      ev.category || null,
+      ev.overallScore || 0,
+      ev.status || 'Qualified',
       ev.submissionDate || new Date().toISOString().substring(0, 10),
-      ev.status || 'PREFERRED ENTERPRISE SUPPLIER',
-      ev.overallScore || 85.0,
-      ev.systemAction || null,
+      ev.auditHash,
       JSON.stringify(ev.moduleScores || {}),
-      JSON.stringify(ev.documents || []),
+      JSON.stringify(ev.verifiedClaims || []),
     ]
   );
 }
@@ -357,40 +338,49 @@ async function upsertEvaluationInDB(ev) {
 // ==============================================================================
 
 async function getAuditLogsFromDB() {
-  if (!pool) return [];
-  const res = await query(`
+  if (!poolModule.pool) return [];
+  const res = await poolModule.query(`
     SELECT
       id,
       timestamp,
       user_email AS "userEmail",
       action,
       rfq_number AS "rfqNumber",
+      ip_address AS "ipAddress",
       sha_signature AS "shaSignature",
-      status,
-      ip_address AS "ipAddress"
+      previous_sha AS "previousSha",
+      payload,
+      verified
     FROM audit_logs
-    ORDER BY created_at DESC
-    LIMIT 100
+    ORDER BY id DESC
   `);
-  return res.rows;
+  return res.rows.map((row) => ({
+    ...row,
+    payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
+  }));
 }
 
 async function insertAuditLogInDB(log) {
-  if (!pool) return;
-  await query(
+  if (!poolModule.pool) return;
+  await poolModule.query(
     `
-    INSERT INTO audit_logs (id, timestamp, user_email, action, rfq_number, sha_signature, status, ip_address)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    INSERT INTO audit_logs (
+      id, timestamp, user_email, action, rfq_number, ip_address,
+      sha_signature, previous_sha, payload, verified
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    ON CONFLICT (id) DO NOTHING
   `,
     [
       log.id,
-      log.timestamp || new Date().toISOString(),
-      log.userEmail || 'system@procucev.ai',
+      log.timestamp,
+      log.userEmail,
       log.action,
       log.rfqNumber || null,
+      log.ipAddress || null,
       log.shaSignature,
-      log.status || 'TAMPER_CHECK_OK',
-      log.ipAddress || '10.0.4.12 (Azure Private VNet)',
+      log.previousSha || null,
+      JSON.stringify(log.payload || {}),
+      log.verified !== undefined ? log.verified : true,
     ]
   );
 }
@@ -400,14 +390,14 @@ async function insertAuditLogInDB(log) {
 // ==============================================================================
 
 async function getSystemConfigFromDB() {
-  if (!pool) return null;
-  const res = await query(`SELECT value FROM system_config WHERE key = 'main_config' LIMIT 1`);
+  if (!poolModule.pool) return null;
+  const res = await poolModule.query(`SELECT value FROM system_config WHERE key = 'main_config' LIMIT 1`);
   return res.rows[0]?.value || null;
 }
 
 async function upsertSystemConfigInDB(config) {
-  if (!pool) return;
-  await query(
+  if (!poolModule.pool) return;
+  await poolModule.query(
     `
     INSERT INTO system_config (id, key, value, updated_at)
     VALUES ('sys-cfg-1', 'main_config', $1, CURRENT_TIMESTAMP)

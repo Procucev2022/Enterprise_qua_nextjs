@@ -1,83 +1,69 @@
+const logger = require('../src/middleware/logger');
 const errorHandler = require('../src/middleware/errorHandler');
-const requestLogger = require('../src/middleware/logger');
 
 describe('Middleware Unit Tests', () => {
-  describe('errorHandler', () => {
-    test('handles standard error object with custom status code', () => {
-      const err = new Error('Custom failure');
-      err.statusCode = 403;
-      const req = { method: 'GET', originalUrl: '/test' };
-      const res = {
-        status: jest.fn().mockReturnThis(),
-        json: jest.fn(),
-      };
-      const next = jest.fn();
+  test('logger logs request duration on response finish when not test env', () => {
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
 
-      errorHandler(err, req, res, next);
-      expect(res.status).toHaveBeenCalledWith(403);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          success: false,
-          error: 'Custom failure',
-        })
-      );
-    });
+    const req = { method: 'GET', originalUrl: '/api/test' };
+    let finishHandler;
+    const res = {
+      statusCode: 200,
+      on: jest.fn((event, handler) => {
+        if (event === 'finish') finishHandler = handler;
+      }),
+    };
+    const next = jest.fn();
 
-    test('defaults to 500 when statusCode is missing', () => {
-      const err = new Error('Unexpected crash');
-      const req = { method: 'POST', originalUrl: '/crash' };
-      const res = {
-        status: jest.fn().mockReturnThis(),
-        json: jest.fn(),
-      };
-      const next = jest.fn();
+    logger(req, res, next);
+    expect(next).toHaveBeenCalled();
+    expect(finishHandler).toBeDefined();
 
-      errorHandler(err, req, res, next);
-      expect(res.status).toHaveBeenCalledWith(500);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          success: false,
-          error: 'Unexpected crash',
-        })
-      );
-    });
+    finishHandler();
+
+    res.statusCode = 302;
+    finishHandler();
+
+    res.statusCode = 404;
+    finishHandler();
+
+    res.statusCode = 500;
+    finishHandler();
+
+    process.env.NODE_ENV = 'test';
+    logger(req, res, next);
+    expect(next).toHaveBeenCalledTimes(2);
+
+    process.env.NODE_ENV = originalEnv;
   });
 
-  describe('requestLogger', () => {
-    test('passes through to next() middleware in test environment', () => {
-      const req = { method: 'GET', originalUrl: '/api/rfqs' };
-      const res = { on: jest.fn(), statusCode: 200 };
-      const next = jest.fn();
+  test('errorHandler formats error response with custom statusCode and dev stack', () => {
+    const err = new Error('Custom Validation Error');
+    err.statusCode = 400;
+    const req = { method: 'POST', originalUrl: '/api/test' };
+    const res = {
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn(),
+    };
+    const next = jest.fn();
 
-      requestLogger(req, res, next);
-      expect(next).toHaveBeenCalled();
-    });
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
 
-    test('registers on finish listener when NODE_ENV is development', () => {
-      const origEnv = process.env.NODE_ENV;
-      process.env.NODE_ENV = 'development';
-      const req = { method: 'GET', originalUrl: '/api/test' };
-      let finishCallback;
-      const res = {
-        on: jest.fn((event, cb) => {
-          if (event === 'finish') finishCallback = cb;
-        }),
-        statusCode: 200,
-      };
-      const next = jest.fn();
+    errorHandler(err, req, res, next);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        error: 'Custom Validation Error',
+      })
+    );
 
-      requestLogger(req, res, next);
-      expect(next).toHaveBeenCalled();
-      expect(typeof finishCallback).toBe('function');
-      finishCallback(); // Trigger finish log
+    process.env.NODE_ENV = 'production';
+    errorHandler(new Error(), req, res, next);
+    expect(res.status).toHaveBeenCalledWith(500);
 
-      res.statusCode = 404;
-      finishCallback();
-
-      res.statusCode = 500;
-      finishCallback();
-
-      process.env.NODE_ENV = origEnv;
-    });
+    process.env.NODE_ENV = originalEnv;
   });
 });

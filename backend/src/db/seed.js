@@ -1,4 +1,4 @@
-const { pool, initializeSchema } = require('./pool');
+const poolModule = require('./pool');
 const {
   upsertBuyerAccountInDB,
   upsertVendorInDB,
@@ -451,7 +451,7 @@ const SEED_AI_FEED = [
 ];
 
 async function seedInitialDataToPostgres() {
-  if (!pool) {
+  if (!poolModule.pool) {
     return {
       success: false,
       message: 'DATABASE_URL is not set. Skipped PostgreSQL seed.',
@@ -459,7 +459,7 @@ async function seedInitialDataToPostgres() {
     };
   }
 
-  await initializeSchema();
+  await poolModule.initializeSchema();
 
   let buyerCount = 0;
   let vendorCount = 0;
@@ -531,16 +531,18 @@ async function seedInitialDataToPostgres() {
   };
 }
 
-if (require.main === module) {
-  seedInitialDataToPostgres()
-    .then((res) => {
-      console.log('Seed result:', res);
-      process.exit(0);
-    })
-    .catch((err) => {
-      console.error('Seed error:', err);
-      process.exit(1);
-    });
+async function runSeedCLI() {
+  try {
+    const res = await seedInitialDataToPostgres();
+    return res;
+  } catch (err) {
+    console.error('Seed error:', err);
+    process.exit(1);
+  }
+}
+
+if (process.env.AUTO_RUN_SEED === 'true' || require.main === module) {
+  runSeedCLI();
 }
 
 module.exports = {
@@ -551,4 +553,5 @@ module.exports = {
   SEED_AUDIT_LOGS,
   SEED_AI_FEED,
   seedInitialDataToPostgres,
+  runSeedCLI,
 };

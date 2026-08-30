@@ -563,3 +563,25 @@ export interface BuyerAccount {
   historicalDataPeriod?: '1_year' | '2_years' | '3_years';
   historicalVendorsCount?: number;
 }
+
+export interface DBHealthStatus {
+  connected: boolean;
+  isConnected?: boolean;
+  isConfigured?: boolean;
+  providerLabel?: string;
+  latencyMs?: number;
+  poolStatus?: {
+    totalCount: number;
+    idleCount: number;
+    waitingCount: number;
+  };
+  tablesCount?: number;
+  totalRecords?: {
+    buyerAccounts?: number;
+    vendors?: number;
+    rfqs?: number;
+    evaluations?: number;
+    auditLogs?: number;
+  };
+  uptime?: string;
+}

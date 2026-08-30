@@ -22,12 +22,24 @@ import {
 
 interface RoleNavProps {
   activeScreen: string;
-  setActiveScreen: (screen: string) => void;
-  onLogout: () => void;
+  setActiveScreen?: (screen: string) => void;
+  onScreenChange?: (screen: string) => void;
+  onLogout?: () => void;
+  onOpenInitialSetup?: () => void;
 }
 
-export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNavProps) {
+export default function RoleNavigation({
+  activeScreen,
+  setActiveScreen,
+  onScreenChange,
+  onLogout,
+}: RoleNavProps) {
   const { currentRole, isLoggedIn, activeBuyerAccount, vendorSubscription } = useApp();
+
+  const changeScreen = (screen: string) => {
+    if (setActiveScreen) setActiveScreen(screen);
+    if (onScreenChange) onScreenChange(screen);
+  };
 
   if (!isLoggedIn) {
     return null;
@@ -74,7 +86,7 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
           {currentRole === 'buyer' && (
             <>
               <button
-                onClick={() => setActiveScreen('command_center')}
+                onClick={() => changeScreen('command_center')}
                 className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                   activeScreen === 'command_center'
                     ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
@@ -84,7 +96,7 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
                 <Layers size={13} /> Screen 1.1: Command Center
               </button>
               <button
-                onClick={() => setActiveScreen('ingestion_wizard')}
+                onClick={() => changeScreen('ingestion_wizard')}
                 className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                   activeScreen === 'ingestion_wizard'
                     ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
@@ -94,7 +106,7 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
                 <FileSpreadsheet size={13} /> Screen 1.2: AI Ingestion &amp; Mode Wizard
               </button>
               <button
-                onClick={() => setActiveScreen('vendor_evaluation_summary')}
+                onClick={() => changeScreen('vendor_evaluation_summary')}
                 className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                   activeScreen === 'vendor_evaluation_summary'
                     ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
@@ -104,7 +116,7 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
                 <FileCheck size={13} /> Screen 1.3: Evaluation Summary
               </button>
               <button
-                onClick={() => setActiveScreen('vendor_summary')}
+                onClick={() => changeScreen('vendor_summary')}
                 className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                   activeScreen === 'vendor_summary'
                     ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
@@ -114,7 +126,7 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
                 <Building2 size={13} /> Screen 1.4: Vendor Directory
               </button>
               <button
-                onClick={() => setActiveScreen('subscription_center')}
+                onClick={() => changeScreen('subscription_center')}
                 className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                   activeScreen === 'subscription_center'
                     ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
@@ -124,7 +136,7 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
                 <Sparkles size={13} className="text-amber-400" /> Screen 1.5: Sourcing Subscriptions
               </button>
               <button
-                onClick={() => setActiveScreen('buyer_profile')}
+                onClick={() => changeScreen('buyer_profile')}
                 className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                   activeScreen === 'buyer_profile'
                     ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
@@ -134,7 +146,7 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
                 <Building2 size={13} /> Screen 1.6: Buyer Profile
               </button>
               <button
-                onClick={() => setActiveScreen('buyer_directory')}
+                onClick={() => changeScreen('buyer_directory')}
                 className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                   activeScreen === 'buyer_directory'
                     ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
@@ -150,7 +162,7 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
           {currentRole === 'category_manager' && (
             <>
               <button
-                onClick={() => setActiveScreen('kanban_board')}
+                onClick={() => changeScreen('kanban_board')}
                 className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                   activeScreen === 'kanban_board'
                     ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
@@ -160,7 +172,7 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
                 <Kanban size={13} /> Screen 2.1: Operational Kanban
               </button>
               <button
-                onClick={() => setActiveScreen('spend_dashboard')}
+                onClick={() => changeScreen('spend_dashboard')}
                 className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                   activeScreen === 'spend_dashboard'
                     ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
@@ -170,7 +182,7 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
                 <TrendingUp size={13} /> Screen 2.2: Spend Analytics
               </button>
               <button
-                onClick={() => setActiveScreen('buyer_console')}
+                onClick={() => changeScreen('buyer_console')}
                 className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                   activeScreen === 'buyer_console'
                     ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
@@ -180,7 +192,7 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
                 <Building2 size={13} /> Screen 2.3: Buyer RFQ Console
               </button>
               <button
-                onClick={() => setActiveScreen('vendor_evaluation_summary')}
+                onClick={() => changeScreen('vendor_evaluation_summary')}
                 className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                   activeScreen === 'vendor_evaluation_summary'
                     ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
@@ -190,7 +202,7 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
                 <FileCheck size={13} /> Screen 2.4: Mode 3 Evaluations
               </button>
               <button
-                onClick={() => setActiveScreen('vendor_console')}
+                onClick={() => changeScreen('vendor_console')}
                 className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                   activeScreen === 'vendor_console'
                     ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
@@ -200,7 +212,7 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
                 <Building2 size={13} /> Screen 2.5: Vendor Performance
               </button>
               <button
-                onClick={() => setActiveScreen('category_summary')}
+                onClick={() => changeScreen('category_summary')}
                 className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                   activeScreen === 'category_summary'
                     ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
@@ -216,7 +228,7 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
           {currentRole === 'vendor' && (
             <>
               <button
-                onClick={() => setActiveScreen('vendor_feed')}
+                onClick={() => changeScreen('vendor_feed')}
                 className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                   activeScreen === 'vendor_feed'
                     ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
@@ -226,7 +238,7 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
                 <Truck size={13} /> Screen 3.1: Opportunity Feed
               </button>
               <button
-                onClick={() => setActiveScreen('quotation_form')}
+                onClick={() => changeScreen('quotation_form')}
                 className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                   activeScreen === 'quotation_form'
                     ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
@@ -236,7 +248,7 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
                 <FileCheck size={13} /> Screen 3.2: Bid Quotes
               </button>
               <button
-                onClick={() => setActiveScreen('qualification_form')}
+                onClick={() => changeScreen('qualification_form')}
                 className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                   activeScreen === 'qualification_form'
                     ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
@@ -246,7 +258,7 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
                 <Award size={13} /> Screen 3.3: 360° AI Self-Evaluation
               </button>
               <button
-                onClick={() => setActiveScreen('item_catalogue')}
+                onClick={() => changeScreen('item_catalogue')}
                 className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                   activeScreen === 'item_catalogue'
                     ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
@@ -256,7 +268,7 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
                 <Layers size={13} /> Screen 3.4: Item Catalogue
               </button>
               <button
-                onClick={() => setActiveScreen('vendor_subscription')}
+                onClick={() => changeScreen('vendor_subscription')}
                 className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                   activeScreen === 'vendor_subscription'
                     ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
@@ -266,7 +278,7 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
                 <Sparkles size={13} className="text-emerald-400" /> Screen 3.5: Subscription Plans
               </button>
               <button
-                onClick={() => setActiveScreen('vendor_profile')}
+                onClick={() => changeScreen('vendor_profile')}
                 className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                   activeScreen === 'vendor_profile'
                     ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
@@ -282,7 +294,7 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
           {currentRole === 'admin' && (
             <>
               <button
-                onClick={() => setActiveScreen('infra_control')}
+                onClick={() => changeScreen('infra_control')}
                 className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                   activeScreen === 'infra_control'
                     ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30'
@@ -292,7 +304,7 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
                 <Server size={13} /> Screen 4.1: Azure Infrastructure &amp; AI
               </button>
               <button
-                onClick={() => setActiveScreen('audit_log')}
+                onClick={() => changeScreen('audit_log')}
                 className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
                   activeScreen === 'audit_log'
                     ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30'
@@ -302,6 +314,15 @@ export default function RoleNavigation({ activeScreen, setActiveScreen }: RoleNa
                 <ShieldCheck size={13} /> Screen 4.2: Immutable Audit Log
               </button>
             </>
+          )}
+          {onLogout && (
+            <button
+              onClick={onLogout}
+              className="px-2.5 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 ml-auto border border-rose-200 dark:border-rose-900/40"
+              title="Sign Out of Session"
+            >
+              Sign Out
+            </button>
           )}
         </div>
       </div>

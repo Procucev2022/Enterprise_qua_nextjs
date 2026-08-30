@@ -24,7 +24,7 @@ import CompanyHoverTooltip from '@/app/components/CompanyHoverTooltip';
 
 interface VendorConsoleProps {
   onNavigateToMatrix: (rfq: RFQItem) => void;
-  onNavigateToEvaluation: () => void;
+  onNavigateToEvaluation?: () => void;
 }
 
 export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluation }: VendorConsoleProps) {
@@ -118,6 +118,22 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
       whatsappSla: 89.2,
       awardedSpend: 90000,
       rfqBids: ['RFQ-2026-00424'],
+    },
+    {
+      id: 'vendor-6',
+      name: 'Rohan Verma',
+      email: 'rohan@voltas.com',
+      company: 'Voltas Electro Mech',
+      logoLetter: 'V',
+      logoBg: 'bg-rose-600 text-white',
+      avatarColor: 'bg-rose-100 text-rose-800',
+      category: 'HVAC & Refrigeration',
+      location: 'New Delhi, DL',
+      rating: 4.4,
+      leadTimeDays: 18,
+      whatsappSla: 84.0,
+      awardedSpend: 0,
+      rfqBids: ['RFQ-2026-99999'],
     },
   ];
 
@@ -447,7 +463,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                 const isQuoteExpanded = expandedQuoteNumber === rfq.rfqNumber;
                 
                 // Find matching quote from this vendor inside the RFQ list
-                const matchingQuote = rfq.quotes.find((q) => q.vendorName.toLowerCase().includes(selectedVendor.company.toLowerCase()) || selectedVendor.company.toLowerCase().includes(q.vendorName.toLowerCase())) || {
+                const matchingQuote = rfq.quotes.find((q) => q.vendorName.toLowerCase().includes(selectedVendor.company.toLowerCase())) || {
                   unitPrice: rfq.budget / 12,
                   totalPrice: rfq.budget,
                   leadTimeDays: selectedVendor.leadTimeDays,
@@ -480,7 +496,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                           <div className="flex items-center gap-3 text-[10px] text-slate-450 dark:text-gray-500 mt-1">
                             <span>Sourced Spend: <strong>${rfq.budget.toLocaleString()}</strong></span>
                             <span>Line Items: <strong>{rfq.extractedEntities.length}</strong></span>
-                            <span>Total Quote Value: <strong className="text-emerald-600">${matchingQuote.totalPrice?.toLocaleString() || rfq.budget.toLocaleString()}</strong></span>
+                            <span>Total Quote Value: <strong className="text-emerald-600">${matchingQuote.totalPrice.toLocaleString()}</strong></span>
                           </div>
                         </div>
                       </div>
@@ -490,9 +506,9 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                           Lead: {matchingQuote.leadTimeDays} days
                         </span>
                         <span className={`badge text-[9px] ${
-                          matchingQuote.complianceStatus?.includes('Fully') ? 'badge-emerald' : 'badge-amber'
+                          matchingQuote.complianceStatus.includes('Fully') ? 'badge-emerald' : 'badge-amber'
                         }`}>
-                          {matchingQuote.complianceStatus || 'Compliant'}
+                          {matchingQuote.complianceStatus}
                         </span>
                         <ChevronDown size={14} className="text-slate-455 transition-transform" style={{ transform: isQuoteExpanded ? 'rotate(180deg)' : 'none' }} />
                       </div>
@@ -512,7 +528,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                               </div>
                               <div className="flex justify-between">
                                 <span className="text-slate-500">Total Bidded Price:</span>
-                                <span className="font-bold text-emerald-600 dark:text-emerald-450 font-mono">${matchingQuote.totalPrice?.toLocaleString()}</span>
+                                <span className="font-bold text-emerald-600 dark:text-emerald-450 font-mono">${matchingQuote.totalPrice.toLocaleString()}</span>
                               </div>
                               <div className="flex justify-between">
                                 <span className="text-slate-500">Payment Terms:</span>
@@ -524,7 +540,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                           <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-250/60 dark:border-gray-850 space-y-2">
                             <h4 className="text-[10px] font-bold uppercase text-slate-450 dark:text-gray-500 tracking-wider">Remarks & Compliance Audit</h4>
                             <p className="text-slate-650 dark:text-gray-300 text-[11px] leading-relaxed">
-                              {matchingQuote.remarks || 'Ingested automatically from mail inbox quote attachment.'}
+                              {matchingQuote.remarks}
                             </p>
                           </div>
                         </div>
@@ -535,7 +551,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                             🚀 <strong>Category Manager Action</strong>: You can check the overall ranking of this quote in the central Quote Matrix.
                           </span>
                           <button
-                            onClick={() => onNavigateToMatrix(rfq)}
+                            onClick={() => onNavigateToMatrix && onNavigateToMatrix(rfq)}
                             className="btn btn-primary btn-xs font-bold"
                           >
                             Go to Central Quote Matrix
