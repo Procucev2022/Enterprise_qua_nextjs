@@ -1,4 +1,13 @@
-import { SOURCING_MODES, INITIAL_SYSTEM_CONFIG, INITIAL_AZURE_HEALTH } from '@/lib/constants';
+import {
+  SOURCING_MODES,
+  INITIAL_SYSTEM_CONFIG,
+  INITIAL_AZURE_HEALTH,
+  FORM_SCHEMAS,
+  validateFormData,
+  EMAIL_PATTERN,
+  GSTIN_PATTERN,
+  PHONE_PATTERN,
+} from '@/lib/constants';
 
 describe('lib/constants', () => {
   it('should export valid SOURCING_MODES', () => {
@@ -39,5 +48,22 @@ describe('lib/constants', () => {
     expect(services.some(s => s.includes('Cosmos DB'))).toBe(true);
     expect(services.some(s => s.includes('Communication Services'))).toBe(true);
     expect(services.some(s => s.includes('Key Vault'))).toBe(true);
+  });
+
+  it('should re-export validation schemas, regex patterns, and validation helpers', () => {
+    expect(FORM_SCHEMAS).toBeDefined();
+    expect(FORM_SCHEMAS.rfqIngestion).toBeDefined();
+    expect(EMAIL_PATTERN).toBeDefined();
+    expect(GSTIN_PATTERN).toBeDefined();
+    expect(PHONE_PATTERN).toBeDefined();
+    expect(typeof validateFormData).toBe('function');
+
+    const result = validateFormData(FORM_SCHEMAS.rfqIngestion, {
+      title: 'Valid RFQ Title',
+      category: 'Mechanical',
+      budget: 20000,
+      targetDeliveryDate: '2026-03-30',
+    });
+    expect(result.isValid).toBe(true);
   });
 });

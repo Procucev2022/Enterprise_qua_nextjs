@@ -79,3 +79,12 @@ export const INITIAL_AZURE_HEALTH: AzureServiceHealth[] = [
     details: 'FIPS 140-2 Level 3 Hardware Security Module Active',
   },
 ];
+
+export {
+  FORM_SCHEMAS,
+  validateFormData,
+  EMAIL_PATTERN,
+  GSTIN_PATTERN,
+  PHONE_PATTERN,
+} from './validationSchemas';
+

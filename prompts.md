@@ -103,3 +103,12 @@ Comprehensive and Descriptive UI Error Messaging: Add a comprehensive configurat
 ```
 
 ---
+
+### Prompt 10
+**Timestamp**: 2026-08-30T04:34:28Z
+
+```text
+Input Schema Validation: Add a comprehensive configuration in assistant instructions to enforce strict input validation across the entire application. This configuration must mandate the addition of input schema validation whenever any code change touches user or system inputs, including frontend forms, API routes, controller bodies, query parameters, and headers. Additionally, all validation schemas must be defined in dedicated constants modules, rather than being declared inline, ensuring they serve as a single source of truth for data integrity throughout the projects. Also refactor the code & apply these validation changes across the complete projects.
+```
+
+---

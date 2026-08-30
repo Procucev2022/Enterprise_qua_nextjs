@@ -156,3 +156,13 @@ Whenever making any code changes or adding new features:
   - **Database & Sync Failures**: Indicate whether PostgreSQL synchronization failed, explain temporary operational mode (e.g., local state active), and provide a direct "Retry Sync" action.
   - **Authentication & Permissions**: Provide explicit guidance for session timeouts, invalid credentials, or unauthorized role access with direct navigation to login or role-selection screens.
   - **Business Logic & Workflow Constraints**: Detail exactly why an operation cannot proceed (e.g., budget exceeded, deadline expired, minimum vendor quote requirement unmet) and outline the specific remediation steps required.
+
+---
+
+## 17. Strict Input Schema Validation Standard
+- **Centralized Schema Definition in Constants**: All input validation schemas for user and system inputs (frontend forms, API routes, controller bodies, query parameters, and headers) **MUST** be defined in dedicated constants/schema modules (`backend/src/config/validationSchemas.js` and `frontend/lib/validationSchemas.ts`) rather than being declared inline.
+- **Single Source of Truth**: Schemas in constants modules serve as the single source of truth for field types, boundaries, regular expressions, and mandatory constraint rules across all project layers.
+- **Mandatory Validation Gate on Code Changes**: Whenever making changes that touch user or system inputs:
+  1. Define or update the corresponding schema in the dedicated constants module.
+  2. Enforce schema validation on incoming payloads, query parameters, and headers at the entry boundary before executing downstream business logic or database operations.
+  3. Reject invalid inputs with structured, descriptive validation errors detailing the exact offending fields and formatting requirements.

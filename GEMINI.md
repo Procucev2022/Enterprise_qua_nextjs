@@ -84,3 +84,9 @@
 
 ## 13. Comprehensive and Descriptive UI Error Messaging Standard
 - Implement user-facing error messages with specific failure details, clear context, and actionable resolution steps across all error categories (Form Validation, Network Failures, Database/Sync, Authentication, and Business Logic constraints).
+
+---
+
+## 14. Strict Input Schema Validation Standard
+- Define all input validation schemas in dedicated constants modules (`backend/src/config/validationSchemas.js` and `frontend/lib/validationSchemas.ts`) as a single source of truth.
+- Validate all user and system inputs (forms, API routes, controller bodies, query params, headers) against schema constants before executing business logic.

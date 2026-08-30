@@ -189,6 +189,14 @@ const QUALIFICATION_PILLARS = [
   { id: 'M6', name: 'Governance & ESG', weight: 10, color: '#f43f5e' },
 ];
 
+const {
+  EMAIL_REGEX,
+  GSTIN_REGEX,
+  PHONE_REGEX,
+  VALIDATION_SCHEMAS,
+  validatePayload,
+} = require('./validationSchemas');
+
 module.exports = {
   SOURCING_MODES,
   BUYER_SUBSCRIPTION_PLANS,
@@ -196,4 +204,10 @@ module.exports = {
   INITIAL_SYSTEM_CONFIG,
   INITIAL_AZURE_HEALTH,
   QUALIFICATION_PILLARS,
+  EMAIL_REGEX,
+  GSTIN_REGEX,
+  PHONE_REGEX,
+  VALIDATION_SCHEMAS,
+  validatePayload,
 };
+
