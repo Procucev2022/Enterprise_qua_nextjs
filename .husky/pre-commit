@@ -1,0 +1,18 @@
+#!/bin/sh
+# Procucev Enterprise Automated Pre-Commit Quality Gate
+# Enforces Linting, Typechecking, Building, and 90% Unit Test Code Coverage
+
+echo "🛡️  [PRE-COMMIT GATE] Executing full workspace quality check..."
+
+npm run check:quality
+
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ]; then
+  echo ""
+  echo "❌ [PRE-COMMIT REJECTED] Quality check failed. Please resolve all errors/coverage benchmarks before committing."
+  exit 1
+fi
+
+echo "✅ [PRE-COMMIT APPROVED] All quality gates and coverage benchmarks verified."
+exit 0

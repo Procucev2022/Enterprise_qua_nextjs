@@ -196,3 +196,18 @@ Whenever making any code changes or adding new features:
   - ES6+ formatting: Enforce single quotes (`quotes: ['error', 'single']`), semicolons (`semi: ['error', 'always']`), `prefer-const`, `no-var`, `object-shorthand`, and `comma-dangle`.
   - Maintainability: Enforce modular files, clean function structure, and UI string separation via `frontend/lib/uiStrings.ts`.
   - Continuous Gate: Linter verification (`npm run lint`) is strictly integrated into primary build and CI/CD workflows, blocking any merges with warnings or errors.
+
+---
+
+## 21. Pre-Commit Quality Gate & Git Hooks Protocol
+- **Mandatory Pre-Commit Verification**: All git commits **MUST** pass automated pre-commit hook checks (`.husky/pre-commit` or `.git/hooks/pre-commit`) before being recorded in git history.
+- **Pre-Commit Execution Sequence**:
+  1. **Linting & Code Style**: Run `npm run lint` to enforce zero ESLint warnings and errors.
+  2. **TypeScript Static Typecheck**: Run `npm run typecheck` (`tsc --noEmit`) to ensure zero type errors.
+  3. **Unit Tests & 90% Per-File Code Coverage**: Run `npm run test:coverage` and `npm run check:coverage` enforcing $\ge 90\%$ on Statements, Branches, Functions, and Lines.
+  4. **Production Build & Asset Verification**: Run `npm run build` to confirm clean compilation and prerendering.
+- **Fail-Safe Gate**: If any test fails, coverage falls below 90% on any file, or linter/typecheck reports warnings/errors, the commit operation is automatically aborted.
+- **Workspace Pre-Commit Command**:
+  ```bash
+  npm run pre-commit
+  ```

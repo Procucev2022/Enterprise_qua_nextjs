@@ -132,3 +132,12 @@ Formatting & ES6+: Enforce single quotes, semi (colons), and comma-dangle. Requi
 ```
 
 ---
+
+### Prompt 12
+**Timestamp**: 2026-08-30T04:42:36Z
+
+```text
+Pre-commits check: Add assistant instructions to run git pre-commit hooks that execute all quality checks—such as linting, typechecking, building, and running tests—before allowing any commit.
+```
+
+---

@@ -109,3 +109,8 @@
 - Enforce strict typing (`@typescript-eslint/no-explicit-any`, `@typescript-eslint/no-non-null-assertion`, `@typescript-eslint/consistent-type-imports`, `@typescript-eslint/prefer-optional-chain`).
 - Enforce React hooks safety, accessibility (`jsx-a11y`), and ES6+ style standards (`prefer-const`, `no-var`, `object-shorthand`, single quotes, semicolons).
 - Block all merges and builds with unhandled linting errors.
+
+---
+
+## 18. Pre-Commit Quality Gate & Git Hooks Protocol
+- Enforce git pre-commit hooks (`.husky/pre-commit` or `npm run pre-commit`) executing linting, typechecking, building, and unit tests with 90% per-file coverage before allowing any commit to proceed.

@@ -69,3 +69,6 @@
 
 18. Strictest Linter & Code Quality Standard
 - Enforce strict typing (`no-explicit-any`, `no-non-null-assertion`, `consistent-type-imports`, `prefer-optional-chain`), accessibility (`jsx-a11y`), React hooks, and ES6+ style conventions in CI/CD and build gates.
+
+19. Pre-Commit Quality Gate & Git Hooks Protocol
+- Execute full quality checks (linting, typechecking, building, and unit tests with 90% per-file coverage) via `npm run pre-commit` or `.husky/pre-commit` before allowing git commits.
