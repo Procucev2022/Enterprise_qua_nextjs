@@ -70,3 +70,12 @@ Auto performance optimization: Configure assistant instructions to continuously 
 ```
 
 ---
+
+### Prompt 7
+**Timestamp**: 2026-08-30T04:18:07Z
+
+```text
+Quality Check Configuration such as build, typecheck, lint etc: Add configuration in assistant instructions to ensure that after every change the system runs the appropriate quality check commands where AI coding agents such as antigravity, Kiro, github copilot, claude, etc will check for build issues, typecheck issues, lint issues, unit test code coverage, apply any pending database schema migrations etc. In case of multiple projects in the workspace, use global commands to check all issues in the workspace. Build & unit test coverage should be checked first. Also add a command which can check only changes in fast ways.
+```
+
+---

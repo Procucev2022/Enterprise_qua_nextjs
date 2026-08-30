@@ -1,6 +1,6 @@
 {
   "name": "procucev-enterprise-root",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "scripts": {
     "dev": "concurrently -k -n \"BACKEND,FRONTEND\" -c \"bgBlue.bold,bgGreen.bold\" \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\"",
@@ -8,11 +8,19 @@
     "dev:backend": "npm run dev --prefix backend",
     "dev:frontend": "npm run dev --prefix frontend",
     "start": "concurrently -k -n \"BACKEND,FRONTEND\" -c \"bgBlue.bold,bgGreen.bold\" \"npm run start --prefix backend\" \"npm run start --prefix frontend\"",
+    "build": "npm run build --prefix frontend",
+    "typecheck": "npm run typecheck --prefix frontend",
+    "lint": "npm run lint --prefix frontend",
+    "db:migrate": "node backend/src/db/seed.js",
     "test": "npm test --prefix backend && npm test --prefix frontend",
     "test:backend": "npm test --prefix backend",
     "test:frontend": "npm test --prefix frontend",
     "test:coverage": "npm run test:coverage --prefix backend && npm run test:coverage --prefix frontend",
-    "check:coverage": "npm run check:coverage --prefix backend && npm run check:coverage --prefix frontend"
+    "check:coverage": "npm run check:coverage --prefix backend && npm run check:coverage --prefix frontend",
+    "check:quality": "node scripts/quality-check.js",
+    "qc": "node scripts/quality-check.js",
+    "check:fast": "node scripts/fast-check.js",
+    "qc:fast": "node scripts/fast-check.js"
   },
   "devDependencies": {
     "concurrently": "^10.0.5"

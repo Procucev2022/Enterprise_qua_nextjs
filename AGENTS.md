@@ -102,3 +102,28 @@ Whenever making any code changes or adding new features:
 - **Continuous Performance Auditing**: Continuously profile and audit critical execution paths, database query latencies, API payload sizes, and frontend rendering performance across the entire codebase.
 - **Automated Optimizations**: Proactively implement code-splitting, lazy-loading, resource caching (HTTP cache headers, LRU query caching, client-side store memoization), and payload minification.
 - **Benchmark Validation**: Validate all optimizations against established bundle size and latency benchmarks via the quality check pipeline, ensuring optimal load times and minimal compute consumption.
+
+---
+
+## 13. Quality Check Pipeline & Multi-Project Verification Protocol
+- **Mandatory Quality Check Execution**: After every code change, AI agents **MUST** run the comprehensive workspace quality check pipeline.
+- **Strict Verification Sequence**:
+  1. **Production Build & Asset Verification**: `npm run build` (Ensures compilation, bundling, and prerendering succeed).
+  2. **Unit Test & 90% Per-File Coverage Enforcement**: `npm run test:coverage` and `npm run check:coverage` (Enforces per-file $\ge 90\%$ benchmarks across statements, branches, functions, and lines with 0 failures).
+  3. **TypeScript Static Typecheck**: `npm run typecheck` (Ensures zero type errors).
+  4. **Linting & Code Style Analysis**: `npm run lint` (Ensures zero ESLint warnings and errors).
+  5. **Database Schema & Migrations Verification**: `npm run db:migrate` (Applies and verifies pending schema updates and seed integrity).
+- **Workspace-Wide Global Commands**:
+  - Run full quality check across all workspace projects:
+    ```bash
+    npm run check:quality
+    # Or shorthand:
+    npm run qc
+    ```
+- **Fast Change Verification**:
+  - For rapid iterative feedback during active edits, run the fast verification command to validate modified files:
+    ```bash
+    npm run check:fast
+    # Or shorthand:
+    npm run qc:fast
+    ```

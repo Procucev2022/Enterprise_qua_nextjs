@@ -59,3 +59,11 @@
 ## 9. Automated Performance Optimization Standard
 - Continuously profile and optimize critical paths, API payloads, database query latency, code-splitting, lazy-loading, and multi-tier resource caching.
 - Validate improvements against bundle size, load time, and compute consumption benchmarks.
+
+---
+
+## 10. Quality Check Pipeline & Multi-Project Verification Protocol
+- **Sequence**: Build and Unit Test Coverage MUST be verified first, followed by TypeScript Typecheck, Linting, and Database Migrations.
+- **Global Workspace Commands**:
+  - `npm run check:quality` or `npm run qc`: Full workspace quality check pipeline.
+  - `npm run check:fast` or `npm run qc:fast`: Fast incremental check for active changes.

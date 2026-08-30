@@ -36,3 +36,12 @@
 
 10. Automated Performance Optimization Standard
 - Continuously audit and optimize critical execution paths, API payloads, query latencies, code-splitting, lazy-loading, and multi-tier resource caching.
+
+11. Quality Check Pipeline & Multi-Project Verification Protocol
+- Run `npm run check:quality` (`npm run qc`) after changes to verify:
+  1. Build (`npm run build`)
+  2. Unit test coverage (`npm run test:coverage` & `npm run check:coverage`)
+  3. Typecheck (`npm run typecheck`)
+  4. Lint (`npm run lint`)
+  5. DB migrations (`npm run db:migrate`)
+- Run `npm run check:fast` (`npm run qc:fast`) for fast change validation.

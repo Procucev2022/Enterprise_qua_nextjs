@@ -21,18 +21,30 @@ import {
 } from 'lucide-react';
 
 interface QuoteMatrixProps {
-  onBackToDashboard: () => void;
+  onBackToDashboard?: () => void;
 }
 
 export default function QuoteMatrix({ onBackToDashboard }: QuoteMatrixProps) {
   const { rfqs, selectedRFQForMatrix, setSelectedRFQForMatrix, showToast, openRFQDeepDive, deepDiveModalOpen, setDeepDiveModalOpen, selectedRFQForDeepDive } = useApp();
 
-  const currentRFQ = selectedRFQForMatrix || rfqs[0];
+  const currentRFQ = selectedRFQForMatrix || (rfqs && rfqs.length > 0 ? rfqs[0] : null);
 
   const [poModalOpen, setPoModalOpen] = useState(false);
   const [selectedVendorForPO, setSelectedVendorForPO] = useState<QuoteComparison | null>(null);
 
-  const quotes = currentRFQ.quotes;
+  if (!currentRFQ) {
+    return (
+      <div className="p-12 text-center glass-panel rounded-2xl space-y-3 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80">
+        <AlertCircle size={32} className="mx-auto text-amber-500" />
+        <h3 className="text-base font-bold text-slate-900 dark:text-white">No RFQs Available</h3>
+        <p className="text-xs text-slate-500 dark:text-gray-400 max-w-md mx-auto">
+          Please create or ingest an RFQ first to generate the comparative quote evaluation matrix.
+        </p>
+      </div>
+    );
+  }
+
+  const quotes = currentRFQ.quotes || [];
 
   const handleSelectVendor = (quote: QuoteComparison) => {
     setSelectedVendorForPO(quote);

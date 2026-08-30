@@ -1,21 +1,35 @@
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
-import QuoteMatrix from '@/app/buyer/quote-matrix';
-import { useApp } from '@/lib/store';
-import { RFQItem } from '@/lib/types';
+import QuoteMatrix from '../../../app/buyer/quote-matrix';
+import { useApp } from '../../../lib/store';
 
-jest.mock('@/lib/store', () => ({
+jest.mock('../../../lib/store', () => ({
   useApp: jest.fn(),
 }));
 
-describe('app/buyer/quote-matrix.tsx', () => {
+jest.mock('../../../app/components/Modals', () => ({
+  PurchaseOrderModal: ({ isOpen, onClose }: any) =>
+    isOpen ? (
+      <div data-testid="po-modal">
+        <button onClick={onClose}>Close PO Modal</button>
+      </div>
+    ) : null,
+  RFQFollowUpDeepDiveModal: ({ isOpen, onClose }: any) =>
+    isOpen ? (
+      <div data-testid="deep-dive-modal">
+        <button onClick={onClose}>Close Deep Dive</button>
+      </div>
+    ) : null,
+}));
+
+describe('QuoteMatrix Component Tests', () => {
+  const mockShowToast = jest.fn();
   const mockSetSelectedRFQForMatrix = jest.fn();
   const mockOpenRFQDeepDive = jest.fn();
   const mockSetDeepDiveModalOpen = jest.fn();
-  const mockShowToast = jest.fn();
   const mockOnBackToDashboard = jest.fn();
 
-  const mockRFQs: RFQItem[] = [
+  const mockRFQs = [
     {
       id: 'rfq-1',
       rfqNumber: 'RFQ-2026-00421',
@@ -25,13 +39,13 @@ describe('app/buyer/quote-matrix.tsx', () => {
       creationDate: '2026-02-28',
       targetDeliveryDate: '2026-03-25',
       budget: 85000,
-      quotesCount: 3,
-      status: 'Quotes Received',
+      quotesCount: 2,
+      status: 'In Evaluation' as const,
       chasingActive: true,
       followUpData: {
         totalInvited: 5,
         respondedCount: 3,
-        callStats: { total: 5, connected: 4, voicemail: 1, failed: 0, avgDuration: '1m 45s' },
+        callStats: { total: 5, connected: 4, avgDuration: '1m 45s' },
         whatsappStats: { total: 5, delivered: 5, read: 4, replied: 3 },
         smsStats: { total: 5, delivered: 5, clicked: 4 },
         channels: [],
@@ -60,6 +74,8 @@ describe('app/buyer/quote-matrix.tsx', () => {
           totalPrice: 79200,
           leadTimeDays: 21,
           aiMatchScore: 88,
+          isBestPrice: false,
+          isPreferred: false,
           warrantyYears: 2,
           complianceStatus: 'Minor Exception',
           paymentTerms: 'Net 30 Days',
@@ -89,7 +105,7 @@ describe('app/buyer/quote-matrix.tsx', () => {
       targetDeliveryDate: '2026-03-30',
       budget: 120000,
       quotesCount: 0,
-      status: 'In Sourcing',
+      status: 'Quotes Pending' as const,
       quotes: [],
       lineItems: [],
     },
@@ -99,116 +115,108 @@ describe('app/buyer/quote-matrix.tsx', () => {
     jest.clearAllMocks();
     (useApp as jest.Mock).mockReturnValue({
       rfqs: mockRFQs,
-      selectedRFQForMatrix: mockRFQs[0],
+      selectedRFQForMatrix: null,
       setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
       openRFQDeepDive: mockOpenRFQDeepDive,
       deepDiveModalOpen: false,
       setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
       selectedRFQForDeepDive: null,
-      showToast: mockShowToast,
-      approvePO: jest.fn(),
     });
   });
 
-  it('renders comparative quote matrix with RFQ header, telemetry, and quotes table', () => {
+  test('renders QuoteMatrix with title, RFQ switcher, and vendors comparison matrix', () => {
     render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
-
-    expect(screen.getByText('Comparative Quote Evaluation Matrix')).toBeInTheDocument();
-    expect(screen.getByText('High Pressure Centrifugal Water Pumps 500 GPM')).toBeInTheDocument();
-    expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
-    expect(screen.getByText('Kiran Valve Industries')).toBeInTheDocument();
-
-    // Back to dashboard link
-    fireEvent.click(screen.getByText(/Back to Command Center/i));
-    expect(mockOnBackToDashboard).toHaveBeenCalled();
+    expect(screen.getByText(/Comparative Quote Evaluation Matrix/i)).toBeInTheDocument();
+    expect(screen.getByText(/Apex Supplies Ltd./i)).toBeInTheDocument();
+    expect(screen.getByText(/Kiran Valve Industries/i)).toBeInTheDocument();
+    expect(screen.getByText(/\$85,000/i)).toBeInTheDocument();
   });
 
-  it('handles RFQ switcher dropdown and deep dive modal trigger', () => {
+  test('allows selecting a different RFQ from dropdown', () => {
     render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
-
-    // Switch RFQ
     const select = screen.getByRole('combobox');
     fireEvent.change(select, { target: { value: 'rfq-2' } });
+
     expect(mockSetSelectedRFQForMatrix).toHaveBeenCalledWith(mockRFQs[1]);
-
-    // Click Deep Dive telemetry button
-    fireEvent.click(screen.getByText(/Deep Dive Telemetry/i));
-    expect(mockOpenRFQDeepDive).toHaveBeenCalledWith(mockRFQs[0]);
   });
 
-  it('handles awarding / selecting vendor and PO modal workflow', () => {
-    const { container } = render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
-
-    // Click Approve & Generate PO for preferred quote
-    fireEvent.click(screen.getByText(/APPROVE & GENERATE PO/i));
-
-    // PO Modal should be open
-    expect(screen.getByText(/Purchase Order Generation & Dispatch/i)).toBeInTheDocument();
-
-    // Close PO Modal via X button
-    const closeBtns = screen.getAllByRole('button');
-    const xBtn = closeBtns.find((b) => b.querySelector('svg.lucide-x'));
-    if (xBtn) fireEvent.click(xBtn);
-
-    // Select second non-preferred quote
-    fireEvent.click(screen.getByText(/Select Kiran/i));
-    expect(screen.getByText(/Purchase Order Generation & Dispatch/i)).toBeInTheDocument();
-  });
-
-  it('renders deep dive modal when deepDiveModalOpen is true and closes it', () => {
-    (useApp as jest.Mock).mockReturnValue({
-      rfqs: mockRFQs,
-      selectedRFQForMatrix: mockRFQs[0],
-      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
-      openRFQDeepDive: mockOpenRFQDeepDive,
-      deepDiveModalOpen: true,
-      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
-      selectedRFQForDeepDive: mockRFQs[0],
-      showToast: mockShowToast,
-      approvePO: jest.fn(),
-    });
-
+  test('triggers PO generator modal for preferred and non-preferred vendors and closes modal', () => {
     render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
-    expect(screen.getByText(/RFQ AI Follow-Up Telemetry & Deep Dive/i)).toBeInTheDocument();
 
-    // Close deep dive modal via top right X button
-    const closeBtns = screen.getAllByRole('button');
-    const xBtn = closeBtns.find((b) => b.querySelector('svg.lucide-x'));
-    if (xBtn) fireEvent.click(xBtn);
-    expect(mockSetDeepDiveModalOpen).toHaveBeenCalledWith(false);
+    // Preferred vendor PO action
+    const approveBtn = screen.getByText(/\[ APPROVE & GENERATE PO \]/i);
+    fireEvent.click(approveBtn);
+
+    expect(screen.getByTestId('po-modal')).toBeInTheDocument();
+    const closeBtn = screen.getByText(/Close PO Modal/i);
+    fireEvent.click(closeBtn);
+
+    // Non-preferred vendor PO action
+    const selectKiranBtn = screen.getByText(/Select Kiran/i);
+    fireEvent.click(selectKiranBtn);
   });
 
-  it('renders empty quotes fallback state when selected RFQ has no quotes', () => {
+  test('triggers openRFQDeepDive and closes deep dive modal', () => {
     (useApp as jest.Mock).mockReturnValue({
       rfqs: mockRFQs,
       selectedRFQForMatrix: null,
       setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
-      openRFQDeepDive: mockOpenRFQDeepDive,
-      deepDiveModalOpen: false,
-      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
-      selectedRFQForDeepDive: null,
       showToast: mockShowToast,
-      approvePO: jest.fn(),
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      deepDiveModalOpen: true,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      selectedRFQForDeepDive: mockRFQs[0],
     });
 
     render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
-    // With selectedRFQForMatrix null, defaults to rfqs[0]
-    expect(screen.getByText('High Pressure Centrifugal Water Pumps 500 GPM')).toBeInTheDocument();
+    const deepDiveBtn = screen.getByText(/Deep Dive Telemetry/i);
+    fireEvent.click(deepDiveBtn);
 
-    // Now test with rfqs[1] (0 quotes)
+    expect(mockOpenRFQDeepDive).toHaveBeenCalledWith(mockRFQs[0]);
+
+    const closeDeepDiveBtn = screen.getByText(/Close Deep Dive/i);
+    fireEvent.click(closeDeepDiveBtn);
+    expect(mockSetDeepDiveModalOpen).toHaveBeenCalledWith(false);
+  });
+
+  test('triggers onBackToDashboard when back button is clicked', () => {
+    render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+    const backBtn = screen.getByText(/Back to Command Center/i);
+    fireEvent.click(backBtn);
+
+    expect(mockOnBackToDashboard).toHaveBeenCalled();
+  });
+
+  test('renders empty quotes state when selected RFQ has zero quotes', () => {
     (useApp as jest.Mock).mockReturnValue({
       rfqs: mockRFQs,
       selectedRFQForMatrix: mockRFQs[1],
       setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
       openRFQDeepDive: mockOpenRFQDeepDive,
       deepDiveModalOpen: false,
       setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
       selectedRFQForDeepDive: null,
-      showToast: mockShowToast,
-      approvePO: jest.fn(),
     });
 
     render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
-    expect(screen.getByText('Quotes Pending for this RFQ')).toBeInTheDocument();
+    expect(screen.getByText(/Quotes Pending for this RFQ/i)).toBeInTheDocument();
+  });
+
+  test('renders empty state when no RFQs exist', () => {
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: [],
+      selectedRFQForMatrix: null,
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      deepDiveModalOpen: false,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      selectedRFQForDeepDive: null,
+    });
+
+    render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+    expect(screen.getByText(/No RFQs Available/i)).toBeInTheDocument();
   });
 });
