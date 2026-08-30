@@ -67,3 +67,15 @@
 - **Global Workspace Commands**:
   - `npm run check:quality` or `npm run qc`: Full workspace quality check pipeline.
   - `npm run check:fast` or `npm run qc:fast`: Fast incremental check for active changes.
+
+---
+
+## 11. CI/CD Quality Gate & Pull Request Reporting Protocol
+- CI/CD workflow (`.github/workflows/ci.yml`) runs on PRs and pushes to enforce linting, build, typecheck, migrations, and strict per-file 90% unit test coverage.
+- Automatically generates and posts detailed PR summary comments with test failure/success stats, suite metrics, and per-file coverage tables.
+
+---
+
+## 12. Environment Variables Example & Secrets Sanitation Standard
+- Maintain `.env.example`, `backend/.env.example`, and `frontend/.env.example` with all configuration variables without exposing secrets or credentials.
+- Read all configurable parameters from `process.env` with safe default fallbacks.

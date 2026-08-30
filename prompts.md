@@ -79,3 +79,18 @@ Quality Check Configuration such as build, typecheck, lint etc: Add configuratio
 ```
 
 ---
+
+### Prompt 8
+**Timestamp**: 2026-08-30T04:26:06Z
+
+```text
+CI/CD configuration: Set up a CI/CD workflow to run on pull requests. This workflow must check for all quality requirements for the application, including linting, building, typechecking, and ensuring all unit tests pass with the required code coverage of 90% across each file across all parameters.
+
+Also, print overall unit tests summary PR comments such as number of unit test failure or success etc, overall unit test code coverage.
+
+Environment variables example: Add the configuration in AI coding agents (e.g., antigravity, cursor, Claude, codex, kiro, etc.) to maintain & keep an environment variables example file updated with all the required variables used in the application, ensuring no sensitive data or actual secrets are included. Add the example file as well. 
+
+In case, there is any environment variable hardcoded in codebase, please add that in env file
+```
+
+---

@@ -45,3 +45,11 @@
   4. Lint (`npm run lint`)
   5. DB migrations (`npm run db:migrate`)
 - Run `npm run check:fast` (`npm run qc:fast`) for fast change validation.
+
+12. CI/CD Workflow & PR Summary Comment Standard
+- Enforce full quality check pipeline on PRs via `.github/workflows/ci.yml`.
+- Automatically generate and post PR comments with unit test pass/fail counts and per-file coverage metrics.
+
+13. Environment Variables Example Maintenance & Secrets Sanitation Standard
+- Keep `.env.example`, `backend/.env.example`, and `frontend/.env.example` updated with all required configuration variables.
+- Never hardcode sensitive secrets in source code; read from `process.env` with fallback defaults.

@@ -127,3 +127,21 @@ Whenever making any code changes or adding new features:
     # Or shorthand:
     npm run qc:fast
     ```
+
+---
+
+## 14. CI/CD Quality Gate & Pull Request Reporting Protocol
+- **Continuous Integration Gate (`.github/workflows/ci.yml`)**: Every pull request and push to main branches must automatically trigger the comprehensive quality pipeline (linting, build verification, TypeScript typecheck, database migrations, and unit test execution).
+- **Strict Per-File 90% Enforcement in CI**: If any unit test fails or if even a single file falls below 90% coverage in lines, statements, branches, or functions, the CI workflow run MUST fail.
+- **Automated Pull Request Summary Comments**: The CI workflow must automatically generate and post a formatted markdown comment on each pull request detailing:
+  - Total unit tests executed, passed, failed, and skipped.
+  - Overall coverage breakdown (Statements, Branches, Functions, Lines).
+  - Per-file coverage status confirming 100% compliance across all workspace projects.
+  - Status of build, lint, typecheck, and database schema migrations.
+
+---
+
+## 15. Environment Variables Example & Secrets Sanitation Standard
+- **Centralized `.env.example` Maintenance**: Maintain and regularly update `.env.example` at the workspace root, `backend/.env.example`, and `frontend/.env.example` with all configuration variables used across the application.
+- **Zero Hardcoded Secrets or Credentials**: Never hardcode sensitive data, API keys, passwords, database credentials, or secret tokens anywhere in the codebase. All runtime configuration values must be read from `process.env` with safe default fallbacks.
+- **Synchronization Gate**: Whenever new environment variables are introduced or refactored, immediately document them with descriptions and safe placeholder values in all `.env.example` files.

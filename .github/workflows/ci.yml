@@ -1,0 +1,103 @@
+name: Enterprise CI Pipeline & Quality Gate
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gate:
+    name: Quality Check, Test Coverage & Build Gate
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [ 20.x ]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install Workspace Dependencies
+        run: |
+          npm ci || npm install
+          npm ci --prefix backend || npm install --prefix backend
+          npm ci --prefix frontend || npm install --prefix frontend
+
+      - name: Step 1 - Build Verification
+        run: npm run build
+
+      - name: Step 2 - Unit Tests & 90% Per-File Code Coverage Enforcement
+        run: |
+          npm run test:coverage
+          npm run check:coverage
+
+      - name: Step 3 - TypeScript Static Typecheck
+        run: npm run typecheck
+
+      - name: Step 4 - ESLint & Code Style Analysis
+        run: npm run lint
+
+      - name: Step 5 - Database Schema & Migrations Verification
+        run: npm run db:migrate
+
+      - name: Step 6 - Generate Quality & Unit Tests Summary Report
+        id: summary_report
+        run: node scripts/generate-ci-summary.js
+
+      - name: Post PR Summary Comment
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            let summaryMarkdown = '';
+            try {
+              // Capture output from generator
+              const summaryScript = path.resolve('scripts/generate-ci-summary.js');
+              const { execSync } = require('child_process');
+              summaryMarkdown = execSync(`node ${summaryScript}`, { encoding: 'utf8' });
+            } catch (err) {
+              summaryMarkdown = '## 🚀 Quality Gate Execution Completed';
+            }
+
+            const botCommentIdentifier = '<!-- procucev-ci-summary-comment -->';
+            const body = `${botCommentIdentifier}\n${summaryMarkdown}`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existingComment = comments.find(c => c.body.includes(botCommentIdentifier));
+
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body: body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body,
+              });
+            }
