@@ -18,8 +18,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="light">
-      <body className="bg-slate-50 dark:bg-[#07090e] text-slate-900 dark:text-slate-100 transition-colors duration-200">
+    <html lang="en" className="light" suppressHydrationWarning>
+      <body
+        className="bg-slate-50 dark:bg-[#07090e] text-slate-900 dark:text-slate-100 transition-colors duration-200"
+        suppressHydrationWarning
+      >
         <AppProvider>
           <div className="min-h-screen flex flex-col">
             <Header />
