@@ -1,31 +1,30 @@
 {
-  "name": "procucev-enterprise-procurement",
-  "version": "2.0.0",
+  "name": "procucev-enterprise-root",
+  "version": "2.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "next lint"
-  },
-  "dependencies": {
-    "lucide-react": "^0.453.0",
-    "next": "^14.2.15",
-    "pg": "^8.23.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "xlsx": "^0.18.5"
+    "dev": "concurrently -k -n \"BACKEND,FRONTEND\" -c \"bgBlue.bold,bgGreen.bold\" \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\"",
+    "dev:fullstack": "concurrently -k -n \"BACKEND,FRONTEND\" -c \"bgBlue.bold,bgGreen.bold\" \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\"",
+    "dev:backend": "npm run dev --prefix backend",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "start": "concurrently -k -n \"BACKEND,FRONTEND\" -c \"bgBlue.bold,bgGreen.bold\" \"npm run start --prefix backend\" \"npm run start --prefix frontend\"",
+    "build": "npm run build --prefix frontend",
+    "typecheck": "npm run typecheck --prefix frontend",
+    "lint": "npm run lint --prefix frontend",
+    "db:migrate": "node backend/src/db/seed.js",
+    "test": "npm test --prefix backend && npm test --prefix frontend",
+    "test:backend": "npm test --prefix backend",
+    "test:frontend": "npm test --prefix frontend",
+    "test:coverage": "npm run test:coverage --prefix backend && npm run test:coverage --prefix frontend",
+    "check:coverage": "npm run check:coverage --prefix backend && npm run check:coverage --prefix frontend",
+    "check:quality": "node scripts/quality-check.js",
+    "qc": "node scripts/quality-check.js",
+    "check:fast": "node scripts/fast-check.js",
+    "qc:fast": "node scripts/fast-check.js",
+    "pre-commit": "node scripts/quality-check.js",
+    "prepare": "node scripts/setup-git-hooks.js"
   },
   "devDependencies": {
-    "@types/node": "^20.14.10",
-    "@types/pg": "^8.23.1",
-    "@types/react": "^18.3.3",
-    "@types/react-dom": "^18.3.0",
-    "autoprefixer": "^10.5.4",
-    "docx": "^9.7.1",
-    "postcss": "^8.5.26",
-    "puppeteer-core": "^24.43.1",
-    "tailwindcss": "^3.4.1",
-    "typescript": "^5.5.3"
+    "concurrently": "^10.0.5"
   }
 }

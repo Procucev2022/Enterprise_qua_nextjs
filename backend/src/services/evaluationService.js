@@ -1,0 +1,132 @@
+/**
+ * Parametric Quote Evaluation & 360° Vendor Scoring Service
+ */
+
+/**
+ * Normalize and compare quotes for an RFQ
+ * @param {Array} quotes - Array of vendor quotes
+ * @returns {Array} - Ranked and enriched quotes
+ */
+function evaluateQuotes(quotes = []) {
+  if (!Array.isArray(quotes) || quotes.length === 0) return [];
+
+  // Find lowest price
+  const validPrices = quotes.map((q) => Number(q.totalPrice || q.unitPrice || 0)).filter((p) => p > 0);
+  const minPrice = validPrices.length > 0 ? Math.min(...validPrices) : 0;
+
+  return quotes.map((q) => {
+    const currentPrice = Number(q.totalPrice || q.unitPrice || 0);
+    const isBestPrice = currentPrice === minPrice && minPrice > 0;
+
+    // Price Score: Inverse ratio to minimum price
+    const priceScore = currentPrice > 0 ? Math.min(100, Math.round((minPrice / currentPrice) * 100)) : 80;
+    
+    // Lead time score (faster is better)
+    const leadTime = Number(q.leadTimeDays || 14);
+    const leadTimeScore = Math.max(60, Math.min(100, 100 - leadTime * 1.5));
+
+    // Warranty score
+    const warranty = Number(q.warrantyYears || 1);
+    const warrantyScore = Math.min(100, 70 + warranty * 10);
+
+    // Composite AI Match Score
+    const aiMatchScore = Math.round(priceScore * 0.45 + leadTimeScore * 0.3 + warrantyScore * 0.25);
+
+    return {
+      ...q,
+      isBestPrice,
+      aiMatchScore: q.aiMatchScore || aiMatchScore,
+      complianceStatus: q.complianceStatus || 'Fully Compliant',
+      warrantyYears: q.warrantyYears || 2,
+    };
+  });
+}
+
+/**
+ * Calculate 360° 6-Pillar Evaluation for Mode 3 Sourcing
+ * @param {object} moduleScores - Raw module scores (0-100)
+ * @returns {object} - Weighted evaluation breakdown & overall score
+ */
+function calculate360Evaluation(moduleScores = {}) {
+  const weights = {
+    commercial: 0.25, // 25%
+    technical: 0.15,  // 15%
+    quality: 0.20,    // 20%
+    delivery: 0.20,   // 20%
+    financial: 0.10,  // 10%
+    governance: 0.10, // 10%
+  };
+
+  const commercial = Number(moduleScores.commercial?.score ?? 90);
+  const technical = Number(moduleScores.technical?.score ?? 88);
+  const quality = Number(moduleScores.quality?.score ?? 92);
+  const delivery = Number(moduleScores.delivery?.score ?? 90);
+  const financial = Number(moduleScores.financial?.score ?? 85);
+  const governance = Number(moduleScores.governance?.score ?? 90);
+
+  const breakdown = {
+    commercial: { score: commercial, maxScore: 100, weight: 25, weightedScore: commercial * weights.commercial },
+    technical: { score: technical, maxScore: 100, weight: 15, weightedScore: technical * weights.technical },
+    quality: { score: quality, maxScore: 100, weight: 20, weightedScore: quality * weights.quality },
+    delivery: { score: delivery, maxScore: 100, weight: 20, weightedScore: delivery * weights.delivery },
+    financial: { score: financial, maxScore: 100, weight: 10, weightedScore: financial * weights.financial },
+    governance: { score: governance, maxScore: 100, weight: 10, weightedScore: governance * weights.governance },
+  };
+
+  const overallScore = parseFloat(
+    (
+      breakdown.commercial.weightedScore +
+      breakdown.technical.weightedScore +
+      breakdown.quality.weightedScore +
+      breakdown.delivery.weightedScore +
+      breakdown.financial.weightedScore +
+      breakdown.governance.weightedScore
+    ).toFixed(2)
+  );
+
+  let status = 'PREFERRED ENTERPRISE SUPPLIER';
+  let systemAction = 'Full Qualification Approved - Circulate High-Value RFQs with Automated PO Issuance';
+
+  if (overallScore < 60) {
+    status = 'NON-COMPLIANT / REJECTED';
+    systemAction = 'Qualification Rejected - Remediation plan required';
+  } else if (overallScore < 75) {
+    status = 'PROBATIONARY / CONDITIONAL';
+    systemAction = 'Conditional Qualification - Require Category Manager Approval for RFQs';
+  }
+
+  return {
+    overallScore,
+    status,
+    systemAction,
+    moduleScores: breakdown,
+  };
+}
+
+/**
+ * Calculate revised composite vendor score and rating
+ * @param {object} params
+ * @param {number} params.qualityScore
+ * @param {number} params.costScore
+ * @param {number} params.deliveryScore
+ * @param {number} params.previousScore
+ * @returns {object} - Revised score and rating
+ */
+function calculateRevisedRating({ qualityScore, costScore, deliveryScore, previousScore = 85.0 }) {
+  const buyerAverage = parseFloat(((qualityScore + costScore + deliveryScore) / 3).toFixed(2));
+  // 60% historical platform weight + 40% latest buyer audit weight
+  const newCompositeScore = parseFloat((previousScore * 0.6 + buyerAverage * 0.4).toFixed(2));
+  const newRating = parseFloat((Math.min(5.0, (newCompositeScore / 100) * 5)).toFixed(1));
+
+  return {
+    buyerAverage,
+    newCompositeScore,
+    newRating,
+  };
+}
+
+module.exports = {
+  evaluateQuotes,
+  calculate360Evaluation,
+  calculateRevisedRating,
+};

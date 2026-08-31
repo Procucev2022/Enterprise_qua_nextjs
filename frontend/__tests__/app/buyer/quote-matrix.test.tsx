@@ -1,0 +1,222 @@
+import React from 'react';
+import { render, screen, fireEvent } from '@testing-library/react';
+import QuoteMatrix from '../../../app/buyer/quote-matrix';
+import { useApp } from '../../../lib/store';
+
+jest.mock('../../../lib/store', () => ({
+  useApp: jest.fn(),
+}));
+
+jest.mock('../../../app/components/Modals', () => ({
+  PurchaseOrderModal: ({ isOpen, onClose }: any) =>
+    isOpen ? (
+      <div data-testid="po-modal">
+        <button onClick={onClose}>Close PO Modal</button>
+      </div>
+    ) : null,
+  RFQFollowUpDeepDiveModal: ({ isOpen, onClose }: any) =>
+    isOpen ? (
+      <div data-testid="deep-dive-modal">
+        <button onClick={onClose}>Close Deep Dive</button>
+      </div>
+    ) : null,
+}));
+
+describe('QuoteMatrix Component Tests', () => {
+  const mockShowToast = jest.fn();
+  const mockSetSelectedRFQForMatrix = jest.fn();
+  const mockOpenRFQDeepDive = jest.fn();
+  const mockSetDeepDiveModalOpen = jest.fn();
+  const mockOnBackToDashboard = jest.fn();
+
+  const mockRFQs = [
+    {
+      id: 'rfq-1',
+      rfqNumber: 'RFQ-2026-00421',
+      title: 'High Pressure Centrifugal Water Pumps 500 GPM',
+      category: 'Engineering Spares - Mechanical',
+      intakeSource: 'email_gateway',
+      creationDate: '2026-02-28',
+      targetDeliveryDate: '2026-03-25',
+      budget: 85000,
+      quotesCount: 2,
+      status: 'In Evaluation' as const,
+      chasingActive: true,
+      followUpData: {
+        totalInvited: 5,
+        respondedCount: 3,
+        callStats: { total: 5, connected: 4, avgDuration: '1m 45s' },
+        whatsappStats: { total: 5, delivered: 5, read: 4, replied: 3 },
+        smsStats: { total: 5, delivered: 5, clicked: 4 },
+        channels: [],
+      },
+      quotes: [
+        {
+          vendorId: 'v-1',
+          vendorName: 'Apex Supplies Ltd.',
+          vendorCategory: 'Procucev - AI Rec',
+          unitPrice: 12500,
+          totalPrice: 75000,
+          leadTimeDays: 14,
+          aiMatchScore: 98,
+          isBestPrice: true,
+          isPreferred: true,
+          warrantyYears: 3,
+          complianceStatus: 'Fully Compliant',
+          paymentTerms: 'Net 45 Days',
+          remarks: 'OEM certified warranty with plant dispatch.',
+        },
+        {
+          vendorId: 'v-2',
+          vendorName: 'Kiran Valve Industries',
+          vendorCategory: 'Client List',
+          unitPrice: 13200,
+          totalPrice: 79200,
+          leadTimeDays: 21,
+          aiMatchScore: 88,
+          isBestPrice: false,
+          isPreferred: false,
+          warrantyYears: 2,
+          complianceStatus: 'Minor Exception',
+          paymentTerms: 'Net 30 Days',
+          remarks: 'Standard mechanical specifications.',
+        },
+      ],
+      lineItems: [
+        {
+          id: 'li-1',
+          itemName: 'Centrifugal Pump 500 GPM',
+          quantity: 6,
+          unit: 'Units',
+          targetDate: '2026-03-25',
+          technicalSpecs: '15 HP Motor, 500 GPM',
+          confidence: 0.95,
+          category: 'Pumps & Accessories',
+        },
+      ],
+    },
+    {
+      id: 'rfq-2',
+      rfqNumber: 'RFQ-2026-00422',
+      title: 'LV Switchgear Modular Panels',
+      category: 'Engineering Spares - Electrical',
+      intakeSource: 'web_portal',
+      creationDate: '2026-02-28',
+      targetDeliveryDate: '2026-03-30',
+      budget: 120000,
+      quotesCount: 0,
+      status: 'Quotes Pending' as const,
+      quotes: [],
+      lineItems: [],
+    },
+  ];
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: mockRFQs,
+      selectedRFQForMatrix: null,
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      deepDiveModalOpen: false,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      selectedRFQForDeepDive: null,
+    });
+  });
+
+  test('renders QuoteMatrix with title, RFQ switcher, and vendors comparison matrix', () => {
+    render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+    expect(screen.getByText(/Comparative Quote Evaluation Matrix/i)).toBeInTheDocument();
+    expect(screen.getByText(/Apex Supplies Ltd./i)).toBeInTheDocument();
+    expect(screen.getByText(/Kiran Valve Industries/i)).toBeInTheDocument();
+    expect(screen.getByText(/\$85,000/i)).toBeInTheDocument();
+  });
+
+  test('allows selecting a different RFQ from dropdown', () => {
+    render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+    const select = screen.getByRole('combobox');
+    fireEvent.change(select, { target: { value: 'rfq-2' } });
+
+    expect(mockSetSelectedRFQForMatrix).toHaveBeenCalledWith(mockRFQs[1]);
+  });
+
+  test('triggers PO generator modal for preferred and non-preferred vendors and closes modal', () => {
+    render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+
+    // Preferred vendor PO action
+    const approveBtn = screen.getByText(/\[ APPROVE & GENERATE PO \]/i);
+    fireEvent.click(approveBtn);
+
+    expect(screen.getByTestId('po-modal')).toBeInTheDocument();
+    const closeBtn = screen.getByText(/Close PO Modal/i);
+    fireEvent.click(closeBtn);
+
+    // Non-preferred vendor PO action
+    const selectKiranBtn = screen.getByText(/Select Kiran/i);
+    fireEvent.click(selectKiranBtn);
+  });
+
+  test('triggers openRFQDeepDive and closes deep dive modal', () => {
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: mockRFQs,
+      selectedRFQForMatrix: null,
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      deepDiveModalOpen: true,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      selectedRFQForDeepDive: mockRFQs[0],
+    });
+
+    render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+    const deepDiveBtn = screen.getByText(/Deep Dive Telemetry/i);
+    fireEvent.click(deepDiveBtn);
+
+    expect(mockOpenRFQDeepDive).toHaveBeenCalledWith(mockRFQs[0]);
+
+    const closeDeepDiveBtn = screen.getByText(/Close Deep Dive/i);
+    fireEvent.click(closeDeepDiveBtn);
+    expect(mockSetDeepDiveModalOpen).toHaveBeenCalledWith(false);
+  });
+
+  test('triggers onBackToDashboard when back button is clicked', () => {
+    render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+    const backBtn = screen.getByText(/Back to Command Center/i);
+    fireEvent.click(backBtn);
+
+    expect(mockOnBackToDashboard).toHaveBeenCalled();
+  });
+
+  test('renders empty quotes state when selected RFQ has zero quotes', () => {
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: mockRFQs,
+      selectedRFQForMatrix: mockRFQs[1],
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      deepDiveModalOpen: false,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      selectedRFQForDeepDive: null,
+    });
+
+    render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+    expect(screen.getByText(/Quotes Pending for this RFQ/i)).toBeInTheDocument();
+  });
+
+  test('renders empty state when no RFQs exist', () => {
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: [],
+      selectedRFQForMatrix: null,
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      deepDiveModalOpen: false,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      selectedRFQForDeepDive: null,
+    });
+
+    render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+    expect(screen.getByText(/No RFQs Available/i)).toBeInTheDocument();
+  });
+});
