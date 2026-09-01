@@ -260,6 +260,42 @@ describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
     });
   });
 
+  describe('Resolved but Unsuccessful Responses', () => {
+    test('loginWithPassword returns the failure response without establishing a session', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({ success: false, error: 'Invalid email or password.' }),
+      });
+
+      const res = await authClient.loginWithPassword('buyer@procucev.com', 'wrongpassword');
+      expect(res.success).toBe(false);
+      expect(authClient.getToken()).toBeNull();
+      expect(authClient.getSessionUser()).toBeNull();
+    });
+
+    test('register returns the failure response without establishing a session', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({ success: false, error: 'Email is required for registration.' }),
+      });
+
+      const res = await authClient.register({ name: 'No Email', email: '' });
+      expect(res.success).toBe(false);
+      expect(authClient.getToken()).toBeNull();
+    });
+
+    test('getSession returns null when the server responds with success:false', async () => {
+      authClient.setSession(null, 'some-token');
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: false, error: 'Invalid session' }),
+      });
+
+      const session = await authClient.getSession();
+      expect(session).toBeNull();
+    });
+  });
+
   describe('Storage & Session Management', () => {
     test('setSession writes to and removes from localStorage', () => {
       authClient.setSession(

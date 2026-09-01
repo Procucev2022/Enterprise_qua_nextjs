@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { logger } = require('./loggerService');
 const storeService = require('./storeService');
 const poolModule = require('../db/pool');
+const mailerService = require('./mailerService');
 const { AUTH_MESSAGES } = require('../config/constants');
 const {
   getUsersFromDB,
@@ -358,6 +359,10 @@ function requestOtp(email, roleHint, ipAddress) {
       logger.error('DB OTP save error', e, 'AUTH_SERVICE')
     );
   }
+
+  mailerService.sendOtpEmail(normalizedEmail, code, OTP_EXPIRY_MS / 1000).catch((e) =>
+    logger.error('OTP email dispatch error', e, 'AUTH_SERVICE')
+  );
 
   logger.info(`OTP generated for ${normalizedEmail}: ${code}`, { ipAddress }, 'AUTH_SERVICE');
   storeService.addAuditLog({

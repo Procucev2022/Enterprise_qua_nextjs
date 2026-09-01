@@ -177,7 +177,7 @@ export default function HomePage() {
   };
 
   // Request Successive Login OTP (Sent strictly to Email)
-  const handleRequestLoginOtp = (e: React.FormEvent) => {
+  const handleRequestLoginOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!loginEmail.trim()) {
       showToast('Error', 'Please enter your registered Email ID.', 'warning');
@@ -185,67 +185,49 @@ export default function HomePage() {
     }
 
     const emailKey = loginEmail.trim().toLowerCase();
-    let buyer = registeredBuyers[emailKey];
+    const buyer = registeredBuyers[emailKey] || {
+      name: emailKey.split('@')[0] || 'Enterprise Buyer',
+      email: emailKey,
+      mobile: '+91 98201 44820',
+    };
 
-    if (!buyer) {
-      // Auto-register on the fly so custom emails always work seamlessly
-      buyer = {
-        name: emailKey.split('@')[0] || 'Enterprise Buyer',
-        email: emailKey,
-        mobile: '+91 98201 44820',
-      };
-      setRegisteredBuyers((prev) => ({
-        ...prev,
-        [emailKey]: buyer,
-      }));
+    // The backend is authoritative here: an unregistered email is rejected,
+    // not silently created — register() is the only path that creates accounts.
+    const response = await authClient.requestOtp(emailKey, 'buyer');
+    if (!response.success) {
+      showToast('OTP Request Failed', response.error || 'Unable to send an OTP for this email.', 'warning');
+      return;
     }
 
-    // Trigger background API call to backend auth controller
-    authClient.requestOtp(emailKey, 'buyer').catch(() => {});
-
-    // Generate a 4-digit mock OTP
-    const mockOtp = Math.floor(1000 + Math.random() * 9000).toString();
-    setSimulatedLoginOtp(mockOtp);
-    setLoginOtpInput(mockOtp);
+    setRegisteredBuyers((prev) => ({ ...prev, [emailKey]: buyer }));
+    setSimulatedLoginOtp(response.demoCode || '');
+    setLoginOtpInput(response.demoCode || '');
     setLoginOtpSent(true);
 
     showToast(
       'OTP Dispatched',
-      `Login OTP sent to ${buyer.email}. (Demo Code: ${mockOtp})`,
+      `Login OTP sent to ${buyer.email}.${response.demoCode ? ` (Demo Code: ${response.demoCode})` : ''}`,
       'success'
     );
   };
 
   // Verify Login OTP and sign in
-  const handleVerifyLoginOtp = (e: React.FormEvent) => {
+  const handleVerifyLoginOtp = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (
-      loginOtpInput === simulatedLoginOtp ||
-      loginOtpInput === '4321' ||
-      loginOtpInput === '1234' ||
-      loginOtpInput.length === 4
-    ) {
-      const emailKey = loginEmail.trim().toLowerCase();
-      const sessionUser = {
-        id: `usr-buyer-${Date.now()}`,
-        email: emailKey,
-        name: emailKey.split('@')[0].toUpperCase(),
-        role: 'buyer' as UserRole,
-        orgId: 'org-buyer-01',
-        orgName: 'Procucev Buyer Desk',
-        authMethod: 'EMAIL_OTP' as const,
-      };
-      authClient.verifyOtp(emailKey, loginOtpInput).catch(() => {});
-      setCurrentUserSession(sessionUser);
+    const emailKey = loginEmail.trim().toLowerCase();
+    const response = await authClient.verifyOtp(emailKey, loginOtpInput);
+
+    if (response.success && response.user) {
+      setCurrentUserSession(response.user);
       setIsLoggedIn(true);
-      setCurrentRole('buyer');
+      setCurrentRole(response.user.role);
       setActiveScreen('command_center');
       if (!initialSetupCompleted) {
         setInitialSetupModalOpen(true);
       }
       showToast('Welcome Back', 'Logged in successfully as Enterprise Buyer.', 'success');
     } else {
-      showToast('Invalid OTP', 'The OTP entered is incorrect. Please verify and try again.', 'warning');
+      showToast('Invalid OTP', response.error || 'The OTP entered is incorrect. Please verify and try again.', 'warning');
     }
   };
 
@@ -280,69 +262,66 @@ export default function HomePage() {
   const [simulatedVendorOtp, setSimulatedVendorOtp] = useState('');
 
   // Handle Vendor First-Time Password Login
-  const handleVendorPasswordLogin = (e: React.FormEvent) => {
+  const handleVendorPasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!vendorLoginEmail.trim() || !vendorLoginPassword.trim()) {
       showToast('Missing Fields', 'Please enter your registered Vendor Email and Temporary Password.', 'warning');
       return;
     }
-    const sessionUser = {
-      id: `usr-vendor-${Date.now()}`,
-      email: vendorLoginEmail.trim().toLowerCase(),
-      name: vendorLoginEmail.split('@')[0].toUpperCase(),
-      role: 'vendor' as UserRole,
-      orgId: 'org-vendor-01',
-      orgName: 'Vendor Partner Organization',
-      authMethod: 'TEMP_PASSWORD' as const,
-    };
-    authClient.loginWithPassword(vendorLoginEmail, vendorLoginPassword).catch(() => {});
-    setCurrentUserSession(sessionUser);
-    setIsLoggedIn(true);
-    setCurrentRole('vendor');
-    setActiveScreen('vendor_feed');
-    showToast(
-      'First-Time Login Verified',
-      `Welcome ${vendorLoginEmail}! Please update your enterprise profile and category specializations.`,
-      'success'
-    );
+
+    const response = await authClient.loginWithPassword(vendorLoginEmail, vendorLoginPassword);
+    if (response.success && response.user) {
+      setCurrentUserSession(response.user);
+      setIsLoggedIn(true);
+      setCurrentRole(response.user.role);
+      setActiveScreen('vendor_feed');
+      showToast(
+        'First-Time Login Verified',
+        `Welcome ${vendorLoginEmail}! Please update your enterprise profile and category specializations.`,
+        'success'
+      );
+    } else {
+      showToast('Login Failed', response.error || 'Invalid email or password.', 'warning');
+    }
   };
 
   // Request Vendor Email OTP (For subsequent logins)
-  const handleRequestVendorOtp = (e: React.FormEvent) => {
+  const handleRequestVendorOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!vendorLoginEmail.trim()) {
       showToast('Missing Email', 'Please enter your registered Vendor Email ID.', 'warning');
       return;
     }
-    authClient.requestOtp(vendorLoginEmail.trim().toLowerCase(), 'vendor').catch(() => {});
-    const mockOtp = Math.floor(1000 + Math.random() * 9000).toString();
-    setSimulatedVendorOtp(mockOtp);
-    setVendorOtpInput(mockOtp);
+
+    const response = await authClient.requestOtp(vendorLoginEmail.trim().toLowerCase(), 'vendor');
+    if (!response.success) {
+      showToast('OTP Request Failed', response.error || 'Unable to send an OTP for this email.', 'warning');
+      return;
+    }
+
+    setSimulatedVendorOtp(response.demoCode || '');
+    setVendorOtpInput(response.demoCode || '');
     setVendorOtpSent(true);
-    showToast('OTP Dispatched', `Login OTP dispatched to ${vendorLoginEmail}. (Demo Code: ${mockOtp})`, 'success');
+    showToast(
+      'OTP Dispatched',
+      `Login OTP dispatched to ${vendorLoginEmail}.${response.demoCode ? ` (Demo Code: ${response.demoCode})` : ''}`,
+      'success'
+    );
   };
 
   // Verify Vendor Email OTP
-  const handleVerifyVendorOtp = (e: React.FormEvent) => {
+  const handleVerifyVendorOtp = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (vendorOtpInput === simulatedVendorOtp || vendorOtpInput === '1234' || vendorOtpInput === '4321' || vendorOtpInput.length === 4) {
-      const sessionUser = {
-        id: `usr-vendor-${Date.now()}`,
-        email: vendorLoginEmail.trim().toLowerCase(),
-        name: vendorLoginEmail.split('@')[0].toUpperCase(),
-        role: 'vendor' as UserRole,
-        orgId: 'org-vendor-01',
-        orgName: 'Vendor Partner Organization',
-        authMethod: 'EMAIL_OTP' as const,
-      };
-      authClient.verifyOtp(vendorLoginEmail, vendorOtpInput).catch(() => {});
-      setCurrentUserSession(sessionUser);
+    const response = await authClient.verifyOtp(vendorLoginEmail, vendorOtpInput);
+
+    if (response.success && response.user) {
+      setCurrentUserSession(response.user);
       setIsLoggedIn(true);
-      setCurrentRole('vendor');
+      setCurrentRole(response.user.role);
       setActiveScreen('vendor_feed');
       showToast('Authentication Successful', `Logged in via Email OTP as ${vendorLoginEmail}.`, 'success');
     } else {
-      showToast('Invalid OTP', 'The OTP entered is incorrect. Please verify and try again.', 'warning');
+      showToast('Invalid OTP', response.error || 'The OTP entered is incorrect. Please verify and try again.', 'warning');
     }
   };
 
