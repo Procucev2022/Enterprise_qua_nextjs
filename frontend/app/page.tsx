@@ -130,7 +130,7 @@ export default function HomePage() {
         setActiveScreen('command_center');
       }
     } else if (currentRole === 'category_manager') {
-      const validCatScreens = ['kanban_board', 'spend_dashboard', 'buyer_console', 'vendor_evaluation_summary', 'vendor_console', 'category_summary'];
+      const validCatScreens = ['kanban_board', 'spend_dashboard', 'buyer_console', 'vendor_evaluation_summary', 'vendor_console', 'category_summary', 'quote_matrix'];
       if (!validCatScreens.includes(activeScreen)) {
         setActiveScreen('kanban_board');
       }
@@ -153,6 +153,10 @@ export default function HomePage() {
   const navigateToSpendDashboard = (rfq?: any) => {
     if (rfq) setSelectedRFQForMatrix(rfq);
     setActiveScreen('spend_dashboard');
+  };
+  const navigateToQuoteMatrix = (rfq?: any) => {
+    if (rfq) setSelectedRFQForMatrix(rfq);
+    setActiveScreen('quote_matrix');
   };
   const navigateToVendorFeed = () => setActiveScreen('vendor_feed');
 
@@ -1108,10 +1112,10 @@ export default function HomePage() {
     );
   }
 
-  // Logged-in Core Screens switchboard layout
+  // Logged-in Core Screens switchboard layout (flush sidebar dashboard shell)
   return (
-    <div className="space-y-6">
-      {/* Role Navigation Bar with Screen Selectors */}
+    <div className="flex flex-col lg:flex-row items-stretch">
+      {/* Flush Role Workspace Sidebar with Module Selectors */}
       <RoleNavigation
         activeScreen={activeScreen}
         setActiveScreen={setActiveScreen}
@@ -1119,7 +1123,7 @@ export default function HomePage() {
       />
 
       {/* Screen Render Switcher */}
-      <div className="mt-2">
+      <div className="flex-1 min-w-0 w-full px-4 lg:px-6 py-5">
         {/* ROLE 1: ENTERPRISE BUYER */}
         {currentRole === 'buyer' && (
           <>
@@ -1180,7 +1184,7 @@ export default function HomePage() {
           <>
             {activeScreen === 'kanban_board' && (
               <KanbanBoard
-                onNavigateToMatrix={navigateToSpendDashboard}
+                onNavigateToMatrix={navigateToQuoteMatrix}
                 onNavigateToSpend={navigateToSpendDashboard}
               />
             )}
@@ -1191,7 +1195,7 @@ export default function HomePage() {
             )}
             {activeScreen === 'buyer_console' && (
               <BuyerConsole
-                onNavigateToMatrix={navigateToSpendDashboard}
+                onNavigateToMatrix={navigateToQuoteMatrix}
                 onNavigateToEvaluation={() => setActiveScreen('vendor_evaluation_summary')}
               />
             )}
@@ -1202,11 +1206,16 @@ export default function HomePage() {
             )}
             {activeScreen === 'vendor_console' && (
               <VendorConsole
-                onNavigateToMatrix={navigateToSpendDashboard}
+                onNavigateToMatrix={navigateToQuoteMatrix}
               />
             )}
             {activeScreen === 'category_summary' && (
               <CategorySummaryDashboard />
+            )}
+            {activeScreen === 'quote_matrix' && (
+              <QuoteMatrix
+                onBackToDashboard={() => setActiveScreen('kanban_board')}
+              />
             )}
           </>
         )}

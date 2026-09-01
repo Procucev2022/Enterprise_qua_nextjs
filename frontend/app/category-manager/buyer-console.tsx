@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQItem } from '@/lib/types';
 import { SOURCING_MODES } from '@/lib/constants';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import {
   Building2,
   Users,
@@ -31,6 +32,9 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedBuyerId, setSelectedBuyerId] = useState<string | null>(null);
   const [expandedRfqNumber, setExpandedRfqNumber] = useState<string | null>(null);
+  // Tracks an explicit user collapse ("Hide Details") so dropdown-driven
+  // expansion cannot silently re-open a panel the user just dismissed.
+  const [drillDownDismissed, setDrillDownDismissed] = useState(false);
 
   // Dropdown context filter states
   const [selectedCompany, setSelectedCompany] = useState<string>('all');
@@ -137,8 +141,14 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
     ? (filteredByDropdownBuyers.reduce((sum, b) => sum + b.avgSlaDays, 0) / filteredByDropdownBuyers.length).toFixed(1)
     : '0.0';
 
-  // Dynamic context drill down: if buyer is chosen from dropdown, show it. Otherwise check manual click selectedBuyerId.
-  const activeBuyerId = selectedBuyerFilterId !== 'all' ? selectedBuyerFilterId : selectedBuyerId;
+  // Dynamic context drill down precedence:
+  //  1. An explicit "Hide Details" collapse always wins and keeps the panel closed,
+  //     even if the dropdown selection changes afterwards. Clicking a card's
+  //     expand action clears the dismissal.
+  //  2. Otherwise a specific dropdown selection drives the expansion.
+  //  3. Otherwise fall back to the manually expanded card.
+  const dropdownDrivenBuyerId = selectedBuyerFilterId !== 'all' ? selectedBuyerFilterId : null;
+  const activeBuyerId = drillDownDismissed ? null : dropdownDrivenBuyerId ?? selectedBuyerId;
   const selectedBuyer = compiledBuyers.find((b) => b.id === activeBuyerId);
 
   return (
@@ -317,7 +327,9 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
         {/* Buyers List Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filteredBuyers.map((b) => {
-            const isSelected = selectedBuyerId === b.id;
+            // Reflect the resolved panel state so the toggle label always matches
+            // what is actually on screen, including dropdown-driven expansion.
+            const isSelected = activeBuyerId === b.id;
             const preferredModeObj = SOURCING_MODES.find(m => m.id === b.preferredMode);
             
             return (
@@ -390,14 +402,16 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
                     onClick={() => {
                       if (isSelected) {
                         setSelectedBuyerId(null);
+                        setDrillDownDismissed(true);
                       } else {
                         setSelectedBuyerId(b.id);
+                        setDrillDownDismissed(false);
                         setExpandedRfqNumber(null);
                       }
                     }}
                     className="btn btn-secondary btn-xs font-bold flex items-center gap-1"
                   >
-                    <span>{isSelected ? 'Hide Details' : 'Review RFQ Details'}</span>
+                    <span>{isSelected ? UI_STRINGS.actions.hideDetails : UI_STRINGS.actions.reviewRfqDetails}</span>
                     <ChevronRight size={12} className={`transform transition-transform ${isSelected ? 'rotate-90' : ''}`} />
                   </button>
                 </div>

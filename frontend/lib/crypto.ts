@@ -18,7 +18,7 @@ function bufferToHex(buffer: Uint8Array): string {
 /**
  * Convert hex string to Uint8Array buffer
  */
-function hexToBuffer(hex: string): Uint8Array {
+function hexToBuffer(hex: string): Uint8Array<ArrayBuffer> {
   const cleanHex = hex.trim();
   const bytes = new Uint8Array(cleanHex.length / 2);
   for (let i = 0; i < cleanHex.length; i += 2) {
@@ -49,7 +49,9 @@ export function getWebCrypto(): Crypto {
  */
 async function deriveAESKey(
   secretKey: string,
-  saltBytes: Uint8Array
+  // Pinned to ArrayBuffer (rather than the default ArrayBufferLike, which admits
+  // SharedArrayBuffer) so the view satisfies the BufferSource contract.
+  saltBytes: Uint8Array<ArrayBuffer>
 ): Promise<CryptoKey> {
   const cryptoObj = getWebCrypto();
   const encoder = new TextEncoder();
@@ -61,10 +63,15 @@ async function deriveAESKey(
     ['deriveKey']
   );
 
+  // Pass the TypedArray view itself rather than `.buffer`. Web Crypto accepts any
+  // BufferSource, and a view preserves byteOffset/byteLength — `.buffer` would
+  // expose the whole backing store and silently use the wrong bytes for any view
+  // created via subarray(). It is also the only form that validates correctly when
+  // the view originates from a realm other than the Web Crypto implementation's.
   return await cryptoObj.subtle.deriveKey(
     {
       name: 'PBKDF2',
-      salt: saltBytes.buffer as ArrayBuffer,
+      salt: saltBytes,
       iterations: AES_CONFIG.PBKDF2_ITERATIONS,
       hash: 'SHA-256',
     },
@@ -102,18 +109,18 @@ export async function encryptClientData(
 
   const aesParams: AesGcmParams = {
     name: 'AES-GCM',
-    iv: ivBytes.buffer as ArrayBuffer,
+    iv: ivBytes,
     tagLength: AES_CONFIG.TAG_LENGTH_BITS,
   };
 
   if (options.additionalData) {
-    aesParams.additionalData = encoder.encode(options.additionalData).buffer as ArrayBuffer;
+    aesParams.additionalData = encoder.encode(options.additionalData);
   }
 
   const encryptedBuffer = await cryptoObj.subtle.encrypt(
     aesParams,
     cryptoKey,
-    plaintextBytes.buffer as ArrayBuffer
+    plaintextBytes
   );
 
 
@@ -202,18 +209,18 @@ export async function decryptClientData(
 
   const aesParams: AesGcmParams = {
     name: 'AES-GCM',
-    iv: ivBytes.buffer as ArrayBuffer,
+    iv: ivBytes,
     tagLength: AES_CONFIG.TAG_LENGTH_BITS,
   };
 
   if (options.additionalData) {
-    aesParams.additionalData = encoder.encode(options.additionalData).buffer as ArrayBuffer;
+    aesParams.additionalData = encoder.encode(options.additionalData);
   }
 
   const decryptedBuffer = await cryptoObj.subtle.decrypt(
     aesParams,
     cryptoKey,
-    combinedBuffer.buffer as ArrayBuffer
+    combinedBuffer
   );
 
 

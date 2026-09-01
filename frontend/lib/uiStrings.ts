@@ -59,6 +59,9 @@ export const UI_STRINGS = {
     cancel: 'Cancel',
     confirm: 'Confirm',
     downloadTemplate: 'Download CSV Template',
+    hideDetails: 'Hide Details',
+    reviewRfqDetails: 'Review RFQ Details',
+    reviewVendorPerformance: 'Review Performance',
   },
 
   badges: {
@@ -74,6 +77,116 @@ export const UI_STRINGS = {
     cryptoVerified: 'Cryptographically Verified',
   },
 
+
+  navigation: {
+    sidebarHeading: 'Workspace Modules',
+    navLandmarkLabel: 'Role Workspace Sidebar Navigation',
+    openMenu: 'Open Workspace Navigation',
+    closeMenu: 'Close Workspace Navigation',
+    dismissOverlay: 'Dismiss Navigation Overlay',
+    activeModuleIndicator: 'Currently Active Module',
+    signOut: 'Sign Out',
+    signOutHint: 'Sign Out of Session',
+    modulesCountTemplate: '{count} Modules',
+    groups: {
+      buyerSourcing: 'Sourcing Operations',
+      buyerEvaluation: 'Evaluation & Vendors',
+      buyerAccount: 'Account & Data',
+      categoryOperations: 'Operational Desk',
+      categoryConsoles: 'Buyer & Vendor Consoles',
+      categoryGovernance: 'Category Governance',
+      vendorOpportunities: 'Opportunities & Bids',
+      vendorQualification: 'Qualification & Catalogue',
+      vendorAccount: 'Subscription & Profile',
+      adminPlatform: 'Platform Control Plane',
+    },
+    items: {
+      commandCenter: {
+        label: 'Command Center',
+        description: 'Live RFQ pipeline & AI chaser telemetry',
+      },
+      ingestionWizard: {
+        label: 'AI Ingestion & Mode Wizard',
+        description: 'Parse BOM inputs & pick a sourcing version',
+      },
+      buyerEvaluationSummary: {
+        label: 'Evaluation Summary',
+        description: '6-pillar supplier scorecards with OCR trails',
+      },
+      vendorDirectory: {
+        label: 'Vendor Directory',
+        description: 'Empanelled roster & network suppliers',
+      },
+      sourcingSubscriptions: {
+        label: 'Sourcing Subscriptions',
+        description: 'Plan quotas & remaining free RFQs',
+      },
+      buyerProfile: {
+        label: 'Buyer Profile',
+        description: 'Organisation, tax identity & approvers',
+      },
+      buyerDbSync: {
+        label: 'Buyer DB Sync',
+        description: 'Integrated public database reconciliation',
+      },
+      operationalKanban: {
+        label: 'Operational Kanban',
+        description: 'Pipeline stages & chasing control board',
+      },
+      spendAnalytics: {
+        label: 'Spend Analytics',
+        description: 'Mode performance & spend distribution',
+      },
+      buyerRfqConsole: {
+        label: 'Buyer RFQ Console',
+        description: 'Buyer-wise enquiry governance',
+      },
+      modeEvaluations: {
+        label: 'Mode 3 Evaluations',
+        description: 'Autonomous sourcing evaluation reports',
+      },
+      vendorPerformance: {
+        label: 'Vendor Performance',
+        description: 'Supplier scorecards & bid reliability',
+      },
+      categoryTrends: {
+        label: 'Categories & Trends',
+        description: 'Demand-supply taxonomy analytics',
+      },
+      opportunityFeed: {
+        label: 'Opportunity Feed',
+        description: 'Matched enquiries open for quoting',
+      },
+      bidQuotes: {
+        label: 'Bid Quotes',
+        description: 'Submit & track line-item quotations',
+      },
+      selfEvaluation: {
+        label: '360° AI Self-Evaluation',
+        description: 'Capability audit across 6 pillars',
+      },
+      itemCatalogue: {
+        label: 'Item Catalogue',
+        description: 'Published SKUs & pricing bands',
+      },
+      subscriptionPlans: {
+        label: 'Subscription Plans',
+        description: 'Access tiers, quotas & downloads',
+      },
+      supplierProfile: {
+        label: 'Vendor Profile',
+        description: 'Company credentials & banking vault',
+      },
+      azureInfrastructure: {
+        label: 'Azure Infrastructure & AI',
+        description: 'Cloud health, pools & inference latency',
+      },
+      immutableAuditLog: {
+        label: 'Immutable Audit Log',
+        description: 'SHA-256 chained compliance ledger',
+      },
+    },
+  },
 
   templates: {
     rfqDispatched: 'RFQ #{rfqNumber} successfully dispatched to {vendorCount} qualified vendors.',

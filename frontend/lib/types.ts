@@ -666,3 +666,51 @@ export interface RegisterPayload {
   orgName?: string;
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════
+// Sidebar Dashboard Navigation Types (Role Workspace Shell)
+// ═══════════════════════════════════════════════════════════════════════
+
+export type SidebarIconKey =
+  | 'Building2'
+  | 'SlidersHorizontal'
+  | 'Truck'
+  | 'Cpu'
+  | 'Layers'
+  | 'Sparkles'
+  | 'Kanban'
+  | 'TrendingUp'
+  | 'FileSpreadsheet'
+  | 'FileCheck'
+  | 'ShieldCheck'
+  | 'Server'
+  | 'Award'
+  | 'Database';
+
+export interface SidebarNavItem {
+  /** Active screen key consumed by the screen switchboard */
+  id: string;
+  /** Full screen reference used for accessible names (e.g. "Screen 1.1") */
+  screenTag: string;
+  /** Compact screen reference rendered as a sidebar badge (e.g. "1.1") */
+  shortTag: string;
+  label: string;
+  description: string;
+  icon: SidebarIconKey;
+  /** Section heading key the item is grouped under */
+  group: string;
+}
+
+export interface RoleWorkspaceMeta {
+  accentText: string;
+  accentActive: string;
+  accentRing: string;
+}
+
+export interface RoleNavigationProps {
+  activeScreen: string;
+  setActiveScreen?: (screen: string) => void;
+  onScreenChange?: (screen: string) => void;
+  onLogout?: () => void;
+  onOpenInitialSetup?: () => void;
+}
