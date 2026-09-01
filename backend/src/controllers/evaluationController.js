@@ -5,7 +5,7 @@ function getEvaluations(req, res, next) {
   try {
     logger.info('Fetching vendor evaluations list', { query: req.query }, 'EVALUATION_CONTROLLER');
     const evals = storeService.getEvaluations();
-    res.json({ success: true, source: storeService.isHydratedFromDB ? 'postgresql' : 'in_memory', data: evals });
+    res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: evals });
   } catch (err) {
     logger.error('Error fetching vendor evaluations', err, 'EVALUATION_CONTROLLER');
     next(err);

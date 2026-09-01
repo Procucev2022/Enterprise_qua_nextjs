@@ -10,8 +10,8 @@ const rfqController = require('../src/controllers/rfqController');
 const supportChatController = require('../src/controllers/supportChatController');
 const vendorController = require('../src/controllers/vendorController');
 const storeService = require('../src/services/storeService');
-const poolModule = require('../src/db/pool');
-const seed = require('../src/db/seed');
+const identityPool = require('../src/db/identityPool');
+const optimizationMetrics = require('../src/db/optimizationMetrics');
 
 function mockRes() {
   const res = {};
@@ -170,26 +170,21 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
   test('DB Controller Error Branches', async () => {
     const next = jest.fn();
     const res = mockRes();
-
-    jest.spyOn(poolModule, 'checkDBHealth').mockImplementationOnce(() => {
+    // The controller now depends on the MySQL identity connection rather than the
+    // removed PostgreSQL pool and seed routines.
+    jest.spyOn(identityPool, 'checkIdentityHealth').mockImplementationOnce(() => {
       throw new Error('Health error');
     });
     await dbController.getDBStatus({}, res, next);
     expect(next).toHaveBeenCalled();
 
-    jest.spyOn(poolModule, 'initializeSchema').mockImplementationOnce(() => {
-      throw new Error('Schema error');
+    next.mockClear();
+    jest.spyOn(optimizationMetrics, 'getOptimizationMetrics').mockImplementationOnce(() => {
+      throw new Error('Metrics error');
     });
-    await dbController.initDBSchema({}, res, next);
-    expect(next).toHaveBeenCalled();
-
-    jest.spyOn(seed, 'seedInitialDataToPostgres').mockImplementationOnce(() => {
-      throw new Error('Seed fail');
-    });
-    await dbController.syncDBData({}, res, next);
+    await dbController.getDBMetrics({}, res, next);
     expect(next).toHaveBeenCalled();
   });
-
   test('Evaluation Controller Error Branches', async () => {
     const next = jest.fn();
     const res = mockRes();

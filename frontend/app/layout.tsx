@@ -7,9 +7,12 @@ import StandardRFQEmailModal from '@/app/components/StandardRFQEmailModal';
 import VendorRatingRevisionModal from '@/app/components/VendorRatingRevisionModal';
 
 export const metadata: Metadata = {
-  title: 'PROCUCEV ENTERPRISE | Enterprise Procurement Platform (QUA AI 2.0)',
+  title: 'Procucev Enterprise',
   description:
     'End-to-End Enterprise Procurement Platform with AI Ingestion, 3 Sourcing Modes, Autonomous WhatsApp Chasing, Comparative Quote Matrix & Immutable Audit Trail.',
+  icons: {
+    icon: '/favicon.ico',
+  },
 };
 
 export default function RootLayout({
@@ -36,7 +39,6 @@ export default function RootLayout({
                   <span className="font-semibold text-slate-700 dark:text-gray-400">PROCUCEV ENTERPRISE SOLUTIONS</span> • Enterprise QUA AI Production Release 2.0
                 </div>
                 <div className="flex items-center gap-4 text-[11px]">
-                  <span>System Identifier: <span className="mono text-slate-600 dark:text-gray-400">client@procucev.com</span></span>
                   <span>Azure Region: <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Central India (Primary) / West US 2</span></span>
                 </div>
               </div>

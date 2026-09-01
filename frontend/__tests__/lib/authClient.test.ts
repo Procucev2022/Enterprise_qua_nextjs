@@ -1,4 +1,5 @@
 import { authClient } from '@/lib/authClient';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
   beforeEach(() => {
@@ -173,63 +174,80 @@ describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
     });
   });
 
-  describe('Offline & Error Fallback Paths', () => {
-    test('loginWithPassword handles network error with role fallbacks', async () => {
+  describe('Unreachable Backend Fails Closed', () => {
+    // The client used to fabricate a valid session whenever fetch() rejected,
+    // which made an unreachable API indistinguishable from a real sign-in.
+    // Every transport failure must now surface as an explicit failure.
+    test('loginWithPassword reports a network failure instead of signing the user in', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Network error'));
 
-      // Vendor fallback
-      const vRes = await authClient.loginWithPassword('vendor@test.com', 'p');
-      expect(vRes.user?.role).toBe('vendor');
+      for (const email of ['vendor@test.com', 'admin@test.com', 'manager@test.com', 'buyer@test.com']) {
+        const res = await authClient.loginWithPassword(email, 'p');
+        expect(res.success).toBe(false);
+        expect(res.user).toBeUndefined();
+        expect(res.error).toBe(UI_STRINGS.auth.networkUnreachable);
+      }
 
-      // Admin fallback
-      const aRes = await authClient.loginWithPassword('admin@test.com', 'p');
-      expect(aRes.user?.role).toBe('admin');
-
-      // Manager fallback
-      const mRes = await authClient.loginWithPassword('manager@test.com', 'p');
-      expect(mRes.user?.role).toBe('category_manager');
-
-      // Buyer fallback
-      const bRes = await authClient.loginWithPassword('buyer@test.com', 'p');
-      expect(bRes.user?.role).toBe('buyer');
+      expect(authClient.getToken()).toBeNull();
+      expect(authClient.getSessionUser()).toBeNull();
     });
 
-    test('requestOtp handles network error fallback', async () => {
+    test('requestOtp reports a network failure and never invents a demo code', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Network error'));
+
       const res = await authClient.requestOtp('buyer@test.com', 'buyer');
-      expect(res.success).toBe(true);
-      expect(res.demoCode).toBeDefined();
+      expect(res.success).toBe(false);
+      expect(res.demoCode).toBeUndefined();
+      expect(res.error).toBe(UI_STRINGS.auth.networkUnreachable);
     });
 
-    test('verifyOtp handles network error with role fallbacks', async () => {
+    test('verifyOtp reports a network failure instead of signing the user in', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Network error'));
 
-      const vRes = await authClient.verifyOtp('vendor@test.com', '1234');
-      expect(vRes.user?.role).toBe('vendor');
-
-      const aRes = await authClient.verifyOtp('admin@test.com', '1234');
-      expect(aRes.user?.role).toBe('admin');
-
-      const mRes = await authClient.verifyOtp('manager@test.com', '1234');
-      expect(mRes.user?.role).toBe('category_manager');
-
-      const bRes = await authClient.verifyOtp('buyer@test.com', '1234');
-      expect(bRes.user?.role).toBe('buyer');
+      const res = await authClient.verifyOtp('vendor@test.com', '1234');
+      expect(res.success).toBe(false);
+      expect(res.user).toBeUndefined();
+      expect(res.error).toBe(UI_STRINGS.auth.networkUnreachable);
+      expect(authClient.getToken()).toBeNull();
     });
 
-    test('register handles network error fallback with default values', async () => {
+    test('register reports a network failure instead of creating a local account', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Network error'));
 
-      const res = await authClient.register({
-        name: '',
-        email: 'fallback.reg@enterprise.com',
+      const res = await authClient.register({ name: '', email: 'fallback.reg@enterprise.com' });
+      expect(res.success).toBe(false);
+      expect(res.user).toBeUndefined();
+      expect(res.error).toBe(UI_STRINGS.auth.networkUnreachable);
+      expect(authClient.getToken()).toBeNull();
+    });
+
+    test('a response body that is not JSON is reported as a server error', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: async () => {
+          throw new Error('not json');
+        },
       });
-      expect(res.success).toBe(true);
-      expect(res.user?.email).toBe('fallback.reg@enterprise.com');
-      expect(res.user?.role).toBe('buyer');
+
+      const res = await authClient.loginWithPassword('buyer@test.com', 'p');
+      expect(res.success).toBe(false);
+      expect(res.error).toBe(UI_STRINGS.auth.serverErrorFallback);
     });
 
-    test('getSession handles network error and non-ok gracefully', async () => {
+    test('an error status with no message from the server still fails with an explanation', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: async () => ({ success: false }),
+      });
+
+      const res = await authClient.loginWithPassword('buyer@test.com', 'p');
+      expect(res.success).toBe(false);
+      expect(res.error).toBe(UI_STRINGS.auth.serverErrorFallback);
+    });
+
+    test('getSession keeps the cached session offline but discards a rejected token', async () => {
       authClient.setSession(
         {
           id: 'usr-1',
@@ -242,15 +260,24 @@ describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
         'token-123'
       );
 
-      // fetch rejects
+      // Network failure: the cached session is retained rather than signing out.
       global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
-      const session1 = await authClient.getSession();
-      expect(session1?.email).toBe('cached@test.com');
+      const offlineSession = await authClient.getSession();
+      expect(offlineSession?.email).toBe('cached@test.com');
 
-      // fetch returns non-ok (e.g. 401)
+      // A 401 means the token is genuinely invalid, so local state is cleared.
       global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 401 });
-      const session2 = await authClient.getSession();
-      expect(session2?.email).toBe('cached@test.com');
+      const rejectedSession = await authClient.getSession();
+      expect(rejectedSession).toBeNull();
+      expect(authClient.getToken()).toBeNull();
+    });
+
+    test('getSession returns null without a token and makes no request', async () => {
+      authClient.setSession(null, null);
+      global.fetch = jest.fn();
+
+      await expect(authClient.getSession()).resolves.toBeNull();
+      expect(global.fetch).not.toHaveBeenCalled();
     });
 
     test('logout handles fetch error gracefully', async () => {

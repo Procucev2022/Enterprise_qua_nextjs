@@ -6,7 +6,7 @@ function getRFQs(req, res, next) {
   try {
     logger.info('Fetching all RFQs list', { query: req.query }, 'RFQ_CONTROLLER');
     const rfqs = storeService.getRFQs();
-    res.json({ success: true, source: storeService.isHydratedFromDB ? 'postgresql' : 'in_memory', data: rfqs });
+    res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: rfqs });
   } catch (err) {
     logger.error('Error fetching RFQs list', err, 'RFQ_CONTROLLER');
     next(err);

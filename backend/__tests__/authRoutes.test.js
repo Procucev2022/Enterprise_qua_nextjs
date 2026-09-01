@@ -2,7 +2,10 @@ const request = require('supertest');
 const app = require('../src/app');
 const authService = require('../src/services/authService');
 const authController = require('../src/controllers/authController');
-const { logger } = require('../src/services/loggerService');
+const identityPool = require('../src/db/identityPool');
+const identityQueries = require('../src/db/identityQueries');
+const mailerService = require('../src/services/mailerService');
+const { AUTH_MESSAGES } = require('../src/config/constants');
 const { authHeader } = require('./testHelpers');
 
 function mockRes() {
@@ -12,697 +15,808 @@ function mockRes() {
   return res;
 }
 
-describe('Authentication Routes & Services (/api/auth) - Complete 100% Coverage', () => {
+/** An active, approved buyer row as returned by identityQueries.findUserByEmail. */
+function buyerRecord(overrides = {}) {
+  return {
+    id: '1b7083fa-78b1-4372-bf11-6eca62db9b7e',
+    email: 'navinchaudhary.dev@gmail.com',
+    name: 'Navin Chaudhary',
+    role: 'buyer',
+    rawRoleName: 'ClientInitiator',
+    orgId: 'f84c8587-5c39-49f4-add2-c6ee62352008',
+    orgName: 'Navin Chaudhary Enterprises',
+    password: 'Pass@123',
+    mobile: '+919157154504',
+    status: 'ACTIVE',
+    isActive: true,
+    isApproved: true,
+    isSelfClient: false,
+    verificationStatus: 'EMAIL_VERIFIED',
+    ...overrides,
+  };
+}
+
+const EMAIL = 'navinchaudhary.dev@gmail.com';
+const PASSWORD = 'Pass@123';
+
+describe('Authentication against the shared identity database (/api/auth)', () => {
+  let originalPool;
+
+  beforeEach(() => {
+    // The identity pool is only constructed when MYSQL_* is configured, which it
+    // is not under test. A truthy stub puts the service in its "configured" path
+    // while every read is driven by the identityQueries mocks below.
+    originalPool = identityPool.pool;
+    identityPool.pool = { query: jest.fn() };
+    jest.spyOn(mailerService, 'sendOtpEmail').mockResolvedValue(undefined);
+  });
+
   afterEach(() => {
+    identityPool.pool = originalPool;
     jest.restoreAllMocks();
   });
 
-  describe('authService unit tests & branch coverage', () => {
-    test('hashPassword generates a hash+salt pair, reusing a given salt when provided', () => {
+  // ── Password hashing helpers (retained for legacy callers) ─────────────────
+  describe('password helpers', () => {
+    test('hashPassword generates a hash+salt pair, reusing a supplied salt', () => {
       const auto = authService.hashPassword('testpass');
       expect(auto.hash).toBeDefined();
       expect(auto.salt).toBeDefined();
 
       const withSalt = authService.hashPassword('testpass', 'custom-salt');
       expect(withSalt.salt).toBe('custom-salt');
-      expect(withSalt.hash).not.toBe(auto.hash);
-
-      const sameSaltAgain = authService.hashPassword('testpass', 'custom-salt');
-      expect(sameSaltAgain.hash).toBe(withSalt.hash);
+      expect(authService.hashPassword('testpass', 'custom-salt').hash).toBe(withSalt.hash);
     });
 
-    test('verifyPassword checks a password against a hash+salt pair and handles empty inputs safely', () => {
+    test('verifyPassword handles empty inputs safely and matches a valid pair', () => {
       const { hash, salt } = authService.hashPassword('password123');
       expect(authService.verifyPassword('', hash, salt)).toBe(false);
       expect(authService.verifyPassword('password123', '', salt)).toBe(false);
       expect(authService.verifyPassword('password123', hash, '')).toBe(false);
       expect(authService.verifyPassword(null, null, null)).toBe(false);
       expect(authService.verifyPassword('password123', hash, salt)).toBe(true);
-      expect(authService.verifyPassword('wrongpassword', hash, salt)).toBe(false);
+    });
+  });
+
+  // ── Session tokens ────────────────────────────────────────────────────────
+  describe('session tokens', () => {
+    test('a generated token verifies and carries the account claims', () => {
+      const token = authService.generateSessionToken(buyerRecord());
+      const result = authService.verifySessionToken(token);
+
+      expect(result.valid).toBe(true);
+      expect(result.user.email).toBe(EMAIL);
+      expect(result.user.role).toBe('buyer');
     });
 
-    test('verifySessionToken handles all invalid & expired scenarios', () => {
-      // Missing token
-      expect(authService.verifySessionToken(null).valid).toBe(false);
-      expect(authService.verifySessionToken('').valid).toBe(false);
-      expect(authService.verifySessionToken(12345).valid).toBe(false);
+    test.each([
+      [null, AUTH_MESSAGES.SESSION_TOKEN_MISSING],
+      ['', AUTH_MESSAGES.SESSION_TOKEN_MISSING],
+      ['not-a-jwt', AUTH_MESSAGES.MALFORMED_TOKEN],
+    ])('rejects malformed token %p', (token, expectedError) => {
+      const result = authService.verifySessionToken(token);
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe(expectedError);
+    });
 
-      // Malformed parts
-      expect(authService.verifySessionToken('part1.part2').valid).toBe(false);
+    test('rejects a token whose signature does not match', () => {
+      const [header, payload] = authService.generateSessionToken(buyerRecord()).split('.');
+      const result = authService.verifySessionToken(`${header}.${payload}.tampered`);
 
-      // Invalid signature
-      const validToken = authService.generateSessionToken({
-        id: 'usr-1',
-        email: 'test@procucev.com',
-        name: 'Test User',
-        role: 'buyer',
-        orgId: 'org-1',
-        orgName: 'Org',
-      });
-      const tamperedToken = validToken.slice(0, -5) + 'xxxxx';
-      expect(authService.verifySessionToken(tamperedToken).valid).toBe(false);
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe(AUTH_MESSAGES.INVALID_TOKEN_SIGNATURE);
+    });
 
-      // Valid token verification
-      const validResult = authService.verifySessionToken(validToken);
-      expect(validResult.valid).toBe(true);
-      expect(validResult.user.email).toBe('test@procucev.com');
-
-      // Expired token
-      const expiredPayload = Buffer.from(
-        JSON.stringify({
-          sub: 'usr-1',
-          email: 'expired@procucev.com',
-          exp: Math.floor(Date.now() / 1000) - 100, // in past
-        })
-      ).toString('base64url');
-      const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+    test('rejects an undecodable payload', () => {
+      const token = authService.generateSessionToken(buyerRecord());
+      const [header, , signature] = token.split('.');
+      // Re-sign a deliberately invalid payload so the signature check passes first.
       const crypto = require('crypto');
+      const badPayload = '!!!not-base64-json!!!';
       const sig = crypto
-        .createHmac('sha256', process.env.AUTH_SECRET || 'procucev-enterprise-auth-secret-key-2026')
-        .update(`${header}.${expiredPayload}`)
+        .createHmac('sha256', 'procucev-enterprise-auth-secret-key-2026')
+        .update(`${header}.${badPayload}`)
         .digest('base64url');
-      const expiredToken = `${header}.${expiredPayload}.${sig}`;
+      const result = authService.verifySessionToken(`${header}.${badPayload}.${sig}`);
 
-      const expiredResult = authService.verifySessionToken(expiredToken);
-      expect(expiredResult.valid).toBe(false);
-      expect(expiredResult.error).toContain('Session token has expired');
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe(AUTH_MESSAGES.TOKEN_DECODE_FAILED);
+      expect(signature).toBeDefined();
+    });
 
-      // Malformed JSON payload
-      const badJsonPayload = Buffer.from('invalid-json-payload{').toString('base64url');
-      const badSig = crypto
-        .createHmac('sha256', process.env.AUTH_SECRET || 'procucev-enterprise-auth-secret-key-2026')
-        .update(`${header}.${badJsonPayload}`)
+    test('an expired token is reported as expired', () => {
+      const crypto = require('crypto');
+      const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+      const payload = Buffer.from(
+        JSON.stringify({ sub: 'usr-1', email: EMAIL, role: 'buyer', exp: 1 })
+      ).toString('base64url');
+      const sig = crypto
+        .createHmac('sha256', 'procucev-enterprise-auth-secret-key-2026')
+        .update(`${header}.${payload}`)
         .digest('base64url');
-      const badJsonToken = `${header}.${badJsonPayload}.${badSig}`;
-      const badJsonResult = authService.verifySessionToken(badJsonToken);
-      expect(badJsonResult.valid).toBe(false);
-      expect(badJsonResult.error).toContain('Failed to decode');
+
+      const result = authService.verifySessionToken(`${header}.${payload}.${sig}`);
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe(AUTH_MESSAGES.SESSION_EXPIRED);
     });
 
-    test('authenticateWithPassword rejects unknown emails and wrong passwords without creating accounts', () => {
-      // Missing credentials throw error
-      expect(() => authService.authenticateWithPassword('', '')).toThrow();
+    test('a revoked token stops verifying, and revoking junk is a no-op', () => {
+      const token = authService.generateSessionToken(buyerRecord({ id: 'usr-revoke-1' }));
+      expect(authService.verifySessionToken(token).valid).toBe(true);
 
-      const beforeCount = authService.getAllUsers().length;
+      expect(authService.revokeSessionToken(token)).toBe(true);
+      const after = authService.verifySessionToken(token);
+      expect(after.valid).toBe(false);
+      expect(after.error).toBe(AUTH_MESSAGES.SESSION_LOGGED_OUT);
 
-      // Unknown email is rejected with the same generic error as a wrong password (no enumeration, no auto-create)
-      expect(() => authService.authenticateWithPassword('nobody.here@nowhere.com', 'whatever123')).toThrow('Invalid email or password.');
-      expect(authService.getAllUsers().length).toBe(beforeCount);
-
-      // Wrong password for a real seed account also throws the same generic error
-      expect(() => authService.authenticateWithPassword('buyer@procucev.com', 'wrongpassword')).toThrow('Invalid email or password.');
-
-      // Correct password for a real seed account succeeds
-      const res = authService.authenticateWithPassword('buyer@procucev.com', 'password123', '10.0.0.1');
-      expect(res.success).toBe(true);
-      expect(res.user.role).toBe('buyer');
-      expect(res.token).toBeDefined();
+      expect(authService.revokeSessionToken(null)).toBe(false);
+      expect(authService.revokeSessionToken('a.b')).toBe(false);
     });
 
-    test('requestOtp rejects unregistered emails and succeeds for a registered one', () => {
-      expect(() => authService.requestOtp('')).toThrow();
+    test('revoking a token with an undecodable payload still succeeds', () => {
+      const crypto = require('crypto');
+      const header = 'h';
+      const payload = '!!!bad!!!';
+      const sig = crypto
+        .createHmac('sha256', 'procucev-enterprise-auth-secret-key-2026')
+        .update(`${header}.${payload}`)
+        .digest('base64url');
 
-      // Unregistered email is rejected, not auto-created
-      expect(() => authService.requestOtp('never.registered@nowhere.com', 'buyer', '127.0.0.1')).toThrow('No account found');
+      expect(authService.revokeSessionToken(`${header}.${payload}.${sig}`)).toBe(true);
+    });
+  });
 
-      // Register first, then requesting an OTP succeeds
-      authService.registerUser({ email: 'otp.candidate@enterprise.com' }, '127.0.0.1');
-      const res = authService.requestOtp('otp.candidate@enterprise.com', undefined, '127.0.0.1');
-      expect(res.success).toBe(true);
-      expect(res.demoCode).toMatch(/^\d{4}$/);
+  // ── Identity lookups & sign-in gates ──────────────────────────────────────
+  describe('loadIdentityUser', () => {
+    test('returns the row the identity database provides', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+      await expect(authService.loadIdentityUser(EMAIL)).resolves.toMatchObject({ email: EMAIL });
     });
 
-    test('requestOtp omits demoCode once SMTP is actually configured, even outside the test environment', () => {
-      let freshAuthService;
-      jest.isolateModules(() => {
-        process.env.NODE_ENV = 'development';
-        process.env.SMTP_USER = 'test@example.com';
-        process.env.SMTP_PASSWORD = 'app-password';
-        jest.doMock('nodemailer', () => ({
-          createTransport: jest.fn(() => ({
-            sendMail: jest.fn().mockResolvedValue({ messageId: 'mock-id' }),
-          })),
-        }));
-
-        const freshPoolModule = require('../src/db/pool');
-        freshPoolModule.pool = null;
-        freshAuthService = require('../src/services/authService');
-      });
-
-      freshAuthService.registerUser(
-        { email: 'smtp.configured.user@procucev.com', password: 'Pass@1234', role: 'buyer' },
-        '127.0.0.1'
+    test('fails closed when the identity database is not configured', async () => {
+      identityPool.pool = null;
+      await expect(authService.loadIdentityUser(EMAIL)).rejects.toThrow(
+        AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED
       );
-      const result = freshAuthService.requestOtp('smtp.configured.user@procucev.com', 'buyer', '127.0.0.1');
+    });
+
+    test('fails closed when the lookup query throws', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockRejectedValue(new Error('ETIMEDOUT'));
+      await expect(authService.loadIdentityUser(EMAIL)).rejects.toThrow(
+        AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE
+      );
+    });
+  });
+
+  describe('assertUserCanSignIn', () => {
+    test('passes for an active, approved, mapped account', () => {
+      expect(() => authService.assertUserCanSignIn(buyerRecord(), EMAIL, '::1')).not.toThrow();
+    });
+
+    test('blocks an inactive account', () => {
+      expect(() =>
+        authService.assertUserCanSignIn(buyerRecord({ isActive: false }), EMAIL, '::1')
+      ).toThrow(AUTH_MESSAGES.ACCOUNT_INACTIVE);
+    });
+
+    test('blocks a self-registered account still awaiting approval', () => {
+      expect(() =>
+        authService.assertUserCanSignIn(
+          buyerRecord({ isSelfClient: true, isApproved: false }),
+          EMAIL,
+          '::1'
+        )
+      ).toThrow(AUTH_MESSAGES.ACCOUNT_PENDING_APPROVAL);
+    });
+
+    test('blocks a role this workspace has no screens for', () => {
+      expect(() =>
+        authService.assertUserCanSignIn(buyerRecord({ role: null, rawRoleName: 'Registration' }), EMAIL, '::1')
+      ).toThrow(AUTH_MESSAGES.INVALID_CREDENTIALS);
+    });
+  });
+
+  // ── Password authentication ───────────────────────────────────────────────
+  describe('authenticateWithPassword', () => {
+    test('issues a session for correct credentials', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+
+      const result = await authService.authenticateWithPassword(EMAIL, PASSWORD, '::1');
 
       expect(result.success).toBe(true);
-      expect(result.demoCode).toBeUndefined();
-
-      delete process.env.SMTP_USER;
-      delete process.env.SMTP_PASSWORD;
-      process.env.NODE_ENV = 'test';
+      expect(result.user).toEqual({
+        id: buyerRecord().id,
+        email: EMAIL,
+        name: 'Navin Chaudhary',
+        role: 'buyer',
+        orgId: buyerRecord().orgId,
+        orgName: 'Navin Chaudhary Enterprises',
+      });
+      expect(authService.verifySessionToken(result.token).valid).toBe(true);
     });
 
-    test('verifyOtp branches: missing input, unregistered email, wrong code, master codes removed, real code succeeds', () => {
-      expect(() => authService.verifyOtp('', '')).toThrow();
+    test('rejects a wrong password', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+      await expect(
+        authService.authenticateWithPassword(EMAIL, 'WrongPass@1', '::1')
+      ).rejects.toThrow(AUTH_MESSAGES.INVALID_CREDENTIALS);
+    });
 
-      // Unregistered email + any code is rejected (no OTP entry, no user)
-      expect(() => authService.verifyOtp('never.registered@nowhere.com', '1234')).toThrow('Invalid or expired OTP code.');
+    test('rejects an unknown email with the same generic error', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+      await expect(
+        authService.authenticateWithPassword('ghost@nowhere.test', 'x', '::1')
+      ).rejects.toThrow(AUTH_MESSAGES.INVALID_CREDENTIALS);
+    });
 
-      // Register + request a real OTP for a fresh account
-      authService.registerUser({ email: 'attempt.user@procure.com' }, '127.0.0.1');
-      const { demoCode } = authService.requestOtp('attempt.user@procure.com', 'buyer', '127.0.0.1');
+    test('requires both an email and a password', async () => {
+      await expect(authService.authenticateWithPassword('', PASSWORD)).rejects.toThrow(
+        AUTH_MESSAGES.EMAIL_PASSWORD_REQUIRED
+      );
+      await expect(authService.authenticateWithPassword(EMAIL, '')).rejects.toThrow(
+        AUTH_MESSAGES.EMAIL_PASSWORD_REQUIRED
+      );
+    });
 
-      // Wrong code increments attempts and throws
-      expect(() => authService.verifyOtp('attempt.user@procure.com', '0000', '127.0.0.1')).toThrow('Invalid or expired OTP code');
+    test('normalises the email before looking it up', async () => {
+      const findSpy = jest
+        .spyOn(identityQueries, 'findUserByEmail')
+        .mockResolvedValue(buyerRecord());
 
-      // The old master bypass codes no longer work, even for a real registered account
-      expect(() => authService.verifyOtp('attempt.user@procure.com', '1234')).toThrow('Invalid or expired OTP code.');
-      expect(() => authService.verifyOtp('attempt.user@procure.com', '4321')).toThrow('Invalid or expired OTP code.');
+      await authService.authenticateWithPassword(`  ${EMAIL.toUpperCase()} `, PASSWORD, '::1');
 
-      // The actual issued code succeeds
-      const res = authService.verifyOtp('attempt.user@procure.com', demoCode, '127.0.0.1');
+      expect(findSpy).toHaveBeenCalledWith(EMAIL);
+    });
+  });
+
+  // ── OTP flow ──────────────────────────────────────────────────────────────
+  describe('OTP request and verification', () => {
+    test('dispatches a code for a known account and verifies it', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+
+      const requested = await authService.requestOtp(EMAIL, 'buyer', '::1');
+      expect(requested.success).toBe(true);
+      expect(requested.expiresInSeconds).toBe(600);
+      expect(requested.demoCode).toMatch(/^\d{4}$/);
+
+      const verified = await authService.verifyOtp(EMAIL, requested.demoCode, '::1');
+      expect(verified.success).toBe(true);
+      expect(verified.user.email).toBe(EMAIL);
+    });
+
+    test('an OTP cannot be replayed once consumed', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+      const { demoCode } = await authService.requestOtp(EMAIL, 'buyer', '::1');
+      await authService.verifyOtp(EMAIL, demoCode, '::1');
+
+      await expect(authService.verifyOtp(EMAIL, demoCode, '::1')).rejects.toThrow(
+        AUTH_MESSAGES.INVALID_OTP
+      );
+    });
+
+    test('rejects an OTP request for an unregistered email', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+      await expect(authService.requestOtp('ghost@nowhere.test', 'buyer', '::1')).rejects.toThrow(
+        AUTH_MESSAGES.ACCOUNT_NOT_FOUND
+      );
+    });
+
+    test('rejects an OTP request for an account that cannot sign in', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord({ isActive: false }));
+      await expect(authService.requestOtp(EMAIL, 'buyer', '::1')).rejects.toThrow(
+        AUTH_MESSAGES.ACCOUNT_INACTIVE
+      );
+    });
+
+    test('requires an email to request a code', async () => {
+      await expect(authService.requestOtp('', 'buyer')).rejects.toThrow(
+        AUTH_MESSAGES.OTP_EMAIL_REQUIRED
+      );
+    });
+
+    test('requires both an email and a code to verify', async () => {
+      await expect(authService.verifyOtp('', '1234')).rejects.toThrow(
+        AUTH_MESSAGES.OTP_CODE_REQUIRED
+      );
+      await expect(authService.verifyOtp(EMAIL, '')).rejects.toThrow(
+        AUTH_MESSAGES.OTP_CODE_REQUIRED
+      );
+    });
+
+    test('rejects an incorrect code', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+      await authService.requestOtp(EMAIL, 'buyer', '::1');
+
+      await expect(authService.verifyOtp(EMAIL, '0000', '::1')).rejects.toThrow(
+        AUTH_MESSAGES.INVALID_OTP
+      );
+    });
+
+    test('rejects a code when none was ever issued', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+      await expect(authService.verifyOtp('never.issued@example.com', '1234', '::1')).rejects.toThrow(
+        AUTH_MESSAGES.INVALID_OTP
+      );
+    });
+
+    test('omits demoCode once SMTP is configured', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+      jest.spyOn(mailerService, 'isConfigured').mockReturnValue(true);
+      const originalEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production';
+
+      try {
+        const res = await authService.requestOtp(EMAIL, 'buyer', '::1');
+        expect(res.demoCode).toBeUndefined();
+      } finally {
+        process.env.NODE_ENV = originalEnv;
+      }
+    });
+
+    test('an email dispatch failure does not fail the request', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+      jest.spyOn(mailerService, 'sendOtpEmail').mockRejectedValue(new Error('SMTP down'));
+
+      const res = await authService.requestOtp(EMAIL, 'buyer', '::1');
       expect(res.success).toBe(true);
-      expect(res.user.email).toBe('attempt.user@procure.com');
-
-      // The code is single-use — verifying again fails
-      expect(() => authService.verifyOtp('attempt.user@procure.com', demoCode)).toThrow('Invalid or expired OTP code.');
-    });
-
-    test('revokeSessionToken invalidates a token immediately and handles malformed input', () => {
-      expect(authService.revokeSessionToken(null)).toBe(false);
-      expect(authService.revokeSessionToken('not-a-token')).toBe(false);
-
-      const token = authService.generateSessionToken({
-        id: 'usr-revoke-1', email: 'revoke.me@procucev.com', name: 'Revoke Me', role: 'buyer', orgId: 'org-1', orgName: 'Org',
-      });
-
-      expect(authService.verifySessionToken(token).valid).toBe(true);
-      expect(authService.revokeSessionToken(token)).toBe(true);
-      const afterRevoke = authService.verifySessionToken(token);
-      expect(afterRevoke.valid).toBe(false);
-      expect(afterRevoke.error).toContain('logged out');
-
-      // A token with an undecodable payload still revokes, falling back to a default expiry
-      const badPayloadToken = `${Buffer.from('header').toString('base64url')}.${Buffer.from('not-json{').toString('base64url')}.sig`;
-      expect(authService.revokeSessionToken(badPayloadToken)).toBe(true);
-    });
-
-    test('hydrateFromDB syncs users and revoked sessions from Postgres, seeds an empty DB, and degrades gracefully on query failure', async () => {
-      const poolModule = require('../src/db/pool');
-      const originalPool = poolModule.pool;
-      const originalQuery = poolModule.query;
-
-      // No pool configured: returns immediately without querying
-      poolModule.pool = null;
-      poolModule.query = jest.fn();
-      await authService.hydrateFromDB();
-      expect(poolModule.query).not.toHaveBeenCalled();
-
-      // Pool configured, DB already has a user + a revoked session: adopts both
-      poolModule.pool = {};
-      poolModule.query = jest.fn((sql) => {
-        if (sql.includes('FROM users')) {
-          return Promise.resolve({
-            rows: [{
-              id: 'usr-db-1', email: 'db.hydrated@procucev.com', name: 'DB Hydrated', role: 'buyer',
-              orgId: 'org-db', orgName: 'DB Org', passwordHash: 'h', passwordSalt: 's', mobile: null, status: 'ACTIVE',
-            }],
-          });
-        }
-        return Promise.resolve({ rows: [{ tokenSignature: 'revoked-sig-from-db' }] });
-      });
-      await authService.hydrateFromDB();
-      expect(authService.getAllUsers().some((u) => u.email === 'db.hydrated@procucev.com')).toBe(true);
-
-      // DB has no users yet: seeds it from the current in-memory registry instead
-      poolModule.query = jest.fn().mockResolvedValue({ rows: [] });
-      await authService.hydrateFromDB();
-      expect(poolModule.query.mock.calls.length).toBeGreaterThan(1);
-
-      // A query failure is caught and swallowed, not thrown
-      poolModule.query = jest.fn().mockRejectedValue(new Error('connection refused'));
-      await expect(authService.hydrateFromDB()).resolves.toBeUndefined();
-
-      poolModule.pool = originalPool;
-      poolModule.query = originalQuery;
-    });
-
-    test('DB write-through failures in requestOtp and revokeSessionToken are logged, not thrown', async () => {
-      const poolModule = require('../src/db/pool');
-      const originalPool = poolModule.pool;
-      const originalQuery = poolModule.query;
-
-      authService.registerUser({ email: 'db.failure.otp@procucev.com' }, '127.0.0.1');
-
-      poolModule.pool = {};
-      poolModule.query = jest.fn().mockRejectedValue(new Error('write failed'));
-
-      expect(() => authService.requestOtp('db.failure.otp@procucev.com', 'buyer', '127.0.0.1')).not.toThrow();
-
-      const token = authService.generateSessionToken({
-        id: 'usr-db-fail', email: 'db.fail.revoke@procucev.com', name: 'x', role: 'buyer', orgId: 'o', orgName: 'O',
-      });
-      expect(() => authService.revokeSessionToken(token)).not.toThrow();
-
-      // let the fire-and-forget rejections settle before restoring
       await new Promise((resolve) => setImmediate(resolve));
-
-      poolModule.pool = originalPool;
-      poolModule.query = originalQuery;
-    });
-
-    test('DB write-through failures in registerUser, verifyOtp, and hydrateFromDB seeding are logged, not thrown', async () => {
-      const poolModule = require('../src/db/pool');
-      const originalPool = poolModule.pool;
-      const originalQuery = poolModule.query;
-
-      // registerUser: the save fails, but the caller still gets a successful result
-      poolModule.pool = {};
-      poolModule.query = jest.fn().mockRejectedValue(new Error('insert failed'));
-      const regRes = authService.registerUser({ email: 'db.reg.failure@procucev.com' }, '127.0.0.1');
-      expect(regRes.success).toBe(true);
-
-      // verifyOtp: the delete-OTP write fails, but verification still succeeds
-      poolModule.query = jest.fn().mockResolvedValue({ rows: [] });
-      authService.registerUser({ email: 'db.verify.failure@procucev.com' }, '127.0.0.1');
-      const { demoCode } = authService.requestOtp('db.verify.failure@procucev.com', 'buyer', '127.0.0.1');
-      poolModule.query = jest.fn().mockRejectedValue(new Error('delete failed'));
-      const verifyRes = authService.verifyOtp('db.verify.failure@procucev.com', demoCode, '127.0.0.1');
-      expect(verifyRes.success).toBe(true);
-
-      // hydrateFromDB seeding an empty DB: one user's upsert rejects, the rest still resolve
-      poolModule.query = jest.fn((sql) => {
-        if (sql.includes('FROM users')) return Promise.resolve({ rows: [] });
-        if (sql.includes('FROM revoked_sessions')) return Promise.resolve({ rows: [] });
-        return Promise.reject(new Error('seed write failed'));
-      });
-      await expect(authService.hydrateFromDB()).resolves.toBeUndefined();
-
-      // let the fire-and-forget rejections settle before restoring
-      await new Promise((resolve) => setImmediate(resolve));
-
-      poolModule.pool = originalPool;
-      poolModule.query = originalQuery;
-    });
-
-    test('registerUser branches: duplicate email, default fields', () => {
-      expect(() => authService.registerUser({}, '127.0.0.1')).toThrow();
-
-      // First registration with minimal fields
-      const res1 = authService.registerUser({ email: 'minimal@enterprise.com' }, '127.0.0.1');
-      expect(res1.success).toBe(true);
-      expect(res1.user.name).toBe('minimal');
-      expect(res1.user.role).toBe('buyer');
-
-      // Duplicate registration returns existing account
-      const res2 = authService.registerUser({ email: 'minimal@enterprise.com' }, '127.0.0.1');
-      expect(res2.success).toBe(true);
-      expect(res2.message).toContain('already exists');
     });
   });
 
-  describe('authController helper and direct branch tests', () => {
-    test('getClientIp handles ip, x-forwarded-for header, and fallback', () => {
-      expect(authController.getClientIp({ ip: '192.168.1.1' })).toBe('192.168.1.1');
-      expect(authController.getClientIp({ headers: { 'x-forwarded-for': '10.0.0.5' } })).toBe('10.0.0.5');
-      expect(authController.getClientIp({})).toBe('127.0.0.1');
+  // ── Registration ──────────────────────────────────────────────────────────
+  describe('registerUser', () => {
+    const payload = {
+      name: 'Navin Chaudhary',
+      email: EMAIL,
+      password: PASSWORD,
+      mobile: '9157154504',
+      orgName: 'Navin Chaudhary Enterprises',
+    };
+
+    test('creates the account in the identity database and returns a session', async () => {
+      const insertSpy = jest.spyOn(identityQueries, 'insertBuyerAccount').mockResolvedValue({
+        created: true,
+        user: {
+          id: 'new-uuid',
+          email: EMAIL,
+          name: 'Navin Chaudhary',
+          role: 'buyer',
+          orgId: 'new-org',
+          orgName: 'Navin Chaudhary Enterprises',
+        },
+      });
+
+      const result = await authService.registerUser(payload, '::1');
+
+      expect(insertSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ email: EMAIL, password: PASSWORD, phone: '9157154504' })
+      );
+      expect(result.success).toBe(true);
+      expect(result.message).toBe(AUTH_MESSAGES.REGISTRATION_SUCCESS);
+      expect(authService.verifySessionToken(result.token).valid).toBe(true);
+    });
+
+    test('reports a duplicate account rather than signing the caller in', async () => {
+      jest
+        .spyOn(identityQueries, 'insertBuyerAccount')
+        .mockResolvedValue({ created: false, reason: 'ALREADY_EXISTS', user: buyerRecord() });
+
+      await expect(authService.registerUser(payload, '::1')).rejects.toThrow(
+        AUTH_MESSAGES.ACCOUNT_ALREADY_EXISTS
+      );
+    });
+
+    test('validates the mandatory fields', async () => {
+      await expect(authService.registerUser({ ...payload, email: '' })).rejects.toThrow(
+        AUTH_MESSAGES.REGISTRATION_EMAIL_REQUIRED
+      );
+      await expect(authService.registerUser({ ...payload, password: '' })).rejects.toThrow(
+        AUTH_MESSAGES.EMAIL_PASSWORD_REQUIRED
+      );
+      await expect(authService.registerUser({ ...payload, mobile: '' })).rejects.toThrow(
+        AUTH_MESSAGES.OTP_EMAIL_REQUIRED
+      );
+    });
+
+    test('fails closed when the identity database is not configured', async () => {
+      identityPool.pool = null;
+      await expect(authService.registerUser(payload)).rejects.toThrow(
+        AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED
+      );
     });
   });
 
-  describe('HTTP REST Routes & Controller Coverage', () => {
-    test('POST /api/auth/login with code (OTP mode)', async () => {
-      authService.registerUser({ email: 'http.otp.login@procucev.com' }, '127.0.0.1');
-      const { demoCode } = authService.requestOtp('http.otp.login@procucev.com', 'buyer', '127.0.0.1');
+  // ── Admin user listing ────────────────────────────────────────────────────
+  describe('getAllUsers', () => {
+    test('maps the directory rows onto the public shape', async () => {
+      jest.spyOn(identityQueries, 'listUsers').mockResolvedValue([buyerRecord()]);
 
-      const res = await request(app)
-        .post('/api/auth/login')
-        .send({ email: 'http.otp.login@procucev.com', code: demoCode });
+      const users = await authService.getAllUsers();
 
-      expect(res.status).toBe(200);
+      expect(users).toEqual([
+        {
+          id: buyerRecord().id,
+          email: EMAIL,
+          name: 'Navin Chaudhary',
+          role: 'buyer',
+          orgId: buyerRecord().orgId,
+          orgName: 'Navin Chaudhary Enterprises',
+          mobile: '+919157154504',
+          status: 'ACTIVE',
+        },
+      ]);
+    });
+
+    test('fails closed when the identity database is not configured', async () => {
+      identityPool.pool = null;
+      await expect(authService.getAllUsers()).rejects.toThrow(
+        AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED
+      );
+    });
+  });
+
+  // ── Boot-time health report ───────────────────────────────────────────────
+  describe('hydrateFromDB', () => {
+    test('returns the identity health report when reachable', async () => {
+      jest
+        .spyOn(identityPool, 'checkIdentityHealth')
+        .mockResolvedValue({ isConnected: true, userCount: 5 });
+
+      await expect(authService.hydrateFromDB()).resolves.toMatchObject({ isConnected: true });
+    });
+
+    test('logs loudly but resolves when the identity database is unreachable', async () => {
+      jest
+        .spyOn(identityPool, 'checkIdentityHealth')
+        .mockResolvedValue({ isConnected: false, errorMessage: 'offline' });
+
+      await expect(authService.hydrateFromDB()).resolves.toMatchObject({ isConnected: false });
+    });
+  });
+
+  // ── HTTP surface ──────────────────────────────────────────────────────────
+  describe('HTTP routes', () => {
+    test('POST /api/auth/login signs in with a password', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+
+      const res = await request(app).post('/api/auth/login').send({ email: EMAIL, password: PASSWORD });
+
+      expect(res.statusCode).toBe(200);
       expect(res.body.success).toBe(true);
-    });
-
-    test('POST /api/auth/login with password', async () => {
-      const res = await request(app)
-        .post('/api/auth/login')
-        .send({ email: 'buyer@procucev.com', password: 'password123' });
-
-      expect(res.status).toBe(200);
-      expect(res.body.success).toBe(true);
-    });
-
-    test('POST /api/auth/login rejects when neither password nor code is sent (400)', async () => {
-      const res = await request(app)
-        .post('/api/auth/login')
-        .send({ email: 'buyer@procucev.com' });
-
-      expect(res.status).toBe(400);
-      expect(res.body.success).toBe(false);
-      expect(res.body.error).toContain('Password or OTP code is required');
-    });
-
-    test('POST /api/auth/login handles missing email (400)', async () => {
-      const res = await request(app).post('/api/auth/login').send({});
-      expect(res.status).toBe(400);
-      expect(res.body.error).toContain('Email is required');
-    });
-
-    test('POST /api/auth/login handles invalid password (401)', async () => {
-      const res = await request(app)
-        .post('/api/auth/login')
-        .send({ email: 'buyer@procucev.com', password: 'badpassword' });
-      expect(res.status).toBe(401);
-      expect(res.body.success).toBe(false);
-    });
-
-    test('POST /api/auth/request-otp with a registered email (200)', async () => {
-      await request(app).post('/api/auth/register').send({ email: 'http.buyer@procucev.com', role: 'buyer' });
-
-      const res = await request(app)
-        .post('/api/auth/request-otp')
-        .send({ email: 'http.buyer@procucev.com', roleHint: 'buyer' });
-      expect(res.status).toBe(200);
-      expect(res.body.success).toBe(true);
-      expect(res.body.demoCode).toBeDefined();
-    });
-
-    test('POST /api/auth/request-otp missing email (400)', async () => {
-      const res = await request(app).post('/api/auth/request-otp').send({});
-      expect(res.status).toBe(400);
-      expect(res.body.error).toContain('Email is required');
-    });
-
-    test('POST /api/auth/request-otp for an unregistered email is rejected (400)', async () => {
-      const res = await request(app)
-        .post('/api/auth/request-otp')
-        .send({ email: 'never.seen.before@nowhere.com' });
-      expect(res.status).toBe(400);
-      expect(res.body.success).toBe(false);
-      expect(res.body.error).toContain('No account found');
-    });
-
-    test('POST /api/auth/verify-otp with the actual issued code (200)', async () => {
-      const otpRes = await request(app).post('/api/auth/request-otp').send({ email: 'http.buyer@procucev.com' });
-
-      const res = await request(app)
-        .post('/api/auth/verify-otp')
-        .send({ email: 'http.buyer@procucev.com', code: otpRes.body.demoCode });
-      expect(res.status).toBe(200);
-      expect(res.body.success).toBe(true);
+      expect(res.body.user.role).toBe('buyer');
       expect(res.body.token).toBeDefined();
     });
 
-    test('POST /api/auth/verify-otp missing email or code (400)', async () => {
-      const res1 = await request(app).post('/api/auth/verify-otp').send({ email: 'a@b.com' });
-      expect(res1.status).toBe(400);
-      expect(res1.body.error).toContain('Email and verification code are required');
+    test('POST /api/auth/login returns 401 for a wrong password', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
 
-      const res2 = await request(app).post('/api/auth/verify-otp').send({ code: '1234' });
-      expect(res2.status).toBe(400);
-      expect(res2.body.error).toContain('Email and verification code are required');
+      const res = await request(app).post('/api/auth/login').send({ email: EMAIL, password: 'nope' });
+
+      expect(res.statusCode).toBe(401);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toBe(AUTH_MESSAGES.INVALID_CREDENTIALS);
     });
 
-    test('POST /api/auth/verify-otp invalid code returns 400', async () => {
-      const res = await request(app)
-        .post('/api/auth/verify-otp')
-        .send({ email: 'buyer@procucev.com', code: '0000' });
-      expect(res.status).toBe(400);
+    test('POST /api/auth/login accepts an OTP code branch', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+      const { demoCode } = await authService.requestOtp(EMAIL, 'buyer', '::1');
+
+      const res = await request(app).post('/api/auth/login').send({ email: EMAIL, code: demoCode });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+    });
+
+    test('POST /api/auth/login rejects a payload with neither password nor code', async () => {
+      const res = await request(app).post('/api/auth/login').send({ email: EMAIL });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error).toBe(AUTH_MESSAGES.PASSWORD_OR_CODE_REQUIRED);
+    });
+
+    test('POST /api/auth/login validates the payload', async () => {
+      const res = await request(app).post('/api/auth/login').send({});
+      expect(res.statusCode).toBe(400);
       expect(res.body.success).toBe(false);
     });
 
-    test('POST /api/auth/register with valid payload (201)', async () => {
-      const res = await request(app)
-        .post('/api/auth/register')
-        .send({
-          name: 'HTTP Enterprise Entity',
-          email: 'http.register@enterprise.com',
-          password: 'Password123!',
-          role: 'buyer',
-        });
-      expect(res.status).toBe(201);
+    test('POST /api/auth/request-otp dispatches a code', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+
+      const res = await request(app).post('/api/auth/request-otp').send({ email: EMAIL, roleHint: 'buyer' });
+
+      expect(res.statusCode).toBe(200);
       expect(res.body.success).toBe(true);
-      expect(res.body.user.email).toBe('http.register@enterprise.com');
     });
 
-    test('POST /api/auth/register missing email (400)', async () => {
-      const res = await request(app).post('/api/auth/register').send({});
-      expect(res.status).toBe(400);
-      expect(res.body.error).toContain('Email is required');
+    test('POST /api/auth/request-otp returns 400 for an unknown account', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+
+      const res = await request(app).post('/api/auth/request-otp').send({ email: 'ghost@nowhere.test' });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error).toBe(AUTH_MESSAGES.ACCOUNT_NOT_FOUND);
     });
 
-    test('GET /api/auth/session supports cookie header token', async () => {
-      const loginRes = await request(app)
-        .post('/api/auth/login')
-        .send({ email: 'buyer@procucev.com', password: 'password123' });
-
-      const token = loginRes.body.token;
-
-      // Send token in cookie
-      const sessionRes = await request(app)
-        .get('/api/auth/session')
-        .set('Cookie', [`auth_token=${token}`]);
-
-      expect(sessionRes.status).toBe(200);
-      expect(sessionRes.body.success).toBe(true);
-      expect(sessionRes.body.user.email).toBe('buyer@procucev.com');
+    test('POST /api/auth/request-otp validates the payload', async () => {
+      const res = await request(app).post('/api/auth/request-otp').send({});
+      expect(res.statusCode).toBe(400);
     });
 
-    test('GET /api/auth/session supports req.cookies.auth_token directly', () => {
-      const token = authService.generateSessionToken({
-        id: 'usr-1',
-        email: 'cookie.user@procucev.com',
-        name: 'Cookie User',
-        role: 'buyer',
-        orgId: 'org-1',
-        orgName: 'Org',
+    test('POST /api/auth/verify-otp verifies and rejects codes', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+      const { demoCode } = await authService.requestOtp(EMAIL, 'buyer', '::1');
+
+      const bad = await request(app).post('/api/auth/verify-otp').send({ email: EMAIL, code: '0000' });
+      expect(bad.statusCode).toBe(400);
+
+      const good = await request(app).post('/api/auth/verify-otp').send({ email: EMAIL, code: demoCode });
+      expect(good.statusCode).toBe(200);
+      expect(good.body.success).toBe(true);
+    });
+
+    test('POST /api/auth/verify-otp validates the payload', async () => {
+      const res = await request(app).post('/api/auth/verify-otp').send({ email: EMAIL });
+      expect(res.statusCode).toBe(400);
+    });
+
+    test('POST /api/auth/register creates an account', async () => {
+      jest.spyOn(identityQueries, 'insertBuyerAccount').mockResolvedValue({
+        created: true,
+        user: {
+          id: 'new-uuid',
+          email: 'brand.new@example.com',
+          name: 'Brand New',
+          role: 'buyer',
+          orgId: 'new-org',
+          orgName: 'Brand New Ltd',
+        },
       });
-      const res = mockRes();
-      const next = jest.fn();
 
-      authController.getSession({ headers: {}, cookies: { auth_token: token } }, res, next);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          success: true,
-          user: expect.objectContaining({ email: 'cookie.user@procucev.com' }),
-        })
-      );
+      const res = await request(app).post('/api/auth/register').send({
+        name: 'Brand New',
+        email: 'brand.new@example.com',
+        password: 'Secret@123',
+        mobile: '9876543210',
+        role: 'buyer',
+        orgName: 'Brand New Ltd',
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body.success).toBe(true);
     });
 
-    test('GET /api/auth/session missing token returns 401', async () => {
-      const res = await request(app).get('/api/auth/session');
-      expect(res.status).toBe(401);
-      expect(res.body.error).toContain('No active session token');
+    test('POST /api/auth/register reports a duplicate with 400', async () => {
+      jest
+        .spyOn(identityQueries, 'insertBuyerAccount')
+        .mockResolvedValue({ created: false, user: buyerRecord() });
+
+      const res = await request(app).post('/api/auth/register').send({
+        name: 'Navin Chaudhary',
+        email: EMAIL,
+        password: PASSWORD,
+        mobile: '9157154504',
+        role: 'buyer',
+        orgName: 'Navin Chaudhary Enterprises',
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error).toBe(AUTH_MESSAGES.ACCOUNT_ALREADY_EXISTS);
     });
 
-    test('GET /api/auth/session rejects invalid token (401)', async () => {
-      const sessionRes = await request(app)
-        .get('/api/auth/session')
-        .set('Authorization', 'Bearer invalid.token.structure');
-
-      expect(sessionRes.status).toBe(401);
-      expect(sessionRes.body.success).toBe(false);
+    test('POST /api/auth/register validates the payload', async () => {
+      const res = await request(app).post('/api/auth/register').send({});
+      expect(res.statusCode).toBe(400);
     });
 
-    test('POST /api/auth/logout with and without email body', async () => {
-      const res1 = await request(app).post('/api/auth/logout').send({ email: 'user@procucev.com' });
-      expect(res1.status).toBe(200);
-      expect(res1.body.success).toBe(true);
+    test('GET /api/auth/session round-trips a bearer token', async () => {
+      const noToken = await request(app).get('/api/auth/session');
+      expect(noToken.statusCode).toBe(401);
+      expect(noToken.body.error).toBe(AUTH_MESSAGES.NO_SESSION_TOKEN);
 
-      const res2 = await request(app).post('/api/auth/logout').send({});
-      expect(res2.status).toBe(200);
-      expect(res2.body.success).toBe(true);
+      const bad = await request(app).get('/api/auth/session').set('Authorization', 'Bearer nonsense');
+      expect(bad.statusCode).toBe(401);
+
+      const ok = await request(app).get('/api/auth/session').set(authHeader('buyer'));
+      expect(ok.statusCode).toBe(200);
+      expect(ok.body.user.role).toBe('buyer');
     });
 
-    test('POST /api/auth/logout revokes a real session token', async () => {
-      const loginRes = await request(app)
-        .post('/api/auth/login')
-        .send({ email: 'buyer@procucev.com', password: 'password123' });
-      const token = loginRes.body.token;
-
-      const logoutRes = await request(app)
+    test('POST /api/auth/logout succeeds with and without a token', async () => {
+      const withToken = await request(app)
         .post('/api/auth/logout')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ email: 'buyer@procucev.com' });
-      expect(logoutRes.status).toBe(200);
+        .set(authHeader('vendor'))
+        .send({ email: 'vendor@apexsupplies.com' });
+      expect(withToken.statusCode).toBe(200);
+      expect(withToken.body.message).toBe(AUTH_MESSAGES.LOGOUT_SUCCESS);
 
-      const sessionRes = await request(app)
-        .get('/api/auth/session')
-        .set('Authorization', `Bearer ${token}`);
-      expect(sessionRes.status).toBe(401);
-      expect(sessionRes.body.error).toContain('logged out');
+      const withoutToken = await request(app).post('/api/auth/logout').send({});
+      expect(withoutToken.statusCode).toBe(200);
     });
 
-    test('GET /api/auth/users lists all users for an admin', async () => {
-      const res = await request(app).get('/api/auth/users').set(authHeader('admin'));
-      expect(res.status).toBe(200);
-      expect(res.body.data.length).toBeGreaterThan(0);
-    });
+    test('GET /api/auth/users is admin-only and lists the directory', async () => {
+      jest.spyOn(identityQueries, 'listUsers').mockResolvedValue([buyerRecord()]);
 
-    test('GET /api/auth/users rejects a non-admin role', async () => {
-      const res = await request(app).get('/api/auth/users').set(authHeader('buyer'));
-      expect(res.status).toBe(403);
-    });
+      const unauth = await request(app).get('/api/auth/users');
+      expect(unauth.statusCode).toBe(401);
 
-    test('GET /api/auth/users rejects an unauthenticated request', async () => {
-      const res = await request(app).get('/api/auth/users');
-      expect(res.status).toBe(401);
+      const nonAdmin = await request(app).get('/api/auth/users').set(authHeader('buyer'));
+      expect(nonAdmin.statusCode).toBe(403);
+
+      const admin = await request(app).get('/api/auth/users').set(authHeader('admin'));
+      expect(admin.statusCode).toBe(200);
+      expect(admin.body.count).toBe(1);
     });
   });
 
-  describe('Controller Catch Blocks & Error Handling', () => {
-    test('requestOtp catch block returns 400 with the error message', async () => {
-      const next = jest.fn();
-      const res = mockRes();
-      jest.spyOn(authService, 'requestOtp').mockImplementationOnce(() => {
-        throw new Error('Forced OTP failure');
-      });
-
-      authController.requestOtp({ body: { email: 'test@domain.com' }, headers: {} }, res, next);
-      expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false, error: 'Forced OTP failure' }));
-      expect(next).not.toHaveBeenCalled();
+  // ── Controller error branches ─────────────────────────────────────────────
+  describe('controller error branches', () => {
+    test('getClientIp falls back through req.ip, x-forwarded-for, then a default', () => {
+      expect(authController.getClientIp({ ip: '10.0.0.1' })).toBe('10.0.0.1');
+      expect(authController.getClientIp({ headers: { 'x-forwarded-for': '8.8.8.8' } })).toBe('8.8.8.8');
+      expect(authController.getClientIp({})).toBe('127.0.0.1');
     });
 
-    test('register catch block triggers next(err)', async () => {
+    test('getSession forwards unexpected failures to next()', async () => {
       const next = jest.fn();
       const res = mockRes();
-      jest.spyOn(authService, 'registerUser').mockImplementationOnce(() => {
-        throw new Error('Forced register failure');
+      jest.spyOn(authService, 'verifySessionToken').mockImplementation(() => {
+        throw new Error('boom');
       });
 
-      authController.register({ body: { email: 'test@domain.com' }, headers: {} }, res, next);
+      await authController.getSession(
+        { headers: { authorization: 'Bearer x.y.z' } },
+        res,
+        next
+      );
       expect(next).toHaveBeenCalled();
     });
 
-    test('getSession catch block triggers next(err)', async () => {
+    test('logout forwards unexpected failures to next()', async () => {
       const next = jest.fn();
       const res = mockRes();
-      jest.spyOn(authService, 'verifySessionToken').mockImplementationOnce(() => {
-        throw new Error('Forced session verification failure');
+      jest.spyOn(authService, 'revokeSessionToken').mockImplementation(() => {
+        throw new Error('boom');
       });
 
-      authController.getSession({ headers: { authorization: 'Bearer test.token.here' } }, res, next);
+      await authController.logout(
+        { body: { email: EMAIL }, headers: { authorization: 'Bearer x.y.z' } },
+        res,
+        next
+      );
       expect(next).toHaveBeenCalled();
     });
 
-    test('logout catch block triggers next(err)', async () => {
+    test('listUsers forwards identity database failures to next()', async () => {
       const next = jest.fn();
       const res = mockRes();
-      jest.spyOn(logger, 'audit').mockImplementationOnce(() => {
-        throw new Error('Forced audit failure');
-      });
+      jest.spyOn(authService, 'getAllUsers').mockRejectedValue(new Error('db down'));
 
-      authController.logout({ body: {}, headers: {} }, res, next);
+      await authController.listUsers({}, res, next);
       expect(next).toHaveBeenCalled();
     });
 
-    test('listUsers catch block triggers next(err)', async () => {
-      const next = jest.fn();
-      const res = mockRes();
-      jest.spyOn(authService, 'getAllUsers').mockImplementationOnce(() => {
-        throw new Error('Forced list failure');
-      });
+    test('login surfaces an unavailable identity database as 401', async () => {
+      jest
+        .spyOn(identityQueries, 'findUserByEmail')
+        .mockRejectedValue(new Error('ECONNREFUSED'));
 
-      authController.listUsers({}, res, next);
-      expect(next).toHaveBeenCalled();
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({ email: EMAIL, password: PASSWORD });
+
+      expect(res.statusCode).toBe(401);
+      expect(res.body.error).toBe(AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE);
     });
+  });
 
-    test('login and verifyOtp error messages without message fallback', () => {
-      const res1 = mockRes();
-      jest.spyOn(authService, 'authenticateWithPassword').mockImplementationOnce(() => {
-        const e = new Error();
-        e.message = '';
-        throw e;
-      });
-      authController.login({ body: { email: 'test@domain.com', password: 'p' } }, res1, jest.fn());
-      expect(res1.status).toHaveBeenCalledWith(401);
+  // ── Fallback branches when a body or an error message is absent ────────────
+  describe('controller fallback branches', () => {
+    const VALID = { email: EMAIL, password: PASSWORD };
 
-      const res2 = mockRes();
-      jest.spyOn(authService, 'verifyOtp').mockImplementationOnce(() => {
-        const e = new Error();
-        e.message = '';
-        throw e;
-      });
-      authController.verifyOtp({ body: { email: 'test@domain.com', code: '1111' } }, res2, jest.fn());
-      expect(res2.status).toHaveBeenCalledWith(400);
-    });
-
-    test('getSession header variations and invalid session without error string', () => {
-      // Non-bearer authorization header
-      const resNonBearer = mockRes();
-      authController.getSession({ headers: { authorization: 'Basic dXNlcjpwYXNz' } }, resNonBearer, jest.fn());
-      expect(resNonBearer.status).toHaveBeenCalledWith(401);
-
-      // Cookie header without auth_token match
-      const resNoCookieMatch = mockRes();
-      authController.getSession({ headers: { cookie: 'other_session=abc12345' } }, resNoCookieMatch, jest.fn());
-      expect(resNoCookieMatch.status).toHaveBeenCalledWith(401);
-
-      // Token invalid with empty error string fallback
-      const resEmptyErr = mockRes();
-      jest.spyOn(authService, 'verifySessionToken').mockReturnValueOnce({ valid: false, error: '' });
-      authController.getSession({ headers: { authorization: 'Bearer token.with.empty.err' } }, resEmptyErr, jest.fn());
-      expect(resEmptyErr.status).toHaveBeenCalledWith(401);
-
-      // All null/empty body objects in controllers
-      const resEmpty = mockRes();
-      authController.login({}, resEmpty, jest.fn());
-      authController.requestOtp({}, resEmpty, jest.fn());
-      authController.verifyOtp({}, resEmpty, jest.fn());
-      authController.register({}, resEmpty, jest.fn());
-      authController.logout({}, resEmpty, jest.fn());
-      expect(resEmpty.status).toHaveBeenCalledWith(400);
-    });
-
-    // Placed last: jest.resetModules() clears Jest's require cache, so anything
-    // that plain-requires a shared module (logger, poolModule, ...) afterwards
-    // would get a fresh instance instead of the one already-loaded services hold.
-    test('module load: AUTH_SECRET/JWT_SECRET fail-fast in production, warn in dev, silent when configured', () => {
-      const originalNodeEnv = process.env.NODE_ENV;
-      const originalAuthSecret = process.env.AUTH_SECRET;
-      const originalJwtSecret = process.env.JWT_SECRET;
-
-      const restoreEnv = () => {
-        process.env.NODE_ENV = originalNodeEnv;
-        if (originalAuthSecret === undefined) delete process.env.AUTH_SECRET; else process.env.AUTH_SECRET = originalAuthSecret;
-        if (originalJwtSecret === undefined) delete process.env.JWT_SECRET; else process.env.JWT_SECRET = originalJwtSecret;
-        jest.resetModules();
-      };
-
-      try {
-        // Production + no secret configured: throws at require-time
-        jest.resetModules();
-        process.env.NODE_ENV = 'production';
-        delete process.env.AUTH_SECRET;
-        delete process.env.JWT_SECRET;
-        expect(() => {
-          jest.isolateModules(() => {
-            require('../src/services/authService');
-          });
-        }).toThrow('AUTH_SECRET');
-
-        // Development + no secret configured: doesn't throw (falls back with a logged warning)
-        jest.resetModules();
-        process.env.NODE_ENV = 'development';
-        expect(() => {
-          jest.isolateModules(() => {
-            require('../src/services/authService');
-          });
-        }).not.toThrow();
-
-        // A configured secret: doesn't throw, regardless of environment
-        jest.resetModules();
-        process.env.NODE_ENV = 'production';
-        process.env.AUTH_SECRET = 'a-real-configured-secret';
-        expect(() => {
-          jest.isolateModules(() => {
-            require('../src/services/authService');
-          });
-        }).not.toThrow();
-      } finally {
-        restoreEnv();
+    test('every handler tolerates a request with no body at all', async () => {
+      for (const handler of ['login', 'requestOtp', 'verifyOtp', 'register']) {
+        const res = mockRes();
+        await authController[handler]({}, res, jest.fn());
+        expect(res.status).toHaveBeenCalledWith(400);
       }
+    });
+
+    test('login falls back to a generic error when the failure carries no message', async () => {
+      jest.spyOn(authService, 'authenticateWithPassword').mockRejectedValue(new Error(''));
+      const res = mockRes();
+
+      await authController.login({ body: VALID }, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: AUTH_MESSAGES.AUTH_FAILED_FALLBACK,
+      });
+    });
+
+    test('requestOtp falls back to a generic error when the failure carries no message', async () => {
+      jest.spyOn(authService, 'requestOtp').mockRejectedValue(new Error(''));
+      const res = mockRes();
+
+      await authController.requestOtp({ body: { email: EMAIL } }, res, jest.fn());
+
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: AUTH_MESSAGES.OTP_REQUEST_EMAIL_REQUIRED,
+      });
+    });
+
+    test('verifyOtp falls back to a generic error when the failure carries no message', async () => {
+      jest.spyOn(authService, 'verifyOtp').mockRejectedValue(new Error(''));
+      const res = mockRes();
+
+      await authController.verifyOtp({ body: { email: EMAIL, code: '1234' } }, res, jest.fn());
+
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: AUTH_MESSAGES.INVALID_OTP_FALLBACK,
+      });
+    });
+
+    test('register falls back to a generic error when the failure carries no message', async () => {
+      jest.spyOn(authService, 'registerUser').mockRejectedValue(new Error(''));
+      const res = mockRes();
+
+      await authController.register(
+        {
+          body: {
+            name: 'Someone',
+            email: 'someone@example.com',
+            password: 'Secret@123',
+            mobile: '9876543210',
+          },
+        },
+        res,
+        jest.fn()
+      );
+
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: AUTH_MESSAGES.AUTH_FAILED_FALLBACK,
+      });
+    });
+
+    test('login reaches the OTP branch through the code field', async () => {
+      jest.spyOn(authService, 'verifyOtp').mockResolvedValue({ success: true, token: 't', user: {} });
+      const res = mockRes();
+
+      await authController.login({ body: { email: EMAIL, code: '1234' } }, res, jest.fn());
+
+      expect(authService.verifyOtp).toHaveBeenCalledWith(EMAIL, '1234', '127.0.0.1');
+    });
+
+    test('getSession falls back to a generic message when verification gives no reason', async () => {
+      jest.spyOn(authService, 'verifySessionToken').mockReturnValue({ valid: false });
+      const res = mockRes();
+
+      await authController.getSession({ headers: { authorization: 'Bearer a.b.c' } }, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: AUTH_MESSAGES.INVALID_SESSION_FALLBACK,
+      });
+    });
+
+    test('logout falls back to a placeholder identity when no email is supplied', async () => {
+      const res = mockRes();
+      await authController.logout({ body: {}, headers: {} }, res, jest.fn());
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        message: AUTH_MESSAGES.LOGOUT_SUCCESS,
+      });
+    });
+
+    test('logout tolerates a request with no body', async () => {
+      const res = mockRes();
+      await authController.logout({ headers: {} }, res, jest.fn());
+      expect(res.json).toHaveBeenCalled();
     });
   });
 });

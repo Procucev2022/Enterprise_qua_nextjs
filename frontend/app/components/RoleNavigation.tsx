@@ -1,6 +1,8 @@
 'use client';
 
 import React, { useMemo, useState } from 'react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { ROLE_SIDEBAR_NAV, ROLE_WORKSPACE_META, SIDEBAR_LAYOUT } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
@@ -62,13 +64,9 @@ interface NavGroup {
  * role. Pinned directly under the application header with no top, left, or
  * bottom gutters, and collapses to an off-canvas drawer on small screens.
  */
-export default function RoleNavigation({
-  activeScreen,
-  setActiveScreen,
-  onScreenChange,
-  onLogout,
-}: RoleNavigationProps) {
+export default function RoleNavigation({ onLogout }: RoleNavigationProps) {
   const { currentRole, isLoggedIn } = useApp();
+  const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const role: UserRole = currentRole ?? 'buyer';
@@ -87,12 +85,6 @@ export default function RoleNavigation({
       }, []),
     [navItems]
   );
-
-  const changeScreen = (screen: string) => {
-    if (setActiveScreen) setActiveScreen(screen);
-    if (onScreenChange) onScreenChange(screen);
-    setMobileOpen(false);
-  };
 
   if (!isLoggedIn) {
     return null;
@@ -157,13 +149,15 @@ export default function RoleNavigation({
 
               {group.items.map((item) => {
                 const ItemIcon = SIDEBAR_ICONS[item.icon];
-                const isActive = activeScreen === item.id;
+                // The URL is the single source of truth for which module is
+                // active, so deep links and browser back/forward stay in sync.
+                const isActive = pathname === item.route;
 
                 return (
-                  <button
+                  <Link
                     key={item.id}
-                    type="button"
-                    onClick={() => changeScreen(item.id)}
+                    href={item.route}
+                    onClick={() => setMobileOpen(false)}
                     aria-label={`${item.screenTag}: ${item.label}`}
                     aria-current={isActive ? 'page' : undefined}
                     title={item.description}
@@ -212,7 +206,7 @@ export default function RoleNavigation({
                         className="w-1.5 h-1.5 rounded-full bg-white shrink-0"
                       />
                     )}
-                  </button>
+                  </Link>
                 );
               })}
             </div>

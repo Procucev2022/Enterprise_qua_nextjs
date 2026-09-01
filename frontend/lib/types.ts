@@ -699,6 +699,8 @@ export interface SidebarNavItem {
   icon: SidebarIconKey;
   /** Section heading key the item is grouped under */
   group: string;
+  /** Application URL this module is served at, e.g. "/buyer/command-center" */
+  route: string;
 }
 
 export interface RoleWorkspaceMeta {
@@ -708,9 +710,6 @@ export interface RoleWorkspaceMeta {
 }
 
 export interface RoleNavigationProps {
-  activeScreen: string;
-  setActiveScreen?: (screen: string) => void;
-  onScreenChange?: (screen: string) => void;
+  /** Optional sign-out handler rendered in the rail footer. */
   onLogout?: () => void;
-  onOpenInitialSetup?: () => void;
 }

@@ -157,19 +157,21 @@ const schema = buildSchema(`
     chaserIntervalSeconds: Int
     aiModel: String
     aiTemperature: Float
-    azurePostgresSyncInterval: Int
+    identityDbSyncInterval: Int
   }
 
+  """
+  Health of the shared MySQL identity database that backs authentication.
+  """
   type DBHealthStatus {
     isConfigured: Boolean!
     isConnected: Boolean!
     provider: String!
     providerLabel: String!
     poolStatus: String!
+    database: String
+    userCount: Int
     latencyMs: Int
-    activeConnections: Int
-    totalConnections: Int
-    idleConnections: Int
     errorMessage: String
     timestamp: String
   }

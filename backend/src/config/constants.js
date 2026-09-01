@@ -144,11 +144,11 @@ const INITIAL_SYSTEM_CONFIG = {
 
 const INITIAL_AZURE_HEALTH = [
   {
-    service: 'Azure PostgreSQL Flexible Server (Neon Pooler)',
+    service: 'Azure Database for MySQL (Shared Identity Schema)',
     status: 'ONLINE',
     latency: '18ms',
     uptime: '99.99%',
-    details: 'Read/Write Active, SSL Require, Automated HA Clustering',
+    details: 'Read/Write Active, TLS Required, Shared Procucev user directory',
   },
   {
     service: 'Azure OpenAI (Doc Intelligence OCR)',
@@ -227,6 +227,66 @@ const AUTH_MESSAGES = {
   SESSION_EXPIRED: 'Session token has expired',
   TOKEN_DECODE_FAILED: 'Failed to decode token payload',
   LOGOUT_SUCCESS: 'Logged out successfully.',
+  IDENTITY_DB_UNAVAILABLE:
+    'The identity database is unreachable, so credentials cannot be verified right now. Check the MYSQL_* connection settings in backend/.env, confirm the Azure MySQL firewall allows this host, then retry.',
+  IDENTITY_DB_NOT_CONFIGURED:
+    'No identity database is configured. Set MYSQL_HOST / MYSQL_DATABASE / MYSQL_USER / MYSQL_PASSWORD in backend/.env so logins can be verified against real user records.',
+  ACCOUNT_INACTIVE:
+    'This account is marked inactive in the identity database. Ask an administrator to re-activate it before signing in.',
+  ACCOUNT_PENDING_APPROVAL:
+    'This self-registered account is still awaiting administrator approval, so sign-in is blocked. You will be able to log in once it is approved.',
+  ACCOUNT_ALREADY_EXISTS:
+    'An account already exists for this email address. Use the Sign In tab instead of creating a new account.',
+};
+
+// ==============================================================================
+// IDENTITY DATABASE (shared Procucev MySQL) - role + master-data mapping
+// ==============================================================================
+
+// Maps a `role.role_name` value in the shared MySQL schema onto the four
+// application roles the Next.js workspace understands. Unmapped roles are
+// rejected at login rather than silently downgraded to `buyer`.
+const IDENTITY_ROLE_MAP = {
+  clientinitiator: 'buyer',
+  'clientinitiator1.1': 'buyer',
+  client: 'buyer',
+  prapprover: 'buyer',
+  prapprover2: 'buyer',
+  'prapprover1.1': 'buyer',
+  vendor: 'vendor',
+  partialvendor: 'vendor',
+  registration: 'vendor',
+  categorymanager: 'category_manager',
+  categorymanager2: 'category_manager',
+  categorymanagerbasic: 'category_manager',
+  categorymanagerbasic2: 'category_manager',
+  vendormanager: 'admin',
+  vendormanager2: 'admin',
+  vendormanager3: 'admin',
+  vendorexecutive: 'admin',
+  vendorexecutive2: 'admin',
+  superuser: 'admin',
+  procucev: 'admin',
+};
+
+// Master-data row identifiers that already exist in the shared schema. These are
+// looked up by name at runtime; the ids are documented fallbacks only.
+const IDENTITY_MASTER_DATA = {
+  BUYER_ROLE_NAME: 'ClientInitiator',
+  BUYER_ORG_TYPE: 'CLIENT',
+  BUYER_STATUS: 'CLIENT_NEW',
+  DEFAULT_GMT_PLAN: 'GMT Basic',
+  DEFAULT_BFS_PLAN: 'BFS PRO',
+  SOURCE_TYPE_WEB: 'W',
+  VERIFICATION_VERIFIED: 'EMAIL_VERIFIED',
+  VERIFICATION_PENDING: 'PENDING_EMAIL_VERIFICATION',
+};
+
+// Indian phone numbers are stored normalised as +91XXXXXXXXXX in the shared
+// schema, and the Java login path compares them byte-for-byte.
+const IDENTITY_PHONE_CONFIG = {
+  DEFAULT_COUNTRY_CODE: '+91',
+  NATIONAL_NUMBER_LENGTH: 10,
 };
 
 const {
@@ -246,6 +306,9 @@ module.exports = {
   QUALIFICATION_PILLARS,
   AES_CONFIG,
   AUTH_MESSAGES,
+  IDENTITY_ROLE_MAP,
+  IDENTITY_MASTER_DATA,
+  IDENTITY_PHONE_CONFIG,
   EMAIL_REGEX,
   GSTIN_REGEX,
   PHONE_REGEX,

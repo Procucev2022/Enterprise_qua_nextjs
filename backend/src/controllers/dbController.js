@@ -1,42 +1,55 @@
-const poolModule = require('../db/pool');
-const seed = require('../db/seed');
+// ==============================================================================
+// DATABASE STATUS CONTROLLER
+// ==============================================================================
+// Reports on the shared MySQL identity database that backs authentication.
+// This backend has no PostgreSQL connection: domain records are served from the
+// in-memory enterprise store, and user accounts live in the identity schema
+// owned by the Procucev p2pservices application.
+// ==============================================================================
+
+const identityPoolModule = require('../db/identityPool');
+// Referenced through the module object rather than destructured so the helper
+// stays observable to tests.
+const optimizationMetrics = require('../db/optimizationMetrics');
+const storeService = require('../services/storeService');
 const { logger } = require('../services/loggerService');
 
+/**
+ * GET /api/db/status - identity database reachability + domain store mode.
+ */
 async function getDBStatus(req, res, next) {
   try {
-    logger.info('Checking PostgreSQL database connection status', {}, 'DB_CONTROLLER');
-    const health = await poolModule.checkDBHealth();
-    res.json({ success: true, ...health });
+    logger.info('Checking identity database connection status', {}, 'DB_CONTROLLER');
+    const health = await identityPoolModule.checkIdentityHealth();
+    res.json({
+      success: true,
+      ...health,
+      domainStore: {
+        mode: storeService.isHydratedFromDB ? 'persisted' : 'in_memory_seed',
+        buyerAccounts: storeService.getBuyerAccounts().length,
+        vendors: storeService.getVendors().length,
+        rfqs: storeService.getRFQs().length,
+      },
+    });
   } catch (err) {
-    logger.error('Error checking DB status', err, 'DB_CONTROLLER');
+    logger.error('Error checking identity database status', err, 'DB_CONTROLLER');
     next(err);
   }
 }
 
-async function initDBSchema(req, res, next) {
+/**
+ * GET /api/db/metrics - query cache and audit efficiency report.
+ */
+async function getDBMetrics(req, res, next) {
   try {
-    logger.info('Initializing PostgreSQL database schema', {}, 'DB_CONTROLLER');
-    const result = await poolModule.initializeSchema();
-    res.json(result);
+    res.json({ success: true, ...optimizationMetrics.getOptimizationMetrics() });
   } catch (err) {
-    logger.error('Error initializing database schema', err, 'DB_CONTROLLER');
-    next(err);
-  }
-}
-
-async function syncDBData(req, res, next) {
-  try {
-    logger.info('Syncing initial seed data to PostgreSQL database', {}, 'DB_CONTROLLER');
-    const result = await seed.seedInitialDataToPostgres();
-    res.json(result);
-  } catch (err) {
-    logger.error('Error syncing seed data to database', err, 'DB_CONTROLLER');
+    logger.error('Error building optimization metrics', err, 'DB_CONTROLLER');
     next(err);
   }
 }
 
 module.exports = {
   getDBStatus,
-  initDBSchema,
-  syncDBData,
+  getDBMetrics,
 };

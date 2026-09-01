@@ -5,7 +5,7 @@ function getBuyerAccounts(req, res, next) {
   try {
     logger.info('Fetching buyer accounts', {}, 'BUYER_ACCOUNT_CONTROLLER');
     const accounts = storeService.getBuyerAccounts();
-    res.json({ success: true, source: storeService.isHydratedFromDB ? 'postgresql' : 'in_memory', data: accounts });
+    res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: accounts });
   } catch (err) {
     logger.error('Error fetching buyer accounts', err, 'BUYER_ACCOUNT_CONTROLLER');
     next(err);

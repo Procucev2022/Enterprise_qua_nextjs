@@ -8,11 +8,16 @@ import type { UserRole } from '@/lib/types';
 
 jest.mock('@/lib/store');
 
+// The rail derives its active module from the URL, so the pathname hook is the
+// value under test rather than an activeScreen prop.
+let mockPathname = '/buyer/command-center';
+jest.mock('next/navigation', () => ({
+  usePathname: () => mockPathname,
+}));
+
 const NAV = UI_STRINGS.navigation;
 
 describe('RoleNavigation Sidebar Dashboard', () => {
-  const mockSetActiveScreen = jest.fn();
-  const mockOnScreenChange = jest.fn();
   const mockOnLogout = jest.fn();
 
   const mockStore = (overrides: Record<string, unknown> = {}) => {
@@ -25,6 +30,10 @@ describe('RoleNavigation Sidebar Dashboard', () => {
     });
   };
 
+  beforeEach(() => {
+    mockPathname = '/buyer/command-center';
+  });
+
   afterEach(() => {
     jest.clearAllMocks();
   });
@@ -32,13 +41,7 @@ describe('RoleNavigation Sidebar Dashboard', () => {
   it('renders null when the session is not authenticated', () => {
     mockStore({ isLoggedIn: false });
 
-    const { container } = render(
-      <RoleNavigation
-        activeScreen="command_center"
-        setActiveScreen={mockSetActiveScreen}
-        onLogout={mockOnLogout}
-      />
-    );
+    const { container } = render(<RoleNavigation onLogout={mockOnLogout} />);
 
     expect(container.firstChild).toBeNull();
   });
@@ -46,13 +49,7 @@ describe('RoleNavigation Sidebar Dashboard', () => {
   it('renders a flush full-height rail with grouped modules and no workspace header card', () => {
     mockStore();
 
-    render(
-      <RoleNavigation
-        activeScreen="command_center"
-        setActiveScreen={mockSetActiveScreen}
-        onLogout={mockOnLogout}
-      />
-    );
+    render(<RoleNavigation onLogout={mockOnLogout} />);
 
     const rail = screen.getByRole('complementary', { name: NAV.navLandmarkLabel });
     expect(rail.className).toContain(SIDEBAR_LAYOUT.STICKY_OFFSET_CLASS);
@@ -72,78 +69,59 @@ describe('RoleNavigation Sidebar Dashboard', () => {
       screen.getByText(formatString(NAV.modulesCountTemplate, { count: ROLE_SIDEBAR_NAV.buyer.length }))
     ).toBeInTheDocument();
 
-    // Active module is flagged for assistive technology
-    expect(screen.getByRole('button', { name: /Screen 1\.1/ })).toHaveAttribute('aria-current', 'page');
-    expect(screen.getByRole('button', { name: /Screen 1\.2/ })).not.toHaveAttribute('aria-current');
+    // Active module is derived from the pathname and flagged for assistive tech
+    expect(screen.getByRole('link', { name: /Screen 1\.1/ })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: /Screen 1\.2/ })).not.toHaveAttribute('aria-current');
   });
 
   it('falls back to the buyer module rail when no role is resolved', () => {
     mockStore({ currentRole: undefined });
 
-    render(<RoleNavigation activeScreen="command_center" setActiveScreen={mockSetActiveScreen} />);
+    render(<RoleNavigation />);
 
-    expect(screen.getByRole('button', { name: /Screen 1\.1/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Screen 1\.1/ })).toBeInTheDocument();
     // Sign Out is omitted when no logout handler is supplied
     expect(screen.queryByRole('button', { name: NAV.signOut })).not.toBeInTheDocument();
   });
 
   it.each<[UserRole]>([['buyer'], ['category_manager'], ['vendor'], ['admin']])(
-    'renders every %s module and dispatches screen changes',
+    'links every %s module to its own route and marks the current one active',
     (role) => {
       const items = ROLE_SIDEBAR_NAV[role];
 
-      // Cover active + inactive visual states for each module of the role
+      // Cover the active visual state for each module of the role
       items.forEach((item) => {
+        mockPathname = item.route;
         mockStore({ currentRole: role });
-        const { unmount } = render(
-          <RoleNavigation
-            activeScreen={item.id}
-            setActiveScreen={mockSetActiveScreen}
-            onLogout={mockOnLogout}
-          />
-        );
-        expect(screen.getByRole('button', { name: `${item.screenTag}: ${item.label}` })).toHaveAttribute(
+        const { unmount } = render(<RoleNavigation onLogout={mockOnLogout} />);
+        expect(screen.getByRole('link', { name: `${item.screenTag}: ${item.label}` })).toHaveAttribute(
           'aria-current',
           'page'
         );
         unmount();
       });
 
-      mockSetActiveScreen.mockClear();
+      // With an unrelated pathname nothing is active, and every module still
+      // renders with a correct href.
+      mockPathname = '/unmatched-route';
       mockStore({ currentRole: role });
-      render(
-        <RoleNavigation
-          activeScreen="unmatched_screen"
-          setActiveScreen={mockSetActiveScreen}
-          onScreenChange={mockOnScreenChange}
-          onLogout={mockOnLogout}
-        />
-      );
+      render(<RoleNavigation onLogout={mockOnLogout} />);
 
       items.forEach((item) => {
-        const button = screen.getByRole('button', { name: `${item.screenTag}: ${item.label}` });
+        const link = screen.getByRole('link', { name: `${item.screenTag}: ${item.label}` });
+        expect(link).toHaveAttribute('href', item.route);
+        expect(link).not.toHaveAttribute('aria-current');
         expect(screen.getByText(item.label)).toBeInTheDocument();
         expect(screen.getByText(item.description)).toBeInTheDocument();
         expect(screen.getByText(item.shortTag)).toBeInTheDocument();
-        fireEvent.click(button);
-        expect(mockSetActiveScreen).toHaveBeenCalledWith(item.id);
-        expect(mockOnScreenChange).toHaveBeenCalledWith(item.id);
       });
-
-      expect(mockSetActiveScreen).toHaveBeenCalledTimes(items.length);
     }
   );
 
   it('opens the mobile drawer and closes it via the overlay, close button and navigation', () => {
     mockStore();
 
-    render(
-      <RoleNavigation
-        activeScreen="command_center"
-        setActiveScreen={mockSetActiveScreen}
-        onLogout={mockOnLogout}
-      />
-    );
+    render(<RoleNavigation onLogout={mockOnLogout} />);
 
     const openBtn = screen.getByRole('button', { name: NAV.openMenu });
     expect(openBtn).toHaveAttribute('aria-expanded', 'false');
@@ -162,28 +140,23 @@ describe('RoleNavigation Sidebar Dashboard', () => {
 
     // Open -> auto-dismiss after selecting a module
     fireEvent.click(screen.getByRole('button', { name: NAV.openMenu }));
-    fireEvent.click(screen.getByRole('button', { name: /Screen 1\.4/ }));
-    expect(mockSetActiveScreen).toHaveBeenCalledWith('vendor_summary');
+    fireEvent.click(screen.getByRole('link', { name: /Screen 1\.4/ }));
     expect(screen.getByRole('button', { name: NAV.openMenu })).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('invokes the logout handler from the rail footer', () => {
+    mockPathname = '/admin/infra-control';
     mockStore({ currentRole: 'admin' });
 
-    render(
-      <RoleNavigation
-        activeScreen="infra_control"
-        onScreenChange={mockOnScreenChange}
-        onLogout={mockOnLogout}
-      />
-    );
+    render(<RoleNavigation onLogout={mockOnLogout} />);
 
     fireEvent.click(screen.getByRole('button', { name: NAV.signOut }));
     expect(mockOnLogout).toHaveBeenCalledTimes(1);
 
-    // Screen change works when only the onScreenChange callback is provided
-    fireEvent.click(screen.getByRole('button', { name: /Screen 4\.2/ }));
-    expect(mockOnScreenChange).toHaveBeenCalledWith('audit_log');
-    expect(mockSetActiveScreen).not.toHaveBeenCalled();
+    // The other admin module points at its own route
+    expect(screen.getByRole('link', { name: /Screen 4\.2/ })).toHaveAttribute(
+      'href',
+      '/admin/audit-log'
+    );
   });
 });

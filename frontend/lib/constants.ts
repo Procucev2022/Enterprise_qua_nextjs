@@ -217,6 +217,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.commandCenter.description,
       icon: 'Layers',
       group: NAV_GROUPS.buyerSourcing,
+      route: '/buyer/command-center',
     },
     {
       id: 'ingestion_wizard',
@@ -226,6 +227,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.ingestionWizard.description,
       icon: 'FileSpreadsheet',
       group: NAV_GROUPS.buyerSourcing,
+      route: '/buyer/ingestion-wizard',
     },
     {
       id: 'vendor_evaluation_summary',
@@ -235,6 +237,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.buyerEvaluationSummary.description,
       icon: 'FileCheck',
       group: NAV_GROUPS.buyerEvaluation,
+      route: '/buyer/vendor-evaluation-summary',
     },
     {
       id: 'vendor_summary',
@@ -244,6 +247,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.vendorDirectory.description,
       icon: 'Building2',
       group: NAV_GROUPS.buyerEvaluation,
+      route: '/buyer/vendor-summary',
     },
     {
       id: 'subscription_center',
@@ -253,6 +257,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.sourcingSubscriptions.description,
       icon: 'Sparkles',
       group: NAV_GROUPS.buyerAccount,
+      route: '/buyer/subscription-center',
     },
     {
       id: 'buyer_profile',
@@ -262,6 +267,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.buyerProfile.description,
       icon: 'Building2',
       group: NAV_GROUPS.buyerAccount,
+      route: '/buyer/buyer-profile',
     },
     {
       id: 'buyer_directory',
@@ -271,6 +277,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.buyerDbSync.description,
       icon: 'Database',
       group: NAV_GROUPS.buyerAccount,
+      route: '/buyer/buyer-directory',
     },
   ],
   category_manager: [
@@ -282,6 +289,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.operationalKanban.description,
       icon: 'Kanban',
       group: NAV_GROUPS.categoryOperations,
+      route: '/category-manager/kanban-board',
     },
     {
       id: 'spend_dashboard',
@@ -291,6 +299,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.spendAnalytics.description,
       icon: 'TrendingUp',
       group: NAV_GROUPS.categoryOperations,
+      route: '/category-manager/spend-dashboard',
     },
     {
       id: 'buyer_console',
@@ -300,6 +309,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.buyerRfqConsole.description,
       icon: 'Building2',
       group: NAV_GROUPS.categoryConsoles,
+      route: '/category-manager/buyer-console',
     },
     {
       id: 'vendor_evaluation_summary',
@@ -309,6 +319,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.modeEvaluations.description,
       icon: 'FileCheck',
       group: NAV_GROUPS.categoryConsoles,
+      route: '/category-manager/vendor-evaluation-summary',
     },
     {
       id: 'vendor_console',
@@ -318,6 +329,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.vendorPerformance.description,
       icon: 'Truck',
       group: NAV_GROUPS.categoryConsoles,
+      route: '/category-manager/vendor-console',
     },
     {
       id: 'category_summary',
@@ -327,6 +339,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.categoryTrends.description,
       icon: 'Layers',
       group: NAV_GROUPS.categoryGovernance,
+      route: '/category-manager/category-summary',
     },
   ],
   vendor: [
@@ -338,6 +351,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.opportunityFeed.description,
       icon: 'Truck',
       group: NAV_GROUPS.vendorOpportunities,
+      route: '/vendor/opportunity-feed',
     },
     {
       id: 'quotation_form',
@@ -347,6 +361,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.bidQuotes.description,
       icon: 'FileCheck',
       group: NAV_GROUPS.vendorOpportunities,
+      route: '/vendor/quotation-form',
     },
     {
       id: 'qualification_form',
@@ -356,6 +371,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.selfEvaluation.description,
       icon: 'Award',
       group: NAV_GROUPS.vendorQualification,
+      route: '/vendor/qualification-form',
     },
     {
       id: 'item_catalogue',
@@ -365,6 +381,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.itemCatalogue.description,
       icon: 'Layers',
       group: NAV_GROUPS.vendorQualification,
+      route: '/vendor/item-catalogue',
     },
     {
       id: 'vendor_subscription',
@@ -374,6 +391,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.subscriptionPlans.description,
       icon: 'Sparkles',
       group: NAV_GROUPS.vendorAccount,
+      route: '/vendor/vendor-subscription',
     },
     {
       id: 'vendor_profile',
@@ -383,6 +401,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.supplierProfile.description,
       icon: 'Truck',
       group: NAV_GROUPS.vendorAccount,
+      route: '/vendor/vendor-profile',
     },
   ],
   admin: [
@@ -394,6 +413,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.azureInfrastructure.description,
       icon: 'Server',
       group: NAV_GROUPS.adminPlatform,
+      route: '/admin/infra-control',
     },
     {
       id: 'audit_log',
@@ -403,6 +423,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.immutableAuditLog.description,
       icon: 'ShieldCheck',
       group: NAV_GROUPS.adminPlatform,
+      route: '/admin/audit-log',
     },
   ],
 };
@@ -415,6 +436,25 @@ export const SIDEBAR_LAYOUT = {
   WIDTH_CLASS: 'lg:w-[262px]',
   STICKY_OFFSET_CLASS: 'lg:top-16',
   HEIGHT_CLASS: 'lg:h-[calc(100vh-4rem)]',
+};
+
+/** Route the sign-in flow redirects to, chosen by the role on the user record. */
+export const ROLE_LANDING_ROUTE: Record<UserRole, string> = {
+  buyer: '/buyer/command-center',
+  category_manager: '/category-manager/kanban-board',
+  vendor: '/vendor/opportunity-feed',
+  admin: '/admin/infra-control',
+};
+
+/** Path of the sign-in screen. */
+export const LOGIN_ROUTE = '/login';
+
+/** URL prefix that scopes each role's workspace, used to guard route access. */
+export const ROLE_ROUTE_PREFIX: Record<UserRole, string> = {
+  buyer: '/buyer',
+  category_manager: '/category-manager',
+  vendor: '/vendor',
+  admin: '/admin',
 };
 
 export {

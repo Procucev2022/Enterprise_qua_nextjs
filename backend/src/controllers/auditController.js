@@ -5,7 +5,7 @@ function getAuditLogs(req, res, next) {
   try {
     logger.info('Fetching cryptographic audit trail', { query: req.query }, 'AUDIT_CONTROLLER');
     const logs = storeService.getAuditLogs();
-    res.json({ success: true, source: storeService.isHydratedFromDB ? 'postgresql' : 'in_memory', data: logs });
+    res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: logs });
   } catch (err) {
     logger.error('Error fetching audit logs', err, 'AUDIT_CONTROLLER');
     next(err);

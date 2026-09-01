@@ -1,17 +1,10 @@
 const crypto = require('crypto');
 const { logger } = require('./loggerService');
 const storeService = require('./storeService');
-const poolModule = require('../db/pool');
 const mailerService = require('./mailerService');
 const { AUTH_MESSAGES } = require('../config/constants');
-const {
-  getUsersFromDB,
-  upsertUserInDB,
-  upsertOtpInDB,
-  deleteOtpInDB,
-  getRevokedSessionsFromDB,
-  insertRevokedSessionInDB,
-} = require('../db/queries');
+const identityPoolModule = require('../db/identityPool');
+const identityQueries = require('../db/identityQueries');
 
 const DEV_FALLBACK_AUTH_SECRET = 'procucev-enterprise-auth-secret-key-2026';
 const CONFIGURED_AUTH_SECRET = process.env.AUTH_SECRET || process.env.JWT_SECRET || '';
@@ -38,80 +31,6 @@ const otpStore = new Map();
 // In-memory revoked-token set (holds each token's signature segment)
 const revokedTokens = new Set();
 
-// Default seed users (login credentials for the 4 roles used in Phase-4 testing)
-const DEFAULT_USER_SEEDS = [
-  {
-    id: 'usr-buyer-001',
-    email: 'buyer@procucev.com',
-    name: 'Procucev Buyer Desk',
-    role: 'buyer',
-    orgId: 'org-procucev-01',
-    orgName: 'Procucev Heavy Engineering',
-    password: 'password123',
-    mobile: '+91 98201 44820',
-  },
-  {
-    id: 'usr-client-001',
-    email: 'client@procucev.com',
-    name: 'L&T Infrastructure Buyer',
-    role: 'buyer',
-    orgId: 'org-lt-01',
-    orgName: 'Larsen & Toubro EPC Division',
-    password: 'password123',
-    mobile: '+91 98201 44821',
-  },
-  {
-    id: 'usr-catman-001',
-    email: 'catmanager@procucev.com',
-    name: 'Sourcing Lead & Category Manager',
-    role: 'category_manager',
-    orgId: 'org-procucev-01',
-    orgName: 'Procucev Procurement Directorate',
-    password: 'password123',
-    mobile: '+91 98201 44822',
-  },
-  {
-    id: 'usr-vendor-001',
-    email: 'vendor@apexsupplies.com',
-    name: 'Apex Industrial Supplies Desk',
-    role: 'vendor',
-    orgId: 'org-apex-01',
-    orgName: 'Apex Industrial Supplies Pvt Ltd',
-    password: 'password123',
-    mobile: '+91 98450 67890',
-  },
-  {
-    id: 'usr-vendor-002',
-    email: 'amit@kiranvalves.com',
-    name: 'Kiran Valves & Actuators',
-    role: 'vendor',
-    orgId: 'org-kiran-02',
-    orgName: 'Kiran Precision Valves Mfg',
-    password: 'Kiran@Temp8821#',
-    mobile: '+91 98110 54321',
-  },
-  {
-    id: 'usr-admin-001',
-    email: 'admin@procucev.com',
-    name: 'Platform Administrator & Compliance Auditor',
-    role: 'admin',
-    orgId: 'org-platform-root',
-    orgName: 'Procucev Enterprise Governance',
-    password: 'adminpassword123',
-    mobile: '+91 98000 00001',
-  },
-  {
-    id: 'usr-auditor-001',
-    email: 'auditor@procucev.com',
-    name: 'Lead Compliance Auditor',
-    role: 'admin',
-    orgId: 'org-platform-root',
-    orgName: 'Procucev Audit & Regulatory Commission',
-    password: 'adminpassword123',
-    mobile: '+91 98000 00002',
-  },
-];
-
 /**
  * Generate a random per-user salt
  */
@@ -137,58 +56,68 @@ function verifyPassword(plainPassword, storedHash, storedSalt) {
   return crypto.timingSafeEqual(Buffer.from(computedHash), Buffer.from(storedHash));
 }
 
-// User repository: email -> User
-const userRegistry = new Map();
-
-function buildUserRecord(seed) {
-  const { hash, salt } = hashPassword(seed.password, generateSalt());
-  return {
-    id: seed.id,
-    email: seed.email,
-    name: seed.name,
-    role: seed.role,
-    orgId: seed.orgId,
-    orgName: seed.orgName,
-    passwordHash: hash,
-    passwordSalt: salt,
-    mobile: seed.mobile,
-    status: 'ACTIVE',
-  };
+/**
+ * Load an account from the shared identity database (MySQL `user` table).
+ *
+ * This is the single source of truth for authentication: there is no in-memory
+ * user registry and no seeded demo credentials. If the identity database is
+ * unreachable, authentication fails closed with a descriptive error rather than
+ * silently accepting anything.
+ */
+async function loadIdentityUser(normalizedEmail) {
+  if (!identityPoolModule.pool) {
+    throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
+  }
+  try {
+    return await identityQueries.findUserByEmail(normalizedEmail);
+  } catch (err) {
+    logger.error('Identity database lookup failed', err, 'AUTH_SERVICE');
+    throw new Error(AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE);
+  }
 }
 
-DEFAULT_USER_SEEDS.forEach((seed) => {
-  userRegistry.set(seed.email.toLowerCase(), buildUserRecord(seed));
-});
+/**
+ * Reject accounts that exist but are not permitted to sign in, with a message
+ * that explains which gate failed and how to clear it.
+ */
+function assertUserCanSignIn(user, normalizedEmail, ipAddress) {
+  if (!user.isActive) {
+    logger.warn(`Sign-in blocked, inactive account: ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+    throw new Error(AUTH_MESSAGES.ACCOUNT_INACTIVE);
+  }
+  // Self-registered accounts in the shared schema require admin approval, the
+  // same gate the Java service enforces on its own login path.
+  if (user.isSelfClient && !user.isApproved) {
+    logger.warn(`Sign-in blocked, pending approval: ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+    throw new Error(AUTH_MESSAGES.ACCOUNT_PENDING_APPROVAL);
+  }
+  if (!user.role) {
+    logger.warn(
+      `Sign-in blocked, unmapped role "${user.rawRoleName}" for ${normalizedEmail}`,
+      { ipAddress },
+      'AUTH_SERVICE'
+    );
+    throw new Error(AUTH_MESSAGES.INVALID_CREDENTIALS);
+  }
+}
 
 /**
- * Hydrate the in-memory user registry and revoked-session set from Postgres.
- * If the DB has no users yet, push the current in-memory seed users into it
- * so registrations made after a restart don't disappear. Mirrors the
- * storeService hydrate-on-boot pattern used for the rest of the app.
+ * Confirm the identity database is reachable at boot.
+ *
+ * Issued OTP codes and revoked session tokens are deliberately kept in process
+ * memory: both are short-lived session state, so a restart simply invalidates
+ * them, which fails safe. Durable data (accounts) lives in the identity schema.
  */
 async function hydrateFromDB() {
-  if (!poolModule.pool) return;
-  try {
-    const dbUsers = await getUsersFromDB();
-    if (dbUsers && dbUsers.length > 0) {
-      dbUsers.forEach((u) => userRegistry.set(u.email.toLowerCase(), u));
-    } else {
-      await Promise.all(
-        Array.from(userRegistry.values()).map((u) =>
-          upsertUserInDB(u).catch((e) => logger.error('DB user seed error', e, 'AUTH_SERVICE'))
-        )
-      );
-    }
-
-    const dbRevoked = await getRevokedSessionsFromDB();
-    (dbRevoked || []).forEach((r) => revokedTokens.add(r.tokenSignature));
-  } catch (err) {
-    logger.warn(
-      'Auth hydration from PostgreSQL failed, continuing with in-memory seed users',
-      { error: err.message },
+  const health = await identityPoolModule.checkIdentityHealth();
+  if (!health.isConnected) {
+    logger.error(
+      `Identity database unreachable at startup: ${health.errorMessage}. Sign-in will be rejected until it recovers.`,
+      null,
       'AUTH_SERVICE'
     );
   }
+  return health;
 }
 
 /**
@@ -280,11 +209,7 @@ function revokeSessionToken(token) {
     // keep default expiry
   }
 
-  if (poolModule.pool) {
-    insertRevokedSessionInDB(signature, expiresAt).catch((e) =>
-      logger.error('DB revoke save error', e, 'AUTH_SERVICE')
-    );
-  }
+  logger.info(`Session token revoked, expiring at ${expiresAt}`, {}, 'AUTH_SERVICE');
 
   return true;
 }
@@ -305,18 +230,22 @@ function toPublicUser(user) {
  * an unknown email is rejected with the same generic error as a wrong
  * password, to avoid leaking which emails are registered.
  */
-function authenticateWithPassword(email, password, ipAddress) {
+async function authenticateWithPassword(email, password, ipAddress) {
   if (!email || !password) {
     throw new Error(AUTH_MESSAGES.EMAIL_PASSWORD_REQUIRED);
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-  const user = userRegistry.get(normalizedEmail);
+  const user = await loadIdentityUser(normalizedEmail);
 
-  if (!user || !verifyPassword(password, user.passwordHash, user.passwordSalt)) {
+  // Unknown email and wrong password produce the same error so the response
+  // cannot be used to enumerate registered addresses.
+  if (!user || !identityQueries.verifyStoredPassword(password, user.password)) {
     logger.warn(`Failed password authentication for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
     throw new Error(AUTH_MESSAGES.INVALID_CREDENTIALS);
   }
+
+  assertUserCanSignIn(user, normalizedEmail, ipAddress);
 
   const token = generateSessionToken(user);
   logger.audit(`User logged in via Password: ${user.email} (${user.role})`, user.email, { role: user.role, ipAddress });
@@ -337,28 +266,24 @@ function authenticateWithPassword(email, password, ipAddress) {
  * Generate and dispatch a 4-digit OTP for Email. Only for an email that
  * already has an account — use `register` to create one first.
  */
-function requestOtp(email, roleHint, ipAddress) {
+async function requestOtp(email, roleHint, ipAddress) {
   if (!email) {
     throw new Error(AUTH_MESSAGES.OTP_EMAIL_REQUIRED);
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-  const user = userRegistry.get(normalizedEmail);
+  const user = await loadIdentityUser(normalizedEmail);
   if (!user) {
     logger.warn(`OTP requested for unregistered email: ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
     throw new Error(AUTH_MESSAGES.ACCOUNT_NOT_FOUND);
   }
 
+  assertUserCanSignIn(user, normalizedEmail, ipAddress);
+
   // Generate 4-digit code
   const code = Math.floor(1000 + Math.random() * 9000).toString();
   const expiresAt = Date.now() + OTP_EXPIRY_MS;
   otpStore.set(normalizedEmail, { code, expiresAt, attempts: 0 });
-
-  if (poolModule.pool) {
-    upsertOtpInDB(normalizedEmail, code, expiresAt).catch((e) =>
-      logger.error('DB OTP save error', e, 'AUTH_SERVICE')
-    );
-  }
 
   mailerService.sendOtpEmail(normalizedEmail, code, OTP_EXPIRY_MS / 1000).catch((e) =>
     logger.error('OTP email dispatch error', e, 'AUTH_SERVICE')
@@ -387,13 +312,13 @@ function requestOtp(email, roleHint, ipAddress) {
  * Verify 4-digit OTP and issue a session. No master/bypass codes — only the
  * code actually issued via requestOtp for a real, registered account verifies.
  */
-function verifyOtp(email, code, ipAddress) {
+async function verifyOtp(email, code, ipAddress) {
   if (!email || !code) {
     throw new Error(AUTH_MESSAGES.OTP_CODE_REQUIRED);
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-  const user = userRegistry.get(normalizedEmail);
+  const user = await loadIdentityUser(normalizedEmail);
   const storedOtp = otpStore.get(normalizedEmail);
 
   const isValidCode = !!user && !!storedOtp && storedOtp.code === code && Date.now() <= storedOtp.expiresAt;
@@ -404,11 +329,10 @@ function verifyOtp(email, code, ipAddress) {
     throw new Error(AUTH_MESSAGES.INVALID_OTP);
   }
 
+  assertUserCanSignIn(user, normalizedEmail, ipAddress);
+
   // Clear OTP on successful verification
   otpStore.delete(normalizedEmail);
-  if (poolModule.pool) {
-    deleteOtpInDB(normalizedEmail).catch((e) => logger.error('DB OTP delete error', e, 'AUTH_SERVICE'));
-  }
 
   const token = generateSessionToken(user);
   logger.audit(`User logged in via Instant OTP: ${user.email} (${user.role})`, user.email, { role: user.role, ipAddress });
@@ -428,41 +352,33 @@ function verifyOtp(email, code, ipAddress) {
 /**
  * Register a new user / enterprise entity. The only path that creates an account.
  */
-function registerUser(payload, ipAddress) {
-  const { name, email, password, mobile, role, orgName } = payload;
+async function registerUser(payload, ipAddress) {
+  const { name, email, password, mobile, orgName } = payload;
   if (!email) throw new Error(AUTH_MESSAGES.REGISTRATION_EMAIL_REQUIRED);
+  if (!password) throw new Error(AUTH_MESSAGES.EMAIL_PASSWORD_REQUIRED);
+  if (!mobile) throw new Error(AUTH_MESSAGES.OTP_EMAIL_REQUIRED);
+
+  if (!identityPoolModule.pool) {
+    throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
+  }
 
   const normalizedEmail = email.trim().toLowerCase();
-  if (userRegistry.has(normalizedEmail)) {
-    const existing = userRegistry.get(normalizedEmail);
-    const token = generateSessionToken(existing);
-    return {
-      success: true,
-      message: AUTH_MESSAGES.ACCOUNT_EXISTS_LOGIN,
-      token,
-      user: toPublicUser(existing),
-    };
-  }
 
-  const { hash, salt } = hashPassword(password || 'password123', generateSalt());
-  const newUser = {
-    id: `usr-${Date.now()}`,
+  // Accounts are created in the shared identity database so they are usable by
+  // every Procucev application, not just this workspace.
+  const result = await identityQueries.insertBuyerAccount({
     email: normalizedEmail,
-    name: name || normalizedEmail.split('@')[0],
-    role: role || 'buyer',
-    orgId: `org-${Date.now()}`,
-    orgName: orgName || `${name || 'Enterprise'} Entity`,
-    passwordHash: hash,
-    passwordSalt: salt,
-    mobile: mobile || '+91 98201 44820',
-    status: 'ACTIVE',
-  };
+    password,
+    phone: mobile,
+    fullName: name,
+    organizationName: orgName,
+  });
 
-  userRegistry.set(normalizedEmail, newUser);
-  if (poolModule.pool) {
-    upsertUserInDB(newUser).catch((e) => logger.error('DB user save error', e, 'AUTH_SERVICE'));
+  if (!result.created) {
+    throw new Error(AUTH_MESSAGES.ACCOUNT_ALREADY_EXISTS);
   }
 
+  const newUser = result.user;
   const token = generateSessionToken(newUser);
   logger.audit(`New enterprise account registered: ${newUser.email} (${newUser.role})`, newUser.email, { ipAddress });
   storeService.addAuditLog({
@@ -482,8 +398,12 @@ function registerUser(payload, ipAddress) {
 /**
  * Get all registered users (for admin inspection)
  */
-function getAllUsers() {
-  return Array.from(userRegistry.values()).map((u) => ({
+async function getAllUsers() {
+  if (!identityPoolModule.pool) {
+    throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
+  }
+  const users = await identityQueries.listUsers();
+  return users.map((u) => ({
     id: u.id,
     email: u.email,
     name: u.name,
@@ -498,6 +418,8 @@ function getAllUsers() {
 module.exports = {
   hashPassword,
   verifyPassword,
+  loadIdentityUser,
+  assertUserCanSignIn,
   generateSessionToken,
   verifySessionToken,
   revokeSessionToken,

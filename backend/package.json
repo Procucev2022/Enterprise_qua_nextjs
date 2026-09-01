@@ -29,8 +29,8 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "graphql": "^17.0.2",
-    "nodemailer": "^9.1.0",
-    "pg": "^8.13.3"
+    "mysql2": "^3.24.2",
+    "nodemailer": "^9.1.0"
   },
   "devDependencies": {
     "jest": "^29.7.0",

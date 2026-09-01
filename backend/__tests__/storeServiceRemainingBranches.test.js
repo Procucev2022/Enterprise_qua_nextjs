@@ -1,4 +1,3 @@
-const poolModule = require('../src/db/pool');
 const storeService = require('../src/services/storeService');
 
 describe('Store Service — remaining branch coverage', () => {
@@ -129,60 +128,26 @@ describe('Store Service — remaining branch coverage', () => {
     });
   });
 
-  describe('hydrateFromDB remaining branches', () => {
-    let originalPool;
-    let originalQuery;
-
-    beforeEach(() => {
-      originalPool = poolModule.pool;
-      originalQuery = poolModule.query;
-    });
-    afterEach(() => {
-      poolModule.pool = originalPool;
-      poolModule.query = originalQuery;
-    });
-
-    test('returns immediately without querying when no pool is configured', async () => {
-      poolModule.pool = null;
-      poolModule.query = jest.fn();
-      await storeService.hydrateFromDB();
-      expect(poolModule.query).not.toHaveBeenCalled();
-    });
-
-    test('leaves in-memory data untouched when the DB returns nothing for every collection', async () => {
-      poolModule.pool = {};
-      poolModule.query = jest.fn().mockResolvedValue({ rows: [] });
-
+  describe('hydrateFromDB after the PostgreSQL removal', () => {
+    test('resolves as a no-op and reports the in-memory seed as the source', async () => {
+      // Domain records are served from the in-memory seed dataset; only user
+      // accounts are persisted, and those live in the MySQL identity schema.
       const beforeBuyers = storeService.getBuyerAccounts().length;
-      await storeService.hydrateFromDB();
+      const result = await storeService.hydrateFromDB();
+
+      expect(result).toEqual({ hydrated: false, source: 'in_memory_seed' });
+      expect(storeService.isHydratedFromDB).toBe(false);
       expect(storeService.getBuyerAccounts().length).toBe(beforeBuyers);
-      expect(storeService.isHydratedFromDB).toBe(true);
     });
   });
 
-  describe('processHistoricalPurchaseData DB-write failure', () => {
-    let originalPool;
-    let originalQuery;
-
-    beforeEach(() => {
-      originalPool = poolModule.pool;
-      originalQuery = poolModule.query;
-    });
-    afterEach(() => {
-      poolModule.pool = originalPool;
-      poolModule.query = originalQuery;
-    });
-
-    test('a vendor save failure during historical import is logged, not thrown', async () => {
-      poolModule.pool = {};
-      poolModule.query = jest.fn().mockRejectedValue(new Error('insert failed'));
-
-      const res = storeService.processHistoricalPurchaseData('FY2026-dbfail', [
-        { companyName: 'DB Fail Historical Co', email: 'dbfail@historical.com' },
+  describe('processHistoricalPurchaseData without a domain persistence layer', () => {
+    test('imports vendors into the in-memory store and reports the count', () => {
+      const res = storeService.processHistoricalPurchaseData('FY2026-nodb', [
+        { companyName: 'In Memory Historical Co', email: 'inmemory@historical.com' },
       ]);
-      expect(res.importedCount).toBe(1);
 
-      await new Promise((resolve) => setImmediate(resolve));
+      expect(res.importedCount).toBe(1);
     });
   });
 });
