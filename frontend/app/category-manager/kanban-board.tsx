@@ -27,6 +27,7 @@ import {
   Smartphone,
 } from 'lucide-react';
 import CompanyHoverTooltip from '@/app/components/CompanyHoverTooltip';
+import { KANBAN_CARD_RFQ_REFS, FALLBACK_RFQ_TEMPLATE } from '@/lib/constants';
 
 interface KanbanBoardProps {
   onNavigateToMatrix?: (rfq: RFQItem) => void;
@@ -52,6 +53,17 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
   const [selectedRfqForChaser, setSelectedRfqForChaser] = useState<string>('RFQ-2026-00421');
   const [targetVendor, setTargetVendor] = useState<string>('Apex Supplies Ltd.');
   const [chaserInitialChannel, setChaserInitialChannel] = useState<'call' | 'whatsapp' | 'sms'>('whatsapp');
+
+  /**
+   * Resolves a static pipeline card's RFQ reference against the live RFQ
+   * collection. Falls back to a well-formed skeleton so card handlers and
+   * navigation callbacks never receive `undefined` when the pipeline is empty
+   * or still hydrating from the database.
+   */
+  const resolveCardRFQ = (ref: { rfqNumber: string; title: string }): RFQItem => {
+    const matched = rfqs.find((r) => r.rfqNumber === ref.rfqNumber);
+    return matched ?? { ...FALLBACK_RFQ_TEMPLATE, rfqNumber: ref.rfqNumber, title: ref.title };
+  };
 
   // Group into 3 specification Kanban columns
   const col1_parsing = rfqs.filter((r) => r.status === 'Parsing');
@@ -306,7 +318,7 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
                   <span>✉️</span> 24h Email
                 </button>
                 <button
-                  onClick={() => openRFQDeepDive(rfqs[0])}
+                  onClick={() => openRFQDeepDive(resolveCardRFQ(KANBAN_CARD_RFQ_REFS.FOLLOW_UP_DEEP_DIVE))}
                   className="btn btn-secondary btn-sm text-[10px] px-2 ml-auto"
                 >
                   <Search size={10} /> Deep Dive
@@ -361,13 +373,13 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
 
               <div className="grid grid-cols-2 gap-2 pt-1">
                 <button
-                  onClick={() => handleApproveReport(rfqs[0])}
+                  onClick={() => handleApproveReport(resolveCardRFQ(KANBAN_CARD_RFQ_REFS.SCORED_REPORT))}
                   className="btn btn-secondary btn-sm text-[11px] font-semibold"
                 >
                   <FileCheck size={12} /> Approve Report
                 </button>
                 <button
-                  onClick={() => handleShareReport(rfqs[0])}
+                  onClick={() => handleShareReport(resolveCardRFQ(KANBAN_CARD_RFQ_REFS.SCORED_REPORT))}
                   className="btn btn-primary btn-sm text-[11px] font-semibold"
                 >
                   <Share2 size={12} /> Share Report
@@ -378,8 +390,9 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
             {/* Card 2: RFQ-00421 Link to matrix */}
             <div
               onClick={() => {
-                setSelectedRFQForMatrix(rfqs[0]);
-                if (onNavigateToMatrix) onNavigateToMatrix(rfqs[0]);
+                const matrixRFQ = resolveCardRFQ(KANBAN_CARD_RFQ_REFS.MATRIX_READY);
+                setSelectedRFQForMatrix(matrixRFQ);
+                if (onNavigateToMatrix) onNavigateToMatrix(matrixRFQ);
               }}
               className="p-3.5 rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 hover:border-indigo-400 dark:hover:border-indigo-500/50 transition-all text-xs cursor-pointer group shadow-xs"
             >

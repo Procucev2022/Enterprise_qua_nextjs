@@ -59,6 +59,9 @@ export const UI_STRINGS = {
     cancel: 'Cancel',
     confirm: 'Confirm',
     downloadTemplate: 'Download CSV Template',
+    hideDetails: 'Hide Details',
+    reviewRfqDetails: 'Review RFQ Details',
+    reviewVendorPerformance: 'Review Performance',
   },
 
   badges: {

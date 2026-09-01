@@ -396,4 +396,174 @@ describe('Category Manager Screens Suite', () => {
       }
     });
   });
+
+  describe('Quote Matrix Navigation Tests', () => {
+    test('KanbanBoard Matrix Ready card navigates to quote_matrix screen', async () => {
+      const onMatrix = jest.fn();
+      renderWithProvider(<KanbanBoard onNavigateToMatrix={onMatrix} onNavigateToSpend={jest.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/Operational Monitoring Kanban & Chasing Control/i)).toBeInTheDocument();
+      });
+
+      const matrixCard = screen.getByText(/RFQ-00421: Matrix Ready/i);
+      fireEvent.click(matrixCard);
+      
+      expect(onMatrix).toHaveBeenCalledTimes(1);
+      expect(onMatrix).toHaveBeenCalledWith(expect.objectContaining({
+        rfqNumber: expect.stringContaining('RFQ-00421')
+      }));
+    });
+
+    test('BuyerConsole Go to Quote Matrix button navigates to quote_matrix screen', async () => {
+      const onMatrix = jest.fn();
+      renderWithProvider(<BuyerConsole onNavigateToMatrix={onMatrix} onNavigateToEvaluation={jest.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/Buyer Wise Command Console & Analytics/i)).toBeInTheDocument();
+      });
+
+      // Search for buyer with RFQs
+      const searchInput = screen.getByPlaceholderText(/Search Buyer name or company/i);
+      fireEvent.change(searchInput, { target: { value: 'Rajesh' } });
+
+      // Click buyer card to expand
+      const buyerCard = screen.getAllByText(/Rajesh Nair/i)[0];
+      fireEvent.click(buyerCard);
+
+      // Click Review RFQ Details
+      const reviewBtns = screen.queryAllByRole('button', { name: /Review RFQ Details/i });
+      if (reviewBtns.length > 0) {
+        fireEvent.click(reviewBtns[0]);
+
+        // Expand RFQ row
+        const rfqRows = screen.queryAllByText(/Centrifugal Water Pumps & Spares|RFQ-2026/i);
+        if (rfqRows.length > 0) {
+          fireEvent.click(rfqRows[0]);
+
+          // Click Go to Quote Matrix
+          const matrixBtn = screen.queryByRole('button', { name: /Go to Quote Matrix/i });
+          if (matrixBtn) {
+            fireEvent.click(matrixBtn);
+            expect(onMatrix).toHaveBeenCalledTimes(1);
+            expect(onMatrix).toHaveBeenCalledWith(expect.objectContaining({
+              rfqNumber: expect.stringContaining('RFQ-2026')
+            }));
+          }
+        }
+      }
+    });
+
+    test('VendorConsole Go to Central Quote Matrix button navigates to quote_matrix screen', async () => {
+      const onMatrix = jest.fn();
+      renderWithProvider(<VendorConsole onNavigateToMatrix={onMatrix} onNavigateToEvaluation={jest.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/Vendor Summary & Performance Analytics/i)).toBeInTheDocument();
+      });
+
+      // Click Review Performance for first vendor
+      const reviewBtns = screen.queryAllByRole('button', { name: /Review Performance/i });
+      if (reviewBtns.length > 0) {
+        fireEvent.click(reviewBtns[0]);
+
+        // Expand Quote card
+        const quoteCards = screen.queryAllByText(/Centrifugal Water Pumps & Spares|RFQ-2026/i);
+        if (quoteCards.length > 0) {
+          fireEvent.click(quoteCards[0]);
+
+          // Click Go to Central Quote Matrix
+          const centralMatrixBtn = screen.queryByRole('button', { name: /Go to Central Quote Matrix/i });
+          if (centralMatrixBtn) {
+            fireEvent.click(centralMatrixBtn);
+            expect(onMatrix).toHaveBeenCalledTimes(1);
+            expect(onMatrix).toHaveBeenCalledWith(expect.objectContaining({
+              rfqNumber: expect.stringContaining('RFQ-2026')
+            }));
+          }
+        }
+      }
+    });
+  });
+
+  describe('Kanban Pipeline Card RFQ Resolution', () => {
+    function KanbanResolutionWrapper({ onMatrix }: any) {
+      const { addNewRFQ } = useApp();
+
+      return (
+        <>
+          <button
+            data-testid="test-add-matrix-ready-rfq"
+            onClick={() => {
+              try {
+                addNewRFQ({
+                  rfqNumber: 'RFQ-00421',
+                  title: 'Matrix Ready Live RFQ',
+                  category: 'Heavy Industrial Fluid Dynamics & Valves',
+                  sourcingMode: 'mode_1',
+                  targetDeliveryDate: '2026-10-01',
+                  budget: 90000,
+                  extractedEntities: [],
+                  aiScore: 94,
+                  autoCirculated: false,
+                });
+              } catch (e) {}
+            }}
+          >
+            Add Matrix Ready RFQ
+          </button>
+          <KanbanBoard onNavigateToMatrix={onMatrix} onNavigateToSpend={jest.fn()} />
+        </>
+      );
+    }
+
+    test('resolves the Matrix Ready card against the live RFQ pipeline when the RFQ exists', async () => {
+      const onMatrix = jest.fn();
+      renderWithProvider(<KanbanResolutionWrapper onMatrix={onMatrix} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('test-add-matrix-ready-rfq')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByTestId('test-add-matrix-ready-rfq'));
+      fireEvent.click(screen.getByText(/RFQ-00421: Matrix Ready/i));
+
+      expect(onMatrix).toHaveBeenCalledTimes(1);
+      expect(onMatrix).toHaveBeenCalledWith(
+        expect.objectContaining({
+          rfqNumber: 'RFQ-00421',
+          title: 'Matrix Ready Live RFQ',
+          budget: 90000,
+        })
+      );
+    });
+
+    test('never dispatches undefined from pipeline card actions when the pipeline is empty', async () => {
+      const onMatrix = jest.fn();
+      renderWithProvider(<KanbanBoard onNavigateToMatrix={onMatrix} onNavigateToSpend={jest.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/Operational Monitoring Kanban & Chasing Control/i)).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText(/RFQ-00421: Matrix Ready/i));
+      expect(onMatrix).toHaveBeenCalledWith(
+        expect.objectContaining({
+          rfqNumber: 'RFQ-00421',
+          quotes: [],
+          extractedEntities: [],
+        })
+      );
+
+      // Report handlers dereference rfq.rfqNumber, so they must receive a real object
+      expect(() => {
+        fireEvent.click(screen.getByRole('button', { name: /Approve Report/i }));
+        fireEvent.click(screen.getByRole('button', { name: /Share Report/i }));
+      }).not.toThrow();
+
+      // Deep Dive resolves the canonical follow-up RFQ reference
+      fireEvent.click(screen.getByRole('button', { name: /Deep Dive/i }));
+      expect(screen.getByText(/RFQ AI Follow-Up Telemetry & Deep Dive/i)).toBeInTheDocument();
+    });
+  });
 });

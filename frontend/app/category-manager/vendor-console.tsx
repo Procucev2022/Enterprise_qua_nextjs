@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQItem } from '@/lib/types';
 import { SOURCING_MODES } from '@/lib/constants';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import {
   Building2,
   Users,
@@ -32,6 +33,9 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedVendorId, setSelectedVendorId] = useState<string | null>(null);
   const [expandedQuoteNumber, setExpandedQuoteNumber] = useState<string | null>(null);
+  // Tracks an explicit user collapse ("Hide Details") so dropdown-driven
+  // expansion cannot silently re-open a panel the user just dismissed.
+  const [drillDownDismissed, setDrillDownDismissed] = useState(false);
 
   // Dropdown filter states
   const [selectedCompany, setSelectedCompany] = useState<string>('all');
@@ -179,8 +183,14 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
     ? (filteredByDropdownVendors.reduce((sum, v) => sum + v.whatsappSla, 0) / filteredByDropdownVendors.length).toFixed(1)
     : '0.0';
 
-  // Dynamic context drill down: if vendor is selected via dropdown, expand it. Otherwise use click-selected ID.
-  const activeVendorId = selectedContactFilterId !== 'all' ? selectedContactFilterId : selectedVendorId;
+  // Dynamic context drill down precedence:
+  //  1. An explicit "Hide Details" collapse always wins and keeps the panel closed,
+  //     even if the dropdown selection changes afterwards. Clicking a card's
+  //     expand action clears the dismissal.
+  //  2. Otherwise a specific dropdown selection drives the expansion.
+  //  3. Otherwise fall back to the manually expanded card.
+  const dropdownDrivenVendorId = selectedContactFilterId !== 'all' ? selectedContactFilterId : null;
+  const activeVendorId = drillDownDismissed ? null : dropdownDrivenVendorId ?? selectedVendorId;
   const selectedVendor = compiledVendors.find((v) => v.id === activeVendorId);
 
   return (
@@ -354,7 +364,9 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
         {/* Vendors Performance Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filteredVendors.map((v) => {
-            const isSelected = selectedVendorId === v.id;
+            // Reflect the resolved panel state so the toggle label always matches
+            // what is actually on screen, including dropdown-driven expansion.
+            const isSelected = activeVendorId === v.id;
             
             return (
               <div
@@ -416,14 +428,16 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                     onClick={() => {
                       if (isSelected) {
                         setSelectedVendorId(null);
+                        setDrillDownDismissed(true);
                       } else {
                         setSelectedVendorId(v.id);
+                        setDrillDownDismissed(false);
                         setExpandedQuoteNumber(null);
                       }
                     }}
                     className="btn btn-secondary btn-xs font-bold flex items-center gap-1"
                   >
-                    <span>{isSelected ? 'Hide Details' : 'Review Performance'}</span>
+                    <span>{isSelected ? UI_STRINGS.actions.hideDetails : UI_STRINGS.actions.reviewVendorPerformance}</span>
                     <ChevronRight size={12} className={`transform transition-transform ${isSelected ? 'rotate-90' : ''}`} />
                   </button>
                 </div>

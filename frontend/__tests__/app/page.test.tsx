@@ -483,8 +483,9 @@ describe('HomePage Comprehensive Suite', () => {
       const matrixReadyCard = screen.queryByText(/RFQ-00421: Matrix Ready/i);
       if (matrixReadyCard) {
         fireEvent.click(matrixReadyCard);
-        expect(screen.getByText(/Mode Performance & RFQ Analytics Dashboard/i)).toBeInTheDocument();
-        fireEvent.click(screen.getByRole('button', { name: /Back to Operational Monitoring Kanban/i }));
+        expect(screen.getByText(/Comparative Quote Evaluation Matrix/i)).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: /Back to Command Center/i }));
+        expect(screen.getByText(/Operational Monitoring Kanban & Chasing Control/i)).toBeInTheDocument();
       }
 
       // Screen 2.2: Spend Analytics

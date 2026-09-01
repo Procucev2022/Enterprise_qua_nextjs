@@ -22,11 +22,11 @@ function printHeader(title) {
   console.log('================================================================================\n');
 }
 
-function runStep(title, command, cwd = rootDir) {
+function runStep(title, command, cwd = rootDir, extraEnv = {}) {
   printHeader(title);
   const start = Date.now();
   try {
-    execSync(command, { cwd, stdio: 'inherit', env: { ...process.env, CI: 'true' } });
+    execSync(command, { cwd, stdio: 'inherit', env: { ...process.env, CI: 'true', ...extraEnv } });
     const duration = ((Date.now() - start) / 1000).toFixed(2);
     console.log(`\n✔ [SUCCESS] ${title} passed in ${duration}s.\n`);
   } catch (error) {
@@ -38,7 +38,11 @@ function runStep(title, command, cwd = rootDir) {
 console.log('\n🚀 Starting Procucev Enterprise Workspace Quality Check Pipeline...\n');
 
 // 1. Build Verification
-runStep('Step 1: Production Build Verification', 'npm run build --prefix frontend');
+// Built into a dedicated directory so the gate never contends with a running
+// `next dev` server over `.next` (concurrent access causes EPERM on Windows).
+runStep('Step 1: Production Build Verification', 'npm run build --prefix frontend', rootDir, {
+  NEXT_DIST_DIR: '.next-qc',
+});
 
 // 2. Unit Test & Per-File Coverage (Backend + Frontend)
 runStep('Step 2A: Backend Test Suite & 90% Per-File Coverage Enforcement', 'npm run test:coverage --prefix backend');
