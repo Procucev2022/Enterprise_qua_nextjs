@@ -203,6 +203,32 @@ const AES_CONFIG = {
   SERIALIZATION_PREFIX: 'enc:v1:aes-256-gcm:',
 };
 
+const AUTH_MESSAGES = {
+  EMAIL_REQUIRED: 'Email is required.',
+  EMAIL_PASSWORD_REQUIRED: 'Email and password are required.',
+  INVALID_CREDENTIALS: 'Invalid email or password.',
+  PASSWORD_OR_CODE_REQUIRED: 'Password or OTP code is required.',
+  AUTH_FAILED_FALLBACK: 'Authentication failed',
+  OTP_EMAIL_REQUIRED: 'Email is required to dispatch OTP.',
+  OTP_REQUEST_EMAIL_REQUIRED: 'Email is required to request OTP.',
+  ACCOUNT_NOT_FOUND: 'No account found for this email. Please register first.',
+  OTP_CODE_REQUIRED: 'Email and verification code are required.',
+  INVALID_OTP: 'Invalid or expired OTP code.',
+  INVALID_OTP_FALLBACK: 'Invalid OTP code.',
+  REGISTRATION_EMAIL_REQUIRED: 'Email is required for registration.',
+  ACCOUNT_EXISTS_LOGIN: 'Account already exists. Logged in successfully.',
+  REGISTRATION_SUCCESS: 'Registration successful.',
+  NO_SESSION_TOKEN: 'No active session token provided.',
+  INVALID_SESSION_FALLBACK: 'Invalid session',
+  SESSION_TOKEN_MISSING: 'Token missing or invalid',
+  MALFORMED_TOKEN: 'Malformed token structure',
+  INVALID_TOKEN_SIGNATURE: 'Invalid token signature',
+  SESSION_LOGGED_OUT: 'Session has been logged out.',
+  SESSION_EXPIRED: 'Session token has expired',
+  TOKEN_DECODE_FAILED: 'Failed to decode token payload',
+  LOGOUT_SUCCESS: 'Logged out successfully.',
+};
+
 const {
   EMAIL_REGEX,
   GSTIN_REGEX,
@@ -219,6 +245,7 @@ module.exports = {
   INITIAL_AZURE_HEALTH,
   QUALIFICATION_PILLARS,
   AES_CONFIG,
+  AUTH_MESSAGES,
   EMAIL_REGEX,
   GSTIN_REGEX,
   PHONE_REGEX,

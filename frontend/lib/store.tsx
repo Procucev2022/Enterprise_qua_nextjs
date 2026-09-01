@@ -31,6 +31,16 @@ import {
   INITIAL_AZURE_HEALTH,
 } from './constants';
 
+// Backend write endpoints now require a session token (Phase 4 authorization
+// hardening) — every fetch() that mutates data needs this attached.
+function authFetchHeaders(): Record<string, string> {
+  const token = authClient.getToken();
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
 interface AppContextType {
   currentRole: UserRole;
   setCurrentRole: (role: UserRole) => void;
@@ -457,7 +467,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
     // Persist to PostgreSQL
     fetch('/api/buyer-accounts', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authFetchHeaders(),
       body: JSON.stringify(newAcc),
     }).catch((e) => console.error('Failed to save buyer account to DB:', e));
 
@@ -486,7 +496,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
     if (updatedAcc) {
       fetch('/api/buyer-accounts', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authFetchHeaders(),
         body: JSON.stringify(updatedAcc),
       }).catch((e) => console.error('Failed to update buyer account in DB:', e));
     }
@@ -529,7 +539,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
     created.forEach((acc) => {
       fetch('/api/buyer-accounts', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authFetchHeaders(),
         body: JSON.stringify(acc),
       }).catch((e) => console.error('Failed to sync buyer account to DB:', e));
     });
@@ -555,7 +565,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
     setVendorEvaluations((prev) => [record, ...prev.filter((r) => r.id !== record.id)]);
     fetch('/api/evaluations', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authFetchHeaders(),
       body: JSON.stringify(record),
     }).catch((e) => console.error('Failed to save evaluation to DB:', e));
   };
@@ -995,7 +1005,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
     // Persist rating revision to PostgreSQL
     fetch('/api/vendors', {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authFetchHeaders(),
       body: JSON.stringify({
         action: 'rating_revision',
         vendor: updatedTargetVendor,
@@ -1447,7 +1457,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
 
     fetch('/api/audit', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authFetchHeaders(),
       body: JSON.stringify(newLog),
     }).catch((e) => console.error('Failed to save audit log to DB:', e));
   };
@@ -1479,7 +1489,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
 
     fetch('/api/ai-feed', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authFetchHeaders(),
       body: JSON.stringify(newFeed),
     }).catch((e) => console.error('Failed to save AI feed item to DB:', e));
   };
@@ -1865,7 +1875,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
     // Persist new RFQ to PostgreSQL
     fetch('/api/rfqs', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authFetchHeaders(),
       body: JSON.stringify(newRFQ),
     }).catch((e) => console.error('Failed to save RFQ to DB:', e));
     

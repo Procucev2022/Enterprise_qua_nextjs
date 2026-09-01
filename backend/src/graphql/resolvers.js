@@ -5,6 +5,35 @@ const { logger } = require('../services/loggerService');
 const { logErrorResolver } = require('../services/logErrorResolver');
 const { performanceOptimizer } = require('../services/performanceOptimizer');
 const cryptoService = require('../services/cryptoService');
+const authService = require('../services/authService');
+const { extractToken } = require('../middleware/auth');
+const { AUTH_MESSAGES } = require('../config/constants');
+
+/**
+ * Mutations go through the same rootValue-as-plain-functions path as queries,
+ * bypassing the REST route middleware entirely — so auth has to be enforced
+ * here instead. graphql-js calls these as fn(args, context, info); context
+ * carries { req, res } from graphqlController.
+ */
+function requireAuth(context) {
+  const token = extractToken(context && context.req);
+  if (!token) {
+    throw new Error(AUTH_MESSAGES.NO_SESSION_TOKEN);
+  }
+  const verification = authService.verifySessionToken(token);
+  if (!verification.valid) {
+    throw new Error(verification.error || AUTH_MESSAGES.INVALID_SESSION_FALLBACK);
+  }
+  return verification.user;
+}
+
+function requireAdmin(context) {
+  const user = requireAuth(context);
+  if (user.role !== 'admin') {
+    throw new Error('You do not have permission to perform this action.');
+  }
+  return user;
+}
 
 /**
  * GraphQL Root Resolvers
@@ -142,47 +171,56 @@ const rootResolvers = {
     return { plaintext };
   },
 
-  createRFQ: ({ input }) => {
+  createRFQ: ({ input }, context) => {
+    requireAuth(context);
     logger.info('GraphQL Mutation: createRFQ', { title: input.title }, 'GRAPHQL_MUTATION');
     return storeService.createRFQ(input);
   },
 
-  updateRFQ: ({ id, input }) => {
+  updateRFQ: ({ id, input }, context) => {
+    requireAuth(context);
     logger.info(`GraphQL Mutation: updateRFQ ${id}`, { id, input }, 'GRAPHQL_MUTATION');
     return storeService.updateRFQ(id, input);
   },
 
-  createVendor: ({ input }) => {
+  createVendor: ({ input }, context) => {
+    requireAuth(context);
     logger.info('GraphQL Mutation: createVendor', { name: input.name }, 'GRAPHQL_MUTATION');
     return storeService.addVendor(input);
   },
 
-  updateVendor: ({ id, input }) => {
+  updateVendor: ({ id, input }, context) => {
+    requireAuth(context);
     logger.info(`GraphQL Mutation: updateVendor ${id}`, { id, input }, 'GRAPHQL_MUTATION');
     return storeService.updateVendor(id, input);
   },
 
-  deleteVendor: ({ id }) => {
+  deleteVendor: ({ id }, context) => {
+    requireAuth(context);
     logger.info(`GraphQL Mutation: deleteVendor ${id}`, { id }, 'GRAPHQL_MUTATION');
     return storeService.deleteVendor(id);
   },
 
-  createBuyerAccount: ({ input }) => {
+  createBuyerAccount: ({ input }, context) => {
+    requireAuth(context);
     logger.info('GraphQL Mutation: createBuyerAccount', { org: input.organizationName }, 'GRAPHQL_MUTATION');
     return storeService.addBuyerAccount(input);
   },
 
-  clearQueryCache: () => {
+  clearQueryCache: (args, context) => {
+    requireAuth(context);
     queryCache.clear();
     return true;
   },
 
-  purgeLogs: (args = {}) => {
+  purgeLogs: (args = {}, context) => {
+    requireAdmin(context);
     const maxAgeDays = args.maxAgeDays || 30;
     return logger.purgeExpiredLogs({ maxAgeDays });
   },
 
-  autoResolveLogErrors: async (args = {}) => {
+  autoResolveLogErrors: async (args = {}, context) => {
+    requireAdmin(context);
     if (args.action) {
       const res = await logErrorResolver.executeRemediation(args.action);
       return {
@@ -194,12 +232,14 @@ const rootResolvers = {
     return await logErrorResolver.autoResolveAll();
   },
 
-  optimizePerformance: (args = {}) => {
+  optimizePerformance: (args = {}, context) => {
+    requireAdmin(context);
     const level = args.level || 'standard';
     return performanceOptimizer.optimizePerformance(level);
   },
 
-  encryptData: ({ input }) => {
+  encryptData: ({ input }, context) => {
+    requireAuth(context);
     const res = cryptoService.encrypt(input.plaintext, {
       secretKey: input.secretKey,
       additionalData: input.additionalData,

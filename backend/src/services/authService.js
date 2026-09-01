@@ -1,15 +1,45 @@
 const crypto = require('crypto');
 const { logger } = require('./loggerService');
 const storeService = require('./storeService');
+const poolModule = require('../db/pool');
+const mailerService = require('./mailerService');
+const { AUTH_MESSAGES } = require('../config/constants');
+const {
+  getUsersFromDB,
+  upsertUserInDB,
+  upsertOtpInDB,
+  deleteOtpInDB,
+  getRevokedSessionsFromDB,
+  insertRevokedSessionInDB,
+} = require('../db/queries');
 
-const AUTH_SECRET = process.env.AUTH_SECRET || process.env.JWT_SECRET || 'procucev-enterprise-auth-secret-key-2026';
+const DEV_FALLBACK_AUTH_SECRET = 'procucev-enterprise-auth-secret-key-2026';
+const CONFIGURED_AUTH_SECRET = process.env.AUTH_SECRET || process.env.JWT_SECRET || '';
+
+if (!CONFIGURED_AUTH_SECRET) {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'AUTH_SECRET (or JWT_SECRET) must be set in production. Refusing to start with an insecure default session-signing key.'
+    );
+  }
+  logger.warn(
+    'AUTH_SECRET/JWT_SECRET not set — using an insecure development-only fallback signing key. Set one before deploying.',
+    {},
+    'AUTH_SERVICE'
+  );
+}
+
+const AUTH_SECRET = CONFIGURED_AUTH_SECRET || DEV_FALLBACK_AUTH_SECRET;
 const OTP_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
 
 // In-memory OTP storage: email -> { code, expiresAt, attempts }
 const otpStore = new Map();
 
-// Default seed users
-const DEFAULT_USERS = [
+// In-memory revoked-token set (holds each token's signature segment)
+const revokedTokens = new Set();
+
+// Default seed users (login credentials for the 4 roles used in Phase-4 testing)
+const DEFAULT_USER_SEEDS = [
   {
     id: 'usr-buyer-001',
     email: 'buyer@procucev.com',
@@ -17,9 +47,8 @@ const DEFAULT_USERS = [
     role: 'buyer',
     orgId: 'org-procucev-01',
     orgName: 'Procucev Heavy Engineering',
-    passwordHash: hashPassword('password123'),
+    password: 'password123',
     mobile: '+91 98201 44820',
-    status: 'ACTIVE',
   },
   {
     id: 'usr-client-001',
@@ -28,9 +57,8 @@ const DEFAULT_USERS = [
     role: 'buyer',
     orgId: 'org-lt-01',
     orgName: 'Larsen & Toubro EPC Division',
-    passwordHash: hashPassword('password123'),
+    password: 'password123',
     mobile: '+91 98201 44821',
-    status: 'ACTIVE',
   },
   {
     id: 'usr-catman-001',
@@ -39,9 +67,8 @@ const DEFAULT_USERS = [
     role: 'category_manager',
     orgId: 'org-procucev-01',
     orgName: 'Procucev Procurement Directorate',
-    passwordHash: hashPassword('password123'),
+    password: 'password123',
     mobile: '+91 98201 44822',
-    status: 'ACTIVE',
   },
   {
     id: 'usr-vendor-001',
@@ -50,9 +77,8 @@ const DEFAULT_USERS = [
     role: 'vendor',
     orgId: 'org-apex-01',
     orgName: 'Apex Industrial Supplies Pvt Ltd',
-    passwordHash: hashPassword('password123'),
+    password: 'password123',
     mobile: '+91 98450 67890',
-    status: 'ACTIVE',
   },
   {
     id: 'usr-vendor-002',
@@ -61,10 +87,8 @@ const DEFAULT_USERS = [
     role: 'vendor',
     orgId: 'org-kiran-02',
     orgName: 'Kiran Precision Valves Mfg',
-    passwordHash: hashPassword('Kiran@Temp8821#'),
-    tempPassword: 'Kiran@Temp8821#',
+    password: 'Kiran@Temp8821#',
     mobile: '+91 98110 54321',
-    status: 'ACTIVE',
   },
   {
     id: 'usr-admin-001',
@@ -73,9 +97,8 @@ const DEFAULT_USERS = [
     role: 'admin',
     orgId: 'org-platform-root',
     orgName: 'Procucev Enterprise Governance',
-    passwordHash: hashPassword('adminpassword123'),
+    password: 'adminpassword123',
     mobile: '+91 98000 00001',
-    status: 'ACTIVE',
   },
   {
     id: 'usr-auditor-001',
@@ -84,35 +107,88 @@ const DEFAULT_USERS = [
     role: 'admin',
     orgId: 'org-platform-root',
     orgName: 'Procucev Audit & Regulatory Commission',
-    passwordHash: hashPassword('adminpassword123'),
+    password: 'adminpassword123',
     mobile: '+91 98000 00002',
-    status: 'ACTIVE',
   },
 ];
+
+/**
+ * Generate a random per-user salt
+ */
+function generateSalt() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
+/**
+ * Hash password using SHA-256 + salt. Generates a random salt when none is supplied.
+ */
+function hashPassword(password, salt) {
+  const effectiveSalt = salt || generateSalt();
+  const hash = crypto.createHmac('sha256', effectiveSalt).update(password).digest('hex');
+  return { hash, salt: effectiveSalt };
+}
+
+/**
+ * Verify password against a stored hash + the salt that hash was created with
+ */
+function verifyPassword(plainPassword, storedHash, storedSalt) {
+  if (!plainPassword || !storedHash || !storedSalt) return false;
+  const { hash: computedHash } = hashPassword(plainPassword, storedSalt);
+  return crypto.timingSafeEqual(Buffer.from(computedHash), Buffer.from(storedHash));
+}
 
 // User repository: email -> User
 const userRegistry = new Map();
 
-// Initialize users
-DEFAULT_USERS.forEach((user) => {
-  userRegistry.set(user.email.toLowerCase(), { ...user });
+function buildUserRecord(seed) {
+  const { hash, salt } = hashPassword(seed.password, generateSalt());
+  return {
+    id: seed.id,
+    email: seed.email,
+    name: seed.name,
+    role: seed.role,
+    orgId: seed.orgId,
+    orgName: seed.orgName,
+    passwordHash: hash,
+    passwordSalt: salt,
+    mobile: seed.mobile,
+    status: 'ACTIVE',
+  };
+}
+
+DEFAULT_USER_SEEDS.forEach((seed) => {
+  userRegistry.set(seed.email.toLowerCase(), buildUserRecord(seed));
 });
 
 /**
- * Hash password using SHA-256 + salt
+ * Hydrate the in-memory user registry and revoked-session set from Postgres.
+ * If the DB has no users yet, push the current in-memory seed users into it
+ * so registrations made after a restart don't disappear. Mirrors the
+ * storeService hydrate-on-boot pattern used for the rest of the app.
  */
-function hashPassword(password, salt) {
-  const effectiveSalt = salt || 'procucev-static-enterprise-salt-2026';
-  return crypto.createHmac('sha256', effectiveSalt).update(password).digest('hex');
-}
+async function hydrateFromDB() {
+  if (!poolModule.pool) return;
+  try {
+    const dbUsers = await getUsersFromDB();
+    if (dbUsers && dbUsers.length > 0) {
+      dbUsers.forEach((u) => userRegistry.set(u.email.toLowerCase(), u));
+    } else {
+      await Promise.all(
+        Array.from(userRegistry.values()).map((u) =>
+          upsertUserInDB(u).catch((e) => logger.error('DB user seed error', e, 'AUTH_SERVICE'))
+        )
+      );
+    }
 
-/**
- * Verify password against hash
- */
-function verifyPassword(plainPassword, storedHash) {
-  if (!plainPassword || !storedHash) return false;
-  const computedHash = hashPassword(plainPassword);
-  return crypto.timingSafeEqual(Buffer.from(computedHash), Buffer.from(storedHash));
+    const dbRevoked = await getRevokedSessionsFromDB();
+    (dbRevoked || []).forEach((r) => revokedTokens.add(r.tokenSignature));
+  } catch (err) {
+    logger.warn(
+      'Auth hydration from PostgreSQL failed, continuing with in-memory seed users',
+      { error: err.message },
+      'AUTH_SERVICE'
+    );
+  }
 }
 
 /**
@@ -145,16 +221,16 @@ function generateSessionToken(user) {
 }
 
 /**
- * Verify session token and extract user claims
+ * Verify session token, extract user claims, and reject revoked/logged-out sessions
  */
 function verifySessionToken(token) {
   if (!token || typeof token !== 'string') {
-    return { valid: false, error: 'Token missing or invalid' };
+    return { valid: false, error: AUTH_MESSAGES.SESSION_TOKEN_MISSING };
   }
 
   const parts = token.split('.');
   if (parts.length !== 3) {
-    return { valid: false, error: 'Malformed token structure' };
+    return { valid: false, error: AUTH_MESSAGES.MALFORMED_TOKEN };
   }
 
   const [header, payload, signature] = parts;
@@ -164,7 +240,11 @@ function verifySessionToken(token) {
     .digest('base64url');
 
   if (signature !== expectedSignature) {
-    return { valid: false, error: 'Invalid token signature' };
+    return { valid: false, error: AUTH_MESSAGES.INVALID_TOKEN_SIGNATURE };
+  }
+
+  if (revokedTokens.has(signature)) {
+    return { valid: false, error: AUTH_MESSAGES.SESSION_LOGGED_OUT };
   }
 
   try {
@@ -172,53 +252,70 @@ function verifySessionToken(token) {
     const now = Math.floor(Date.now() / 1000);
 
     if (claims.exp && claims.exp < now) {
-      return { valid: false, error: 'Session token has expired' };
+      return { valid: false, error: AUTH_MESSAGES.SESSION_EXPIRED };
     }
 
     return { valid: true, user: claims };
   } catch (err) {
-    return { valid: false, error: 'Failed to decode token payload' };
+    return { valid: false, error: AUTH_MESSAGES.TOKEN_DECODE_FAILED };
   }
 }
 
 /**
- * Authenticate with Email and Password
+ * Revoke a session token so it no longer verifies, even before its natural expiry (logout)
+ */
+function revokeSessionToken(token) {
+  if (!token || typeof token !== 'string') return false;
+  const parts = token.split('.');
+  if (parts.length !== 3) return false;
+
+  const [, payload, signature] = parts;
+  revokedTokens.add(signature);
+
+  let expiresAt = Math.floor(Date.now() / 1000) + 24 * 60 * 60;
+  try {
+    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    if (claims.exp) expiresAt = claims.exp;
+  } catch {
+    // keep default expiry
+  }
+
+  if (poolModule.pool) {
+    insertRevokedSessionInDB(signature, expiresAt).catch((e) =>
+      logger.error('DB revoke save error', e, 'AUTH_SERVICE')
+    );
+  }
+
+  return true;
+}
+
+function toPublicUser(user) {
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    orgId: user.orgId,
+    orgName: user.orgName,
+  };
+}
+
+/**
+ * Authenticate with Email and Password. Does not auto-create accounts —
+ * an unknown email is rejected with the same generic error as a wrong
+ * password, to avoid leaking which emails are registered.
  */
 function authenticateWithPassword(email, password, ipAddress) {
   if (!email || !password) {
-    throw new Error('Email and password are required.');
+    throw new Error(AUTH_MESSAGES.EMAIL_PASSWORD_REQUIRED);
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-  let user = userRegistry.get(normalizedEmail);
+  const user = userRegistry.get(normalizedEmail);
 
-  // Auto-provision if user doesn't exist yet (for seamless demo/developer workflows)
-  if (!user) {
-    const autoRole = normalizedEmail.includes('vendor')
-      ? 'vendor'
-      : normalizedEmail.includes('admin')
-      ? 'admin'
-      : normalizedEmail.includes('manager')
-      ? 'category_manager'
-      : 'buyer';
-
-    user = {
-      id: `usr-${Date.now()}`,
-      email: normalizedEmail,
-      name: normalizedEmail.split('@')[0].replace('.', ' ').toUpperCase(),
-      role: autoRole,
-      orgId: `org-${normalizedEmail.split('@')[1] || 'generic'}`,
-      orgName: `${normalizedEmail.split('@')[1] || 'Enterprise'} Entity`,
-      passwordHash: hashPassword(password),
-      status: 'ACTIVE',
-    };
-    userRegistry.set(normalizedEmail, user);
-  } else {
-    const isValid = verifyPassword(password, user.passwordHash) || (user.tempPassword && password === user.tempPassword);
-    if (!isValid) {
-      logger.warn(`Failed password authentication for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
-      throw new Error('Invalid email or password.');
-    }
+  if (!user || !verifyPassword(password, user.passwordHash, user.passwordSalt)) {
+    logger.warn(`Failed password authentication for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+    throw new Error(AUTH_MESSAGES.INVALID_CREDENTIALS);
   }
 
   const token = generateSessionToken(user);
@@ -232,50 +329,40 @@ function authenticateWithPassword(email, password, ipAddress) {
   return {
     success: true,
     token,
-    user: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-      orgId: user.orgId,
-      orgName: user.orgName,
-    },
+    user: toPublicUser(user),
   };
 }
 
 /**
- * Generate and dispatch 4-digit OTP for Email
+ * Generate and dispatch a 4-digit OTP for Email. Only for an email that
+ * already has an account — use `register` to create one first.
  */
 function requestOtp(email, roleHint, ipAddress) {
   if (!email) {
-    throw new Error('Email is required to dispatch OTP.');
+    throw new Error(AUTH_MESSAGES.OTP_EMAIL_REQUIRED);
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-  let user = userRegistry.get(normalizedEmail);
-
+  const user = userRegistry.get(normalizedEmail);
   if (!user) {
-    const role = roleHint || (normalizedEmail.includes('vendor') ? 'vendor' : 'buyer');
-    user = {
-      id: `usr-${Date.now()}`,
-      email: normalizedEmail,
-      name: normalizedEmail.split('@')[0].replace('.', ' ').toUpperCase(),
-      role,
-      orgId: `org-${normalizedEmail.split('@')[1] || 'generic'}`,
-      orgName: `${normalizedEmail.split('@')[1] || 'Enterprise'} Entity`,
-      passwordHash: hashPassword('password123'),
-      status: 'ACTIVE',
-    };
-    userRegistry.set(normalizedEmail, user);
+    logger.warn(`OTP requested for unregistered email: ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+    throw new Error(AUTH_MESSAGES.ACCOUNT_NOT_FOUND);
   }
 
   // Generate 4-digit code
   const code = Math.floor(1000 + Math.random() * 9000).toString();
-  otpStore.set(normalizedEmail, {
-    code,
-    expiresAt: Date.now() + OTP_EXPIRY_MS,
-    attempts: 0,
-  });
+  const expiresAt = Date.now() + OTP_EXPIRY_MS;
+  otpStore.set(normalizedEmail, { code, expiresAt, attempts: 0 });
+
+  if (poolModule.pool) {
+    upsertOtpInDB(normalizedEmail, code, expiresAt).catch((e) =>
+      logger.error('DB OTP save error', e, 'AUTH_SERVICE')
+    );
+  }
+
+  mailerService.sendOtpEmail(normalizedEmail, code, OTP_EXPIRY_MS / 1000).catch((e) =>
+    logger.error('OTP email dispatch error', e, 'AUTH_SERVICE')
+  );
 
   logger.info(`OTP generated for ${normalizedEmail}: ${code}`, { ipAddress }, 'AUTH_SERVICE');
   storeService.addAuditLog({
@@ -288,50 +375,39 @@ function requestOtp(email, roleHint, ipAddress) {
     success: true,
     message: `Verification OTP dispatched to ${normalizedEmail}`,
     email: normalizedEmail,
-    // Returned in response for testing/demo environments
-    demoCode: code,
+    // Only echoed back in tests or when SMTP isn't configured, so local/dev/test
+    // runs without real email delivery can still complete the OTP flow; once
+    // SMTP is live, the real code is never exposed in the API response.
+    ...(process.env.NODE_ENV === 'test' || !mailerService.isConfigured() ? { demoCode: code } : {}),
     expiresInSeconds: 600,
   };
 }
 
 /**
- * Verify 4-digit OTP and issue session
+ * Verify 4-digit OTP and issue a session. No master/bypass codes — only the
+ * code actually issued via requestOtp for a real, registered account verifies.
  */
 function verifyOtp(email, code, ipAddress) {
   if (!email || !code) {
-    throw new Error('Email and verification code are required.');
+    throw new Error(AUTH_MESSAGES.OTP_CODE_REQUIRED);
   }
 
   const normalizedEmail = email.trim().toLowerCase();
+  const user = userRegistry.get(normalizedEmail);
   const storedOtp = otpStore.get(normalizedEmail);
 
-  const isValidCode =
-    code === '1234' ||
-    code === '4321' ||
-    (storedOtp && storedOtp.code === code && Date.now() <= storedOtp.expiresAt);
+  const isValidCode = !!user && !!storedOtp && storedOtp.code === code && Date.now() <= storedOtp.expiresAt;
 
   if (!isValidCode) {
     if (storedOtp) storedOtp.attempts = (storedOtp.attempts || 0) + 1;
-    logger.warn(`Invalid OTP submitted for ${normalizedEmail}`, { code, ipAddress }, 'AUTH_SERVICE');
-    throw new Error('Invalid or expired OTP code.');
+    logger.warn(`Invalid OTP submitted for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+    throw new Error(AUTH_MESSAGES.INVALID_OTP);
   }
 
   // Clear OTP on successful verification
   otpStore.delete(normalizedEmail);
-
-  let user = userRegistry.get(normalizedEmail);
-  if (!user) {
-    user = {
-      id: `usr-${Date.now()}`,
-      email: normalizedEmail,
-      name: normalizedEmail.split('@')[0].toUpperCase(),
-      role: 'buyer',
-      orgId: 'org-default',
-      orgName: 'Enterprise Buyer Organization',
-      passwordHash: hashPassword('password123'),
-      status: 'ACTIVE',
-    };
-    userRegistry.set(normalizedEmail, user);
+  if (poolModule.pool) {
+    deleteOtpInDB(normalizedEmail).catch((e) => logger.error('DB OTP delete error', e, 'AUTH_SERVICE'));
   }
 
   const token = generateSessionToken(user);
@@ -345,23 +421,16 @@ function verifyOtp(email, code, ipAddress) {
   return {
     success: true,
     token,
-    user: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-      orgId: user.orgId,
-      orgName: user.orgName,
-    },
+    user: toPublicUser(user),
   };
 }
 
 /**
- * Register a new user / enterprise entity
+ * Register a new user / enterprise entity. The only path that creates an account.
  */
 function registerUser(payload, ipAddress) {
   const { name, email, password, mobile, role, orgName } = payload;
-  if (!email) throw new Error('Email is required for registration.');
+  if (!email) throw new Error(AUTH_MESSAGES.REGISTRATION_EMAIL_REQUIRED);
 
   const normalizedEmail = email.trim().toLowerCase();
   if (userRegistry.has(normalizedEmail)) {
@@ -369,19 +438,13 @@ function registerUser(payload, ipAddress) {
     const token = generateSessionToken(existing);
     return {
       success: true,
-      message: 'Account already exists. Logged in successfully.',
+      message: AUTH_MESSAGES.ACCOUNT_EXISTS_LOGIN,
       token,
-      user: {
-        id: existing.id,
-        email: existing.email,
-        name: existing.name,
-        role: existing.role,
-        orgId: existing.orgId,
-        orgName: existing.orgName,
-      },
+      user: toPublicUser(existing),
     };
   }
 
+  const { hash, salt } = hashPassword(password || 'password123', generateSalt());
   const newUser = {
     id: `usr-${Date.now()}`,
     email: normalizedEmail,
@@ -389,12 +452,16 @@ function registerUser(payload, ipAddress) {
     role: role || 'buyer',
     orgId: `org-${Date.now()}`,
     orgName: orgName || `${name || 'Enterprise'} Entity`,
-    passwordHash: hashPassword(password || 'password123'),
+    passwordHash: hash,
+    passwordSalt: salt,
     mobile: mobile || '+91 98201 44820',
     status: 'ACTIVE',
   };
 
   userRegistry.set(normalizedEmail, newUser);
+  if (poolModule.pool) {
+    upsertUserInDB(newUser).catch((e) => logger.error('DB user save error', e, 'AUTH_SERVICE'));
+  }
 
   const token = generateSessionToken(newUser);
   logger.audit(`New enterprise account registered: ${newUser.email} (${newUser.role})`, newUser.email, { ipAddress });
@@ -406,16 +473,9 @@ function registerUser(payload, ipAddress) {
 
   return {
     success: true,
-    message: 'Registration successful.',
+    message: AUTH_MESSAGES.REGISTRATION_SUCCESS,
     token,
-    user: {
-      id: newUser.id,
-      email: newUser.email,
-      name: newUser.name,
-      role: newUser.role,
-      orgId: newUser.orgId,
-      orgName: newUser.orgName,
-    },
+    user: toPublicUser(newUser),
   };
 }
 
@@ -440,9 +500,11 @@ module.exports = {
   verifyPassword,
   generateSessionToken,
   verifySessionToken,
+  revokeSessionToken,
   authenticateWithPassword,
   requestOtp,
   verifyOtp,
   registerUser,
   getAllUsers,
+  hydrateFromDB,
 };

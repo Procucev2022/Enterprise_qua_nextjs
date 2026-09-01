@@ -97,7 +97,6 @@ export default function HomePage() {
   const [loginPassword, setLoginPassword] = useState('password123');
   const [loginOtpSent, setLoginOtpSent] = useState(false);
   const [loginOtpInput, setLoginOtpInput] = useState('');
-  const [simulatedLoginOtp, setSimulatedLoginOtp] = useState('');
 
   // Registration inputs
   const [regName, setRegName] = useState('');
@@ -181,7 +180,7 @@ export default function HomePage() {
   };
 
   // Request Successive Login OTP (Sent strictly to Email)
-  const handleRequestLoginOtp = (e: React.FormEvent) => {
+  const handleRequestLoginOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!loginEmail.trim()) {
       showToast('Error', 'Please enter your registered Email ID.', 'warning');
@@ -189,67 +188,44 @@ export default function HomePage() {
     }
 
     const emailKey = loginEmail.trim().toLowerCase();
-    let buyer = registeredBuyers[emailKey];
+    const buyer = registeredBuyers[emailKey] || {
+      name: emailKey.split('@')[0] || 'Enterprise Buyer',
+      email: emailKey,
+      mobile: '+91 98201 44820',
+    };
 
-    if (!buyer) {
-      // Auto-register on the fly so custom emails always work seamlessly
-      buyer = {
-        name: emailKey.split('@')[0] || 'Enterprise Buyer',
-        email: emailKey,
-        mobile: '+91 98201 44820',
-      };
-      setRegisteredBuyers((prev) => ({
-        ...prev,
-        [emailKey]: buyer,
-      }));
+    // The backend is authoritative here: an unregistered email is rejected,
+    // not silently created — register() is the only path that creates accounts.
+    const response = await authClient.requestOtp(emailKey, 'buyer');
+    if (!response.success) {
+      showToast('OTP Request Failed', response.error || 'Unable to send an OTP for this email.', 'warning');
+      return;
     }
 
-    // Trigger background API call to backend auth controller
-    authClient.requestOtp(emailKey, 'buyer').catch(() => {});
-
-    // Generate a 4-digit mock OTP
-    const mockOtp = Math.floor(1000 + Math.random() * 9000).toString();
-    setSimulatedLoginOtp(mockOtp);
-    setLoginOtpInput(mockOtp);
+    setRegisteredBuyers((prev) => ({ ...prev, [emailKey]: buyer }));
+    setLoginOtpInput('');
     setLoginOtpSent(true);
 
-    showToast(
-      'OTP Dispatched',
-      `Login OTP sent to ${buyer.email}. (Demo Code: ${mockOtp})`,
-      'success'
-    );
+    showToast('OTP Dispatched', `A verification code has been emailed to ${buyer.email}.`, 'success');
   };
 
   // Verify Login OTP and sign in
-  const handleVerifyLoginOtp = (e: React.FormEvent) => {
+  const handleVerifyLoginOtp = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (
-      loginOtpInput === simulatedLoginOtp ||
-      loginOtpInput === '4321' ||
-      loginOtpInput === '1234' ||
-      loginOtpInput.length === 4
-    ) {
-      const emailKey = loginEmail.trim().toLowerCase();
-      const sessionUser = {
-        id: `usr-buyer-${Date.now()}`,
-        email: emailKey,
-        name: emailKey.split('@')[0].toUpperCase(),
-        role: 'buyer' as UserRole,
-        orgId: 'org-buyer-01',
-        orgName: 'Procucev Buyer Desk',
-        authMethod: 'EMAIL_OTP' as const,
-      };
-      authClient.verifyOtp(emailKey, loginOtpInput).catch(() => {});
-      setCurrentUserSession(sessionUser);
+    const emailKey = loginEmail.trim().toLowerCase();
+    const response = await authClient.verifyOtp(emailKey, loginOtpInput);
+
+    if (response.success && response.user) {
+      setCurrentUserSession(response.user);
       setIsLoggedIn(true);
-      setCurrentRole('buyer');
+      setCurrentRole(response.user.role);
       setActiveScreen('command_center');
       if (!initialSetupCompleted) {
         setInitialSetupModalOpen(true);
       }
       showToast('Welcome Back', 'Logged in successfully as Enterprise Buyer.', 'success');
     } else {
-      showToast('Invalid OTP', 'The OTP entered is incorrect. Please verify and try again.', 'warning');
+      showToast('Invalid OTP', response.error || 'The OTP entered is incorrect. Please verify and try again.', 'warning');
     }
   };
 
@@ -281,72 +257,63 @@ export default function HomePage() {
   const [vendorLoginPassword, setVendorLoginPassword] = useState('Kiran@Temp8821#');
   const [vendorOtpSent, setVendorOtpSent] = useState(false);
   const [vendorOtpInput, setVendorOtpInput] = useState('');
-  const [simulatedVendorOtp, setSimulatedVendorOtp] = useState('');
 
   // Handle Vendor First-Time Password Login
-  const handleVendorPasswordLogin = (e: React.FormEvent) => {
+  const handleVendorPasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!vendorLoginEmail.trim() || !vendorLoginPassword.trim()) {
       showToast('Missing Fields', 'Please enter your registered Vendor Email and Temporary Password.', 'warning');
       return;
     }
-    const sessionUser = {
-      id: `usr-vendor-${Date.now()}`,
-      email: vendorLoginEmail.trim().toLowerCase(),
-      name: vendorLoginEmail.split('@')[0].toUpperCase(),
-      role: 'vendor' as UserRole,
-      orgId: 'org-vendor-01',
-      orgName: 'Vendor Partner Organization',
-      authMethod: 'TEMP_PASSWORD' as const,
-    };
-    authClient.loginWithPassword(vendorLoginEmail, vendorLoginPassword).catch(() => {});
-    setCurrentUserSession(sessionUser);
-    setIsLoggedIn(true);
-    setCurrentRole('vendor');
-    setActiveScreen('vendor_feed');
-    showToast(
-      'First-Time Login Verified',
-      `Welcome ${vendorLoginEmail}! Please update your enterprise profile and category specializations.`,
-      'success'
-    );
+
+    const response = await authClient.loginWithPassword(vendorLoginEmail, vendorLoginPassword);
+    if (response.success && response.user) {
+      setCurrentUserSession(response.user);
+      setIsLoggedIn(true);
+      setCurrentRole(response.user.role);
+      setActiveScreen('vendor_feed');
+      showToast(
+        'First-Time Login Verified',
+        `Welcome ${vendorLoginEmail}! Please update your enterprise profile and category specializations.`,
+        'success'
+      );
+    } else {
+      showToast('Login Failed', response.error || 'Invalid email or password.', 'warning');
+    }
   };
 
   // Request Vendor Email OTP (For subsequent logins)
-  const handleRequestVendorOtp = (e: React.FormEvent) => {
+  const handleRequestVendorOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!vendorLoginEmail.trim()) {
       showToast('Missing Email', 'Please enter your registered Vendor Email ID.', 'warning');
       return;
     }
-    authClient.requestOtp(vendorLoginEmail.trim().toLowerCase(), 'vendor').catch(() => {});
-    const mockOtp = Math.floor(1000 + Math.random() * 9000).toString();
-    setSimulatedVendorOtp(mockOtp);
-    setVendorOtpInput(mockOtp);
+
+    const response = await authClient.requestOtp(vendorLoginEmail.trim().toLowerCase(), 'vendor');
+    if (!response.success) {
+      showToast('OTP Request Failed', response.error || 'Unable to send an OTP for this email.', 'warning');
+      return;
+    }
+
+    setVendorOtpInput('');
     setVendorOtpSent(true);
-    showToast('OTP Dispatched', `Login OTP dispatched to ${vendorLoginEmail}. (Demo Code: ${mockOtp})`, 'success');
+    showToast('OTP Dispatched', `A verification code has been emailed to ${vendorLoginEmail}.`, 'success');
   };
 
   // Verify Vendor Email OTP
-  const handleVerifyVendorOtp = (e: React.FormEvent) => {
+  const handleVerifyVendorOtp = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (vendorOtpInput === simulatedVendorOtp || vendorOtpInput === '1234' || vendorOtpInput === '4321' || vendorOtpInput.length === 4) {
-      const sessionUser = {
-        id: `usr-vendor-${Date.now()}`,
-        email: vendorLoginEmail.trim().toLowerCase(),
-        name: vendorLoginEmail.split('@')[0].toUpperCase(),
-        role: 'vendor' as UserRole,
-        orgId: 'org-vendor-01',
-        orgName: 'Vendor Partner Organization',
-        authMethod: 'EMAIL_OTP' as const,
-      };
-      authClient.verifyOtp(vendorLoginEmail, vendorOtpInput).catch(() => {});
-      setCurrentUserSession(sessionUser);
+    const response = await authClient.verifyOtp(vendorLoginEmail, vendorOtpInput);
+
+    if (response.success && response.user) {
+      setCurrentUserSession(response.user);
       setIsLoggedIn(true);
-      setCurrentRole('vendor');
+      setCurrentRole(response.user.role);
       setActiveScreen('vendor_feed');
       showToast('Authentication Successful', `Logged in via Email OTP as ${vendorLoginEmail}.`, 'success');
     } else {
-      showToast('Invalid OTP', 'The OTP entered is incorrect. Please verify and try again.', 'warning');
+      showToast('Invalid OTP', response.error || 'The OTP entered is incorrect. Please verify and try again.', 'warning');
     }
   };
 
@@ -360,36 +327,35 @@ export default function HomePage() {
     showToast('Vendor Selected', `Selected ${v.name} (${v.email}) for portal access.`, 'info');
   };
 
-  // Direct Bypass Login for non-buyer roles
-  const handleDirectRoleLogin = (e: React.FormEvent) => {
+  // Password login for Category Manager / Admin roles, verified against the real backend
+  const [roleLoginEmail, setRoleLoginEmail] = useState('');
+  const handleDirectRoleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const roleEmail = selectedRole === 'category_manager'
-      ? 'catmanager@procucev.com'
-      : selectedRole === 'admin'
-      ? 'admin@procucev.com'
-      : selectedRole === 'vendor'
-      ? 'vendor@apexsupplies.com'
-      : 'buyer@procucev.com';
+    const email = roleLoginEmail.trim().toLowerCase();
+    if (!email || !loginPassword.trim()) {
+      showToast('Missing Fields', 'Please enter your registered email and password.', 'warning');
+      return;
+    }
 
-    const sessionUser = {
-      id: `usr-${selectedRole}-01`,
-      email: roleEmail,
-      name: roleEmail.split('@')[0].toUpperCase(),
-      role: selectedRole,
-      orgId: `org-${selectedRole}-01`,
-      orgName: `${selectedRole.toUpperCase()} Entity`,
-      authMethod: 'PASSWORD' as const,
-    };
-    setCurrentUserSession(sessionUser);
+    const response = await authClient.loginWithPassword(email, loginPassword);
+    if (!response.success || !response.user) {
+      showToast('Login Failed', response.error || 'Invalid email or password.', 'warning');
+      return;
+    }
+
+    setCurrentUserSession(response.user);
     setIsLoggedIn(true);
-    setCurrentRole(selectedRole);
+    setCurrentRole(response.user.role);
 
-    if (selectedRole === 'category_manager') {
+    if (response.user.role === 'category_manager') {
       setActiveScreen('kanban_board');
       showToast('Logged In', 'Successfully signed in as Category Manager.', 'success');
-    } else if (selectedRole === 'admin') {
+    } else if (response.user.role === 'admin') {
       setActiveScreen('infra_control');
       showToast('Logged In', 'Successfully signed in as Infrastructure Admin.', 'success');
+    } else {
+      setActiveScreen('command_center');
+      showToast('Logged In', 'Successfully signed in.', 'success');
     }
   };
 
@@ -727,7 +693,7 @@ export default function HomePage() {
                       ) : (
                         <form onSubmit={handleVerifyLoginOtp} className="space-y-3 animate-scale-up">
                           <div className="p-3 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-[11px] text-indigo-700 dark:text-indigo-300 border border-indigo-150/40">
-                            📨 Verification OTP has been dispatched to <strong>{loginEmail}</strong>. (Simulated Demo Code is: <strong className="text-indigo-900 dark:text-white underline">{simulatedLoginOtp}</strong>)
+                            📨 A verification code has been emailed to <strong>{loginEmail}</strong>. Enter it below to sign in.
                           </div>
                           
                           <div className="space-y-1">
@@ -861,13 +827,13 @@ export default function HomePage() {
                               </div>
 
                               <button type="submit" className="btn btn-primary w-full text-xs font-bold py-2.5 flex items-center justify-center gap-1.5">
-                                <Mail size={14} /> Send Instant OTP to Email
+                                <Mail size={14} /> Send OTP to Email
                               </button>
                             </form>
                           ) : (
                             <form onSubmit={handleVerifyVendorOtp} className="space-y-3 animate-scale-up">
                               <div className="p-2.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-[11px] text-indigo-700 dark:text-indigo-300 border border-indigo-150/40">
-                                📨 OTP code dispatched to <strong>{vendorLoginEmail}</strong>. (Simulated Demo Code: <strong className="underline">{simulatedVendorOtp}</strong>)
+                                📨 A verification code has been emailed to <strong>{vendorLoginEmail}</strong>. Enter it below to sign in.
                               </div>
 
                               <div className="space-y-1">
@@ -925,21 +891,23 @@ export default function HomePage() {
                       </div>
                     </div>
                   ) : (
-                    /* BYPASS CM / ADMIN CREDENTIALS */
+                    /* CATEGORY MANAGER / ADMIN PASSWORD LOGIN */
                     <form onSubmit={handleDirectRoleLogin} className="space-y-3 animate-fade-in">
                       <div className="space-y-1">
                         <label className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450">Email / Username</label>
                         <div className="relative">
                           <Mail className="absolute left-3 top-3 text-slate-400" size={14} />
                           <input
-                            type="text"
-                            value={
+                            type="email"
+                            value={roleLoginEmail}
+                            onChange={(e) => setRoleLoginEmail(e.target.value)}
+                            placeholder={
                               selectedRole === 'category_manager'
-                                ? 'catmanager@procucev.com'
-                                : 'admin@procucev.com'
+                                ? 'e.g. catmanager@yourcompany.com'
+                                : 'e.g. admin@yourcompany.com'
                             }
-                            readOnly
-                            className="pl-9 text-xs opacity-70 cursor-not-allowed bg-slate-50 dark:bg-gray-950 font-mono"
+                            className="pl-9 text-xs font-mono"
+                            required
                           />
                         </div>
                       </div>

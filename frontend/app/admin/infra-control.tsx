@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useApp } from '@/lib/store';
+import { authClient } from '@/lib/authClient';
 import { RbacModal } from '@/app/components/Modals';
 import type { DBHealthStatus } from '@/lib/types';
 import { UI_STRINGS } from '@/lib/uiStrings';
@@ -88,7 +89,11 @@ export default function InfraControl({ onNavigateToAuditLog }: InfraControlProps
   const handleRunMigrations = async () => {
     setMigratingDb(true);
     try {
-      const res = await fetch('/api/db/init', { method: 'POST' });
+      const token = authClient.getToken();
+      const res = await fetch('/api/db/init', {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
       const data = await res.json();
       if (data.success) {
         setDbHealth(data.health);
@@ -108,7 +113,11 @@ export default function InfraControl({ onNavigateToAuditLog }: InfraControlProps
   const handleSyncData = async () => {
     setSyncingDb(true);
     try {
-      const res = await fetch('/api/db/sync', { method: 'POST' });
+      const token = authClient.getToken();
+      const res = await fetch('/api/db/sync', {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
       const data = await res.json();
       if (data.success) {
         setDbHealth(data.health);

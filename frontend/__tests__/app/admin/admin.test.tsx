@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import AuditLog from '@/app/admin/audit-log';
 import InfraControl from '@/app/admin/infra-control';
 import { AppProvider } from '@/lib/store';
+import { authClient } from '@/lib/authClient';
 
 // Mock global fetch for API calls
 global.fetch = jest.fn();
@@ -296,6 +297,47 @@ describe('Admin Components (AuditLog & InfraControl)', () => {
       await waitFor(() => {
         expect(global.fetch).toHaveBeenCalled();
       });
+    });
+
+    test('attaches Authorization header to migrate/sync requests when a session token is present', async () => {
+      const getTokenSpy = jest.spyOn(authClient, 'getToken').mockReturnValue('test-session-token');
+
+      (global.fetch as jest.Mock)
+        .mockResolvedValueOnce({
+          json: async () => ({
+            success: true,
+            health: { isConnected: true, latencyMs: 15, providerLabel: 'Postgres' },
+            tablesCreated: ['rfqs', 'vendors'],
+            message: 'Schema Initialized',
+          }),
+        })
+        .mockResolvedValueOnce({
+          json: async () => ({
+            success: true,
+            health: { isConnected: true, latencyMs: 15, providerLabel: 'Postgres' },
+            message: 'Data Synchronized',
+          }),
+        });
+
+      renderWithProvider(<InfraControl onNavigateToAuditLog={jest.fn()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: /Run Schema Migrations/i }));
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledWith('/api/db/init', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer test-session-token' },
+        });
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Sync Data to Postgres/i }));
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledWith('/api/db/sync', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer test-session-token' },
+        });
+      });
+
+      getTokenSpy.mockRestore();
     });
 
     test('opens and closes RBAC modal, Azure Key Vault secrets modal, and triggers database backup snapshot', async () => {

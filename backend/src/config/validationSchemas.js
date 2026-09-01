@@ -74,6 +74,31 @@ const VALIDATION_SCHEMAS = {
     iv: { type: 'string', required: true, minLength: 12 },
     authTag: { type: 'string', required: true, minLength: 16 },
   },
+
+  login: {
+    email: { type: 'string', required: true, message: 'Email is required.' },
+    password: { type: 'string', required: false },
+    code: { type: 'string', required: false },
+  },
+
+  requestOtp: {
+    email: { type: 'string', required: true, message: 'Email is required to request OTP.' },
+    roleHint: { type: 'string', required: false },
+  },
+
+  verifyOtp: {
+    email: { type: 'string', required: true, message: 'Email and verification code are required.' },
+    code: { type: 'string', required: true, message: 'Email and verification code are required.' },
+  },
+
+  register: {
+    email: { type: 'string', required: true, message: 'Email is required for registration.' },
+    name: { type: 'string', required: false },
+    password: { type: 'string', required: false },
+    mobile: { type: 'string', required: false },
+    role: { type: 'string', required: false },
+    orgName: { type: 'string', required: false },
+  },
 };
 
 

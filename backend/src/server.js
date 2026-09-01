@@ -1,5 +1,6 @@
 const app = require('./app');
 const storeService = require('./services/storeService');
+const authService = require('./services/authService');
 const poolModule = require('./db/pool');
 
 const PORT = process.env.PORT || 4000;
@@ -9,6 +10,7 @@ async function bootstrapServer(port = PORT) {
     const dbHealth = await poolModule.checkDBHealth();
     if (dbHealth && dbHealth.isConnected) {
       await storeService.hydrateFromDB();
+      await authService.hydrateFromDB();
     }
   } catch (err) {
     // Database initialization fallback handled in memory
@@ -27,7 +29,7 @@ async function start(port = PORT) {
   }
 }
 
-if (process.env.AUTO_START_SERVER === 'true' || require.main === module) {
+if (process.env.NODE_ENV !== 'test' && (process.env.AUTO_START_SERVER === 'true' || require.main === module)) {
   start();
 }
 

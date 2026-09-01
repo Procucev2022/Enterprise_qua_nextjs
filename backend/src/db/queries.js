@@ -470,6 +470,107 @@ async function upsertSystemConfigInDB(config) {
   );
 }
 
+// ==============================================================================
+// 7. USERS QUERIES (Auth Identity — login flow)
+// ==============================================================================
+
+async function getUsersFromDB() {
+  if (!poolModule.pool) return [];
+
+  const res = await poolModule.query(`
+    SELECT
+      id, email, name, role,
+      org_id AS "orgId",
+      org_name AS "orgName",
+      password_hash AS "passwordHash",
+      password_salt AS "passwordSalt",
+      mobile, status
+    FROM users
+  `);
+  return res.rows;
+}
+
+async function upsertUserInDB(user) {
+  if (!poolModule.pool) return;
+  await poolModule.query(
+    `
+    INSERT INTO users (
+      id, email, name, role, org_id, org_name, password_hash, password_salt, mobile, status, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+    ON CONFLICT (email) DO UPDATE SET
+      name = EXCLUDED.name,
+      role = EXCLUDED.role,
+      org_id = EXCLUDED.org_id,
+      org_name = EXCLUDED.org_name,
+      password_hash = EXCLUDED.password_hash,
+      password_salt = EXCLUDED.password_salt,
+      mobile = EXCLUDED.mobile,
+      status = EXCLUDED.status,
+      updated_at = CURRENT_TIMESTAMP
+  `,
+    [
+      user.id,
+      user.email,
+      user.name,
+      user.role,
+      user.orgId || null,
+      user.orgName || null,
+      user.passwordHash,
+      user.passwordSalt,
+      user.mobile || null,
+      user.status || 'ACTIVE',
+    ]
+  );
+}
+
+// ==============================================================================
+// 8. OTP CODES QUERIES (email/code only — no WhatsApp)
+// ==============================================================================
+
+async function upsertOtpInDB(email, code, expiresAtMs) {
+  if (!poolModule.pool) return;
+  await poolModule.query(
+    `
+    INSERT INTO otp_codes (email, code, expires_at, attempts)
+    VALUES ($1, $2, to_timestamp($3 / 1000.0), 0)
+    ON CONFLICT (email) DO UPDATE SET
+      code = EXCLUDED.code,
+      expires_at = EXCLUDED.expires_at,
+      attempts = 0
+  `,
+    [email, code, expiresAtMs]
+  );
+}
+
+async function deleteOtpInDB(email) {
+  if (!poolModule.pool) return;
+  await poolModule.query(`DELETE FROM otp_codes WHERE email = $1`, [email]);
+}
+
+// ==============================================================================
+// 9. REVOKED SESSIONS QUERIES (logout invalidation)
+// ==============================================================================
+
+async function getRevokedSessionsFromDB() {
+  if (!poolModule.pool) return [];
+  const res = await poolModule.query(
+    `SELECT token_signature AS "tokenSignature" FROM revoked_sessions WHERE expires_at > NOW()`
+  );
+  return res.rows;
+}
+
+async function insertRevokedSessionInDB(tokenSignature, expiresAtEpochSeconds) {
+  if (!poolModule.pool) return;
+  await poolModule.query(
+    `
+    INSERT INTO revoked_sessions (token_signature, expires_at)
+    VALUES ($1, to_timestamp($2))
+    ON CONFLICT (token_signature) DO NOTHING
+  `,
+    [tokenSignature, expiresAtEpochSeconds]
+  );
+}
+
 module.exports = {
   getBuyerAccountsFromDB,
   upsertBuyerAccountInDB,
@@ -485,4 +586,10 @@ module.exports = {
   insertAuditLogInDB,
   getSystemConfigFromDB,
   upsertSystemConfigInDB,
+  getUsersFromDB,
+  upsertUserInDB,
+  upsertOtpInDB,
+  deleteOtpInDB,
+  getRevokedSessionsFromDB,
+  insertRevokedSessionInDB,
 };

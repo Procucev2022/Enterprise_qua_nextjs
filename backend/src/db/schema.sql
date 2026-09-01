@@ -173,8 +173,11 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   action TEXT NOT NULL,
   rfq_number VARCHAR(100),
   sha_signature VARCHAR(255) NOT NULL,
+  previous_sha VARCHAR(255),
   status VARCHAR(50) DEFAULT 'TAMPER_CHECK_OK',
   ip_address VARCHAR(100) DEFAULT '10.0.4.12 (Azure Private VNet)',
+  payload JSONB DEFAULT '{}'::jsonb,
+  verified BOOLEAN DEFAULT true,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -207,3 +210,40 @@ CREATE TABLE IF NOT EXISTS system_config (
   value JSONB NOT NULL,
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 9. Users Table (Auth Identity — login flow)
+CREATE TABLE IF NOT EXISTS users (
+  id VARCHAR(64) PRIMARY KEY,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  name VARCHAR(255) NOT NULL,
+  role VARCHAR(50) NOT NULL DEFAULT 'buyer',
+  org_id VARCHAR(64),
+  org_name VARCHAR(255),
+  password_hash VARCHAR(255) NOT NULL,
+  password_salt VARCHAR(64) NOT NULL,
+  mobile VARCHAR(50),
+  status VARCHAR(50) DEFAULT 'ACTIVE',
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+
+-- 10. OTP Codes Table (login one-time passcodes, email/code only — no WhatsApp)
+CREATE TABLE IF NOT EXISTS otp_codes (
+  email VARCHAR(255) PRIMARY KEY,
+  code VARCHAR(10) NOT NULL,
+  expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  attempts INTEGER DEFAULT 0,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 11. Revoked Session Tokens Table (logout invalidation)
+CREATE TABLE IF NOT EXISTS revoked_sessions (
+  token_signature VARCHAR(255) PRIMARY KEY,
+  expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  revoked_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_revoked_sessions_expires ON revoked_sessions(expires_at);

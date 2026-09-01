@@ -1,7 +1,103 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import HomePage from '@/app/page';
+import NotificationToast from '@/app/components/NotificationToast';
 import { AppProvider, useApp } from '@/lib/store';
+
+// The login/OTP flows now depend on the real backend response (Phase 4 login-flow
+// hardening removed the old client-side-only bypass), so /api/auth/* needs a realistic
+// mock here instead of the generic `{ success: true, data: {} }` the shared fetch mock
+// in jest.setup.ts returns for every non-/api/bootstrap URL. Everything else still falls
+// through to that original mock unchanged.
+const DEFAULT_FETCH_IMPL = (global.fetch as jest.Mock).getMockImplementation()!;
+
+function deriveTestRole(email: string): string {
+  if (email.includes('kiranvalves') || email.includes('apexsupplies')) return 'vendor';
+  if (email.includes('admin')) return 'admin';
+  if (email.includes('catmanager') || email.includes('manager')) return 'category_manager';
+  return 'buyer';
+}
+
+(global.fetch as jest.Mock).mockImplementation((url: string, options?: RequestInit) => {
+  if (typeof url === 'string' && url.includes('/api/auth/')) {
+    const body = options?.body ? JSON.parse(options.body as string) : {};
+
+    if (url.includes('/api/auth/request-otp')) {
+      if (body.email === 'reject.otp@nowhere.com') {
+        return Promise.resolve({
+          ok: false,
+          status: 400,
+          json: async () => ({ success: false, error: 'No account found for this email. Please register first.' }),
+        });
+      }
+      if (body.email === 'no.democode@example.com') {
+        // Real-world edge case: the backend accepted the request but the response omits demoCode
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true, message: `OTP dispatched to ${body.email}`, expiresInSeconds: 600 }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, message: `OTP dispatched to ${body.email}`, demoCode: '1234', expiresInSeconds: 600 }),
+      });
+    }
+
+    if (url.includes('/api/auth/verify-otp')) {
+      if (body.code === '0000') {
+        // Real-world edge case: a rejection with no error field, exercising the client-side fallback text
+        return Promise.resolve({ ok: false, status: 400, json: async () => ({ success: false }) });
+      }
+      const ok = body.code === '1234' || body.code === '4321';
+      return Promise.resolve({
+        ok,
+        status: ok ? 200 : 400,
+        json: async () =>
+          ok
+            ? {
+                success: true,
+                token: 'mock-jwt-token',
+                user: {
+                  id: `usr-test-${Date.now()}`,
+                  email: body.email,
+                  name: String(body.email).split('@')[0].toUpperCase(),
+                  role: deriveTestRole(body.email),
+                  orgId: 'org-test-1',
+                  orgName: 'Test Organization',
+                },
+              }
+            : { success: false, error: 'Invalid or expired OTP code.' },
+      });
+    }
+
+    if (url.includes('/api/auth/login')) {
+      const ok = body.password === 'Kiran@Temp8821#' || body.password === 'cmPass123' || body.password === 'adminPass123';
+      return Promise.resolve({
+        ok,
+        status: ok ? 200 : 401,
+        json: async () =>
+          ok
+            ? {
+                success: true,
+                token: 'mock-jwt-token',
+                user: {
+                  id: `usr-test-${Date.now()}`,
+                  email: body.email,
+                  name: String(body.email).split('@')[0].toUpperCase(),
+                  role: deriveTestRole(body.email),
+                  orgId: 'org-test-1',
+                  orgName: 'Test Organization',
+                },
+              }
+            : { success: false, error: 'Invalid email or password.' },
+      });
+    }
+  }
+
+  return DEFAULT_FETCH_IMPL(url, options);
+});
 
 function AuthTestWrapper() {
   const { setIsLoggedIn, setCurrentRole, setCurrentMode } = useApp();
@@ -26,6 +122,9 @@ function AuthTestWrapper() {
         Set Mode 3
       </button>
       <HomePage />
+      {/* Mirrors app/layout.tsx, which mounts this as a sibling of the page, not inside it —
+          needed here so toast assertions (e.g. login/OTP failure messages) can find anything. */}
+      <NotificationToast />
     </>
   );
 }
@@ -68,7 +167,10 @@ describe('HomePage Comprehensive Suite', () => {
       fireEvent.change(emailInput, { target: { value: 'custom.procurement@adanimanufacturing.com' } });
       fireEvent.submit(requestOtpBtn.closest('form')!);
 
-      expect(screen.getByText(/Verification OTP has been dispatched to/i)).toBeInTheDocument();
+      // requestOtp now awaits the real backend response before showing the dispatched toast
+      await waitFor(() => {
+        expect(screen.getByText(/Enter it below to sign in/i)).toBeInTheDocument();
+      });
 
       // Back button on Login OTP form
       const backLoginBtn = screen.getByRole('button', { name: /^Back$/i });
@@ -79,7 +181,7 @@ describe('HomePage Comprehensive Suite', () => {
       fireEvent.submit(requestOtpBtn2.closest('form')!);
 
       // Test invalid OTP (length < 4)
-      const otpInput = screen.getByPlaceholderText(/Enter 4-digit code/i);
+      const otpInput = await waitFor(() => screen.getByPlaceholderText(/Enter 4-digit code/i));
       fireEvent.change(otpInput, { target: { value: '12' } });
       const verifyBtn = screen.getByRole('button', { name: /Verify & Sign In/i });
       const form = verifyBtn.closest('form')!;
@@ -92,6 +194,41 @@ describe('HomePage Comprehensive Suite', () => {
 
       await waitFor(() => {
         expect(screen.getByText(/Buyer Command Center/i)).toBeInTheDocument();
+      });
+    });
+
+    test('buyer OTP request/verify failure branches, and success without a demo code', async () => {
+      render(
+        <AppProvider>
+          <AuthTestWrapper />
+        </AppProvider>
+      );
+
+      fireEvent.click(screen.getByTestId('test-logout'));
+      fireEvent.click(screen.getByRole('button', { name: /^Sign In$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /^Buyer$/i }));
+
+      const emailInput = screen.getByPlaceholderText(/buyer@procucev.com/i);
+      const requestOtpBtn = screen.getByRole('button', { name: /Request Login OTP/i });
+
+      // Backend rejects the OTP request (e.g. unregistered email)
+      fireEvent.change(emailInput, { target: { value: 'reject.otp@nowhere.com' } });
+      fireEvent.submit(requestOtpBtn.closest('form')!);
+      await waitFor(() => {
+        expect(screen.getByText(/No account found/i)).toBeInTheDocument();
+      });
+
+      // Backend accepts the request but omits a demo code in the response
+      fireEvent.change(emailInput, { target: { value: 'no.democode@example.com' } });
+      fireEvent.submit(requestOtpBtn.closest('form')!);
+      const otpInput = await waitFor(() => screen.getByPlaceholderText(/Enter 4-digit code/i));
+
+      // Verify fails with no error message from the backend
+      fireEvent.change(otpInput, { target: { value: '0000' } });
+      const verifyBtn = screen.getByRole('button', { name: /Verify & Sign In/i });
+      fireEvent.submit(verifyBtn.closest('form')!);
+      await waitFor(() => {
+        expect(screen.getByText(/OTP entered is incorrect/i)).toBeInTheDocument();
       });
     });
 
@@ -189,21 +326,21 @@ describe('HomePage Comprehensive Suite', () => {
       // Request OTP empty email
       const vendorOtpEmailInput = screen.getByPlaceholderText(/vendor@company\.com/i);
       fireEvent.change(vendorOtpEmailInput, { target: { value: '' } });
-      const reqVendorOtpBtn = screen.getByRole('button', { name: /Send Instant OTP to Email/i });
+      const reqVendorOtpBtn = screen.getByRole('button', { name: /Send OTP to Email/i });
       fireEvent.submit(reqVendorOtpBtn.closest('form')!);
 
       // Request OTP with valid email
       fireEvent.change(vendorOtpEmailInput, { target: { value: 'sales@apexsupplies.com' } });
       fireEvent.submit(reqVendorOtpBtn.closest('form')!);
 
-      // Back button in Vendor OTP form
-      const backOtpBtn = screen.getByRole('button', { name: /^Back$/i });
+      // requestOtp now awaits the real backend response before the OTP form appears
+      const backOtpBtn = await waitFor(() => screen.getByRole('button', { name: /^Back$/i }));
       fireEvent.click(backOtpBtn);
 
       // Switch back to OTP and test invalid OTP (length < 4)
-      const reqVendorOtpBtn2 = screen.getByRole('button', { name: /Send Instant OTP to Email/i });
+      const reqVendorOtpBtn2 = screen.getByRole('button', { name: /Send OTP to Email/i });
       fireEvent.submit(reqVendorOtpBtn2.closest('form')!);
-      const vendorOtpInput = screen.getByPlaceholderText(/Enter 4-digit code/i);
+      const vendorOtpInput = await waitFor(() => screen.getByPlaceholderText(/Enter 4-digit code/i));
       fireEvent.change(vendorOtpInput, { target: { value: '12' } });
       const verifyVendorBtn = screen.getByRole('button', { name: /Verify OTP & Sign In/i });
       const formVendor = verifyVendorBtn.closest('form')!;
@@ -219,6 +356,54 @@ describe('HomePage Comprehensive Suite', () => {
       });
     });
 
+    test('vendor password login and OTP failure branches, and OTP success without a demo code', async () => {
+      render(
+        <AppProvider>
+          <AuthTestWrapper />
+        </AppProvider>
+      );
+
+      fireEvent.click(screen.getByTestId('test-logout'));
+      fireEvent.click(screen.getByRole('button', { name: /Vendor Partner/i }));
+
+      // Wrong temporary password
+      const emailInput = screen.getByPlaceholderText(/vendor@company\.com/i);
+      const passwordInput = screen.getByPlaceholderText(/Enter temporary password/i);
+      fireEvent.change(emailInput, { target: { value: 'amit@kiranvalves.com' } });
+      fireEvent.change(passwordInput, { target: { value: 'wrong-password' } });
+      const signInBtn = screen.getByRole('button', { name: /First-Time Sign In & Update Profile/i });
+      fireEvent.submit(signInBtn.closest('form')!);
+      await waitFor(() => {
+        expect(screen.getByText(/Invalid email or password/i)).toBeInTheDocument();
+      });
+
+      // Switch to Email OTP (Subsequent) mode
+      fireEvent.click(screen.getByRole('button', { name: /Email OTP \(Subsequent\)/i }));
+
+      const vendorOtpEmailInput = screen.getByPlaceholderText(/vendor@company\.com/i);
+      const reqVendorOtpBtn = screen.getByRole('button', { name: /Send OTP to Email/i });
+
+      // Backend rejects the OTP request
+      fireEvent.change(vendorOtpEmailInput, { target: { value: 'reject.otp@nowhere.com' } });
+      fireEvent.submit(reqVendorOtpBtn.closest('form')!);
+      await waitFor(() => {
+        expect(screen.getByText(/No account found/i)).toBeInTheDocument();
+      });
+
+      // Backend accepts the request but omits a demo code in the response
+      fireEvent.change(vendorOtpEmailInput, { target: { value: 'no.democode@example.com' } });
+      fireEvent.submit(reqVendorOtpBtn.closest('form')!);
+      const vendorOtpInput = await waitFor(() => screen.getByPlaceholderText(/Enter 4-digit code/i));
+
+      // Verify fails with no error message from the backend
+      fireEvent.change(vendorOtpInput, { target: { value: '0000' } });
+      const verifyVendorBtn = screen.getByRole('button', { name: /Verify OTP & Sign In/i });
+      fireEvent.submit(verifyVendorBtn.closest('form')!);
+      await waitFor(() => {
+        expect(screen.getByText(/OTP entered is incorrect/i)).toBeInTheDocument();
+      });
+    });
+
     test('category manager and admin direct credentials login', async () => {
       render(
         <AppProvider>
@@ -231,7 +416,16 @@ describe('HomePage Comprehensive Suite', () => {
       const cmRoleBtn = screen.getByRole('button', { name: /Cat Manager/i });
       fireEvent.click(cmRoleBtn);
 
-      // Test typing password (covers line 873)
+      // Missing fields: submit with no email/password entered
+      const accessBtnEmpty = screen.getByRole('button', { name: /Access Workspace/i });
+      fireEvent.submit(accessBtnEmpty.closest('form')!);
+      await waitFor(() => {
+        expect(screen.getByText(/Please enter your registered email and password/i)).toBeInTheDocument();
+      });
+
+      const emailInput = screen.getByPlaceholderText(/catmanager@yourcompany.com/i);
+      fireEvent.change(emailInput, { target: { value: 'catmanager@procucev.com' } });
+
       const passInput = screen.getByRole('button', { name: /Access Workspace/i }).closest('form')?.querySelector('input[type="password"]');
       if (passInput) {
         fireEvent.change(passInput, { target: { value: 'cmPass123' } });
@@ -249,6 +443,9 @@ describe('HomePage Comprehensive Suite', () => {
       const adminRoleBtn = screen.getByRole('button', { name: /System Admin/i });
       fireEvent.click(adminRoleBtn);
 
+      const emailInputAdmin = screen.getByPlaceholderText(/admin@yourcompany.com/i);
+      fireEvent.change(emailInputAdmin, { target: { value: 'admin@procucev.com' } });
+
       const passInputAdmin = screen.getByRole('button', { name: /Access Workspace/i }).closest('form')?.querySelector('input[type="password"]');
       if (passInputAdmin) {
         fireEvent.change(passInputAdmin, { target: { value: 'adminPass123' } });
@@ -259,6 +456,21 @@ describe('HomePage Comprehensive Suite', () => {
 
       await waitFor(() => {
         expect(screen.getByText(/Security, Azure Infrastructure & System Settings/i)).toBeInTheDocument();
+      });
+
+      // Invalid credentials branch
+      fireEvent.click(screen.getByTestId('test-logout'));
+      fireEvent.click(screen.getByRole('button', { name: /^Sign In$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Cat Manager/i }));
+      const emailInputBad = screen.getByPlaceholderText(/catmanager@yourcompany.com/i);
+      fireEvent.change(emailInputBad, { target: { value: 'catmanager@procucev.com' } });
+      const passInputBad = screen.getByRole('button', { name: /Access Workspace/i }).closest('form')?.querySelector('input[type="password"]');
+      if (passInputBad) {
+        fireEvent.change(passInputBad, { target: { value: 'wrong-password' } });
+      }
+      fireEvent.submit(screen.getByRole('button', { name: /Access Workspace/i }).closest('form')!);
+      await waitFor(() => {
+        expect(screen.getByText(/Invalid email or password/i)).toBeInTheDocument();
       });
     });
 

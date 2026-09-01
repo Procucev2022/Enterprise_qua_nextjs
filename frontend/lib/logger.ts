@@ -3,6 +3,8 @@
  * Provides persistent in-memory buffering, formatted console debugging, and API stream syncing.
  */
 
+import { authClient } from './authClient';
+
 export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'AUDIT';
 
 export interface FrontendLogEntry {
@@ -75,9 +77,13 @@ export class ClientLogger {
     // Asynchronous non-blocking post to backend logs endpoint
     if (this.isRemoteSyncEnabled && typeof fetch === 'function') {
       try {
+        const token = authClient.getToken();
         fetch('/api/logs', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
           body: JSON.stringify({
             level,
             message,
