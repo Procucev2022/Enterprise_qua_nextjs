@@ -132,6 +132,37 @@ describe('Authentication Routes & Services (/api/auth) - Complete 100% Coverage'
       expect(res.demoCode).toMatch(/^\d{4}$/);
     });
 
+    test('requestOtp omits demoCode once SMTP is actually configured, even outside the test environment', () => {
+      let freshAuthService;
+      jest.isolateModules(() => {
+        process.env.NODE_ENV = 'development';
+        process.env.SMTP_USER = 'test@example.com';
+        process.env.SMTP_PASSWORD = 'app-password';
+        jest.doMock('nodemailer', () => ({
+          createTransport: jest.fn(() => ({
+            sendMail: jest.fn().mockResolvedValue({ messageId: 'mock-id' }),
+          })),
+        }));
+
+        const freshPoolModule = require('../src/db/pool');
+        freshPoolModule.pool = null;
+        freshAuthService = require('../src/services/authService');
+      });
+
+      freshAuthService.registerUser(
+        { email: 'smtp.configured.user@procucev.com', password: 'Pass@1234', role: 'buyer' },
+        '127.0.0.1'
+      );
+      const result = freshAuthService.requestOtp('smtp.configured.user@procucev.com', 'buyer', '127.0.0.1');
+
+      expect(result.success).toBe(true);
+      expect(result.demoCode).toBeUndefined();
+
+      delete process.env.SMTP_USER;
+      delete process.env.SMTP_PASSWORD;
+      process.env.NODE_ENV = 'test';
+    });
+
     test('verifyOtp branches: missing input, unregistered email, wrong code, master codes removed, real code succeeds', () => {
       expect(() => authService.verifyOtp('', '')).toThrow();
 

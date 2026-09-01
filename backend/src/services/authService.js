@@ -375,8 +375,10 @@ function requestOtp(email, roleHint, ipAddress) {
     success: true,
     message: `Verification OTP dispatched to ${normalizedEmail}`,
     email: normalizedEmail,
-    // Returned in response for testing/demo environments
-    demoCode: code,
+    // Only echoed back in tests or when SMTP isn't configured, so local/dev/test
+    // runs without real email delivery can still complete the OTP flow; once
+    // SMTP is live, the real code is never exposed in the API response.
+    ...(process.env.NODE_ENV === 'test' || !mailerService.isConfigured() ? { demoCode: code } : {}),
     expiresInSeconds: 600,
   };
 }

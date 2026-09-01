@@ -66,7 +66,12 @@ async function sendOtpEmail(to, code, expiresInSeconds) {
   return { sent: true, messageId: info.messageId };
 }
 
+function isConfigured() {
+  return Boolean(process.env.SMTP_USER && process.env.SMTP_PASSWORD);
+}
+
 module.exports = {
   getTransporter,
   sendOtpEmail,
+  isConfigured,
 };

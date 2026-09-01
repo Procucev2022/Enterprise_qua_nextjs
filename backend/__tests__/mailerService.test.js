@@ -79,4 +79,26 @@ describe('mailerService', () => {
     delete process.env.SMTP_PASSWORD;
     process.env.NODE_ENV = 'test';
   });
+
+  test('isConfigured reflects whether both SMTP_USER and SMTP_PASSWORD are set', () => {
+    const originalUser = process.env.SMTP_USER;
+    const originalPass = process.env.SMTP_PASSWORD;
+
+    delete process.env.SMTP_USER;
+    delete process.env.SMTP_PASSWORD;
+    expect(mailerService.isConfigured()).toBe(false);
+
+    process.env.SMTP_USER = 'test@example.com';
+    delete process.env.SMTP_PASSWORD;
+    expect(mailerService.isConfigured()).toBe(false);
+
+    process.env.SMTP_USER = 'test@example.com';
+    process.env.SMTP_PASSWORD = 'app-password';
+    expect(mailerService.isConfigured()).toBe(true);
+
+    if (originalUser === undefined) delete process.env.SMTP_USER;
+    else process.env.SMTP_USER = originalUser;
+    if (originalPass === undefined) delete process.env.SMTP_PASSWORD;
+    else process.env.SMTP_PASSWORD = originalPass;
+  });
 });

@@ -169,7 +169,7 @@ describe('HomePage Comprehensive Suite', () => {
 
       // requestOtp now awaits the real backend response before showing the dispatched toast
       await waitFor(() => {
-        expect(screen.getByText(/Verification OTP has been dispatched to/i)).toBeInTheDocument();
+        expect(screen.getByText(/Enter it below to sign in/i)).toBeInTheDocument();
       });
 
       // Back button on Login OTP form
@@ -326,7 +326,7 @@ describe('HomePage Comprehensive Suite', () => {
       // Request OTP empty email
       const vendorOtpEmailInput = screen.getByPlaceholderText(/vendor@company\.com/i);
       fireEvent.change(vendorOtpEmailInput, { target: { value: '' } });
-      const reqVendorOtpBtn = screen.getByRole('button', { name: /Send Instant OTP to Email/i });
+      const reqVendorOtpBtn = screen.getByRole('button', { name: /Send OTP to Email/i });
       fireEvent.submit(reqVendorOtpBtn.closest('form')!);
 
       // Request OTP with valid email
@@ -338,7 +338,7 @@ describe('HomePage Comprehensive Suite', () => {
       fireEvent.click(backOtpBtn);
 
       // Switch back to OTP and test invalid OTP (length < 4)
-      const reqVendorOtpBtn2 = screen.getByRole('button', { name: /Send Instant OTP to Email/i });
+      const reqVendorOtpBtn2 = screen.getByRole('button', { name: /Send OTP to Email/i });
       fireEvent.submit(reqVendorOtpBtn2.closest('form')!);
       const vendorOtpInput = await waitFor(() => screen.getByPlaceholderText(/Enter 4-digit code/i));
       fireEvent.change(vendorOtpInput, { target: { value: '12' } });
@@ -381,7 +381,7 @@ describe('HomePage Comprehensive Suite', () => {
       fireEvent.click(screen.getByRole('button', { name: /Email OTP \(Subsequent\)/i }));
 
       const vendorOtpEmailInput = screen.getByPlaceholderText(/vendor@company\.com/i);
-      const reqVendorOtpBtn = screen.getByRole('button', { name: /Send Instant OTP to Email/i });
+      const reqVendorOtpBtn = screen.getByRole('button', { name: /Send OTP to Email/i });
 
       // Backend rejects the OTP request
       fireEvent.change(vendorOtpEmailInput, { target: { value: 'reject.otp@nowhere.com' } });

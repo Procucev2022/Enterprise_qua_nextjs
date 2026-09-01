@@ -97,7 +97,6 @@ export default function HomePage() {
   const [loginPassword, setLoginPassword] = useState('password123');
   const [loginOtpSent, setLoginOtpSent] = useState(false);
   const [loginOtpInput, setLoginOtpInput] = useState('');
-  const [simulatedLoginOtp, setSimulatedLoginOtp] = useState('');
 
   // Registration inputs
   const [regName, setRegName] = useState('');
@@ -200,15 +199,10 @@ export default function HomePage() {
     }
 
     setRegisteredBuyers((prev) => ({ ...prev, [emailKey]: buyer }));
-    setSimulatedLoginOtp(response.demoCode || '');
-    setLoginOtpInput(response.demoCode || '');
+    setLoginOtpInput('');
     setLoginOtpSent(true);
 
-    showToast(
-      'OTP Dispatched',
-      `Login OTP sent to ${buyer.email}.${response.demoCode ? ` (Demo Code: ${response.demoCode})` : ''}`,
-      'success'
-    );
+    showToast('OTP Dispatched', `A verification code has been emailed to ${buyer.email}.`, 'success');
   };
 
   // Verify Login OTP and sign in
@@ -259,7 +253,6 @@ export default function HomePage() {
   const [vendorLoginPassword, setVendorLoginPassword] = useState('Kiran@Temp8821#');
   const [vendorOtpSent, setVendorOtpSent] = useState(false);
   const [vendorOtpInput, setVendorOtpInput] = useState('');
-  const [simulatedVendorOtp, setSimulatedVendorOtp] = useState('');
 
   // Handle Vendor First-Time Password Login
   const handleVendorPasswordLogin = async (e: React.FormEvent) => {
@@ -299,14 +292,9 @@ export default function HomePage() {
       return;
     }
 
-    setSimulatedVendorOtp(response.demoCode || '');
-    setVendorOtpInput(response.demoCode || '');
+    setVendorOtpInput('');
     setVendorOtpSent(true);
-    showToast(
-      'OTP Dispatched',
-      `Login OTP dispatched to ${vendorLoginEmail}.${response.demoCode ? ` (Demo Code: ${response.demoCode})` : ''}`,
-      'success'
-    );
+    showToast('OTP Dispatched', `A verification code has been emailed to ${vendorLoginEmail}.`, 'success');
   };
 
   // Verify Vendor Email OTP
@@ -701,7 +689,7 @@ export default function HomePage() {
                       ) : (
                         <form onSubmit={handleVerifyLoginOtp} className="space-y-3 animate-scale-up">
                           <div className="p-3 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-[11px] text-indigo-700 dark:text-indigo-300 border border-indigo-150/40">
-                            📨 Verification OTP has been dispatched to <strong>{loginEmail}</strong>. (Simulated Demo Code is: <strong className="text-indigo-900 dark:text-white underline">{simulatedLoginOtp}</strong>)
+                            📨 A verification code has been emailed to <strong>{loginEmail}</strong>. Enter it below to sign in.
                           </div>
                           
                           <div className="space-y-1">
@@ -835,13 +823,13 @@ export default function HomePage() {
                               </div>
 
                               <button type="submit" className="btn btn-primary w-full text-xs font-bold py-2.5 flex items-center justify-center gap-1.5">
-                                <Mail size={14} /> Send Instant OTP to Email
+                                <Mail size={14} /> Send OTP to Email
                               </button>
                             </form>
                           ) : (
                             <form onSubmit={handleVerifyVendorOtp} className="space-y-3 animate-scale-up">
                               <div className="p-2.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-[11px] text-indigo-700 dark:text-indigo-300 border border-indigo-150/40">
-                                📨 OTP code dispatched to <strong>{vendorLoginEmail}</strong>. (Simulated Demo Code: <strong className="underline">{simulatedVendorOtp}</strong>)
+                                📨 A verification code has been emailed to <strong>{vendorLoginEmail}</strong>. Enter it below to sign in.
                               </div>
 
                               <div className="space-y-1">
