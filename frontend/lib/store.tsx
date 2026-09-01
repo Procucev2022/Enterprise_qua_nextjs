@@ -130,6 +130,12 @@ interface AppContextType {
   addFeedItem: (title: string, message: string, type: AIBotFeedItem['type'], rfqNumber?: string, recipient?: string, channel?: 'call' | 'whatsapp' | 'sms' | 'email' | 'system', channelDetails?: AIBotFeedItem['channelDetails']) => void;
   selectedRFQForMatrix: RFQItem | null;
   setSelectedRFQForMatrix: (rfq: RFQItem | null) => void;
+  /** Opportunity carried from the vendor feed into the quotation form route. */
+  selectedVendorOpportunity: VendorOpportunity | null;
+  setSelectedVendorOpportunity: (opp: VendorOpportunity | null) => void;
+  /** Evaluation carried from the vendor directory into the summary route. */
+  activeEvaluationRecord: VendorEvaluationRecord | null;
+  setActiveEvaluationRecord: (record: VendorEvaluationRecord | null) => void;
   selectedRFQForDeepDive: RFQItem | null;
   setSelectedRFQForDeepDive: (rfq: RFQItem | null) => void;
   deepDiveModalOpen: boolean;
@@ -249,19 +255,19 @@ const INITIAL_VENDOR_OPPORTUNITIES: VendorOpportunity[] = [
 ];
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [currentRole, setCurrentRole] = useState<UserRole>('buyer');
-  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(true);
-  const [currentUserSession, setCurrentUserSession] = useState<UserSession | null>(() => {
-    return authClient.getSessionUser() || {
-      id: 'usr-buyer-001',
-      email: 'buyer@procucev.com',
-      name: 'Procucev Buyer Desk',
-      role: 'buyer',
-      orgId: 'org-procucev-01',
-      orgName: 'Procucev Heavy Engineering',
-      authMethod: 'PASSWORD',
-    };
-  });
+  // Session bootstrap. The only source of truth is the token + session that
+  // authClient persisted after a verified sign-in, so a page refresh on a deep
+  // route keeps the user signed in and nobody is ever signed in by default.
+  const restoredSession = authClient.getSessionUser();
+  const hasValidToken = !!authClient.getToken();
+
+  const [currentUserSession, setCurrentUserSession] = useState<UserSession | null>(
+    hasValidToken ? restoredSession : null
+  );
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(hasValidToken && !!restoredSession);
+  const [currentRole, setCurrentRole] = useState<UserRole>(
+    hasValidToken && restoredSession ? restoredSession.role : 'buyer'
+  );
   const [currentMode, setCurrentMode] = useState<SourcingMode>('mode_2');
   const [activeTab, setActiveTab] = useState<string>('command_center');
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
@@ -371,6 +377,8 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
   const [azureHealth, setAzureHealth] = useState<AzureServiceHealth[]>(INITIAL_AZURE_HEALTH);
   const [systemConfig, setSystemConfig] = useState<SystemConfig>(INITIAL_SYSTEM_CONFIG);
   const [selectedRFQForMatrix, setSelectedRFQForMatrix] = useState<RFQItem | null>(null);
+  const [selectedVendorOpportunity, setSelectedVendorOpportunity] = useState<VendorOpportunity | null>(null);
+  const [activeEvaluationRecord, setActiveEvaluationRecord] = useState<VendorEvaluationRecord | null>(null);
   const [selectedRFQForDeepDive, setSelectedRFQForDeepDive] = useState<RFQItem | null>(null);
   const [deepDiveModalOpen, setDeepDiveModalOpen] = useState<boolean>(false);
 
@@ -388,10 +396,22 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
         const d = json.data;
         if (d.buyerAccounts && d.buyerAccounts.length > 0) {
           setBuyerAccounts(d.buyerAccounts);
+          // Only ever align to an account that actually belongs to the signed-in
+          // user. Previously this fell back to buyerAccounts[0], which attached
+          // whichever company happened to be first in the directory to the
+          // current session and surfaced it as their own organisation.
           setActiveBuyerAccount((prev) => {
-            if (!prev) return d.buyerAccounts[0];
-            const matched = d.buyerAccounts.find((a: BuyerAccount) => a.id === prev.id);
-            return matched || d.buyerAccounts[0];
+            if (prev) {
+              const matchedById = d.buyerAccounts.find((a: BuyerAccount) => a.id === prev.id);
+              if (matchedById) return matchedById;
+            }
+            const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
+            if (!sessionEmail) return null;
+            return (
+              d.buyerAccounts.find(
+                (a: BuyerAccount) => a.corporateEmail?.toLowerCase() === sessionEmail
+              ) || null
+            );
           });
         }
         if (d.vendors && d.vendors.length > 0) {
@@ -2197,6 +2217,10 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
         addAuditLog,
         addFeedItem,
         selectedRFQForMatrix,
+        selectedVendorOpportunity,
+        setSelectedVendorOpportunity,
+        activeEvaluationRecord,
+        setActiveEvaluationRecord,
         setSelectedRFQForMatrix,
         selectedRFQForDeepDive,
         setSelectedRFQForDeepDive,

@@ -5,6 +5,15 @@ import * as storeModule from '@/lib/store';
 
 jest.mock('@/lib/store');
 
+const mockReplace = jest.fn();
+jest.mock('next/navigation', () => ({
+  useRouter: () => ({ replace: mockReplace, push: jest.fn() }),
+}));
+
+jest.mock('@/lib/authClient', () => ({
+  authClient: { logout: jest.fn().mockResolvedValue(undefined) },
+}));
+
 describe('Header', () => {
   const mockSetCurrentRole = jest.fn();
   const mockSetIsLoggedIn = jest.fn();
@@ -13,6 +22,7 @@ describe('Header', () => {
   const mockToggleTheme = jest.fn();
   const mockShowToast = jest.fn();
   const mockAddAuditLog = jest.fn();
+  const mockSetCurrentUserSession = jest.fn();
 
   beforeEach(() => {
     (storeModule.useApp as jest.Mock).mockReturnValue({
@@ -36,6 +46,16 @@ describe('Header', () => {
       showToast: mockShowToast,
       addAuditLog: mockAddAuditLog,
       activeBuyerAccount: { organizationName: 'Tata Motors' },
+      currentUserSession: {
+        id: 'usr-1',
+        email: 'navinchaudhary.dev@gmail.com',
+        name: 'Navin Chaudhary',
+        role: 'buyer',
+        orgId: 'org-1',
+        orgName: 'Navin Chaudhary Enterprises',
+        authMethod: 'PASSWORD',
+      },
+      setCurrentUserSession: mockSetCurrentUserSession,
     });
   });
 
@@ -161,47 +181,86 @@ describe('Header', () => {
     expect(screen.getByText('SMS Notice')).toBeInTheDocument();
   });
 
-  it('opens user persona dropdown and handles persona switch and logout', () => {
+  it('shows only the signed-in account details, with no demo persona switcher', () => {
     render(<Header />);
 
-    const profileBtn = screen.getByTitle('Click to Switch Persona / User Login Details');
-    fireEvent.click(profileBtn);
+    fireEvent.click(screen.getByTitle('Signed-in account details'));
 
-    expect(screen.getByText('Switch Active User / Demo Persona')).toBeInTheDocument();
+    // Real values from the verified session record
+    expect(screen.getAllByText('Navin Chaudhary').length).toBeGreaterThan(0);
+    expect(screen.getByText('navinchaudhary.dev@gmail.com')).toBeInTheDocument();
+    expect(screen.getByText('Password verified')).toBeInTheDocument();
+    // Initials are derived from the real name
+    expect(screen.getAllByText('NC').length).toBeGreaterThan(0);
 
-    const catManagerBtn = screen.getByText('Priya Sen');
-    fireEvent.click(catManagerBtn);
-    expect(mockSetCurrentRole).toHaveBeenCalledWith('category_manager');
+    // The hardcoded demo identities and the switcher are gone
+    expect(screen.queryByText('Switch Active User / Demo Persona')).not.toBeInTheDocument();
+    expect(screen.queryByText('Rajesh Sharma')).not.toBeInTheDocument();
+    expect(screen.queryByText('Priya Sen')).not.toBeInTheDocument();
+    expect(screen.queryByText('Arun Mehta')).not.toBeInTheDocument();
+    expect(screen.queryByText('Rajesh Nair')).not.toBeInTheDocument();
+  });
 
-    // Switch to admin persona
-    fireEvent.click(profileBtn);
-    const adminBtn = screen.getByText('Arun Mehta');
-    fireEvent.click(adminBtn);
-    expect(mockSetCurrentRole).toHaveBeenCalledWith('admin');
+  it('shows the organisation from the session, not an unrelated directory account', () => {
+    // activeBuyerAccount here is a different company (Tata Motors) that does not
+    // belong to the signed-in user, so it must never be labelled as their org.
+    render(<Header />);
 
-    // Switch to vendor persona
-    fireEvent.click(profileBtn);
-    const vendorBtn = screen.getByText('Rajesh Nair');
-    fireEvent.click(vendorBtn);
-    expect(mockSetCurrentRole).toHaveBeenCalledWith('vendor');
+    fireEvent.click(screen.getByTitle('Signed-in account details'));
 
-    // Switch to buyer persona
-    fireEvent.click(profileBtn);
-    const buyerBtns = screen.getAllByText('Rajesh Sharma');
-    fireEvent.click(buyerBtns[buyerBtns.length - 1]);
-    expect(mockSetCurrentRole).toHaveBeenCalledWith('buyer');
+    expect(screen.getAllByText('Navin Chaudhary Enterprises').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Tata Motors')).not.toBeInTheDocument();
+  });
 
-    // Reopen and test logout
-    fireEvent.click(profileBtn);
-    const logoutBtn = screen.getByText('Logout');
-    fireEvent.click(logoutBtn);
+  it('uses the aligned buyer account only when its email matches the session', () => {
+    const base = (storeModule.useApp as jest.Mock)();
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      ...base,
+      currentUserSession: { ...base.currentUserSession, orgName: '' },
+      activeBuyerAccount: {
+        organizationName: 'Navin Chaudhary Enterprises',
+        corporateEmail: 'navinchaudhary.dev@gmail.com',
+      },
+    });
+
+    render(<Header />);
+    fireEvent.click(screen.getByTitle('Signed-in account details'));
+
+    expect(screen.getAllByText('Navin Chaudhary Enterprises').length).toBeGreaterThan(0);
+  });
+
+  it('shows no organisation when neither the session nor a matching account has one', () => {
+    const base = (storeModule.useApp as jest.Mock)();
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      ...base,
+      currentUserSession: { ...base.currentUserSession, orgName: '' },
+      activeBuyerAccount: {
+        organizationName: 'Tata Motors',
+        corporateEmail: 'someone.else@tatamotors.com',
+      },
+    });
+
+    render(<Header />);
+    fireEvent.click(screen.getByTitle('Signed-in account details'));
+
+    expect(screen.queryByText('Tata Motors')).not.toBeInTheDocument();
+  });
+
+  it('clears the session and returns to the sign-in route on logout', () => {
+    render(<Header />);
+
+    fireEvent.click(screen.getByTitle('Signed-in account details'));
+    fireEvent.click(screen.getByText('Logout'));
+
     expect(mockSetIsLoggedIn).toHaveBeenCalledWith(false);
+    expect(mockSetCurrentUserSession).toHaveBeenCalledWith(null);
+    expect(mockReplace).toHaveBeenCalledWith('/login');
   });
 
   it('opens account modal and handles display name & password updates and top and bottom close buttons', () => {
     render(<Header />);
 
-    const profileBtn = screen.getByTitle('Click to Switch Persona / User Login Details');
+    const profileBtn = screen.getByTitle('Signed-in account details');
     fireEvent.click(profileBtn);
 
     const accountBtn = screen.getByText(/Account & Security/);
@@ -226,7 +285,7 @@ describe('Header', () => {
     fireEvent.click(updatePwdBtn);
     expect(mockShowToast).toHaveBeenCalledWith('Validation Error', 'Please enter your current password.', 'warning');
 
-    const currPwdInput = screen.getByPlaceholderText('••••••••••••');
+    const currPwdInput = screen.getByPlaceholderText('Enter your current password');
     const newPwdInput = screen.getByPlaceholderText('Min 8 characters');
     const confirmPwdInput = screen.getByPlaceholderText('Re-enter new password');
 

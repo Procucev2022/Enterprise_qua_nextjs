@@ -310,44 +310,33 @@ describe('API Route Endpoints', () => {
       expect(failRes.statusCode).toBe(400);
     });
 
-    test('POST /api/db/init and /api/db/sync are admin-only', async () => {
-      const unauthInit = await request(app).post('/api/db/init');
-      expect(unauthInit.statusCode).toBe(401);
+    test('GET /api/db/metrics is admin-only', async () => {
+      const unauth = await request(app).get('/api/db/metrics');
+      expect(unauth.statusCode).toBe(401);
 
-      const nonAdminInit = await request(app).post('/api/db/init').set(authHeader('buyer'));
-      expect(nonAdminInit.statusCode).toBe(403);
-
-      const unauthSync = await request(app).post('/api/db/sync');
-      expect(unauthSync.statusCode).toBe(401);
+      const nonAdmin = await request(app).get('/api/db/metrics').set(authHeader('buyer'));
+      expect(nonAdmin.statusCode).toBe(403);
     });
 
-    test('POST /api/db/init handles schema initialization without connection gracefully', async () => {
-      // Force the disconnected state explicitly rather than relying on DATABASE_URL being
-      // unset in the ambient environment — this dev environment has a real Postgres configured.
-      const poolModule = require('../src/db/pool');
-      const originalPool = poolModule.pool;
-      poolModule.pool = null;
-      try {
-        const res = await request(app).post('/api/db/init').set(authHeader('admin'));
-        expect(res.statusCode).toBe(500);
-        expect(res.body.success).toBe(false);
-      } finally {
-        poolModule.pool = originalPool;
-      }
+    test('GET /api/db/metrics returns the cache and audit efficiency report', async () => {
+      const res = await request(app).get('/api/db/metrics').set(authHeader('admin'));
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body).toHaveProperty('cache');
+      expect(res.body).toHaveProperty('auditing');
     });
 
-    test('POST /api/db/sync handles data synchronization without connection gracefully', async () => {
-      const poolModule = require('../src/db/pool');
-      const originalPool = poolModule.pool;
-      poolModule.pool = null;
-      try {
-        const res = await request(app).post('/api/db/sync').set(authHeader('admin'));
-        expect(res.statusCode).toBe(200);
-        expect(res.body.success).toBe(false);
-        expect(res.body.message).toContain('DATABASE_URL');
-      } finally {
-        poolModule.pool = originalPool;
-      }
+    test('GET /api/db/status reports the identity connection and the domain store mode', async () => {
+      const res = await request(app).get('/api/db/status');
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body).toHaveProperty('poolStatus');
+      expect(res.body.domainStore).toEqual(
+        expect.objectContaining({
+          mode: expect.any(String),
+          buyerAccounts: expect.any(Number),
+        })
+      );
     });
 
     test('GET /api/buyer-accounts/active returns active account', async () => {

@@ -1,6 +1,7 @@
 const storeService = require('../services/storeService');
 const { queryCache } = require('../db/queryCache');
-const poolModule = require('../db/pool');
+const identityPoolModule = require('../db/identityPool');
+const { getOptimizationMetrics } = require('../db/optimizationMetrics');
 const { logger } = require('../services/loggerService');
 const { logErrorResolver } = require('../services/logErrorResolver');
 const { performanceOptimizer } = require('../services/performanceOptimizer');
@@ -136,11 +137,11 @@ const rootResolvers = {
   },
 
   dbHealth: async () => {
-    return await poolModule.checkDBHealth();
+    return await identityPoolModule.checkIdentityHealth();
   },
 
   optimizationMetrics: () => {
-    return poolModule.getOptimizationMetrics();
+    return getOptimizationMetrics();
   },
 
   diagnoseLogErrors: () => {

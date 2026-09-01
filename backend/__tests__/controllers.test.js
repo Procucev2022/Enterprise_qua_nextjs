@@ -152,15 +152,28 @@ describe('Controllers Error & Edge-Case Coverage', () => {
   test('dbController methods & error handling', async () => {
     const next = jest.fn();
     const res = mockRes();
-
+    // initDBSchema / syncDBData were removed with PostgreSQL. The controller now
+    // reports identity-database health and the query efficiency report.
     await dbController.getDBStatus({}, res, next);
     expect(res.json).toHaveBeenCalled();
-
-    await dbController.initDBSchema({}, res, next);
+    await dbController.getDBMetrics({}, res, next);
     expect(res.json).toHaveBeenCalled();
-
-    await dbController.syncDBData({}, res, next);
-    expect(res.json).toHaveBeenCalled();
+  });
+  test('dbController reports the domain store as persisted once it is hydrated', async () => {
+    const next = jest.fn();
+    const res = mockRes();
+    const original = storeService.isHydratedFromDB;
+    storeService.isHydratedFromDB = true;
+    try {
+      await dbController.getDBStatus({}, res, next);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          domainStore: expect.objectContaining({ mode: 'persisted' }),
+        })
+      );
+    } finally {
+      storeService.isHydratedFromDB = original;
+    }
   });
 
   test('evaluationController methods & error handling', async () => {

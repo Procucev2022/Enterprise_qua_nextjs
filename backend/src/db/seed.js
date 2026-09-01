@@ -1,13 +1,11 @@
-const poolModule = require('./pool');
-const {
-  upsertBuyerAccountInDB,
-  upsertVendorInDB,
-  upsertRFQInDB,
-  upsertEvaluationInDB,
-  insertAuditLogInDB,
-  upsertSystemConfigInDB,
-} = require('./queries');
-const { INITIAL_SYSTEM_CONFIG } = require('../config/constants');
+// ==============================================================================
+// SEED DATA
+// ==============================================================================
+// Reference dataset the in-memory enterprise store boots from. This module is
+// pure data with no database coupling: user accounts are persisted in the shared
+// MySQL identity schema (see db/identityQueries.js), and the domain records
+// below are served from storeService.
+// ==============================================================================
 
 const SEED_BUYER_ACCOUNTS = [
   {
@@ -450,101 +448,6 @@ const SEED_AI_FEED = [
   },
 ];
 
-async function seedInitialDataToPostgres() {
-  if (!poolModule.pool) {
-    return {
-      success: false,
-      message: 'DATABASE_URL is not set. Skipped PostgreSQL seed.',
-      counts: { buyerAccounts: 0, vendors: 0, rfqs: 0, evaluations: 0, auditLogs: 0 },
-    };
-  }
-
-  await poolModule.initializeSchema();
-
-  let buyerCount = 0;
-  let vendorCount = 0;
-  let rfqCount = 0;
-  let evalCount = 0;
-  let auditCount = 0;
-
-  for (const buyer of SEED_BUYER_ACCOUNTS) {
-    try {
-      await upsertBuyerAccountInDB(buyer);
-      buyerCount++;
-    } catch (e) {
-      console.error('Seed buyer error:', e);
-    }
-  }
-
-  for (const v of SEED_VENDORS) {
-    try {
-      await upsertVendorInDB(v);
-      vendorCount++;
-    } catch (e) {
-      console.error('Seed vendor error:', e);
-    }
-  }
-
-  for (const rfq of SEED_RFQS) {
-    try {
-      await upsertRFQInDB(rfq);
-      rfqCount++;
-    } catch (e) {
-      console.error('Seed RFQ error:', e);
-    }
-  }
-
-  for (const ev of SEED_EVALUATIONS) {
-    try {
-      await upsertEvaluationInDB(ev);
-      evalCount++;
-    } catch (e) {
-      console.error('Seed Evaluation error:', e);
-    }
-  }
-
-  for (const log of SEED_AUDIT_LOGS) {
-    try {
-      await insertAuditLogInDB(log);
-      auditCount++;
-    } catch (e) {
-      console.error('Seed Audit log error:', e);
-    }
-  }
-
-  try {
-    await upsertSystemConfigInDB(INITIAL_SYSTEM_CONFIG);
-  } catch (e) {
-    console.error('Seed System config error:', e);
-  }
-
-  return {
-    success: true,
-    message: `Database synchronization complete. Seeded ${buyerCount} buyers, ${vendorCount} vendors, ${rfqCount} RFQs, ${evalCount} evaluations, ${auditCount} audit logs into PostgreSQL.`,
-    counts: {
-      buyerAccounts: buyerCount,
-      vendors: vendorCount,
-      rfqs: rfqCount,
-      evaluations: evalCount,
-      auditLogs: auditCount,
-    },
-  };
-}
-
-async function runSeedCLI() {
-  try {
-    const res = await seedInitialDataToPostgres();
-    return res;
-  } catch (err) {
-    console.error('Seed error:', err);
-    process.exit(1);
-  }
-}
-
-if (process.env.AUTO_RUN_SEED === 'true' || require.main === module) {
-  runSeedCLI();
-}
-
 module.exports = {
   SEED_BUYER_ACCOUNTS,
   SEED_VENDORS,
@@ -552,6 +455,4 @@ module.exports = {
   SEED_EVALUATIONS,
   SEED_AUDIT_LOGS,
   SEED_AI_FEED,
-  seedInitialDataToPostgres,
-  runSeedCLI,
 };

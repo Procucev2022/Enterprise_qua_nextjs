@@ -7,7 +7,7 @@ async function getBootstrap(req, res, next) {
     const data = storeService.getBootstrapData();
     res.json({
       success: true,
-      source: storeService.isHydratedFromDB ? 'postgresql' : 'in_memory',
+      source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory',
       data,
     });
   } catch (err) {

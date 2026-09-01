@@ -195,6 +195,44 @@ export const UI_STRINGS = {
     welcomeUser: 'Welcome back, {userName} ({userRole})',
     totalSpendSummary: 'Total analyzed spend: ₹{amount} across {categoryCount} categories.',
   },
+  auth: {
+    // Titles used by the sign-in / registration toasts
+    signInFailedTitle: 'Sign In Failed',
+    registrationFailedTitle: 'Registration Failed',
+    otpRequestFailedTitle: 'OTP Request Failed',
+    otpInvalidTitle: 'Invalid OTP',
+    missingFieldsTitle: 'Missing Fields',
+    loggedOutTitle: 'Logged Out',
+    welcomeBackTitle: 'Welcome Back',
+    registrationSuccessTitle: 'Registration Successful',
+
+    // Field-level validation
+    emailRequired: 'Enter your registered email address to continue.',
+    passwordRequired: 'Enter your account password to continue.',
+    emailAndPasswordRequired: 'Enter both your registered email address and password to continue.',
+    otpRequired: 'Enter the 4-digit verification code that was emailed to you.',
+    registrationFieldsRequired:
+      'Full name, company email, mobile number and password are all required to create an account.',
+    passwordTooShort: 'Choose a password of at least 8 characters.',
+    mobileInvalid: 'Enter a valid 10-digit Indian mobile number, for example 9876543210.',
+
+    // Network / backend reachability. These replace the previous behaviour of
+    // silently fabricating a valid session when the API could not be reached.
+    networkUnreachable:
+      'Cannot reach the Procucev API, so your credentials could not be verified. Check that the backend is running on the configured port and that you are online, then try again.',
+    serverErrorFallback:
+      'The server rejected the request but did not explain why. Please retry, and contact support if it persists.',
+
+    // Success / informational
+    signedInAs: 'Signed in as {userName} ({userRole}) — {orgName}.',
+    otpDispatched: 'A 4-digit verification code has been emailed to {email}. It expires in 10 minutes.',
+    loggedOutMessage: 'Successfully signed out of the secure workspace.',
+    redirecting: 'Redirecting to your workspace…',
+    showPassword: 'Show password',
+    hidePassword: 'Hide password',
+    registrationSuccessMessage:
+      'Account created for {email}. You are signed in and can start configuring your workspace.',
+  },
 };
 
 /**

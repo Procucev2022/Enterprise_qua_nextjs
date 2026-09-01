@@ -498,7 +498,7 @@ export default function BuyerAccountTable() {
               placeholder="Search by Company Name, Contact Person, Corporate Email, GSTIN, Industry..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-9 text-xs w-full"
+              className="has-leading-icon text-xs w-full"
             />
             {searchTerm && (
               <button aria-label="Clear Search" onClick={() => setSearchTerm('')} className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600">

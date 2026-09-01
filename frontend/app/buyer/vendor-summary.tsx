@@ -254,7 +254,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             placeholder="Search vendors by name, contact, category..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9 text-xs"
+            className="has-leading-icon text-xs"
           />
         </div>
 

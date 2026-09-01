@@ -6,7 +6,7 @@ function getVendors(req, res, next) {
   try {
     logger.info('Fetching vendor master list', { query: req.query }, 'VENDOR_CONTROLLER');
     const vendors = storeService.getVendors();
-    res.json({ success: true, source: storeService.isHydratedFromDB ? 'postgresql' : 'in_memory', data: vendors });
+    res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: vendors });
   } catch (err) {
     logger.error('Error fetching vendors list', err, 'VENDOR_CONTROLLER');
     next(err);

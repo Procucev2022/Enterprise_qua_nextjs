@@ -10,23 +10,6 @@ const { INITIAL_SYSTEM_CONFIG, INITIAL_AZURE_HEALTH } = require('../config/const
 const { createAuditEntry, verifyAuditTrail } = require('./auditService');
 const { evaluateQuotes, calculate360Evaluation, calculateRevisedRating } = require('./evaluationService');
 const { simulateChaserOutreach } = require('./aiChaserService');
-const {
-  getBuyerAccountsFromDB,
-  upsertBuyerAccountInDB,
-  deleteBuyerAccountInDB,
-  getVendorsFromDB,
-  upsertVendorInDB,
-  deleteVendorInDB,
-  getRFQsFromDB,
-  upsertRFQInDB,
-  getEvaluationsFromDB,
-  upsertEvaluationInDB,
-  getAuditLogsFromDB,
-  insertAuditLogInDB,
-  getSystemConfigFromDB,
-  upsertSystemConfigInDB,
-} = require('../db/queries');
-const poolModule = require('../db/pool');
 const { logger } = require('./loggerService');
 
 class StoreService {
@@ -75,32 +58,21 @@ class StoreService {
     ];
   }
 
+  /**
+   * Domain records (buyer accounts, vendors, RFQs, evaluations, audit logs and
+   * system config) are served from the reference seed dataset held in this
+   * process.
+   *
+   * User accounts are the exception: they are read from and written to the
+   * shared MySQL identity schema via db/identityQueries.js. This backend has no
+   * PostgreSQL connection.
+   *
+   * Kept as an async no-op so the bootstrap path and callers keep a stable
+   * contract if a domain persistence layer is introduced later.
+   */
   async hydrateFromDB() {
-    if (!poolModule.pool) return;
-    try {
-      const [dbBuyers, dbVendors, dbRfqs, dbEvals, dbAudits, dbConfig] = await Promise.all([
-        getBuyerAccountsFromDB(),
-        getVendorsFromDB(),
-        getRFQsFromDB(),
-        getEvaluationsFromDB(),
-        getAuditLogsFromDB(),
-        getSystemConfigFromDB(),
-      ]);
-
-      if (dbBuyers && dbBuyers.length > 0) {
-        this.buyerAccounts = dbBuyers;
-        this.activeBuyerAccount = dbBuyers[0];
-      }
-      if (dbVendors && dbVendors.length > 0) this.vendors = dbVendors;
-      if (dbRfqs && dbRfqs.length > 0) this.rfqs = dbRfqs;
-      if (dbEvals && dbEvals.length > 0) this.evaluations = dbEvals;
-      if (dbAudits && dbAudits.length > 0) this.auditLogs = dbAudits;
-      if (dbConfig) this.systemConfig = dbConfig;
-
-      this.isHydratedFromDB = true;
-    } catch (err) {
-      console.warn('Hydration from PostgreSQL encountered error, running with seed fallback:', err.message);
-    }
+    this.isHydratedFromDB = false;
+    return { hydrated: false, source: 'in_memory_seed' };
   }
 
   // ==========================================
@@ -134,10 +106,6 @@ class StoreService {
       action: `Created buyer account for ${newAcc.organizationName} (${newAcc.corporateEmail})`,
     });
 
-    if (poolModule.pool) {
-      upsertBuyerAccountInDB(newAcc).catch((e) => console.error('DB buyer save error:', e.message));
-    }
-
     return newAcc;
   }
 
@@ -156,10 +124,6 @@ class StoreService {
       this.activeBuyerAccount = updated;
     }
 
-    if (poolModule.pool) {
-      upsertBuyerAccountInDB(updated).catch((e) => console.error('DB buyer update error:', e.message));
-    }
-
     return updated;
   }
 
@@ -169,9 +133,6 @@ class StoreService {
     if (this.buyerAccounts.length < beforeLen) {
       if (this.activeBuyerAccount && this.activeBuyerAccount.id === id) {
         this.activeBuyerAccount = this.buyerAccounts[0] || null;
-      }
-      if (poolModule.pool) {
-        deleteBuyerAccountInDB(id).catch((e) => console.error('DB buyer delete error:', e.message));
       }
       return true;
     }
@@ -217,10 +178,6 @@ class StoreService {
       action: `Registered vendor ${newVendor.name} in category ${newVendor.majorCategory}`,
     });
 
-    if (poolModule.pool) {
-      upsertVendorInDB(newVendor).catch((e) => console.error('DB vendor save error:', e.message));
-    }
-
     return newVendor;
   }
 
@@ -231,10 +188,6 @@ class StoreService {
     const updated = { ...this.vendors[idx], ...updates };
     this.vendors[idx] = updated;
 
-    if (poolModule.pool) {
-      upsertVendorInDB(updated).catch((e) => console.error('DB vendor update error:', e.message));
-    }
-
     return updated;
   }
 
@@ -242,9 +195,6 @@ class StoreService {
     const beforeLen = this.vendors.length;
     this.vendors = this.vendors.filter((v) => v.id !== id);
     if (this.vendors.length < beforeLen) {
-      if (poolModule.pool) {
-        deleteVendorInDB(id).catch((e) => console.error('DB vendor delete error:', e.message));
-      }
       return true;
     }
     return false;
@@ -362,10 +312,6 @@ class StoreService {
       });
     }
 
-    if (poolModule.pool) {
-      upsertRFQInDB(newRFQ).catch((e) => console.error('DB RFQ save error:', e.message));
-    }
-
     return newRFQ;
   }
 
@@ -382,10 +328,6 @@ class StoreService {
       quotesCount: quotes.length,
     };
     this.rfqs[idx] = updated;
-
-    if (poolModule.pool) {
-      upsertRFQInDB(updated).catch((e) => console.error('DB RFQ update error:', e.message));
-    }
 
     return updated;
   }
@@ -437,10 +379,6 @@ class StoreService {
       action: `Executed 360° AI Supplier Audit for ${newEval.vendorName}: Score ${newEval.overallScore}% (${newEval.status})`,
     });
 
-    if (poolModule.pool) {
-      upsertEvaluationInDB(newEval).catch((e) => console.error('DB evaluation save error:', e.message));
-    }
-
     return newEval;
   }
 
@@ -457,10 +395,6 @@ class StoreService {
     this.auditLogs.unshift(entry);
 
     logger.audit(action, userEmail || 'system@procucev.ai', { rfqNumber, ipAddress, shaSignature: entry.shaSignature }, rfqNumber);
-
-    if (poolModule.pool) {
-      insertAuditLogInDB(entry).catch((e) => console.error('DB audit log save error:', e.message));
-    }
 
     return entry;
   }
@@ -505,9 +439,6 @@ class StoreService {
 
   updateSystemConfig(updates) {
     this.systemConfig = { ...this.systemConfig, ...updates };
-    if (poolModule.pool) {
-      upsertSystemConfigInDB(this.systemConfig).catch((e) => console.error('DB config save error:', e.message));
-    }
     return this.systemConfig;
   }
 
@@ -553,9 +484,6 @@ class StoreService {
         this.vendors.push(newVendor);
         importedCount++;
 
-        if (poolModule.pool) {
-          upsertVendorInDB(newVendor).catch((e) => console.error('DB vendor save error:', e.message));
-        }
       }
     });
 

@@ -1,21 +1,39 @@
 const app = require('./app');
-const storeService = require('./services/storeService');
-const authService = require('./services/authService');
-const poolModule = require('./db/pool');
+const identityPoolModule = require('./db/identityPool');
+const { logger } = require('./services/loggerService');
 
 const PORT = process.env.PORT || 4000;
 
-async function bootstrapServer(port = PORT) {
+/**
+ * Report identity-database reachability at boot. Authentication depends on this
+ * connection, so a failure is logged loudly here instead of surfacing later as
+ * an unexplained login rejection.
+ */
+async function reportIdentityHealth() {
   try {
-    const dbHealth = await poolModule.checkDBHealth();
-    if (dbHealth && dbHealth.isConnected) {
-      await storeService.hydrateFromDB();
-      await authService.hydrateFromDB();
+    const health = await identityPoolModule.checkIdentityHealth();
+    if (health.isConnected) {
+      logger.info(
+        `Identity database connected: ${health.providerLabel} (${health.database}) — ${health.userCount} active users, ${health.latencyMs}ms`,
+        {},
+        'SERVER'
+      );
+    } else {
+      logger.error(
+        `Identity database UNAVAILABLE (${health.providerLabel}): ${health.errorMessage}. Logins will be rejected until this is resolved.`,
+        null,
+        'SERVER'
+      );
     }
+    return health;
   } catch (err) {
-    // Database initialization fallback handled in memory
+    logger.error('Identity database health check threw', err, 'SERVER');
+    return null;
   }
+}
 
+async function bootstrapServer(port = PORT) {
+  await reportIdentityHealth();
   const server = app.listen(port);
   return server;
 }
@@ -33,4 +51,4 @@ if (process.env.NODE_ENV !== 'test' && (process.env.AUTO_START_SERVER === 'true'
   start();
 }
 
-module.exports = { app, bootstrapServer, start };
+module.exports = { app, bootstrapServer, start, reportIdentityHealth };

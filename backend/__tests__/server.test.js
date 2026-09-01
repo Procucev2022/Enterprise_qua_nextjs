@@ -1,6 +1,6 @@
 const request = require('supertest');
 const { app, bootstrapServer } = require('../src/server');
-const pool = require('../src/db/pool');
+const identityPool = require('../src/db/identityPool');
 
 function restoreEnvVar(name, originalValue) {
   if (originalValue === undefined) delete process.env[name];
@@ -30,22 +30,32 @@ describe('Server & Health Endpoints', () => {
     expect(res.body.success).toBe(false);
   });
 
-  test('bootstrapServer starts server instance', async () => {
-    jest.spyOn(pool, 'checkDBHealth').mockResolvedValueOnce({ isConnected: true });
+  test('bootstrapServer starts the server once identity health is reported', async () => {
+    jest.spyOn(identityPool, 'checkIdentityHealth').mockResolvedValueOnce({
+      isConnected: true,
+      providerLabel: 'Test MySQL',
+      database: 'test_db',
+      userCount: 3,
+      latencyMs: 5,
+    });
     const server = await bootstrapServer(0);
     expect(server).toBeDefined();
     await new Promise((resolve) => server.close(resolve));
   });
 
-  test('bootstrapServer handles db health error fallback', async () => {
-    jest.spyOn(pool, 'checkDBHealth').mockRejectedValueOnce(new Error('Connection Failed'));
+  test('bootstrapServer survives an identity health check that throws', async () => {
+    jest.spyOn(identityPool, 'checkIdentityHealth').mockRejectedValueOnce(new Error('Connection Failed'));
     const server = await bootstrapServer(0);
     expect(server).toBeDefined();
     await new Promise((resolve) => server.close(resolve));
   });
 
   test('bootstrapServer falls back to its default port parameter when called with no arguments', async () => {
-    jest.spyOn(pool, 'checkDBHealth').mockResolvedValueOnce({ isConnected: false });
+    jest.spyOn(identityPool, 'checkIdentityHealth').mockResolvedValueOnce({
+      isConnected: false,
+      providerLabel: 'Test MySQL',
+      errorMessage: 'unreachable',
+    });
     const listenSpy = jest.spyOn(app, 'listen').mockImplementation(() => ({ close: (cb) => cb && cb() }));
 
     const server = await bootstrapServer();

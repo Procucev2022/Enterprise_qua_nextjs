@@ -7,7 +7,7 @@ function getClientIp(req) {
   return req.ip || (req.headers && req.headers['x-forwarded-for']) || '127.0.0.1';
 }
 
-function login(req, res, next) {
+async function login(req, res, next) {
   try {
     const { email, password, code } = req.body || {};
     const ipAddress = getClientIp(req);
@@ -18,12 +18,12 @@ function login(req, res, next) {
     }
 
     if (code) {
-      const result = authService.verifyOtp(email, code, ipAddress);
+      const result = await authService.verifyOtp(email, code, ipAddress);
       return res.json(result);
     }
 
     if (password) {
-      const result = authService.authenticateWithPassword(email, password, ipAddress);
+      const result = await authService.authenticateWithPassword(email, password, ipAddress);
       return res.json(result);
     }
 
@@ -34,7 +34,7 @@ function login(req, res, next) {
   }
 }
 
-function requestOtp(req, res, next) {
+async function requestOtp(req, res, next) {
   try {
     const { email, roleHint } = req.body || {};
     const ipAddress = getClientIp(req);
@@ -44,7 +44,7 @@ function requestOtp(req, res, next) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0] });
     }
 
-    const result = authService.requestOtp(email, roleHint, ipAddress);
+    const result = await authService.requestOtp(email, roleHint, ipAddress);
     res.json(result);
   } catch (err) {
     logger.warn('OTP request failed in authController', { error: err.message, email: req.body?.email }, 'AUTH_CONTROLLER');
@@ -52,7 +52,7 @@ function requestOtp(req, res, next) {
   }
 }
 
-function verifyOtp(req, res, next) {
+async function verifyOtp(req, res, next) {
   try {
     const { email, code } = req.body || {};
     const ipAddress = getClientIp(req);
@@ -62,7 +62,7 @@ function verifyOtp(req, res, next) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0] });
     }
 
-    const result = authService.verifyOtp(email, code, ipAddress);
+    const result = await authService.verifyOtp(email, code, ipAddress);
     res.json(result);
   } catch (err) {
     logger.warn('OTP verification failed in authController', { error: err.message, email: req.body?.email }, 'AUTH_CONTROLLER');
@@ -70,7 +70,7 @@ function verifyOtp(req, res, next) {
   }
 }
 
-function register(req, res, next) {
+async function register(req, res, next) {
   try {
     const { name, email, password, mobile, role, orgName } = req.body || {};
     const ipAddress = getClientIp(req);
@@ -80,11 +80,15 @@ function register(req, res, next) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0] });
     }
 
-    const result = authService.registerUser({ name, email, password, mobile, role, orgName }, ipAddress);
+    const result = await authService.registerUser({ name, email, password, mobile, role, orgName }, ipAddress);
     res.status(201).json(result);
   } catch (err) {
-    logger.error('Registration failed in authController', err, 'AUTH_CONTROLLER');
-    next(err);
+    logger.warn(
+      'Registration failed in authController',
+      { error: err.message, email: req.body?.email },
+      'AUTH_CONTROLLER'
+    );
+    return res.status(400).json({ success: false, error: err.message || AUTH_MESSAGES.AUTH_FAILED_FALLBACK });
   }
 }
 
@@ -127,9 +131,9 @@ function logout(req, res, next) {
   }
 }
 
-function listUsers(req, res, next) {
+async function listUsers(req, res, next) {
   try {
-    const users = authService.getAllUsers();
+    const users = await authService.getAllUsers();
     res.json({ success: true, count: users.length, data: users });
   } catch (err) {
     logger.error('Error listing users', err, 'AUTH_CONTROLLER');

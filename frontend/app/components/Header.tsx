@@ -2,8 +2,12 @@
 
 import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
-import { SOURCING_MODES } from '@/lib/constants';
-import { SourcingMode, UserRole } from '@/lib/types';
+import { useRouter } from 'next/navigation';
+import { SOURCING_MODES, ROLE_SIDEBAR_NAV, LOGIN_ROUTE } from '@/lib/constants';
+import { authClient } from '@/lib/authClient';
+import { UI_STRINGS } from '@/lib/uiStrings';
+import PasswordInput from '@/app/components/PasswordInput';
+import type { SourcingMode, UserRole } from '@/lib/types';
 import {
   ShieldCheck,
   ChevronDown,
@@ -27,79 +31,69 @@ import {
   Building,
 } from 'lucide-react';
 
-interface UserPersona {
-  role: UserRole;
-  name: string;
+/**
+ * Presentation metadata per role. Deliberately contains no identity data: the
+ * name, email and organisation shown in the profile dropdown come from the
+ * signed-in session record, so nothing on screen is invented.
+ */
+interface RoleChrome {
   designation: string;
-  organization: string;
-  email: string;
-  authMethod: string;
+  authLabel: string;
   avatarGradient: string;
-  initials: string;
-  screensCount: number;
   badge: string;
   badgeClass: string;
-  scopeSummary: string;
 }
 
-const USER_PERSONAS: Record<UserRole, UserPersona> = {
+const ROLE_CHROME: Record<UserRole, RoleChrome> = {
   buyer: {
-    role: 'buyer',
-    name: 'Rajesh Sharma',
-    designation: 'Chief Procurement Officer (CPO)',
-    organization: 'Larsen & Toubro Limited',
-    email: 'buyer@procucev.com',
-    authMethod: 'Azure AD SSO • Enterprise Gateway',
+    designation: 'Enterprise Buyer',
+    authLabel: 'Verified against enterprise user directory',
     avatarGradient: 'from-indigo-600 to-indigo-800 text-white',
-    initials: 'RS',
-    screensCount: 7,
-    badge: 'Enterprise Buyer',
-    badgeClass: 'bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800',
-    scopeSummary: '5 Free RFQs Available across all versions • 7 Modules',
+    badge: 'Buyer',
+    badgeClass:
+      'bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800',
   },
   category_manager: {
-    role: 'category_manager',
-    name: 'Priya Sen',
-    designation: 'Lead Category Manager (Mechanical)',
-    organization: 'Procucev Category Desk',
-    email: 'catmanager@procucev.com',
-    authMethod: 'Internal SSO • Level 3 Approver',
+    designation: 'Category Manager',
+    authLabel: 'Verified against enterprise user directory',
     avatarGradient: 'from-sky-600 to-blue-700 text-white',
-    initials: 'PS',
-    screensCount: 6,
     badge: 'Category Desk',
-    badgeClass: 'bg-sky-100 dark:bg-sky-950 text-sky-800 dark:text-sky-300 border-sky-200 dark:border-sky-800',
-    scopeSummary: 'Autonomous AI Kanban Desk & Analytics • 6 Modules',
+    badgeClass:
+      'bg-sky-100 dark:bg-sky-950 text-sky-800 dark:text-sky-300 border-sky-200 dark:border-sky-800',
   },
   vendor: {
-    role: 'vendor',
-    name: 'Rajesh Nair',
-    designation: 'Managing Director',
-    organization: 'Apex Supplies Ltd.',
-    email: 'rajesh@apexsupplies.in',
-    authMethod: 'Password + Email OTP Verified',
+    designation: 'Vendor Partner',
+    authLabel: 'Verified against enterprise user directory',
     avatarGradient: 'from-emerald-600 to-teal-700 text-white',
-    initials: 'RN',
-    screensCount: 6,
-    badge: '⭐ Premium Vendor',
-    badgeClass: 'bg-amber-100 dark:bg-amber-950 text-amber-900 dark:text-amber-300 border-amber-300 dark:border-amber-700',
-    scopeSummary: 'Empanelled by L&T • 360° AI Self-Evaluation • 6 Modules',
+    badge: 'Vendor',
+    badgeClass:
+      'bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800',
   },
   admin: {
-    role: 'admin',
-    name: 'Arun Mehta',
-    designation: 'Chief Compliance Officer',
-    organization: 'Platform Governance & Security',
-    email: 'admin@procucev.com',
-    authMethod: 'MFA Hardware Key Verified',
+    designation: 'Platform Administrator',
+    authLabel: 'Verified against enterprise user directory',
     avatarGradient: 'from-purple-600 to-indigo-800 text-white',
-    initials: 'AM',
-    screensCount: 2,
-    badge: 'Admin & Auditor',
-    badgeClass: 'bg-purple-100 dark:bg-purple-950 text-purple-800 dark:text-purple-300 border-purple-200 dark:border-purple-800',
-    scopeSummary: 'SHA-256 Compliance Logs & Azure Health • 2 Modules',
+    badge: 'Admin',
+    badgeClass:
+      'bg-purple-100 dark:bg-purple-950 text-purple-800 dark:text-purple-300 border-purple-200 dark:border-purple-800',
   },
 };
+
+/** Initials derived from the real account name, falling back to the email. */
+function deriveInitials(name?: string, email?: string): string {
+  const source = (name || '').trim() || (email || '').split('@')[0] || '';
+  const words = source.split(/[\s._-]+/).filter(Boolean);
+  if (words.length === 0) return '--';
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+}
+
+/** Human label for the authentication method recorded on the session. */
+function authMethodLabel(method?: string): string | null {
+  if (method === 'PASSWORD') return 'Password verified';
+  if (method === 'EMAIL_OTP') return 'Email OTP verified';
+  return null;
+}
 
 export default function Header() {
   const {
@@ -118,7 +112,11 @@ export default function Header() {
     showToast,
     addAuditLog,
     activeBuyerAccount,
+    currentUserSession,
+    setCurrentUserSession,
   } = useApp();
+
+  const router = useRouter();
 
   const [modeDropdownOpen, setModeDropdownOpen] = useState(false);
   const [userProfileDropdownOpen, setUserProfileDropdownOpen] = useState(false);
@@ -131,10 +129,24 @@ export default function Header() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
-  const activePersona = USER_PERSONAS[currentRole] || USER_PERSONAS.buyer;
-  const currentOrgName = currentRole === 'buyer' && activeBuyerAccount?.organizationName 
-    ? activeBuyerAccount.organizationName 
-    : activePersona.organization;
+  // Everything shown about the user comes from the verified session record.
+  const chrome = ROLE_CHROME[currentRole] || ROLE_CHROME.buyer;
+  const sessionName = currentUserSession?.name?.trim() || '';
+  const sessionEmail = currentUserSession?.email || '';
+  const initials = deriveInitials(sessionName, sessionEmail);
+  const authLabel = authMethodLabel(currentUserSession?.authMethod) || chrome.authLabel;
+  const moduleCount = ROLE_SIDEBAR_NAV[currentRole]?.length ?? 0;
+
+  // The organisation on the verified session record is authoritative. The
+  // aligned buyer account is only used when it demonstrably belongs to this
+  // user, so an unrelated account from the directory can never be shown as
+  // the signed-in user's own company.
+  const alignedAccountName =
+    activeBuyerAccount?.corporateEmail &&
+    activeBuyerAccount.corporateEmail.toLowerCase() === sessionEmail.toLowerCase()
+      ? activeBuyerAccount.organizationName
+      : '';
+  const currentOrgName = currentUserSession?.orgName || alignedAccountName || '';
 
   const handleUpdateDisplayName = (e: React.FormEvent) => {
     e.preventDefault();
@@ -181,23 +193,15 @@ export default function Header() {
     showToast('Vendor Tier Switched', `Active vendor access model set to: ${tierName}`, 'success');
   };
 
-  const handleSwitchPersona = (role: UserRole) => {
-    setCurrentRole(role);
-    setUserProfileDropdownOpen(false);
-    const persona = USER_PERSONAS[role];
-    addAuditLog(`Switched operational demo persona to ${persona.name} (${persona.organization})`, undefined, persona.email);
-    showToast(
-      'Session Switched',
-      `Now logged in as ${persona.name} (${persona.organization}) • ${persona.email}`,
-      'success'
-    );
-  };
-
   const handleLogout = () => {
     setUserProfileDropdownOpen(false);
+    addAuditLog('User logged out of session', undefined, sessionEmail || undefined);
     setIsLoggedIn(false);
-    addAuditLog('User logged out of session');
-    showToast('Logged Out', 'You have been safely signed out.', 'info');
+    setCurrentUserSession(null);
+    setCurrentRole('buyer');
+    authClient.logout(sessionEmail || undefined).catch(() => {});
+    showToast(UI_STRINGS.auth.loggedOutTitle, UI_STRINGS.auth.loggedOutMessage, 'info');
+    router.replace(LOGIN_ROUTE);
   };
 
   if (!isLoggedIn) {
@@ -484,18 +488,18 @@ export default function Header() {
                 setNotifDropdownOpen(false);
               }}
               className="flex items-center gap-2.5 p-1.5 pr-2.5 rounded-2xl hover:bg-slate-100 dark:hover:bg-gray-800/80 transition-all border border-slate-200/80 dark:border-gray-700/60 bg-slate-50/50 dark:bg-gray-900/50 shadow-xs text-left group"
-              title="Click to Switch Persona / User Login Details"
+              title="Signed-in account details"
             >
               {/* Dynamic Avatar with Active Indicator */}
-              <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${activePersona.avatarGradient} flex items-center justify-center text-xs font-black shadow-sm shrink-0 relative`}>
-                {activePersona.initials}
+              <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${chrome.avatarGradient} flex items-center justify-center text-xs font-black shadow-sm shrink-0 relative`}>
+                {initials}
                 <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-white dark:border-gray-900" />
               </div>
 
               {/* User Identity Details */}
               <div className="hidden lg:block text-left max-w-[150px]">
                 <p className="text-xs font-black text-slate-900 dark:text-white leading-tight truncate">
-                  {activePersona.name}
+                  {sessionName || sessionEmail}
                 </p>
                 <p className="text-[10px] text-slate-500 dark:text-gray-400 truncate leading-tight mt-0.5 font-medium">
                   {currentOrgName}
@@ -512,17 +516,17 @@ export default function Header() {
                 <div className="p-3.5 rounded-2xl bg-gradient-to-br from-slate-50 to-indigo-50/50 dark:from-gray-800/80 dark:to-indigo-950/40 border border-indigo-100 dark:border-indigo-900/60 space-y-2.5">
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex items-center gap-3">
-                      <div className={`w-11 h-11 rounded-2xl bg-gradient-to-br ${activePersona.avatarGradient} flex items-center justify-center text-sm font-black shadow-md shrink-0`}>
-                        {activePersona.initials}
+                      <div className={`w-11 h-11 rounded-2xl bg-gradient-to-br ${chrome.avatarGradient} flex items-center justify-center text-sm font-black shadow-md shrink-0`}>
+                        {initials}
                       </div>
                       <div>
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <h4 className="text-xs font-black text-slate-900 dark:text-white">{activePersona.name}</h4>
-                          <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded-full border ${activePersona.badgeClass}`}>
-                            {activePersona.badge}
+                          <h4 className="text-xs font-black text-slate-900 dark:text-white">{sessionName || sessionEmail}</h4>
+                          <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded-full border ${chrome.badgeClass}`}>
+                            {chrome.badge}
                           </span>
                         </div>
-                        <p className="text-[11px] font-semibold text-slate-600 dark:text-gray-300 mt-0.5">{activePersona.designation}</p>
+                        <p className="text-[11px] font-semibold text-slate-600 dark:text-gray-300 mt-0.5">{chrome.designation}</p>
                       </div>
                     </div>
                   </div>
@@ -535,70 +539,25 @@ export default function Header() {
                     </div>
                     <div className="flex items-center justify-between text-slate-500 dark:text-gray-400 text-[10px]">
                       <span>User Name (Login ID):</span>
-                      <strong className="mono font-bold text-indigo-600 dark:text-indigo-400">{activePersona.email}</strong>
+                      <strong className="mono font-bold text-indigo-600 dark:text-indigo-400">{sessionEmail}</strong>
                     </div>
                     <div className="flex items-center justify-between text-slate-500 dark:text-gray-400 text-[10px] pt-1 border-t border-slate-100 dark:border-gray-800/80">
                       <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold">
-                        <ShieldCheck size={12} /> {activePersona.authMethod}
+                        <ShieldCheck size={12} /> {authLabel}
                       </span>
                     </div>
                   </div>
                 </div>
 
-                {/* Persona Switcher Section */}
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between px-1">
-                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 dark:text-gray-500">
-                      Switch Active User / Demo Persona
-                    </span>
-                    <span className="text-[10px] text-slate-400 font-mono">4 Specification Roles</span>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-1.5">
-                    {(['buyer', 'category_manager', 'vendor', 'admin'] as UserRole[]).map((r) => {
-                      const p = USER_PERSONAS[r];
-                      const isSelected = currentRole === r;
-                      return (
-                        <button
-                          key={r}
-                          type="button"
-                          onClick={() => handleSwitchPersona(r)}
-                          className={`w-full text-left p-2.5 rounded-2xl transition-all flex items-center justify-between border ${
-                            isSelected
-                              ? 'bg-indigo-50/90 dark:bg-indigo-950/60 border-indigo-300 dark:border-indigo-600 ring-2 ring-indigo-500/20'
-                              : 'bg-slate-50/60 dark:bg-gray-800/40 border-slate-200/70 dark:border-gray-800 hover:bg-slate-100 dark:hover:bg-gray-800 hover:border-slate-300'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2.5">
-                            <div className={`w-8 h-8 rounded-xl bg-gradient-to-br ${p.avatarGradient} flex items-center justify-center text-[11px] font-black shrink-0`}>
-                              {p.initials}
-                            </div>
-                            <div>
-                              <div className="flex items-center gap-1.5">
-                                <span className="font-bold text-xs text-slate-900 dark:text-white">{p.name}</span>
-                                <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded border ${p.badgeClass}`}>
-                                  {p.badge}
-                                </span>
-                              </div>
-                              <p className="text-[10px] text-slate-500 dark:text-gray-400 font-mono mt-0.5">
-                                {p.email} · {p.screensCount} Screens
-                              </p>
-                            </div>
-                          </div>
-
-                          {isSelected ? (
-                            <div className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center shrink-0">
-                              <Check size={12} />
-                            </div>
-                          ) : (
-                            <ArrowRight size={14} className="text-slate-300 dark:text-gray-600" />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
+                {/* Workspace Summary (read-only, derived from the session) */}
+                <div className="px-1 flex items-center justify-between text-[10px]">
+                  <span className="font-black uppercase tracking-wider text-slate-400 dark:text-gray-500">
+                    Active Workspace
+                  </span>
+                  <span className="font-mono text-slate-500 dark:text-gray-400">
+                    {chrome.designation} · {moduleCount} modules
+                  </span>
                 </div>
-
                 {/* Session Actions Footer */}
                 <div className="pt-2 border-t border-slate-100 dark:border-gray-800 flex items-center justify-between gap-2 text-xs">
                   <button
@@ -633,12 +592,12 @@ export default function Header() {
             {/* Modal Header */}
             <div className="p-5 border-b border-slate-100 dark:border-gray-800 flex items-center justify-between bg-slate-50/50 dark:bg-gray-950/40">
               <div className="flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-2xl bg-gradient-to-br ${activePersona.avatarGradient} flex items-center justify-center font-black text-sm`}>
-                  {activePersona.initials}
+                <div className={`w-10 h-10 rounded-2xl bg-gradient-to-br ${chrome.avatarGradient} flex items-center justify-center font-black text-sm`}>
+                  {initials}
                 </div>
                 <div>
                   <h3 className="text-base font-extrabold text-slate-900 dark:text-white">Account &amp; Security Settings</h3>
-                  <p className="text-xs text-slate-500 dark:text-gray-400">{activePersona.email} • {currentOrgName}</p>
+                  <p className="text-xs text-slate-500 dark:text-gray-400">{sessionEmail} • {currentOrgName}</p>
                 </div>
               </div>
               <button
@@ -662,7 +621,7 @@ export default function Header() {
                 <div className="flex items-center gap-2">
                   <input
                     type="text"
-                    defaultValue={activePersona.name}
+                    defaultValue={sessionName || sessionEmail}
                     onChange={(e) => setUserDisplayName(e.target.value)}
                     placeholder="Enter your full display name..."
                     className="flex-1 px-3.5 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-semibold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
@@ -686,38 +645,42 @@ export default function Header() {
                 </div>
 
                 <div className="space-y-3">
-                  <div>
-                    <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Current Password</label>
-                    <input
-                      type="password"
-                      value={currentPassword}
-                      onChange={(e) => setCurrentPassword(e.target.value)}
-                      placeholder="••••••••••••"
-                      className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
-                    />
-                  </div>
+                  <PasswordInput
+                    id="current-password"
+                    label="Current Password"
+                    placeholder="Enter your current password"
+                    value={currentPassword}
+                    onChange={setCurrentPassword}
+                    autoComplete="current-password"
+                    showLeadingIcon={false}
+                    labelClassName="text-[10px] font-bold uppercase tracking-wider text-slate-400"
+                    inputClassName="rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                  />
 
                   <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">New Password</label>
-                      <input
-                        type="password"
-                        value={newPassword}
-                        onChange={(e) => setNewPassword(e.target.value)}
-                        placeholder="Min 8 characters"
-                        className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Confirm New Password</label>
-                      <input
-                        type="password"
-                        value={confirmPassword}
-                        onChange={(e) => setConfirmPassword(e.target.value)}
-                        placeholder="Re-enter new password"
-                        className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
-                      />
-                    </div>
+                    <PasswordInput
+                      id="new-password"
+                      label="New Password"
+                      placeholder="Min 8 characters"
+                      value={newPassword}
+                      onChange={setNewPassword}
+                      autoComplete="new-password"
+                      minLength={8}
+                      showLeadingIcon={false}
+                      labelClassName="text-[10px] font-bold uppercase tracking-wider text-slate-400"
+                      inputClassName="rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                    />
+                    <PasswordInput
+                      id="confirm-password"
+                      label="Confirm New Password"
+                      placeholder="Re-enter new password"
+                      value={confirmPassword}
+                      onChange={setConfirmPassword}
+                      autoComplete="new-password"
+                      showLeadingIcon={false}
+                      labelClassName="text-[10px] font-bold uppercase tracking-wider text-slate-400"
+                      inputClassName="rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                    />
                   </div>
 
                   <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-950/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500 dark:text-gray-400 space-y-1">
@@ -753,7 +716,7 @@ export default function Header() {
                   </div>
                   <div>
                     <span className="text-slate-400 block text-[10px]">Verified Email</span>
-                    <strong className="text-slate-900 dark:text-white font-mono">{activePersona.email}</strong>
+                    <strong className="text-slate-900 dark:text-white font-mono">{sessionEmail}</strong>
                   </div>
                 </div>
               </div>

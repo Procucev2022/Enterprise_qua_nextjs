@@ -1,15 +1,23 @@
-import {
+import type {
   AuthResponse,
-  LoginCredentials,
   OtpRequestPayload,
-  OtpVerifyPayload,
   RegisterPayload,
   UserSession,
 } from './types';
+import { UI_STRINGS } from './uiStrings';
 
 const TOKEN_KEY = 'procucev_auth_token';
 const SESSION_KEY = 'procucev_user_session';
 
+/**
+ * Transport for the authentication API.
+ *
+ * Every credential check is performed by the backend against the shared
+ * Procucev identity database. This client deliberately has NO offline fallback:
+ * if the API cannot be reached, the caller receives an explicit failure rather
+ * than a fabricated session, so an unreachable backend can never be mistaken
+ * for a successful sign-in.
+ */
 class AuthClient {
   private token: string | null = null;
   private currentSession: UserSession | null = null;
@@ -20,7 +28,7 @@ class AuthClient {
       const savedSession = localStorage.getItem(SESSION_KEY) || sessionStorage.getItem(SESSION_KEY);
       if (savedSession) {
         try {
-          this.currentSession = JSON.parse(savedSession);
+          this.currentSession = JSON.parse(savedSession) as UserSession;
         } catch {
           this.currentSession = null;
         }
@@ -56,166 +64,115 @@ class AuthClient {
   }
 
   /**
-   * Login with Email and Password
+   * POST JSON to an auth endpoint, normalising both transport failures and
+   * error responses into an AuthResponse carrying a descriptive message.
+   */
+  private async postJson(path: string, body: unknown): Promise<AuthResponse> {
+    let res: Response;
+    try {
+      res = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } catch {
+      // Transport-level failure: the API is unreachable. Fail closed.
+      return { success: false, error: UI_STRINGS.auth.networkUnreachable };
+    }
+
+    let data: AuthResponse | null = null;
+    try {
+      data = (await res.json()) as AuthResponse;
+    } catch {
+      data = null;
+    }
+
+    if (!data) {
+      return { success: false, error: UI_STRINGS.auth.serverErrorFallback };
+    }
+    if (!res.ok && !data.error) {
+      return { ...data, success: false, error: UI_STRINGS.auth.serverErrorFallback };
+    }
+    return data;
+  }
+
+  /**
+   * Sign in with email + password, verified against the identity database.
    */
   public async loginWithPassword(email: string, password: string): Promise<AuthResponse> {
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-
-      const data: AuthResponse = await res.json();
-      if (data.success && data.user) {
-        data.user.authMethod = 'PASSWORD';
-        this.setSession(data.user, data.token);
-      }
-      return data;
-    } catch (err: any) {
-      // Offline fallback for unit tests and offline demos
-      const role = email.includes('vendor')
-        ? 'vendor'
-        : email.includes('admin')
-        ? 'admin'
-        : email.includes('manager')
-        ? 'category_manager'
-        : 'buyer';
-
-      const fallbackUser: UserSession = {
-        id: `usr-${Date.now()}`,
-        email,
-        name: email.split('@')[0].toUpperCase(),
-        role,
-        orgId: 'org-local-fallback',
-        orgName: `${email.split('@')[0].toUpperCase()} Enterprise`,
-        authMethod: 'PASSWORD',
-      };
-      this.setSession(fallbackUser, 'mock-jwt-token-fallback');
-      return { success: true, user: fallbackUser, token: 'mock-jwt-token-fallback' };
+    const data = await this.postJson('/api/auth/login', { email, password });
+    if (data.success && data.user) {
+      data.user.authMethod = 'PASSWORD';
+      this.setSession(data.user, data.token);
     }
+    return data;
   }
 
   /**
-   * Request Instant 4-digit OTP to Email
+   * Request a 4-digit email OTP. Only succeeds for an account that exists.
    */
-  public async requestOtp(email: string, roleHint?: OtpRequestPayload['roleHint']): Promise<AuthResponse> {
-    try {
-      const res = await fetch('/api/auth/request-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, roleHint }),
-      });
-
-      return await res.json();
-    } catch (err: any) {
-      const mockCode = Math.floor(1000 + Math.random() * 9000).toString();
-      return {
-        success: true,
-        message: `Verification OTP dispatched to ${email}`,
-        demoCode: mockCode,
-        expiresInSeconds: 600,
-      };
-    }
+  public async requestOtp(
+    email: string,
+    roleHint?: OtpRequestPayload['roleHint']
+  ): Promise<AuthResponse> {
+    return this.postJson('/api/auth/request-otp', { email, roleHint });
   }
 
   /**
-   * Verify 4-digit OTP code and sign in
+   * Verify a 4-digit OTP and establish a session.
    */
   public async verifyOtp(email: string, code: string): Promise<AuthResponse> {
-    try {
-      const res = await fetch('/api/auth/verify-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, code }),
-      });
-
-      const data: AuthResponse = await res.json();
-      if (data.success && data.user) {
-        data.user.authMethod = 'EMAIL_OTP';
-        this.setSession(data.user, data.token);
-      }
-      return data;
-    } catch (err: any) {
-      const role = email.includes('vendor')
-        ? 'vendor'
-        : email.includes('admin')
-        ? 'admin'
-        : email.includes('manager')
-        ? 'category_manager'
-        : 'buyer';
-
-      const fallbackUser: UserSession = {
-        id: `usr-${Date.now()}`,
-        email,
-        name: email.split('@')[0].toUpperCase(),
-        role,
-        orgId: 'org-local-fallback',
-        orgName: `${email.split('@')[0].toUpperCase()} Enterprise`,
-        authMethod: 'EMAIL_OTP',
-      };
-      this.setSession(fallbackUser, 'mock-jwt-token-fallback');
-      return { success: true, user: fallbackUser, token: 'mock-jwt-token-fallback' };
+    const data = await this.postJson('/api/auth/verify-otp', { email, code });
+    if (data.success && data.user) {
+      data.user.authMethod = 'EMAIL_OTP';
+      this.setSession(data.user, data.token);
     }
+    return data;
   }
 
   /**
-   * Register a new enterprise buyer or vendor account
+   * Create a new buyer account in the shared identity database.
    */
   public async register(payload: RegisterPayload): Promise<AuthResponse> {
-    try {
-      const res = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      const data: AuthResponse = await res.json();
-      if (data.success && data.user) {
-        data.user.authMethod = 'PASSWORD';
-        this.setSession(data.user, data.token);
-      }
-      return data;
-    } catch (err: any) {
-      const fallbackUser: UserSession = {
-        id: `usr-${Date.now()}`,
-        email: payload.email,
-        name: payload.name || payload.email.split('@')[0],
-        role: payload.role || 'buyer',
-        orgId: `org-${Date.now()}`,
-        orgName: payload.orgName || 'Enterprise Workspace',
-        mobile: payload.mobile,
-        authMethod: 'PASSWORD',
-      };
-      this.setSession(fallbackUser, 'mock-jwt-token-fallback');
-      return { success: true, message: 'Registered successfully', user: fallbackUser, token: 'mock-jwt-token-fallback' };
+    const data = await this.postJson('/api/auth/register', payload);
+    if (data.success && data.user) {
+      data.user.authMethod = 'PASSWORD';
+      this.setSession(data.user, data.token);
     }
+    return data;
   }
 
   /**
-   * Fetch active session verification from server
+   * Re-validate the stored token with the server.
+   * A token the server rejects is discarded so stale sessions cannot linger.
    */
   public async getSession(): Promise<UserSession | null> {
-    if (!this.token) return this.currentSession;
+    if (!this.token) return null;
     try {
       const res = await fetch('/api/auth/session', {
         headers: { Authorization: `Bearer ${this.token}` },
       });
       if (res.ok) {
-        const data = await res.json();
+        const data = (await res.json()) as AuthResponse;
         if (data.success && data.user) {
           this.currentSession = data.user;
           return data.user;
         }
       }
+      if (res.status === 401) {
+        this.setSession(null, null);
+        return null;
+      }
     } catch {
-      // Return cached in-memory session if network unavailable
+      // Network failure: keep the cached session rather than signing the user
+      // out, but do not treat it as re-verified.
+      return this.currentSession;
     }
     return this.currentSession;
   }
 
   /**
-   * Logout user and clear local session state
+   * Sign out, revoking the token server-side and clearing local state.
    */
   public async logout(email?: string): Promise<void> {
     try {
@@ -228,7 +185,7 @@ class AuthClient {
         body: JSON.stringify({ email: email || this.currentSession?.email }),
       });
     } catch {
-      // Ignore network errors on logout
+      // Local state is still cleared below even if the server is unreachable.
     } finally {
       this.setSession(null, null);
     }

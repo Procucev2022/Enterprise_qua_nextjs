@@ -1,7 +1,6 @@
 const { PerformanceOptimizer, performanceOptimizer } = require('../src/services/performanceOptimizer');
 const { queryAuditor } = require('../src/db/queryAuditor');
 const { queryCache } = require('../src/db/queryCache');
-const poolModule = require('../src/db/pool');
 
 describe('PerformanceOptimizer Unit Tests', () => {
   let optimizer;
