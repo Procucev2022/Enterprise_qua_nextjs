@@ -12,7 +12,10 @@ import { AppProvider, useApp } from '@/lib/store';
 const DEFAULT_FETCH_IMPL = (global.fetch as jest.Mock).getMockImplementation()!;
 
 function deriveTestRole(email: string): string {
-  return email.includes('kiranvalves') || email.includes('apexsupplies') ? 'vendor' : 'buyer';
+  if (email.includes('kiranvalves') || email.includes('apexsupplies')) return 'vendor';
+  if (email.includes('admin')) return 'admin';
+  if (email.includes('catmanager') || email.includes('manager')) return 'category_manager';
+  return 'buyer';
 }
 
 (global.fetch as jest.Mock).mockImplementation((url: string, options?: RequestInit) => {
@@ -70,7 +73,7 @@ function deriveTestRole(email: string): string {
     }
 
     if (url.includes('/api/auth/login')) {
-      const ok = body.password === 'Kiran@Temp8821#';
+      const ok = body.password === 'Kiran@Temp8821#' || body.password === 'cmPass123' || body.password === 'adminPass123';
       return Promise.resolve({
         ok,
         status: ok ? 200 : 401,
@@ -413,7 +416,16 @@ describe('HomePage Comprehensive Suite', () => {
       const cmRoleBtn = screen.getByRole('button', { name: /Cat Manager/i });
       fireEvent.click(cmRoleBtn);
 
-      // Test typing password (covers line 873)
+      // Missing fields: submit with no email/password entered
+      const accessBtnEmpty = screen.getByRole('button', { name: /Access Workspace/i });
+      fireEvent.submit(accessBtnEmpty.closest('form')!);
+      await waitFor(() => {
+        expect(screen.getByText(/Please enter your registered email and password/i)).toBeInTheDocument();
+      });
+
+      const emailInput = screen.getByPlaceholderText(/catmanager@yourcompany.com/i);
+      fireEvent.change(emailInput, { target: { value: 'catmanager@procucev.com' } });
+
       const passInput = screen.getByRole('button', { name: /Access Workspace/i }).closest('form')?.querySelector('input[type="password"]');
       if (passInput) {
         fireEvent.change(passInput, { target: { value: 'cmPass123' } });
@@ -431,6 +443,9 @@ describe('HomePage Comprehensive Suite', () => {
       const adminRoleBtn = screen.getByRole('button', { name: /System Admin/i });
       fireEvent.click(adminRoleBtn);
 
+      const emailInputAdmin = screen.getByPlaceholderText(/admin@yourcompany.com/i);
+      fireEvent.change(emailInputAdmin, { target: { value: 'admin@procucev.com' } });
+
       const passInputAdmin = screen.getByRole('button', { name: /Access Workspace/i }).closest('form')?.querySelector('input[type="password"]');
       if (passInputAdmin) {
         fireEvent.change(passInputAdmin, { target: { value: 'adminPass123' } });
@@ -441,6 +456,21 @@ describe('HomePage Comprehensive Suite', () => {
 
       await waitFor(() => {
         expect(screen.getByText(/Security, Azure Infrastructure & System Settings/i)).toBeInTheDocument();
+      });
+
+      // Invalid credentials branch
+      fireEvent.click(screen.getByTestId('test-logout'));
+      fireEvent.click(screen.getByRole('button', { name: /^Sign In$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Cat Manager/i }));
+      const emailInputBad = screen.getByPlaceholderText(/catmanager@yourcompany.com/i);
+      fireEvent.change(emailInputBad, { target: { value: 'catmanager@procucev.com' } });
+      const passInputBad = screen.getByRole('button', { name: /Access Workspace/i }).closest('form')?.querySelector('input[type="password"]');
+      if (passInputBad) {
+        fireEvent.change(passInputBad, { target: { value: 'wrong-password' } });
+      }
+      fireEvent.submit(screen.getByRole('button', { name: /Access Workspace/i }).closest('form')!);
+      await waitFor(() => {
+        expect(screen.getByText(/Invalid email or password/i)).toBeInTheDocument();
       });
     });
 

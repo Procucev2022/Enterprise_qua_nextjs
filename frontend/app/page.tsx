@@ -335,36 +335,35 @@ export default function HomePage() {
     showToast('Vendor Selected', `Selected ${v.name} (${v.email}) for portal access.`, 'info');
   };
 
-  // Direct Bypass Login for non-buyer roles
-  const handleDirectRoleLogin = (e: React.FormEvent) => {
+  // Password login for Category Manager / Admin roles, verified against the real backend
+  const [roleLoginEmail, setRoleLoginEmail] = useState('');
+  const handleDirectRoleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const roleEmail = selectedRole === 'category_manager'
-      ? 'catmanager@procucev.com'
-      : selectedRole === 'admin'
-      ? 'admin@procucev.com'
-      : selectedRole === 'vendor'
-      ? 'vendor@apexsupplies.com'
-      : 'buyer@procucev.com';
+    const email = roleLoginEmail.trim().toLowerCase();
+    if (!email || !loginPassword.trim()) {
+      showToast('Missing Fields', 'Please enter your registered email and password.', 'warning');
+      return;
+    }
 
-    const sessionUser = {
-      id: `usr-${selectedRole}-01`,
-      email: roleEmail,
-      name: roleEmail.split('@')[0].toUpperCase(),
-      role: selectedRole,
-      orgId: `org-${selectedRole}-01`,
-      orgName: `${selectedRole.toUpperCase()} Entity`,
-      authMethod: 'PASSWORD' as const,
-    };
-    setCurrentUserSession(sessionUser);
+    const response = await authClient.loginWithPassword(email, loginPassword);
+    if (!response.success || !response.user) {
+      showToast('Login Failed', response.error || 'Invalid email or password.', 'warning');
+      return;
+    }
+
+    setCurrentUserSession(response.user);
     setIsLoggedIn(true);
-    setCurrentRole(selectedRole);
+    setCurrentRole(response.user.role);
 
-    if (selectedRole === 'category_manager') {
+    if (response.user.role === 'category_manager') {
       setActiveScreen('kanban_board');
       showToast('Logged In', 'Successfully signed in as Category Manager.', 'success');
-    } else if (selectedRole === 'admin') {
+    } else if (response.user.role === 'admin') {
       setActiveScreen('infra_control');
       showToast('Logged In', 'Successfully signed in as Infrastructure Admin.', 'success');
+    } else {
+      setActiveScreen('command_center');
+      showToast('Logged In', 'Successfully signed in.', 'success');
     }
   };
 
@@ -900,21 +899,23 @@ export default function HomePage() {
                       </div>
                     </div>
                   ) : (
-                    /* BYPASS CM / ADMIN CREDENTIALS */
+                    /* CATEGORY MANAGER / ADMIN PASSWORD LOGIN */
                     <form onSubmit={handleDirectRoleLogin} className="space-y-3 animate-fade-in">
                       <div className="space-y-1">
                         <label className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450">Email / Username</label>
                         <div className="relative">
                           <Mail className="absolute left-3 top-3 text-slate-400" size={14} />
                           <input
-                            type="text"
-                            value={
+                            type="email"
+                            value={roleLoginEmail}
+                            onChange={(e) => setRoleLoginEmail(e.target.value)}
+                            placeholder={
                               selectedRole === 'category_manager'
-                                ? 'catmanager@procucev.com'
-                                : 'admin@procucev.com'
+                                ? 'e.g. catmanager@yourcompany.com'
+                                : 'e.g. admin@yourcompany.com'
                             }
-                            readOnly
-                            className="pl-9 text-xs opacity-70 cursor-not-allowed bg-slate-50 dark:bg-gray-950 font-mono"
+                            className="pl-9 text-xs font-mono"
+                            required
                           />
                         </div>
                       </div>

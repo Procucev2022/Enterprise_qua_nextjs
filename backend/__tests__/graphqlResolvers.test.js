@@ -1,5 +1,10 @@
 const rootResolvers = require('../src/graphql/resolvers');
 const storeService = require('../src/services/storeService');
+const { getTestToken } = require('./testHelpers');
+
+function contextFor(role) {
+  return { req: { headers: { authorization: `Bearer ${getTestToken(role)}` } } };
+}
 
 describe('GraphQL Resolvers Direct Unit Tests', () => {
   test('rfqs resolver filters by category, sourcingMode, and status with default arguments', () => {
@@ -115,57 +120,67 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
     expect(perf.healthScore).toBeGreaterThanOrEqual(0);
   });
 
-  test('mutations execute properly', async () => {
+  test('mutations execute properly for an authenticated user', async () => {
+    const buyerCtx = contextFor('buyer');
+    const adminCtx = contextFor('admin');
+
     const createdRFQ = rootResolvers.createRFQ({
       input: { title: 'Direct Resolver RFQ', category: 'Raw Materials' },
-    });
+    }, buyerCtx);
     expect(createdRFQ.title).toBe('Direct Resolver RFQ');
 
     const updatedRFQ = rootResolvers.updateRFQ({
       id: createdRFQ.id,
       input: { status: 'awarded' },
-    });
+    }, buyerCtx);
     expect(updatedRFQ.status).toBe('awarded');
 
     const createdVendor = rootResolvers.createVendor({
       input: { name: 'Direct Resolver Vendor', email: 'resolver@vendor.com', majorCategory: 'Electrical' },
-    });
+    }, buyerCtx);
     expect(createdVendor.name).toBe('Direct Resolver Vendor');
 
     const updatedVendor = rootResolvers.updateVendor({
       id: createdVendor.id,
       input: { rating: 4.9 },
-    });
+    }, buyerCtx);
     expect(updatedVendor.rating).toBe(4.9);
 
-    const deleted = rootResolvers.deleteVendor({ id: createdVendor.id });
+    const deleted = rootResolvers.deleteVendor({ id: createdVendor.id }, buyerCtx);
     expect(deleted).toBe(true);
 
     const createdBuyer = rootResolvers.createBuyerAccount({
       input: { organizationName: 'Resolver Org', corporateEmail: 'resolver@org.com', contactPerson: 'Buyer' },
-    });
+    }, buyerCtx);
     expect(createdBuyer.organizationName).toBe('Resolver Org');
 
-    expect(rootResolvers.clearQueryCache()).toBe(true);
+    expect(rootResolvers.clearQueryCache(undefined, buyerCtx)).toBe(true);
 
-    const purgeDefault = rootResolvers.purgeLogs();
+    // purgeLogs/autoResolveLogErrors/optimizePerformance are admin-only
+    const purgeDefault = rootResolvers.purgeLogs(undefined, adminCtx);
     expect(purgeDefault.success).toBe(true);
 
-    const purgeCustom = rootResolvers.purgeLogs({ maxAgeDays: 10 });
+    const purgeCustom = rootResolvers.purgeLogs({ maxAgeDays: 10 }, adminCtx);
     expect(purgeCustom.success).toBe(true);
 
     // Auto resolve log errors mutations
-    const autoResolveDefault = await rootResolvers.autoResolveLogErrors();
+    const autoResolveDefault = await rootResolvers.autoResolveLogErrors(undefined, adminCtx);
     expect(autoResolveDefault).toBeDefined();
 
-    const autoResolveAction = await rootResolvers.autoResolveLogErrors({ action: 'OPTIMIZE_QUERY_CACHE' });
+    const autoResolveAction = await rootResolvers.autoResolveLogErrors({ action: 'OPTIMIZE_QUERY_CACHE' }, adminCtx);
     expect(autoResolveAction.remediationsApplied[0].actionType).toBe('OPTIMIZE_QUERY_CACHE');
 
     // Optimize performance mutations
-    const optDefault = rootResolvers.optimizePerformance();
+    const optDefault = rootResolvers.optimizePerformance(undefined, adminCtx);
     expect(optDefault.status).toBe('OPTIMIZED');
 
-    const optLevel = rootResolvers.optimizePerformance({ level: 'deep' });
+    const optLevel = rootResolvers.optimizePerformance({ level: 'deep' }, adminCtx);
     expect(optLevel.level).toBe('deep');
+  });
+
+  test('mutations reject a missing/invalid token, and admin-only mutations reject a non-admin role', () => {
+    expect(() => rootResolvers.createRFQ({ input: { title: 'X' } }, { req: { headers: {} } })).toThrow();
+    expect(() => rootResolvers.createRFQ({ input: { title: 'X' } }, { req: { headers: { authorization: 'Bearer not-a-real-token' } } })).toThrow();
+    expect(() => rootResolvers.purgeLogs({}, contextFor('buyer'))).toThrow();
   });
 });

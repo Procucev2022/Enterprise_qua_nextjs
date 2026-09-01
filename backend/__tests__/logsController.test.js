@@ -4,10 +4,28 @@ const { logger } = require('../src/services/loggerService');
 const { logErrorResolver } = require('../src/services/logErrorResolver');
 const { performanceOptimizer } = require('../src/services/performanceOptimizer');
 const logsController = require('../src/controllers/logsController');
+const { authHeader } = require('./testHelpers');
 
 describe('Backend Logs Controller & Endpoints Suite', () => {
   beforeEach(() => {
     logger.clear();
+  });
+
+  test('every /api/logs endpoint except POST / requires an admin session', async () => {
+    const unauth = await request(app).get('/api/logs');
+    expect(unauth.statusCode).toBe(401);
+
+    const nonAdmin = await request(app).get('/api/logs').set(authHeader('buyer'));
+    expect(nonAdmin.statusCode).toBe(403);
+  });
+
+  test('POST /api/logs (the client-side logging beacon) accepts any authenticated role, not just admin', async () => {
+    const unauth = await request(app).post('/api/logs').send({ message: 'no token' });
+    expect(unauth.statusCode).toBe(401);
+
+    const nonAdmin = await request(app).post('/api/logs').set(authHeader('buyer')).send({ message: 'buyer client log' });
+    expect(nonAdmin.statusCode).toBe(201);
+    expect(nonAdmin.body.success).toBe(true);
   });
 
   test('GET /api/logs returns queried logs and accepts filtering parameters and default query', async () => {
@@ -16,13 +34,14 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     logger.audit('Vendor modified', 'admin@procucev.com');
 
     // Default call without query parameters
-    const resAll = await request(app).get('/api/logs').expect(200);
+    const resAll = await request(app).get('/api/logs').set(authHeader('admin')).expect(200);
     expect(resAll.body.success).toBe(true);
     expect(resAll.body.total).toBe(3);
 
     // Query with all filters including limit and offset
     const resFiltered = await request(app)
       .get('/api/logs?level=ERROR&category=API&search=Timeout&limit=10&offset=0')
+      .set(authHeader('admin'))
       .expect(200);
     expect(resFiltered.body.success).toBe(true);
     expect(resFiltered.body.count).toBe(1);
@@ -31,6 +50,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     // Query with only search and from/to
     const resDates = await request(app)
       .get('/api/logs?from=2026-01-01&to=2026-12-31')
+      .set(authHeader('admin'))
       .expect(200);
     expect(resDates.body.success).toBe(true);
   });
@@ -39,6 +59,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     // Missing message
     const resBad = await request(app)
       .post('/api/logs')
+      .set(authHeader('admin'))
       .send({ level: 'INFO', category: 'UI' })
       .expect(400);
     expect(resBad.body.success).toBe(false);
@@ -47,6 +68,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     // Valid log with default level, category, and metadata
     const resDefaults = await request(app)
       .post('/api/logs')
+      .set(authHeader('admin'))
       .send({ message: 'Default log test' })
       .expect(201);
     expect(resDefaults.body.success).toBe(true);
@@ -56,6 +78,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     // Valid log with custom values
     const resGood = await request(app)
       .post('/api/logs')
+      .set(authHeader('admin'))
       .send({
         level: 'WARN',
         message: 'User clicked dispatch RFQ button',
@@ -72,6 +95,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     logger.info('Log entry to purge');
     const res1 = await request(app)
       .post('/api/logs/purge')
+      .set(authHeader('admin'))
       .send({ maxAgeDays: 30 })
       .expect(200);
     expect(res1.body.success).toBe(true);
@@ -79,6 +103,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
 
     const res2 = await request(app)
       .post('/api/logs/purge')
+      .set(authHeader('admin'))
       .send()
       .expect(200);
     expect(res2.body.success).toBe(true);
@@ -89,7 +114,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     logger.warn('Warn log');
     logger.error('Error log');
 
-    const res = await request(app).get('/api/logs/stats').expect(200);
+    const res = await request(app).get('/api/logs/stats').set(authHeader('admin')).expect(200);
     expect(res.body.success).toBe(true);
     expect(res.body.stats.totalLogs).toBe(3);
     expect(res.body.stats.levelCounts.INFO).toBe(1);
@@ -98,18 +123,19 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
   });
 
   test('GET /api/logs/diagnose and POST /api/logs/auto-resolve diagnose and resolve log errors', async () => {
-    const resDiag = await request(app).get('/api/logs/diagnose').expect(200);
+    const resDiag = await request(app).get('/api/logs/diagnose').set(authHeader('admin')).expect(200);
     expect(resDiag.body.success).toBe(true);
     expect(Array.isArray(resDiag.body.issues)).toBe(true);
 
     // Auto resolve all
-    const resResolveAll = await request(app).post('/api/logs/auto-resolve').send({}).expect(200);
+    const resResolveAll = await request(app).post('/api/logs/auto-resolve').set(authHeader('admin')).send({}).expect(200);
     expect(resResolveAll.body.success).toBe(true);
     expect(resResolveAll.body.report).toBeDefined();
 
     // Auto resolve specific action
     const resResolveAction = await request(app)
       .post('/api/logs/auto-resolve')
+      .set(authHeader('admin'))
       .send({ action: 'OPTIMIZE_QUERY_CACHE' })
       .expect(200);
     expect(resResolveAction.body.success).toBe(true);
@@ -117,18 +143,19 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
   });
 
   test('GET /api/logs/performance and POST /api/logs/performance/optimize audit and optimize performance', async () => {
-    const resPerf = await request(app).get('/api/logs/performance').expect(200);
+    const resPerf = await request(app).get('/api/logs/performance').set(authHeader('admin')).expect(200);
     expect(resPerf.body.success).toBe(true);
     expect(resPerf.body.audit).toBeDefined();
 
     // Standard optimization (no body)
-    const resOptDefault = await request(app).post('/api/logs/performance/optimize').send().expect(200);
+    const resOptDefault = await request(app).post('/api/logs/performance/optimize').set(authHeader('admin')).send().expect(200);
     expect(resOptDefault.body.success).toBe(true);
     expect(resOptDefault.body.result.status).toBe('OPTIMIZED');
 
     // Level optimization (with body)
     const resOptAggressive = await request(app)
       .post('/api/logs/performance/optimize')
+      .set(authHeader('admin'))
       .send({ level: 'aggressive' })
       .expect(200);
     expect(resOptAggressive.body.success).toBe(true);
@@ -166,7 +193,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     logger.queryLogs = () => {
       throw new Error('Unexpected Query Failure');
     };
-    const resGet = await request(app).get('/api/logs').expect(500);
+    const resGet = await request(app).get('/api/logs').set(authHeader('admin')).expect(500);
     expect(resGet.body.success).toBe(false);
     expect(resGet.body.error).toBe('Unexpected Query Failure');
     logger.queryLogs = origQueryLogs;
@@ -176,7 +203,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     logger.log = () => {
       throw new Error('Unexpected Create Failure');
     };
-    const resCreate = await request(app).post('/api/logs').send({ message: 'Valid message' }).expect(500);
+    const resCreate = await request(app).post('/api/logs').set(authHeader('admin')).send({ message: 'Valid message' }).expect(500);
     expect(resCreate.body.success).toBe(false);
     expect(resCreate.body.error).toBe('Unexpected Create Failure');
     logger.log = origLog;
@@ -186,7 +213,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     logger.purgeExpiredLogs = () => {
       throw new Error('Unexpected Purge Failure');
     };
-    const resPurge = await request(app).post('/api/logs/purge').send().expect(500);
+    const resPurge = await request(app).post('/api/logs/purge').set(authHeader('admin')).send().expect(500);
     expect(resPurge.body.success).toBe(false);
     expect(resPurge.body.error).toBe('Unexpected Purge Failure');
     logger.purgeExpiredLogs = origPurge;
@@ -196,7 +223,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     logger.getLogStats = () => {
       throw new Error('Unexpected Stats Failure');
     };
-    const resStats = await request(app).get('/api/logs/stats').expect(500);
+    const resStats = await request(app).get('/api/logs/stats').set(authHeader('admin')).expect(500);
     expect(resStats.body.success).toBe(false);
     expect(resStats.body.error).toBe('Unexpected Stats Failure');
     logger.getLogStats = origStats;
@@ -206,7 +233,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     logErrorResolver.diagnoseErrors = () => {
       throw new Error('Unexpected Diagnose Failure');
     };
-    const resDiagErr = await request(app).get('/api/logs/diagnose').expect(500);
+    const resDiagErr = await request(app).get('/api/logs/diagnose').set(authHeader('admin')).expect(500);
     expect(resDiagErr.body.error).toBe('Unexpected Diagnose Failure');
     logErrorResolver.diagnoseErrors = origDiag;
 
@@ -215,7 +242,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     logErrorResolver.autoResolveAll = () => {
       throw new Error('Unexpected AutoResolve Failure');
     };
-    const resAutoResolveErr = await request(app).post('/api/logs/auto-resolve').send().expect(500);
+    const resAutoResolveErr = await request(app).post('/api/logs/auto-resolve').set(authHeader('admin')).send().expect(500);
     expect(resAutoResolveErr.body.error).toBe('Unexpected AutoResolve Failure');
     logErrorResolver.autoResolveAll = origAutoResolve;
 
@@ -224,7 +251,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     performanceOptimizer.auditPerformance = () => {
       throw new Error('Unexpected Perf Audit Failure');
     };
-    const resAuditErr = await request(app).get('/api/logs/performance').expect(500);
+    const resAuditErr = await request(app).get('/api/logs/performance').set(authHeader('admin')).expect(500);
     expect(resAuditErr.body.error).toBe('Unexpected Perf Audit Failure');
     performanceOptimizer.auditPerformance = origAudit;
 
@@ -233,7 +260,7 @@ describe('Backend Logs Controller & Endpoints Suite', () => {
     performanceOptimizer.optimizePerformance = () => {
       throw new Error('Unexpected Optimize Failure');
     };
-    const resOptErr = await request(app).post('/api/logs/performance/optimize').send().expect(500);
+    const resOptErr = await request(app).post('/api/logs/performance/optimize').set(authHeader('admin')).send().expect(500);
     expect(resOptErr.body.error).toBe('Unexpected Optimize Failure');
     performanceOptimizer.optimizePerformance = origOpt;
   });

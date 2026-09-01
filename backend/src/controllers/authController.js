@@ -1,24 +1,10 @@
 const authService = require('../services/authService');
 const { logger } = require('../services/loggerService');
 const { VALIDATION_SCHEMAS, validatePayload, AUTH_MESSAGES } = require('../config/constants');
+const { extractToken } = require('../middleware/auth');
 
 function getClientIp(req) {
   return req.ip || (req.headers && req.headers['x-forwarded-for']) || '127.0.0.1';
-}
-
-function extractToken(req) {
-  const authHeader = req.headers && req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    return authHeader.substring(7);
-  }
-  if (req.headers && req.headers.cookie) {
-    const match = req.headers.cookie.match(/auth_token=([^;]+)/);
-    if (match) return match[1];
-  }
-  if (req.cookies && req.cookies.auth_token) {
-    return req.cookies.auth_token;
-  }
-  return null;
 }
 
 function login(req, res, next) {

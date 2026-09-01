@@ -221,7 +221,10 @@ class AuthClient {
     try {
       await fetch('/api/auth/logout', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
+        },
         body: JSON.stringify({ email: email || this.currentSession?.email }),
       });
     } catch {

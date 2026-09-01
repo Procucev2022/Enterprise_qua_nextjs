@@ -2,6 +2,7 @@ const request = require('supertest');
 const app = require('../src/app');
 const cryptoService = require('../src/services/cryptoService');
 const cryptoController = require('../src/controllers/cryptoController');
+const { authHeader } = require('./testHelpers');
 
 describe('Crypto Controller & /api/crypto Endpoints', () => {
   const samplePlaintext = 'Confidential Purchase Order Amount: ₹12,50,000';
@@ -10,6 +11,7 @@ describe('Crypto Controller & /api/crypto Endpoints', () => {
     test('should successfully encrypt plaintext payload', async () => {
       const res = await request(app)
         .post('/api/crypto/encrypt')
+        .set(authHeader('buyer'))
         .send({ plaintext: samplePlaintext });
 
       expect(res.status).toBe(200);
@@ -23,6 +25,7 @@ describe('Crypto Controller & /api/crypto Endpoints', () => {
     test('should encrypt with custom secret and base64 encoding', async () => {
       const res = await request(app)
         .post('/api/crypto/encrypt')
+        .set(authHeader('buyer'))
         .send({
           plaintext: samplePlaintext,
           secretKey: 'custom-controller-test-key-32b',
@@ -37,11 +40,17 @@ describe('Crypto Controller & /api/crypto Endpoints', () => {
     test('should return 400 on validation failure when plaintext is missing', async () => {
       const res = await request(app)
         .post('/api/crypto/encrypt')
+        .set(authHeader('buyer'))
         .send({});
 
       expect(res.status).toBe(400);
       expect(res.body.success).toBe(false);
       expect(res.body.error).toBe('Validation failed');
+    });
+
+    test('POST /api/crypto/encrypt requires authentication', async () => {
+      const res = await request(app).post('/api/crypto/encrypt').send({ plaintext: samplePlaintext });
+      expect(res.status).toBe(401);
     });
   });
 
@@ -50,6 +59,7 @@ describe('Crypto Controller & /api/crypto Endpoints', () => {
       const enc = cryptoService.encrypt(samplePlaintext);
       const res = await request(app)
         .post('/api/crypto/decrypt')
+        .set(authHeader('buyer'))
         .send({
           ciphertext: enc.ciphertext,
           iv: enc.iv,
@@ -66,6 +76,7 @@ describe('Crypto Controller & /api/crypto Endpoints', () => {
       const enc = cryptoService.encrypt(samplePlaintext);
       const res = await request(app)
         .post('/api/crypto/decrypt')
+        .set(authHeader('buyer'))
         .send({ token: enc.encoded });
 
       expect(res.status).toBe(200);
@@ -76,6 +87,7 @@ describe('Crypto Controller & /api/crypto Endpoints', () => {
     test('should return 400 when decrypt payload fails schema validation', async () => {
       const res = await request(app)
         .post('/api/crypto/decrypt')
+        .set(authHeader('buyer'))
         .send({ ciphertext: 'abc' }); // Missing IV and AuthTag
 
       expect(res.status).toBe(400);
@@ -90,6 +102,7 @@ describe('Crypto Controller & /api/crypto Endpoints', () => {
 
       const res = await request(app)
         .post('/api/crypto/decrypt')
+        .set(authHeader('buyer'))
         .send({
           ciphertext: enc.ciphertext,
           iv: enc.iv,
@@ -102,6 +115,10 @@ describe('Crypto Controller & /api/crypto Endpoints', () => {
       expect(res.body.error).toContain('Decryption failed');
     });
 
+    test('POST /api/crypto/decrypt requires authentication', async () => {
+      const res = await request(app).post('/api/crypto/decrypt').send({ ciphertext: 'abc' });
+      expect(res.status).toBe(401);
+    });
   });
 
   describe('GET /api/crypto/status', () => {
@@ -121,6 +138,7 @@ describe('Crypto Controller & /api/crypto Endpoints', () => {
       const enc = cryptoService.encrypt(samplePlaintext);
       const res = await request(app)
         .post('/api/crypto/verify-integrity')
+        .set(authHeader('buyer'))
         .send({
           ciphertext: enc.ciphertext,
           iv: enc.iv,
@@ -139,6 +157,7 @@ describe('Crypto Controller & /api/crypto Endpoints', () => {
 
       const res = await request(app)
         .post('/api/crypto/verify-integrity')
+        .set(authHeader('buyer'))
         .send({
           ciphertext: tamperedCiphertext,
           iv: enc.iv,
@@ -154,10 +173,16 @@ describe('Crypto Controller & /api/crypto Endpoints', () => {
     test('should return 400 on invalid payload schema in verify-integrity', async () => {
       const res = await request(app)
         .post('/api/crypto/verify-integrity')
+        .set(authHeader('buyer'))
         .send({ ciphertext: '' });
 
       expect(res.status).toBe(400);
       expect(res.body.success).toBe(false);
+    });
+
+    test('POST /api/crypto/verify-integrity requires authentication', async () => {
+      const res = await request(app).post('/api/crypto/verify-integrity').send({ ciphertext: '' });
+      expect(res.status).toBe(401);
     });
   });
 

@@ -3,6 +3,7 @@ const app = require('../src/app');
 const storeService = require('../src/services/storeService');
 const { queryCache } = require('../src/db/queryCache');
 const { handleGraphQL } = require('../src/controllers/graphqlController');
+const { authHeader } = require('./testHelpers');
 
 describe('GraphQL API & Controller Integration Tests', () => {
   beforeEach(() => {
@@ -171,7 +172,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
         }
       }
     `;
-    const resCreateRFQ = await request(app).post('/graphql').send({ query: createRFQMutation }).expect(200);
+    const resCreateRFQ = await request(app).post('/graphql').set(authHeader('buyer')).send({ query: createRFQMutation }).expect(200);
     const createdRFQ = resCreateRFQ.body.data.createRFQ;
     expect(createdRFQ.title).toBe('GraphQL Sourcing RFQ Test');
 
@@ -188,7 +189,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
         }
       }
     `;
-    const resUpdateRFQ = await request(app).post('/graphql').send({ query: updateRFQMutation }).expect(200);
+    const resUpdateRFQ = await request(app).post('/graphql').set(authHeader('buyer')).send({ query: updateRFQMutation }).expect(200);
     expect(resUpdateRFQ.body.data.updateRFQ.status).toBe('awarded');
 
     // 3. Create Vendor
@@ -207,7 +208,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
         }
       }
     `;
-    const resCreateVendor = await request(app).post('/graphql').send({ query: createVendorMutation }).expect(200);
+    const resCreateVendor = await request(app).post('/graphql').set(authHeader('buyer')).send({ query: createVendorMutation }).expect(200);
     const createdVendor = resCreateVendor.body.data.createVendor;
     expect(createdVendor.name).toBe('Apex Precision Castings');
 
@@ -224,7 +225,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
         }
       }
     `;
-    const resUpdateVendor = await request(app).post('/graphql').send({ query: updateVendorMutation }).expect(200);
+    const resUpdateVendor = await request(app).post('/graphql').set(authHeader('buyer')).send({ query: updateVendorMutation }).expect(200);
     expect(resUpdateVendor.body.data.updateVendor.rating).toBe(4.9);
 
     // 5. Delete Vendor
@@ -233,7 +234,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
         deleteVendor(id: "${createdVendor.id}")
       }
     `;
-    const resDeleteVendor = await request(app).post('/graphql').send({ query: deleteVendorMutation }).expect(200);
+    const resDeleteVendor = await request(app).post('/graphql').set(authHeader('buyer')).send({ query: deleteVendorMutation }).expect(200);
     expect(resDeleteVendor.body.data.deleteVendor).toBe(true);
 
     // 6. Create Buyer Account
@@ -251,7 +252,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
         }
       }
     `;
-    const resCreateBuyer = await request(app).post('/graphql').send({ query: createBuyerMutation }).expect(200);
+    const resCreateBuyer = await request(app).post('/graphql').set(authHeader('buyer')).send({ query: createBuyerMutation }).expect(200);
     expect(resCreateBuyer.body.data.createBuyerAccount.organizationName).toBe('JSW Energy Limited');
 
     // 7. Clear Query Cache
@@ -260,10 +261,10 @@ describe('GraphQL API & Controller Integration Tests', () => {
         clearQueryCache
       }
     `;
-    const resClearCache = await request(app).post('/graphql').send({ query: clearCacheMutation }).expect(200);
+    const resClearCache = await request(app).post('/graphql').set(authHeader('buyer')).send({ query: clearCacheMutation }).expect(200);
     expect(resClearCache.body.data.clearQueryCache).toBe(true);
 
-    // 8. Purge Logs
+    // 8. Purge Logs (admin-only)
     const purgeLogsMutation = `
       mutation {
         purgeLogs(maxAgeDays: 14) {
@@ -271,8 +272,32 @@ describe('GraphQL API & Controller Integration Tests', () => {
         }
       }
     `;
-    const resPurgeLogs = await request(app).post('/graphql').send({ query: purgeLogsMutation }).expect(200);
+    const resPurgeLogs = await request(app).post('/graphql').set(authHeader('admin')).send({ query: purgeLogsMutation }).expect(200);
     expect(resPurgeLogs.body.data.purgeLogs.success).toBe(true);
+  });
+
+  test('mutations reject unauthenticated requests, and admin-only mutations reject non-admin roles', async () => {
+    const createRFQMutation = `
+      mutation {
+        createRFQ(input: { title: "Unauthenticated RFQ", category: "X", budget: 1 }) {
+          id
+        }
+      }
+    `;
+    const resUnauth = await request(app).post('/graphql').send({ query: createRFQMutation }).expect(200);
+    expect(resUnauth.body.errors).toBeDefined();
+    expect(resUnauth.body.data.createRFQ).toBeNull();
+
+    const purgeLogsMutation = `
+      mutation {
+        purgeLogs(maxAgeDays: 14) {
+          success
+        }
+      }
+    `;
+    const resNonAdmin = await request(app).post('/graphql').set(authHeader('buyer')).send({ query: purgeLogsMutation }).expect(200);
+    expect(resNonAdmin.body.errors).toBeDefined();
+    expect(resNonAdmin.body.data.purgeLogs).toBeNull();
   });
 
   test('GET /graphql supports query execution and handles string variables and invalid JSON variables fallback', async () => {
@@ -368,6 +393,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
 
     const encRes = await request(app)
       .post('/graphql')
+      .set(authHeader('buyer'))
       .send({
         query: encMutation,
         variables: { input: { plaintext: 'Confidential ERP Quote' } },

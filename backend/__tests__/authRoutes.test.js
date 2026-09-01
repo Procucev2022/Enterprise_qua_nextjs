@@ -3,6 +3,7 @@ const app = require('../src/app');
 const authService = require('../src/services/authService');
 const authController = require('../src/controllers/authController');
 const { logger } = require('../src/services/loggerService');
+const { authHeader } = require('./testHelpers');
 
 function mockRes() {
   const res = {};
@@ -501,10 +502,20 @@ describe('Authentication Routes & Services (/api/auth) - Complete 100% Coverage'
       expect(sessionRes.body.error).toContain('logged out');
     });
 
-    test('GET /api/auth/users lists all users', async () => {
-      const res = await request(app).get('/api/auth/users');
+    test('GET /api/auth/users lists all users for an admin', async () => {
+      const res = await request(app).get('/api/auth/users').set(authHeader('admin'));
       expect(res.status).toBe(200);
       expect(res.body.data.length).toBeGreaterThan(0);
+    });
+
+    test('GET /api/auth/users rejects a non-admin role', async () => {
+      const res = await request(app).get('/api/auth/users').set(authHeader('buyer'));
+      expect(res.status).toBe(403);
+    });
+
+    test('GET /api/auth/users rejects an unauthenticated request', async () => {
+      const res = await request(app).get('/api/auth/users');
+      expect(res.status).toBe(401);
     });
   });
 
