@@ -2,6 +2,7 @@ const request = require('supertest');
 const app = require('../src/app');
 const authService = require('../src/services/authService');
 const authController = require('../src/controllers/authController');
+const { logger } = require('../src/services/loggerService');
 
 function mockRes() {
   const res = {};
@@ -16,19 +17,27 @@ describe('Authentication Routes & Services (/api/auth) - Complete 100% Coverage'
   });
 
   describe('authService unit tests & branch coverage', () => {
-    test('hashPassword with custom and default salt', () => {
-      const hash1 = authService.hashPassword('testpass');
-      const hash2 = authService.hashPassword('testpass', 'custom-salt');
-      expect(hash1).toBeDefined();
-      expect(hash2).toBeDefined();
-      expect(hash1).not.toBe(hash2);
+    test('hashPassword generates a hash+salt pair, reusing a given salt when provided', () => {
+      const auto = authService.hashPassword('testpass');
+      expect(auto.hash).toBeDefined();
+      expect(auto.salt).toBeDefined();
+
+      const withSalt = authService.hashPassword('testpass', 'custom-salt');
+      expect(withSalt.salt).toBe('custom-salt');
+      expect(withSalt.hash).not.toBe(auto.hash);
+
+      const sameSaltAgain = authService.hashPassword('testpass', 'custom-salt');
+      expect(sameSaltAgain.hash).toBe(withSalt.hash);
     });
 
-    test('verifyPassword handles empty inputs safely', () => {
-      expect(authService.verifyPassword('', 'somehash')).toBe(false);
-      expect(authService.verifyPassword('somepass', '')).toBe(false);
-      expect(authService.verifyPassword(null, null)).toBe(false);
-      expect(authService.verifyPassword('password123', authService.hashPassword('password123'))).toBe(true);
+    test('verifyPassword checks a password against a hash+salt pair and handles empty inputs safely', () => {
+      const { hash, salt } = authService.hashPassword('password123');
+      expect(authService.verifyPassword('', hash, salt)).toBe(false);
+      expect(authService.verifyPassword('password123', '', salt)).toBe(false);
+      expect(authService.verifyPassword('password123', hash, '')).toBe(false);
+      expect(authService.verifyPassword(null, null, null)).toBe(false);
+      expect(authService.verifyPassword('password123', hash, salt)).toBe(true);
+      expect(authService.verifyPassword('wrongpassword', hash, salt)).toBe(false);
     });
 
     test('verifySessionToken handles all invalid & expired scenarios', () => {
@@ -89,51 +98,180 @@ describe('Authentication Routes & Services (/api/auth) - Complete 100% Coverage'
       expect(badJsonResult.error).toContain('Failed to decode');
     });
 
-    test('authenticateWithPassword auto-provisions different role patterns', () => {
-      // Vendor pattern
-      const resVendor = authService.authenticateWithPassword('new.vendor@distributor.com', 'pass123', '10.0.0.1');
-      expect(resVendor.user.role).toBe('vendor');
-
-      // Admin pattern
-      const resAdmin = authService.authenticateWithPassword('super.admin@governance.com', 'pass123', '10.0.0.1');
-      expect(resAdmin.user.role).toBe('admin');
-
-      // Manager pattern
-      const resManager = authService.authenticateWithPassword('sourcing.manager@plants.com', 'pass123', '10.0.0.1');
-      expect(resManager.user.role).toBe('category_manager');
-
-      // Generic email without @
-      const resNoAt = authService.authenticateWithPassword('plainuser', 'pass123', '10.0.0.1');
-      expect(resNoAt.user.role).toBe('buyer');
-
+    test('authenticateWithPassword rejects unknown emails and wrong passwords without creating accounts', () => {
       // Missing credentials throw error
       expect(() => authService.authenticateWithPassword('', '')).toThrow();
-      expect(() => authService.authenticateWithPassword('buyer@procucev.com', 'wrongpassword')).toThrow('Invalid email or password');
+
+      const beforeCount = authService.getAllUsers().length;
+
+      // Unknown email is rejected with the same generic error as a wrong password (no enumeration, no auto-create)
+      expect(() => authService.authenticateWithPassword('nobody.here@nowhere.com', 'whatever123')).toThrow('Invalid email or password.');
+      expect(authService.getAllUsers().length).toBe(beforeCount);
+
+      // Wrong password for a real seed account also throws the same generic error
+      expect(() => authService.authenticateWithPassword('buyer@procucev.com', 'wrongpassword')).toThrow('Invalid email or password.');
+
+      // Correct password for a real seed account succeeds
+      const res = authService.authenticateWithPassword('buyer@procucev.com', 'password123', '10.0.0.1');
+      expect(res.success).toBe(true);
+      expect(res.user.role).toBe('buyer');
+      expect(res.token).toBeDefined();
     });
 
-    test('requestOtp creates user with roleHint and without roleHint', () => {
+    test('requestOtp rejects unregistered emails and succeeds for a registered one', () => {
       expect(() => authService.requestOtp('')).toThrow();
 
-      const resHint = authService.requestOtp('custom.buyer@tata.com', 'category_manager', '127.0.0.1');
-      expect(resHint.success).toBe(true);
+      // Unregistered email is rejected, not auto-created
+      expect(() => authService.requestOtp('never.registered@nowhere.com', 'buyer', '127.0.0.1')).toThrow('No account found');
 
-      const resVendor = authService.requestOtp('new.vendor.fast@valves.com', undefined, '127.0.0.1');
-      expect(resVendor.success).toBe(true);
+      // Register first, then requesting an OTP succeeds
+      authService.registerUser({ email: 'otp.candidate@enterprise.com' }, '127.0.0.1');
+      const res = authService.requestOtp('otp.candidate@enterprise.com', undefined, '127.0.0.1');
+      expect(res.success).toBe(true);
+      expect(res.demoCode).toMatch(/^\d{4}$/);
     });
 
-    test('verifyOtp branches: code validation, attempt counting, user creation', () => {
+    test('verifyOtp branches: missing input, unregistered email, wrong code, master codes removed, real code succeeds', () => {
       expect(() => authService.verifyOtp('', '')).toThrow();
 
-      // Request OTP for user
-      authService.requestOtp('attempt.user@procure.com', 'buyer', '127.0.0.1');
+      // Unregistered email + any code is rejected (no OTP entry, no user)
+      expect(() => authService.verifyOtp('never.registered@nowhere.com', '1234')).toThrow('Invalid or expired OTP code.');
 
-      // Wrong code increments attempts
+      // Register + request a real OTP for a fresh account
+      authService.registerUser({ email: 'attempt.user@procure.com' }, '127.0.0.1');
+      const { demoCode } = authService.requestOtp('attempt.user@procure.com', 'buyer', '127.0.0.1');
+
+      // Wrong code increments attempts and throws
       expect(() => authService.verifyOtp('attempt.user@procure.com', '0000', '127.0.0.1')).toThrow('Invalid or expired OTP code');
 
-      // Universal code for non-existing user
-      const univRes = authService.verifyOtp('brand.new.user@external.com', '1234', '127.0.0.1');
-      expect(univRes.success).toBe(true);
-      expect(univRes.user.email).toBe('brand.new.user@external.com');
+      // The old master bypass codes no longer work, even for a real registered account
+      expect(() => authService.verifyOtp('attempt.user@procure.com', '1234')).toThrow('Invalid or expired OTP code.');
+      expect(() => authService.verifyOtp('attempt.user@procure.com', '4321')).toThrow('Invalid or expired OTP code.');
+
+      // The actual issued code succeeds
+      const res = authService.verifyOtp('attempt.user@procure.com', demoCode, '127.0.0.1');
+      expect(res.success).toBe(true);
+      expect(res.user.email).toBe('attempt.user@procure.com');
+
+      // The code is single-use — verifying again fails
+      expect(() => authService.verifyOtp('attempt.user@procure.com', demoCode)).toThrow('Invalid or expired OTP code.');
+    });
+
+    test('revokeSessionToken invalidates a token immediately and handles malformed input', () => {
+      expect(authService.revokeSessionToken(null)).toBe(false);
+      expect(authService.revokeSessionToken('not-a-token')).toBe(false);
+
+      const token = authService.generateSessionToken({
+        id: 'usr-revoke-1', email: 'revoke.me@procucev.com', name: 'Revoke Me', role: 'buyer', orgId: 'org-1', orgName: 'Org',
+      });
+
+      expect(authService.verifySessionToken(token).valid).toBe(true);
+      expect(authService.revokeSessionToken(token)).toBe(true);
+      const afterRevoke = authService.verifySessionToken(token);
+      expect(afterRevoke.valid).toBe(false);
+      expect(afterRevoke.error).toContain('logged out');
+
+      // A token with an undecodable payload still revokes, falling back to a default expiry
+      const badPayloadToken = `${Buffer.from('header').toString('base64url')}.${Buffer.from('not-json{').toString('base64url')}.sig`;
+      expect(authService.revokeSessionToken(badPayloadToken)).toBe(true);
+    });
+
+    test('hydrateFromDB syncs users and revoked sessions from Postgres, seeds an empty DB, and degrades gracefully on query failure', async () => {
+      const poolModule = require('../src/db/pool');
+      const originalPool = poolModule.pool;
+      const originalQuery = poolModule.query;
+
+      // No pool configured: returns immediately without querying
+      poolModule.pool = null;
+      poolModule.query = jest.fn();
+      await authService.hydrateFromDB();
+      expect(poolModule.query).not.toHaveBeenCalled();
+
+      // Pool configured, DB already has a user + a revoked session: adopts both
+      poolModule.pool = {};
+      poolModule.query = jest.fn((sql) => {
+        if (sql.includes('FROM users')) {
+          return Promise.resolve({
+            rows: [{
+              id: 'usr-db-1', email: 'db.hydrated@procucev.com', name: 'DB Hydrated', role: 'buyer',
+              orgId: 'org-db', orgName: 'DB Org', passwordHash: 'h', passwordSalt: 's', mobile: null, status: 'ACTIVE',
+            }],
+          });
+        }
+        return Promise.resolve({ rows: [{ tokenSignature: 'revoked-sig-from-db' }] });
+      });
+      await authService.hydrateFromDB();
+      expect(authService.getAllUsers().some((u) => u.email === 'db.hydrated@procucev.com')).toBe(true);
+
+      // DB has no users yet: seeds it from the current in-memory registry instead
+      poolModule.query = jest.fn().mockResolvedValue({ rows: [] });
+      await authService.hydrateFromDB();
+      expect(poolModule.query.mock.calls.length).toBeGreaterThan(1);
+
+      // A query failure is caught and swallowed, not thrown
+      poolModule.query = jest.fn().mockRejectedValue(new Error('connection refused'));
+      await expect(authService.hydrateFromDB()).resolves.toBeUndefined();
+
+      poolModule.pool = originalPool;
+      poolModule.query = originalQuery;
+    });
+
+    test('DB write-through failures in requestOtp and revokeSessionToken are logged, not thrown', async () => {
+      const poolModule = require('../src/db/pool');
+      const originalPool = poolModule.pool;
+      const originalQuery = poolModule.query;
+
+      authService.registerUser({ email: 'db.failure.otp@procucev.com' }, '127.0.0.1');
+
+      poolModule.pool = {};
+      poolModule.query = jest.fn().mockRejectedValue(new Error('write failed'));
+
+      expect(() => authService.requestOtp('db.failure.otp@procucev.com', 'buyer', '127.0.0.1')).not.toThrow();
+
+      const token = authService.generateSessionToken({
+        id: 'usr-db-fail', email: 'db.fail.revoke@procucev.com', name: 'x', role: 'buyer', orgId: 'o', orgName: 'O',
+      });
+      expect(() => authService.revokeSessionToken(token)).not.toThrow();
+
+      // let the fire-and-forget rejections settle before restoring
+      await new Promise((resolve) => setImmediate(resolve));
+
+      poolModule.pool = originalPool;
+      poolModule.query = originalQuery;
+    });
+
+    test('DB write-through failures in registerUser, verifyOtp, and hydrateFromDB seeding are logged, not thrown', async () => {
+      const poolModule = require('../src/db/pool');
+      const originalPool = poolModule.pool;
+      const originalQuery = poolModule.query;
+
+      // registerUser: the save fails, but the caller still gets a successful result
+      poolModule.pool = {};
+      poolModule.query = jest.fn().mockRejectedValue(new Error('insert failed'));
+      const regRes = authService.registerUser({ email: 'db.reg.failure@procucev.com' }, '127.0.0.1');
+      expect(regRes.success).toBe(true);
+
+      // verifyOtp: the delete-OTP write fails, but verification still succeeds
+      poolModule.query = jest.fn().mockResolvedValue({ rows: [] });
+      authService.registerUser({ email: 'db.verify.failure@procucev.com' }, '127.0.0.1');
+      const { demoCode } = authService.requestOtp('db.verify.failure@procucev.com', 'buyer', '127.0.0.1');
+      poolModule.query = jest.fn().mockRejectedValue(new Error('delete failed'));
+      const verifyRes = authService.verifyOtp('db.verify.failure@procucev.com', demoCode, '127.0.0.1');
+      expect(verifyRes.success).toBe(true);
+
+      // hydrateFromDB seeding an empty DB: one user's upsert rejects, the rest still resolve
+      poolModule.query = jest.fn((sql) => {
+        if (sql.includes('FROM users')) return Promise.resolve({ rows: [] });
+        if (sql.includes('FROM revoked_sessions')) return Promise.resolve({ rows: [] });
+        return Promise.reject(new Error('seed write failed'));
+      });
+      await expect(authService.hydrateFromDB()).resolves.toBeUndefined();
+
+      // let the fire-and-forget rejections settle before restoring
+      await new Promise((resolve) => setImmediate(resolve));
+
+      poolModule.pool = originalPool;
+      poolModule.query = originalQuery;
     });
 
     test('registerUser branches: duplicate email, default fields', () => {
@@ -162,9 +300,12 @@ describe('Authentication Routes & Services (/api/auth) - Complete 100% Coverage'
 
   describe('HTTP REST Routes & Controller Coverage', () => {
     test('POST /api/auth/login with code (OTP mode)', async () => {
+      authService.registerUser({ email: 'http.otp.login@procucev.com' }, '127.0.0.1');
+      const { demoCode } = authService.requestOtp('http.otp.login@procucev.com', 'buyer', '127.0.0.1');
+
       const res = await request(app)
         .post('/api/auth/login')
-        .send({ email: 'buyer@procucev.com', code: '1234' });
+        .send({ email: 'http.otp.login@procucev.com', code: demoCode });
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
@@ -179,13 +320,14 @@ describe('Authentication Routes & Services (/api/auth) - Complete 100% Coverage'
       expect(res.body.success).toBe(true);
     });
 
-    test('POST /api/auth/login fallback when neither password nor code is sent', async () => {
+    test('POST /api/auth/login rejects when neither password nor code is sent (400)', async () => {
       const res = await request(app)
         .post('/api/auth/login')
         .send({ email: 'buyer@procucev.com' });
 
-      expect(res.status).toBe(200);
-      expect(res.body.success).toBe(true);
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toContain('Password or OTP code is required');
     });
 
     test('POST /api/auth/login handles missing email (400)', async () => {
@@ -202,7 +344,9 @@ describe('Authentication Routes & Services (/api/auth) - Complete 100% Coverage'
       expect(res.body.success).toBe(false);
     });
 
-    test('POST /api/auth/request-otp with valid email (200)', async () => {
+    test('POST /api/auth/request-otp with a registered email (200)', async () => {
+      await request(app).post('/api/auth/register').send({ email: 'http.buyer@procucev.com', role: 'buyer' });
+
       const res = await request(app)
         .post('/api/auth/request-otp')
         .send({ email: 'http.buyer@procucev.com', roleHint: 'buyer' });
@@ -217,10 +361,21 @@ describe('Authentication Routes & Services (/api/auth) - Complete 100% Coverage'
       expect(res.body.error).toContain('Email is required');
     });
 
-    test('POST /api/auth/verify-otp with valid code (200)', async () => {
+    test('POST /api/auth/request-otp for an unregistered email is rejected (400)', async () => {
+      const res = await request(app)
+        .post('/api/auth/request-otp')
+        .send({ email: 'never.seen.before@nowhere.com' });
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toContain('No account found');
+    });
+
+    test('POST /api/auth/verify-otp with the actual issued code (200)', async () => {
+      const otpRes = await request(app).post('/api/auth/request-otp').send({ email: 'http.buyer@procucev.com' });
+
       const res = await request(app)
         .post('/api/auth/verify-otp')
-        .send({ email: 'http.buyer@procucev.com', code: '1234' });
+        .send({ email: 'http.buyer@procucev.com', code: otpRes.body.demoCode });
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.token).toBeDefined();
@@ -327,6 +482,25 @@ describe('Authentication Routes & Services (/api/auth) - Complete 100% Coverage'
       expect(res2.body.success).toBe(true);
     });
 
+    test('POST /api/auth/logout revokes a real session token', async () => {
+      const loginRes = await request(app)
+        .post('/api/auth/login')
+        .send({ email: 'buyer@procucev.com', password: 'password123' });
+      const token = loginRes.body.token;
+
+      const logoutRes = await request(app)
+        .post('/api/auth/logout')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ email: 'buyer@procucev.com' });
+      expect(logoutRes.status).toBe(200);
+
+      const sessionRes = await request(app)
+        .get('/api/auth/session')
+        .set('Authorization', `Bearer ${token}`);
+      expect(sessionRes.status).toBe(401);
+      expect(sessionRes.body.error).toContain('logged out');
+    });
+
     test('GET /api/auth/users lists all users', async () => {
       const res = await request(app).get('/api/auth/users');
       expect(res.status).toBe(200);
@@ -335,7 +509,7 @@ describe('Authentication Routes & Services (/api/auth) - Complete 100% Coverage'
   });
 
   describe('Controller Catch Blocks & Error Handling', () => {
-    test('requestOtp catch block triggers next(err)', async () => {
+    test('requestOtp catch block returns 400 with the error message', async () => {
       const next = jest.fn();
       const res = mockRes();
       jest.spyOn(authService, 'requestOtp').mockImplementationOnce(() => {
@@ -343,7 +517,9 @@ describe('Authentication Routes & Services (/api/auth) - Complete 100% Coverage'
       });
 
       authController.requestOtp({ body: { email: 'test@domain.com' }, headers: {} }, res, next);
-      expect(next).toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false, error: 'Forced OTP failure' }));
+      expect(next).not.toHaveBeenCalled();
     });
 
     test('register catch block triggers next(err)', async () => {
@@ -371,7 +547,6 @@ describe('Authentication Routes & Services (/api/auth) - Complete 100% Coverage'
     test('logout catch block triggers next(err)', async () => {
       const next = jest.fn();
       const res = mockRes();
-      const { logger } = require('../src/services/loggerService');
       jest.spyOn(logger, 'audit').mockImplementationOnce(() => {
         throw new Error('Forced audit failure');
       });
@@ -436,6 +611,56 @@ describe('Authentication Routes & Services (/api/auth) - Complete 100% Coverage'
       authController.register({}, resEmpty, jest.fn());
       authController.logout({}, resEmpty, jest.fn());
       expect(resEmpty.status).toHaveBeenCalledWith(400);
+    });
+
+    // Placed last: jest.resetModules() clears Jest's require cache, so anything
+    // that plain-requires a shared module (logger, poolModule, ...) afterwards
+    // would get a fresh instance instead of the one already-loaded services hold.
+    test('module load: AUTH_SECRET/JWT_SECRET fail-fast in production, warn in dev, silent when configured', () => {
+      const originalNodeEnv = process.env.NODE_ENV;
+      const originalAuthSecret = process.env.AUTH_SECRET;
+      const originalJwtSecret = process.env.JWT_SECRET;
+
+      const restoreEnv = () => {
+        process.env.NODE_ENV = originalNodeEnv;
+        if (originalAuthSecret === undefined) delete process.env.AUTH_SECRET; else process.env.AUTH_SECRET = originalAuthSecret;
+        if (originalJwtSecret === undefined) delete process.env.JWT_SECRET; else process.env.JWT_SECRET = originalJwtSecret;
+        jest.resetModules();
+      };
+
+      try {
+        // Production + no secret configured: throws at require-time
+        jest.resetModules();
+        process.env.NODE_ENV = 'production';
+        delete process.env.AUTH_SECRET;
+        delete process.env.JWT_SECRET;
+        expect(() => {
+          jest.isolateModules(() => {
+            require('../src/services/authService');
+          });
+        }).toThrow('AUTH_SECRET');
+
+        // Development + no secret configured: doesn't throw (falls back with a logged warning)
+        jest.resetModules();
+        process.env.NODE_ENV = 'development';
+        expect(() => {
+          jest.isolateModules(() => {
+            require('../src/services/authService');
+          });
+        }).not.toThrow();
+
+        // A configured secret: doesn't throw, regardless of environment
+        jest.resetModules();
+        process.env.NODE_ENV = 'production';
+        process.env.AUTH_SECRET = 'a-real-configured-secret';
+        expect(() => {
+          jest.isolateModules(() => {
+            require('../src/services/authService');
+          });
+        }).not.toThrow();
+      } finally {
+        restoreEnv();
+      }
     });
   });
 });

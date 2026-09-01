@@ -280,16 +280,32 @@ describe('API Route Endpoints', () => {
     });
 
     test('POST /api/db/init handles schema initialization without connection gracefully', async () => {
-      const res = await request(app).post('/api/db/init');
-      expect(res.statusCode).toBe(500);
-      expect(res.body.success).toBe(false);
+      // Force the disconnected state explicitly rather than relying on DATABASE_URL being
+      // unset in the ambient environment — this dev environment has a real Postgres configured.
+      const poolModule = require('../src/db/pool');
+      const originalPool = poolModule.pool;
+      poolModule.pool = null;
+      try {
+        const res = await request(app).post('/api/db/init');
+        expect(res.statusCode).toBe(500);
+        expect(res.body.success).toBe(false);
+      } finally {
+        poolModule.pool = originalPool;
+      }
     });
 
     test('POST /api/db/sync handles data synchronization without connection gracefully', async () => {
-      const res = await request(app).post('/api/db/sync');
-      expect(res.statusCode).toBe(200);
-      expect(res.body.success).toBe(false);
-      expect(res.body.message).toContain('DATABASE_URL');
+      const poolModule = require('../src/db/pool');
+      const originalPool = poolModule.pool;
+      poolModule.pool = null;
+      try {
+        const res = await request(app).post('/api/db/sync');
+        expect(res.statusCode).toBe(200);
+        expect(res.body.success).toBe(false);
+        expect(res.body.message).toContain('DATABASE_URL');
+      } finally {
+        poolModule.pool = originalPool;
+      }
     });
 
     test('GET /api/buyer-accounts/active returns active account', async () => {

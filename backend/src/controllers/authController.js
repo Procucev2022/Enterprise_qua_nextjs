@@ -1,8 +1,24 @@
 const authService = require('../services/authService');
 const { logger } = require('../services/loggerService');
+const { VALIDATION_SCHEMAS, validatePayload, AUTH_MESSAGES } = require('../config/constants');
 
 function getClientIp(req) {
   return req.ip || (req.headers && req.headers['x-forwarded-for']) || '127.0.0.1';
+}
+
+function extractToken(req) {
+  const authHeader = req.headers && req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    return authHeader.substring(7);
+  }
+  if (req.headers && req.headers.cookie) {
+    const match = req.headers.cookie.match(/auth_token=([^;]+)/);
+    if (match) return match[1];
+  }
+  if (req.cookies && req.cookies.auth_token) {
+    return req.cookies.auth_token;
+  }
+  return null;
 }
 
 function login(req, res, next) {
@@ -10,8 +26,9 @@ function login(req, res, next) {
     const { email, password, code } = req.body || {};
     const ipAddress = getClientIp(req);
 
-    if (!email) {
-      return res.status(400).json({ success: false, error: 'Email is required.' });
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.login, { email, password, code });
+    if (!isValid) {
+      return res.status(400).json({ success: false, error: Object.values(errors)[0] });
     }
 
     if (code) {
@@ -24,11 +41,10 @@ function login(req, res, next) {
       return res.json(result);
     }
 
-    const result = authService.authenticateWithPassword(email, 'password123', ipAddress);
-    return res.json(result);
+    return res.status(400).json({ success: false, error: AUTH_MESSAGES.PASSWORD_OR_CODE_REQUIRED });
   } catch (err) {
     logger.warn('Login failure in authController', { error: err.message, body: req.body }, 'AUTH_CONTROLLER');
-    return res.status(401).json({ success: false, error: err.message || 'Authentication failed' });
+    return res.status(401).json({ success: false, error: err.message || AUTH_MESSAGES.AUTH_FAILED_FALLBACK });
   }
 }
 
@@ -37,15 +53,16 @@ function requestOtp(req, res, next) {
     const { email, roleHint } = req.body || {};
     const ipAddress = getClientIp(req);
 
-    if (!email) {
-      return res.status(400).json({ success: false, error: 'Email is required to request OTP.' });
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.requestOtp, { email, roleHint });
+    if (!isValid) {
+      return res.status(400).json({ success: false, error: Object.values(errors)[0] });
     }
 
     const result = authService.requestOtp(email, roleHint, ipAddress);
     res.json(result);
   } catch (err) {
-    logger.error('Error requesting OTP', err, 'AUTH_CONTROLLER');
-    next(err);
+    logger.warn('OTP request failed in authController', { error: err.message, email: req.body?.email }, 'AUTH_CONTROLLER');
+    return res.status(400).json({ success: false, error: err.message || AUTH_MESSAGES.OTP_REQUEST_EMAIL_REQUIRED });
   }
 }
 
@@ -54,15 +71,16 @@ function verifyOtp(req, res, next) {
     const { email, code } = req.body || {};
     const ipAddress = getClientIp(req);
 
-    if (!email || !code) {
-      return res.status(400).json({ success: false, error: 'Email and verification code are required.' });
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.verifyOtp, { email, code });
+    if (!isValid) {
+      return res.status(400).json({ success: false, error: Object.values(errors)[0] });
     }
 
     const result = authService.verifyOtp(email, code, ipAddress);
     res.json(result);
   } catch (err) {
     logger.warn('OTP verification failed in authController', { error: err.message, email: req.body?.email }, 'AUTH_CONTROLLER');
-    return res.status(400).json({ success: false, error: err.message || 'Invalid OTP code.' });
+    return res.status(400).json({ success: false, error: err.message || AUTH_MESSAGES.INVALID_OTP_FALLBACK });
   }
 }
 
@@ -71,8 +89,9 @@ function register(req, res, next) {
     const { name, email, password, mobile, role, orgName } = req.body || {};
     const ipAddress = getClientIp(req);
 
-    if (!email) {
-      return res.status(400).json({ success: false, error: 'Email is required for registration.' });
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.register, { name, email, password, mobile, role, orgName });
+    if (!isValid) {
+      return res.status(400).json({ success: false, error: Object.values(errors)[0] });
     }
 
     const result = authService.registerUser({ name, email, password, mobile, role, orgName }, ipAddress);
@@ -85,25 +104,15 @@ function register(req, res, next) {
 
 function getSession(req, res, next) {
   try {
-    const authHeader = req.headers && req.headers.authorization;
-    let token = null;
-
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      token = authHeader.substring(7);
-    } else if (req.headers && req.headers.cookie) {
-      const match = req.headers.cookie.match(/auth_token=([^;]+)/);
-      if (match) token = match[1];
-    } else if (req.cookies && req.cookies.auth_token) {
-      token = req.cookies.auth_token;
-    }
+    const token = extractToken(req);
 
     if (!token) {
-      return res.status(401).json({ success: false, error: 'No active session token provided.' });
+      return res.status(401).json({ success: false, error: AUTH_MESSAGES.NO_SESSION_TOKEN });
     }
 
     const verification = authService.verifySessionToken(token);
     if (!verification.valid) {
-      return res.status(401).json({ success: false, error: verification.error || 'Invalid session' });
+      return res.status(401).json({ success: false, error: verification.error || AUTH_MESSAGES.INVALID_SESSION_FALLBACK });
     }
 
     res.json({
@@ -120,8 +129,12 @@ function logout(req, res, next) {
   try {
     const userEmail = (req.body && req.body.email) || 'authenticated-user';
     const ipAddress = getClientIp(req);
+    const token = extractToken(req);
+    if (token) {
+      authService.revokeSessionToken(token);
+    }
     logger.audit(`User logged out: ${userEmail}`, userEmail, { ipAddress });
-    res.json({ success: true, message: 'Logged out successfully.' });
+    res.json({ success: true, message: AUTH_MESSAGES.LOGOUT_SUCCESS });
   } catch (err) {
     logger.error('Error logging out', err, 'AUTH_CONTROLLER');
     next(err);
@@ -140,6 +153,7 @@ function listUsers(req, res, next) {
 
 module.exports = {
   getClientIp,
+  extractToken,
   login,
   requestOtp,
   verifyOtp,
