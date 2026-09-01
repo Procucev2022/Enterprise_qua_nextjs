@@ -26,9 +26,7 @@ export default function RootLayout({
         <AppProvider>
           <div className="min-h-screen flex flex-col">
             <Header />
-            <main className="flex-1 max-w-[1600px] w-full mx-auto px-4 lg:px-6 py-6">
-              {children}
-            </main>
+            <main className="flex-1 w-full">{children}</main>
             <NotificationToast />
             <StandardRFQEmailModal />
             <VendorRatingRevisionModal />

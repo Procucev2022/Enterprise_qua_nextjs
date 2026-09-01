@@ -1112,10 +1112,10 @@ export default function HomePage() {
     );
   }
 
-  // Logged-in Core Screens switchboard layout
+  // Logged-in Core Screens switchboard layout (flush sidebar dashboard shell)
   return (
-    <div className="space-y-6">
-      {/* Role Navigation Bar with Screen Selectors */}
+    <div className="flex flex-col lg:flex-row items-stretch">
+      {/* Flush Role Workspace Sidebar with Module Selectors */}
       <RoleNavigation
         activeScreen={activeScreen}
         setActiveScreen={setActiveScreen}
@@ -1123,7 +1123,7 @@ export default function HomePage() {
       />
 
       {/* Screen Render Switcher */}
-      <div className="mt-2">
+      <div className="flex-1 min-w-0 w-full px-4 lg:px-6 py-5">
         {/* ROLE 1: ENTERPRISE BUYER */}
         {currentRole === 'buyer' && (
           <>

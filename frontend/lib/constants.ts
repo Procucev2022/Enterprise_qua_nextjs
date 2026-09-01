@@ -1,4 +1,13 @@
-import type { SourcingModeDetail, SystemConfig, AzureServiceHealth, RFQItem } from './types';
+import type {
+  SourcingModeDetail,
+  SystemConfig,
+  AzureServiceHealth,
+  RFQItem,
+  SidebarNavItem,
+  RoleWorkspaceMeta,
+  UserRole,
+} from './types';
+import { UI_STRINGS } from './uiStrings';
 
 export const SOURCING_MODES: SourcingModeDetail[] = [
   {
@@ -161,6 +170,251 @@ export const FALLBACK_RFQ_TEMPLATE: Omit<RFQItem, 'rfqNumber' | 'title'> = {
   extractedEntities: [],
   quotes: [],
   chasingActive: false,
+};
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════
+ * Sidebar Dashboard Navigation Configuration
+ * ═══════════════════════════════════════════════════════════════════════
+ * Declarative per-role module registry driving the collapsible workspace
+ * sidebar. Icons are referenced by key so this module stays pure data and
+ * free of React/JSX imports; labels resolve from the centralized
+ * `UI_STRINGS` dictionary to remain i18n-ready.
+ */
+const NAV_ITEMS = UI_STRINGS.navigation.items;
+const NAV_GROUPS = UI_STRINGS.navigation.groups;
+
+export const ROLE_WORKSPACE_META: Record<UserRole, RoleWorkspaceMeta> = {
+  buyer: {
+    accentText: 'text-indigo-600 dark:text-indigo-400',
+    accentActive: 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30',
+    accentRing: 'group-hover:border-indigo-400 dark:group-hover:border-indigo-600',
+  },
+  category_manager: {
+    accentText: 'text-sky-600 dark:text-sky-400',
+    accentActive: 'bg-sky-600 text-white shadow-sm shadow-sky-600/30',
+    accentRing: 'group-hover:border-sky-400 dark:group-hover:border-sky-600',
+  },
+  vendor: {
+    accentText: 'text-emerald-600 dark:text-emerald-400',
+    accentActive: 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/30',
+    accentRing: 'group-hover:border-emerald-400 dark:group-hover:border-emerald-600',
+  },
+  admin: {
+    accentText: 'text-purple-600 dark:text-purple-400',
+    accentActive: 'bg-purple-600 text-white shadow-sm shadow-purple-600/30',
+    accentRing: 'group-hover:border-purple-400 dark:group-hover:border-purple-600',
+  },
+};
+
+export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
+  buyer: [
+    {
+      id: 'command_center',
+      screenTag: 'Screen 1.1',
+      shortTag: '1.1',
+      label: NAV_ITEMS.commandCenter.label,
+      description: NAV_ITEMS.commandCenter.description,
+      icon: 'Layers',
+      group: NAV_GROUPS.buyerSourcing,
+    },
+    {
+      id: 'ingestion_wizard',
+      screenTag: 'Screen 1.2',
+      shortTag: '1.2',
+      label: NAV_ITEMS.ingestionWizard.label,
+      description: NAV_ITEMS.ingestionWizard.description,
+      icon: 'FileSpreadsheet',
+      group: NAV_GROUPS.buyerSourcing,
+    },
+    {
+      id: 'vendor_evaluation_summary',
+      screenTag: 'Screen 1.3',
+      shortTag: '1.3',
+      label: NAV_ITEMS.buyerEvaluationSummary.label,
+      description: NAV_ITEMS.buyerEvaluationSummary.description,
+      icon: 'FileCheck',
+      group: NAV_GROUPS.buyerEvaluation,
+    },
+    {
+      id: 'vendor_summary',
+      screenTag: 'Screen 1.4',
+      shortTag: '1.4',
+      label: NAV_ITEMS.vendorDirectory.label,
+      description: NAV_ITEMS.vendorDirectory.description,
+      icon: 'Building2',
+      group: NAV_GROUPS.buyerEvaluation,
+    },
+    {
+      id: 'subscription_center',
+      screenTag: 'Screen 1.5',
+      shortTag: '1.5',
+      label: NAV_ITEMS.sourcingSubscriptions.label,
+      description: NAV_ITEMS.sourcingSubscriptions.description,
+      icon: 'Sparkles',
+      group: NAV_GROUPS.buyerAccount,
+    },
+    {
+      id: 'buyer_profile',
+      screenTag: 'Screen 1.6',
+      shortTag: '1.6',
+      label: NAV_ITEMS.buyerProfile.label,
+      description: NAV_ITEMS.buyerProfile.description,
+      icon: 'Building2',
+      group: NAV_GROUPS.buyerAccount,
+    },
+    {
+      id: 'buyer_directory',
+      screenTag: 'Screen 1.7',
+      shortTag: '1.7',
+      label: NAV_ITEMS.buyerDbSync.label,
+      description: NAV_ITEMS.buyerDbSync.description,
+      icon: 'Database',
+      group: NAV_GROUPS.buyerAccount,
+    },
+  ],
+  category_manager: [
+    {
+      id: 'kanban_board',
+      screenTag: 'Screen 2.1',
+      shortTag: '2.1',
+      label: NAV_ITEMS.operationalKanban.label,
+      description: NAV_ITEMS.operationalKanban.description,
+      icon: 'Kanban',
+      group: NAV_GROUPS.categoryOperations,
+    },
+    {
+      id: 'spend_dashboard',
+      screenTag: 'Screen 2.2',
+      shortTag: '2.2',
+      label: NAV_ITEMS.spendAnalytics.label,
+      description: NAV_ITEMS.spendAnalytics.description,
+      icon: 'TrendingUp',
+      group: NAV_GROUPS.categoryOperations,
+    },
+    {
+      id: 'buyer_console',
+      screenTag: 'Screen 2.3',
+      shortTag: '2.3',
+      label: NAV_ITEMS.buyerRfqConsole.label,
+      description: NAV_ITEMS.buyerRfqConsole.description,
+      icon: 'Building2',
+      group: NAV_GROUPS.categoryConsoles,
+    },
+    {
+      id: 'vendor_evaluation_summary',
+      screenTag: 'Screen 2.4',
+      shortTag: '2.4',
+      label: NAV_ITEMS.modeEvaluations.label,
+      description: NAV_ITEMS.modeEvaluations.description,
+      icon: 'FileCheck',
+      group: NAV_GROUPS.categoryConsoles,
+    },
+    {
+      id: 'vendor_console',
+      screenTag: 'Screen 2.5',
+      shortTag: '2.5',
+      label: NAV_ITEMS.vendorPerformance.label,
+      description: NAV_ITEMS.vendorPerformance.description,
+      icon: 'Truck',
+      group: NAV_GROUPS.categoryConsoles,
+    },
+    {
+      id: 'category_summary',
+      screenTag: 'Screen 2.6',
+      shortTag: '2.6',
+      label: NAV_ITEMS.categoryTrends.label,
+      description: NAV_ITEMS.categoryTrends.description,
+      icon: 'Layers',
+      group: NAV_GROUPS.categoryGovernance,
+    },
+  ],
+  vendor: [
+    {
+      id: 'vendor_feed',
+      screenTag: 'Screen 3.1',
+      shortTag: '3.1',
+      label: NAV_ITEMS.opportunityFeed.label,
+      description: NAV_ITEMS.opportunityFeed.description,
+      icon: 'Truck',
+      group: NAV_GROUPS.vendorOpportunities,
+    },
+    {
+      id: 'quotation_form',
+      screenTag: 'Screen 3.2',
+      shortTag: '3.2',
+      label: NAV_ITEMS.bidQuotes.label,
+      description: NAV_ITEMS.bidQuotes.description,
+      icon: 'FileCheck',
+      group: NAV_GROUPS.vendorOpportunities,
+    },
+    {
+      id: 'qualification_form',
+      screenTag: 'Screen 3.3',
+      shortTag: '3.3',
+      label: NAV_ITEMS.selfEvaluation.label,
+      description: NAV_ITEMS.selfEvaluation.description,
+      icon: 'Award',
+      group: NAV_GROUPS.vendorQualification,
+    },
+    {
+      id: 'item_catalogue',
+      screenTag: 'Screen 3.4',
+      shortTag: '3.4',
+      label: NAV_ITEMS.itemCatalogue.label,
+      description: NAV_ITEMS.itemCatalogue.description,
+      icon: 'Layers',
+      group: NAV_GROUPS.vendorQualification,
+    },
+    {
+      id: 'vendor_subscription',
+      screenTag: 'Screen 3.5',
+      shortTag: '3.5',
+      label: NAV_ITEMS.subscriptionPlans.label,
+      description: NAV_ITEMS.subscriptionPlans.description,
+      icon: 'Sparkles',
+      group: NAV_GROUPS.vendorAccount,
+    },
+    {
+      id: 'vendor_profile',
+      screenTag: 'Screen 3.6',
+      shortTag: '3.6',
+      label: NAV_ITEMS.supplierProfile.label,
+      description: NAV_ITEMS.supplierProfile.description,
+      icon: 'Truck',
+      group: NAV_GROUPS.vendorAccount,
+    },
+  ],
+  admin: [
+    {
+      id: 'infra_control',
+      screenTag: 'Screen 4.1',
+      shortTag: '4.1',
+      label: NAV_ITEMS.azureInfrastructure.label,
+      description: NAV_ITEMS.azureInfrastructure.description,
+      icon: 'Server',
+      group: NAV_GROUPS.adminPlatform,
+    },
+    {
+      id: 'audit_log',
+      screenTag: 'Screen 4.2',
+      shortTag: '4.2',
+      label: NAV_ITEMS.immutableAuditLog.label,
+      description: NAV_ITEMS.immutableAuditLog.description,
+      icon: 'ShieldCheck',
+      group: NAV_GROUPS.adminPlatform,
+    },
+  ],
+};
+
+/**
+ * Flush edge-to-edge sidebar geometry. The rail is pinned directly beneath the
+ * 64px sticky application header with zero top, left, or bottom gutters.
+ */
+export const SIDEBAR_LAYOUT = {
+  WIDTH_CLASS: 'lg:w-[262px]',
+  STICKY_OFFSET_CLASS: 'lg:top-16',
+  HEIGHT_CLASS: 'lg:h-[calc(100vh-4rem)]',
 };
 
 export {
