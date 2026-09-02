@@ -19,9 +19,14 @@ export const UI_STRINGS = {
       screenTag: 'Screen 1.2',
       subtitle: 'Parse structured, tabular, and unstructured industrial BOM requirements.',
     },
+    rfqSummary: {
+      title: 'Buyer RFQ Portfolio Summary',
+      screenTag: 'Screen 1.3',
+      subtitle: 'Every RFQ raised by this organisation with intake source, sourcing mode and quote progress.',
+    },
     quoteMatrix: {
       title: 'Comparative Quote Evaluation Matrix',
-      screenTag: 'Screen 1.3',
+      screenTag: 'Screen 1.4',
       subtitle: 'Side-by-side parametric evaluation of line-item vendor bids synthesized by QUA AI.',
     },
     vendorEvaluation: {
@@ -109,6 +114,10 @@ export const UI_STRINGS = {
         label: 'AI Ingestion & Mode Wizard',
         description: 'Parse BOM inputs & pick a sourcing version',
       },
+      rfqSummary: {
+        label: 'RFQ Summary',
+        description: 'Portfolio of every RFQ raised & its quote status',
+      },
       buyerEvaluationSummary: {
         label: 'Evaluation Summary',
         description: '6-pillar supplier scorecards with OCR trails',
@@ -195,6 +204,169 @@ export const UI_STRINGS = {
     welcomeUser: 'Welcome back, {userName} ({userRole})',
     totalSpendSummary: 'Total analyzed spend: ₹{amount} across {categoryCount} categories.',
   },
+  /** Buyer RFQ Portfolio Summary (Screen 1.3). */
+  /** AI document extraction inside the ingestion wizard (Screen 1.2). */
+  rfqExtraction: {
+    // Step 1
+    noFileTitle: 'No Document Selected',
+    noFileMessage: 'Upload a BOQ spreadsheet, PDF or scanned requirement before continuing.',
+    extractAction: 'Extract Line Items with AI',
+    extractingLabel: 'Reading your document with QUA AI…',
+    extractingHint: 'Identifying line items, quantities, units and specifications.',
+
+    // Step 2 outcome banners
+    successTitle: 'AI Extraction Complete',
+    successSummary:
+      '{accepted} line items extracted by {model}. {needsReview} need a category review before dispatch.',
+    successToast: '{accepted} line items extracted from {fileName}.',
+    fallbackTitle: 'Line Items Could Not Be Read',
+    fallbackHint: 'Add each line item below, assign its minor category, then continue to sourcing.',
+    unreadableResponse:
+      'The extraction service returned an unexpected response. Add the line items manually to continue.',
+    /**
+     * Shown for a transport failure rather than a model failure. A dev-proxy error
+     * or a stopped API answers with HTML, and reporting `unreadableResponse` for
+     * that blamed the AI for what was actually an unreachable backend.
+     */
+    apiUnavailable:
+      'The RFQ service is not responding (HTTP {status}), so the document could not be sent for extraction. It may be restarting — wait a moment and retry. You can add the line items manually to carry on in the meantime.',
+
+    // Step 2 empty state
+    emptyTitle: 'No Line Items Yet',
+    emptyMessage: 'Add at least one line item so vendors have something to quote against.',
+    addFirstItemAction: 'Add First Line Item',
+    incompleteItemsTitle: 'Line Items Incomplete',
+    incompleteItemsMessage: 'Give every line item a description before choosing a sourcing mode.',
+
+    // Step 2 RFQ header fields
+    budgetLabel: 'Estimated Budget ({symbol})',
+    budgetFromDocumentHint: 'Read from {fileName}. Edit it if the document under-states the true value.',
+    budgetMissingHint: 'No value was stated in the document. Enter your estimated budget before saving.',
+    budgetRequiredTitle: 'Estimated Budget Required',
+    budgetRequiredMessage:
+      'Enter an estimated budget above zero. Vendors are ranked against it, so the RFQ cannot be saved without one.',
+
+    /**
+     * Step strip. Rendered in order, and a step only becomes reachable once the
+     * one before it has produced what the next step needs.
+     */
+    steps: [
+      {
+        number: 1,
+        label: 'STEP 1: INGESTION',
+        tag: 'Portal / Email',
+        hint: 'BOQ file or Email Gateway',
+      },
+      {
+        number: 2,
+        label: 'STEP 2: MINOR CATEGORIZATION',
+        tag: 'Taxonomy Mapping',
+        hint: 'Classify into 280+ Minor Categories',
+      },
+      {
+        number: 3,
+        label: 'STEP 3: SOURCING MODE',
+        tag: 'Mode Selection',
+        hint: 'Choose how this RFQ reaches suppliers',
+      },
+    ],
+
+    // Step 2 taxonomy re-classification
+    classifyAction: 'AI Auto-Categorize All',
+    classifyingLabel: 'Re-categorizing line items…',
+    classifyEmptyTitle: 'Nothing to Categorize',
+    classifyEmptyMessage: 'Add at least one line item with a description first.',
+    classifySuccessTitle: 'Minor Categories Updated',
+    classifySuccessMessage:
+      '{accepted} line items re-categorized against the shared taxonomy. {needsReview} could not be matched and kept the default category.',
+    classifyFailed:
+      'Categories could not be refreshed just now. Set the major and minor category on each line item manually, or try again.',
+
+    // Step strip gating
+    stepLockedTitle: 'Finish the Current Step First',
+    stepLockedExtractMessage: 'Upload a document and extract its line items before opening the review step.',
+    stepLockedReviewMessage: 'Review the line items and give each one a description before choosing a sourcing mode.',
+    stepLockedHint: 'Complete the previous step',
+
+    // Step 3 vendor placeholder
+    vendorComingSoonTitle: 'Vendor Matching & Dispatch — Coming Soon',
+    vendorComingSoonMessage:
+      'Supplier matching, the Mode 3 anonymous pool and standard RFQ email dispatch are being rebuilt on the new sourcing engine. For now your RFQ is saved with the sourcing mode you select here, and vendors can be attached once matching goes live.',
+    vendorComingSoonBadge: 'In Development',
+    dispatchAction: 'Save RFQ with Selected Sourcing Mode',
+    dispatchSummary: '{rfqNumber} — {itemCount} categorised line items will be saved under {modeCode}.',
+  },
+
+  rfqSummary: {
+    createRFQAction: 'Create New RFQ',
+
+    // KPI strip
+    kpiTotalRFQs: 'Total RFQs Raised',
+    kpiTotalRFQsHint: '{activeCount} still chasing vendors',
+    kpiAwaitingQuotes: 'Awaiting First Quote',
+    kpiAwaitingQuotesHint: '{quoteCount} quotations received in total',
+    kpiPortfolioValue: 'Portfolio Value',
+    kpiPortfolioValueHint: 'Averaging {average} quotes per RFQ',
+    kpiVendorsEngaged: 'Vendors Invited',
+    kpiVendorsEngagedHint: '{responded} have responded so far',
+
+    // Sourcing mode distribution
+    modeDistributionTitle: 'Sourcing Mode Distribution',
+    modeSharePercent: '{modeCode}: {share}% of portfolio',
+
+    // Filters
+    searchLabel: 'Search Portfolio',
+    searchPlaceholder: 'RFQ number, title, category or line item…',
+    statusFilterLabel: 'Status',
+    modeFilterLabel: 'Sourcing Mode',
+    sourceFilterLabel: 'Intake Source',
+    allStatuses: 'All Statuses',
+    allModes: 'All Modes',
+    allSources: 'All Sources',
+    resultCount: 'Showing {shown} of {total} RFQs',
+
+    // Intake source badges
+    sourceEmailGateway: 'Email Gateway',
+    sourceEmailUpload: 'Email File Upload',
+    sourceManualEntry: 'Manual Web Entry',
+    sourceWebPortal: 'Web App Portal',
+
+    // Table
+    tableCaption: 'RFQ portfolio with sourcing mode, status, quote counts and delivery dates',
+    colRfqNumber: 'RFQ Number',
+    colTitle: 'Title & Category',
+    colMode: 'Mode',
+    colStatus: 'Status',
+    colItems: 'Items',
+    colQuotes: 'Quotes',
+    colBudget: 'Budget',
+    colDelivery: 'Target Delivery',
+    colActions: 'Actions',
+    chasingActive: 'Chasers running',
+    deliveryDateUnset: 'Not set',
+    ofInvited: 'of {invited} invited',
+    followUpsAction: 'Follow-ups',
+    quotesAction: 'Quotes',
+    viewFollowUpsAria: 'View multi-channel follow-up detail for {rfqNumber}',
+    viewQuotesAria: 'Open the comparative quote matrix for {rfqNumber}',
+
+    // Empty & no-match states
+    emptyPortfolioTitle: 'No RFQs raised yet',
+    emptyPortfolioMessage:
+      'Ingest a BOQ spreadsheet, forward a requisition email, or enter line items manually to raise your first RFQ.',
+    noMatchesMessage: 'No RFQs match the current search and filter combination.',
+    noQuotesYetTitle: 'No Quotes Received Yet',
+    noQuotesYetMessage:
+      'Vendors have not submitted quotations against {rfqNumber} yet. Chasers are still running, so check back shortly.',
+
+    // Pagination
+    rowsPerPageLabel: 'Rows per page',
+    pageRange: 'Showing {from}–{to} of {total}',
+    pageIndicator: 'Page {current} of {total}',
+    previousPageAria: 'Go to the previous page of RFQs',
+    nextPageAria: 'Go to the next page of RFQs',
+  },
+
   auth: {
     // Titles used by the sign-in / registration toasts
     signInFailedTitle: 'Sign In Failed',

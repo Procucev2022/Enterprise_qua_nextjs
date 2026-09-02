@@ -62,7 +62,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
 
   const totalActiveRFQs = rfqs.length;
   const totalPendingQuotes = rfqs.reduce((acc, r) => acc + (r.quotesCount || 0), 0) + 24;
-  const totalSpend = '$1.24M';
+  const totalSpend = '₹1.24 Cr';
 
   // Intake Source Counts
   const emailGatewayRFQs = rfqs.filter(r => r.source === 'email_gateway');

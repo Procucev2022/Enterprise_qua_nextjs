@@ -12,15 +12,44 @@ const { evaluateQuotes, calculate360Evaluation, calculateRevisedRating } = requi
 const { simulateChaserOutreach } = require('./aiChaserService');
 const { logger } = require('./loggerService');
 
+/**
+ * Whether to preload the demo RFQs, AI feed and audit trail.
+ *
+ * These ship with the repo so a fresh checkout has something to show, but they
+ * are written into the same store a buyer's real RFQs land in, and the portfolio
+ * summary derives every KPI from that store. The result was a screen reporting
+ * demo spend, quote counts and vendor engagement next to genuine work, with no
+ * way to tell them apart.
+ *
+ * The test suite uses them as fixtures, so seeding stays on under NODE_ENV=test.
+ * Set SEED_DEMO_RFQS=true to get them back in a running app, or false to switch
+ * them off during a test run.
+ *
+ * Vendors, buyer accounts and evaluations are deliberately not gated: the active
+ * buyer account and the vendor directory are load-bearing for sign-in and vendor
+ * selection rather than illustrative.
+ */
+function shouldSeedDemoRFQs() {
+  if (process.env.SEED_DEMO_RFQS !== undefined) {
+    return process.env.SEED_DEMO_RFQS === 'true';
+  }
+  return process.env.NODE_ENV === 'test';
+}
+
 class StoreService {
   constructor() {
     this.buyerAccounts = JSON.parse(JSON.stringify(SEED_BUYER_ACCOUNTS));
     this.activeBuyerAccount = this.buyerAccounts[0] || null;
     this.vendors = JSON.parse(JSON.stringify(SEED_VENDORS));
-    this.rfqs = JSON.parse(JSON.stringify(SEED_RFQS));
+    // Demo RFQs and the feed/audit narrative around them are opt-in. Once
+    // hydrated they are indistinguishable from a buyer's own work, so the RFQ
+    // portfolio summary reported fabricated spend, quote counts and vendor
+    // engagement alongside real RFQs. See shouldSeedDemoRFQs.
+    const seedDemo = shouldSeedDemoRFQs();
+    this.rfqs = seedDemo ? JSON.parse(JSON.stringify(SEED_RFQS)) : [];
     this.evaluations = JSON.parse(JSON.stringify(SEED_EVALUATIONS));
-    this.auditLogs = JSON.parse(JSON.stringify(SEED_AUDIT_LOGS));
-    this.aiFeed = JSON.parse(JSON.stringify(SEED_AI_FEED));
+    this.auditLogs = seedDemo ? JSON.parse(JSON.stringify(SEED_AUDIT_LOGS)) : [];
+    this.aiFeed = seedDemo ? JSON.parse(JSON.stringify(SEED_AI_FEED)) : [];
     this.systemConfig = JSON.parse(JSON.stringify(INITIAL_SYSTEM_CONFIG));
     this.azureHealth = JSON.parse(JSON.stringify(INITIAL_AZURE_HEALTH));
     this.isHydratedFromDB = false;
@@ -273,7 +302,12 @@ class StoreService {
       title: rfqData.title || 'Untitled RFQ',
       category: rfqData.category || 'Engineering Spares - Mechanical',
       createdAt: rfqData.createdAt || new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
-      deadline: rfqData.deadline || '2026-09-20',
+      deadline: rfqData.deadline || rfqData.targetDeliveryDate || '2026-09-20',
+      // Budget was previously dropped here, so an RFQ saved through the API came
+      // back from hydration with no budget at all: the portfolio value totalled
+      // zero and the quote matrix crashed reading it. It is validated as a
+      // required positive number by VALIDATION_SCHEMAS.createRFQ.
+      budget: Number(rfqData.budget) || 0,
       status: rfqData.status || 'open',
       sourcingMode: rfqData.sourcingMode || 'mode_1',
       quotesCount: rfqData.quotes ? rfqData.quotes.length : 0,
@@ -344,6 +378,63 @@ class StoreService {
     const beforeLen = this.rfqs.length;
     this.rfqs = this.rfqs.filter((r) => r.id !== id && r.rfqNumber !== id);
     return this.rfqs.length < beforeLen;
+  }
+
+  /**
+   * Aggregate the buyer RFQ portfolio for the RFQ Summary screen.
+   *
+   * Mirrors the roll-ups the Java BuyerDashboardServiceImpl computed by walking
+   * the pipeline list: portfolio counts, spend, and breakdowns by status, sourcing
+   * mode and intake source, plus the multi-channel follow-up totals. Everything is
+   * derived from the RFQ list so the summary can never disagree with the table
+   * rendered beside it.
+   */
+  getRFQSummary() {
+    const rfqs = this.getRFQs();
+
+    const countBy = (keyFor) =>
+      rfqs.reduce((acc, rfq) => {
+        const key = keyFor(rfq);
+        if (!key) return acc;
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {});
+
+    const sumChannel = (channel, field) =>
+      rfqs.reduce((total, rfq) => {
+        const stats = rfq.followUpData && rfq.followUpData[channel];
+        return total + ((stats && Number(stats[field])) || 0);
+      }, 0);
+
+    const totalQuotes = rfqs.reduce((total, rfq) => total + (Number(rfq.quotesCount) || 0), 0);
+
+    return {
+      totalRFQs: rfqs.length,
+      // An RFQ still chasing vendors is the buyer's actionable workload.
+      activeRFQs: rfqs.filter((r) => r.chasingActive).length,
+      awaitingQuotes: rfqs.filter((r) => (Number(r.quotesCount) || 0) === 0).length,
+      totalQuotesReceived: totalQuotes,
+      totalBudget: rfqs.reduce((total, rfq) => total + (Number(rfq.budget) || 0), 0),
+      averageQuotesPerRFQ: rfqs.length === 0 ? 0 : Math.round((totalQuotes / rfqs.length) * 10) / 10,
+      byStatus: countBy((r) => r.status),
+      bySourcingMode: countBy((r) => r.sourcingMode),
+      bySource: countBy((r) => r.source || r.intakeSource),
+      followUps: {
+        vendorsInvited: rfqs.reduce(
+          (total, rfq) => total + ((rfq.followUpData && Number(rfq.followUpData.totalInvited)) || 0),
+          0
+        ),
+        vendorsResponded: rfqs.reduce(
+          (total, rfq) => total + ((rfq.followUpData && Number(rfq.followUpData.respondedCount)) || 0),
+          0
+        ),
+        calls: sumChannel('callStats', 'total'),
+        callsConnected: sumChannel('callStats', 'connected'),
+        whatsapp: sumChannel('whatsappStats', 'total'),
+        whatsappRead: sumChannel('whatsappStats', 'read'),
+        sms: sumChannel('smsStats', 'total'),
+      },
+    };
   }
 
   // ==========================================
@@ -695,5 +786,9 @@ class StoreService {
 
 // Global Singleton Instance for Node.js process
 const storeService = new StoreService();
+
+// Every caller shares the singleton, so the seeding predicate is hung off it
+// rather than exported separately, keeping `require('./storeService')` unchanged.
+storeService.shouldSeedDemoRFQs = shouldSeedDemoRFQs;
 
 module.exports = storeService;

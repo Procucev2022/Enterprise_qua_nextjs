@@ -3,6 +3,7 @@
 import React, { useState, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import { useApp } from '@/lib/store';
+import { formatCurrency } from '@/lib/constants';
 import {
   VendorMasterUploadRecord,
   PurchaseOrderLineItemRecord,
@@ -346,7 +347,9 @@ export default function InitialSetupModal() {
         hasPoHistory: hasMatchingPOs,
         categoriesMappedByBuyer: hasMatchingPOs,
         itemsSupplied: items,
-        pastPoSpend: hasMatchingPOs ? `$${totalAmount.toLocaleString()} (${matchingPOs.length} POs)` : 'No PO History in Dump',
+        pastPoSpend: hasMatchingPOs
+          ? `${formatCurrency(totalAmount)} (${matchingPOs.length} POs)`
+          : 'No PO History in Dump',
         poCount: matchingPOs.length,
         firstSetMajorCategory: firstSetMajor,
         secondSetMinorCategories: secondSetMinors,
@@ -833,7 +836,7 @@ export default function InitialSetupModal() {
                   PO Line Items Preview ({poLineItems.length} Line Items):
                 </span>
                 <span className="text-[10px] text-purple-600 dark:text-purple-400 font-bold">
-                  Total Spend: ${poLineItems.reduce((acc, p) => acc + p.totalSpend, 0).toLocaleString()}
+                  Total Spend: {formatCurrency(poLineItems.reduce((acc, p) => acc + p.totalSpend, 0))}
                 </span>
               </div>
 
@@ -859,7 +862,7 @@ export default function InitialSetupModal() {
                         </td>
                         <td className="p-2.5 text-slate-600 dark:text-gray-400">{p.quantity} {p.unit}</td>
                         <td className="p-2.5 font-mono font-bold text-indigo-700 dark:text-indigo-300">
-                          ${p.totalSpend.toLocaleString()}
+                          {formatCurrency(p.totalSpend)}
                         </td>
                       </tr>
                     ))}

@@ -42,6 +42,7 @@ jest.mock('@/app/buyer/command-center', () =>
   ])
 );
 jest.mock('@/app/buyer/ingestion-wizard', () => stub('ingestion-wizard', ['onComplete', 'onCancel']));
+jest.mock('@/app/buyer/rfq-summary', () => stub('rfq-summary', ['onViewQuotes', 'onCreateRFQ']));
 jest.mock('@/app/buyer/quote-matrix', () => stub('quote-matrix', ['onBackToDashboard']));
 jest.mock('@/app/buyer/vendor-evaluation-summary', () => stub('evaluation-summary', ['onBack']));
 jest.mock('@/app/buyer/vendor-summary', () =>
@@ -79,6 +80,7 @@ jest.mock('@/app/admin/audit-log', () => stub('audit-log', ['onBackToInfra']));
 /* eslint-disable @typescript-eslint/no-var-requires */
 const BuyerCommandCenterPage = require('@/app/buyer/command-center/page').default;
 const BuyerIngestionWizardPage = require('@/app/buyer/ingestion-wizard/page').default;
+const BuyerRFQSummaryPage = require('@/app/buyer/rfq-summary/page').default;
 const BuyerQuoteMatrixPage = require('@/app/buyer/quote-matrix/page').default;
 const BuyerEvaluationSummaryPage = require('@/app/buyer/vendor-evaluation-summary/page').default;
 const BuyerVendorSummaryPage = require('@/app/buyer/vendor-summary/page').default;
@@ -182,6 +184,18 @@ describe('Role screen routes', () => {
       render(<BuyerQuoteMatrixPage />);
       clickCallback('quote-matrix:onBackToDashboard');
       expect(mockPush).toHaveBeenCalledWith('/buyer/command-center');
+    });
+
+    it('rfq summary opens the quote matrix and the wizard', () => {
+      render(<BuyerRFQSummaryPage />);
+
+      clickCallback('rfq-summary:onViewQuotes');
+      // The matrix reads its RFQ from the store, so the selection is recorded first.
+      expect(setSelectedRFQForMatrix).toHaveBeenCalled();
+      expect(mockPush).toHaveBeenCalledWith('/buyer/quote-matrix');
+
+      clickCallback('rfq-summary:onCreateRFQ');
+      expect(mockPush).toHaveBeenCalledWith('/buyer/ingestion-wizard');
     });
 
     it('evaluation summary clears the selection and returns to the vendor list', () => {

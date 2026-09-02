@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { BuyerAccount, SourcingMode } from '@/lib/types';
 import categoriesData from '@/lib/categories.json';
-import { SOURCING_MODES } from '@/lib/constants';
+import { SOURCING_MODES, formatCurrency } from '@/lib/constants';
 import {
   Building2,
   Users,
@@ -165,7 +165,7 @@ export default function BuyerAccountTable() {
       supportedMajorCategories: selectedMajors.length > 0 ? selectedMajors : ['Engineering Spares - Mechanical'],
       supportedMinorCategories: ['Pumps & Accessories', 'Hoses, Valves & Fittings', 'Panels'],
       totalRFQsCreated: 0,
-      totalSpend: '$0',
+      totalSpend: formatCurrency(0),
     });
 
     setAddModalOpen(false);
@@ -222,7 +222,7 @@ export default function BuyerAccountTable() {
           supportedMajorCategories: ['Engineering Spares - Electrical', 'CAPEX - Equipment & Machinery', 'Civil Works'],
           supportedMinorCategories: ['Transformers', 'Panels', 'Turbines', 'PEB Structure'],
           totalRFQsCreated: 31,
-          totalSpend: '$4.12M',
+          totalSpend: '₹4.12 Cr',
         },
         {
           organizationName: 'BHEL Heavy Electricals',
@@ -244,7 +244,7 @@ export default function BuyerAccountTable() {
           supportedMajorCategories: ['Engineering Spares - Electrical', 'Engineering Spares - Mechanical', 'Raw Materials'],
           supportedMinorCategories: ['Panels', 'Motors', 'Circuit Breakers', 'Die Casting'],
           totalRFQsCreated: 18,
-          totalSpend: '$2.80M',
+          totalSpend: '₹2.80 Cr',
         },
         {
           organizationName: 'Vedanta Resources & SCM',
@@ -266,7 +266,7 @@ export default function BuyerAccountTable() {
           supportedMajorCategories: ['Engineering Spares - Mechanical', 'Raw Materials', 'Lubricants, Greases & Oils'],
           supportedMinorCategories: ['Bearings & Accessories', 'Compressors & Accessories', 'Hydraulic Oils'],
           totalRFQsCreated: 8,
-          totalSpend: '$940k',
+          totalSpend: '₹94 L',
         },
       ];
 

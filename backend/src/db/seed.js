@@ -252,6 +252,8 @@ const SEED_RFQS = [
     allocatedTime: '24 hrs',
     elapsedTime: '18 hrs',
     targetSavings: '15.4%',
+    // Budget ceiling the buyer approved, against which the quotes below are scored.
+    budget: 460000,
     quotes: [
       {
         vendorId: 'v-001',
@@ -323,6 +325,7 @@ const SEED_RFQS = [
     allocatedTime: '24 hrs',
     elapsedTime: '12 hrs',
     targetSavings: '18.2%',
+    budget: 820000,
     quotes: [
       {
         vendorId: 'v-003',
