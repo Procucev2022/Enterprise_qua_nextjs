@@ -300,6 +300,176 @@ const IDENTITY_PHONE_CONFIG = {
   COUNTRY_DIALLING_DIGITS: '91',
 };
 
+// ==============================================================================
+// RFQ LINE-ITEM CATEGORY CLASSIFICATION
+// ==============================================================================
+// Ported from CategoryClassificationService in the Java p2pservices app, which
+// resolves a major ("division") and minor ("category") for every ingested line
+// item in strict precedence: an explicit non-generic category wins, then a
+// domain keyword match, then a documented default. Confidence and status are
+// recorded so the buyer can see why an item landed where it did.
+//
+// Every major/minor pair below must exist in frontend/lib/categories.json,
+// otherwise the review grid cannot render the value in its dropdowns.
+const RFQ_CATEGORY_CLASSIFICATION = {
+  DEFAULT_MINOR_CATEGORY: 'General Industrial Goods',
+  DEFAULT_MAJOR_CATEGORY: 'General Procurement',
+
+  CONFIDENCE: {
+    EXPLICIT: 0.95,
+    KEYWORD: 0.9,
+    DEFAULT: 0.5,
+  },
+
+  STATUS: {
+    EXPLICIT: 'AI_EXTRACTED',
+    KEYWORD: 'DOMAIN_KEYWORD_MATCHED',
+    DEFAULT: 'DEFAULT',
+  },
+
+  // Values that look like a category but carry no routing information, so they
+  // must not short-circuit keyword matching.
+  GENERIC_CATEGORY_TOKENS: [
+    'multiple',
+    'various',
+    'mixed',
+    'general',
+    'not specified',
+    'unspecified',
+    'unknown',
+    'other',
+    'others',
+    'misc',
+    'miscellaneous',
+    'n/a',
+    'na',
+    'none',
+    'tbd',
+  ],
+
+  // Longest keyword is evaluated first so "circuit breaker" beats "breaker".
+  DOMAIN_KEYWORD_MAP: {
+    'centrifugal pump': { major: 'Engineering Spares - Mechanical', minor: 'Pumps & Accessories' },
+    'circuit breaker': { major: 'Engineering Spares - Electrical', minor: 'Circuit Breakers' },
+    'structural steel': { major: 'Civil Works', minor: 'PEB Structure' },
+    'roofing sheet': { major: 'Civil Works', minor: 'Roofing Sheets' },
+    'gate valve': { major: 'Engineering Spares - Mechanical', minor: 'Hoses, Valves & Fittings' },
+    switchgear: { major: 'Engineering Spares - Electrical', minor: 'Electrical-Lv Switch Gears' },
+    transformer: { major: 'Engineering Spares - Electrical', minor: 'Transformers' },
+    compressor: { major: 'Engineering Spares - Mechanical', minor: 'Compressors & Accessories' },
+    gearbox: { major: 'Engineering Spares - Mechanical', minor: 'Gearboxes & Spares' },
+    bearing: { major: 'Engineering Spares - Mechanical', minor: 'Bearings & Accessories' },
+    fastener: { major: 'Engineering Spares - Mechanical', minor: 'Fasteners' },
+    lubricant: { major: 'Raw Material', minor: 'Lubricants' },
+    impeller: { major: 'Engineering Spares - Mechanical', minor: 'Pumps & Accessories' },
+    rebar: { major: 'Civil Works', minor: 'TMT BARS' },
+    mccb: { major: 'Engineering Spares - Electrical', minor: 'Circuit Breakers' },
+    laptop: { major: 'IT', minor: 'Laptop' },
+    software: { major: 'IT', minor: 'Software' },
+    freight: { major: 'Logistics', minor: 'Road transport' },
+    pump: { major: 'Engineering Spares - Mechanical', minor: 'Pumps & Accessories' },
+    valve: { major: 'Engineering Spares - Mechanical', minor: 'Hoses, Valves & Fittings' },
+    hose: { major: 'Engineering Spares - Mechanical', minor: 'Hoses, Valves & Fittings' },
+    pipe: { major: 'Engineering Spares - Mechanical', minor: 'Pipes & Pipe Fittings' },
+    panel: { major: 'Engineering Spares - Electrical', minor: 'Panels' },
+    cable: { major: 'Engineering Spares - Electrical', minor: 'Cables' },
+    sensor: { major: 'Engineering Spares - Electrical', minor: 'Sensors' },
+    motor: { major: 'Engineering Spares - Electrical', minor: 'Motors' },
+    peb: { major: 'Civil Works', minor: 'PEB Structure' },
+    tmt: { major: 'Civil Works', minor: 'TMT BARS' },
+    steel: { major: 'Raw Material', minor: 'Steels' },
+    tool: { major: 'Engineering Spares - Mechanical', minor: 'Tools & Tackles' },
+  },
+};
+
+// ==============================================================================
+// GEMINI AI DOCUMENT EXTRACTION
+// ==============================================================================
+// Mirrors app.gemini.* in the Java p2pservices app, which is the service that
+// currently extracts RFQ line items in production. The API key is read from the
+// environment only and never leaves the server.
+const GEMINI_CONFIG = {
+  API_KEY: process.env.GEMINI_API_KEY || '',
+  BASE_URL: process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/models',
+  // Pinned to a specific GA model so extraction quality is reproducible.
+  PRIMARY_MODEL: process.env.GEMINI_PRIMARY_MODEL || 'gemini-3.6-flash',
+  // Tried in order when the primary model errors or is unavailable.
+  //
+  // Mirrors app.gemini.backup-models in the Java p2pservices service, which is the
+  // chain currently extracting in production, and ends on the floating
+  // `gemini-flash-latest` alias deliberately. Google retires pinned models: when
+  // gemini-2.0-flash was withdrawn every entry in the old chain 404'd at once and
+  // extraction failed outright instead of degrading. An alias last means the next
+  // retirement costs quality, not uptime. The depth also matters in practice —
+  // the primary answers 503 "high demand" often enough to need real headroom.
+  FALLBACK_MODELS: (
+    process.env.GEMINI_FALLBACK_MODELS ||
+    'gemini-3.7-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-flash-latest'
+  )
+    .split(',')
+    .map((m) => m.trim())
+    .filter(Boolean),
+  REQUEST_TIMEOUT_MS: Number(process.env.GEMINI_REQUEST_TIMEOUT_MS || 20000),
+  // Ceiling for the whole model chain, not one attempt.
+  //
+  // Extraction is answered inside a browser request, so the walk has to finish
+  // while something is still listening. Without a ceiling a deep chain of slow
+  // failures could hold the request for timeout x models, which the dev proxy
+  // reports to the buyer as an unexplained socket hang up rather than the
+  // manual-entry fallback this endpoint is designed to return.
+  TOTAL_BUDGET_MS: Number(process.env.GEMINI_TOTAL_BUDGET_MS || 45000),
+  // Below this much remaining budget a further attempt cannot finish, so the
+  // chain stops rather than starting a request it will have to abandon.
+  MIN_ATTEMPT_MS: Number(process.env.GEMINI_MIN_ATTEMPT_MS || 3000),
+  // Documents larger than this are rejected before a request is billed.
+  MAX_DOCUMENT_BYTES: Number(process.env.GEMINI_MAX_DOCUMENT_BYTES || 10 * 1024 * 1024),
+  MAX_DOCUMENT_TEXT_CHARS: Number(process.env.GEMINI_MAX_DOCUMENT_TEXT_CHARS || 120000),
+  // Deterministic output: extraction must not paraphrase or invent values.
+  TEMPERATURE: 0,
+};
+
+// Buyer-facing explanation for each extraction outcome. Every one of these ends
+// by pointing at manual line-item entry, because that is the recovery path.
+const EXTRACTION_REASON_MESSAGES = {
+  NOT_CONFIGURED:
+    'AI extraction is not configured on this environment (GEMINI_API_KEY is unset). Add the line items manually to continue.',
+  NO_CONTENT:
+    'No readable content was found in this file. Add the line items manually to continue.',
+  DOCUMENT_TOO_LARGE:
+    'This document is too large for AI extraction. Upload a smaller file or add the line items manually.',
+  UNSUPPORTED_TYPE:
+    'This file type cannot be read by AI extraction. Upload a spreadsheet, PDF or image, or add the line items manually.',
+  AI_FAILED:
+    'AI extraction could not read this document. Add the line items manually to continue.',
+  NO_ITEMS_FOUND:
+    'No procurement line items could be identified in this document. Add the line items manually to continue.',
+};
+
+// MIME types Gemini can read natively as inline data. Spreadsheets are flattened
+// to text by the browser first, because Gemini cannot parse xlsx binaries.
+const GEMINI_INLINE_MIME_TYPES = [
+  'application/pdf',
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+  'text/plain',
+  'text/csv',
+];
+
+// Normalisation defaults applied to every ingested RFQ line item. These mirror
+// AutomaticRfqServiceImpl.raiseRfq and RFQBuilderService in the Java app, which
+// are the values buyers' existing RFQs were created with.
+const RFQ_INGESTION_CONFIG = {
+  DEFAULT_UNIT: 'Nos',
+  DEFAULT_QUANTITY: 1,
+  DELIVERY_DATE_OFFSET_DAYS: 5,
+  MAX_TITLE_LENGTH: 100,
+  TITLE_SUFFIX_SINGLE: ' Procurement',
+  TITLE_SUFFIX_MULTIPLE: ' & Allied Items Procurement',
+};
+
 // Email OTP shape shared with the Java p2pservices app. That service stores
 // codes in `otp_store` under the key `<normalisedPhone>_EMAIL_<email>` with a
 // 6-character column and a 15-minute expiry, so these values are not free
@@ -335,6 +505,11 @@ module.exports = {
   IDENTITY_MASTER_DATA,
   IDENTITY_PHONE_CONFIG,
   IDENTITY_OTP_CONFIG,
+  RFQ_CATEGORY_CLASSIFICATION,
+  RFQ_INGESTION_CONFIG,
+  GEMINI_CONFIG,
+  GEMINI_INLINE_MIME_TYPES,
+  EXTRACTION_REASON_MESSAGES,
   EMAIL_REGEX,
   GSTIN_REGEX,
   PHONE_REGEX,

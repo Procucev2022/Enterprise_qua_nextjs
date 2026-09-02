@@ -1,6 +1,6 @@
 import { extractLineItemsFromDocument, classifyLineItems } from '@/lib/rfqClient';
 import { authClient } from '@/lib/authClient';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 
 describe('rfqClient.extractLineItemsFromDocument', () => {
   const originalFetch = global.fetch;
@@ -108,10 +108,13 @@ describe('rfqClient.extractLineItemsFromDocument', () => {
     expect(res.error).toBe(UI_STRINGS.rfqExtraction.unreadableResponse);
   });
 
+  // 422 is what the endpoint returns when it rejects a document, and this covers
+  // the case where it omits both `reason` and `error`. A 5xx would instead be a
+  // transport failure, which is reported separately and asserted further down.
   test('falls back to a default message when the server sends none', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: false,
-      status: 500,
+      status: 422,
       json: async () => ({ success: false }),
     });
 
@@ -271,5 +274,79 @@ describe('rfqClient.classifyLineItems', () => {
     const res = await classifyLineItems([row]);
 
     expect(res.error).toBe(UI_STRINGS.rfqExtraction.classifyFailed);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Transport failures must not be reported as model failures
+//
+// When the API is stopped, the Next dev proxy answers with an HTML 500. Reporting
+// the generic "unexpected response" for that blamed the AI for an unreachable
+// backend, which is what made a plain "backend not started" look like a bug in
+// extraction.
+// ══════════════════════════════════════════════════════════════════════════════
+describe('rfqClient transport failure reporting', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
+  test('extractLineItemsFromDocument reports an unreachable API on a 5xx', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      // A proxy error page is HTML, so parsing must never even be attempted.
+      json: async () => {
+        throw new Error('Unexpected token < in JSON');
+      },
+    });
+
+    const res = await extractLineItemsFromDocument({ fileName: 'BOQ.xlsx', documentText: 'Pump | 12' });
+
+    expect(res.success).toBe(false);
+    expect(res.reason).toBe('NETWORK');
+    expect(res.error).toBe(formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: 500 }));
+  });
+
+  test('extractLineItemsFromDocument names the status it saw', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      json: async () => ({}),
+    });
+
+    const res = await extractLineItemsFromDocument({ fileName: 'BOQ.xlsx', documentText: 'x' });
+
+    expect(res.error).toContain('502');
+  });
+
+  test('classifyLineItems reports an unreachable API on a 5xx', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      json: async () => {
+        throw new Error('Unexpected token < in JSON');
+      },
+    });
+
+    const res = await classifyLineItems([
+      {
+        id: 'ent-1',
+        itemName: 'Flanged Gate Valve',
+        quantity: 2,
+        unit: 'Nos',
+        targetDate: '2026-09-18',
+        technicalSpecs: '',
+        confidence: 90,
+        category: 'Pumps & Accessories',
+        majorCategory: 'Engineering Spares - Mechanical',
+        minorCategory: 'Pumps & Accessories',
+      },
+    ]);
+
+    expect(res.success).toBe(false);
+    expect(res.error).toBe(formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: 503 }));
   });
 });

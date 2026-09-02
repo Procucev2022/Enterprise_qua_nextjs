@@ -223,6 +223,13 @@ export const UI_STRINGS = {
     fallbackHint: 'Add each line item below, assign its minor category, then continue to sourcing.',
     unreadableResponse:
       'The extraction service returned an unexpected response. Add the line items manually to continue.',
+    /**
+     * Shown for a transport failure rather than a model failure. A dev-proxy error
+     * or a stopped API answers with HTML, and reporting `unreadableResponse` for
+     * that blamed the AI for what was actually an unreachable backend.
+     */
+    apiUnavailable:
+      'The RFQ service is not responding (HTTP {status}), so the document could not be sent for extraction. It may be restarting — wait a moment and retry. You can add the line items manually to carry on in the meantime.',
 
     // Step 2 empty state
     emptyTitle: 'No Line Items Yet',

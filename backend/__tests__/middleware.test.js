@@ -10,6 +10,7 @@ describe('Middleware Unit Tests', () => {
     let finishHandler;
     const res = {
       statusCode: 200,
+      writableEnded: true,
       on: jest.fn((event, handler) => {
         if (event === 'finish') finishHandler = handler;
       }),
@@ -65,5 +66,62 @@ describe('Middleware Unit Tests', () => {
     expect(res.status).toHaveBeenCalledWith(500);
 
     process.env.NODE_ENV = originalEnv;
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Hung / aborted request visibility
+//
+// Only 'finish' used to be observed, so a request that never produced a response
+// left no trace and the log could not even confirm it had arrived.
+// ══════════════════════════════════════════════════════════════════════════════
+describe('requestLogger connection-close reporting', () => {
+  const { logger: structuredLogger } = require('../src/services/loggerService');
+
+  /** Captures both handlers the middleware registers. */
+  function attach(res) {
+    const handlers = {};
+    res.on = jest.fn((event, handler) => {
+      handlers[event] = handler;
+    });
+    logger({ method: 'POST', originalUrl: '/api/rfqs/extract', ip: '::1' }, res, jest.fn());
+    return handlers;
+  }
+
+  let originalEnv;
+
+  beforeEach(() => {
+    originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
+  });
+
+  afterEach(() => {
+    process.env.NODE_ENV = originalEnv;
+    jest.restoreAllMocks();
+  });
+
+  test('reports a connection that closed before any response was written', () => {
+    const logSpy = jest.spyOn(structuredLogger, 'log').mockImplementation(() => {});
+    const res = { statusCode: 200, writableEnded: false };
+
+    attach(res).close();
+
+    const [level, message, metadata, category] = logSpy.mock.calls[0];
+    expect(level).toBe('WARN');
+    expect(message).toContain('/api/rfqs/extract');
+    expect(message).toContain('closed with no response');
+    expect(metadata.url).toBe('/api/rfqs/extract');
+    expect(category).toBe('HTTP_REQUEST');
+  });
+
+  // 'close' always follows 'finish', so a completed response must not be reported
+  // twice or mislabelled as a hang.
+  test('stays quiet when the response completed normally', () => {
+    const logSpy = jest.spyOn(structuredLogger, 'log').mockImplementation(() => {});
+    const res = { statusCode: 200, writableEnded: true };
+
+    attach(res).close();
+
+    expect(logSpy).not.toHaveBeenCalled();
   });
 });

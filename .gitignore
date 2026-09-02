@@ -21,6 +21,9 @@ out/
 build/
 dist/
 
+# Crash dumps a dying shell leaves behind; one reached the repo by accident.
+*.stackdump
+
 # Environment Variables & Secrets
 .env
 .env.local

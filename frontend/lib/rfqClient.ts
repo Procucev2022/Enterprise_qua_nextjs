@@ -1,5 +1,5 @@
 import { authClient } from './authClient';
-import { UI_STRINGS } from './uiStrings';
+import { UI_STRINGS, formatString } from './uiStrings';
 import type {
   ExtractedEntity,
   RFQExtractionRequest,
@@ -36,6 +36,17 @@ export async function extractLineItemsFromDocument(
     // The API is unreachable. Fail closed so the buyer is never shown
     // fabricated line items.
     return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
+  }
+
+  // A 5xx is the API failing or absent, not the model misreading the document.
+  // The endpoint reports every genuine extraction failure as a 422 with a reason,
+  // so anything in the 500s is a transport problem and has to say so.
+  if (res.status >= 500) {
+    return {
+      success: false,
+      reason: 'NETWORK',
+      error: formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: res.status }),
+    };
   }
 
   let body: Partial<RFQExtractionResult> & { data?: unknown } = {};
@@ -97,6 +108,10 @@ export async function classifyLineItems(items: ExtractedEntity[]): Promise<RFQIn
     });
   } catch {
     return { success: false, error: UI_STRINGS.auth.networkUnreachable };
+  }
+
+  if (res.status >= 500) {
+    return { success: false, error: formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: res.status }) };
   }
 
   let body: Partial<RFQIngestionResponse> = {};

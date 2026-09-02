@@ -1,6 +1,11 @@
 const storeService = require('../services/storeService');
 const { generateStandardRFQEmail } = require('../services/emailService');
+// Called through the module namespace (like storeService below) so the ingestion
+// pipeline stays substitutable in tests rather than being bound at import time.
+const rfqIngestionService = require('../services/rfqIngestionService');
+const geminiService = require('../services/geminiService');
 const { logger } = require('../services/loggerService');
+const { VALIDATION_SCHEMAS, validatePayload, EXTRACTION_REASON_MESSAGES } = require('../config/constants');
 
 function getRFQs(req, res, next) {
   try {
@@ -31,16 +36,147 @@ function getRFQById(req, res, next) {
 
 function createRFQ(req, res, next) {
   try {
-    const body = req.body;
-    if (!body.title) {
-      logger.warn('Failed to create RFQ: Missing title', { body }, 'RFQ_CONTROLLER');
-      return res.status(400).json({ success: false, error: 'RFQ title is required.' });
+    const body = req.body || {};
+
+    // Validated against the centralized schema at the entry boundary so a
+    // malformed RFQ never reaches the store. Previously only `title` was checked.
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.createRFQ, body);
+    if (!isValid) {
+      logger.warn('Failed to create RFQ: payload validation failed', { errors }, 'RFQ_CONTROLLER');
+      return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
     }
+
     logger.info(`Creating new RFQ: ${body.title}`, { title: body.title, category: body.category, budget: body.budget }, 'RFQ_CONTROLLER');
     const created = storeService.createRFQ(body);
     res.status(201).json({ success: true, data: created });
   } catch (err) {
     logger.error('Error creating RFQ', err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
+/**
+ * Classify raw extracted BOQ/email rows into review-ready RFQ line items.
+ *
+ * This is the server half of AI ingestion: the client extracts rows from the
+ * document, this endpoint normalises and categorises them, and the wizard renders
+ * the returned draft for the buyer to confirm before dispatch.
+ */
+function ingestRFQ(req, res, next) {
+  try {
+    const body = req.body || {};
+
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.ingestRFQ, body);
+    if (!isValid) {
+      logger.warn('Failed to ingest RFQ: payload validation failed', { errors }, 'RFQ_CONTROLLER');
+      return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
+    }
+
+    const { draft, classification } = rfqIngestionService.buildRFQDraft(body);
+
+    // An upload that yielded nothing usable is a failed ingestion, not an empty
+    // success: returning 422 lets the wizard keep the buyer on the upload step.
+    if (classification.accepted === 0) {
+      logger.warn('RFQ ingestion produced no usable line items', classification, 'RFQ_CONTROLLER');
+      return res.status(422).json({
+        success: false,
+        error: 'No usable line items could be extracted. Check that the document has a description column.',
+        classification,
+      });
+    }
+
+    logger.info(`RFQ ingestion complete: ${classification.accepted} line items`, classification, 'RFQ_CONTROLLER');
+    res.json({ success: true, data: draft, classification });
+  } catch (err) {
+    logger.error('Error ingesting RFQ line items', err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
+/**
+ * Extract RFQ line items from an uploaded document using Gemini, then classify
+ * them through the same ingestion pipeline the manual path uses.
+ *
+ * A failed or empty extraction is not a server error — it is an expected outcome
+ * that the wizard handles by inviting the buyer to key the line items instead.
+ * The response therefore always carries a machine-readable `reason` so the UI can
+ * explain precisely what happened (no API key, unreadable file, nothing found).
+ */
+async function extractRFQFromDocument(req, res, next) {
+  try {
+    const body = req.body || {};
+
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.extractRFQ, body);
+    if (!isValid) {
+      logger.warn('Document extraction rejected: payload validation failed', { errors }, 'RFQ_CONTROLLER');
+      return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
+    }
+
+    const extraction = await geminiService.extractLineItems({
+      documentText: body.documentText,
+      inlineData: body.inlineData,
+      mimeType: body.mimeType,
+      fileName: body.fileName,
+    });
+
+    if (extraction.status !== geminiService.EXTRACTION_STATUS.SUCCESS) {
+      logger.warn(
+        `Document extraction produced no line items (${extraction.status})`,
+        { fileName: body.fileName, status: extraction.status },
+        'RFQ_CONTROLLER'
+      );
+      return res.status(422).json({
+        success: false,
+        reason: extraction.status,
+        error: EXTRACTION_REASON_MESSAGES[extraction.status] || EXTRACTION_REASON_MESSAGES.AI_FAILED,
+      });
+    }
+
+    // Reuse the shared normalisation + taxonomy classification so an AI-extracted
+    // RFQ is shaped identically to one keyed by hand.
+    const { draft, classification } = rfqIngestionService.buildRFQDraft({
+      lineItems: extraction.lineItems,
+      title: extraction.documentTitle,
+      category: extraction.category,
+      estimatedBudget: extraction.estimatedBudget,
+      source: 'web_portal',
+      sourceFileName: body.fileName,
+    });
+
+    if (classification.accepted === 0) {
+      return res.status(422).json({
+        success: false,
+        reason: geminiService.EXTRACTION_STATUS.NO_ITEMS_FOUND,
+        error: EXTRACTION_REASON_MESSAGES.NO_ITEMS_FOUND,
+      });
+    }
+
+    logger.info(
+      `Document extraction complete: ${classification.accepted} line items via ${extraction.model}`,
+      { ...classification, model: extraction.model },
+      'RFQ_CONTROLLER'
+    );
+
+    res.json({
+      success: true,
+      data: draft,
+      classification,
+      extraction: { model: extraction.model, deliveryDate: extraction.deliveryDate },
+    });
+  } catch (err) {
+    logger.error('Error extracting RFQ line items from document', err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
+/** Portfolio roll-up backing the buyer RFQ Summary screen. */
+function getRFQSummary(req, res, next) {
+  try {
+    logger.info('Fetching buyer RFQ portfolio summary', {}, 'RFQ_CONTROLLER');
+    const summary = storeService.getRFQSummary();
+    res.json({ success: true, data: summary });
+  } catch (err) {
+    logger.error('Error building RFQ summary', err, 'RFQ_CONTROLLER');
     next(err);
   }
 }
@@ -139,7 +275,10 @@ function approvePO(req, res, next) {
 module.exports = {
   getRFQs,
   getRFQById,
+  getRFQSummary,
   createRFQ,
+  ingestRFQ,
+  extractRFQFromDocument,
   updateRFQ,
   addQuote,
   generateEmailPreview,

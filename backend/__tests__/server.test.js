@@ -1,6 +1,8 @@
 const request = require('supertest');
-const { app, bootstrapServer } = require('../src/server');
+const { EventEmitter } = require('events');
+const { app, bootstrapServer, installCrashHandlers } = require('../src/server');
 const identityPool = require('../src/db/identityPool');
+const { logger } = require('../src/services/loggerService');
 
 function restoreEnvVar(name, originalValue) {
   if (originalValue === undefined) delete process.env[name];
@@ -126,5 +128,70 @@ describe('Server & Health Endpoints', () => {
       restoreEnvVar('PORT', originalPort);
       restoreEnvVar('AUTO_START_SERVER', originalAutoStart);
     }
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Crash visibility
+//
+// An unhandled rejection exits the process and closes every in-flight socket.
+// The client sees only "socket hang up", so without these handlers the cause
+// never reaches app.log and the failure cannot be diagnosed after the fact.
+// ══════════════════════════════════════════════════════════════════════════════
+describe('installCrashHandlers', () => {
+  /** Stand-in for `process` so a test can assert without exiting the Jest worker. */
+  function fakeProcess() {
+    const proc = new EventEmitter();
+    proc.exit = jest.fn();
+    return proc;
+  }
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('logs an unhandled rejection carrying an Error', () => {
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+    const proc = installCrashHandlers(fakeProcess());
+
+    const cause = new Error('Gemini call rejected');
+    proc.emit('unhandledRejection', cause);
+
+    expect(errorSpy).toHaveBeenCalledWith('Unhandled promise rejection', cause, 'SERVER');
+  });
+
+  // A bare `Promise.reject('boom')` yields a string, which the logger needs as an
+  // Error to record a stack trace at all.
+  test('wraps a non-Error rejection reason', () => {
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+    const proc = installCrashHandlers(fakeProcess());
+
+    proc.emit('unhandledRejection', 'socket hang up');
+
+    const [message, err, category] = errorSpy.mock.calls[0];
+    expect(message).toBe('Unhandled promise rejection');
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toBe('socket hang up');
+    expect(category).toBe('SERVER');
+  });
+
+  test('logs an uncaught exception and preserves the non-zero exit', () => {
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+    const proc = installCrashHandlers(fakeProcess());
+
+    const cause = new Error('boom');
+    proc.emit('uncaughtException', cause);
+
+    expect(errorSpy).toHaveBeenCalledWith('Uncaught exception — the process is exiting', cause, 'SERVER');
+    expect(proc.exit).toHaveBeenCalledWith(1);
+  });
+
+  test('defaults to the real process when called with no argument', () => {
+    const onSpy = jest.spyOn(process, 'on').mockImplementation(() => process);
+
+    installCrashHandlers();
+
+    expect(onSpy).toHaveBeenCalledWith('unhandledRejection', expect.any(Function));
+    expect(onSpy).toHaveBeenCalledWith('uncaughtException', expect.any(Function));
   });
 });

@@ -221,8 +221,37 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     jest.spyOn(storeService, 'createRFQ').mockImplementationOnce(() => {
       throw new Error('Create RFQ error');
     });
-    await rfqController.createRFQ({ body: { title: 'RFQ' } }, res, next);
+    // The payload must satisfy VALIDATION_SCHEMAS.createRFQ, otherwise the
+    // handler returns 400 and never reaches the store call under test.
+    await rfqController.createRFQ(
+      { body: { title: 'RFQ Title', category: 'Mechanical', budget: 1000, targetDeliveryDate: '2026-10-01' } },
+      res,
+      next
+    );
     expect(next).toHaveBeenCalled();
+
+    // ── Ingestion & summary error branches ──
+    jest.spyOn(storeService, 'getRFQSummary').mockImplementationOnce(() => {
+      throw new Error('Summary error');
+    });
+    await rfqController.getRFQSummary({}, res, next);
+    expect(next).toHaveBeenCalled();
+
+    const ingestionService = require('../src/services/rfqIngestionService');
+    jest.spyOn(ingestionService, 'buildRFQDraft').mockImplementationOnce(() => {
+      throw new Error('Ingestion error');
+    });
+    await rfqController.ingestRFQ({ body: { lineItems: [{ itemName: 'Pump' }] } }, res, next);
+    expect(next).toHaveBeenCalled();
+
+    // A body-less request must fall back to {} rather than throwing on property access.
+    const noBodyRes = mockRes();
+    await rfqController.createRFQ({}, noBodyRes, next);
+    expect(noBodyRes.status).toHaveBeenCalledWith(400);
+
+    const noBodyIngest = mockRes();
+    await rfqController.ingestRFQ({}, noBodyIngest, next);
+    expect(noBodyIngest.status).toHaveBeenCalledWith(400);
 
     const notFoundUpdate = mockRes();
     jest.spyOn(storeService, 'updateRFQ').mockReturnValueOnce(null);
