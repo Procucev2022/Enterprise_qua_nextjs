@@ -184,6 +184,8 @@ describe('API Route Endpoints', () => {
       const rfq = {
         title: 'Procurement of High Temperature Valves',
         category: 'Engineering Spares - Mechanical',
+        budget: 145000,
+        targetDeliveryDate: '2026-09-30',
         deadline: '2026-09-30',
         sourcingMode: 'mode_2',
       };

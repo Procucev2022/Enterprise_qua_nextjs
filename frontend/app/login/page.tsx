@@ -265,7 +265,7 @@ export default function LoginPage() {
         supportedMajorCategories: [],
         supportedMinorCategories: [],
         totalRFQsCreated: 0,
-        totalSpend: '$0',
+        totalSpend: '₹0',
       });
 
       setActiveSubscription('free_trial');

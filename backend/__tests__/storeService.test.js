@@ -155,3 +155,74 @@ describe('Store Service & Business Operations', () => {
     });
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Demo data gating
+//
+// The demo RFQs land in the same store a buyer's real RFQs do, and the portfolio
+// summary derives every KPI from that store, so leaving them on reported
+// fabricated spend and vendor engagement next to genuine work.
+// ══════════════════════════════════════════════════════════════════════════════
+describe('demo RFQ seeding', () => {
+  const originalFlag = process.env.SEED_DEMO_RFQS;
+  const originalEnv = process.env.NODE_ENV;
+
+  afterEach(() => {
+    if (originalFlag === undefined) delete process.env.SEED_DEMO_RFQS;
+    else process.env.SEED_DEMO_RFQS = originalFlag;
+    process.env.NODE_ENV = originalEnv;
+    jest.resetModules();
+  });
+
+  describe('shouldSeedDemoRFQs', () => {
+    test('seeds under test so the suite keeps its fixtures', () => {
+      delete process.env.SEED_DEMO_RFQS;
+      process.env.NODE_ENV = 'test';
+      expect(storeService.shouldSeedDemoRFQs()).toBe(true);
+    });
+
+    test('does not seed a running app', () => {
+      delete process.env.SEED_DEMO_RFQS;
+      process.env.NODE_ENV = 'development';
+      expect(storeService.shouldSeedDemoRFQs()).toBe(false);
+    });
+
+    test.each([
+      ['true', true],
+      ['false', false],
+    ])('an explicit flag of %s wins over the environment', (flag, expected) => {
+      process.env.SEED_DEMO_RFQS = flag;
+      process.env.NODE_ENV = 'test';
+      expect(storeService.shouldSeedDemoRFQs()).toBe(expected);
+    });
+  });
+
+  test('a store built with seeding off starts with no RFQs, feed or audit trail', () => {
+    process.env.SEED_DEMO_RFQS = 'false';
+    jest.resetModules();
+
+    // Re-required so the constructor re-reads the flag.
+    const freshStore = require('../src/services/storeService');
+
+    expect(freshStore.rfqs).toEqual([]);
+    expect(freshStore.aiFeed).toEqual([]);
+    expect(freshStore.auditLogs).toEqual([]);
+    // Vendors and buyer accounts are load-bearing for sign-in and vendor
+    // selection, so they are never gated.
+    expect(freshStore.vendors.length).toBeGreaterThan(0);
+    expect(freshStore.buyerAccounts.length).toBeGreaterThan(0);
+    expect(freshStore.activeBuyerAccount).not.toBeNull();
+  });
+
+  test('the portfolio summary reports an empty portfolio rather than dividing by zero', () => {
+    process.env.SEED_DEMO_RFQS = 'false';
+    jest.resetModules();
+
+    const freshStore = require('../src/services/storeService');
+    const summary = freshStore.getRFQSummary();
+
+    expect(summary.totalRFQs).toBe(0);
+    expect(summary.totalBudget).toBe(0);
+    expect(summary.averageQuotesPerRFQ).toBe(0);
+  });
+});

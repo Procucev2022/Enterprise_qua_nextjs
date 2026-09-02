@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQItem } from '@/lib/types';
-import { SOURCING_MODES } from '@/lib/constants';
+import { SOURCING_MODES, formatCurrency } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import {
   Building2,
@@ -12,7 +12,7 @@ import {
   ChevronRight,
   TrendingUp,
   Clock,
-  DollarSign,
+  IndianRupee,
   Layers,
   ArrowRight,
   ShieldCheck,
@@ -275,10 +275,10 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
           <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-850 bg-white dark:bg-gray-900/80 shadow-sm flex items-center justify-between">
             <div>
               <div className="text-[10px] font-bold text-slate-500 dark:text-gray-450 uppercase tracking-wider">Awarded Spend Contracts</div>
-              <p className="text-2xl font-black text-slate-900 dark:text-white mt-1 mono">${totalAwardedSpend.toLocaleString()}</p>
+              <p className="text-2xl font-black text-slate-900 dark:text-white mt-1 mono">{formatCurrency(totalAwardedSpend)}</p>
             </div>
             <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 shrink-0">
-              <DollarSign size={20} />
+              <IndianRupee size={20} />
             </div>
           </div>
 
@@ -414,7 +414,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                   </div>
                   <div>
                     <div className="text-[9px] text-slate-450 dark:text-gray-550 font-bold uppercase">Awarded Spend</div>
-                    <div className="font-black text-emerald-600 dark:text-emerald-400 mt-0.5 mono">${v.awardedSpend.toLocaleString()}</div>
+                    <div className="font-black text-emerald-600 dark:text-emerald-400 mt-0.5 mono">{formatCurrency(v.awardedSpend)}</div>
                   </div>
                 </div>
 
@@ -508,9 +508,9 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                             </span>
                           </div>
                           <div className="flex items-center gap-3 text-[10px] text-slate-450 dark:text-gray-500 mt-1">
-                            <span>Sourced Spend: <strong>${rfq.budget.toLocaleString()}</strong></span>
+                            <span>Sourced Spend: <strong>{formatCurrency(rfq.budget)}</strong></span>
                             <span>Line Items: <strong>{rfq.extractedEntities.length}</strong></span>
-                            <span>Total Quote Value: <strong className="text-emerald-600">${matchingQuote.totalPrice.toLocaleString()}</strong></span>
+                            <span>Total Quote Value: <strong className="text-emerald-600">{formatCurrency(matchingQuote.totalPrice)}</strong></span>
                           </div>
                         </div>
                       </div>
@@ -542,7 +542,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                               </div>
                               <div className="flex justify-between">
                                 <span className="text-slate-500">Total Bidded Price:</span>
-                                <span className="font-bold text-emerald-600 dark:text-emerald-450 font-mono">${matchingQuote.totalPrice.toLocaleString()}</span>
+                                <span className="font-bold text-emerald-600 dark:text-emerald-450 font-mono">{formatCurrency(matchingQuote.totalPrice)}</span>
                               </div>
                               <div className="flex justify-between">
                                 <span className="text-slate-500">Payment Terms:</span>

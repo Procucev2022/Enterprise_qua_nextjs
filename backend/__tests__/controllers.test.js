@@ -203,10 +203,26 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     await rfqController.getRFQById({ params: { id: 'non-existent' } }, res, next);
     expect(res.status).toHaveBeenCalledWith(404);
 
-    await rfqController.createRFQ({ body: { title: 'New RFQ', category: 'Mechanical' } }, res, next);
+    await rfqController.createRFQ(
+      {
+        body: {
+          title: 'New RFQ',
+          category: 'Mechanical',
+          budget: 50000,
+          targetDeliveryDate: '2026-10-01',
+        },
+      },
+      res,
+      next
+    );
     expect(res.status).toHaveBeenCalledWith(201);
 
     await rfqController.createRFQ({ body: {} }, res, next);
+    expect(res.status).toHaveBeenCalledWith(400);
+
+    // A payload that clears the title check but violates another rule must still
+    // be rejected, which the old bare `if (!body.title)` gate let through.
+    await rfqController.createRFQ({ body: { title: 'Only a title' } }, res, next);
     expect(res.status).toHaveBeenCalledWith(400);
 
     await rfqController.updateRFQ({ params: { id: 'rfq-1' }, body: { title: 'Updated' } }, res, next);

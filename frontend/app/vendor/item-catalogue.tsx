@@ -340,7 +340,7 @@ export default function ItemCatalogue() {
             {/* Price, Lead Time & MOQ */}
             <div className="grid grid-cols-3 gap-2">
               <div className="space-y-1">
-                <label className="text-[9px] uppercase font-bold text-slate-450 dark:text-gray-500">Unit Price ($) *</label>
+                <label className="text-[9px] uppercase font-bold text-slate-450 dark:text-gray-500">Unit Price (₹) *</label>
                 <input
                   type="number"
                   value={unitPrice}

@@ -230,9 +230,19 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       route: '/buyer/ingestion-wizard',
     },
     {
-      id: 'vendor_evaluation_summary',
+      id: 'rfq_summary',
       screenTag: 'Screen 1.3',
       shortTag: '1.3',
+      label: NAV_ITEMS.rfqSummary.label,
+      description: NAV_ITEMS.rfqSummary.description,
+      icon: 'ClipboardList',
+      group: NAV_GROUPS.buyerSourcing,
+      route: '/buyer/rfq-summary',
+    },
+    {
+      id: 'vendor_evaluation_summary',
+      screenTag: 'Screen 1.4',
+      shortTag: '1.4',
       label: NAV_ITEMS.buyerEvaluationSummary.label,
       description: NAV_ITEMS.buyerEvaluationSummary.description,
       icon: 'FileCheck',
@@ -241,8 +251,8 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
     },
     {
       id: 'vendor_summary',
-      screenTag: 'Screen 1.4',
-      shortTag: '1.4',
+      screenTag: 'Screen 1.5',
+      shortTag: '1.5',
       label: NAV_ITEMS.vendorDirectory.label,
       description: NAV_ITEMS.vendorDirectory.description,
       icon: 'Building2',
@@ -251,8 +261,8 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
     },
     {
       id: 'subscription_center',
-      screenTag: 'Screen 1.5',
-      shortTag: '1.5',
+      screenTag: 'Screen 1.6',
+      shortTag: '1.6',
       label: NAV_ITEMS.sourcingSubscriptions.label,
       description: NAV_ITEMS.sourcingSubscriptions.description,
       icon: 'Sparkles',
@@ -261,8 +271,8 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
     },
     {
       id: 'buyer_profile',
-      screenTag: 'Screen 1.6',
-      shortTag: '1.6',
+      screenTag: 'Screen 1.7',
+      shortTag: '1.7',
       label: NAV_ITEMS.buyerProfile.label,
       description: NAV_ITEMS.buyerProfile.description,
       icon: 'Building2',
@@ -271,8 +281,8 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
     },
     {
       id: 'buyer_directory',
-      screenTag: 'Screen 1.7',
-      shortTag: '1.7',
+      screenTag: 'Screen 1.8',
+      shortTag: '1.8',
       label: NAV_ITEMS.buyerDbSync.label,
       description: NAV_ITEMS.buyerDbSync.description,
       icon: 'Database',
@@ -456,6 +466,42 @@ export const LOGIN_ROUTE = '/login';
  */
 export const OTP_CODE_LENGTH = 6;
 export const OTP_EXPIRY_MINUTES = 15;
+
+/**
+ * Neutral defaults for a line item the buyer adds by hand, used when an AI
+ * extraction came back empty. Only the structural fields are pre-filled; the
+ * description and specification stay blank so a vendor is never asked to quote
+ * against placeholder text. The values mirror RFQ_INGESTION_CONFIG on the backend
+ * so a keyed row and an ingested row carry the same defaults.
+ */
+export const MANUAL_LINE_ITEM_DEFAULTS = {
+  QUANTITY: 1,
+  UNIT: 'Nos',
+  TARGET_DATE_OFFSET_DAYS: 5,
+} as const;
+
+/**
+ * Single currency the platform trades in. Amounts are grouped the Indian way
+ * (1,45,000 rather than 145,000), so the symbol and the locale have to travel
+ * together: pairing a rupee symbol with en-US grouping, or the reverse, is the
+ * inconsistency this constant exists to prevent.
+ */
+export const CURRENCY = {
+  SYMBOL: '₹',
+  CODE: 'INR',
+  LOCALE: 'en-IN',
+} as const;
+
+/**
+ * Format an amount for display, e.g. 145000 -> "₹1,45,000".
+ *
+ * Fractional paise are dropped because every amount the platform shows is a
+ * budget, quote or purchase-order total quoted in whole rupees.
+ */
+export function formatCurrency(amount: number): string {
+  const safe = Number.isFinite(amount) ? amount : 0;
+  return `${CURRENCY.SYMBOL}${Math.round(safe).toLocaleString(CURRENCY.LOCALE)}`;
+}
 
 /** URL prefix that scopes each role's workspace, used to guard route access. */
 export const ROLE_ROUTE_PREFIX: Record<UserRole, string> = {

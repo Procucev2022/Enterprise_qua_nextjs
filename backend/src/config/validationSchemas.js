@@ -29,6 +29,36 @@ const VALIDATION_SCHEMAS = {
     lineItems: { type: 'array', required: false },
   },
 
+  // Document handed to POST /api/rfqs/extract for Gemini line-item extraction.
+  // Either documentText (client-flattened spreadsheet) or inlineData (PDF/image
+  // base64) must be present; that either/or rule is enforced in the service,
+  // which can report a precise reason the wizard shows to the buyer.
+  extractRFQ: {
+    fileName: { type: 'string', required: true, minLength: 1, maxLength: 260 },
+    documentText: { type: 'string', required: false },
+    inlineData: { type: 'string', required: false },
+    mimeType: { type: 'string', required: false, maxLength: 120 },
+  },
+
+  // Raw extracted rows handed to POST /api/rfqs/ingest. The rows themselves are
+  // deliberately loose because they come from arbitrary spreadsheets; each row is
+  // normalised and validated per-field by rfqIngestionService instead.
+  ingestRFQ: {
+    lineItems: { type: 'array', required: true, message: 'lineItems must be an array of extracted rows.' },
+    title: { type: 'string', required: false, maxLength: 200 },
+    category: { type: 'string', required: false },
+    // Overall value stated on the document. Optional because most BOQs price only
+    // the individual lines, which the ingestion service sums instead.
+    estimatedBudget: { type: 'number', required: false, min: 0 },
+    source: {
+      type: 'string',
+      required: false,
+      enum: ['email_gateway', 'web_portal', 'email_upload', 'manual_entry'],
+    },
+    sourceFileName: { type: 'string', required: false, maxLength: 260 },
+    sourceEmail: { type: 'string', required: false, pattern: EMAIL_REGEX, message: 'Valid source email required' },
+  },
+
   vendorRegistration: {
     name: { type: 'string', required: true, minLength: 2, maxLength: 150 },
     corporateEmail: { type: 'string', required: true, pattern: EMAIL_REGEX, message: 'Valid corporate email address required' },

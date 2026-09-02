@@ -10,7 +10,9 @@ describe('UI Strings Constants & i18n Format Tests', () => {
   test('exports screen metadata definitions', () => {
     expect(UI_STRINGS.screens.commandCenter.screenTag).toBe('Screen 1.1');
     expect(UI_STRINGS.screens.ingestionWizard.screenTag).toBe('Screen 1.2');
-    expect(UI_STRINGS.screens.quoteMatrix.screenTag).toBe('Screen 1.3');
+    // RFQ Summary took Screen 1.3, shifting the quote matrix to 1.4.
+    expect(UI_STRINGS.screens.rfqSummary.screenTag).toBe('Screen 1.3');
+    expect(UI_STRINGS.screens.quoteMatrix.screenTag).toBe('Screen 1.4');
     expect(UI_STRINGS.screens.vendorEvaluation.screenTag).toBe('Screen 2.3');
     expect(UI_STRINGS.screens.categoryDashboard.screenTag).toBe('Screen 3.1');
     expect(UI_STRINGS.screens.infraControl.screenTag).toBe('Screen 4.1');

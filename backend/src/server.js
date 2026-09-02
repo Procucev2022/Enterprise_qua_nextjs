@@ -32,6 +32,32 @@ async function reportIdentityHealth() {
   }
 }
 
+/**
+ * Record a crash before the process dies.
+ *
+ * Node exits on an unhandled rejection, which closes every in-flight socket. The
+ * client sees only "socket hang up" and nothing reaches app.log, so the cause is
+ * unrecoverable after the fact — which is precisely how a failing extraction
+ * became impossible to diagnose. Default exit behaviour is preserved; this just
+ * makes the reason survive.
+ *
+ * `proc` is injectable so a test can assert the logging without exiting the
+ * Jest worker.
+ */
+function installCrashHandlers(proc = process) {
+  proc.on('unhandledRejection', (reason) => {
+    const err = reason instanceof Error ? reason : new Error(String(reason));
+    logger.error('Unhandled promise rejection', err, 'SERVER');
+  });
+
+  proc.on('uncaughtException', (err) => {
+    logger.error('Uncaught exception — the process is exiting', err, 'SERVER');
+    proc.exit(1);
+  });
+
+  return proc;
+}
+
 async function bootstrapServer(port = PORT) {
   await reportIdentityHealth();
   const server = app.listen(port);
@@ -48,7 +74,10 @@ async function start(port = PORT) {
 }
 
 if (process.env.NODE_ENV !== 'test' && (process.env.AUTO_START_SERVER === 'true' || require.main === module)) {
+  // Installed only on a real boot. Registering these on the Jest process would
+  // both leak listeners across suites and swallow failures the runner should see.
+  installCrashHandlers();
   start();
 }
 
-module.exports = { app, bootstrapServer, start, reportIdentityHealth };
+module.exports = { app, bootstrapServer, start, reportIdentityHealth, installCrashHandlers };

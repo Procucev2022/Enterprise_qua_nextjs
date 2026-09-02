@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
+import { formatCurrency } from '@/lib/constants';
 import { RFQItem, QuoteComparison } from '@/lib/types';
 import { PurchaseOrderModal, RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
 import {
@@ -15,7 +16,7 @@ import {
   Award,
   ChevronDown,
   ArrowLeft,
-  DollarSign,
+  IndianRupee,
   AlertCircle,
   Search,
 } from 'lucide-react';
@@ -121,7 +122,9 @@ export default function QuoteMatrix({ onBackToDashboard }: QuoteMatrixProps) {
             </div>
             <div>
               <span className="text-[10px] text-slate-400 dark:text-gray-400 block uppercase">Estimated Budget</span>
-              <span className="font-bold text-emerald-600 dark:text-emerald-400 mono">${currentRFQ.budget.toLocaleString()}</span>
+              <span className="font-bold text-emerald-600 dark:text-emerald-400 mono">
+                {formatCurrency(currentRFQ.budget)}
+              </span>
             </div>
             <div>
               <span className="text-[10px] text-slate-400 dark:text-gray-400 block uppercase">Bids Evaluated</span>
@@ -213,7 +216,7 @@ export default function QuoteMatrix({ onBackToDashboard }: QuoteMatrixProps) {
                 {/* Unit Price */}
                 <tr className="hover:bg-slate-50/80 dark:hover:bg-gray-800/20">
                   <td className="p-4 font-bold text-slate-800 dark:text-gray-200 flex items-center gap-2">
-                    <DollarSign size={15} className="text-emerald-600 dark:text-emerald-400" /> Unit Price ($)
+                    <IndianRupee size={15} className="text-emerald-600 dark:text-emerald-400" /> Unit Price (₹)
                   </td>
                   {quotes.map((q) => (
                     <td
@@ -222,7 +225,7 @@ export default function QuoteMatrix({ onBackToDashboard }: QuoteMatrixProps) {
                     >
                       <div className="flex items-baseline gap-2">
                         <span className="text-lg font-black text-slate-900 dark:text-white mono">
-                          ${q.unitPrice.toLocaleString()}
+                          {formatCurrency(q.unitPrice)}
                         </span>
                         {q.isBestPrice && (
                           <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-0.5">
@@ -230,7 +233,7 @@ export default function QuoteMatrix({ onBackToDashboard }: QuoteMatrixProps) {
                           </span>
                         )}
                       </div>
-                      <span className="text-[10px] text-slate-400 dark:text-gray-500">Total: ${q.totalPrice.toLocaleString()}</span>
+                      <span className="text-[10px] text-slate-400 dark:text-gray-500">Total: {formatCurrency(q.totalPrice)}</span>
                     </td>
                   ))}
                 </tr>
