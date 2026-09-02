@@ -133,6 +133,21 @@ describe('Gemini document extraction service', () => {
       expect(text).toContain('Pump | 12 | Units');
     });
 
+    // A BOQ that prices everything in one description column left the technical
+    // specification blank for every row, because the model had nowhere to split
+    // it. The instruction redistributes text already written in the document,
+    // which is why it is paired with a no-invent and no-drop rule.
+    test('instructs the model to split a combined description without inventing or dropping text', () => {
+      const body = gemini.buildRequestBody({ documentText: 'x' });
+      const text = body.contents[0].parts.map((p) => p.text || '').join('\n');
+
+      expect(text).toContain('DESCRIPTION vs SPECIFICATION');
+      expect(text).toContain('Never add a specification that is not stated');
+      expect(text).toContain('never drop a token');
+      // The identifying tokens have to stay on the item, not move to the spec.
+      expect(text).toContain('IDENTIFIES the item in "itemDescription"');
+    });
+
     test('attaches inline data for a PDF', () => {
       const body = gemini.buildRequestBody({ inlineData: 'BASE64', mimeType: 'application/pdf' });
       expect(body.contents[0].parts).toEqual(
