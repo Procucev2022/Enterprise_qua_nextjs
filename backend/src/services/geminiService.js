@@ -50,6 +50,12 @@ ACCURACY IS MORE IMPORTANT THAN COMPLETENESS. DO NOT GUESS.
 - A spreadsheet may be flattened with cells separated by " | ", one row per line. A label may sit in one cell with its value in the next cell on the same line, or as a column header with values in the rows beneath it. Read both layouts.
 - If the document is an image or a scan, read the table structure and match each quantity to the row it sits on.
 
+DESCRIPTION vs SPECIFICATION
+- When a document prices items with a separate specification column, use it as stated.
+- When one description carries both the item and its technical detail, split it. Keep the product name plus any size, dimension, bore, length or model token that IDENTIFIES the item in "itemDescription", and move the qualifying detail — material grade, standard, class, rating, voltage, phase, efficiency, certification, finish — into "specification".
+- Splitting only moves text that is already written in the document. Never add a specification that is not stated, and never drop a token: every word of the original description must appear in one field or the other.
+- Example: "Industrial Ball Valve, 2 inch, SS316, Class 150, threaded" becomes itemDescription "Industrial Ball Valve 2 inch" and specification "SS316, Class 150, threaded", because the bore identifies the valve while the material and class qualify it.
+
 MONETARY VALUES
 - Report money as a plain number with no currency symbol, thousands separator or words. "Rs. 1,45,000/-" becomes 145000.
 - DO NOT calculate, estimate or infer a price that is not printed in the document. Return null instead.
