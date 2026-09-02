@@ -642,6 +642,8 @@ export interface AuthResponse {
 
 export interface LoginCredentials {
   email: string;
+  /** Registered mobile number, verified alongside the password at sign-in. */
+  mobile?: string;
   password?: string;
   code?: string;
   role?: UserRole;
@@ -649,12 +651,16 @@ export interface LoginCredentials {
 
 export interface OtpRequestPayload {
   email: string;
+  /** Registered mobile number the code is issued against. */
+  mobile: string;
   roleHint?: UserRole;
 }
 
 export interface OtpVerifyPayload {
   email: string;
   code: string;
+  /** Must match the mobile number the code was requested with. */
+  mobile: string;
 }
 
 export interface RegisterPayload {

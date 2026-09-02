@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const { logger } = require('./loggerService');
 const storeService = require('./storeService');
 const mailerService = require('./mailerService');
-const { AUTH_MESSAGES } = require('../config/constants');
+const { AUTH_MESSAGES, IDENTITY_OTP_CONFIG } = require('../config/constants');
 const identityPoolModule = require('../db/identityPool');
 const identityQueries = require('../db/identityQueries');
 
@@ -23,10 +23,32 @@ if (!CONFIGURED_AUTH_SECRET) {
 }
 
 const AUTH_SECRET = CONFIGURED_AUTH_SECRET || DEV_FALLBACK_AUTH_SECRET;
-const OTP_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
 
-// In-memory OTP storage: email -> { code, expiresAt, attempts }
+// OTP shape and lifetime are fixed by the Java p2pservices app, which writes the
+// same codes into the shared `otp_store` table: 6 digits, valid for 15 minutes.
+const { OTP_LENGTH, OTP_EXPIRY_MS, OTP_KEY_SEPARATOR } = IDENTITY_OTP_CONFIG;
+
+// In-memory OTP storage: `<+91phone>_EMAIL_<email>` -> { code, expiresAt, attempts }
 const otpStore = new Map();
+
+/**
+ * Build the OTP store key the Java service uses:
+ * `normalisedPhone + "_EMAIL_" + lowercased email`. Keying on the pair rather
+ * than the email alone means a code issued for one registered mobile number
+ * cannot be replayed against a different one.
+ */
+function buildOtpKey(normalizedEmail, mobile) {
+  return `${identityQueries.normalizePhone(mobile)}${OTP_KEY_SEPARATOR}${normalizedEmail}`;
+}
+
+/**
+ * Generate a zero-padded numeric OTP of the configured length using a
+ * cryptographically secure source rather than Math.random.
+ */
+function generateOtpCode() {
+  const ceiling = 10 ** OTP_LENGTH;
+  return String(crypto.randomInt(0, ceiling)).padStart(OTP_LENGTH, '0');
+}
 
 // In-memory revoked-token set (holds each token's signature segment)
 const revokedTokens = new Set();
@@ -63,13 +85,20 @@ function verifyPassword(plainPassword, storedHash, storedSalt) {
  * user registry and no seeded demo credentials. If the identity database is
  * unreachable, authentication fails closed with a descriptive error rather than
  * silently accepting anything.
+ *
+ * When a mobile number is supplied the lookup is narrowed to email + phone,
+ * matching the Java `/authenticate` contract. That matters because the shared
+ * schema has no unique index on `user.username`, so email alone can match more
+ * than one row.
  */
-async function loadIdentityUser(normalizedEmail) {
+async function loadIdentityUser(normalizedEmail, mobile) {
   if (!identityPoolModule.pool) {
     throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
   }
   try {
-    return await identityQueries.findUserByEmail(normalizedEmail);
+    return mobile
+      ? await identityQueries.findUserByEmailAndPhone(normalizedEmail, mobile)
+      : await identityQueries.findUserByEmail(normalizedEmail);
   } catch (err) {
     logger.error('Identity database lookup failed', err, 'AUTH_SERVICE');
     throw new Error(AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE);
@@ -226,32 +255,57 @@ function toPublicUser(user) {
 }
 
 /**
- * Authenticate with Email and Password. Does not auto-create accounts —
- * an unknown email is rejected with the same generic error as a wrong
- * password, to avoid leaking which emails are registered.
+ * Authenticate with Email + registered Mobile + Password.
+ *
+ * Staged to match POST /authenticate in the Java p2pservices app, which is the
+ * contract every other Procucev client already speaks:
+ *   1. the email + mobile pair must resolve to an account
+ *   2. that account must be active and approved
+ *   3. only then is the password compared
+ *
+ * Does not auto-create accounts.
  */
-async function authenticateWithPassword(email, password, ipAddress) {
-  if (!email || !password) {
-    throw new Error(AUTH_MESSAGES.EMAIL_PASSWORD_REQUIRED);
+async function authenticateWithPassword(email, password, ipAddress, mobile) {
+  if (!email || !password || !mobile) {
+    throw new Error(AUTH_MESSAGES.EMAIL_MOBILE_PASSWORD_REQUIRED);
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-  const user = await loadIdentityUser(normalizedEmail);
+  const submittedMobile = String(mobile).trim();
 
-  // Unknown email and wrong password produce the same error so the response
-  // cannot be used to enumerate registered addresses.
-  if (!user || !identityQueries.verifyStoredPassword(password, user.password)) {
-    logger.warn(`Failed password authentication for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
-    throw new Error(AUTH_MESSAGES.INVALID_CREDENTIALS);
+  // Stage 1 — identity. The Java service calls validateUser(username, phone)
+  // before looking at any credential, and reports the pair as wrong rather than
+  // blaming the password, so a visitor who mistyped their mobile number is told
+  // exactly that instead of doubting a password that was correct.
+  const user = await loadIdentityUser(normalizedEmail, submittedMobile);
+  if (!user) {
+    logger.warn(
+      `Sign-in blocked, no account for this email + mobile pair: ${normalizedEmail}`,
+      { ipAddress },
+      'AUTH_SERVICE'
+    );
+    throw new Error(AUTH_MESSAGES.INVALID_USERNAME_OR_MOBILE);
   }
 
+  // Stage 2 — the active / approval gates, again ahead of the credential check,
+  // mirroring validateUserApproval on the Java path.
   assertUserCanSignIn(user, normalizedEmail, ipAddress);
 
+  // Stage 3 — the credential itself.
+  if (!identityQueries.verifyStoredPassword(password, user.password)) {
+    logger.warn(`Failed password authentication for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+    throw new Error(AUTH_MESSAGES.INVALID_LOGIN_CREDENTIALS);
+  }
+
   const token = generateSessionToken(user);
-  logger.audit(`User logged in via Password: ${user.email} (${user.role})`, user.email, { role: user.role, ipAddress });
+  logger.audit(`User logged in via Password: ${user.email} (${user.role})`, user.email, {
+    role: user.role,
+    ipAddress,
+    mobileVerified: true,
+  });
   storeService.addAuditLog({
     userEmail: user.email,
-    action: `User authenticated via Email + Password [Role: ${user.role}]`,
+    action: `User authenticated via Email + Mobile + Password [Role: ${user.role}]`,
     ipAddress,
   });
 
@@ -263,27 +317,39 @@ async function authenticateWithPassword(email, password, ipAddress) {
 }
 
 /**
- * Generate and dispatch a 4-digit OTP for Email. Only for an email that
- * already has an account — use `register` to create one first.
+ * Generate and dispatch a 6-digit email OTP.
+ *
+ * Follows the Java `/authenticate` OTP branch: the email + mobile pair is
+ * validated and the approval gates are applied first, and only then is a code
+ * issued, stored against `<+91phone>_EMAIL_<email>` and emailed. Only for an
+ * account that already exists — use `register` to create one first.
  */
-async function requestOtp(email, roleHint, ipAddress) {
+async function requestOtp(email, mobile, roleHint, ipAddress) {
   if (!email) {
     throw new Error(AUTH_MESSAGES.OTP_EMAIL_REQUIRED);
   }
+  if (!mobile) {
+    throw new Error(AUTH_MESSAGES.MOBILE_REQUIRED);
+  }
 
   const normalizedEmail = email.trim().toLowerCase();
-  const user = await loadIdentityUser(normalizedEmail);
+  const submittedMobile = String(mobile).trim();
+
+  const user = await loadIdentityUser(normalizedEmail, submittedMobile);
   if (!user) {
-    logger.warn(`OTP requested for unregistered email: ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
-    throw new Error(AUTH_MESSAGES.ACCOUNT_NOT_FOUND);
+    logger.warn(
+      `OTP requested for an unrecognised email + mobile pair: ${normalizedEmail}`,
+      { ipAddress },
+      'AUTH_SERVICE'
+    );
+    throw new Error(AUTH_MESSAGES.INVALID_USERNAME_OR_MOBILE);
   }
 
   assertUserCanSignIn(user, normalizedEmail, ipAddress);
 
-  // Generate 4-digit code
-  const code = Math.floor(1000 + Math.random() * 9000).toString();
+  const code = generateOtpCode();
   const expiresAt = Date.now() + OTP_EXPIRY_MS;
-  otpStore.set(normalizedEmail, { code, expiresAt, attempts: 0 });
+  otpStore.set(buildOtpKey(normalizedEmail, submittedMobile), { code, expiresAt, attempts: 0 });
 
   mailerService.sendOtpEmail(normalizedEmail, code, OTP_EXPIRY_MS / 1000).catch((e) =>
     logger.error('OTP email dispatch error', e, 'AUTH_SERVICE')
@@ -292,7 +358,7 @@ async function requestOtp(email, roleHint, ipAddress) {
   logger.info(`OTP generated for ${normalizedEmail}: ${code}`, { ipAddress }, 'AUTH_SERVICE');
   storeService.addAuditLog({
     userEmail: normalizedEmail,
-    action: `Instant 4-digit OTP dispatched to corporate email (${normalizedEmail})`,
+    action: `Instant ${OTP_LENGTH}-digit OTP dispatched to corporate email (${normalizedEmail})`,
     ipAddress,
   });
 
@@ -304,24 +370,38 @@ async function requestOtp(email, roleHint, ipAddress) {
     // runs without real email delivery can still complete the OTP flow; once
     // SMTP is live, the real code is never exposed in the API response.
     ...(process.env.NODE_ENV === 'test' || !mailerService.isConfigured() ? { demoCode: code } : {}),
-    expiresInSeconds: 600,
+    expiresInSeconds: OTP_EXPIRY_MS / 1000,
   };
 }
 
 /**
- * Verify 4-digit OTP and issue a session. No master/bypass codes — only the
- * code actually issued via requestOtp for a real, registered account verifies.
+ * Verify a 6-digit email OTP and issue a session. No master/bypass codes — only
+ * the code actually issued via requestOtp, for the same email + mobile pair,
+ * verifies. An expired entry is deleted on inspection, matching the Java
+ * validateEmailOtp behaviour.
  */
-async function verifyOtp(email, code, ipAddress) {
+async function verifyOtp(email, code, ipAddress, mobile) {
   if (!email || !code) {
     throw new Error(AUTH_MESSAGES.OTP_CODE_REQUIRED);
   }
+  if (!mobile) {
+    throw new Error(AUTH_MESSAGES.MOBILE_REQUIRED);
+  }
 
   const normalizedEmail = email.trim().toLowerCase();
-  const user = await loadIdentityUser(normalizedEmail);
-  const storedOtp = otpStore.get(normalizedEmail);
+  const submittedMobile = String(mobile).trim();
+  const otpKey = buildOtpKey(normalizedEmail, submittedMobile);
 
-  const isValidCode = !!user && !!storedOtp && storedOtp.code === code && Date.now() <= storedOtp.expiresAt;
+  const user = await loadIdentityUser(normalizedEmail, submittedMobile);
+  const storedOtp = otpStore.get(otpKey);
+
+  if (storedOtp && Date.now() > storedOtp.expiresAt) {
+    otpStore.delete(otpKey);
+    logger.warn(`Expired OTP submitted for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+    throw new Error(AUTH_MESSAGES.INVALID_OTP);
+  }
+
+  const isValidCode = !!user && !!storedOtp && storedOtp.code === code;
 
   if (!isValidCode) {
     if (storedOtp) storedOtp.attempts = (storedOtp.attempts || 0) + 1;
@@ -332,7 +412,7 @@ async function verifyOtp(email, code, ipAddress) {
   assertUserCanSignIn(user, normalizedEmail, ipAddress);
 
   // Clear OTP on successful verification
-  otpStore.delete(normalizedEmail);
+  otpStore.delete(otpKey);
 
   const token = generateSessionToken(user);
   logger.audit(`User logged in via Instant OTP: ${user.email} (${user.role})`, user.email, { role: user.role, ipAddress });
@@ -356,7 +436,7 @@ async function registerUser(payload, ipAddress) {
   const { name, email, password, mobile, orgName } = payload;
   if (!email) throw new Error(AUTH_MESSAGES.REGISTRATION_EMAIL_REQUIRED);
   if (!password) throw new Error(AUTH_MESSAGES.EMAIL_PASSWORD_REQUIRED);
-  if (!mobile) throw new Error(AUTH_MESSAGES.OTP_EMAIL_REQUIRED);
+  if (!mobile) throw new Error(AUTH_MESSAGES.MOBILE_REQUIRED);
 
   if (!identityPoolModule.pool) {
     throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);

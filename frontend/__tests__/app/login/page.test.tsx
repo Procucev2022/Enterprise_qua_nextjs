@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import LoginPage from '@/app/login/page';
 import * as storeModule from '@/lib/store';
 import { authClient } from '@/lib/authClient';
-import { ROLE_LANDING_ROUTE } from '@/lib/constants';
+import { OTP_CODE_LENGTH, ROLE_LANDING_ROUTE } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
 
 jest.mock('@/lib/store');
@@ -31,6 +31,12 @@ const BUYER_SESSION = {
   orgId: 'org-1',
   orgName: 'Navin Chaudhary Enterprises',
 };
+
+/** Registered mobile number sign-in is verified against. */
+const LOGIN_MOBILE = '9157154504';
+
+/** A well-formed email OTP, matching the shared 6-digit contract. */
+const OTP_CODE = '123456';
 
 describe('LoginPage', () => {
   const showToast = jest.fn();
@@ -111,11 +117,16 @@ describe('LoginPage', () => {
 
       render(<LoginPage />);
       typeInto(/Registered Email ID/i, BUYER_SESSION.email);
+      typeInto(/Registered Mobile Number/i, LOGIN_MOBILE);
       typeInto(/^Password$/i, 'Pass@123');
       fireEvent.click(submitButton(/Sign In/i));
 
       await waitFor(() => {
-        expect(authClient.loginWithPassword).toHaveBeenCalledWith(BUYER_SESSION.email, 'Pass@123');
+        expect(authClient.loginWithPassword).toHaveBeenCalledWith(
+          BUYER_SESSION.email,
+          'Pass@123',
+          LOGIN_MOBILE
+        );
       });
       expect(setCurrentUserSession).toHaveBeenCalledWith(BUYER_SESSION);
       expect(setIsLoggedIn).toHaveBeenCalledWith(true);
@@ -133,6 +144,7 @@ describe('LoginPage', () => {
       render(<LoginPage />);
       // The visitor leaves "Buyer" selected, but the record says admin.
       typeInto(/Registered Email ID/i, 'admin@procucev.com');
+      typeInto(/Registered Mobile Number/i, LOGIN_MOBILE);
       typeInto(/^Password$/i, 'secret123');
       fireEvent.click(submitButton(/Sign In/i));
 
@@ -150,6 +162,7 @@ describe('LoginPage', () => {
 
       render(<LoginPage />);
       typeInto(/Registered Email ID/i, 'nobody@nowhere.test');
+      typeInto(/Registered Mobile Number/i, LOGIN_MOBILE);
       typeInto(/^Password$/i, 'wrong');
       fireEvent.click(submitButton(/Sign In/i));
 
@@ -164,22 +177,101 @@ describe('LoginPage', () => {
       expect(mockReplace).not.toHaveBeenCalled();
     });
 
-    it('validates that both fields are supplied before calling the API', () => {
+    it('validates that email, mobile and password are all supplied before calling the API', () => {
       render(<LoginPage />);
 
       submitForm(/Sign In/i);
 
       expect(showToast).toHaveBeenCalledWith(
         AUTH.missingFieldsTitle,
-        AUTH.emailAndPasswordRequired,
+        AUTH.loginFieldsRequired,
         'warning'
       );
       expect(authClient.loginWithPassword).not.toHaveBeenCalled();
     });
+
+    it('treats a blank mobile number as a missing field', () => {
+      render(<LoginPage />);
+      typeInto(/Registered Email ID/i, BUYER_SESSION.email);
+      typeInto(/^Password$/i, 'Pass@123');
+
+      submitForm(/Sign In/i);
+
+      expect(showToast).toHaveBeenCalledWith(
+        AUTH.missingFieldsTitle,
+        AUTH.loginFieldsRequired,
+        'warning'
+      );
+      expect(authClient.loginWithPassword).not.toHaveBeenCalled();
+    });
+
+    it('rejects a malformed mobile number before calling the API', () => {
+      render(<LoginPage />);
+      typeInto(/Registered Email ID/i, BUYER_SESSION.email);
+      typeInto(/Registered Mobile Number/i, '12345');
+      typeInto(/^Password$/i, 'Pass@123');
+
+      submitForm(/Sign In/i);
+
+      expect(showToast).toHaveBeenCalledWith(AUTH.signInFailedTitle, AUTH.mobileInvalid, 'warning');
+      expect(authClient.loginWithPassword).not.toHaveBeenCalled();
+    });
+
+    it('rejects a malformed email address before calling the API', () => {
+      render(<LoginPage />);
+      typeInto(/Registered Email ID/i, 'not-an-email');
+      typeInto(/Registered Mobile Number/i, LOGIN_MOBILE);
+      typeInto(/^Password$/i, 'Pass@123');
+
+      submitForm(/Sign In/i);
+
+      expect(showToast).toHaveBeenCalledWith(AUTH.signInFailedTitle, AUTH.emailInvalid, 'warning');
+      expect(authClient.loginWithPassword).not.toHaveBeenCalled();
+    });
+
+    it('accepts a +91 prefixed mobile number and forwards it untouched', async () => {
+      (authClient.loginWithPassword as jest.Mock).mockResolvedValue({
+        success: true,
+        user: BUYER_SESSION,
+        token: 'jwt',
+      });
+
+      render(<LoginPage />);
+      typeInto(/Registered Email ID/i, BUYER_SESSION.email);
+      typeInto(/Registered Mobile Number/i, `  +91${LOGIN_MOBILE}  `);
+      typeInto(/^Password$/i, 'Pass@123');
+      fireEvent.click(submitButton(/Sign In/i));
+
+      await waitFor(() => {
+        expect(authClient.loginWithPassword).toHaveBeenCalledWith(
+          BUYER_SESSION.email,
+          'Pass@123',
+          `+91${LOGIN_MOBILE}`
+        );
+      });
+    });
+
+    // Both sign-in methods resolve the account by email + mobile, so the field
+    // is present on the OTP form too and its value survives switching methods.
+    it('keeps the mobile number when switching to the email OTP method', () => {
+      render(<LoginPage />);
+      typeInto(/Registered Mobile Number/i, LOGIN_MOBILE);
+
+      fireEvent.click(screen.getByRole('button', { name: /Email OTP/i }));
+
+      expect(screen.getByLabelText(/Registered Mobile Number/i)).toHaveValue(LOGIN_MOBILE);
+    });
   });
 
+  // The identity service issues the code against the email + mobile pair and
+  // resends the mobile on verification, matching the Java /authenticate flow.
   describe('email OTP sign-in', () => {
     const switchToOtp = () => fireEvent.click(screen.getByRole('button', { name: /Email OTP/i }));
+
+    const fillOtpIdentity = (email = BUYER_SESSION.email) => {
+      typeInto(/Registered Email ID/i, email);
+      typeInto(/Registered Mobile Number/i, LOGIN_MOBILE);
+    };
 
     it('requests a code then verifies it and signs in', async () => {
       (authClient.requestOtp as jest.Mock).mockResolvedValue({ success: true });
@@ -191,37 +283,52 @@ describe('LoginPage', () => {
 
       render(<LoginPage />);
       switchToOtp();
-      typeInto(/Registered Email ID/i, BUYER_SESSION.email);
+      fillOtpIdentity();
       fireEvent.click(screen.getByRole('button', { name: /Request Login OTP/i }));
 
       await waitFor(() => {
-        expect(authClient.requestOtp).toHaveBeenCalledWith(BUYER_SESSION.email, 'buyer');
+        expect(authClient.requestOtp).toHaveBeenCalledWith(
+          BUYER_SESSION.email,
+          LOGIN_MOBILE,
+          'buyer'
+        );
       });
 
-      typeInto(/Enter Email OTP Code/i, '1234');
+      typeInto(/Enter Email OTP Code/i, OTP_CODE);
       fireEvent.click(screen.getByRole('button', { name: /Verify & Sign In/i }));
 
       await waitFor(() => {
-        expect(authClient.verifyOtp).toHaveBeenCalledWith(BUYER_SESSION.email, '1234');
+        expect(authClient.verifyOtp).toHaveBeenCalledWith(
+          BUYER_SESSION.email,
+          OTP_CODE,
+          LOGIN_MOBILE
+        );
       });
       expect(mockReplace).toHaveBeenCalledWith(ROLE_LANDING_ROUTE.buyer);
+    });
+
+    it('accepts a code of exactly the configured length', () => {
+      render(<LoginPage />);
+      switchToOtp();
+
+      expect(OTP_CODE).toHaveLength(OTP_CODE_LENGTH);
     });
 
     it('reports a rejected OTP request for an unknown account', async () => {
       (authClient.requestOtp as jest.Mock).mockResolvedValue({
         success: false,
-        error: 'No account found for this email. Please register first.',
+        error: 'No active account matches this email address and mobile number together.',
       });
 
       render(<LoginPage />);
       switchToOtp();
-      typeInto(/Registered Email ID/i, 'ghost@nowhere.test');
+      fillOtpIdentity('ghost@nowhere.test');
       fireEvent.click(screen.getByRole('button', { name: /Request Login OTP/i }));
 
       await waitFor(() => {
         expect(showToast).toHaveBeenCalledWith(
           AUTH.otpRequestFailedTitle,
-          'No account found for this email. Please register first.',
+          'No active account matches this email address and mobile number together.',
           'warning'
         );
       });
@@ -237,11 +344,11 @@ describe('LoginPage', () => {
 
       render(<LoginPage />);
       switchToOtp();
-      typeInto(/Registered Email ID/i, BUYER_SESSION.email);
+      fillOtpIdentity();
       fireEvent.click(screen.getByRole('button', { name: /Request Login OTP/i }));
       await waitFor(() => expect(screen.getByLabelText(/Enter Email OTP Code/i)).toBeInTheDocument());
 
-      typeInto(/Enter Email OTP Code/i, '9999');
+      typeInto(/Enter Email OTP Code/i, '999999');
       fireEvent.click(screen.getByRole('button', { name: /Verify & Sign In/i }));
 
       await waitFor(() => {
@@ -254,13 +361,51 @@ describe('LoginPage', () => {
       expect(setIsLoggedIn).not.toHaveBeenCalled();
     });
 
-    it('requires an email before requesting a code', () => {
+    it('rejects a short code without calling the API', async () => {
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({ success: true });
+
+      render(<LoginPage />);
+      switchToOtp();
+      fillOtpIdentity();
+      fireEvent.click(screen.getByRole('button', { name: /Request Login OTP/i }));
+      await waitFor(() => expect(screen.getByLabelText(/Enter Email OTP Code/i)).toBeInTheDocument());
+
+      typeInto(/Enter Email OTP Code/i, '1234');
+      fireEvent.submit(
+        screen.getByRole('button', { name: /Verify & Sign In/i }).closest('form') as HTMLFormElement
+      );
+
+      expect(showToast).toHaveBeenCalledWith(AUTH.otpInvalidTitle, AUTH.otpRequired, 'warning');
+      expect(authClient.verifyOtp).not.toHaveBeenCalled();
+    });
+
+    it('requires an email and a mobile number before requesting a code', () => {
       render(<LoginPage />);
       switchToOtp();
 
       fireEvent.submit(screen.getByRole('button', { name: /Request Login OTP/i }).closest('form')!);
 
-      expect(showToast).toHaveBeenCalledWith(AUTH.missingFieldsTitle, AUTH.emailRequired, 'warning');
+      expect(showToast).toHaveBeenCalledWith(
+        AUTH.missingFieldsTitle,
+        AUTH.emailAndMobileRequired,
+        'warning'
+      );
+      expect(authClient.requestOtp).not.toHaveBeenCalled();
+    });
+
+    it('rejects a malformed mobile number before requesting a code', () => {
+      render(<LoginPage />);
+      switchToOtp();
+      typeInto(/Registered Email ID/i, BUYER_SESSION.email);
+      typeInto(/Registered Mobile Number/i, '12345');
+
+      fireEvent.submit(screen.getByRole('button', { name: /Request Login OTP/i }).closest('form')!);
+
+      expect(showToast).toHaveBeenCalledWith(
+        AUTH.otpRequestFailedTitle,
+        AUTH.mobileInvalid,
+        'warning'
+      );
       expect(authClient.requestOtp).not.toHaveBeenCalled();
     });
 
@@ -269,7 +414,7 @@ describe('LoginPage', () => {
 
       render(<LoginPage />);
       switchToOtp();
-      typeInto(/Registered Email ID/i, BUYER_SESSION.email);
+      fillOtpIdentity();
       fireEvent.click(screen.getByRole('button', { name: /Request Login OTP/i }));
       await waitFor(() => expect(screen.getByLabelText(/Enter Email OTP Code/i)).toBeInTheDocument());
 

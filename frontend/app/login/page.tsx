@@ -4,9 +4,9 @@ import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
-import { ROLE_LANDING_ROUTE } from '@/lib/constants';
+import { OTP_CODE_LENGTH, OTP_EXPIRY_MINUTES, ROLE_LANDING_ROUTE } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { INDIAN_MOBILE_PATTERN } from '@/lib/validationSchemas';
+import { FORM_SCHEMAS, INDIAN_MOBILE_PATTERN, validateFormData } from '@/lib/validationSchemas';
 import PasswordInput from '@/app/components/PasswordInput';
 import type { UserRole, UserSession } from '@/lib/types';
 import {
@@ -58,6 +58,7 @@ export default function LoginPage() {
 
   // Credentials are always verified server-side, so nothing is pre-filled.
   const [loginEmail, setLoginEmail] = useState('');
+  const [loginMobile, setLoginMobile] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [buyerAuthMode, setBuyerAuthMode] = useState<'password' | 'email_otp'>('password');
   const [loginOtpSent, setLoginOtpSent] = useState(false);
@@ -101,14 +102,30 @@ export default function LoginPage() {
   // ── Password sign-in (all roles) ───────────────────────────────────────────
   const handlePasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!loginEmail.trim() || !loginPassword) {
-      showToast(AUTH.missingFieldsTitle, AUTH.emailAndPasswordRequired, 'warning');
+
+    const email = loginEmail.trim();
+    const mobile = loginMobile.trim();
+
+    if (!email || !mobile || !loginPassword) {
+      showToast(AUTH.missingFieldsTitle, AUTH.loginFieldsRequired, 'warning');
+      return;
+    }
+
+    // Formats are checked against the centralized login schema before a request
+    // is made, so a malformed mobile number never reaches the identity lookup.
+    const { isValid, fieldErrors } = validateFormData(FORM_SCHEMAS.loginForm, {
+      email,
+      mobile,
+      password: loginPassword,
+    });
+    if (!isValid) {
+      showToast(AUTH.signInFailedTitle, Object.values(fieldErrors)[0], 'warning');
       return;
     }
 
     setSubmitting(true);
     try {
-      const response = await authClient.loginWithPassword(loginEmail.trim().toLowerCase(), loginPassword);
+      const response = await authClient.loginWithPassword(email.toLowerCase(), loginPassword, mobile);
       if (response.success && response.user) {
         if (response.user.role === 'buyer' && !initialSetupCompleted) {
           setInitialSetupModalOpen(true);
@@ -125,22 +142,43 @@ export default function LoginPage() {
   // ── Email OTP sign-in ──────────────────────────────────────────────────────
   const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!loginEmail.trim()) {
-      showToast(AUTH.missingFieldsTitle, AUTH.emailRequired, 'warning');
+
+    const mobile = loginMobile.trim();
+
+    // The identity service issues the code against the email + mobile pair, so
+    // both are required before a code can be requested.
+    if (!loginEmail.trim() || !mobile) {
+      showToast(AUTH.missingFieldsTitle, AUTH.emailAndMobileRequired, 'warning');
+      return;
+    }
+    if (!INDIAN_MOBILE_PATTERN.test(mobile)) {
+      showToast(AUTH.otpRequestFailedTitle, AUTH.mobileInvalid, 'warning');
       return;
     }
 
     setSubmitting(true);
     try {
       const email = loginEmail.trim().toLowerCase();
-      const response = await authClient.requestOtp(email, selectedRole === 'vendor' ? 'vendor' : 'buyer');
+      const response = await authClient.requestOtp(
+        email,
+        mobile,
+        selectedRole === 'vendor' ? 'vendor' : 'buyer'
+      );
       if (!response.success) {
         fail(AUTH.otpRequestFailedTitle, response.error);
         return;
       }
       setLoginOtpInput('');
       setLoginOtpSent(true);
-      showToast(AUTH.welcomeBackTitle, formatString(AUTH.otpDispatched, { email }), 'success');
+      showToast(
+        AUTH.welcomeBackTitle,
+        formatString(AUTH.otpDispatched, {
+          email,
+          codeLength: OTP_CODE_LENGTH,
+          expiryMinutes: OTP_EXPIRY_MINUTES,
+        }),
+        'success'
+      );
     } finally {
       setSubmitting(false);
     }
@@ -148,9 +186,19 @@ export default function LoginPage() {
 
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (loginOtpInput.trim().length !== OTP_CODE_LENGTH) {
+      showToast(AUTH.otpInvalidTitle, AUTH.otpRequired, 'warning');
+      return;
+    }
+
     setSubmitting(true);
     try {
-      const response = await authClient.verifyOtp(loginEmail.trim().toLowerCase(), loginOtpInput);
+      const response = await authClient.verifyOtp(
+        loginEmail.trim().toLowerCase(),
+        loginOtpInput.trim(),
+        loginMobile.trim()
+      );
       if (response.success && response.user) {
         if (response.user.role === 'buyer' && !initialSetupCompleted) {
           setInitialSetupModalOpen(true);
@@ -428,6 +476,27 @@ export default function LoginPage() {
                       </div>
                     </div>
 
+                    <div className="space-y-1">
+                      <label htmlFor="login-mobile" className={fieldLabel}>Registered Mobile Number</label>
+                      <div className="relative">
+                        <Phone className={iconClass} size={14} />
+                        <input
+                          id="login-mobile"
+                          type="tel"
+                          inputMode="numeric"
+                          autoComplete="tel"
+                          placeholder="e.g. 9811223344"
+                          value={loginMobile}
+                          onChange={(e) => setLoginMobile(e.target.value)}
+                          className={fieldInput}
+                          required
+                        />
+                      </div>
+                      <span className="text-[10px] text-slate-400 italic block mt-0.5">
+                        Must match the mobile number on your account record. It is verified together with your email and password.
+                      </span>
+                    </div>
+
                     <PasswordInput
                       id="login-password"
                       label="Password"
@@ -460,8 +529,27 @@ export default function LoginPage() {
                           required
                         />
                       </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label htmlFor="otp-mobile" className={fieldLabel}>Registered Mobile Number</label>
+                      <div className="relative">
+                        <Phone className={iconClass} size={14} />
+                        <input
+                          id="otp-mobile"
+                          type="tel"
+                          inputMode="numeric"
+                          autoComplete="tel"
+                          placeholder="e.g. 9811223344"
+                          value={loginMobile}
+                          onChange={(e) => setLoginMobile(e.target.value)}
+                          className={fieldInput}
+                          required
+                        />
+                      </div>
                       <span className="text-[10px] text-slate-400 italic block mt-0.5">
-                        A 4-digit code is emailed to your registered address and expires in 10 minutes.
+                        A {OTP_CODE_LENGTH}-digit code is emailed to your registered address and expires in{' '}
+                        {OTP_EXPIRY_MINUTES} minutes. The code is tied to this email and mobile number pair.
                       </span>
                     </div>
 
@@ -485,11 +573,11 @@ export default function LoginPage() {
                           type="text"
                           inputMode="numeric"
                           autoComplete="one-time-code"
-                          placeholder="4-digit code"
+                          placeholder={`${OTP_CODE_LENGTH}-digit code`}
                           value={loginOtpInput}
                           onChange={(e) => setLoginOtpInput(e.target.value)}
                           className={otpInput}
-                          maxLength={4}
+                          maxLength={OTP_CODE_LENGTH}
                           required
                         />
                       </div>

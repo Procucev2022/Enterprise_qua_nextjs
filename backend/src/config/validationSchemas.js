@@ -7,6 +7,19 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i;
 const PHONE_REGEX = /^[+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{7,15}$/;
 
+// Indian mobile number accepted at sign-in and registration. Mirrors
+// INDIAN_MOBILE_PATTERN in frontend/lib/validationSchemas.ts. The identity
+// schema stores these normalised to +91XXXXXXXXXX, so the submitted value must
+// resolve to exactly ten national digits beginning 6-9.
+const INDIAN_MOBILE_REGEX = /^(?:\+?91[-\s]?|0)?[6-9]\d{9}$/;
+const INDIAN_MOBILE_MESSAGE = 'Enter a valid 10-digit Indian mobile number, for example 9876543210.';
+
+// Email OTPs are 6 numeric digits, matching the `otp_store.otp` column the Java
+// p2pservices app writes. Kept here rather than derived from IDENTITY_OTP_CONFIG
+// because config/constants.js requires this module, not the other way round.
+const OTP_CODE_REGEX = /^\d{6}$/;
+const OTP_CODE_MESSAGE = 'Enter the 6-digit verification code sent to your registered email address.';
+
 const VALIDATION_SCHEMAS = {
   createRFQ: {
     title: { type: 'string', required: true, minLength: 3, maxLength: 200 },
@@ -75,27 +88,50 @@ const VALIDATION_SCHEMAS = {
     authTag: { type: 'string', required: true, minLength: 16 },
   },
 
+  // `mobile` is optional at the schema level because the same endpoint also
+  // serves the OTP (`code`) path, which identifies the account by email alone.
+  // Password sign-in requires it, and that is enforced in authService.
   login: {
     email: { type: 'string', required: true, message: 'Email is required.' },
+    mobile: { type: 'string', required: false, pattern: INDIAN_MOBILE_REGEX, message: INDIAN_MOBILE_MESSAGE },
     password: { type: 'string', required: false },
-    code: { type: 'string', required: false },
+    code: { type: 'string', required: false, pattern: OTP_CODE_REGEX, message: OTP_CODE_MESSAGE },
   },
 
+  // The Java `/authenticate` OTP branch validates the email + phone pair before
+  // issuing a code, so the mobile number is mandatory on both OTP endpoints.
   requestOtp: {
     email: { type: 'string', required: true, message: 'Email is required to request OTP.' },
+    mobile: {
+      type: 'string',
+      required: true,
+      pattern: INDIAN_MOBILE_REGEX,
+      message: INDIAN_MOBILE_MESSAGE,
+    },
     roleHint: { type: 'string', required: false },
   },
 
   verifyOtp: {
     email: { type: 'string', required: true, message: 'Email and verification code are required.' },
-    code: { type: 'string', required: true, message: 'Email and verification code are required.' },
+    code: {
+      type: 'string',
+      required: true,
+      pattern: OTP_CODE_REGEX,
+      message: OTP_CODE_MESSAGE,
+    },
+    mobile: {
+      type: 'string',
+      required: true,
+      pattern: INDIAN_MOBILE_REGEX,
+      message: INDIAN_MOBILE_MESSAGE,
+    },
   },
 
   register: {
     email: { type: 'string', required: true, message: 'Email is required for registration.' },
     name: { type: 'string', required: false },
     password: { type: 'string', required: false },
-    mobile: { type: 'string', required: false },
+    mobile: { type: 'string', required: false, pattern: INDIAN_MOBILE_REGEX, message: INDIAN_MOBILE_MESSAGE },
     role: { type: 'string', required: false },
     orgName: { type: 'string', required: false },
   },
@@ -182,6 +218,10 @@ module.exports = {
   EMAIL_REGEX,
   GSTIN_REGEX,
   PHONE_REGEX,
+  INDIAN_MOBILE_REGEX,
+  INDIAN_MOBILE_MESSAGE,
+  OTP_CODE_REGEX,
+  OTP_CODE_MESSAGE,
   VALIDATION_SCHEMAS,
   validatePayload,
 };

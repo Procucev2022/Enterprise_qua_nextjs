@@ -9,21 +9,21 @@ function getClientIp(req) {
 
 async function login(req, res, next) {
   try {
-    const { email, password, code } = req.body || {};
+    const { email, password, code, mobile } = req.body || {};
     const ipAddress = getClientIp(req);
 
-    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.login, { email, password, code });
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.login, { email, password, code, mobile });
     if (!isValid) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0] });
     }
 
     if (code) {
-      const result = await authService.verifyOtp(email, code, ipAddress);
+      const result = await authService.verifyOtp(email, code, ipAddress, mobile);
       return res.json(result);
     }
 
     if (password) {
-      const result = await authService.authenticateWithPassword(email, password, ipAddress);
+      const result = await authService.authenticateWithPassword(email, password, ipAddress, mobile);
       return res.json(result);
     }
 
@@ -36,15 +36,15 @@ async function login(req, res, next) {
 
 async function requestOtp(req, res, next) {
   try {
-    const { email, roleHint } = req.body || {};
+    const { email, mobile, roleHint } = req.body || {};
     const ipAddress = getClientIp(req);
 
-    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.requestOtp, { email, roleHint });
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.requestOtp, { email, mobile, roleHint });
     if (!isValid) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0] });
     }
 
-    const result = await authService.requestOtp(email, roleHint, ipAddress);
+    const result = await authService.requestOtp(email, mobile, roleHint, ipAddress);
     res.json(result);
   } catch (err) {
     logger.warn('OTP request failed in authController', { error: err.message, email: req.body?.email }, 'AUTH_CONTROLLER');
@@ -54,15 +54,15 @@ async function requestOtp(req, res, next) {
 
 async function verifyOtp(req, res, next) {
   try {
-    const { email, code } = req.body || {};
+    const { email, code, mobile } = req.body || {};
     const ipAddress = getClientIp(req);
 
-    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.verifyOtp, { email, code });
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.verifyOtp, { email, code, mobile });
     if (!isValid) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0] });
     }
 
-    const result = await authService.verifyOtp(email, code, ipAddress);
+    const result = await authService.verifyOtp(email, code, ipAddress, mobile);
     res.json(result);
   } catch (err) {
     logger.warn('OTP verification failed in authController', { error: err.message, email: req.body?.email }, 'AUTH_CONTROLLER');

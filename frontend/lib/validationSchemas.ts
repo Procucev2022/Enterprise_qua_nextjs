@@ -3,14 +3,17 @@
  * Single source of truth for all form validations, user input limits, and payload verification.
  */
 
+import { UI_STRINGS } from './uiStrings';
+
 export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export const GSTIN_PATTERN = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i;
 export const PHONE_PATTERN = /^[+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{7,15}$/;
 
 /**
- * Indian mobile number accepted at registration. The identity database stores
- * these normalised to +91XXXXXXXXXX, so the input must resolve to exactly ten
- * national digits beginning 6-9, optionally prefixed with +91 / 0 / 91.
+ * Indian mobile number accepted at sign-in and registration. The identity
+ * database stores these normalised to +91XXXXXXXXXX, so the input must resolve
+ * to exactly ten national digits beginning 6-9, optionally prefixed with
+ * +91 / 0 / 91.
  */
 export const INDIAN_MOBILE_PATTERN = /^(?:\+?91[-\s]?|0)?[6-9]\d{9}$/;
 
@@ -29,6 +32,17 @@ export interface FieldRule {
 export type FormSchema = Record<string, FieldRule>;
 
 export const FORM_SCHEMAS: Record<string, FormSchema> = {
+  /**
+   * Password sign-in. The backend re-checks the same three fields and resolves
+   * the account by email + mobile together, so the mobile number is a hard
+   * requirement here rather than an optional contact detail.
+   */
+  loginForm: {
+    email: { required: true, pattern: EMAIL_PATTERN, message: UI_STRINGS.auth.emailInvalid },
+    mobile: { required: true, pattern: INDIAN_MOBILE_PATTERN, message: UI_STRINGS.auth.mobileInvalid },
+    password: { required: true, message: UI_STRINGS.auth.passwordRequired },
+  },
+
   rfqIngestion: {
     title: { required: true, minLength: 3, maxLength: 200, message: 'Title must be between 3 and 200 characters' },
     category: { required: true, message: 'Category selection is required' },

@@ -206,7 +206,16 @@ const AES_CONFIG = {
 const AUTH_MESSAGES = {
   EMAIL_REQUIRED: 'Email is required.',
   EMAIL_PASSWORD_REQUIRED: 'Email and password are required.',
+  EMAIL_MOBILE_PASSWORD_REQUIRED:
+    'Email, registered mobile number and password are all required to sign in.',
   INVALID_CREDENTIALS: 'Invalid email or password.',
+  // Password sign-in resolves the account by email + mobile together, so the
+  // failure message names all three fields without revealing which one missed.
+  INVALID_LOGIN_CREDENTIALS: 'Invalid password for this account. Check your password and try again.',
+  // Java equivalent: "Invalid phone number and username" from POST /authenticate.
+  INVALID_USERNAME_OR_MOBILE:
+    'No active account matches this email address and mobile number together. Check both values, or register if you do not have an account yet.',
+  MOBILE_REQUIRED: 'A 10-digit Indian mobile number is required.',
   PASSWORD_OR_CODE_REQUIRED: 'Password or OTP code is required.',
   AUTH_FAILED_FALLBACK: 'Authentication failed',
   OTP_EMAIL_REQUIRED: 'Email is required to dispatch OTP.',
@@ -287,12 +296,28 @@ const IDENTITY_MASTER_DATA = {
 const IDENTITY_PHONE_CONFIG = {
   DEFAULT_COUNTRY_CODE: '+91',
   NATIONAL_NUMBER_LENGTH: 10,
+  // Bare dialling digits, used to detect an already-prefixed 91XXXXXXXXXX value.
+  COUNTRY_DIALLING_DIGITS: '91',
+};
+
+// Email OTP shape shared with the Java p2pservices app. That service stores
+// codes in `otp_store` under the key `<normalisedPhone>_EMAIL_<email>` with a
+// 6-character column and a 15-minute expiry, so these values are not free
+// parameters: changing them desynchronises the two applications.
+const IDENTITY_OTP_CONFIG = {
+  OTP_LENGTH: 6,
+  OTP_EXPIRY_MS: 15 * 60 * 1000,
+  OTP_KEY_SEPARATOR: '_EMAIL_',
 };
 
 const {
   EMAIL_REGEX,
   GSTIN_REGEX,
   PHONE_REGEX,
+  INDIAN_MOBILE_REGEX,
+  INDIAN_MOBILE_MESSAGE,
+  OTP_CODE_REGEX,
+  OTP_CODE_MESSAGE,
   VALIDATION_SCHEMAS,
   validatePayload,
 } = require('./validationSchemas');
@@ -309,9 +334,14 @@ module.exports = {
   IDENTITY_ROLE_MAP,
   IDENTITY_MASTER_DATA,
   IDENTITY_PHONE_CONFIG,
+  IDENTITY_OTP_CONFIG,
   EMAIL_REGEX,
   GSTIN_REGEX,
   PHONE_REGEX,
+  INDIAN_MOBILE_REGEX,
+  INDIAN_MOBILE_MESSAGE,
+  OTP_CODE_REGEX,
+  OTP_CODE_MESSAGE,
   VALIDATION_SCHEMAS,
   validatePayload,
 };

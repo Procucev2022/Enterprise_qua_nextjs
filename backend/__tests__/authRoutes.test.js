@@ -5,7 +5,12 @@ const authController = require('../src/controllers/authController');
 const identityPool = require('../src/db/identityPool');
 const identityQueries = require('../src/db/identityQueries');
 const mailerService = require('../src/services/mailerService');
-const { AUTH_MESSAGES } = require('../src/config/constants');
+const {
+  AUTH_MESSAGES,
+  INDIAN_MOBILE_MESSAGE,
+  OTP_CODE_MESSAGE,
+  IDENTITY_OTP_CONFIG,
+} = require('../src/config/constants');
 const { authHeader } = require('./testHelpers');
 
 function mockRes() {
@@ -38,6 +43,8 @@ function buyerRecord(overrides = {}) {
 
 const EMAIL = 'navinchaudhary.dev@gmail.com';
 const PASSWORD = 'Pass@123';
+/** Mobile number as typed by the visitor on the sign-in form. */
+const MOBILE = '9157154504';
 
 describe('Authentication against the shared identity database (/api/auth)', () => {
   let originalPool;
@@ -173,6 +180,27 @@ describe('Authentication against the shared identity database (/api/auth)', () =
       await expect(authService.loadIdentityUser(EMAIL)).resolves.toMatchObject({ email: EMAIL });
     });
 
+    test('narrows the lookup to email + phone when a mobile number is supplied', async () => {
+      const byEmail = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+      const byEmailAndPhone = jest
+        .spyOn(identityQueries, 'findUserByEmailAndPhone')
+        .mockResolvedValue(buyerRecord());
+
+      await expect(authService.loadIdentityUser(EMAIL, MOBILE)).resolves.toMatchObject({ email: EMAIL });
+
+      expect(byEmailAndPhone).toHaveBeenCalledWith(EMAIL, MOBILE);
+      expect(byEmail).not.toHaveBeenCalled();
+    });
+
+    test('fails closed when the email + phone lookup throws', async () => {
+      jest
+        .spyOn(identityQueries, 'findUserByEmailAndPhone')
+        .mockRejectedValue(new Error('ETIMEDOUT'));
+      await expect(authService.loadIdentityUser(EMAIL, MOBILE)).rejects.toThrow(
+        AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE
+      );
+    });
+
     test('fails closed when the identity database is not configured', async () => {
       identityPool.pool = null;
       await expect(authService.loadIdentityUser(EMAIL)).rejects.toThrow(
@@ -219,9 +247,9 @@ describe('Authentication against the shared identity database (/api/auth)', () =
   // ── Password authentication ───────────────────────────────────────────────
   describe('authenticateWithPassword', () => {
     test('issues a session for correct credentials', async () => {
-      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
 
-      const result = await authService.authenticateWithPassword(EMAIL, PASSWORD, '::1');
+      const result = await authService.authenticateWithPassword(EMAIL, PASSWORD, '::1', MOBILE);
 
       expect(result.success).toBe(true);
       expect(result.user).toEqual({
@@ -235,118 +263,231 @@ describe('Authentication against the shared identity database (/api/auth)', () =
       expect(authService.verifySessionToken(result.token).valid).toBe(true);
     });
 
-    test('rejects a wrong password', async () => {
-      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
-      await expect(
-        authService.authenticateWithPassword(EMAIL, 'WrongPass@1', '::1')
-      ).rejects.toThrow(AUTH_MESSAGES.INVALID_CREDENTIALS);
-    });
-
-    test('rejects an unknown email with the same generic error', async () => {
-      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
-      await expect(
-        authService.authenticateWithPassword('ghost@nowhere.test', 'x', '::1')
-      ).rejects.toThrow(AUTH_MESSAGES.INVALID_CREDENTIALS);
-    });
-
-    test('requires both an email and a password', async () => {
-      await expect(authService.authenticateWithPassword('', PASSWORD)).rejects.toThrow(
-        AUTH_MESSAGES.EMAIL_PASSWORD_REQUIRED
-      );
-      await expect(authService.authenticateWithPassword(EMAIL, '')).rejects.toThrow(
-        AUTH_MESSAGES.EMAIL_PASSWORD_REQUIRED
-      );
-    });
-
-    test('normalises the email before looking it up', async () => {
-      const findSpy = jest
-        .spyOn(identityQueries, 'findUserByEmail')
+    test('resolves the account by email + registered mobile, not email alone', async () => {
+      const byEmail = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+      const byEmailAndPhone = jest
+        .spyOn(identityQueries, 'findUserByEmailAndPhone')
         .mockResolvedValue(buyerRecord());
 
-      await authService.authenticateWithPassword(`  ${EMAIL.toUpperCase()} `, PASSWORD, '::1');
+      await authService.authenticateWithPassword(EMAIL, PASSWORD, '::1', MOBILE);
 
-      expect(findSpy).toHaveBeenCalledWith(EMAIL);
+      expect(byEmailAndPhone).toHaveBeenCalledWith(EMAIL, MOBILE);
+      expect(byEmail).not.toHaveBeenCalled();
+    });
+
+    test('rejects a wrong password', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
+      await expect(
+        authService.authenticateWithPassword(EMAIL, 'WrongPass@1', '::1', MOBILE)
+      ).rejects.toThrow(AUTH_MESSAGES.INVALID_LOGIN_CREDENTIALS);
+    });
+
+    // Stage 1 of the Java flow (validateUser) reports the pair as wrong rather
+    // than blaming the password, so a mistyped mobile number is actionable.
+    test('rejects an unknown email as an unmatched email + mobile pair', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(null);
+      await expect(
+        authService.authenticateWithPassword('ghost@nowhere.test', 'x', '::1', MOBILE)
+      ).rejects.toThrow(AUTH_MESSAGES.INVALID_USERNAME_OR_MOBILE);
+    });
+
+    test('rejects a mobile number that does not belong to the account', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(null);
+      await expect(
+        authService.authenticateWithPassword(EMAIL, PASSWORD, '::1', '9000000000')
+      ).rejects.toThrow(AUTH_MESSAGES.INVALID_USERNAME_OR_MOBILE);
+    });
+
+    // Stage 2 runs before the credential check, matching validateUserApproval.
+    test('applies the approval gate before comparing the password', async () => {
+      jest
+        .spyOn(identityQueries, 'findUserByEmailAndPhone')
+        .mockResolvedValue(buyerRecord({ isSelfClient: true, isApproved: false }));
+      const verifySpy = jest.spyOn(identityQueries, 'verifyStoredPassword');
+
+      await expect(
+        authService.authenticateWithPassword(EMAIL, 'WrongPass@1', '::1', MOBILE)
+      ).rejects.toThrow(AUTH_MESSAGES.ACCOUNT_PENDING_APPROVAL);
+
+      expect(verifySpy).not.toHaveBeenCalled();
+    });
+
+    test('applies the active gate before comparing the password', async () => {
+      jest
+        .spyOn(identityQueries, 'findUserByEmailAndPhone')
+        .mockResolvedValue(buyerRecord({ isActive: false }));
+      const verifySpy = jest.spyOn(identityQueries, 'verifyStoredPassword');
+
+      await expect(
+        authService.authenticateWithPassword(EMAIL, PASSWORD, '::1', MOBILE)
+      ).rejects.toThrow(AUTH_MESSAGES.ACCOUNT_INACTIVE);
+
+      expect(verifySpy).not.toHaveBeenCalled();
+    });
+
+    test('requires an email, a mobile number and a password', async () => {
+      await expect(authService.authenticateWithPassword('', PASSWORD, '::1', MOBILE)).rejects.toThrow(
+        AUTH_MESSAGES.EMAIL_MOBILE_PASSWORD_REQUIRED
+      );
+      await expect(authService.authenticateWithPassword(EMAIL, '', '::1', MOBILE)).rejects.toThrow(
+        AUTH_MESSAGES.EMAIL_MOBILE_PASSWORD_REQUIRED
+      );
+      await expect(authService.authenticateWithPassword(EMAIL, PASSWORD, '::1', '')).rejects.toThrow(
+        AUTH_MESSAGES.EMAIL_MOBILE_PASSWORD_REQUIRED
+      );
+      await expect(authService.authenticateWithPassword(EMAIL, PASSWORD, '::1')).rejects.toThrow(
+        AUTH_MESSAGES.EMAIL_MOBILE_PASSWORD_REQUIRED
+      );
+    });
+
+    test('normalises the email and trims the mobile before looking them up', async () => {
+      const findSpy = jest
+        .spyOn(identityQueries, 'findUserByEmailAndPhone')
+        .mockResolvedValue(buyerRecord());
+
+      await authService.authenticateWithPassword(
+        `  ${EMAIL.toUpperCase()} `,
+        PASSWORD,
+        '::1',
+        `  ${MOBILE} `
+      );
+
+      expect(findSpy).toHaveBeenCalledWith(EMAIL, MOBILE);
     });
   });
 
   // ── OTP flow ──────────────────────────────────────────────────────────────
+  // Mirrors the OTP branch of POST /authenticate in the Java p2pservices app:
+  // the email + mobile pair is validated first, and the 6-digit code is stored
+  // against that pair for 15 minutes.
   describe('OTP request and verification', () => {
     test('dispatches a code for a known account and verifies it', async () => {
-      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
 
-      const requested = await authService.requestOtp(EMAIL, 'buyer', '::1');
+      const requested = await authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1');
       expect(requested.success).toBe(true);
-      expect(requested.expiresInSeconds).toBe(600);
-      expect(requested.demoCode).toMatch(/^\d{4}$/);
+      expect(requested.expiresInSeconds).toBe(IDENTITY_OTP_CONFIG.OTP_EXPIRY_MS / 1000);
+      expect(requested.demoCode).toMatch(/^\d{6}$/);
 
-      const verified = await authService.verifyOtp(EMAIL, requested.demoCode, '::1');
+      const verified = await authService.verifyOtp(EMAIL, requested.demoCode, '::1', MOBILE);
       expect(verified.success).toBe(true);
       expect(verified.user.email).toBe(EMAIL);
     });
 
-    test('an OTP cannot be replayed once consumed', async () => {
-      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
-      const { demoCode } = await authService.requestOtp(EMAIL, 'buyer', '::1');
-      await authService.verifyOtp(EMAIL, demoCode, '::1');
+    test('issues a 15-minute, 6-digit code as the shared otp_store column expects', () => {
+      expect(IDENTITY_OTP_CONFIG.OTP_LENGTH).toBe(6);
+      expect(IDENTITY_OTP_CONFIG.OTP_EXPIRY_MS).toBe(15 * 60 * 1000);
+      expect(IDENTITY_OTP_CONFIG.OTP_KEY_SEPARATOR).toBe('_EMAIL_');
+    });
 
-      await expect(authService.verifyOtp(EMAIL, demoCode, '::1')).rejects.toThrow(
+    test('an OTP cannot be replayed once consumed', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
+      const { demoCode } = await authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1');
+      await authService.verifyOtp(EMAIL, demoCode, '::1', MOBILE);
+
+      await expect(authService.verifyOtp(EMAIL, demoCode, '::1', MOBILE)).rejects.toThrow(
         AUTH_MESSAGES.INVALID_OTP
       );
     });
 
-    test('rejects an OTP request for an unregistered email', async () => {
-      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
-      await expect(authService.requestOtp('ghost@nowhere.test', 'buyer', '::1')).rejects.toThrow(
-        AUTH_MESSAGES.ACCOUNT_NOT_FOUND
+    // The store key is `<+91phone>_EMAIL_<email>`, so a code issued for one
+    // registered mobile number must not verify against a different one.
+    test('a code issued for one mobile number does not verify against another', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
+      const { demoCode } = await authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1');
+
+      await expect(authService.verifyOtp(EMAIL, demoCode, '::1', '9000000000')).rejects.toThrow(
+        AUTH_MESSAGES.INVALID_OTP
       );
     });
 
+    test('accepts any dialling form that normalises to the issued number', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
+      const { demoCode } = await authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1');
+
+      const verified = await authService.verifyOtp(EMAIL, demoCode, '::1', `+91 ${MOBILE}`);
+      expect(verified.success).toBe(true);
+    });
+
+    test('deletes an expired code and rejects it', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
+      const { demoCode } = await authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1');
+
+      const expired = Date.now() + IDENTITY_OTP_CONFIG.OTP_EXPIRY_MS + 1000;
+      jest.spyOn(Date, 'now').mockReturnValue(expired);
+
+      await expect(authService.verifyOtp(EMAIL, demoCode, '::1', MOBILE)).rejects.toThrow(
+        AUTH_MESSAGES.INVALID_OTP
+      );
+
+      // The entry is dropped on inspection, so a retry cannot resurrect it.
+      Date.now.mockRestore();
+      await expect(authService.verifyOtp(EMAIL, demoCode, '::1', MOBILE)).rejects.toThrow(
+        AUTH_MESSAGES.INVALID_OTP
+      );
+    });
+
+    test('rejects an OTP request for an unrecognised email + mobile pair', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(null);
+      await expect(
+        authService.requestOtp('ghost@nowhere.test', MOBILE, 'buyer', '::1')
+      ).rejects.toThrow(AUTH_MESSAGES.INVALID_USERNAME_OR_MOBILE);
+    });
+
     test('rejects an OTP request for an account that cannot sign in', async () => {
-      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord({ isActive: false }));
-      await expect(authService.requestOtp(EMAIL, 'buyer', '::1')).rejects.toThrow(
+      jest
+        .spyOn(identityQueries, 'findUserByEmailAndPhone')
+        .mockResolvedValue(buyerRecord({ isActive: false }));
+      await expect(authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1')).rejects.toThrow(
         AUTH_MESSAGES.ACCOUNT_INACTIVE
       );
     });
 
-    test('requires an email to request a code', async () => {
-      await expect(authService.requestOtp('', 'buyer')).rejects.toThrow(
+    test('requires an email and a mobile number to request a code', async () => {
+      await expect(authService.requestOtp('', MOBILE, 'buyer')).rejects.toThrow(
         AUTH_MESSAGES.OTP_EMAIL_REQUIRED
+      );
+      await expect(authService.requestOtp(EMAIL, '', 'buyer')).rejects.toThrow(
+        AUTH_MESSAGES.MOBILE_REQUIRED
       );
     });
 
-    test('requires both an email and a code to verify', async () => {
-      await expect(authService.verifyOtp('', '1234')).rejects.toThrow(
+    test('requires an email, a code and a mobile number to verify', async () => {
+      await expect(authService.verifyOtp('', '123456', '::1', MOBILE)).rejects.toThrow(
         AUTH_MESSAGES.OTP_CODE_REQUIRED
       );
-      await expect(authService.verifyOtp(EMAIL, '')).rejects.toThrow(
+      await expect(authService.verifyOtp(EMAIL, '', '::1', MOBILE)).rejects.toThrow(
         AUTH_MESSAGES.OTP_CODE_REQUIRED
+      );
+      await expect(authService.verifyOtp(EMAIL, '123456', '::1', '')).rejects.toThrow(
+        AUTH_MESSAGES.MOBILE_REQUIRED
       );
     });
 
     test('rejects an incorrect code', async () => {
-      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
-      await authService.requestOtp(EMAIL, 'buyer', '::1');
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
+      await authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1');
 
-      await expect(authService.verifyOtp(EMAIL, '0000', '::1')).rejects.toThrow(
+      await expect(authService.verifyOtp(EMAIL, '000000', '::1', MOBILE)).rejects.toThrow(
         AUTH_MESSAGES.INVALID_OTP
       );
     });
 
     test('rejects a code when none was ever issued', async () => {
-      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
-      await expect(authService.verifyOtp('never.issued@example.com', '1234', '::1')).rejects.toThrow(
-        AUTH_MESSAGES.INVALID_OTP
-      );
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
+      await expect(
+        authService.verifyOtp('never.issued@example.com', '123456', '::1', MOBILE)
+      ).rejects.toThrow(AUTH_MESSAGES.INVALID_OTP);
     });
 
     test('omits demoCode once SMTP is configured', async () => {
-      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
       jest.spyOn(mailerService, 'isConfigured').mockReturnValue(true);
       const originalEnv = process.env.NODE_ENV;
       process.env.NODE_ENV = 'production';
 
       try {
-        const res = await authService.requestOtp(EMAIL, 'buyer', '::1');
+        const res = await authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1');
         expect(res.demoCode).toBeUndefined();
       } finally {
         process.env.NODE_ENV = originalEnv;
@@ -354,10 +495,10 @@ describe('Authentication against the shared identity database (/api/auth)', () =
     });
 
     test('an email dispatch failure does not fail the request', async () => {
-      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
       jest.spyOn(mailerService, 'sendOtpEmail').mockRejectedValue(new Error('SMTP down'));
 
-      const res = await authService.requestOtp(EMAIL, 'buyer', '::1');
+      const res = await authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1');
       expect(res.success).toBe(true);
       await new Promise((resolve) => setImmediate(resolve));
     });
@@ -414,7 +555,7 @@ describe('Authentication against the shared identity database (/api/auth)', () =
         AUTH_MESSAGES.EMAIL_PASSWORD_REQUIRED
       );
       await expect(authService.registerUser({ ...payload, mobile: '' })).rejects.toThrow(
-        AUTH_MESSAGES.OTP_EMAIL_REQUIRED
+        AUTH_MESSAGES.MOBILE_REQUIRED
       );
     });
 
@@ -476,32 +617,62 @@ describe('Authentication against the shared identity database (/api/auth)', () =
 
   // ── HTTP surface ──────────────────────────────────────────────────────────
   describe('HTTP routes', () => {
-    test('POST /api/auth/login signs in with a password', async () => {
-      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+    test('POST /api/auth/login signs in with an email, mobile and password', async () => {
+      const findSpy = jest
+        .spyOn(identityQueries, 'findUserByEmailAndPhone')
+        .mockResolvedValue(buyerRecord());
 
-      const res = await request(app).post('/api/auth/login').send({ email: EMAIL, password: PASSWORD });
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({ email: EMAIL, password: PASSWORD, mobile: MOBILE });
 
       expect(res.statusCode).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.user.role).toBe('buyer');
       expect(res.body.token).toBeDefined();
+      expect(findSpy).toHaveBeenCalledWith(EMAIL, MOBILE);
     });
 
     test('POST /api/auth/login returns 401 for a wrong password', async () => {
-      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
 
-      const res = await request(app).post('/api/auth/login').send({ email: EMAIL, password: 'nope' });
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({ email: EMAIL, password: 'nope', mobile: MOBILE });
 
       expect(res.statusCode).toBe(401);
       expect(res.body.success).toBe(false);
-      expect(res.body.error).toBe(AUTH_MESSAGES.INVALID_CREDENTIALS);
+      expect(res.body.error).toBe(AUTH_MESSAGES.INVALID_LOGIN_CREDENTIALS);
+    });
+
+    test('POST /api/auth/login returns 401 when the mobile number is missing', async () => {
+      const res = await request(app).post('/api/auth/login').send({ email: EMAIL, password: PASSWORD });
+
+      expect(res.statusCode).toBe(401);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toBe(AUTH_MESSAGES.EMAIL_MOBILE_PASSWORD_REQUIRED);
+    });
+
+    test('POST /api/auth/login rejects a malformed mobile number at the boundary', async () => {
+      const findSpy = jest.spyOn(identityQueries, 'findUserByEmailAndPhone');
+
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({ email: EMAIL, password: PASSWORD, mobile: '12345' });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toBe(INDIAN_MOBILE_MESSAGE);
+      expect(findSpy).not.toHaveBeenCalled();
     });
 
     test('POST /api/auth/login accepts an OTP code branch', async () => {
-      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
-      const { demoCode } = await authService.requestOtp(EMAIL, 'buyer', '::1');
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
+      const { demoCode } = await authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1');
 
-      const res = await request(app).post('/api/auth/login').send({ email: EMAIL, code: demoCode });
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({ email: EMAIL, code: demoCode, mobile: MOBILE });
 
       expect(res.statusCode).toBe(200);
       expect(res.body.success).toBe(true);
@@ -521,21 +692,25 @@ describe('Authentication against the shared identity database (/api/auth)', () =
     });
 
     test('POST /api/auth/request-otp dispatches a code', async () => {
-      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
 
-      const res = await request(app).post('/api/auth/request-otp').send({ email: EMAIL, roleHint: 'buyer' });
+      const res = await request(app)
+        .post('/api/auth/request-otp')
+        .send({ email: EMAIL, mobile: MOBILE, roleHint: 'buyer' });
 
       expect(res.statusCode).toBe(200);
       expect(res.body.success).toBe(true);
     });
 
-    test('POST /api/auth/request-otp returns 400 for an unknown account', async () => {
-      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+    test('POST /api/auth/request-otp returns 400 for an unknown email + mobile pair', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(null);
 
-      const res = await request(app).post('/api/auth/request-otp').send({ email: 'ghost@nowhere.test' });
+      const res = await request(app)
+        .post('/api/auth/request-otp')
+        .send({ email: 'ghost@nowhere.test', mobile: MOBILE });
 
       expect(res.statusCode).toBe(400);
-      expect(res.body.error).toBe(AUTH_MESSAGES.ACCOUNT_NOT_FOUND);
+      expect(res.body.error).toBe(AUTH_MESSAGES.INVALID_USERNAME_OR_MOBILE);
     });
 
     test('POST /api/auth/request-otp validates the payload', async () => {
@@ -543,14 +718,25 @@ describe('Authentication against the shared identity database (/api/auth)', () =
       expect(res.statusCode).toBe(400);
     });
 
-    test('POST /api/auth/verify-otp verifies and rejects codes', async () => {
-      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(buyerRecord());
-      const { demoCode } = await authService.requestOtp(EMAIL, 'buyer', '::1');
+    test('POST /api/auth/request-otp requires a mobile number', async () => {
+      const res = await request(app).post('/api/auth/request-otp').send({ email: EMAIL });
 
-      const bad = await request(app).post('/api/auth/verify-otp').send({ email: EMAIL, code: '0000' });
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error).toBe(INDIAN_MOBILE_MESSAGE);
+    });
+
+    test('POST /api/auth/verify-otp verifies and rejects codes', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(buyerRecord());
+      const { demoCode } = await authService.requestOtp(EMAIL, MOBILE, 'buyer', '::1');
+
+      const bad = await request(app)
+        .post('/api/auth/verify-otp')
+        .send({ email: EMAIL, code: '000000', mobile: MOBILE });
       expect(bad.statusCode).toBe(400);
 
-      const good = await request(app).post('/api/auth/verify-otp').send({ email: EMAIL, code: demoCode });
+      const good = await request(app)
+        .post('/api/auth/verify-otp')
+        .send({ email: EMAIL, code: demoCode, mobile: MOBILE });
       expect(good.statusCode).toBe(200);
       expect(good.body.success).toBe(true);
     });
@@ -558,6 +744,15 @@ describe('Authentication against the shared identity database (/api/auth)', () =
     test('POST /api/auth/verify-otp validates the payload', async () => {
       const res = await request(app).post('/api/auth/verify-otp').send({ email: EMAIL });
       expect(res.statusCode).toBe(400);
+    });
+
+    test('POST /api/auth/verify-otp rejects a code that is not 6 digits', async () => {
+      const res = await request(app)
+        .post('/api/auth/verify-otp')
+        .send({ email: EMAIL, code: '1234', mobile: MOBILE });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error).toBe(OTP_CODE_MESSAGE);
     });
 
     test('POST /api/auth/register creates an account', async () => {
@@ -698,12 +893,12 @@ describe('Authentication against the shared identity database (/api/auth)', () =
 
     test('login surfaces an unavailable identity database as 401', async () => {
       jest
-        .spyOn(identityQueries, 'findUserByEmail')
+        .spyOn(identityQueries, 'findUserByEmailAndPhone')
         .mockRejectedValue(new Error('ECONNREFUSED'));
 
       const res = await request(app)
         .post('/api/auth/login')
-        .send({ email: EMAIL, password: PASSWORD });
+        .send({ email: EMAIL, password: PASSWORD, mobile: MOBILE });
 
       expect(res.statusCode).toBe(401);
       expect(res.body.error).toBe(AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE);
@@ -739,7 +934,7 @@ describe('Authentication against the shared identity database (/api/auth)', () =
       jest.spyOn(authService, 'requestOtp').mockRejectedValue(new Error(''));
       const res = mockRes();
 
-      await authController.requestOtp({ body: { email: EMAIL } }, res, jest.fn());
+      await authController.requestOtp({ body: { email: EMAIL, mobile: MOBILE } }, res, jest.fn());
 
       expect(res.json).toHaveBeenCalledWith({
         success: false,
@@ -751,7 +946,11 @@ describe('Authentication against the shared identity database (/api/auth)', () =
       jest.spyOn(authService, 'verifyOtp').mockRejectedValue(new Error(''));
       const res = mockRes();
 
-      await authController.verifyOtp({ body: { email: EMAIL, code: '1234' } }, res, jest.fn());
+      await authController.verifyOtp(
+        { body: { email: EMAIL, code: '123456', mobile: MOBILE } },
+        res,
+        jest.fn()
+      );
 
       expect(res.json).toHaveBeenCalledWith({
         success: false,
@@ -786,9 +985,13 @@ describe('Authentication against the shared identity database (/api/auth)', () =
       jest.spyOn(authService, 'verifyOtp').mockResolvedValue({ success: true, token: 't', user: {} });
       const res = mockRes();
 
-      await authController.login({ body: { email: EMAIL, code: '1234' } }, res, jest.fn());
+      await authController.login(
+        { body: { email: EMAIL, code: '123456', mobile: MOBILE } },
+        res,
+        jest.fn()
+      );
 
-      expect(authService.verifyOtp).toHaveBeenCalledWith(EMAIL, '1234', '127.0.0.1');
+      expect(authService.verifyOtp).toHaveBeenCalledWith(EMAIL, '123456', '127.0.0.1', MOBILE);
     });
 
     test('getSession falls back to a generic message when verification gives no reason', async () => {

@@ -1,6 +1,8 @@
 import type {
   AuthResponse,
+  LoginCredentials,
   OtpRequestPayload,
+  OtpVerifyPayload,
   RegisterPayload,
   UserSession,
 } from './types';
@@ -97,10 +99,14 @@ class AuthClient {
   }
 
   /**
-   * Sign in with email + password, verified against the identity database.
+   * Sign in with email + mobile + password, verified against the identity
+   * database. The mobile number narrows the account lookup to the exact record
+   * (the shared schema permits duplicate usernames), so it is sent on every
+   * password sign-in.
    */
-  public async loginWithPassword(email: string, password: string): Promise<AuthResponse> {
-    const data = await this.postJson('/api/auth/login', { email, password });
+  public async loginWithPassword(email: string, password: string, mobile: string): Promise<AuthResponse> {
+    const credentials: LoginCredentials = { email, password, mobile };
+    const data = await this.postJson('/api/auth/login', credentials);
     if (data.success && data.user) {
       data.user.authMethod = 'PASSWORD';
       this.setSession(data.user, data.token);
@@ -113,16 +119,21 @@ class AuthClient {
    */
   public async requestOtp(
     email: string,
+    mobile: string,
     roleHint?: OtpRequestPayload['roleHint']
   ): Promise<AuthResponse> {
-    return this.postJson('/api/auth/request-otp', { email, roleHint });
+    const payload: OtpRequestPayload = { email, mobile, roleHint };
+    return this.postJson('/api/auth/request-otp', payload);
   }
 
   /**
-   * Verify a 4-digit OTP and establish a session.
+   * Verify a 6-digit OTP and establish a session. The mobile number is resent so
+   * the server can match the code against the email + mobile pair it was issued
+   * for, exactly as the Java identity service keys it.
    */
-  public async verifyOtp(email: string, code: string): Promise<AuthResponse> {
-    const data = await this.postJson('/api/auth/verify-otp', { email, code });
+  public async verifyOtp(email: string, code: string, mobile: string): Promise<AuthResponse> {
+    const payload: OtpVerifyPayload = { email, code, mobile };
+    const data = await this.postJson('/api/auth/verify-otp', payload);
     if (data.success && data.user) {
       data.user.authMethod = 'EMAIL_OTP';
       this.setSession(data.user, data.token);
