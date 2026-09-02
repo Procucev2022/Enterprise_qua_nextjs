@@ -26,22 +26,38 @@ const {
 const { bitToBoolean } = identityPoolModule;
 
 /**
- * Normalise an Indian mobile number to the +91XXXXXXXXXX form the shared schema
- * stores, so login lookups match byte-for-byte.
+ * Normalise a phone number to the form the shared schema stores, so login
+ * lookups match byte-for-byte.
+ *
+ * This is a direct port of ProcUserServiceImpl.normalizePhone in the Java
+ * p2pservices app, which owns the `user.phone` column. Any divergence would
+ * silently break sign-in for accounts that service created, so the branch order
+ * and the fallback are deliberately identical:
+ *   - keep digits only, then strip leading zeros
+ *   - exactly 10 digits            -> +91XXXXXXXXXX (assumed Indian mobile)
+ *   - 12 digits beginning with 91  -> +91 + the trailing 10
+ *   - anything else                -> '+' + the digits, untouched
  */
 function normalizePhone(raw) {
-  if (!raw) return '';
+  if (raw === null || raw === undefined) return '';
   const trimmed = String(raw).trim();
-  const digits = trimmed.replace(/\D/g, '');
-  const { DEFAULT_COUNTRY_CODE, NATIONAL_NUMBER_LENGTH } = IDENTITY_PHONE_CONFIG;
+  if (trimmed === '') return trimmed;
+
+  const { DEFAULT_COUNTRY_CODE, NATIONAL_NUMBER_LENGTH, COUNTRY_DIALLING_DIGITS } =
+    IDENTITY_PHONE_CONFIG;
+
+  const digits = String(raw).replace(/[^0-9]/g, '').replace(/^0+/, '');
 
   if (digits.length === NATIONAL_NUMBER_LENGTH) {
     return `${DEFAULT_COUNTRY_CODE}${digits}`;
   }
-  if (digits.length > NATIONAL_NUMBER_LENGTH) {
-    return `${DEFAULT_COUNTRY_CODE}${digits.slice(-NATIONAL_NUMBER_LENGTH)}`;
+  if (
+    digits.length === COUNTRY_DIALLING_DIGITS.length + NATIONAL_NUMBER_LENGTH &&
+    digits.startsWith(COUNTRY_DIALLING_DIGITS)
+  ) {
+    return `${DEFAULT_COUNTRY_CODE}${digits.slice(COUNTRY_DIALLING_DIGITS.length)}`;
   }
-  return trimmed;
+  return `+${digits}`;
 }
 
 /**

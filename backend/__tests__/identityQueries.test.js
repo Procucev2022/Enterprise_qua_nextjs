@@ -25,8 +25,28 @@ describe('Identity queries (shared Procucev MySQL schema)', () => {
       expect(identityQueries.normalizePhone(undefined)).toBe('');
     });
 
-    test('leaves a too-short number untouched rather than inventing digits', () => {
-      expect(identityQueries.normalizePhone('12345')).toBe('12345');
+    // Ported from ProcUserServiceImpl.normalizePhone in the Java p2pservices
+    // app, which writes the `user.phone` values this module has to match.
+    test.each([
+      ['12345', '+12345'],
+      ['1234567890123', '+1234567890123'],
+      ['449157154504', '+449157154504'],
+    ])('falls back to a plain + prefix for %s', (input, expected) => {
+      expect(identityQueries.normalizePhone(input)).toBe(expected);
+    });
+
+    test('strips leading zeros before deciding the number is a 10-digit Indian mobile', () => {
+      expect(identityQueries.normalizePhone('0009157154504')).toBe('+919157154504');
+    });
+
+    test('strips a 91 country prefix only when the result is exactly ten digits', () => {
+      expect(identityQueries.normalizePhone('919157154504')).toBe('+919157154504');
+      // 91 + 11 digits is not a 12-digit value, so it is left as dialled.
+      expect(identityQueries.normalizePhone('9191571545040')).toBe('+9191571545040');
+    });
+
+    test('preserves whitespace-only input rather than emitting a bare +', () => {
+      expect(identityQueries.normalizePhone('   ')).toBe('');
     });
   });
 

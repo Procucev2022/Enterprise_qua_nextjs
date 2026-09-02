@@ -4,10 +4,55 @@ import {
   EMAIL_PATTERN,
   GSTIN_PATTERN,
   PHONE_PATTERN,
+  INDIAN_MOBILE_PATTERN,
   FormSchema,
 } from '../../lib/validationSchemas';
+import { UI_STRINGS } from '../../lib/uiStrings';
 
 describe('Frontend validationSchemas Unit Tests', () => {
+  describe('loginForm schema (email + mobile + password)', () => {
+    const validLogin = {
+      email: 'buyer@procucev.com',
+      mobile: '9157154504',
+      password: 'Pass@123',
+    };
+
+    test('accepts a complete, well-formed sign-in payload', () => {
+      const res = validateFormData(FORM_SCHEMAS.loginForm, validLogin);
+      expect(res.isValid).toBe(true);
+      expect(res.fieldErrors).toEqual({});
+    });
+
+    test.each(['9157154504', '09157154504', '919157154504', '+919157154504', '+91 9157154504'])(
+      'accepts the accepted Indian mobile form %s',
+      (mobile) => {
+        expect(INDIAN_MOBILE_PATTERN.test(mobile)).toBe(true);
+        expect(validateFormData(FORM_SCHEMAS.loginForm, { ...validLogin, mobile }).isValid).toBe(true);
+      }
+    );
+
+    test.each(['12345', '5157154504', '91571545040', '915715450', 'nine1five', ''])(
+      'rejects the malformed mobile number %s',
+      (mobile) => {
+        const res = validateFormData(FORM_SCHEMAS.loginForm, { ...validLogin, mobile });
+        expect(res.isValid).toBe(false);
+        expect(res.fieldErrors.mobile).toBe(UI_STRINGS.auth.mobileInvalid);
+      }
+    );
+
+    test('rejects a malformed email address', () => {
+      const res = validateFormData(FORM_SCHEMAS.loginForm, { ...validLogin, email: 'not-an-email' });
+      expect(res.isValid).toBe(false);
+      expect(res.fieldErrors.email).toBe(UI_STRINGS.auth.emailInvalid);
+    });
+
+    test('rejects a missing password', () => {
+      const res = validateFormData(FORM_SCHEMAS.loginForm, { ...validLogin, password: '' });
+      expect(res.isValid).toBe(false);
+      expect(res.fieldErrors.password).toBe(UI_STRINGS.auth.passwordRequired);
+    });
+  });
+
   test('validates rfqIngestion schema with valid data', () => {
     const validData = {
       title: 'Centrifugal Pump Equipment',

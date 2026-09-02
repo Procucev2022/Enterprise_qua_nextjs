@@ -30,11 +30,28 @@ describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
         }),
       });
 
-      const res = await authClient.loginWithPassword('buyer@procucev.com', 'password123');
+      const res = await authClient.loginWithPassword('buyer@procucev.com', 'password123', '9157154504');
       expect(res.success).toBe(true);
       expect(res.user?.email).toBe('buyer@procucev.com');
       expect(authClient.getToken()).toBe('test-jwt-token');
       expect(authClient.getSessionUser()?.email).toBe('buyer@procucev.com');
+    });
+
+    test('loginWithPassword sends the registered mobile number in the request body', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: false, error: 'checked separately' }),
+      });
+
+      await authClient.loginWithPassword('buyer@procucev.com', 'password123', '9157154504');
+
+      const [path, init] = (global.fetch as jest.Mock).mock.calls[0];
+      expect(path).toBe('/api/auth/login');
+      expect(JSON.parse(init.body)).toEqual({
+        email: 'buyer@procucev.com',
+        password: 'password123',
+        mobile: '9157154504',
+      });
     });
 
     test('requestOtp dispatches verification code', async () => {
@@ -48,7 +65,7 @@ describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
         }),
       });
 
-      const res = await authClient.requestOtp('buyer@procucev.com', 'buyer');
+      const res = await authClient.requestOtp('buyer@procucev.com', '9157154504', 'buyer');
       expect(res.success).toBe(true);
       expect(res.demoCode).toBe('1234');
     });
@@ -73,7 +90,7 @@ describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
         }),
       });
 
-      const res = await authClient.verifyOtp('buyer@procucev.com', '1234');
+      const res = await authClient.verifyOtp('buyer@procucev.com', '123456', '9157154504');
       expect(res.success).toBe(true);
       expect(res.user?.authMethod).toBe('EMAIL_OTP');
       expect(authClient.getToken()).toBe('test-otp-jwt-token');
@@ -182,7 +199,7 @@ describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Network error'));
 
       for (const email of ['vendor@test.com', 'admin@test.com', 'manager@test.com', 'buyer@test.com']) {
-        const res = await authClient.loginWithPassword(email, 'p');
+        const res = await authClient.loginWithPassword(email, 'p', '9157154504');
         expect(res.success).toBe(false);
         expect(res.user).toBeUndefined();
         expect(res.error).toBe(UI_STRINGS.auth.networkUnreachable);
@@ -195,7 +212,7 @@ describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
     test('requestOtp reports a network failure and never invents a demo code', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Network error'));
 
-      const res = await authClient.requestOtp('buyer@test.com', 'buyer');
+      const res = await authClient.requestOtp('buyer@test.com', '9157154504', 'buyer');
       expect(res.success).toBe(false);
       expect(res.demoCode).toBeUndefined();
       expect(res.error).toBe(UI_STRINGS.auth.networkUnreachable);
@@ -204,7 +221,7 @@ describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
     test('verifyOtp reports a network failure instead of signing the user in', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Network error'));
 
-      const res = await authClient.verifyOtp('vendor@test.com', '1234');
+      const res = await authClient.verifyOtp('vendor@test.com', '123456', '9157154504');
       expect(res.success).toBe(false);
       expect(res.user).toBeUndefined();
       expect(res.error).toBe(UI_STRINGS.auth.networkUnreachable);
@@ -230,7 +247,7 @@ describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
         },
       });
 
-      const res = await authClient.loginWithPassword('buyer@test.com', 'p');
+      const res = await authClient.loginWithPassword('buyer@test.com', 'p', '9157154504');
       expect(res.success).toBe(false);
       expect(res.error).toBe(UI_STRINGS.auth.serverErrorFallback);
     });
@@ -242,7 +259,7 @@ describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
         json: async () => ({ success: false }),
       });
 
-      const res = await authClient.loginWithPassword('buyer@test.com', 'p');
+      const res = await authClient.loginWithPassword('buyer@test.com', 'p', '9157154504');
       expect(res.success).toBe(false);
       expect(res.error).toBe(UI_STRINGS.auth.serverErrorFallback);
     });
@@ -294,7 +311,7 @@ describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
         json: async () => ({ success: false, error: 'Invalid email or password.' }),
       });
 
-      const res = await authClient.loginWithPassword('buyer@procucev.com', 'wrongpassword');
+      const res = await authClient.loginWithPassword('buyer@procucev.com', 'wrongpassword', '9157154504');
       expect(res.success).toBe(false);
       expect(authClient.getToken()).toBeNull();
       expect(authClient.getSessionUser()).toBeNull();

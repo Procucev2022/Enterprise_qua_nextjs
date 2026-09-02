@@ -4,9 +4,47 @@ const {
   EMAIL_REGEX,
   GSTIN_REGEX,
   PHONE_REGEX,
+  INDIAN_MOBILE_REGEX,
+  INDIAN_MOBILE_MESSAGE,
 } = require('../src/config/validationSchemas');
 
 describe('Backend Validation Schemas Unit Tests', () => {
+  describe('login schema mobile number', () => {
+    const base = { email: 'buyer@procucev.com', password: 'Pass@123' };
+
+    test.each(['9157154504', '09157154504', '919157154504', '+919157154504', '+91 9157154504'])(
+      'accepts %s',
+      (mobile) => {
+        expect(INDIAN_MOBILE_REGEX.test(mobile)).toBe(true);
+        expect(validatePayload(VALIDATION_SCHEMAS.login, { ...base, mobile }).isValid).toBe(true);
+      }
+    );
+
+    test.each(['12345', '5157154504', '91571545040', 'nine1five'])('rejects %s', (mobile) => {
+      const res = validatePayload(VALIDATION_SCHEMAS.login, { ...base, mobile });
+      expect(res.isValid).toBe(false);
+      expect(res.errors.mobile).toBe(INDIAN_MOBILE_MESSAGE);
+    });
+
+    // The OTP branch of POST /api/auth/login identifies the account by email
+    // alone, so an absent mobile number must not fail schema validation.
+    test('treats an absent mobile number as valid so the OTP branch still works', () => {
+      const res = validatePayload(VALIDATION_SCHEMAS.login, { email: base.email, code: '123456' });
+      expect(res.isValid).toBe(true);
+    });
+
+    test('applies the same mobile pattern to the register schema', () => {
+      const payload = { email: base.email, password: base.password, name: 'Buyer' };
+      expect(validatePayload(VALIDATION_SCHEMAS.register, { ...payload, mobile: '9157154504' }).isValid).toBe(
+        true
+      );
+
+      const bad = validatePayload(VALIDATION_SCHEMAS.register, { ...payload, mobile: '12345' });
+      expect(bad.isValid).toBe(false);
+      expect(bad.errors.mobile).toBe(INDIAN_MOBILE_MESSAGE);
+    });
+  });
+
   test('validates createRFQ schema with valid data', () => {
     const validRFQ = {
       title: 'High Pressure Water Pump',

@@ -449,6 +449,14 @@ export const ROLE_LANDING_ROUTE: Record<UserRole, string> = {
 /** Path of the sign-in screen. */
 export const LOGIN_ROUTE = '/login';
 
+/**
+ * Email OTP shape, mirroring IDENTITY_OTP_CONFIG on the backend. Both trace back
+ * to the shared `otp_store` table the Java p2pservices app writes, whose `otp`
+ * column is six characters with a 15-minute expiry.
+ */
+export const OTP_CODE_LENGTH = 6;
+export const OTP_EXPIRY_MINUTES = 15;
+
 /** URL prefix that scopes each role's workspace, used to guard route access. */
 export const ROLE_ROUTE_PREFIX: Record<UserRole, string> = {
   buyer: '/buyer',

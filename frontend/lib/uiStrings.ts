@@ -210,7 +210,12 @@ export const UI_STRINGS = {
     emailRequired: 'Enter your registered email address to continue.',
     passwordRequired: 'Enter your account password to continue.',
     emailAndPasswordRequired: 'Enter both your registered email address and password to continue.',
-    otpRequired: 'Enter the 4-digit verification code that was emailed to you.',
+    loginFieldsRequired:
+      'Enter your registered email address, registered mobile number and password to continue.',
+    emailInvalid: 'Enter a valid email address, for example you@company.com.',
+    otpRequired: 'Enter the 6-digit verification code that was emailed to you.',
+    emailAndMobileRequired:
+      'Enter both your registered email address and mobile number. The code is issued against the pair.',
     registrationFieldsRequired:
       'Full name, company email, mobile number and password are all required to create an account.',
     passwordTooShort: 'Choose a password of at least 8 characters.',
@@ -225,7 +230,8 @@ export const UI_STRINGS = {
 
     // Success / informational
     signedInAs: 'Signed in as {userName} ({userRole}) — {orgName}.',
-    otpDispatched: 'A 4-digit verification code has been emailed to {email}. It expires in 10 minutes.',
+    otpDispatched:
+      'A {codeLength}-digit verification code has been emailed to {email}. It expires in {expiryMinutes} minutes.',
     loggedOutMessage: 'Successfully signed out of the secure workspace.',
     redirecting: 'Redirecting to your workspace…',
     showPassword: 'Show password',
