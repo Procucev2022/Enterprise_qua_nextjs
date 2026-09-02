@@ -630,6 +630,107 @@ export interface UserSession {
   authMethod?: 'PASSWORD' | 'EMAIL_OTP' | 'TEMP_PASSWORD' | 'INSTANT_DEMO';
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// RFQ Ingestion & Portfolio Summary Types
+// ═══════════════════════════════════════════════════════════════════════
+
+/** Why an ingested line item landed in its category, surfaced in the review grid. */
+export type RFQClassificationStatus = 'AI_EXTRACTED' | 'DOMAIN_KEYWORD_MATCHED' | 'DEFAULT';
+
+/** Per-ingest breakdown returned by POST /api/rfqs/ingest. */
+export interface RFQIngestionClassification {
+  totalExtracted: number;
+  accepted: number;
+  duplicatesRemoved: number;
+  needsReview: number;
+  autoClassified: number;
+}
+
+/** Draft RFQ header + classified line items returned by POST /api/rfqs/ingest. */
+export interface RFQIngestionDraft {
+  title: string;
+  category: string;
+  targetDeliveryDate: string;
+  /**
+   * Overall value read off the document: a stated grand total, else the sum of
+   * the priced line items. Null when the document carried no pricing at all, in
+   * which case the buyer supplies the figure on the review step.
+   */
+  estimatedBudget: number | null;
+  extractedEntities: ExtractedEntity[];
+  source: RFQSource;
+  sourceFileName?: string;
+  sourceEmail?: string;
+}
+
+/** Why an AI extraction attempt did not yield line items. */
+export type RFQExtractionReason =
+  | 'NOT_CONFIGURED'
+  | 'NO_CONTENT'
+  | 'DOCUMENT_TOO_LARGE'
+  | 'UNSUPPORTED_TYPE'
+  | 'AI_FAILED'
+  | 'NO_ITEMS_FOUND'
+  | 'NETWORK';
+
+/**
+ * Document posted to POST /api/rfqs/extract. Spreadsheets are flattened to text
+ * in the browser; PDFs and images travel as base64 with their MIME type.
+ */
+export interface RFQExtractionRequest {
+  fileName: string;
+  documentText?: string;
+  inlineData?: string;
+  mimeType?: string;
+}
+
+/** Which model produced the extraction, for display in the review step. */
+export interface RFQExtractionMeta {
+  model: string;
+  deliveryDate?: string | null;
+}
+
+export interface RFQExtractionResult {
+  success: boolean;
+  data?: RFQIngestionDraft;
+  classification?: RFQIngestionClassification;
+  extraction?: RFQExtractionMeta;
+  reason?: RFQExtractionReason;
+  error?: string;
+}
+
+export interface RFQIngestionResponse {
+  success: boolean;
+  data?: RFQIngestionDraft;
+  classification?: RFQIngestionClassification;
+  error?: string;
+}
+
+/** Multi-channel follow-up roll-up across the whole RFQ portfolio. */
+export interface RFQPortfolioFollowUps {
+  vendorsInvited: number;
+  vendorsResponded: number;
+  calls: number;
+  callsConnected: number;
+  whatsapp: number;
+  whatsappRead: number;
+  sms: number;
+}
+
+/** Aggregated portfolio metrics backing the buyer RFQ Summary screen. */
+export interface RFQPortfolioSummary {
+  totalRFQs: number;
+  activeRFQs: number;
+  awaitingQuotes: number;
+  totalQuotesReceived: number;
+  totalBudget: number;
+  averageQuotesPerRFQ: number;
+  byStatus: Record<string, number>;
+  bySourcingMode: Record<string, number>;
+  bySource: Record<string, number>;
+  followUps: RFQPortfolioFollowUps;
+}
+
 export interface AuthResponse {
   success: boolean;
   message?: string;
@@ -691,6 +792,7 @@ export type SidebarIconKey =
   | 'ShieldCheck'
   | 'Server'
   | 'Award'
+  | 'ClipboardList'
   | 'Database';
 
 export interface SidebarNavItem {

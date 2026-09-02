@@ -50,7 +50,7 @@ global.fetch = jest.fn().mockImplementation((url: string) => {
                 supportedMajorCategories: ['Engineering Spares - Mechanical', 'Civil Works'],
                 supportedMinorCategories: ['Pumps & Accessories', 'Hoses, Valves & Fittings'],
                 totalRFQsCreated: 14,
-                totalSpend: '$1,240,000',
+                totalSpend: '₹12,40,000',
               },
             ],
             vendors: [

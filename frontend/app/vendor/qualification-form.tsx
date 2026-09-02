@@ -19,7 +19,6 @@ import {
   ChevronRight,
   ChevronLeft,
   Lock,
-  DollarSign,
   Cpu,
   Clock,
   Briefcase,

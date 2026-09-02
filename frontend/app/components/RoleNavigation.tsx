@@ -26,6 +26,7 @@ import {
   ShieldCheck,
   Server,
   Award,
+  ClipboardList,
   Database,
   Menu,
   X,
@@ -48,6 +49,7 @@ const SIDEBAR_ICONS: Record<SidebarIconKey, LucideIcon> = {
   ShieldCheck,
   Server,
   Award,
+  ClipboardList,
   Database,
 };
 

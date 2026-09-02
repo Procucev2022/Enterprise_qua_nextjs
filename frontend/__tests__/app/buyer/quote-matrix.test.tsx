@@ -2,6 +2,7 @@ import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import QuoteMatrix from '../../../app/buyer/quote-matrix';
 import { useApp } from '../../../lib/store';
+import { formatCurrency } from '../../../lib/constants';
 
 jest.mock('../../../lib/store', () => ({
   useApp: jest.fn(),
@@ -130,7 +131,7 @@ describe('QuoteMatrix Component Tests', () => {
     expect(screen.getByText(/Comparative Quote Evaluation Matrix/i)).toBeInTheDocument();
     expect(screen.getByText(/Apex Supplies Ltd./i)).toBeInTheDocument();
     expect(screen.getByText(/Kiran Valve Industries/i)).toBeInTheDocument();
-    expect(screen.getByText(/\$85,000/i)).toBeInTheDocument();
+    expect(screen.getByText(formatCurrency(85000))).toBeInTheDocument();
   });
 
   test('allows selecting a different RFQ from dropdown', () => {

@@ -29,6 +29,8 @@ import {
   SOURCING_MODES,
   INITIAL_SYSTEM_CONFIG,
   INITIAL_AZURE_HEALTH,
+  CURRENCY,
+  formatCurrency,
 } from './constants';
 
 // Backend write endpoints now require a session token (Phase 4 authorization
@@ -182,6 +184,35 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 // Helper to generate realistic SHA-256 format strings
+/**
+ * Reconcile a persisted RFQ into the shape the `RFQItem` contract promises.
+ *
+ * The API stores line items under `lineItems` and the due date under `deadline`
+ * (its own column names), while every screen reads `extractedEntities` and
+ * `targetDeliveryDate`. Without this bridge any RFQ loaded from the database —
+ * rather than created in this session — crashes the RFQ summary and the
+ * category-manager consoles on `extractedEntities.length`.
+ *
+ * Line items already share the ExtractedEntity field names, so only the keys
+ * differ. Missing collections default to empty rather than undefined so callers
+ * can rely on the declared types.
+ */
+function normalizeHydratedRFQ(
+  raw: RFQItem & { lineItems?: ExtractedEntity[]; deadline?: string }
+): RFQItem {
+  const quotes = raw.quotes ?? [];
+  return {
+    ...raw,
+    extractedEntities: raw.extractedEntities ?? raw.lineItems ?? [],
+    targetDeliveryDate: raw.targetDeliveryDate ?? raw.deadline ?? '',
+    // Coerced rather than trusted: a record written before budget was persisted
+    // carries no value, and every screen formats this as a number.
+    budget: Number(raw.budget) || 0,
+    quotes,
+    quotesCount: raw.quotesCount ?? quotes.length,
+  };
+}
+
 function generateShaHash(): string {
   const chars = '0123456789abcdef';
   let hash = '';
@@ -200,7 +231,7 @@ const INITIAL_VENDOR_OPPORTUNITIES: VendorOpportunity[] = [
     deadline: '2026-09-15',
     daysRemaining: 7,
     type: 'direct_invitation',
-    estimatedValue: '$150,000',
+    estimatedValue: '₹1,50,000',
     deliveryLocation: 'Navi Mumbai Hub',
     status: 'pending_bid',
     lineItems: [
@@ -215,7 +246,7 @@ const INITIAL_VENDOR_OPPORTUNITIES: VendorOpportunity[] = [
     deadline: '2026-09-20',
     daysRemaining: 12,
     type: 'direct_invitation',
-    estimatedValue: '$85,000',
+    estimatedValue: '₹85,000',
     deliveryLocation: 'Pune Facility',
     status: 'pending_bid',
     lineItems: [
@@ -230,7 +261,7 @@ const INITIAL_VENDOR_OPPORTUNITIES: VendorOpportunity[] = [
     deadline: '2026-09-25',
     daysRemaining: 17,
     type: 'network_marketplace',
-    estimatedValue: '$220,000',
+    estimatedValue: '₹2,20,000',
     deliveryLocation: 'Delhi Enterprise Logistics',
     status: 'pending_bid',
     lineItems: [
@@ -245,7 +276,7 @@ const INITIAL_VENDOR_OPPORTUNITIES: VendorOpportunity[] = [
     deadline: '2026-09-30',
     daysRemaining: 22,
     type: 'network_marketplace',
-    estimatedValue: '$310,000',
+    estimatedValue: '₹3,10,000',
     deliveryLocation: 'Chennai Logistics Site',
     status: 'pending_bid',
     lineItems: [
@@ -334,7 +365,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
     primaryPlantLocation: 'Mumbai',
     supportedMajorCategories: ['Mechanical & Fluid Equipment'],
     totalRFQsCreated: 12,
-    totalSpend: '$1,250,000',
+    totalSpend: '₹12,50,000',
     syncTimestamp: '2026-08-30 00:00:00 UTC',
     createdDate: '2026-01-01',
   },
@@ -354,7 +385,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
     primaryPlantLocation: 'Pune',
     supportedMajorCategories: ['Mechanical & Fluid Equipment'],
     totalRFQsCreated: 8,
-    totalSpend: '$850,000',
+    totalSpend: '₹8,50,000',
     syncTimestamp: '2026-08-30 00:00:00 UTC',
     createdDate: '2026-01-01',
   }
@@ -418,11 +449,12 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
           setBuyerVendors(d.vendors);
         }
         if (d.rfqs && d.rfqs.length > 0) {
-          setRfqs(d.rfqs);
-          setSelectedRFQForMatrix((prev) => prev || d.rfqs[0]);
-          setSelectedRFQForDeepDive((prev) => prev || d.rfqs[0]);
+          const hydratedRfqs: RFQItem[] = d.rfqs.map(normalizeHydratedRFQ);
+          setRfqs(hydratedRfqs);
+          setSelectedRFQForMatrix((prev) => prev || hydratedRfqs[0]);
+          setSelectedRFQForDeepDive((prev) => prev || hydratedRfqs[0]);
 
-          const mappedOpps: VendorOpportunity[] = d.rfqs.map((rfq: RFQItem) => ({
+          const mappedOpps: VendorOpportunity[] = hydratedRfqs.map((rfq: RFQItem) => ({
             id: `opp-${rfq.id}`,
             rfqNumber: rfq.rfqNumber,
             title: rfq.title,
@@ -430,7 +462,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
             deadline: rfq.targetDeliveryDate || '2026-09-15',
             daysRemaining: 7,
             type: rfq.sourcingMode === 'mode_3' ? 'network_marketplace' : 'direct_invitation',
-            estimatedValue: rfq.budget ? `$${rfq.budget.toLocaleString()}` : '$150,000',
+            estimatedValue: rfq.budget ? formatCurrency(rfq.budget) : formatCurrency(150000),
             deliveryLocation: 'Pune / Mumbai Plant Site',
             status: rfq.quotes && rfq.quotes.length > 0 ? 'under_review' : 'pending_bid',
             lineItems: (rfq.extractedEntities || []).map((ent: ExtractedEntity, idx: number) => ({
@@ -478,7 +510,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
       ...account,
       id: `buyer-acc-${Date.now().toString().slice(-4)}`,
       totalRFQsCreated: 0,
-      totalSpend: '$0',
+      totalSpend: '₹0',
       syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
       createdDate: new Date().toISOString().substring(0, 10),
     };
@@ -549,7 +581,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
       ...a,
       id: `buyer-acc-sync-${Date.now()}-${i}`,
       totalRFQsCreated: a.totalRFQsCreated || 0,
-      totalSpend: a.totalSpend || '$0',
+      totalSpend: a.totalSpend || '₹0',
       syncTimestamp: timestamp,
       createdDate: dateStr,
     }));
@@ -1694,14 +1726,14 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
 
     addFeedItem(
       `Bid Submitted by Apex Supplies Ltd.`,
-      `Apex Supplies submitted line-item quotation ($${unitPrice.toLocaleString()}/unit, ${leadTimeDays}d lead time). AI Score: 95%.`,
+      `Apex Supplies submitted line-item quotation (${formatCurrency(unitPrice)}/unit, ${leadTimeDays}d lead time). AI Score: 95%.`,
       'scoring',
       rfqNumber,
       'Apex Supplies Ltd.'
     );
 
     addAuditLog(
-      `Apex Supplies Ltd. submitted verified quotation for ${rfqNumber} ($${unitPrice.toLocaleString()})`,
+      `Apex Supplies Ltd. submitted verified quotation for ${rfqNumber} (${formatCurrency(unitPrice)})`,
       rfqNumber,
       'vendor@apex.com'
     );
@@ -1720,13 +1752,13 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
 
     addFeedItem(
       `Purchase Order Generated: ${rfqNumber}`,
-      `Approved PO generated for ${vendorName} totaling $${amount.toLocaleString()}. Dispatched to ERP & Vendor Portal.`,
+      `Approved PO generated for ${vendorName} totaling ${formatCurrency(amount)}. Dispatched to ERP & Vendor Portal.`,
       'approval',
       rfqNumber
     );
 
     addAuditLog(
-      `Approved PO Generation & Dispatched Contract for ${rfqNumber} to ${vendorName} ($${amount.toLocaleString()})`,
+      `Approved PO Generation & Dispatched Contract for ${rfqNumber} to ${vendorName} (${formatCurrency(amount)})`,
       rfqNumber
     );
 
@@ -1836,8 +1868,11 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
     const callScheduledStr = formatDateIST(callScheduledTime);
     const whatsappScheduledStr = formatDateIST(whatsappScheduledTime);
 
-    // Strict Deduplication Guardrail: Ensure each vendor email/ID receives ONLY ONE email and one entry
-    const rawMatchedVendors = customMatchedVendors && customMatchedVendors.length > 0
+    // An explicitly empty list means "attach no vendors" and must be honoured:
+    // only an omitted argument falls back to automatic matching. Treating [] as
+    // "no preference" would fire RFQ emails and chaser sequences at suppliers the
+    // buyer never selected.
+    const rawMatchedVendors = customMatchedVendors
       ? customMatchedVendors
       : matchSuitableVendors(rfqData.extractedEntities, rfqData.sourcingMode);
 
@@ -1874,7 +1909,9 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
       autoCirculated: rfqData.autoCirculated ?? (rfqData.source === 'email_gateway'),
       quotesCount: 0,
       status: 'Quotes Pending',
-      chasingActive: true,
+      // With no vendors attached there is nobody to chase, so the RFQ must not
+      // advertise active chasers on the pipeline and summary screens.
+      chasingActive: matchedVendors.length > 0,
       chaserMethod: 'Multi-Channel',
       quotes: [],
       followUpData: {
@@ -1908,7 +1945,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
       deadline: newRFQ.targetDeliveryDate,
       daysRemaining: 7,
       type: newRFQ.sourcingMode === 'mode_1' ? 'direct_invitation' : 'network_marketplace',
-      estimatedValue: newRFQ.budget > 0 ? `$${(newRFQ.budget / 1000).toFixed(0)}k` : undefined,
+      estimatedValue: newRFQ.budget > 0 ? `${CURRENCY.SYMBOL}${(newRFQ.budget / 1000).toFixed(0)}k` : undefined,
       deliveryLocation: 'Enterprise Logistics Hub (Navi Mumbai)',
       status: 'pending_bid',
       lineItems: newRFQ.extractedEntities.map((e, idx) => ({

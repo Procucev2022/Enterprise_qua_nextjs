@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQItem } from '@/lib/types';
-import { SOURCING_MODES } from '@/lib/constants';
+import { SOURCING_MODES, formatCurrency } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import {
   Building2,
@@ -12,7 +12,7 @@ import {
   ChevronRight,
   TrendingUp,
   Clock,
-  DollarSign,
+  IndianRupee,
   Layers,
   ArrowRight,
   ShieldCheck,
@@ -232,10 +232,10 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
           <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm flex items-center justify-between">
             <div>
               <div className="text-[10px] font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wider">Total Active Spend Sourced</div>
-              <p className="text-2xl font-black text-slate-900 dark:text-white mt-1 mono">${grandTotalSpend.toLocaleString()}</p>
+              <p className="text-2xl font-black text-slate-900 dark:text-white mt-1 mono">{formatCurrency(grandTotalSpend)}</p>
             </div>
             <div className="p-3 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-650 dark:text-indigo-400 shrink-0">
-              <DollarSign size={20} />
+              <IndianRupee size={20} />
             </div>
           </div>
 
@@ -280,7 +280,7 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
                       <span>{b.company}</span>
                     </span>
                     <span className="mono font-bold text-slate-900 dark:text-white text-[11px]">
-                      ${b.totalSpend.toLocaleString()} ({spendPercentage}% · {b.rfqsList.length} RFQs)
+                      {formatCurrency(b.totalSpend)} ({spendPercentage}% · {b.rfqsList.length} RFQs)
                     </span>
                   </div>
                   
@@ -388,7 +388,7 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
                   </div>
                   <div>
                     <div className="text-[9px] text-slate-450 dark:text-gray-550 font-bold uppercase">Sourced Spend</div>
-                    <div className="font-black text-indigo-600 dark:text-indigo-400 mt-0.5 mono">${b.totalSpend.toLocaleString()}</div>
+                    <div className="font-black text-indigo-600 dark:text-indigo-400 mt-0.5 mono">{formatCurrency(b.totalSpend)}</div>
                   </div>
                 </div>
 
@@ -473,7 +473,7 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
                             </span>
                           </div>
                           <div className="flex items-center gap-3 text-[10px] text-slate-450 dark:text-gray-500 mt-1">
-                            <span>Sourced Spend: <strong>${rfq.budget.toLocaleString()}</strong></span>
+                            <span>Sourced Spend: <strong>{formatCurrency(rfq.budget)}</strong></span>
                             <span>Line Items: <strong>{rfq.extractedEntities.length}</strong></span>
                             <span>Quotes Recd: <strong>{rfq.quotesCount}</strong></span>
                           </div>

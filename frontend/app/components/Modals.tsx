@@ -119,7 +119,7 @@ export function PurchaseOrderModal({
                     <th className="p-2">Item Description</th>
                     <th className="p-2 text-center">Qty</th>
                     <th className="p-2 text-right">Unit Rate</th>
-                    <th className="p-2 text-right">Total ($)</th>
+                    <th className="p-2 text-right">Total (₹)</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 dark:divide-gray-800 text-slate-700 dark:text-gray-300">

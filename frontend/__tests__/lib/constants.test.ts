@@ -1,5 +1,8 @@
 import {
   SOURCING_MODES,
+  CURRENCY,
+  formatCurrency,
+  MANUAL_LINE_ITEM_DEFAULTS,
   INITIAL_SYSTEM_CONFIG,
   INITIAL_AZURE_HEALTH,
   BUYER_SUBSCRIPTION_PLANS,
@@ -88,3 +91,39 @@ describe('lib/constants', () => {
   });
 });
 
+describe('CURRENCY and formatCurrency', () => {
+  it('pairs the rupee symbol with Indian grouping', () => {
+    expect(CURRENCY.SYMBOL).toBe('₹');
+    expect(CURRENCY.CODE).toBe('INR');
+    expect(CURRENCY.LOCALE).toBe('en-IN');
+  });
+
+  it('groups amounts the Indian way, not in thousands', () => {
+    // 1,45,000 rather than 145,000: the symbol and the grouping must agree.
+    expect(formatCurrency(145000)).toBe('₹1,45,000');
+    expect(formatCurrency(0)).toBe('₹0');
+  });
+
+  it('rounds to whole rupees because every figure shown is a total', () => {
+    expect(formatCurrency(1500.4)).toBe('₹1,500');
+    expect(formatCurrency(1500.6)).toBe('₹1,501');
+  });
+
+  // A record written before budget was persisted yields NaN here, and a crash on
+  // a missing budget is exactly the defect this guard exists to prevent.
+  it('renders a non-finite amount as zero instead of NaN', () => {
+    expect(formatCurrency(NaN)).toBe('₹0');
+    expect(formatCurrency(Infinity)).toBe('₹0');
+    expect(formatCurrency(undefined as unknown as number)).toBe('₹0');
+  });
+});
+
+describe('MANUAL_LINE_ITEM_DEFAULTS', () => {
+  // These mirror RFQ_INGESTION_CONFIG on the backend so a row keyed by hand and a
+  // row parsed from a document carry identical defaults.
+  it('matches the backend ingestion defaults', () => {
+    expect(MANUAL_LINE_ITEM_DEFAULTS.QUANTITY).toBe(1);
+    expect(MANUAL_LINE_ITEM_DEFAULTS.UNIT).toBe('Nos');
+    expect(MANUAL_LINE_ITEM_DEFAULTS.TARGET_DATE_OFFSET_DAYS).toBe(5);
+  });
+});
