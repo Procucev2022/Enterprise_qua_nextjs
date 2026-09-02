@@ -395,29 +395,44 @@ const GEMINI_CONFIG = {
   PRIMARY_MODEL: process.env.GEMINI_PRIMARY_MODEL || 'gemini-3.6-flash',
   // Tried in order when the primary model errors or is unavailable.
   //
-  // Mirrors app.gemini.backup-models in the Java p2pservices service, which is the
-  // chain currently extracting in production, and ends on the floating
-  // `gemini-flash-latest` alias deliberately. Google retires pinned models: when
+  // Ordered fastest-first, which is a deliberate departure from
+  // app.gemini.backup-models in the Java service.
+  //
+  // That service extracts from inbound email in the background, so it can spend
+  // as long as it likes on progressively stronger models. This endpoint answers a
+  // synchronous browser upload behind a proxy that cuts the request off at 30s,
+  // so once the primary has used most of the budget the only useful fallback is
+  // one that can finish in the seconds that remain. Measured on the same
+  // document: gemini-3.6-flash 12.5s, gemini-3.5-flash-lite 1.8s, identical line
+  // items from both.
+  //
+  // The chain still ends on a floating alias. Google retires pinned models: when
   // gemini-2.0-flash was withdrawn every entry in the old chain 404'd at once and
-  // extraction failed outright instead of degrading. An alias last means the next
-  // retirement costs quality, not uptime. The depth also matters in practice —
-  // the primary answers 503 "high demand" often enough to need real headroom.
+  // extraction failed outright instead of degrading.
   FALLBACK_MODELS: (
     process.env.GEMINI_FALLBACK_MODELS ||
-    'gemini-3.7-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-flash-latest'
+    'gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-flash-lite-latest,gemini-3.7-flash,gemini-3.5-flash'
   )
     .split(',')
     .map((m) => m.trim())
     .filter(Boolean),
+  // The primary model measured 12.5s on a small PDF and timed out at 15s on a
+  // real one, so it needs more than the Java service's 15s read timeout to have a
+  // fair chance before the chain moves on.
   REQUEST_TIMEOUT_MS: Number(process.env.GEMINI_REQUEST_TIMEOUT_MS || 20000),
   // Ceiling for the whole model chain, not one attempt.
   //
   // Extraction is answered inside a browser request, so the walk has to finish
-  // while something is still listening. Without a ceiling a deep chain of slow
-  // failures could hold the request for timeout x models, which the dev proxy
-  // reports to the buyer as an unexplained socket hang up rather than the
-  // manual-entry fallback this endpoint is designed to return.
-  TOTAL_BUDGET_MS: Number(process.env.GEMINI_TOTAL_BUDGET_MS || 45000),
+  // while something is still listening. Next's dev proxy cuts a rewrite off at a
+  // hardcoded 30s and browsers apply a similar cap, so at 45s a second slow
+  // attempt ran past it and the request was killed mid-flight — which surfaced to
+  // the buyer as a bare 500 instead of the manual-entry fallback this endpoint
+  // exists to return.
+  //
+  // 24s leaves 6s of headroom under that ceiling and still funds a fast fallback:
+  // if the 20s primary times out, the remaining 4s comfortably covers a lite
+  // model measured at 1.8s.
+  TOTAL_BUDGET_MS: Number(process.env.GEMINI_TOTAL_BUDGET_MS || 24000),
   // Below this much remaining budget a further attempt cannot finish, so the
   // chain stops rather than starting a request it will have to abandon.
   MIN_ATTEMPT_MS: Number(process.env.GEMINI_MIN_ATTEMPT_MS || 3000),
