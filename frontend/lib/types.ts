@@ -189,6 +189,9 @@ export interface RFQItem {
   awardedVendorId?: string;
   awardedVendor?: string;
   awardedAmount?: number;
+  /** The buyer account this RFQ was created under (the app's single globally "active" buyer account at creation time, not a per-request identity). */
+  buyerAccountId?: string | null;
+  buyerAccountName?: string | null;
 }
 
 export interface AIBotFeedItem {

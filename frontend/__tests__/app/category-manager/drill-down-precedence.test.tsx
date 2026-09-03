@@ -13,10 +13,13 @@ import { UI_STRINGS } from '@/lib/uiStrings';
  * immediately re-expanded and could never be dismissed.
  */
 
-const BUYER_COMPANY_LT = 'Larsen & Toubro Ltd. (L&T)';
+// BuyerConsole now renders the real buyer directory loaded via
+// AppProvider's bootstrap fetch (jest.setup.ts's global fetch mock), rather
+// than an internal hardcoded list — these must match that mock's accounts.
+const BUYER_COMPANY_LT = 'Larsen & Toubro Heavy Engineering';
 const BUYER_COMPANY_RIL = 'Reliance Industries Ltd. (RIL)';
-const BUYER_ID_RAJESH = 'buyer-1';
-const BUYER_ID_SUNITA = 'buyer-2';
+const BUYER_ID_RAJESH = 'buyer-acc-001';
+const BUYER_ID_SUNITA = 'buyer-acc-002';
 
 // VendorConsole now renders the real vendor directory loaded via
 // AppProvider's bootstrap fetch (jest.setup.ts's global fetch mock), rather
@@ -62,8 +65,12 @@ describe('Category Manager drill-down collapse precedence', () => {
       renderWithProvider(
         <BuyerConsole onNavigateToMatrix={onNavigateToMatrix} onNavigateToEvaluation={onNavigateToEvaluation} />
       );
+      // Buyer cards now depend on the real buyer directory loading via
+      // AppProvider's async bootstrap fetch, not an instantly-available
+      // hardcoded list — wait for it before interacting with the dropdowns.
       await waitFor(() => {
         expect(screen.getByText(/Buyer Wise Command Console & Analytics/i)).toBeInTheDocument();
+        expect(screen.getAllByText(BUYER_COMPANY_LT).length).toBeGreaterThan(0);
       });
     }
 
@@ -154,7 +161,7 @@ describe('Category Manager drill-down collapse precedence', () => {
         // Vendor cards now depend on the real vendor directory loading via
         // AppProvider's async bootstrap fetch, not an instantly-available
         // hardcoded list — wait for it before interacting with the dropdowns.
-        expect(screen.getByText(VENDOR_COMPANY_APEX)).toBeInTheDocument();
+        expect(screen.getAllByText(VENDOR_COMPANY_APEX).length).toBeGreaterThan(0);
       });
     }
 

@@ -1949,6 +1949,11 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
       ...rfqData,
       id,
       createdAt: createdAtStr,
+      // Mirrors what storeService.createRFQ independently stamps server-side
+      // from its own activeBuyerAccount — the app has one globally "active"
+      // buyer account rather than a per-request buyer identity.
+      buyerAccountId: activeBuyerAccount?.id || null,
+      buyerAccountName: activeBuyerAccount?.organizationName || null,
       source: rfqData.source || 'web_portal',
       autoCirculated: rfqData.autoCirculated ?? (rfqData.source === 'email_gateway'),
       quotesCount: 0,

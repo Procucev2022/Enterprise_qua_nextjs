@@ -450,6 +450,12 @@ class StoreService {
       // bootstrap payload stays a fixed size no matter how much is attached.
       attachments: Array.isArray(rfqData.attachments) ? rfqData.attachments : [],
       status: rfqData.status || 'open',
+      // The app has one globally "active" buyer account rather than a
+      // per-request buyer identity (see activeBuyerAccount elsewhere in this
+      // file), so that's what an RFQ is stamped with at creation — same
+      // buyer-context convention approvePurchaseOrder already falls back to.
+      buyerAccountId: this.activeBuyerAccount ? this.activeBuyerAccount.id : null,
+      buyerAccountName: this.activeBuyerAccount ? this.activeBuyerAccount.organizationName : null,
       sourcingMode: rfqData.sourcingMode || 'mode_1',
       quotesCount: rfqData.quotes ? rfqData.quotes.length : 0,
       chasingActive: rfqData.chasingActive !== undefined ? rfqData.chasingActive : true,

@@ -199,35 +199,40 @@ describe('Category Manager Screens Suite', () => {
 
       renderWithProvider(<BuyerConsole onNavigateToMatrix={onMatrix} onNavigateToEvaluation={onEval} />);
 
+      // Buyer cards now come from the real buyer directory (loaded via
+      // AppProvider's async bootstrap fetch, mocked in jest.setup.ts) rather
+      // than an instantly-available hardcoded list — wait for it to land.
       await waitFor(() => {
         expect(screen.getByText(/Buyer Wise Command Console & Analytics/i)).toBeInTheDocument();
+        expect(screen.getAllByText(/S\. N\. Subrahmanyan/i).length).toBeGreaterThan(0);
       });
 
       expect(screen.getByText(/Active Context Selection/i)).toBeInTheDocument();
 
       // Test search
       const searchInput = screen.getByPlaceholderText(/Search Buyer name or company/i);
-      fireEvent.change(searchInput, { target: { value: 'Rajesh' } });
-      expect(screen.getAllByText(/Rajesh Nair/i)[0]).toBeInTheDocument();
+      fireEvent.change(searchInput, { target: { value: 'Subrahmanyan' } });
+      expect(screen.getAllByText(/S\. N\. Subrahmanyan/i)[0]).toBeInTheDocument();
 
       // Test company filter dropdown and dependent buyer dropdown
       const selects = screen.getAllByRole('combobox');
       if (selects.length >= 2) {
         // Select company
-        fireEvent.change(selects[0], { target: { value: 'Larsen & Toubro Ltd. (L&T)' } });
+        fireEvent.change(selects[0], { target: { value: 'Larsen & Toubro Heavy Engineering' } });
         // Select buyer within company
-        fireEvent.change(selects[1], { target: { value: 'b-001' } });
+        fireEvent.change(selects[1], { target: { value: 'buyer-acc-001' } });
         // Reset company to all
         fireEvent.change(selects[0], { target: { value: 'all' } });
       }
 
-      // Test buyer with no active RFQs (Amit Kumar Tata)
-      fireEvent.change(searchInput, { target: { value: 'Amit' } });
-      const amitBuyer = screen.getByText(/Amit Kumar Tata/i);
-      fireEvent.click(amitBuyer);
-      const reviewBtnsForAmit = screen.queryAllByRole('button', { name: /Review RFQ Details/i });
-      if (reviewBtnsForAmit.length > 0) {
-        fireEvent.click(reviewBtnsForAmit[0]);
+      // Test buyer with no active RFQs (Reliance — bootstrap mock's only RFQ
+      // belongs to buyer-acc-001, so buyer-acc-002 genuinely has none)
+      fireEvent.change(searchInput, { target: { value: 'Deshmukh' } });
+      const noRfqBuyer = screen.getByText(/Anjali Deshmukh/i);
+      fireEvent.click(noRfqBuyer);
+      const reviewBtnsForNoRfq = screen.queryAllByRole('button', { name: /Review RFQ Details/i });
+      if (reviewBtnsForNoRfq.length > 0) {
+        fireEvent.click(reviewBtnsForNoRfq[0]);
         expect(screen.getByText(/No active RFQ records found for this buyer profile/i)).toBeInTheDocument();
         const hideBtn = screen.getByRole('button', { name: /Hide Details/i });
         fireEvent.click(hideBtn);
@@ -235,7 +240,7 @@ describe('Category Manager Screens Suite', () => {
 
       // Test buyer selection and toggle collapse
       fireEvent.change(searchInput, { target: { value: '' } });
-      const buyerCard = screen.getAllByText(/Rajesh Nair/i)[0];
+      const buyerCard = screen.getAllByText(/S\. N\. Subrahmanyan/i)[0];
       fireEvent.click(buyerCard);
 
       // Test review RFQ details
@@ -424,14 +429,15 @@ describe('Category Manager Screens Suite', () => {
 
       await waitFor(() => {
         expect(screen.getByText(/Buyer Wise Command Console & Analytics/i)).toBeInTheDocument();
+        expect(screen.getAllByText(/S\. N\. Subrahmanyan/i).length).toBeGreaterThan(0);
       });
 
       // Search for buyer with RFQs
       const searchInput = screen.getByPlaceholderText(/Search Buyer name or company/i);
-      fireEvent.change(searchInput, { target: { value: 'Rajesh' } });
+      fireEvent.change(searchInput, { target: { value: 'Subrahmanyan' } });
 
       // Click buyer card to expand
-      const buyerCard = screen.getAllByText(/Rajesh Nair/i)[0];
+      const buyerCard = screen.getAllByText(/S\. N\. Subrahmanyan/i)[0];
       fireEvent.click(buyerCard);
 
       // Click Review RFQ Details
