@@ -38,7 +38,7 @@ describe('Store Service — remaining branch coverage', () => {
       ]);
       expect(res.success).toBe(true);
 
-      const po = freshStore.approvePurchaseOrder('RFQ-TEST-1', 'Some Vendor', 1000, 'notes');
+      const po = freshStore.approvePurchaseOrder('rfq-001', 'v-001', 'Some Vendor', 1000, 'notes');
       expect(po.success).toBe(true);
     });
 
@@ -122,9 +122,9 @@ describe('Store Service — remaining branch coverage', () => {
       expect(prod.unitPrice).toBe(0);
     });
 
-    test('approvePurchaseOrder falls back an empty rfqNumber safely', () => {
-      const po = storeService.approvePurchaseOrder(undefined, 'Vendor X', 500, 'notes');
-      expect(po.poNumber).toBe('PO-2026-');
+    test('approvePurchaseOrder returns null when the RFQ cannot be found', () => {
+      const po = storeService.approvePurchaseOrder(undefined, 'v-001', 'Vendor X', 500, 'notes');
+      expect(po).toBeNull();
     });
   });
 

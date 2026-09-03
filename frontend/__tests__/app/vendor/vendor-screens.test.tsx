@@ -12,17 +12,59 @@ function renderWithProvider(ui: React.ReactElement) {
   return render(<AppProvider>{ui}</AppProvider>);
 }
 
+// These screens now call real backend endpoints (vendor profile, catalogue,
+// quotes, RFQ download, PO approval) instead of only touching local state.
+// A generic success-shaped mock keeps these smoke tests focused on UI
+// behavior without needing a running backend.
+function mockFetchImpl(url: string, options: any = {}) {
+  const method = options.method || 'GET';
+  if (/\/api\/catalogue/.test(url) && method === 'GET') {
+    return Promise.resolve({ ok: true, json: async () => ({ success: true, data: [] }) });
+  }
+  if (url === '/api/catalogue' && method === 'POST') {
+    const body = options.body ? JSON.parse(options.body) : {};
+    return Promise.resolve({ ok: true, json: async () => ({ success: true, data: { id: `prod-${Math.random().toString(36).slice(2)}`, ...body } }) });
+  }
+  if (/\/api\/catalogue\/[^/]+$/.test(url) && (method === 'PUT' || method === 'DELETE')) {
+    const body = options.body ? JSON.parse(options.body) : {};
+    return Promise.resolve({ ok: true, json: async () => ({ success: true, data: { id: 'prod-mock', ...body } }) });
+  }
+  if (/\/api\/vendors\/[^/]+\/categories$/.test(url)) {
+    return Promise.resolve({ ok: true, json: async () => ({ success: true, data: { clientMappedCategories: [], vendorSelectedCategories: [] } }) });
+  }
+  if (/\/api\/vendors$/.test(url) && method === 'POST') {
+    return Promise.resolve({ ok: true, json: async () => ({ success: true, data: { id: 'v-mock-1', name: 'Mock Vendor' } }) });
+  }
+  if (/\/api\/vendors\/[^/]+$/.test(url)) {
+    return Promise.resolve({ ok: false, status: 404, json: async () => ({ success: false, error: 'Not found' }) });
+  }
+  if (/\/api\/rfqs\/[^/]+\/quotes$/.test(url)) {
+    return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+  }
+  if (/\/api\/rfqs\/[^/]+\/email-preview/.test(url)) {
+    return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+  }
+  if (/\/api\/rfqs\/[^/]+\/approve-po$/.test(url)) {
+    return Promise.resolve({ ok: true, json: async () => ({ success: true, poNumber: 'PO-2026-MOCK', issueDate: '2026-09-02', shaSignature: 'a'.repeat(64), lineItems: [] }) });
+  }
+  return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+}
+
 describe('Vendor Screens Comprehensive Suite', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    global.fetch = jest.fn(mockFetchImpl) as any;
   });
 
   describe('ItemCatalogue Screen', () => {
-    test('renders catalogue, adds a product, filters category, performs bulk simulation and deletes product', () => {
+    test('renders catalogue, adds a product, filters category, performs bulk simulation and deletes product', async () => {
       renderWithProvider(<ItemCatalogue />);
 
       expect(screen.getByText(/Product Catalogue Management/i)).toBeInTheDocument();
       expect(screen.getByText(/Catalogue Capacity/i)).toBeInTheDocument();
+
+      // Wait for the initial (no-session) catalogue load to settle
+      await waitFor(() => expect(screen.queryByText(/Saving\.\.\./i)).not.toBeInTheDocument());
 
       // Add a product
       const nameInput = screen.getByPlaceholderText(/e\.g\. Centrifugal Water Pump/i);
@@ -38,9 +80,11 @@ describe('Vendor Screens Comprehensive Suite', () => {
       fireEvent.change(moqInput, { target: { value: '5' } });
 
       const addBtn = screen.getByRole('button', { name: /Add Item/i });
-      fireEvent.click(addBtn);
+      await act(async () => {
+        fireEvent.click(addBtn);
+      });
 
-      expect(screen.getByText(/SKU-CRYO-900/i)).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByText(/SKU-CRYO-900/i)).toBeInTheDocument());
 
       // Category filter dropdown
       const categorySelect = screen.getByRole('combobox');
@@ -49,7 +93,9 @@ describe('Vendor Screens Comprehensive Suite', () => {
 
       // Test Bulk Excel Import
       const bulkBtn = screen.getByRole('button', { name: /Simulate Bulk Excel Import/i });
-      fireEvent.click(bulkBtn);
+      await act(async () => {
+        fireEvent.click(bulkBtn);
+      });
 
       // Test Summary filter toggle
       const summaryBtn = screen.getByRole('button', { name: /Summary:/i });
@@ -59,7 +105,9 @@ describe('Vendor Screens Comprehensive Suite', () => {
       // Delete an item
       const deleteBtns = screen.queryAllByTitle(/Delete Product/i);
       if (deleteBtns.length > 0) {
-        fireEvent.click(deleteBtns[0]);
+        await act(async () => {
+          fireEvent.click(deleteBtns[0]);
+        });
       }
     });
   });
@@ -120,7 +168,7 @@ describe('Vendor Screens Comprehensive Suite', () => {
       const onBack = jest.fn();
       const onSuccess = jest.fn();
 
-      renderWithProvider(<VendorQualificationForm onBack={onBack} onSuccess={onSuccess} />);
+      const { container } = renderWithProvider(<VendorQualificationForm onBack={onBack} onSuccess={onSuccess} />);
 
       expect(screen.getByText(/360-Degree AI Self-Evaluation/i)).toBeInTheDocument();
       expect(screen.getByText(/Module 1: Commercial Terms/i)).toBeInTheDocument();
@@ -135,7 +183,31 @@ describe('Vendor Screens Comprehensive Suite', () => {
       fireEvent.click(prevBtn);
       expect(screen.getByText(/Module 1: Commercial Terms/i)).toBeInTheDocument();
 
-      // Jump directly to Module 6
+      // Attach an evidence file to every question on every tab — submission
+      // is now blocked (BUGS.md #50) until all 24 questions have real
+      // evidence attached, so a smoke test of the full submit flow needs to
+      // actually attach one to each.
+      const attachFilesOnCurrentTab = () => {
+        const fileInputs = container.querySelectorAll('input[type="file"]');
+        fileInputs.forEach((input, idx) => {
+          const file = new File(['dummy'], `evidence-${idx}.pdf`, { type: 'application/pdf' });
+          fireEvent.change(input, { target: { files: [file] } });
+        });
+      };
+      const moduleTabNames = [
+        /1 Commercial Terms/i,
+        /2 Technical Capabilities/i,
+        /3 Quality & Warranty/i,
+        /4 Operational Delivery/i,
+        /5 Financial Stability/i,
+        /6 Governance & ESG/i,
+      ];
+      moduleTabNames.forEach((name) => {
+        fireEvent.click(screen.getByRole('button', { name }));
+        attachFilesOnCurrentTab();
+      });
+
+      // Jump directly to Module 6 (already attached above)
       const m6Tab = screen.getByRole('button', { name: /6 Governance & ESG/i });
       fireEvent.click(m6Tab);
 
@@ -155,6 +227,20 @@ describe('Vendor Screens Comprehensive Suite', () => {
 
       expect(onSuccess).toHaveBeenCalled();
       jest.useRealTimers();
+    });
+
+    test('blocks submission when evidence is missing', () => {
+      const onBack = jest.fn();
+      const onSuccess = jest.fn();
+      renderWithProvider(<VendorQualificationForm onBack={onBack} onSuccess={onSuccess} />);
+
+      // Submit only appears on the last module tab
+      fireEvent.click(screen.getByRole('button', { name: /6 Governance & ESG/i }));
+
+      const submitBtn = screen.getByRole('button', { name: /Submit Final Qualification/i });
+      fireEvent.click(submitBtn);
+
+      expect(onSuccess).not.toHaveBeenCalled();
     });
   });
 
@@ -216,7 +302,8 @@ describe('Vendor Screens Comprehensive Suite', () => {
   });
 
   describe('VendorSubscriptionCenter Screen', () => {
-    test('renders all subscription plans, allows switching between models and resetting quota', () => {
+    test('renders all subscription plans, allows switching between models (via dummy payment gateway) and resetting quota', () => {
+      jest.useFakeTimers();
       renderWithProvider(<VendorSubscriptionCenter />);
 
       expect(screen.getByText(/Vendor Subscription Plans & Quotas/i)).toBeInTheDocument();
@@ -224,21 +311,39 @@ describe('Vendor Screens Comprehensive Suite', () => {
       expect(screen.getAllByText(/Connect Model/i)[0]).toBeInTheDocument();
       expect(screen.getAllByText(/Select Model/i)[0]).toBeInTheDocument();
 
-      // Switch to Connect Model
+      // Connect/Select are paid tiers — clicking now opens the dummy payment
+      // gateway modal rather than switching instantly (BUGS.md #44).
       const connectBtn = screen.getByRole('button', { name: /Switch to Connect Model/i });
       fireEvent.click(connectBtn);
+      expect(screen.getByText(/Dummy Payment Gateway/i)).toBeInTheDocument();
 
-      // Switch to Select Model
+      const payBtn = screen.getByRole('button', { name: /Pay \$149/i });
+      act(() => {
+        fireEvent.click(payBtn);
+        jest.advanceTimersByTime(1300);
+      });
+      expect(screen.queryByText(/Dummy Payment Gateway/i)).not.toBeInTheDocument();
+
+      // Now on Connect — Select is a further upgrade, still paid
       const selectBtn = screen.getByRole('button', { name: /Switch to Select Model/i });
       fireEvent.click(selectBtn);
+      expect(screen.getByText(/Dummy Payment Gateway/i)).toBeInTheDocument();
+      const payBtn2 = screen.getByRole('button', { name: /Pay \$349/i });
+      act(() => {
+        fireEvent.click(payBtn2);
+        jest.advanceTimersByTime(1300);
+      });
+      expect(screen.queryByText(/Dummy Payment Gateway/i)).not.toBeInTheDocument();
 
-      // Switch to Premium Model
+      // Switch back to Premium — free tier, switches instantly, no gateway
       const premBtn = screen.getByRole('button', { name: /Switch to Premium Model/i });
       fireEvent.click(premBtn);
+      expect(screen.queryByText(/Dummy Payment Gateway/i)).not.toBeInTheDocument();
 
       // Reset Quota Counter
       const resetBtn = screen.getByRole('button', { name: /Reset Quota Counter/i });
       fireEvent.click(resetBtn);
+      jest.useRealTimers();
     });
   });
 });

@@ -1108,9 +1108,9 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     });
 
     // 6. Approve PO
-    act(() => {
-      contextValue.approvePO('RFQ-2026-999', 'Apex Supplies Ltd.', 580000);
-      contextValue.approvePO('RFQ-2026-NONEXISTENT', 'Unknown', 100);
+    await act(async () => {
+      await contextValue.approvePO('RFQ-2026-999', 'v-apex-b', 'Apex Supplies Ltd.', 580000, 'Test approval note');
+      await contextValue.approvePO('RFQ-2026-NONEXISTENT', null, 'Unknown', 100);
     });
 
     // 7. Open Deep Dive & Modal triggers

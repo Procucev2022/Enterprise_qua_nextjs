@@ -187,9 +187,18 @@ class StoreService {
   }
 
   addVendor(vendorData) {
+    // A client-supplied id was previously trusted as-is (never checked for
+    // uniqueness) and the auto-generated fallback was only the last 4 digits
+    // of Date.now() — collision-prone within the same ~10s window, and a
+    // deliberate duplicate `id` in the request body would shadow an existing
+    // vendor for every future id-based lookup (getVendorById/updateVendor
+    // resolve by the *first* array match). The id is now always generated
+    // server-side; nothing in the app currently has a legitimate reason to
+    // request a specific vendor id.
+    const { id: _ignoredClientId, ...safeVendorData } = vendorData;
     const newVendor = {
-      ...vendorData,
-      id: vendorData.id || `v-${Date.now().toString().slice(-4)}`,
+      ...safeVendorData,
+      id: `v-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       rating: vendorData.rating || 4.5,
       score: vendorData.score || 85.0,
       source: vendorData.source || 'buyer_manual',
@@ -211,10 +220,13 @@ class StoreService {
   }
 
   updateVendor(id, updates) {
-    const idx = this.vendors.findIndex((v) => v.id === id);
+    const idx = this.vendors.findIndex((v) => v.id === id || v.email === id);
     if (idx === -1) return null;
 
-    const updated = { ...this.vendors[idx], ...updates };
+    // A client payload must never be able to reassign the record's primary
+    // key (would corrupt this.vendors' id-uniqueness and orphan the old id).
+    const { id: _ignoredId, ...safeUpdates } = updates;
+    const updated = { ...this.vendors[idx], ...safeUpdates };
     this.vendors[idx] = updated;
 
     return updated;
@@ -370,7 +382,12 @@ class StoreService {
     const rfq = this.getRFQById(rfqId);
     if (!rfq) return null;
 
-    const quotes = [...(rfq.quotes || []), quote];
+    // A resubmission from the same vendor replaces their previous quote on
+    // this RFQ rather than piling up duplicates (nothing enforced this before).
+    const existingQuotes = rfq.quotes || [];
+    const quotes = quote.vendorId
+      ? [...existingQuotes.filter((q) => q.vendorId !== quote.vendorId), quote]
+      : [...existingQuotes, quote];
     return this.updateRFQ(rfq.id, { quotes });
   }
 
@@ -673,43 +690,53 @@ class StoreService {
   // ==========================================
   // 12. VENDOR ITEM SKU CATALOGUE CRUD
   // ==========================================
-  getVendorCatalogue() {
-    return this.vendorCatalogue;
+  // Was one global array with no vendorId anywhere — every vendor shared and
+  // could read/mutate the same catalogue. Now scoped per vendor; the seeded
+  // demo items have no owner and are excluded once a real vendorId is given.
+  getVendorCatalogue(vendorId) {
+    if (!vendorId) return this.vendorCatalogue;
+    return this.vendorCatalogue.filter((p) => p.vendorId === vendorId);
   }
 
-  addProductToCatalogue(product) {
+  getCatalogueProductById(id) {
+    return this.vendorCatalogue.find((p) => p.id === id);
+  }
+
+  addProductToCatalogue(product, vendorId, userEmail) {
     const newProd = {
       ...product,
       id: product.id || `prod-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+      vendorId,
       unitPrice: Number(product.unitPrice) || 0,
       leadTimeDays: Number(product.leadTimeDays) || 7,
       moq: Number(product.moq) || 1,
     };
     this.vendorCatalogue.unshift(newProd);
     this.addAuditLog({
-      userEmail: 'vendor@apex.com',
+      userEmail: userEmail || 'unknown',
       action: `Added product ${newProd.sku} (${newProd.name}) to item SKU catalogue`,
     });
     return newProd;
   }
 
-  updateCatalogueProduct(id, updates) {
+  updateCatalogueProduct(id, updates, userEmail) {
     const idx = this.vendorCatalogue.findIndex((p) => p.id === id);
     if (idx === -1) return null;
-    this.vendorCatalogue[idx] = { ...this.vendorCatalogue[idx], ...updates };
+    const { vendorId: _ignoredVendorId, id: _ignoredId, ...safeUpdates } = updates;
+    this.vendorCatalogue[idx] = { ...this.vendorCatalogue[idx], ...safeUpdates };
     this.addAuditLog({
-      userEmail: 'vendor@apex.com',
+      userEmail: userEmail || 'unknown',
       action: `Updated SKU ${this.vendorCatalogue[idx].sku} in catalogue`,
     });
     return this.vendorCatalogue[idx];
   }
 
-  deleteCatalogueProduct(id) {
+  deleteCatalogueProduct(id, userEmail) {
     const idx = this.vendorCatalogue.findIndex((p) => p.id === id);
     if (idx === -1) return false;
     const removed = this.vendorCatalogue.splice(idx, 1)[0];
     this.addAuditLog({
-      userEmail: 'vendor@apex.com',
+      userEmail: userEmail || 'unknown',
       action: `Removed product ${removed.sku} from SKU catalogue`,
     });
     return true;
@@ -740,17 +767,19 @@ class StoreService {
     return { success: true, count: outreachLogs.length, logs: outreachLogs };
   }
 
-  approvePurchaseOrder(rfqNumber, vendorName, totalAmount, approverNotes = '') {
+  approvePurchaseOrder(rfqNumber, vendorId, vendorName, totalAmount, approverNotes = '', approverEmail = null) {
     const rfq = this.rfqs.find((r) => r.rfqNumber === rfqNumber || r.id === rfqNumber);
-    if (rfq) {
-      rfq.status = 'PO Generated';
-      rfq.awardedVendor = vendorName;
-      rfq.awardedAmount = totalAmount;
-    }
+    if (!rfq) return null;
+
+    rfq.status = 'PO Generated';
+    rfq.awardedVendorId = vendorId || null;
+    rfq.awardedVendor = vendorName;
+    rfq.awardedAmount = totalAmount;
 
     const poNumber = `PO-2026-` + (rfqNumber || '').replace('RFQ-2026-', '');
+    const issueDate = new Date().toISOString().substring(0, 10);
     const auditRecord = this.addAuditLog({
-      userEmail: this.activeBuyerAccount ? this.activeBuyerAccount.corporateEmail : 'buyer@enterprise.com',
+      userEmail: approverEmail || (this.activeBuyerAccount ? this.activeBuyerAccount.corporateEmail : 'buyer@enterprise.com'),
       action: `Formally approved & sealed Purchase Order ${poNumber} awarded to ${vendorName} ($${Number(totalAmount).toLocaleString()}). Notes: ${approverNotes}`,
       rfqNumber,
     });
@@ -759,8 +788,17 @@ class StoreService {
       success: true,
       poNumber,
       rfqNumber,
+      vendorId: vendorId || null,
       vendorName,
       totalAmount,
+      issueDate,
+      // Real RFQ line items, not a hardcoded pump description — the PO
+      // document should reflect what was actually procured.
+      lineItems: (rfq.extractedEntities || []).map((ent) => ({
+        description: ent.itemName,
+        quantity: ent.quantity,
+        unit: ent.unit,
+      })),
       shaSignature: auditRecord.shaSignature,
     };
   }

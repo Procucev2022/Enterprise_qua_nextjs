@@ -2,9 +2,48 @@ import React from 'react';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import ItemCatalogue from '@/app/vendor/item-catalogue';
 import { AppProvider, useApp } from '@/lib/store';
+import { authClient } from '@/lib/authClient';
 
 function renderWithProvider(ui: React.ReactElement) {
   return render(<AppProvider>{ui}</AppProvider>);
+}
+
+// item-catalogue.tsx now calls the real backend for add/edit/delete/bulk
+// import (BUGS.md #24) instead of only touching local state — mock a
+// generically-successful backend so these UI-focused tests don't need a
+// running server.
+function mockFetchImpl(url: string, options: any = {}) {
+  const method = options.method || 'GET';
+  const body = options.body ? JSON.parse(options.body) : {};
+  if (url === '/api/catalogue' && method === 'POST') {
+    return Promise.resolve({ ok: true, json: async () => ({ success: true, data: { id: `prod-${Math.random().toString(36).slice(2)}`, ...body } }) });
+  }
+  if (/\/api\/catalogue\/[^/]+$/.test(url) && method === 'PUT') {
+    return Promise.resolve({ ok: true, json: async () => ({ success: true, data: { id: url.split('/').pop(), ...body } }) });
+  }
+  if (/\/api\/catalogue\/[^/]+$/.test(url) && method === 'DELETE') {
+    return Promise.resolve({ ok: true, json: async () => ({ success: true }) });
+  }
+  if (/\/api\/vendors\/[^/]+$/.test(url)) {
+    return Promise.resolve({ ok: false, status: 404, json: async () => ({ success: false, error: 'Not found' }) });
+  }
+  return Promise.resolve({ ok: true, json: async () => ({ success: true, data: [] }) });
+}
+
+function ItemCatalogueWithSession() {
+  const { setCurrentUserSession } = useApp();
+  React.useEffect(() => {
+    setCurrentUserSession({
+      id: 'user-1',
+      email: 'vendor@test.com',
+      name: 'Test Vendor',
+      role: 'vendor',
+      orgId: 'org-1',
+      orgName: 'Test Vendor Co',
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return <ItemCatalogue />;
 }
 
 function ItemCatalogueCustomWrapper({
@@ -27,24 +66,33 @@ function ItemCatalogueCustomWrapper({
 }
 
 describe('ItemCatalogue Comprehensive Suite', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
+  afterEach(() => {
+    authClient.setSession(null, null);
   });
 
-  test('Form Validation Edge Cases: Empty fields, invalid Price, invalid Lead Time, invalid MOQ', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    global.fetch = jest.fn(mockFetchImpl) as any;
+  });
+
+  test('Form Validation Edge Cases: Empty fields, invalid Price, invalid Lead Time, invalid MOQ', async () => {
     renderWithProvider(<ItemCatalogue />);
 
     const form = document.querySelector('form')!;
 
     // 1. Submit with empty fields
-    fireEvent.submit(form);
+    await act(async () => {
+      fireEvent.submit(form);
+    });
 
     // 2. Fill Name & SKU but leave others blank
     const nameInput = screen.getByPlaceholderText(/e.g. Centrifugal Water Pump/i);
     const skuInput = screen.getByPlaceholderText('SKU-PUMP-500');
     fireEvent.change(nameInput, { target: { value: 'High Pressure Pump' } });
     fireEvent.change(skuInput, { target: { value: 'SKU-HP-100' } });
-    fireEvent.submit(form);
+    await act(async () => {
+      fireEvent.submit(form);
+    });
 
     // 3. Invalid unit price (e.g. -10)
     const priceInput = screen.getByPlaceholderText('850');
@@ -54,20 +102,26 @@ describe('ItemCatalogue Comprehensive Suite', () => {
     fireEvent.change(priceInput, { target: { value: '-10' } });
     fireEvent.change(leadTimeInput, { target: { value: '7' } });
     fireEvent.change(moqInput, { target: { value: '5' } });
-    fireEvent.submit(form);
+    await act(async () => {
+      fireEvent.submit(form);
+    });
 
     // 4. Invalid lead time (e.g. 0)
     fireEvent.change(priceInput, { target: { value: '250' } });
     fireEvent.change(leadTimeInput, { target: { value: '0' } });
-    fireEvent.submit(form);
+    await act(async () => {
+      fireEvent.submit(form);
+    });
 
     // 5. Invalid MOQ (e.g. -2)
     fireEvent.change(leadTimeInput, { target: { value: '5' } });
     fireEvent.change(moqInput, { target: { value: '-2' } });
-    fireEvent.submit(form);
+    await act(async () => {
+      fireEvent.submit(form);
+    });
   });
 
-  test('Product Add, Edit, Delete, Reset Form, and Search Filter flow', () => {
+  test('Product Add, Edit, Delete, Reset Form, and Search Filter flow', async () => {
     renderWithProvider(<ItemCatalogue />);
 
     const form = document.querySelector('form')!;
@@ -87,7 +141,9 @@ describe('ItemCatalogue Comprehensive Suite', () => {
     fireEvent.change(priceInput, { target: { value: '1200' } });
     fireEvent.change(leadTimeInput, { target: { value: '7' } });
     fireEvent.change(moqInput, { target: { value: '2' } });
-    fireEvent.submit(form);
+    await act(async () => {
+      fireEvent.submit(form);
+    });
 
     // Add a new product
     fireEvent.change(nameInput, { target: { value: 'Stainless Steel Flange Adapter' } });
@@ -98,7 +154,9 @@ describe('ItemCatalogue Comprehensive Suite', () => {
     fireEvent.change(leadTimeInput, { target: { value: '14' } });
     fireEvent.change(moqInput, { target: { value: '10' } });
 
-    fireEvent.submit(form);
+    await act(async () => {
+      fireEvent.submit(form);
+    });
 
     expect(screen.getByText('SKU-FLG-SS304')).toBeInTheDocument();
 
@@ -112,7 +170,9 @@ describe('ItemCatalogue Comprehensive Suite', () => {
 
     // Change price and save
     fireEvent.change(screen.getByPlaceholderText('850'), { target: { value: '499' } });
-    fireEvent.click(screen.getByRole('button', { name: /Update Item/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Update Item/i }));
+    });
 
     // Reset Form / Cancel Editing
     const editBtnsAgain = screen.getAllByTitle('Edit Product');
@@ -140,15 +200,19 @@ describe('ItemCatalogue Comprehensive Suite', () => {
     // Delete the product
     const deleteBtns = screen.getAllByTitle('Delete Product');
     if (deleteBtns.length > 0) {
-      fireEvent.click(deleteBtns[0]);
+      await act(async () => {
+        fireEvent.click(deleteBtns[0]);
+      });
     }
   });
 
-  test('Bulk Import Simulation & Max 100 Limit Constraints (>90% and >70% capacity gradients)', () => {
+  test('Bulk Import Simulation & Max 100 Limit Constraints (>90% and >70% capacity gradients)', async () => {
     // 1. Normal bulk import simulation
     const { unmount } = renderWithProvider(<ItemCatalogue />);
     const bulkImportBtn = screen.getByRole('button', { name: /Simulate Bulk Excel Import/i });
-    fireEvent.click(bulkImportBtn);
+    await act(async () => {
+      fireEvent.click(bulkImportBtn);
+    });
     unmount();
 
     // 2. Test 95% capacity gradient bar (>90% red) and limit behavior
@@ -222,5 +286,200 @@ describe('ItemCatalogue Comprehensive Suite', () => {
     );
 
     expect(screen.getByText(/Select Model Required/i)).toBeInTheDocument();
+  });
+
+  test('loads the catalogue for a logged-in vendor (successful GET .../vendors and .../catalogue)', async () => {
+    global.fetch = jest.fn((url: string, options: any = {}) => {
+      if (/\/api\/vendors\/[^/]+$/.test(url)) {
+        return Promise.resolve({ ok: true, json: async () => ({ success: true, data: { id: 'v-session-1' } }) });
+      }
+      if (/\/api\/catalogue\?vendorId=/.test(url)) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, data: [{ id: 'prod-s1', name: 'Loaded Product', category: 'Valves & Flow Control', sku: 'SKU-LOADED-1', specs: 'test', unitPrice: 10, leadTimeDays: 5, moq: 1 }] }),
+        });
+      }
+      return mockFetchImpl(url, options);
+    }) as any;
+
+    await act(async () => {
+      renderWithProvider(<ItemCatalogueWithSession />);
+    });
+
+    expect(await screen.findByText('SKU-LOADED-1')).toBeInTheDocument();
+  });
+
+  test('handles a 404 vendor lookup and a network failure while loading the catalogue', async () => {
+    // Case A: vendor lookup 404s -> catalogue stays empty, no throw
+    global.fetch = jest.fn((url: string) => {
+      if (/\/api\/vendors\/[^/]+$/.test(url)) {
+        return Promise.resolve({ ok: false, status: 404, json: async () => ({ success: false }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ success: true, data: [] }) });
+    }) as any;
+    const { unmount } = await act(async () => renderWithProvider(<ItemCatalogueWithSession />));
+    expect(screen.getByText(/Product Catalogue Management/i)).toBeInTheDocument();
+    unmount();
+
+    // Case B: network failure on the vendor lookup itself
+    global.fetch = jest.fn(() => Promise.reject(new Error('network down'))) as any;
+    await act(async () => renderWithProvider(<ItemCatalogueWithSession />));
+    expect(screen.getByText(/Product Catalogue Management/i)).toBeInTheDocument();
+  });
+
+  test('shows failure toasts when add, delete, and bulk import all fail at the network level', async () => {
+    global.fetch = jest.fn(() => Promise.reject(new Error('offline'))) as any;
+    renderWithProvider(<ItemCatalogue />);
+
+    // Add product -> outer catch branch
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\. Centrifugal Water Pump/i), { target: { value: 'Offline Item' } });
+    fireEvent.change(screen.getByPlaceholderText('SKU-PUMP-500'), { target: { value: 'SKU-OFFLINE' } });
+    fireEvent.change(screen.getByPlaceholderText('850'), { target: { value: '10' } });
+    fireEvent.change(screen.getByPlaceholderText('5'), { target: { value: '5' } });
+    fireEvent.change(screen.getByPlaceholderText('10'), { target: { value: '1' } });
+    const form = document.querySelector('form')!;
+    await act(async () => {
+      fireEvent.submit(form);
+    });
+    // Product was not added since the network call failed
+    expect(screen.queryByText('SKU-OFFLINE')).not.toBeInTheDocument();
+
+    // Bulk import -> catch branch
+    const bulkBtn = screen.getByRole('button', { name: /Simulate Bulk Excel Import/i });
+    await act(async () => {
+      fireEvent.click(bulkBtn);
+    });
+  });
+
+  test('deleting a product surfaces a failure toast when the request fails', async () => {
+    // Seed one product via the custom wrapper (bypasses fetch), then fail the DELETE call
+    renderWithProvider(
+      <ItemCatalogueCustomWrapper
+        customCatalogue={[{ id: 'prod-del-1', name: 'Delete Me', category: 'Valves & Flow Control', sku: 'SKU-DEL-1', specs: 'x', unitPrice: 5, leadTimeDays: 2, moq: 1 }]}
+      />
+    );
+    global.fetch = jest.fn(() => Promise.reject(new Error('delete failed'))) as any;
+
+    const deleteBtn = screen.getAllByTitle('Delete Product')[0];
+    await act(async () => {
+      fireEvent.click(deleteBtn);
+    });
+    // Still present since the delete failed
+    expect(screen.getByText('SKU-DEL-1')).toBeInTheDocument();
+  });
+
+  test('RFQ-match filter hides products with zero matching opportunities', () => {
+    renderWithProvider(
+      <ItemCatalogueCustomWrapper
+        customCatalogue={[
+          { id: 'prod-nomatch', name: 'Totally Unrelated Widget', category: 'Sensors & Instrumentation', sku: 'SKU-NOMATCH', specs: 'nothing like any RFQ title', unitPrice: 5, leadTimeDays: 2, moq: 1 },
+        ]}
+      />
+    );
+
+    const rfqFilterToggle = screen.getByRole('button', { name: /Summary:/i });
+    fireEvent.click(rfqFilterToggle);
+    expect(screen.queryByText('SKU-NOMATCH')).not.toBeInTheDocument();
+  });
+
+  test('leaves the catalogue empty when the vendor record has no id', async () => {
+    global.fetch = jest.fn((url: string) => {
+      if (/\/api\/vendors\/[^/]+$/.test(url)) {
+        return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) }); // no id
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ success: true, data: [] }) });
+    }) as any;
+
+    await act(async () => renderWithProvider(<ItemCatalogueWithSession />));
+    expect(screen.getByText(/Product Catalogue Management/i)).toBeInTheDocument();
+  });
+
+  test('surfaces server-side rejections (ok, but success:false) for add, edit, and delete', async () => {
+    global.fetch = jest.fn(() => Promise.resolve({ ok: false, json: async () => ({ success: false, error: 'Rejected by server' }) })) as any;
+
+    renderWithProvider(
+      <ItemCatalogueCustomWrapper
+        customCatalogue={[{ id: 'prod-e1', name: 'Editable Item', category: 'Valves & Flow Control', sku: 'SKU-EDIT-1', specs: '', unitPrice: 5, leadTimeDays: 2, moq: 1 }]}
+      />
+    );
+
+    // Edit -> PUT rejected
+    fireEvent.click(screen.getAllByTitle('Edit Product')[0]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Update Item/i }));
+    });
+    expect(screen.getByText('SKU-EDIT-1')).toBeInTheDocument(); // unchanged
+
+    // Add -> POST rejected
+    fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\. Centrifugal Water Pump/i), { target: { value: 'Rejected Item' } });
+    fireEvent.change(screen.getByPlaceholderText('SKU-PUMP-500'), { target: { value: 'SKU-REJECTED' } });
+    fireEvent.change(screen.getByPlaceholderText('850'), { target: { value: '10' } });
+    fireEvent.change(screen.getByPlaceholderText('5'), { target: { value: '5' } });
+    fireEvent.change(screen.getByPlaceholderText('10'), { target: { value: '1' } });
+    await act(async () => {
+      fireEvent.submit(document.querySelector('form')!);
+    });
+    expect(screen.queryByText('SKU-REJECTED')).not.toBeInTheDocument();
+
+    // Delete -> DELETE rejected
+    await act(async () => {
+      fireEvent.click(screen.getAllByTitle('Delete Product')[0]);
+    });
+    expect(screen.getByText('SKU-EDIT-1')).toBeInTheDocument(); // still present
+
+    // Bulk import -> every item rejected server-side (created.length stays 0)
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Simulate Bulk Excel Import/i }));
+    });
+    expect(screen.getByText('SKU-EDIT-1')).toBeInTheDocument();
+  });
+
+  test('leaves the catalogue empty when the vendor is found but the catalogue fetch itself fails', async () => {
+    global.fetch = jest.fn((url: string) => {
+      if (/\/api\/vendors\/[^/]+$/.test(url)) {
+        return Promise.resolve({ ok: true, json: async () => ({ success: true, data: { id: 'v-ok-1' } }) });
+      }
+      if (/\/api\/catalogue\?vendorId=/.test(url)) {
+        return Promise.resolve({ ok: false, json: async () => ({ success: false, error: 'Catalogue fetch failed' }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ success: true, data: [] }) });
+    }) as any;
+
+    await act(async () => renderWithProvider(<ItemCatalogueWithSession />));
+    expect(screen.getByText(/Product Catalogue Management/i)).toBeInTheDocument();
+  });
+
+  test('sends a real auth token on a mutating request when one is present', async () => {
+    authClient.setSession(
+      { id: 'user-1', email: 'vendor@test.com', name: 'Test Vendor', role: 'vendor', orgId: 'org-1', orgName: 'Test Vendor Co' },
+      'fake-token-xyz'
+    );
+    // Loads succeed normally; only inspecting the outgoing add-product request.
+    global.fetch = jest.fn((url: string, options: any = {}) => {
+      if (/\/api\/vendors\/[^/]+$/.test(url)) {
+        return Promise.resolve({ ok: true, json: async () => ({ success: true, data: { id: 'v-token-1' } }) });
+      }
+      if (/\/api\/catalogue\?vendorId=/.test(url)) {
+        return Promise.resolve({ ok: true, json: async () => ({ success: true, data: [] }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ success: true, data: { id: 'prod-new-1', ...JSON.parse(options.body || '{}') } }) });
+    }) as any;
+
+    await act(async () => renderWithProvider(<ItemCatalogueWithSession />));
+
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\. Centrifugal Water Pump/i), { target: { value: 'Token Item' } });
+    fireEvent.change(screen.getByPlaceholderText('SKU-PUMP-500'), { target: { value: 'SKU-TOKEN-1' } });
+    fireEvent.change(screen.getByPlaceholderText('850'), { target: { value: '10' } });
+    fireEvent.change(screen.getByPlaceholderText('5'), { target: { value: '5' } });
+    fireEvent.change(screen.getByPlaceholderText('10'), { target: { value: '1' } });
+    await act(async () => {
+      fireEvent.submit(document.querySelector('form')!);
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/catalogue',
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer fake-token-xyz' }) })
+    );
   });
 });

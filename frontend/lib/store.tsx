@@ -127,7 +127,13 @@ interface AppContextType {
   triggerChannelChaser: (rfqNumber: string, channel: 'call' | 'whatsapp' | 'sms' | 'email', vendorName?: string, customNote?: string) => void;
   triggerBatchChannelChaser: (rfqNumber: string, channels: ('call' | 'whatsapp' | 'sms')[]) => void;
   submitVendorBid: (rfqNumber: string, unitPrice: number, leadTimeDays: number, remarks: string) => void;
-  approvePO: (rfqNumber: string, vendorName: string, amount: number) => void;
+  approvePO: (
+    rfqNumber: string,
+    vendorId: string | null,
+    vendorName: string,
+    amount: number,
+    approverNotes?: string
+  ) => Promise<{ success: boolean; poNumber?: string; issueDate?: string; shaSignature?: string; lineItems?: { description: string; quantity: number; unit: string }[]; error?: string }>;
   addAuditLog: (action: string, rfqNumber?: string, user?: string) => void;
   addFeedItem: (title: string, message: string, type: AIBotFeedItem['type'], rfqNumber?: string, recipient?: string, channel?: 'call' | 'whatsapp' | 'sms' | 'email' | 'system', channelDetails?: AIBotFeedItem['channelDetails']) => void;
   selectedRFQForMatrix: RFQItem | null;
@@ -1054,14 +1060,25 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
       })
     );
 
-    // Persist rating revision to PostgreSQL
-    fetch('/api/vendors', {
-      method: 'PATCH',
+    // Persist rating revision to the backend. Was PATCHing '/api/vendors'
+    // with a client-computed payload — that route/method doesn't exist
+    // (routes/vendors.js has no PATCH handler at all), so this silently
+    // 404'd on every single revision and nothing ever reached the backend.
+    // The real, working, already-authenticated endpoint is POST
+    // '/api/vendors/:id/rating-revision', which computes its own canonical
+    // score server-side (see storeService.reviseVendorRating) — sending it
+    // the same raw buyer inputs the client used for its optimistic UI.
+    fetch(`/api/vendors/${encodeURIComponent(targetVendor?.id || vendorId)}/rating-revision`, {
+      method: 'POST',
       headers: authFetchHeaders(),
       body: JSON.stringify({
-        action: 'rating_revision',
-        vendor: updatedTargetVendor,
-        revision: revisionRecord,
+        qualityScore,
+        costScore,
+        deliveryScore,
+        remarks: revisionRecord.remarks,
+        buyerCompany,
+        buyerName,
+        buyerEmail,
       }),
     }).catch((e) => console.error('Failed to save rating revision to DB:', e));
 
@@ -1745,28 +1762,62 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
     );
   };
 
-  const approvePO = (rfqNumber: string, vendorName: string, amount: number) => {
-    setRfqs((prev) =>
-      prev.map((r) => (r.rfqNumber === rfqNumber ? { ...r, status: 'PO Generated' } : r))
-    );
+  // Was entirely local-state — the real, already-working POST /:id/approve-po
+  // endpoint was never called at all (BUGS.md #37), and the PO document shown
+  // to the user (Modals.tsx) fabricated its own line items, vendor id, issue
+  // date, and even a hardcoded "SHA-256" string that never changed no matter
+  // what was actually approved (#36). Now calls the real endpoint and returns
+  // its real response so the modal can render the real document instead.
+  const approvePO = async (
+    rfqNumber: string,
+    vendorId: string | null,
+    vendorName: string,
+    amount: number,
+    approverNotes?: string
+  ): Promise<{ success: boolean; poNumber?: string; issueDate?: string; shaSignature?: string; lineItems?: { description: string; quantity: number; unit: string }[]; error?: string }> => {
+    try {
+      const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqNumber)}/approve-po`, {
+        method: 'POST',
+        headers: authFetchHeaders(),
+        body: JSON.stringify({ vendorId, vendorName, totalAmount: amount, approverNotes }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        showToast('PO Approval Failed', data.error || 'Could not approve the purchase order.', 'warning');
+        return { success: false, error: data.error };
+      }
 
-    addFeedItem(
-      `Purchase Order Generated: ${rfqNumber}`,
-      `Approved PO generated for ${vendorName} totaling ${formatCurrency(amount)}. Dispatched to ERP & Vendor Portal.`,
-      'approval',
-      rfqNumber
-    );
+      setRfqs((prev) =>
+        prev.map((r) =>
+          r.rfqNumber === rfqNumber
+            ? { ...r, status: 'PO Generated' as const, awardedVendor: vendorName, awardedAmount: amount }
+            : r
+        )
+      );
 
-    addAuditLog(
-      `Approved PO Generation & Dispatched Contract for ${rfqNumber} to ${vendorName} (${formatCurrency(amount)})`,
-      rfqNumber
-    );
+      addFeedItem(
+        `Purchase Order Generated: ${rfqNumber}`,
+        `Approved PO ${data.poNumber} generated for ${vendorName} totaling ${formatCurrency(amount)}. Dispatched to ERP & Vendor Portal.`,
+        'approval',
+        rfqNumber
+      );
 
-    showToast(
-      'Purchase Order Issued!',
-      `Official PO contract generated and signed with SHA-256 digital stamp for ${vendorName}.`,
-      'success'
-    );
+      addAuditLog(
+        `Approved PO Generation & Dispatched Contract for ${rfqNumber} to ${vendorName} (${formatCurrency(amount)})`,
+        rfqNumber
+      );
+
+      showToast(
+        'Purchase Order Issued!',
+        `Official PO ${data.poNumber} generated and signed with a real SHA-256 digital stamp for ${vendorName}.`,
+        'success'
+      );
+
+      return { success: true, poNumber: data.poNumber, issueDate: data.issueDate, shaSignature: data.shaSignature, lineItems: data.lineItems };
+    } catch (err: any) {
+      showToast('PO Approval Failed', err?.message || 'Network error while approving the purchase order.', 'warning');
+      return { success: false, error: err?.message };
+    }
   };
 
   const addNewRFQ = (

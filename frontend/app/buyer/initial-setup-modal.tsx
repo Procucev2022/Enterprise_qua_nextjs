@@ -93,9 +93,22 @@ export default function InitialSetupModal() {
 
   if (!initialSetupModalOpen) return null;
 
+  // Neither the file-picker (`accept=".xlsx,..."` is a browser-only hint,
+  // trivially bypassed) nor drag-and-drop checked the file type before
+  // handing it to the spreadsheet parser — any file went straight in.
+  const ALLOWED_UPLOAD_EXTENSIONS = ['.xlsx', '.xls', '.csv', '.tsv', '.txt'];
+  const isAllowedSpreadsheetFile = (file: File): boolean => {
+    const name = file.name.toLowerCase();
+    return ALLOWED_UPLOAD_EXTENSIONS.some((ext) => name.endsWith(ext));
+  };
+
   // Real File Upload & SheetJS/CSV Parsing for File 1: Vendor Master
   const handleVendorFileUpload = (file: File) => {
     if (!file) return;
+    if (!isAllowedSpreadsheetFile(file)) {
+      showToast('Unsupported File Type', `"${file.name}" is not a supported spreadsheet file. Accepted: ${ALLOWED_UPLOAD_EXTENSIONS.join(', ')}.`, 'warning');
+      return;
+    }
     setIsParsingVendor(true);
     const reader = new FileReader();
 
@@ -172,6 +185,10 @@ export default function InitialSetupModal() {
   // Real File Upload & SheetJS/CSV Parsing for File 2: PO Purchase Dump
   const handlePODataFileUpload = (file: File) => {
     if (!file) return;
+    if (!isAllowedSpreadsheetFile(file)) {
+      showToast('Unsupported File Type', `"${file.name}" is not a supported spreadsheet file. Accepted: ${ALLOWED_UPLOAD_EXTENSIONS.join(', ')}.`, 'warning');
+      return;
+    }
     setIsParsingPo(true);
     const reader = new FileReader();
 

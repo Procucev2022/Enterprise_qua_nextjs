@@ -124,29 +124,36 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
   test('Catalogue Controller Error & 404 Branches', async () => {
     const next = jest.fn();
     const res = mockRes();
+    const adminUser = { role: 'admin', email: 'admin@procucev.com' };
 
     jest.spyOn(storeService, 'getVendorCatalogue').mockImplementationOnce(() => {
       throw new Error('Cat error');
     });
-    await catalogueController.getProducts({}, res, next);
+    await catalogueController.getProducts({ query: {} }, res, next);
     expect(next).toHaveBeenCalled();
 
     jest.spyOn(storeService, 'addProductToCatalogue').mockImplementationOnce(() => {
       throw new Error('Add prod error');
     });
-    await catalogueController.addProduct({ body: { name: 'Item', sku: 'SKU', unitPrice: 10 } }, res, next);
+    await catalogueController.addProduct(
+      { body: { name: 'Item', sku: 'SKU', unitPrice: 10, vendorId: 'v-001' }, user: adminUser },
+      res,
+      next
+    );
     expect(next).toHaveBeenCalled();
 
+    // 'prod-1' is a real seeded item (no owning vendorId); admin bypasses
+    // ownership so the mocked store call below is actually reached.
     jest.spyOn(storeService, 'updateCatalogueProduct').mockImplementationOnce(() => {
       throw new Error('Update prod error');
     });
-    await catalogueController.updateProduct({ params: { id: 'p-1' }, body: {} }, res, next);
+    await catalogueController.updateProduct({ params: { id: 'prod-1' }, body: {}, user: adminUser }, res, next);
     expect(next).toHaveBeenCalled();
 
     jest.spyOn(storeService, 'deleteCatalogueProduct').mockImplementationOnce(() => {
       throw new Error('Delete prod error');
     });
-    await catalogueController.deleteProduct({ params: { id: 'p-1' } }, res, next);
+    await catalogueController.deleteProduct({ params: { id: 'prod-1' }, user: adminUser }, res, next);
     expect(next).toHaveBeenCalled();
   });
 
@@ -264,15 +271,28 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     await rfqController.updateRFQ({ params: { id: 'rfq-1' }, body: {} }, res, next);
     expect(next).toHaveBeenCalled();
 
+    // A quote's vendor identity is resolved server-side from the caller's own
+    // vendor record now, so req.user must be a vendor with a real profile
+    // (rajesh@apexindustrial.in / v-001) to reach the mocked store calls below.
+    const vendorUser = { role: 'vendor', email: 'rajesh@apexindustrial.in' };
+
     const notFoundQuote = mockRes();
     jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValueOnce(null);
-    await rfqController.addQuote({ params: { id: 'rfq-99' }, body: { vendorName: 'Apex', unitPrice: 100 } }, notFoundQuote, next);
+    await rfqController.addQuote(
+      { params: { id: 'rfq-99' }, body: { vendorName: 'Apex', unitPrice: 100 }, user: vendorUser },
+      notFoundQuote,
+      next
+    );
     expect(notFoundQuote.status).toHaveBeenCalledWith(404);
 
     jest.spyOn(storeService, 'addQuoteToRFQ').mockImplementationOnce(() => {
       throw new Error('Quote error');
     });
-    await rfqController.addQuote({ params: { id: 'rfq-1' }, body: { vendorName: 'Apex', unitPrice: 100 } }, res, next);
+    await rfqController.addQuote(
+      { params: { id: 'rfq-1' }, body: { vendorName: 'Apex', unitPrice: 100 }, user: vendorUser },
+      res,
+      next
+    );
     expect(next).toHaveBeenCalled();
 
     const notFoundEmail = mockRes();
@@ -318,6 +338,8 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
   test('Vendor Controller Error & 404 Branches', async () => {
     const next = jest.fn();
     const res = mockRes();
+    const adminUser = { role: 'admin', email: 'admin@procucev.com' };
+    const buyerUser = { role: 'buyer', email: 'buyer@procucev.com' };
 
     jest.spyOn(storeService, 'getVendors').mockImplementationOnce(() => {
       throw new Error('Vendors error');
@@ -334,7 +356,7 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     jest.spyOn(storeService, 'addVendor').mockImplementationOnce(() => {
       throw new Error('Add vendor error');
     });
-    await vendorController.createVendor({ body: { name: 'V', majorCategory: 'Cat' } }, res, next);
+    await vendorController.createVendor({ body: { name: 'V', majorCategory: 'Cat' }, user: adminUser }, res, next);
     expect(next).toHaveBeenCalled();
 
     const notFoundUpdate = mockRes();
@@ -342,10 +364,13 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     await vendorController.updateVendor({ params: { id: 'v-99' }, body: {} }, notFoundUpdate, next);
     expect(notFoundUpdate.status).toHaveBeenCalledWith(404);
 
+    // 'v-1' never matches a real seeded vendor, so it always hit the 404
+    // pre-check and never reached the mocked store call below; 'v-001' with
+    // an admin caller (bypasses ownership) actually gets there.
     jest.spyOn(storeService, 'updateVendor').mockImplementationOnce(() => {
       throw new Error('Update vendor error');
     });
-    await vendorController.updateVendor({ params: { id: 'v-1' }, body: {} }, res, next);
+    await vendorController.updateVendor({ params: { id: 'v-001' }, body: {}, user: adminUser }, res, next);
     expect(next).toHaveBeenCalled();
 
     const notFoundDelete = mockRes();
@@ -356,29 +381,37 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     jest.spyOn(storeService, 'deleteVendor').mockImplementationOnce(() => {
       throw new Error('Delete vendor error');
     });
-    await vendorController.deleteVendor({ params: { id: 'v-1' } }, res, next);
+    await vendorController.deleteVendor({ params: { id: 'v-002' }, user: adminUser }, res, next);
     expect(next).toHaveBeenCalled();
 
     const notFoundRating = mockRes();
     jest.spyOn(storeService, 'reviseVendorRating').mockReturnValueOnce(null);
-    await vendorController.reviseRating({ params: { id: 'v-99' }, body: { qualityScore: 90, costScore: 90, deliveryScore: 90 } }, notFoundRating, next);
+    await vendorController.reviseRating(
+      { params: { id: 'v-99' }, body: { qualityScore: 90, costScore: 90, deliveryScore: 90 }, user: buyerUser },
+      notFoundRating,
+      next
+    );
     expect(notFoundRating.status).toHaveBeenCalledWith(404);
 
     jest.spyOn(storeService, 'reviseVendorRating').mockImplementationOnce(() => {
       throw new Error('Rating error');
     });
-    await vendorController.reviseRating({ params: { id: 'v-1' }, body: { qualityScore: 90, costScore: 90, deliveryScore: 90 } }, res, next);
+    await vendorController.reviseRating(
+      { params: { id: 'v-1' }, body: { qualityScore: 90, costScore: 90, deliveryScore: 90 }, user: buyerUser },
+      res,
+      next
+    );
     expect(next).toHaveBeenCalled();
 
     const notFoundEmail = mockRes();
     jest.spyOn(storeService, 'getVendorById').mockReturnValueOnce(null);
-    await vendorController.generateOnboardingEmailPreview({ params: { id: 'v-99' } }, notFoundEmail, next);
+    await vendorController.generateOnboardingEmailPreview({ params: { id: 'v-99' }, user: buyerUser }, notFoundEmail, next);
     expect(notFoundEmail.status).toHaveBeenCalledWith(404);
 
     jest.spyOn(storeService, 'getVendorById').mockImplementationOnce(() => {
       throw new Error('Email preview error');
     });
-    await vendorController.generateOnboardingEmailPreview({ params: { id: 'v-1' } }, res, next);
+    await vendorController.generateOnboardingEmailPreview({ params: { id: 'v-1' }, user: buyerUser }, res, next);
     expect(next).toHaveBeenCalled();
 
     const notFoundCat = mockRes();
@@ -389,7 +422,7 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     jest.spyOn(storeService, 'updateVendorCategories').mockImplementationOnce(() => {
       throw new Error('Update cat error');
     });
-    await vendorController.updateCategories({ params: { id: 'v-1' }, body: {} }, res, next);
+    await vendorController.updateCategories({ params: { id: 'v-001' }, body: {}, user: adminUser }, res, next);
     expect(next).toHaveBeenCalled();
   });
 });

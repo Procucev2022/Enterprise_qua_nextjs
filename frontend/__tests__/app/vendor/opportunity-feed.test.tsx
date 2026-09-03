@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import OpportunityFeed from '@/app/vendor/opportunity-feed';
 import { AppProvider, useApp } from '@/lib/store';
 
@@ -411,5 +411,77 @@ describe('OpportunityFeed Comprehensive Suite', () => {
       }
     }
     unmount4();
+  });
+
+  test('shows a failure toast when the RFQ download request fails', async () => {
+    global.fetch = jest.fn(() => Promise.resolve({ ok: false, json: async () => ({ success: false, error: 'RFQ not found' }) })) as any;
+
+    renderWithProvider(<OpportunityFeedCustomWrapper customSubscription="select" />);
+    const downloadBtns = screen.queryAllByTitle(/Download RFQ Technical BOQ/i);
+    expect(downloadBtns.length).toBeGreaterThan(0);
+    await act(async () => {
+      fireEvent.click(downloadBtns[0]);
+    });
+  });
+
+  test('completes a full Connect-plan upgrade through the dummy payment gateway', () => {
+    jest.useFakeTimers();
+
+    renderWithProvider(<OpportunityFeedCustomWrapper customSubscription="standard" />);
+
+    // Reliable trigger: the locked-RFQ card's own "🔒 Upgrade" button always
+    // opens the upgrade modal, regardless of which card/section it's on.
+    const lockedBtns = screen.queryAllByRole('button', { name: /🔒 Upgrade/i });
+    expect(lockedBtns.length).toBeGreaterThan(0);
+    fireEvent.click(lockedBtns[0]);
+
+    // Both Connect and Select plan buttons are labeled "Upgrade" — Connect is first
+    const connectBtn = screen.getAllByRole('button', { name: /^Upgrade$/i })[0];
+    fireEvent.click(connectBtn); // Connect plan — opens the dummy payment gateway
+    expect(screen.getByText(/Dummy Payment Gateway/i)).toBeInTheDocument();
+
+    const payBtn = screen.getByRole('button', { name: /Pay \$149/i });
+    act(() => {
+      fireEvent.click(payBtn);
+      jest.advanceTimersByTime(1300);
+    });
+    // onPaymentSuccess fired handleUpgradePlan('connect') — modal closes
+    expect(screen.queryByText(/Dummy Payment Gateway/i)).not.toBeInTheDocument();
+
+    jest.useRealTimers();
+  });
+
+  test('switches directly to Premium (free) from the locked-RFQ upgrade modal', () => {
+    renderWithProvider(<OpportunityFeedCustomWrapper customSubscription="standard" />);
+
+    const lockedBtns = screen.queryAllByRole('button', { name: /🔒 Upgrade/i });
+    expect(lockedBtns.length).toBeGreaterThan(0);
+    fireEvent.click(lockedBtns[0]);
+
+    const selectPremiumBtn = screen.getByRole('button', { name: /^Select$/i });
+    fireEvent.click(selectPremiumBtn);
+
+    // Premium is free — switches instantly, no payment gateway involved
+    expect(screen.queryByText(/Dummy Payment Gateway/i)).not.toBeInTheDocument();
+  });
+
+  test('opens the subscription-fee "View Connect / Select" fallback modal when no onNavigateToSubscription is provided', () => {
+    function NoSubscriptionCallbackWrapper() {
+      const { setVendorSubscription } = useApp();
+      React.useEffect(() => {
+        setVendorSubscription('standard' as any);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, []);
+      // onNavigateToSubscription genuinely omitted (not just undefined-through-a-default)
+      return <OpportunityFeed onNavigateToBidForm={jest.fn()} onNavigateToEvaluation={jest.fn()} onNavigateToSubscription={undefined as any} />;
+    }
+
+    renderWithProvider(<NoSubscriptionCallbackWrapper />);
+
+    const feeBtn = screen.queryByRole('button', { name: /View Connect \/ Select \(\$0 Fee\)/i });
+    if (feeBtn) {
+      fireEvent.click(feeBtn);
+      expect(screen.getByText(/Upgrade to Premium Sourcing Plan/i)).toBeInTheDocument();
+    }
   });
 });

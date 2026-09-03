@@ -10,6 +10,6 @@ router.put('/:id', authenticate, vendorController.updateVendor);
 router.delete('/:id', authenticate, vendorController.deleteVendor);
 router.post('/:id/rating-revision', authenticate, vendorController.reviseRating);
 router.put('/:id/categories', authenticate, vendorController.updateCategories);
-router.get('/:id/onboarding-email', vendorController.generateOnboardingEmailPreview);
+router.get('/:id/onboarding-email', authenticate, vendorController.generateOnboardingEmailPreview);
 
 module.exports = router;

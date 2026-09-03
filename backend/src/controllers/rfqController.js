@@ -201,11 +201,35 @@ function updateRFQ(req, res, next) {
 function addQuote(req, res, next) {
   try {
     const { id } = req.params;
-    const quote = req.body;
-    if (!quote.vendorName || !quote.unitPrice) {
-      logger.warn(`Failed to add quote to RFQ ${id}: Missing vendorName or unitPrice`, { id, quote }, 'RFQ_CONTROLLER');
-      return res.status(400).json({ success: false, error: 'vendorName and unitPrice are required.' });
+    // A quote's vendor identity must come from the authenticated session, not
+    // whatever vendorName/vendorId the client body claims — otherwise any
+    // authenticated user could submit a bid posing as any vendor by name.
+    if (req.user.role !== 'vendor') {
+      return res.status(403).json({ success: false, error: 'Only a vendor can submit a quote.' });
     }
+    const vendorRecord = storeService.getVendorById(req.user.email);
+    if (!vendorRecord) {
+      return res.status(400).json({ success: false, error: 'Create your vendor profile before submitting a quote.' });
+    }
+    const { unitPrice, totalPrice, leadTimeDays, warrantyYears, paymentTerms, remarks, vendorCategory, complianceStatus } = req.body;
+    if (!unitPrice) {
+      logger.warn(`Failed to add quote to RFQ ${id}: Missing unitPrice`, { id }, 'RFQ_CONTROLLER');
+      return res.status(400).json({ success: false, error: 'unitPrice is required.' });
+    }
+    const quote = {
+      vendorId: vendorRecord.id,
+      vendorName: vendorRecord.name,
+      vendorCategory: vendorCategory || 'Client List',
+      unitPrice,
+      totalPrice: totalPrice || unitPrice,
+      leadTimeDays: leadTimeDays || 0,
+      aiMatchScore: 0,
+      warrantyYears: warrantyYears || 0,
+      complianceStatus: complianceStatus || 'Pending Review',
+      paymentTerms: paymentTerms || '',
+      remarks: remarks || '',
+      submittedAt: new Date().toISOString(),
+    };
     logger.info(`Adding quote from ${quote.vendorName} to RFQ ${id}`, { id, vendorName: quote.vendorName, price: quote.unitPrice }, 'RFQ_CONTROLLER');
     const updatedRFQ = storeService.addQuoteToRFQ(id, quote);
     if (!updatedRFQ) {
@@ -258,13 +282,21 @@ function triggerBatchChaser(req, res, next) {
 function approvePO(req, res, next) {
   try {
     const { id } = req.params;
-    const { vendorName, totalAmount, approverNotes } = req.body;
+    // Awarding a PO is a buyer-side decision — a vendor has no business
+    // approving their own (or anyone else's) award.
+    if (!['buyer', 'category_manager', 'admin'].includes(req.user.role)) {
+      return res.status(403).json({ success: false, error: 'You do not have permission to approve a purchase order.' });
+    }
+    const { vendorId, vendorName, totalAmount, approverNotes } = req.body;
     if (!vendorName || !totalAmount) {
       logger.warn(`Failed to approve PO for RFQ ${id}: Missing vendorName or totalAmount`, { id, body: req.body }, 'RFQ_CONTROLLER');
       return res.status(400).json({ success: false, error: 'vendorName and totalAmount are required.' });
     }
-    logger.info(`Approving Purchase Order for RFQ ${id}`, { id, vendorName, totalAmount, approverNotes }, 'RFQ_CONTROLLER');
-    const result = storeService.approvePurchaseOrder(id, vendorName, totalAmount, approverNotes);
+    logger.info(`Approving Purchase Order for RFQ ${id}`, { id, vendorId, vendorName, totalAmount, approverNotes }, 'RFQ_CONTROLLER');
+    const result = storeService.approvePurchaseOrder(id, vendorId, vendorName, totalAmount, approverNotes, req.user.email);
+    if (!result) {
+      return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+    }
     res.json(result);
   } catch (err) {
     logger.error(`Error approving PO for RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');

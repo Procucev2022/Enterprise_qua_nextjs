@@ -153,6 +153,9 @@ export interface RFQItem {
   sourceFileName?: string;
   autoCirculated?: boolean;
   followUpData?: RFQFollowUpBreakdown;
+  awardedVendorId?: string;
+  awardedVendor?: string;
+  awardedAmount?: number;
 }
 
 export interface AIBotFeedItem {

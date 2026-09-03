@@ -1,6 +1,11 @@
 const request = require('supertest');
 const app = require('../src/app');
+const authService = require('../src/services/authService');
 const { authHeader } = require('./testHelpers');
+
+function customAuthHeader(user) {
+  return { Authorization: `Bearer ${authService.generateSessionToken(user)}` };
+}
 
 describe('API Route Endpoints', () => {
   // 1. Bootstrap
@@ -103,15 +108,17 @@ describe('API Route Endpoints', () => {
     });
 
     test('POST /api/vendors creates new vendor', async () => {
+      // Only the vendor themselves (self-registration) or an admin may create
+      // a vendor profile now — a buyer creating a vendor was never a real
+      // product flow, see vendorController.createVendor.
       const newVendor = {
         name: 'Siemens Energy Spares Pvt Ltd',
         contactPerson: 'Rohan Sharma',
-        email: 'rohan.sharma@siemens.com',
         phone: '+91 98333 44555',
         majorCategory: 'Engineering Spares - Electrical',
         minorCategories: ['Turbines', 'Transformers'],
       };
-      const res = await request(app).post('/api/vendors').set(authHeader('buyer')).send(newVendor);
+      const res = await request(app).post('/api/vendors').set(authHeader('vendor')).send(newVendor);
       expect(res.statusCode).toBe(201);
       expect(res.body.success).toBe(true);
       expect(res.body.data.name).toBe(newVendor.name);
@@ -123,8 +130,13 @@ describe('API Route Endpoints', () => {
       expect(res.statusCode).toBe(401);
     });
 
+    test('POST /api/vendors returns 403 for a role that cannot create a vendor profile', async () => {
+      const res = await request(app).post('/api/vendors').set(authHeader('buyer')).send({ name: 'X', majorCategory: 'Y' });
+      expect(res.statusCode).toBe(403);
+    });
+
     test('POST /api/vendors returns 400 when missing name or majorCategory', async () => {
-      const res = await request(app).post('/api/vendors').set(authHeader('buyer')).send({ email: 'test@vendor.com' });
+      const res = await request(app).post('/api/vendors').set(authHeader('vendor')).send({ email: 'test@vendor.com' });
       expect(res.statusCode).toBe(400);
     });
 
@@ -157,14 +169,43 @@ describe('API Route Endpoints', () => {
     });
 
     test('GET /api/vendors/:id/onboarding-email returns email preview payload', async () => {
-      const res = await request(app).get(`/api/vendors/${testVendorId}/onboarding-email`);
+      // Carries the vendor's real tempPassword, so it's now restricted to the
+      // buyer-side roles that actually onboard vendors (or an admin).
+      const res = await request(app).get(`/api/vendors/${testVendorId}/onboarding-email`).set(authHeader('buyer'));
       expect(res.statusCode).toBe(200);
       expect(res.body.data).toHaveProperty('htmlBody');
       expect(res.body.data).toHaveProperty('to');
     });
 
+    test('PUT /api/vendors/:id updates the profile as the owning vendor, ignoring smuggled fields', async () => {
+      const created = await request(app).post('/api/vendors').set(authHeader('vendor')).send({
+        name: 'Whitelist Test Vendor',
+        majorCategory: 'Engineering Spares - Electrical',
+      });
+      const id = created.body.data.id;
+
+      const res = await request(app)
+        .put(`/api/vendors/${id}`)
+        .set(authHeader('vendor'))
+        .send({ contactPerson: 'Updated Contact', rating: 999, status: 'HACKED' });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data.contactPerson).toBe('Updated Contact');
+      // rating/status aren't in VENDOR_SELF_EDIT_FIELDS, so a vendor's own PUT
+      // can't smuggle them through.
+      expect(res.body.data.rating).not.toBe(999);
+      expect(res.body.data.status).not.toBe('HACKED');
+    });
+
+    test('PUT /api/vendors/:id returns 403 for a caller who is neither the owning vendor nor an admin', async () => {
+      const res = await request(app).put(`/api/vendors/${testVendorId}`).set(authHeader('buyer')).send({ name: 'X' });
+      expect(res.statusCode).toBe(403);
+    });
+
     test('DELETE /api/vendors/:id removes vendor', async () => {
-      const res = await request(app).delete(`/api/vendors/${testVendorId}`).set(authHeader('buyer'));
+      // Only the owning vendor (or an admin) may delete the profile; it was
+      // created above under the 'vendor' test user's own session email.
+      const res = await request(app).delete(`/api/vendors/${testVendorId}`).set(authHeader('vendor'));
       expect(res.statusCode).toBe(200);
     });
   });
@@ -212,9 +253,33 @@ describe('API Route Endpoints', () => {
       expect(res.body.data.id).toBe(testRfqId);
     });
 
+    test('PUT /api/rfqs/:id updates RFQ successfully', async () => {
+      const res = await request(app).put(`/api/rfqs/${testRfqId}`).set(authHeader('buyer')).send({ status: 'In Evaluation' });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data.status).toBe('In Evaluation');
+    });
+
+    test('POST /api/rfqs/:id/quotes returns 403 for a non-vendor role', async () => {
+      const res = await request(app).post(`/api/rfqs/${testRfqId}/quotes`).set(authHeader('buyer')).send({ unitPrice: 100 });
+      expect(res.statusCode).toBe(403);
+    });
+
+    test('POST /api/rfqs/:id/quotes returns 400 when the vendor has no profile yet', async () => {
+      const res = await request(app)
+        .post(`/api/rfqs/${testRfqId}/quotes`)
+        .set(customAuthHeader({ id: 'usr-no-profile', email: 'no-profile-vendor@test.com', name: 'No Profile', role: 'vendor' }))
+        .send({ unitPrice: 100 });
+      expect(res.statusCode).toBe(400);
+    });
+
     test('POST /api/rfqs/:id/quotes adds quote and recalculates matrix', async () => {
+      // A quote's vendor identity is resolved server-side from the caller's
+      // own vendor record now, so one must exist before a vendor can bid.
+      await request(app).post('/api/vendors').set(authHeader('vendor')).send({
+        name: 'Apex Industrial Dynamics Pvt Ltd',
+        majorCategory: 'Engineering Spares - Mechanical',
+      });
       const quote = {
-        vendorName: 'Apex Industrial Dynamics Pvt Ltd',
         unitPrice: 5200,
         totalPrice: 52000,
         leadTimeDays: 10,
@@ -384,7 +449,7 @@ describe('API Route Endpoints', () => {
     });
 
     test('GET /api/vendors/:id/onboarding-email and rating revision 404 on invalid vendor', async () => {
-      const emailRes = await request(app).get('/api/vendors/invalid-id/onboarding-email');
+      const emailRes = await request(app).get('/api/vendors/invalid-id/onboarding-email').set(authHeader('buyer'));
       expect(emailRes.statusCode).toBe(404);
 
       const ratingRes = await request(app).post('/api/vendors/invalid-id/rating-revision').set(authHeader('buyer')).send({
