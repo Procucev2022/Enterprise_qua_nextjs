@@ -94,6 +94,60 @@ describe('API Route Endpoints', () => {
       const res = await request(app).delete('/api/buyer-accounts/nonexistent-id').set(authHeader('buyer'));
       expect(res.statusCode).toBe(404);
     });
+
+    // Buyer accounts are buyer-side org records. Every mutating endpoint used
+    // to accept any authenticated role, so a vendor or category manager could
+    // create, edit, delete or re-point the globally active buyer account, and
+    // run the buyer-only historical-purchase vendor ingestion.
+    describe.each(['vendor', 'category_manager'])('returns 403 for the %s role', (role) => {
+      test('POST /api/buyer-accounts', async () => {
+        const res = await request(app)
+          .post('/api/buyer-accounts')
+          .set(authHeader(role))
+          .send({ organizationName: 'Rogue Org', corporateEmail: 'rogue@org.com' });
+        expect(res.statusCode).toBe(403);
+        expect(res.body.success).toBe(false);
+      });
+
+      test('PUT /api/buyer-accounts/:id', async () => {
+        const res = await request(app).put('/api/buyer-accounts/buyer-acc-001').set(authHeader(role)).send({ totalSpend: '₹0' });
+        expect(res.statusCode).toBe(403);
+      });
+
+      test('DELETE /api/buyer-accounts/:id', async () => {
+        const res = await request(app).delete('/api/buyer-accounts/buyer-acc-001').set(authHeader(role));
+        expect(res.statusCode).toBe(403);
+      });
+
+      test('POST /api/buyer-accounts/:id/activate', async () => {
+        const res = await request(app).post('/api/buyer-accounts/buyer-acc-001/activate').set(authHeader(role));
+        expect(res.statusCode).toBe(403);
+      });
+
+      test('POST /api/buyer-accounts/historical-data', async () => {
+        const res = await request(app)
+          .post('/api/buyer-accounts/historical-data')
+          .set(authHeader(role))
+          .send({ period: '2_years', vendorRecords: [] });
+        expect(res.statusCode).toBe(403);
+      });
+    });
+
+    test('POST /api/buyer-accounts/historical-data is allowed for an admin', async () => {
+      const res = await request(app)
+        .post('/api/buyer-accounts/historical-data')
+        .set(authHeader('admin'))
+        .send({ period: '2_years', vendorRecords: [] });
+      expect(res.statusCode).toBe(200);
+    });
+
+    // The two read-only endpoints stay open to any role: the identical
+    // buyerAccounts payload is already served by the unauthenticated
+    // GET /api/bootstrap, which is what the frontend actually reads.
+    test('GET /api/buyer-accounts stays readable by a non-buyer role', async () => {
+      const res = await request(app).get('/api/buyer-accounts').set(authHeader('vendor'));
+      expect(res.statusCode).toBe(200);
+    });
   });
 
   // 3. Vendors

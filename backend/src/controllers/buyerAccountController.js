@@ -1,6 +1,32 @@
 const storeService = require('../services/storeService');
 const { logger } = require('../services/loggerService');
 
+/**
+ * Buyer accounts are buyer-side org records: only a buyer (or an admin acting
+ * on their behalf) has any business creating, editing, deleting or switching
+ * the active one, or triggering the buyer-only historical-purchase ingestion.
+ * Vendors and category managers browse buyer accounts read-only and must not
+ * be able to mutate them.
+ *
+ * This is deliberately a role-level gate and NOT a per-record ownership check
+ * like vendorController's assertVendorOwnership: this app has no per-request
+ * "this buyer account belongs to this buyer" concept at all — there is a
+ * single, globally active buyer account (storeService.activeBuyerAccount), and
+ * storeService.createRFQ stamps new RFQs from that system-wide value rather
+ * than from req.user. Inventing ownership semantics here would be fiction.
+ */
+function assertBuyerAccountRole(req, res) {
+  const user = req.user;
+  if (!user) {
+    res.status(401).json({ success: false, error: 'Authentication required.' });
+    return false;
+  }
+  if (user.role === 'buyer' || user.role === 'admin') return true;
+  logger.warn('Rejected buyer account mutation from a non-buyer role', { role: user.role }, 'BUYER_ACCOUNT_CONTROLLER');
+  res.status(403).json({ success: false, error: 'You do not have permission to modify buyer accounts.' });
+  return false;
+}
+
 function getBuyerAccounts(req, res, next) {
   try {
     logger.info('Fetching buyer accounts', {}, 'BUYER_ACCOUNT_CONTROLLER');
@@ -25,6 +51,7 @@ function getActiveAccount(req, res, next) {
 
 function createBuyerAccount(req, res, next) {
   try {
+    if (!assertBuyerAccountRole(req, res)) return;
     const body = req.body;
     if (!body.organizationName || !body.corporateEmail) {
       logger.warn('Failed to create buyer account: Missing organizationName or corporateEmail', { body }, 'BUYER_ACCOUNT_CONTROLLER');
@@ -41,6 +68,7 @@ function createBuyerAccount(req, res, next) {
 
 function updateBuyerAccount(req, res, next) {
   try {
+    if (!assertBuyerAccountRole(req, res)) return;
     const { id } = req.params;
     const updates = req.body;
     logger.info(`Updating buyer account ${id}`, { id, updates }, 'BUYER_ACCOUNT_CONTROLLER');
@@ -58,6 +86,7 @@ function updateBuyerAccount(req, res, next) {
 
 function deleteBuyerAccount(req, res, next) {
   try {
+    if (!assertBuyerAccountRole(req, res)) return;
     const { id } = req.params;
     logger.info(`Deleting buyer account ${id}`, { id }, 'BUYER_ACCOUNT_CONTROLLER');
     const deleted = storeService.deleteBuyerAccount(id);
@@ -74,6 +103,7 @@ function deleteBuyerAccount(req, res, next) {
 
 function setActiveAccount(req, res, next) {
   try {
+    if (!assertBuyerAccountRole(req, res)) return;
     const { id } = req.params;
     logger.info(`Setting active buyer account to ${id}`, { id }, 'BUYER_ACCOUNT_CONTROLLER');
     const active = storeService.alignActiveBuyerAccount(id);
@@ -90,6 +120,7 @@ function setActiveAccount(req, res, next) {
 
 function ingestHistoricalData(req, res, next) {
   try {
+    if (!assertBuyerAccountRole(req, res)) return;
     const { period, vendorRecords } = req.body;
     if (!period) {
       logger.warn('Failed to ingest historical data: Missing period', { body: req.body }, 'BUYER_ACCOUNT_CONTROLLER');

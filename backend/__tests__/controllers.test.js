@@ -83,6 +83,7 @@ describe('Controllers Error & Edge-Case Coverage', () => {
   test('buyerAccountController methods & error handling', async () => {
     const next = jest.fn();
     const res = mockRes();
+    const buyerUser = { role: 'buyer', email: 'buyer@procucev.com' };
 
     await buyerAccountController.getBuyerAccounts({}, res, next);
     expect(res.json).toHaveBeenCalled();
@@ -90,19 +91,27 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     await buyerAccountController.getActiveAccount({}, res, next);
     expect(res.json).toHaveBeenCalled();
 
-    await buyerAccountController.setActiveAccount({ body: { id: 'buyer-1' } }, res, next);
+    await buyerAccountController.setActiveAccount({ body: { id: 'buyer-1' }, user: buyerUser }, res, next);
     expect(res.json).toHaveBeenCalled();
 
-    await buyerAccountController.createBuyerAccount({ body: { organizationName: 'New Org', corporateEmail: 'test@org.com' } }, res, next);
+    await buyerAccountController.createBuyerAccount(
+      { body: { organizationName: 'New Org', corporateEmail: 'test@org.com' }, user: buyerUser },
+      res,
+      next
+    );
     expect(res.status).toHaveBeenCalledWith(201);
 
-    await buyerAccountController.createBuyerAccount({ body: {} }, res, next);
+    await buyerAccountController.createBuyerAccount({ body: {}, user: buyerUser }, res, next);
     expect(res.status).toHaveBeenCalledWith(400);
 
-    await buyerAccountController.updateBuyerAccount({ params: { id: 'buyer-1' }, body: { organizationName: 'Updated' } }, res, next);
+    await buyerAccountController.updateBuyerAccount(
+      { params: { id: 'buyer-1' }, body: { organizationName: 'Updated' }, user: buyerUser },
+      res,
+      next
+    );
     expect(res.json).toHaveBeenCalled();
 
-    await buyerAccountController.updateBuyerAccount({ params: { id: 'non-existent' }, body: {} }, res, next);
+    await buyerAccountController.updateBuyerAccount({ params: { id: 'non-existent' }, body: {}, user: buyerUser }, res, next);
     expect(res.status).toHaveBeenCalledWith(404);
 
     jest.spyOn(storeService, 'getBuyerAccounts').mockImplementationOnce(() => {
@@ -110,6 +119,54 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     });
     await buyerAccountController.getBuyerAccounts({}, res, next);
     expect(next).toHaveBeenCalled();
+  });
+
+  test('buyerAccountController rejects non-buyer roles on every mutating endpoint', async () => {
+    // Buyer accounts had zero role-gating: a vendor or category manager could
+    // create, edit, delete or re-point the globally active buyer account, and
+    // trigger the buyer-only historical-purchase vendor ingestion.
+    const next = jest.fn();
+    const adminUser = { role: 'admin', email: 'admin@procucev.com' };
+
+    for (const role of ['vendor', 'category_manager']) {
+      const user = { role, email: `${role}@procucev.com` };
+
+      const createRes = mockRes();
+      await buyerAccountController.createBuyerAccount(
+        { body: { organizationName: 'Rogue Org', corporateEmail: 'rogue@org.com' }, user },
+        createRes,
+        next
+      );
+      expect(createRes.status).toHaveBeenCalledWith(403);
+
+      const updateRes = mockRes();
+      await buyerAccountController.updateBuyerAccount({ params: { id: 'buyer-1' }, body: { totalSpend: '₹0' }, user }, updateRes, next);
+      expect(updateRes.status).toHaveBeenCalledWith(403);
+
+      const deleteRes = mockRes();
+      await buyerAccountController.deleteBuyerAccount({ params: { id: 'buyer-1' }, user }, deleteRes, next);
+      expect(deleteRes.status).toHaveBeenCalledWith(403);
+
+      const activateRes = mockRes();
+      await buyerAccountController.setActiveAccount({ params: { id: 'buyer-1' }, user }, activateRes, next);
+      expect(activateRes.status).toHaveBeenCalledWith(403);
+
+      const ingestRes = mockRes();
+      await buyerAccountController.ingestHistoricalData({ body: { period: '2_years', vendorRecords: [] }, user }, ingestRes, next);
+      expect(ingestRes.status).toHaveBeenCalledWith(403);
+    }
+
+    // An unauthenticated direct call is a 401, not a 403 — mirrors
+    // vendorController.assertVendorOwnership's own missing-session branch.
+    const noSessionRes = mockRes();
+    await buyerAccountController.createBuyerAccount({ body: { organizationName: 'X', corporateEmail: 'x@o.com' } }, noSessionRes, next);
+    expect(noSessionRes.status).toHaveBeenCalledWith(401);
+
+    // An admin acting on a buyer's behalf still gets through.
+    const adminRes = mockRes();
+    await buyerAccountController.ingestHistoricalData({ body: { period: '2_years', vendorRecords: [] }, user: adminUser }, adminRes, next);
+    expect(adminRes.json).toHaveBeenCalled();
+    expect(adminRes.status).not.toHaveBeenCalledWith(403);
   });
 
   test('catalogueController methods & error handling', async () => {
