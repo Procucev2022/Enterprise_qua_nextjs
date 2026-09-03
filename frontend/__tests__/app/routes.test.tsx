@@ -6,9 +6,11 @@ import type { RFQItem, VendorEvaluationRecord, VendorOpportunity } from '@/lib/t
 jest.mock('@/lib/store');
 
 const mockPush = jest.fn();
+const mockSearchParams = new URLSearchParams();
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockPush, replace: jest.fn() }),
   usePathname: () => '/',
+  useSearchParams: () => mockSearchParams,
 }));
 
 /**
@@ -17,13 +19,13 @@ jest.mock('next/navigation', () => ({
  * every callback lands on the correct URL and that any selection is recorded in
  * the store first.
  */
-function stub(testId: string, callbackNames: string[] = []) {
+function stub(testId: string, callbackNames: string[] = [], callbackArg?: unknown) {
   return {
     __esModule: true,
     default: (props: Record<string, unknown>) => (
       <div data-testid={testId}>
         {callbackNames.map((name) => (
-          <button key={name} type="button" onClick={() => (props[name] as (arg?: unknown) => void)?.()}>
+          <button key={name} type="button" onClick={() => (props[name] as (arg?: unknown) => void)?.(callbackArg)}>
             {`${testId}:${name}`}
           </button>
         ))}
@@ -42,7 +44,13 @@ jest.mock('@/app/buyer/command-center', () =>
   ])
 );
 jest.mock('@/app/buyer/ingestion-wizard', () => stub('ingestion-wizard', ['onComplete', 'onCancel']));
-jest.mock('@/app/buyer/rfq-summary', () => stub('rfq-summary', ['onViewQuotes', 'onCreateRFQ']));
+jest.mock('@/app/buyer/rfq-summary', () =>
+  stub('rfq-summary', ['onViewQuotes', 'onCreateRFQ', 'onViewDetails'], {
+    id: 'rfq-1',
+    rfqNumber: 'RFQ-1',
+  })
+);
+jest.mock('@/app/buyer/rfq-details', () => stub('rfq-details', ['onBack']));
 jest.mock('@/app/buyer/quote-matrix', () => stub('quote-matrix', ['onBackToDashboard']));
 jest.mock('@/app/buyer/vendor-evaluation-summary', () => stub('evaluation-summary', ['onBack']));
 jest.mock('@/app/buyer/vendor-summary', () =>
@@ -81,6 +89,7 @@ jest.mock('@/app/admin/audit-log', () => stub('audit-log', ['onBackToInfra']));
 const BuyerCommandCenterPage = require('@/app/buyer/command-center/page').default;
 const BuyerIngestionWizardPage = require('@/app/buyer/ingestion-wizard/page').default;
 const BuyerRFQSummaryPage = require('@/app/buyer/rfq-summary/page').default;
+const BuyerRFQDetailsPage = require('@/app/buyer/rfq-details/page').default;
 const BuyerQuoteMatrixPage = require('@/app/buyer/quote-matrix/page').default;
 const BuyerEvaluationSummaryPage = require('@/app/buyer/vendor-evaluation-summary/page').default;
 const BuyerVendorSummaryPage = require('@/app/buyer/vendor-summary/page').default;
@@ -196,6 +205,46 @@ describe('Role screen routes', () => {
 
       clickCallback('rfq-summary:onCreateRFQ');
       expect(mockPush).toHaveBeenCalledWith('/buyer/ingestion-wizard');
+    });
+
+    it('rfq summary opens the details page addressed by RFQ number', () => {
+      render(<BuyerRFQSummaryPage />);
+
+      clickCallback('rfq-summary:onViewDetails');
+
+      // Addressable rather than store-backed, so the view survives a reload.
+      expect(mockPush).toHaveBeenCalledWith('/buyer/rfq-details?rfq=RFQ-1');
+    });
+
+    it('rfq details resolves the RFQ from the query string and returns to the portfolio', () => {
+      mockSearchParams.set('rfq', 'RFQ-1');
+      mockStore({ rfqs: [RFQ] });
+
+      render(<BuyerRFQDetailsPage />);
+      expect(screen.getByTestId('rfq-details')).toBeInTheDocument();
+
+      clickCallback('rfq-details:onBack');
+      expect(mockPush).toHaveBeenCalledWith('/buyer/rfq-summary');
+      mockSearchParams.delete('rfq');
+    });
+
+    it('rfq details renders without an RFQ when the query string carries no number', () => {
+      mockStore({ rfqs: [RFQ] });
+
+      render(<BuyerRFQDetailsPage />);
+
+      expect(screen.getByTestId('rfq-details')).toBeInTheDocument();
+    });
+
+    it('rfq details renders when the number in the URL matches no RFQ', () => {
+      mockSearchParams.set('rfq', 'RFQ-DOES-NOT-EXIST');
+      mockStore({ rfqs: [RFQ] });
+
+      render(<BuyerRFQDetailsPage />);
+
+      // The screen itself reports the miss; the route only has to resolve to null.
+      expect(screen.getByTestId('rfq-details')).toBeInTheDocument();
+      mockSearchParams.delete('rfq');
     });
 
     it('evaluation summary clears the selection and returns to the vendor list', () => {

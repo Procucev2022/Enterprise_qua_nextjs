@@ -1,4 +1,9 @@
-import { extractLineItemsFromDocument, classifyLineItems } from '@/lib/rfqClient';
+import {
+  extractLineItemsFromDocument,
+  classifyLineItems,
+  uploadRFQAttachment,
+  rfqAttachmentUrl,
+} from '@/lib/rfqClient';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 
@@ -348,5 +353,162 @@ describe('rfqClient transport failure reporting', () => {
 
     expect(res.success).toBe(false);
     expect(res.error).toBe(formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: 503 }));
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Supporting document attachments
+//
+// Deliberately separate from extraction: on the manual path the document is
+// evidence to keep with the RFQ, so no Gemini quota is spent reading it.
+// ══════════════════════════════════════════════════════════════════════════════
+describe('rfqClient.uploadRFQAttachment', () => {
+  const originalFetch = global.fetch;
+
+  const stored = {
+    id: 'a1b2c3d4-0000-4000-8000-abcdefabcdef',
+    fileName: 'annexure.pdf',
+    mimeType: 'application/pdf',
+    size: 27,
+    uploadedAt: '2026-09-02T11:07:16.000Z',
+  };
+
+  const pdf = () => new File(['%PDF-1.4 body'], 'annexure.pdf', { type: 'application/pdf' });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    authClient.setSession(null, null);
+    jest.restoreAllMocks();
+  });
+
+  test('posts the file to the attachment endpoint and returns its metadata', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({ success: true, data: stored }),
+    });
+
+    const res = await uploadRFQAttachment(pdf());
+
+    expect(res.success).toBe(true);
+    expect(res.data).toEqual(stored);
+
+    const [path, init] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(path).toBe('/api/rfqs/attachments');
+    expect(init.method).toBe('POST');
+
+    const sent = JSON.parse(init.body);
+    expect(sent.fileName).toBe('annexure.pdf');
+    expect(sent.mimeType).toBe('application/pdf');
+    // Base64 only, with the data-URL prefix removed.
+    expect(sent.content).not.toContain('data:');
+    expect(sent.content.length).toBeGreaterThan(0);
+  });
+
+  test('attaches the session token when one is held', async () => {
+    authClient.setSession(
+      { id: 'u1', email: 'b@x.com', name: 'B', role: 'buyer', orgId: 'o1', orgName: 'O' },
+      'jwt-token'
+    );
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({ success: true, data: stored }),
+    });
+
+    await uploadRFQAttachment(pdf());
+
+    const [, init] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(init.headers.Authorization).toBe('Bearer jwt-token');
+  });
+
+  test('reports the network as unreachable rather than throwing', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error('offline'));
+
+    const res = await uploadRFQAttachment(pdf());
+
+    expect(res.success).toBe(false);
+    expect(res.error).toBe(UI_STRINGS.auth.networkUnreachable);
+  });
+
+  test('reports an unreachable API on a 5xx', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      json: async () => {
+        throw new Error('html');
+      },
+    });
+
+    const res = await uploadRFQAttachment(pdf());
+
+    expect(res.success).toBe(false);
+    expect(res.error).toBe(formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: 502 }));
+  });
+
+  test('surfaces the refusal the server gave', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      json: async () => ({ success: false, reason: 'UNSUPPORTED_TYPE', error: 'That file type cannot be attached.' }),
+    });
+
+    const res = await uploadRFQAttachment(pdf());
+
+    expect(res.success).toBe(false);
+    expect(res.error).toBe('That file type cannot be attached.');
+  });
+
+  test('falls back to a generic message when the server sends none', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      json: async () => ({ success: false }),
+    });
+
+    const res = await uploadRFQAttachment(pdf());
+
+    expect(res.error).toBe(UI_STRINGS.rfqExtraction.attachUnreachable);
+  });
+
+  test('reports an unparseable reply', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => {
+        throw new Error('not json');
+      },
+    });
+
+    const res = await uploadRFQAttachment(pdf());
+
+    expect(res.success).toBe(false);
+    expect(res.error).toBe(UI_STRINGS.rfqExtraction.attachUnreachable);
+  });
+
+  // A file the browser cannot read must not be reported as a server fault.
+  test('reports a file that cannot be read', async () => {
+    global.fetch = jest.fn();
+    jest.spyOn(FileReader.prototype, 'readAsDataURL').mockImplementation(function (this: FileReader) {
+      this.onerror?.(new ProgressEvent('error') as ProgressEvent<FileReader>);
+    });
+
+    const res = await uploadRFQAttachment(pdf());
+
+    expect(res.success).toBe(false);
+    expect(res.error).toBe(UI_STRINGS.rfqExtraction.attachUnreachable);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('rfqAttachmentUrl', () => {
+  test('addresses a stored document by id', () => {
+    expect(rfqAttachmentUrl('a1b2c3d4-0000-4000-8000-abcdefabcdef')).toBe(
+      '/api/rfqs/attachments/a1b2c3d4-0000-4000-8000-abcdefabcdef'
+    );
+  });
+
+  test('encodes an id so it cannot alter the path', () => {
+    expect(rfqAttachmentUrl('../secret')).toBe('/api/rfqs/attachments/..%2Fsecret');
   });
 });

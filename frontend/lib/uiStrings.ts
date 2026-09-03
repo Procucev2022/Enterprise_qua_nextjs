@@ -231,20 +231,36 @@ export const UI_STRINGS = {
     apiUnavailable:
       'The RFQ service is not responding (HTTP {status}), so the document could not be sent for extraction. It may be restarting — wait a moment and retry. You can add the line items manually to carry on in the meantime.',
 
+    // Step 2 line-item table placeholders. A row added by hand starts completely
+    // blank, so each field states what belongs in it.
+    itemNamePlaceholder: 'Item name, with any size or model that identifies it',
+    itemSpecsPlaceholder: 'Material grade, standard, class or rating',
+    itemQtyPlaceholder: 'Qty',
+    itemUnitPlaceholder: 'e.g. Nos',
+    categoryPlaceholder: 'Select major category',
+    minorCategoryPlaceholder: 'Select minor category',
+    confidenceUnset: '—',
+
     // Step 2 empty state
     emptyTitle: 'No Line Items Yet',
     emptyMessage: 'Add at least one line item so vendors have something to quote against.',
     addFirstItemAction: 'Add First Line Item',
     incompleteItemsTitle: 'Line Items Incomplete',
-    incompleteItemsMessage: 'Give every line item a description before choosing a sourcing mode.',
+    incompleteItemsMessage:
+      'Every line item needs a description, a quantity above zero, a unit and both categories before you can choose a sourcing mode. Vendors quote against these, so a blank field cannot be dispatched.',
 
     // Step 2 RFQ header fields
     budgetLabel: 'Estimated Budget ({symbol})',
+    budgetOptionalTag: 'Optional',
     budgetFromDocumentHint: 'Read from {fileName}. Edit it if the document under-states the true value.',
-    budgetMissingHint: 'No value was stated in the document. Enter your estimated budget before saving.',
-    budgetRequiredTitle: 'Estimated Budget Required',
-    budgetRequiredMessage:
-      'Enter an estimated budget above zero. Vendors are ranked against it, so the RFQ cannot be saved without one.',
+    budgetMissingHint: 'Optional. Leave it at zero if you would rather not publish a ceiling to vendors.',
+    deliveryLocationLabel: 'Delivery Location',
+    deliveryLocationPlaceholder: 'Plant, warehouse or site address',
+    deliveryPincodeLabel: 'Pincode / Zipcode',
+    deliveryPincodePlaceholder: 'e.g. 400701',
+    deliveryPincodeInvalidTitle: 'Check the Pincode',
+    deliveryPincodeInvalidMessage:
+      'Enter a valid pincode or zipcode of 3 to 10 letters, digits, spaces or hyphens, or clear the field.',
 
     /**
      * Step strip. Rendered in order, and a step only becomes reachable once the
@@ -288,6 +304,27 @@ export const UI_STRINGS = {
     stepLockedReviewMessage: 'Review the line items and give each one a description before choosing a sourcing mode.',
     stepLockedHint: 'Complete the previous step',
 
+    // Step 1 manual intake
+    manualMethodLabel: 'Manual RFQ Entry',
+    manualStartAction: 'Continue to Line Items',
+    manualHint: 'You will add each line item and its minor category in Step 2.',
+    manualBannerTitle: 'Manual Entry',
+    manualBannerMessage: 'These line items were keyed by hand, so no AI confidence is reported against them.',
+
+    // Step 1 manual attachments. Stored and shown back verbatim; never extracted.
+    attachTitle: 'Supporting Documents',
+    attachMessage:
+      'Attach a drawing, specification sheet or indent form to the RFQ. These are stored with the RFQ for reference and are not read by AI — you key the line items yourself on the next step.',
+    attachAction: 'Choose Files',
+    attachingLabel: 'Attaching…',
+    attachedHeading: 'Attached ({count})',
+    attachRemoveAria: 'Remove {fileName} from this RFQ',
+    attachFailedTitle: 'Document Not Attached',
+    attachLimitTitle: 'Attachment Limit Reached',
+    attachLimitMessage: 'An RFQ can carry up to {max} supporting documents. Remove one before adding another.',
+    attachUnreachable:
+      'The document could not be uploaded because the RFQ service did not respond. Try again in a moment.',
+
     // Step 3 vendor placeholder
     vendorComingSoonTitle: 'Vendor Matching & Dispatch — Coming Soon',
     vendorComingSoonMessage:
@@ -295,6 +332,100 @@ export const UI_STRINGS = {
     vendorComingSoonBadge: 'In Development',
     dispatchAction: 'Save RFQ with Selected Sourcing Mode',
     dispatchSummary: '{rfqNumber} — {itemCount} categorised line items will be saved under {modeCode}.',
+  },
+
+  /** Buyer RFQ Details (Screen 1.4) — everything submitted for one RFQ. */
+  rfqDetails: {
+    backAction: 'Back to RFQ Portfolio',
+    notFoundTitle: 'RFQ Not Found',
+    notFoundMessage:
+      'This RFQ is no longer in your portfolio. It may have been raised in a previous session before the records were reloaded.',
+
+    // Provenance strip
+    documentTypeBadge: 'Request for Quotation (RFQ)',
+    auditImmutable: 'Audit Immutable',
+    raisedOnStrip: 'Raised {timestamp}',
+
+    // Header & submission provenance
+    submittedHeading: 'Submission Detail',
+    sourceLabel: 'Intake Source',
+    sourceFileLabel: 'Source Document',
+    sourceEmailLabel: 'Source Email',
+    createdLabel: 'Raised On',
+    referenceLabel: 'Record ID',
+
+    // Commercial & logistics
+    commercialHeading: 'Commercial & Delivery',
+    categoryLabel: 'Major Category',
+    budgetLabel: 'Estimated Budget',
+    targetDateLabel: 'Target Delivery',
+    statusLabel: 'Current Status',
+    deliveryLocationLabel: 'Delivery Location',
+    deliveryPincodeLabel: 'PIN: {pincode}',
+    unsetValue: 'Not provided',
+    daysRemaining: '{days} days remaining',
+    dueToday: 'Due today',
+    overdueBy: 'Overdue by {days} days',
+
+    // Line items
+    lineItemsHeading: 'Line Items',
+    lineItemsSubtitle: 'Package requirement specification',
+    lineItemSearchPlaceholder: 'Search line items…',
+    lineItemSearchAria: 'Search the line items of this RFQ',
+    allMinorCategories: 'All Minor Categories',
+    minorFilterAria: 'Filter line items by minor category',
+    exportCsvAction: 'Export CSV',
+    exportCsvAria: 'Download the line items of {rfqNumber} as CSV',
+    colItem: 'Item Description',
+    colSpecs: 'Technical Specification',
+    colMajor: 'Major Category',
+    colMinor: 'Minor Category',
+    colQty: 'Qty',
+    colUnit: 'Unit',
+    colTargetDate: 'Required By',
+    colConfidence: 'Confidence',
+    noLineItems: 'No line items were recorded against this RFQ.',
+    noLineItemMatches: 'No line items match the current search and filter.',
+    manualConfidence: 'Keyed manually',
+    confidenceHigh: '{confidence}% High Confidence',
+    confidenceReview: '{confidence}% Needs Review',
+    displayingCount: 'Displaying {shown} of {total} line items',
+    parsedSuccessfully: '{percent}% classified automatically',
+
+    // Quotes
+    quotesHeading: 'Vendor Quotations',
+    quotesTabAll: 'All Quotes ({count})',
+    quotesTabUnderReview: 'Under Review ({count})',
+    quotesTabShortlisted: 'Shortlisted ({count})',
+    colVendor: 'Vendor',
+    colUnitPrice: 'Unit Price',
+    colTotalPrice: 'Total',
+    colLeadTime: 'Lead Time',
+    colMatchScore: 'AI Match',
+    colCompliance: 'Compliance',
+    leadTimeDays: '{days} days',
+    noQuotes: 'No vendor quotations have been received yet.',
+    noQuotesMessage:
+      'Vendor matching and standard RFQ email dispatch are being rebuilt on the new sourcing engine, so this RFQ has not yet been circulated. Quotations will appear here once it goes live.',
+    noQuotesTabMessage: 'No quotations are in this state yet.',
+
+    // Attachments
+    attachmentsHeading: 'Supporting Documents',
+    attachmentViewAction: 'View',
+    attachmentViewAria: 'Open {fileName} in a new tab',
+    attachmentUploadedOn: 'Attached {date}',
+    noAttachments: 'No supporting documents were attached to this RFQ.',
+
+    // Follow-ups
+    followUpsHeading: 'Multi-Channel Follow-Ups',
+    followUpsTag: 'Outreach Analytics',
+    invitedLabel: 'Vendors Invited',
+    respondedLabel: 'Vendors Responded',
+    callsLabel: 'Calls Connected',
+    whatsappLabel: 'WhatsApp Read',
+    smsLabel: 'SMS Delivered',
+    awaitingTrigger: 'Awaiting initial trigger',
+    noFollowUps: 'Vendor matching and dispatch are still to come for this RFQ, so there is nothing to chase yet.',
   },
 
   rfqSummary: {
@@ -345,6 +476,9 @@ export const UI_STRINGS = {
     chasingActive: 'Chasers running',
     deliveryDateUnset: 'Not set',
     ofInvited: 'of {invited} invited',
+    budgetUnset: 'Not set',
+    detailsAction: 'View Details',
+    viewDetailsAria: 'View the full submitted detail for {rfqNumber}',
     followUpsAction: 'Follow-ups',
     quotesAction: 'Quotes',
     viewFollowUpsAria: 'View multi-channel follow-up detail for {rfqNumber}',

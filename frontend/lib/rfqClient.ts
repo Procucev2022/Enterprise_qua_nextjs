@@ -2,6 +2,8 @@ import { authClient } from './authClient';
 import { UI_STRINGS, formatString } from './uiStrings';
 import type {
   ExtractedEntity,
+  RFQAttachment,
+  RFQAttachmentResult,
   RFQExtractionRequest,
   RFQExtractionResult,
   RFQIngestionResponse,
@@ -128,6 +130,76 @@ export async function classifyLineItems(items: ExtractedEntity[]): Promise<RFQIn
   return { success: true, data: body.data, classification: body.classification };
 }
 
-const rfqClient = { extractLineItemsFromDocument, classifyLineItems };
+/** Where a stored attachment is served from, used directly as a link target. */
+export function rfqAttachmentUrl(attachmentId: string): string {
+  return `/api/rfqs/attachments/${encodeURIComponent(attachmentId)}`;
+}
+
+/**
+ * Store a supporting document against an RFQ.
+ *
+ * Deliberately separate from `extractLineItemsFromDocument`: this is the manual
+ * path, where the document is evidence to keep rather than something to read, so
+ * no extraction is performed and no Gemini quota is spent.
+ */
+export async function uploadRFQAttachment(file: File): Promise<RFQAttachmentResult> {
+  const token = authClient.getToken();
+
+  let content: string;
+  try {
+    content = await readFileAsBase64(file);
+  } catch {
+    return { success: false, error: UI_STRINGS.rfqExtraction.attachUnreachable };
+  }
+
+  let res: Response;
+  try {
+    res = await fetch('/api/rfqs/attachments', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      // The browser leaves `type` empty for some uploads; the server allow-list
+      // rejects an unrecognised value, which is the outcome we want.
+      body: JSON.stringify({ fileName: file.name, mimeType: file.type, content }),
+    });
+  } catch {
+    return { success: false, error: UI_STRINGS.auth.networkUnreachable };
+  }
+
+  if (res.status >= 500) {
+    return { success: false, error: formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: res.status }) };
+  }
+
+  let body: { success?: boolean; data?: RFQAttachment; error?: string } = {};
+  try {
+    body = await res.json();
+  } catch {
+    return { success: false, error: UI_STRINGS.rfqExtraction.attachUnreachable };
+  }
+
+  if (!res.ok || !body.success || !body.data) {
+    return { success: false, error: body.error || UI_STRINGS.rfqExtraction.attachUnreachable };
+  }
+
+  return { success: true, data: body.data };
+}
+
+/** Read a file as the base64 body the upload endpoint accepts. */
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('read failed'));
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      // Strip the "data:<mime>;base64," prefix the API does not expect.
+      resolve(result.slice(result.indexOf(',') + 1));
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+const rfqClient = { extractLineItemsFromDocument, classifyLineItems, uploadRFQAttachment, rfqAttachmentUrl };
 
 export default rfqClient;

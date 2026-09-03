@@ -12,7 +12,9 @@
  * @property {string} intakeSource
  * @property {string} creationDate
  * @property {string} targetDeliveryDate
- * @property {number} budget
+ * @property {number} budget optional ceiling; 0 means the buyer stated none
+ * @property {string} [deliveryLocation] where the goods must be delivered
+ * @property {string} [deliveryPincode] postal code for the delivery location
  * @property {number} quotesCount
  * @property {string} status
  * @property {boolean} chasingActive

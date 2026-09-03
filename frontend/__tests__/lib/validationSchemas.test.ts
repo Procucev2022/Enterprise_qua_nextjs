@@ -5,6 +5,7 @@ import {
   GSTIN_PATTERN,
   PHONE_PATTERN,
   INDIAN_MOBILE_PATTERN,
+  PINCODE_PATTERN,
   FormSchema,
 } from '../../lib/validationSchemas';
 import { UI_STRINGS } from '../../lib/uiStrings';
@@ -204,3 +205,65 @@ describe('Frontend validationSchemas Unit Tests', () => {
   });
 });
 
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Delivery pincode / zipcode
+//
+// Deliberately broader than an Indian six-digit PIN: the same field carries
+// international zipcodes for export orders.
+// ══════════════════════════════════════════════════════════════════════════════
+describe('PINCODE_PATTERN', () => {
+  test.each([
+    ['400701', 'Indian six-digit PIN'],
+    ['110 001', 'PIN written with a space'],
+    ['SW1A 1AA', 'UK postcode'],
+    ['12345-6789', 'US ZIP+4'],
+    ['751', 'short three-character code'],
+  ])('accepts %s (%s)', (value) => {
+    expect(PINCODE_PATTERN.test(value)).toBe(true);
+  });
+
+  test.each([
+    ['', 'empty string'],
+    ['40', 'shorter than three characters'],
+    ['-400701', 'leading separator'],
+    ['400!701', 'punctuation'],
+    ['12345678901', 'longer than ten characters'],
+  ])('rejects %s (%s)', (value) => {
+    expect(PINCODE_PATTERN.test(value)).toBe(false);
+  });
+});
+
+describe('rfqIngestion schema', () => {
+  // Optional so a document that prices nothing can still be saved.
+  test('accepts a payload with no budget', () => {
+    const { isValid } = validateFormData(FORM_SCHEMAS.rfqIngestion, {
+      title: 'Procurement of Bearing Housings',
+      category: 'Engineering Spares - Mechanical',
+      targetDeliveryDate: '2026-10-05',
+    });
+    expect(isValid).toBe(true);
+  });
+
+  test('rejects a negative budget', () => {
+    const { isValid, fieldErrors } = validateFormData(FORM_SCHEMAS.rfqIngestion, {
+      title: 'Procurement of Bearing Housings',
+      category: 'Engineering Spares - Mechanical',
+      targetDeliveryDate: '2026-10-05',
+      budget: -1,
+    });
+    expect(isValid).toBe(false);
+    expect(fieldErrors.budget).toBeDefined();
+  });
+
+  test('rejects a malformed delivery pincode', () => {
+    const { isValid, fieldErrors } = validateFormData(FORM_SCHEMAS.rfqIngestion, {
+      title: 'Procurement of Bearing Housings',
+      category: 'Engineering Spares - Mechanical',
+      targetDeliveryDate: '2026-10-05',
+      deliveryPincode: '!!',
+    });
+    expect(isValid).toBe(false);
+    expect(fieldErrors.deliveryPincode).toBe(UI_STRINGS.rfqExtraction.deliveryPincodeInvalidMessage);
+  });
+});
