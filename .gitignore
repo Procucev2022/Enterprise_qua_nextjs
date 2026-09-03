@@ -36,6 +36,9 @@ dist/
 *.key
 *.cert
 
+# Buyer-uploaded RFQ documents. Content only, never code.
+uploads/
+
 # Logs & Diagnostics
 *.log
 npm-debug.log*

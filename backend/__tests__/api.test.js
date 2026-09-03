@@ -237,6 +237,78 @@ describe('API Route Endpoints', () => {
       testRfqId = res.body.data.id;
     });
 
+    // Vendors price freight against these, so they have to round-trip rather than
+    // being dropped the way budget silently was.
+    test('POST /api/rfqs persists the delivery location and pincode', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({
+          title: 'Procurement of Bearing Housings',
+          category: 'Engineering Spares - Mechanical',
+          budget: 90000,
+          targetDeliveryDate: '2026-10-05',
+          sourcingMode: 'mode_1',
+          deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+          deliveryPincode: '400701',
+        });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body.data.deliveryLocation).toBe('Navi Mumbai Plant, Gate 3');
+      expect(res.body.data.deliveryPincode).toBe('400701');
+      expect(res.body.data.budget).toBe(90000);
+    });
+
+    // The budget is optional: a document that prices nothing yields no figure, and
+    // requiring one only made buyers invent a ceiling vendors would quote against.
+    test('POST /api/rfqs accepts an RFQ with no budget', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({
+          title: 'Procurement of Unpriced Spares',
+          category: 'Engineering Spares - Mechanical',
+          targetDeliveryDate: '2026-10-05',
+          sourcingMode: 'mode_1',
+        });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body.data.budget).toBe(0);
+      expect(res.body.data.deliveryLocation).toBe('');
+    });
+
+    test('POST /api/rfqs rejects a malformed pincode', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({
+          title: 'Procurement of Bearing Housings',
+          category: 'Engineering Spares - Mechanical',
+          targetDeliveryDate: '2026-10-05',
+          sourcingMode: 'mode_1',
+          deliveryPincode: '!!',
+        });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.fieldErrors.deliveryPincode).toMatch(/pincode/i);
+    });
+
+    test('POST /api/rfqs accepts an international zipcode', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({
+          title: 'Export Order for Valves',
+          category: 'Engineering Spares - Mechanical',
+          targetDeliveryDate: '2026-10-05',
+          sourcingMode: 'mode_1',
+          deliveryPincode: 'SW1A 1AA',
+        });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body.data.deliveryPincode).toBe('SW1A 1AA');
+    });
+
     test('POST /api/rfqs requires authentication', async () => {
       const res = await request(app).post('/api/rfqs').send({ title: 'Unauthenticated RFQ' });
       expect(res.statusCode).toBe(401);

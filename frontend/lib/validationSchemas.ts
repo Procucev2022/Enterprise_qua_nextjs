@@ -17,6 +17,16 @@ export const PHONE_PATTERN = /^[+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{7,15}$/;
  */
 export const INDIAN_MOBILE_PATTERN = /^(?:\+?91[-\s]?|0)?[6-9]\d{9}$/;
 
+/**
+ * Delivery pincode or zipcode.
+ *
+ * Deliberately broader than an Indian six-digit PIN: the same field carries
+ * international zipcodes for export orders, which are alphanumeric and may
+ * contain a space or hyphen (for example SW1A 1AA or 12345-6789). It must still
+ * start with a letter or digit so a stray separator is rejected.
+ */
+export const PINCODE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9\s-]{2,9}$/;
+
 export interface FieldRule {
   required?: boolean;
   type?: 'string' | 'number' | 'array';
@@ -46,8 +56,17 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
   rfqIngestion: {
     title: { required: true, minLength: 3, maxLength: 200, message: 'Title must be between 3 and 200 characters' },
     category: { required: true, message: 'Category selection is required' },
-    budget: { required: true, type: 'number', min: 1, message: 'Estimated budget must be greater than zero' },
+    // Optional: a document that prices nothing yields no figure, and a required
+    // budget forced the buyer to invent a ceiling that vendors would then quote
+    // against. Zero is accepted and rendered as "not set" rather than as ₹0.
+    budget: { required: false, type: 'number', min: 0, message: 'Estimated budget cannot be negative' },
     targetDeliveryDate: { required: true, message: 'Target delivery date is required' },
+    deliveryLocation: { required: false, maxLength: 200, message: 'Delivery location must be 200 characters or fewer' },
+    deliveryPincode: {
+      required: false,
+      pattern: PINCODE_PATTERN,
+      message: UI_STRINGS.rfqExtraction.deliveryPincodeInvalidMessage,
+    },
   },
 
   vendorQualification: {

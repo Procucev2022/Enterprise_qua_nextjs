@@ -59,6 +59,7 @@ describe('Buyer RFQ Summary (Screen 1.3)', () => {
   const openRFQDeepDive = jest.fn();
   const onViewQuotes = jest.fn();
   const onCreateRFQ = jest.fn();
+  const onViewDetails = jest.fn();
 
   const mockStore = (rfqs: RFQItem[]) => {
     (useApp as jest.Mock).mockReturnValue({
@@ -71,7 +72,9 @@ describe('Buyer RFQ Summary (Screen 1.3)', () => {
 
   const renderScreen = (rfqs: RFQItem[]) => {
     mockStore(rfqs);
-    return render(<RFQSummary onViewQuotes={onViewQuotes} onCreateRFQ={onCreateRFQ} />);
+    return render(
+      <RFQSummary onViewQuotes={onViewQuotes} onCreateRFQ={onCreateRFQ} onViewDetails={onViewDetails} />
+    );
   };
 
   /** Data rows only, excluding the header row. */
@@ -204,6 +207,8 @@ describe('Buyer RFQ Summary (Screen 1.3)', () => {
             technicalSpecs: 'IP54',
             confidence: 97,
             category: 'Panels',
+            majorCategory: 'Engineering Spares - Electrical',
+            minorCategory: 'Panels',
           },
         ],
       }),
@@ -472,5 +477,56 @@ describe('Buyer RFQ Summary (Screen 1.3)', () => {
       fireEvent.change(screen.getByLabelText(RFQ.searchLabel), { target: { value: 'nothing-matches' } });
       expect(screen.queryByRole('button', { name: RFQ.nextPageAria })).not.toBeInTheDocument();
     });
+  });
+});
+
+describe('Buyer RFQ Summary: details action and unset budget', () => {
+  const onViewQuotes = jest.fn();
+  const onCreateRFQ = jest.fn();
+  const onViewDetails = jest.fn();
+
+  const renderWith = (rfqs: RFQItem[]) => {
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs,
+      showToast: jest.fn(),
+      setSelectedRFQForMatrix: jest.fn(),
+      openRFQDeepDive: jest.fn(),
+    });
+    return render(
+      <RFQSummary onViewQuotes={onViewQuotes} onCreateRFQ={onCreateRFQ} onViewDetails={onViewDetails} />
+    );
+  };
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('hands the row through when View Details is pressed', () => {
+    const rfq = buildRFQ({ rfqNumber: 'RFQ-2026-00462' });
+    renderWith([rfq]);
+
+    fireEvent.click(
+      screen.getByRole('button', { name: formatString(RFQ.viewDetailsAria, { rfqNumber: rfq.rfqNumber }) })
+    );
+
+    expect(onViewDetails).toHaveBeenCalledWith(rfq);
+  });
+
+  /** The row cell, scoped so the KPI strip's own currency is not matched. */
+  const budgetCell = () => screen.getAllByRole('row')[1];
+
+  // Zero means the buyer stated no ceiling, which must not read as a real budget
+  // of nil now that the field is optional.
+  it('shows an unstated budget as not set rather than as zero', () => {
+    renderWith([buildRFQ({ budget: 0 })]);
+
+    expect(within(budgetCell()).getByText(RFQ.budgetUnset)).toBeInTheDocument();
+    expect(within(budgetCell()).queryByText(formatCurrency(0))).not.toBeInTheDocument();
+  });
+
+  it('still formats a stated budget as currency', () => {
+    renderWith([buildRFQ({ budget: 145000 })]);
+
+    expect(within(budgetCell()).getByText(formatCurrency(145000))).toBeInTheDocument();
   });
 });

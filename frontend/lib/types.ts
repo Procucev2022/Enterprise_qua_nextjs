@@ -22,8 +22,15 @@ export interface ExtractedEntity {
   technicalSpecs: string;
   confidence: number;
   category: string;
-  majorCategory?: string;
-  minorCategory?: string;
+  /**
+   * Required rather than optional: every producer sets both. Extraction gets them
+   * from the taxonomy classifier, and a row keyed by hand starts with empty
+   * strings that the Step 3 gate refuses to dispatch. Leaving them optional meant
+   * the RFQ header category had to carry an unreachable fallback to satisfy the
+   * type, which hid the fact that the gate already guarantees a value.
+   */
+  majorCategory: string;
+  minorCategory: string;
 }
 
 export interface LineItemBid {
@@ -132,6 +139,21 @@ export interface RFQFollowUpBreakdown {
 
 export type RFQSource = 'email_gateway' | 'web_portal' | 'email_upload' | 'manual_entry';
 
+/**
+ * A supporting document attached to an RFQ.
+ *
+ * Metadata only. The bytes live on the server and are fetched by `id`, because a
+ * 10MB PDF is roughly 13MB of base64 and the bootstrap payload carries every RFQ.
+ */
+export interface RFQAttachment {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  /** Decoded size in bytes. */
+  size: number;
+  uploadedAt: string;
+}
+
 export interface RFQItem {
   id: string;
   rfqNumber: string;
@@ -141,7 +163,18 @@ export interface RFQItem {
   status: 'Parsing' | 'In Evaluation' | 'AI Recommended' | 'PO Generated' | 'Quotes Pending';
   quotesCount: number;
   targetDeliveryDate: string;
+  /**
+   * Budget ceiling, optional. Zero means the buyer did not state one: a document
+   * that prices nothing yields no figure, and forcing a number there would put a
+   * fabricated ceiling in front of vendors.
+   */
   budget: number;
+  /** Where the goods must be delivered, used by vendors to price freight. */
+  deliveryLocation?: string;
+  /** Postal code for the delivery location. Indian PIN or an international zip. */
+  deliveryPincode?: string;
+  /** Supporting documents the buyer attached. Never sent for AI extraction. */
+  attachments?: RFQAttachment[];
   createdAt: string;
   extractedEntities: ExtractedEntity[];
   quotes: QuoteComparison[];
@@ -699,6 +732,13 @@ export interface RFQExtractionResult {
   classification?: RFQIngestionClassification;
   extraction?: RFQExtractionMeta;
   reason?: RFQExtractionReason;
+  error?: string;
+}
+
+/** Outcome of storing one supporting document. */
+export interface RFQAttachmentResult {
+  success: boolean;
+  data?: RFQAttachment;
   error?: string;
 }
 

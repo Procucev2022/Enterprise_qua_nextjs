@@ -21,6 +21,7 @@ import {
   ChevronRight,
   Plus,
   Eye,
+  FileText,
 } from 'lucide-react';
 
 const SCREEN = UI_STRINGS.screens.rfqSummary;
@@ -38,6 +39,8 @@ export interface RFQSummaryProps {
   onViewQuotes: (rfq: RFQItem) => void;
   /** Start a new RFQ in the ingestion wizard. */
   onCreateRFQ: () => void;
+  /** Open the full submitted detail for one RFQ. */
+  onViewDetails: (rfq: RFQItem) => void;
 }
 
 /**
@@ -48,7 +51,7 @@ export interface RFQSummaryProps {
  * every figure from the same `rfqs` collection the table renders, so the headline
  * numbers can never drift from the rows beneath them.
  */
-export default function RFQSummary({ onViewQuotes, onCreateRFQ }: RFQSummaryProps) {
+export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }: RFQSummaryProps) {
   const {
     rfqs,
     showToast,
@@ -165,15 +168,11 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ }: RFQSummaryProp
   const modeBadge = (modeId: SourcingMode) => {
     const mode = SOURCING_MODES.find((m) => m.id === modeId);
     if (!mode) return null;
+    // badgeColor is a Tailwind class string, so it is applied as a class. Feeding
+    // it to style={{ backgroundColor }} produced invalid CSS that the browser
+    // dropped, leaving the mode badge unstyled.
     return (
-      <span
-        className="px-2 py-0.5 rounded text-[10px] font-bold tracking-wide"
-        style={{
-          backgroundColor: `${mode.badgeColor}15`,
-          color: mode.badgeColor,
-          border: `1px solid ${mode.badgeColor}35`,
-        }}
-      >
+      <span className={`px-2 py-0.5 rounded border text-[10px] font-bold tracking-wide ${mode.badgeColor}`}>
         {mode.code}
       </span>
     );
@@ -482,10 +481,26 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ }: RFQSummaryProp
                         </span>
                       )}
                     </td>
-                    <td className="p-3 align-top text-right mono font-semibold">{formatCurrency(rfq.budget || 0)}</td>
+                    {/* A zero budget means none was stated, so it reads as unset
+                        rather than as a real ceiling of nil. */}
+                    <td className="p-3 align-top text-right mono font-semibold">
+                      {rfq.budget > 0 ? (
+                        formatCurrency(rfq.budget)
+                      ) : (
+                        <span className="text-slate-400 dark:text-gray-500 font-normal">{RFQ.budgetUnset}</span>
+                      )}
+                    </td>
                     <td className="p-3 align-top">{rfq.targetDeliveryDate || RFQ.deliveryDateUnset}</td>
                     <td className="p-3 align-top">
                       <div className="flex items-center justify-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => onViewDetails(rfq)}
+                          className="btn btn-secondary btn-xs font-bold flex items-center gap-1"
+                          aria-label={formatString(RFQ.viewDetailsAria, { rfqNumber: rfq.rfqNumber })}
+                        >
+                          <FileText size={11} /> {RFQ.detailsAction}
+                        </button>
                         <button
                           type="button"
                           onClick={() => openRFQDeepDive(rfq)}

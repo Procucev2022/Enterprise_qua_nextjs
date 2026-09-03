@@ -3,13 +3,20 @@
 import React, { useState, useRef, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { useApp } from '@/lib/store';
-import { SOURCING_MODES, CURRENCY, MANUAL_LINE_ITEM_DEFAULTS } from '@/lib/constants';
+import {
+  SOURCING_MODES,
+  CURRENCY,
+  MANUAL_LINE_ITEM_DEFAULTS,
+  PINCODE_PATTERN,
+  formatFileSize,
+} from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { extractLineItemsFromDocument, classifyLineItems } from '@/lib/rfqClient';
+import { extractLineItemsFromDocument, classifyLineItems, uploadRFQAttachment } from '@/lib/rfqClient';
 import type {
   SourcingMode,
   ExtractedEntity,
   VendorEntry,
+  RFQAttachment,
   RFQExtractionRequest,
   RFQExtractionResult,
 } from '@/lib/types';
@@ -31,12 +38,17 @@ import {
   AlertCircle,
   Zap,
   Lock,
+  Pencil,
+  MapPin,
+  Paperclip,
 } from 'lucide-react';
 
 
 const EXTRACTION = UI_STRINGS.rfqExtraction;
 const WIZARD_STEPS = EXTRACTION.steps;
 const TAXONOMY_MAJORS = categoriesData.map((cat) => cat.majorCategory);
+/** Mirrors RFQ_ATTACHMENT_CONFIG.MAX_PER_RFQ on the server. */
+const MAX_ATTACHMENTS = 10;
 
 /**
  * Option list for a taxonomy dropdown that must be able to display whatever the
@@ -49,6 +61,9 @@ function withCurrentValue(options: string[], current: string | undefined): strin
   if (!current || options.includes(current)) return options;
   return [current, ...options];
 }
+
+/** How the buyer is supplying the requirement on Step 1. */
+type IngestionMethod = 'upload' | 'email' | 'manual';
 
 interface IngestionWizardProps {
   onComplete: () => void;
@@ -99,7 +114,11 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
   const [isProcessingDoc, setIsProcessingDoc] = useState(false);
   const [isCategorizing, setIsCategorizing] = useState(false);
   const [uploadedFileName, setUploadedFileName] = useState<string>('');
-  const [ingestionMethod, setIngestionMethod] = useState<'upload' | 'email'>('upload');
+  const [ingestionMethod, setIngestionMethod] = useState<IngestionMethod>('upload');
+  // Manual entry has no extraction to complete, so Step 1 needs its own signal
+  // that the buyer has chosen to proceed. Without it the step strip would stay
+  // locked and there would be no way to reach the line-item table.
+  const [manualEntryStarted, setManualEntryStarted] = useState(false);
   const [uploadTab, setUploadTab] = useState<'boq' | 'email_file'>('boq');
   const [isDraggingDoc, setIsDraggingDoc] = useState(false);
 
@@ -131,6 +150,16 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
   // dispatched to vendors as though the buyer had approved it.
   const [budget, setBudget] = useState(0);
   const [budgetFromDocument, setBudgetFromDocument] = useState(false);
+
+  // Delivery details the buyer supplies; vendors price freight against them.
+  const [deliveryLocation, setDeliveryLocation] = useState('');
+  const [deliveryPincode, setDeliveryPincode] = useState('');
+
+  // Supporting documents on the manual path. Stored server-side and kept with the
+  // RFQ for reference; never sent for extraction.
+  const [attachments, setAttachments] = useState<RFQAttachment[]>([]);
+  const [isAttaching, setIsAttaching] = useState(false);
+  const attachInputRef = useRef<HTMLInputElement>(null);
 
   // Line item entities state
   // Populated only by AI extraction or by the buyer adding rows on Step 2.
@@ -249,6 +278,70 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
     setActiveStep(2);
   };
 
+  /**
+   * Attach supporting documents on the manual path.
+   *
+   * No extraction is attempted and no Gemini quota is spent: on this path the
+   * buyer is keying the line items, and the document is evidence to keep with the
+   * RFQ. Each file is uploaded as it is chosen so a rejection is reported against
+   * the file that caused it rather than as one opaque failure at the end.
+   */
+  const handleAttachDocuments = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+
+    const room = MAX_ATTACHMENTS - attachments.length;
+    if (room <= 0) {
+      showToast(
+        EXTRACTION.attachLimitTitle,
+        formatString(EXTRACTION.attachLimitMessage, { max: MAX_ATTACHMENTS }),
+        'warning'
+      );
+      return;
+    }
+
+    setIsAttaching(true);
+    try {
+      for (const file of Array.from(files).slice(0, room)) {
+        const result = await uploadRFQAttachment(file);
+        if (result.success && result.data) {
+          const stored = result.data;
+          setAttachments((prev) => [...prev, stored]);
+        } else {
+          showToast(EXTRACTION.attachFailedTitle, result.error || EXTRACTION.attachUnreachable, 'warning');
+        }
+      }
+    } finally {
+      setIsAttaching(false);
+      // Cleared so choosing the same file again still raises a change event.
+      if (attachInputRef.current) attachInputRef.current.value = '';
+    }
+  };
+
+  const handleRemoveAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+  };
+
+  /**
+   * Step 1 manual path: skip extraction entirely and open the review step with
+   * one empty row ready to type into.
+   *
+   * Nothing is pre-filled beyond the structural defaults, and no extraction
+   * banner is shown, because there was no document and therefore no AI outcome to
+   * report. The rest of the wizard is unchanged: the same categorisation, the
+   * same sourcing-mode gate and the same dispatch.
+   */
+  const handleStartManualRFQ = () => {
+    setUploadedFile(null);
+    setUploadedFileName('');
+    setExtractionError(null);
+    setExtractionSummary(null);
+    setBudget(0);
+    setBudgetFromDocument(false);
+    setEntities([blankLineItem()]);
+    setManualEntryStarted(true);
+    setActiveStep(2);
+  };
+
   /** Step 1 primary action: extract line items from the staged document. */
   const handleExtractDocument = async () => {
     if (!uploadedFile) {
@@ -294,9 +387,11 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
         if (item.id !== id) return item;
         const updated = { ...item, [field]: value };
         if (field === 'majorCategory') {
-          // Reset minor category if major changed
+          // The minor category belongs to the major, so changing one invalidates
+          // the other. Falls back to '' rather than undefined so a row with no
+          // major reads as unset and the Step 3 gate can see it.
           const validMinors = categoriesData.find((c) => c.majorCategory === value)?.minorCategories ?? [];
-          updated.minorCategory = validMinors[0];
+          updated.minorCategory = validMinors[0] ?? '';
           updated.category = value;
         }
         return updated;
@@ -367,22 +462,31 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
    * the category dropdowns start on the first taxonomy entry so the row is always
    * classified against something the buyer can see and change.
    */
+  /**
+   * A row the buyer adds by hand, with every field genuinely empty.
+   *
+   * Defaults used to be pre-filled here — quantity 1, unit Nos, a target date and
+   * the first taxonomy pair — which read as answers the buyer had given when they
+   * had not. A quantity of 1 and a category of "Civil Works" are exactly the kind
+   * of values that get dispatched to vendors unnoticed. The Step 3 gate requires
+   * each of these instead, so nothing can be quoted against a guess.
+   */
+  const blankLineItem = (): ExtractedEntity => ({
+    id: `ent-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    itemName: '',
+    quantity: 0,
+    unit: '',
+    targetDate: '',
+    technicalSpecs: '',
+    // Nothing was inferred, so there is no AI confidence to report.
+    confidence: 0,
+    category: '',
+    majorCategory: '',
+    minorCategory: '',
+  });
+
   const handleAddEntity = () => {
-    const [firstMajor] = categoriesData;
-    const newEnt: ExtractedEntity = {
-      id: `ent-${Date.now()}`,
-      itemName: '',
-      quantity: MANUAL_LINE_ITEM_DEFAULTS.QUANTITY,
-      unit: MANUAL_LINE_ITEM_DEFAULTS.UNIT,
-      targetDate: defaultTargetDate(),
-      technicalSpecs: '',
-      // Nothing was inferred, so there is no AI confidence to report.
-      confidence: 0,
-      category: firstMajor.majorCategory,
-      majorCategory: firstMajor.majorCategory,
-      minorCategory: firstMajor.minorCategories[0],
-    };
-    setEntities([...entities, newEnt]);
+    setEntities([...entities, blankLineItem()]);
   };
 
   // ─── Step progression ──────────────────────────────────────────────────────
@@ -397,10 +501,24 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
    * failed. A failure still counts: the buyer is then expected to key the line
    * items on Step 2, so keeping them on the upload screen would be a dead end.
    */
-  const isExtractionAttempted = extractionSummary !== null || extractionError !== null;
+  const isExtractionAttempted =
+    extractionSummary !== null || extractionError !== null || manualEntryStarted;
 
-  /** Step 2 is done once every row can actually be quoted against. */
-  const hasCompleteLineItems = entities.length > 0 && entities.every((e) => e.itemName.trim() !== '');
+  /**
+   * Step 2 is done once every row can actually be quoted against.
+   *
+   * An extracted row always satisfies this — the server normalises the quantity
+   * and unit and classifies the categories — so in practice this only holds back
+   * rows keyed by hand, which now start empty.
+   */
+  const isLineItemComplete = (e: ExtractedEntity) =>
+    e.itemName.trim() !== '' &&
+    e.quantity > 0 &&
+    e.unit.trim() !== '' &&
+    e.majorCategory.trim() !== '' &&
+    e.minorCategory.trim() !== '';
+
+  const hasCompleteLineItems = entities.length > 0 && entities.every(isLineItemComplete);
 
   /** Highest step the buyer has earned access to. */
   const unlockedStep = !isExtractionAttempted ? 1 : hasCompleteLineItems ? 3 : 2;
@@ -450,32 +568,44 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
   const handleDispatch = () => {
     // Line-item completeness is not re-checked here: `unlockedStep` locks Step 3
     // the moment a row loses its description, so this screen cannot be reached
-    // with an unquotable list. The budget is not covered by that gate, because a
-    // document can price nothing at all and still classify cleanly.
+    // with an unquotable list.
     //
-    // Vendors are ranked against the budget, and the API rejects a zero, so the
-    // buyer is sent back to the field rather than shown a save failure.
-    if (budget <= 0) {
-      showToast(EXTRACTION.budgetRequiredTitle, EXTRACTION.budgetRequiredMessage, 'warning');
+    // The budget is deliberately not gated. A document can price nothing at all,
+    // and requiring a figure only made buyers invent a ceiling that vendors would
+    // then quote against.
+    //
+    // The pincode is checked because a malformed one silently misdirects freight.
+    const pincode = deliveryPincode.trim();
+    if (pincode !== '' && !PINCODE_PATTERN.test(pincode)) {
+      showToast(EXTRACTION.deliveryPincodeInvalidTitle, EXTRACTION.deliveryPincodeInvalidMessage, 'warning');
       setActiveStep(2);
       return;
     }
 
     setCurrentMode(selectedMode);
+    // No fallback needed: `hasCompleteLineItems` requires a major category on
+    // every row before Step 3 unlocks, so the leading item always carries one.
     const mainMajor = entities[0].majorCategory;
     const vendorsToDispatch: VendorEntry[] = [];
 
     addNewRFQ(
       {
         rfqNumber,
-        title: rfqTitle,
-        category: mainMajor || 'Engineering Spares - Mechanical',
+        // Extraction supplies a document title, but manual entry has none and the
+        // API requires one, so it falls back to the leading line item the way
+        // rfqIngestionService.deriveTitle does on the server.
+        title: rfqTitle.trim() || entities[0].itemName.trim(),
+        category: mainMajor,
         sourcingMode: selectedMode,
         targetDeliveryDate: entities[0].targetDate || defaultTargetDate(),
         budget,
+        deliveryLocation: deliveryLocation.trim(),
+        deliveryPincode: pincode,
+        attachments,
         extractedEntities: entities,
         aiScore: selectedMode === 'mode_3' ? 95 : 88,
-        source: ingestionMethod === 'email' ? 'email_gateway' : 'web_portal',
+        source:
+          ingestionMethod === 'email' ? 'email_gateway' : ingestionMethod === 'manual' ? 'manual_entry' : 'web_portal',
         sourceEmail: ingestionMethod === 'email' ? emailSender : undefined,
         sourceFileName: uploadedFileName,
         autoCirculated: false,
@@ -486,7 +616,9 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
   };
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6 animate-fade-in pb-10">
+    // Widened from max-w-5xl: the Step 2 line-item table carries eight columns
+    // plus two category dropdowns and was scrolling horizontally at 1024px.
+    <div className="max-w-7xl mx-auto space-y-6 animate-fade-in pb-10">
       {/* Header */}
       <div className="flex items-center justify-between pb-4 border-b border-slate-200 dark:border-slate-800">
         <div>
@@ -585,10 +717,95 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
               >
                 <Globe size={13} /> 🌐 Web Portal & File Ingestion
               </button>
+              <button
+                data-testid="intake-manual"
+                onClick={() => setIngestionMethod('manual')}
+                className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
+                  ingestionMethod === 'manual'
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <Pencil size={13} /> {EXTRACTION.manualMethodLabel}
+              </button>
             </div>
           </div>
 
-          {ingestionMethod === 'upload' ? (
+          {ingestionMethod === 'manual' ? (
+            <div className="space-y-4">
+              {/* Supporting documents. Stored with the RFQ, never extracted. */}
+              <div className="p-4 rounded-xl border border-slate-200 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/40 space-y-3">
+                <div className="flex items-start justify-between flex-wrap gap-2">
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                      <Paperclip size={13} className="text-slate-500 dark:text-gray-400" />
+                      {EXTRACTION.attachTitle}
+                    </h4>
+                    <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-1 max-w-xl">
+                      {EXTRACTION.attachMessage}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => attachInputRef.current?.click()}
+                    disabled={isAttaching}
+                    className="btn btn-secondary btn-sm font-bold flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Paperclip size={13} />
+                    {isAttaching ? EXTRACTION.attachingLabel : EXTRACTION.attachAction}
+                  </button>
+                  <input
+                    ref={attachInputRef}
+                    type="file"
+                    multiple
+                    data-testid="attachment-input"
+                    className="hidden"
+                    onChange={(e) => handleAttachDocuments(e.target.files)}
+                  />
+                </div>
+
+                {attachments.length > 0 && (
+                  <ul className="space-y-1.5">
+                    <li className="text-[10px] uppercase font-bold tracking-wide text-slate-400 dark:text-gray-500">
+                      {formatString(EXTRACTION.attachedHeading, { count: attachments.length })}
+                    </li>
+                    {attachments.map((file) => (
+                      <li
+                        key={file.id}
+                        className="flex items-center justify-between gap-2 p-2 rounded-lg bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800"
+                      >
+                        <span className="flex items-center gap-2 min-w-0">
+                          <FileText size={13} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+                          <span className="text-[11px] font-semibold text-slate-800 dark:text-gray-200 truncate">
+                            {file.fileName}
+                          </span>
+                          <span className="text-[10px] mono text-slate-400 dark:text-gray-500 shrink-0">
+                            {formatFileSize(file.size)}
+                          </span>
+                        </span>
+                        <button
+                          onClick={() => handleRemoveAttachment(file.id)}
+                          aria-label={formatString(EXTRACTION.attachRemoveAria, { fileName: file.fileName })}
+                          className="text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 p-1 rounded shrink-0"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between flex-wrap gap-2 pt-2 border-t border-slate-100 dark:border-gray-800">
+                <div className="text-[11px] text-slate-400">{EXTRACTION.manualHint}</div>
+                <button
+                  onClick={handleStartManualRFQ}
+                  className="btn btn-primary font-bold flex items-center gap-2"
+                >
+                  <Pencil size={14} /> <span>{EXTRACTION.manualStartAction}</span> <ArrowRight size={15} />
+                </button>
+              </div>
+            </div>
+          ) : ingestionMethod === 'upload' ? (
             <div className="space-y-4">
               {/* File Upload Subtabs */}
               <div className="flex items-center gap-2 border-b border-slate-200 dark:border-gray-800 pb-2">
@@ -772,7 +989,11 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
             </div>
           )}
 
-          {isProcessingDoc ? (
+          {/* The extract footer belongs to the two AI paths only. Manual entry
+              carries its own continue action, and offering "Extract Line Items
+              with AI" beside it would imply a document had been supplied. */}
+          {ingestionMethod !== 'manual' &&
+            (isProcessingDoc ? (
             <div className="p-4 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-500/40 text-center space-y-2">
               <div className="flex items-center justify-center gap-2 text-indigo-700 dark:text-indigo-300 font-bold text-xs">
                 <Sparkles size={16} className="animate-spin" />
@@ -799,7 +1020,7 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                 </button>
               </div>
             </div>
-          )}
+            ))}
         </div>
       )}
 
@@ -832,6 +1053,18 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
               </button>
             </div>
           </div>
+
+          {/* Manual entry has no AI outcome to report, so it says so plainly
+              rather than leaving the buyer wondering where the banner went. */}
+          {manualEntryStarted && (
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 text-xs">
+              <p className="font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1.5">
+                <Pencil size={13} className="text-emerald-600 dark:text-emerald-400" />
+                {EXTRACTION.manualBannerTitle}
+              </p>
+              <p className="text-slate-500 dark:text-gray-400 mt-0.5">{EXTRACTION.manualBannerMessage}</p>
+            </div>
+          )}
 
           {/* AI extraction outcome: either what was read, or why it could not be. */}
           {extractionSummary && (
@@ -868,8 +1101,14 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
               <input type="text" value={rfqNumber} readOnly className="mono opacity-80 font-bold" />
             </div>
             <div>
-              <label className="block text-slate-600 dark:text-gray-400 font-semibold mb-1">Procurement Project Title</label>
+              <label
+                htmlFor="rfq-project-title"
+                className="block text-slate-600 dark:text-gray-400 font-semibold mb-1"
+              >
+                Procurement Project Title
+              </label>
               <input
+                id="rfq-project-title"
                 type="text"
                 value={rfqTitle}
                 onChange={(e) => setRfqTitle(e.target.value)}
@@ -881,7 +1120,10 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                 htmlFor="rfq-estimated-budget"
                 className="block text-slate-600 dark:text-gray-400 font-semibold mb-1"
               >
-                {formatString(EXTRACTION.budgetLabel, { symbol: CURRENCY.SYMBOL })}
+                {formatString(EXTRACTION.budgetLabel, { symbol: CURRENCY.SYMBOL })}{' '}
+                <span className="text-[9px] font-bold uppercase tracking-wide text-slate-400 dark:text-gray-500">
+                  ({EXTRACTION.budgetOptionalTag})
+                </span>
               </label>
               <input
                 id="rfq-estimated-budget"
@@ -901,10 +1143,53 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                 </p>
               ) : (
                 budget <= 0 && (
-                  <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-1">
+                  <p className="text-[10px] text-slate-500 dark:text-gray-500 mt-1">
                     {EXTRACTION.budgetMissingHint}
                   </p>
                 )
+              )}
+            </div>
+
+            <div>
+              <label
+                htmlFor="rfq-delivery-location"
+                className="block text-slate-600 dark:text-gray-400 font-semibold mb-1 flex items-center gap-1"
+              >
+                <MapPin size={11} /> {EXTRACTION.deliveryLocationLabel}
+              </label>
+              <input
+                id="rfq-delivery-location"
+                type="text"
+                value={deliveryLocation}
+                onChange={(e) => setDeliveryLocation(e.target.value)}
+                placeholder={EXTRACTION.deliveryLocationPlaceholder}
+                maxLength={200}
+                className="font-medium"
+              />
+            </div>
+
+            <div>
+              <label
+                htmlFor="rfq-delivery-pincode"
+                className="block text-slate-600 dark:text-gray-400 font-semibold mb-1"
+              >
+                {EXTRACTION.deliveryPincodeLabel}
+              </label>
+              <input
+                id="rfq-delivery-pincode"
+                type="text"
+                value={deliveryPincode}
+                onChange={(e) => setDeliveryPincode(e.target.value)}
+                placeholder={EXTRACTION.deliveryPincodePlaceholder}
+                maxLength={10}
+                className="mono font-semibold"
+              />
+              {/* Flagged inline as well as on save, so a typo is caught while the
+                  buyer is still looking at the field. */}
+              {deliveryPincode.trim() !== '' && !PINCODE_PATTERN.test(deliveryPincode.trim()) && (
+                <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-1">
+                  {EXTRACTION.deliveryPincodeInvalidMessage}
+                </p>
               )}
             </div>
           </div>
@@ -954,12 +1239,14 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                         <input
                           type="text"
                           value={item.itemName}
+                          placeholder={EXTRACTION.itemNamePlaceholder}
                           onChange={(e) => handleEntityChange(item.id, 'itemName', e.target.value)}
                           className="font-bold text-xs w-full mb-1 !py-1.5 !px-2.5 rounded-lg border border-slate-200 dark:border-gray-800"
                         />
                         <textarea
                           rows={2}
                           value={item.technicalSpecs}
+                          placeholder={EXTRACTION.itemSpecsPlaceholder}
                           onChange={(e) => handleEntityChange(item.id, 'technicalSpecs', e.target.value)}
                           className="text-[11px] w-full resize-none text-slate-500 dark:text-gray-400 !py-1.5 !px-2.5 rounded-lg border border-slate-200 dark:border-gray-800"
                         />
@@ -972,6 +1259,12 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                           onChange={(e) => handleEntityChange(item.id, 'majorCategory', e.target.value)}
                           className="text-[11px] font-semibold w-full rounded-lg bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 !py-2 !px-2 shadow-xs"
                         >
+                          {/* Without an option matching the empty value a browser
+                              displays the first real category, which would look
+                              like a choice the buyer had made. */}
+                          <option value="" disabled>
+                            {EXTRACTION.categoryPlaceholder}
+                          </option>
                           {majorOptions.map((major) => (
                             <option key={major} value={major}>
                               {major}
@@ -987,24 +1280,35 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                           onChange={(e) => handleEntityChange(item.id, 'minorCategory', e.target.value)}
                           className="text-[11px] font-bold w-full rounded-lg bg-indigo-50/50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 !py-2 !px-2 shadow-xs"
                         >
+                          <option value="" disabled>
+                            {EXTRACTION.minorCategoryPlaceholder}
+                          </option>
                           {availableMinors.map((minor) => (
                             <option key={minor} value={minor}>
                               {minor}
                             </option>
                           ))}
                         </select>
-                        <span className="text-[9px] text-slate-400 mt-1 block">
-                          Mapped from {availableMinors.length} minor items
-                        </span>
+                        {availableMinors.length > 0 && (
+                          <span className="text-[9px] text-slate-400 mt-1 block">
+                            Mapped from {availableMinors.length} minor items
+                          </span>
+                        )}
                       </td>
 
                       {/* Quantity */}
                       <td className="p-3 align-top text-center min-w-[90px]">
                         <input
                           type="number"
-                          value={item.quantity}
+                          // Zero means "not stated" and shows as blank rather than
+                          // as a quantity of 0. The old handler clamped every entry
+                          // up to 1, so the field could never be cleared.
+                          value={item.quantity > 0 ? item.quantity : ''}
                           min={1}
-                          onChange={(e) => handleEntityChange(item.id, 'quantity', Math.max(1, Number(e.target.value) || 1))}
+                          placeholder={EXTRACTION.itemQtyPlaceholder}
+                          onChange={(e) =>
+                            handleEntityChange(item.id, 'quantity', Math.max(0, Number(e.target.value) || 0))
+                          }
                           className="mono text-xs text-center font-bold w-full min-w-[75px] rounded-lg bg-white dark:bg-gray-950 border border-slate-200 dark:border-gray-800 !py-2 !px-2 shadow-inner focus:ring-2 focus:ring-indigo-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                         />
                       </td>
@@ -1015,7 +1319,7 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                           type="text"
                           list={`uom-options-${item.id}`}
                           value={item.unit}
-                          placeholder="e.g. Units"
+                          placeholder={EXTRACTION.itemUnitPlaceholder}
                           onChange={(e) => handleEntityChange(item.id, 'unit', e.target.value)}
                           className="text-xs text-center font-semibold w-full min-w-[110px] rounded-lg bg-white dark:bg-gray-950 border border-slate-200 dark:border-gray-800 !py-2 !px-2.5 shadow-inner focus:ring-2 focus:ring-indigo-500"
                         />
@@ -1046,9 +1350,17 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
 
                       {/* Confidence Badge */}
                       <td className="p-3 align-top text-center min-w-[85px]">
-                        <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/30 inline-block mt-1">
-                          {item.confidence}%
-                        </span>
+                        {/* A keyed row has no AI confidence, so a green 0% badge
+                            would report a score that was never computed. */}
+                        {item.confidence > 0 ? (
+                          <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/30 inline-block mt-1">
+                            {item.confidence}%
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-slate-400 dark:text-gray-500 inline-block mt-1">
+                            {EXTRACTION.confidenceUnset}
+                          </span>
+                        )}
                       </td>
 
                       {/* Delete */}
@@ -1173,13 +1485,11 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
 
                   <div>
                     <div className="flex items-center gap-2 mb-2">
+                      {/* badgeColor is a Tailwind class string; passing it to
+                          style={{ backgroundColor }} produced invalid CSS the
+                          browser dropped, leaving the badge unstyled. */}
                       <span
-                        className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider inline-block"
-                        style={{
-                          backgroundColor: `${mode.badgeColor}15`,
-                          color: mode.badgeColor,
-                          border: `1px solid ${mode.badgeColor}35`,
-                        }}
+                        className={`px-2 py-0.5 rounded border text-[10px] font-bold uppercase tracking-wider inline-block ${mode.badgeColor}`}
                       >
                         {mode.code}
                       </span>

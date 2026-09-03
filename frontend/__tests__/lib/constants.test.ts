@@ -2,6 +2,7 @@ import {
   SOURCING_MODES,
   CURRENCY,
   formatCurrency,
+  formatFileSize,
   MANUAL_LINE_ITEM_DEFAULTS,
   INITIAL_SYSTEM_CONFIG,
   INITIAL_AZURE_HEALTH,
@@ -119,11 +120,32 @@ describe('CURRENCY and formatCurrency', () => {
 });
 
 describe('MANUAL_LINE_ITEM_DEFAULTS', () => {
-  // These mirror RFQ_INGESTION_CONFIG on the backend so a row keyed by hand and a
-  // row parsed from a document carry identical defaults.
-  it('matches the backend ingestion defaults', () => {
-    expect(MANUAL_LINE_ITEM_DEFAULTS.QUANTITY).toBe(1);
-    expect(MANUAL_LINE_ITEM_DEFAULTS.UNIT).toBe('Nos');
+  // Mirrors DELIVERY_DATE_OFFSET_DAYS in RFQ_INGESTION_CONFIG on the backend so a
+  // keyed RFQ and an ingested one fall back to the same delivery date.
+  it('matches the backend delivery-date offset', () => {
     expect(MANUAL_LINE_ITEM_DEFAULTS.TARGET_DATE_OFFSET_DAYS).toBe(5);
+  });
+});
+
+describe('formatFileSize', () => {
+  test.each([
+    [0, '0 B'],
+    [512, '512 B'],
+    [1023, '1023 B'],
+    [1024, '1.0 KB'],
+    [2048, '2.0 KB'],
+    [1536, '1.5 KB'],
+    [1024 * 1024, '1.0 MB'],
+    [1024 * 1024 * 1024, '1.0 GB'],
+    // Capped at GB rather than rolling on to TB, which no attachment reaches.
+    [1024 * 1024 * 1024 * 5, '5.0 GB'],
+  ])('renders %i bytes as %s', (bytes, expected) => {
+    expect(formatFileSize(bytes)).toBe(expected);
+  });
+
+  // A record written before size was captured yields NaN, and "NaN B" in a
+  // document list is worse than reporting nothing.
+  test.each([NaN, Infinity, -1, undefined as unknown as number])('renders %p as zero bytes', (bytes) => {
+    expect(formatFileSize(bytes)).toBe('0 B');
   });
 });
