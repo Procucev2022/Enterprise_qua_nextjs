@@ -128,16 +128,73 @@ describe('Store Service — remaining branch coverage', () => {
     });
   });
 
-  describe('hydrateFromDB after the PostgreSQL removal', () => {
-    test('resolves as a no-op and reports the in-memory seed as the source', async () => {
-      // Domain records are served from the in-memory seed dataset; only user
-      // accounts are persisted, and those live in the MySQL identity schema.
+  describe('hydrateFromDB', () => {
+    test('resolves as a no-op and reports the in-memory seed as the source when the domain DB is not configured', async () => {
+      // Buyer accounts/evaluations/audit logs never persist regardless — only
+      // vendors/RFQs hydrate from the domain DB, and only when DATABASE_URL is set.
       const beforeBuyers = storeService.getBuyerAccounts().length;
       const result = await storeService.hydrateFromDB();
 
       expect(result).toEqual({ hydrated: false, source: 'in_memory_seed' });
       expect(storeService.isHydratedFromDB).toBe(false);
       expect(storeService.getBuyerAccounts().length).toBe(beforeBuyers);
+    });
+
+    test('replaces vendors/RFQs from the domain DB when configured and rows exist', async () => {
+      const dbVendors = [{ id: 'v-db-1', name: 'DB Vendor' }];
+      const dbRfqs = [{ id: 'rfq-db-1', title: 'DB RFQ' }];
+      let freshStore;
+      jest.isolateModules(() => {
+        jest.doMock('../src/db/pool', () => ({ pool: {} }));
+        jest.doMock('../src/db/domainQueries', () => ({
+          getVendorsFromDB: jest.fn().mockResolvedValue(dbVendors),
+          getRFQsFromDB: jest.fn().mockResolvedValue(dbRfqs),
+        }));
+        freshStore = require('../src/services/storeService');
+      });
+
+      const result = await freshStore.hydrateFromDB();
+
+      expect(result).toEqual({ hydrated: true, source: 'persisted' });
+      expect(freshStore.isHydratedFromDB).toBe(true);
+      expect(freshStore.getVendors()).toEqual(dbVendors);
+      expect(freshStore.getRFQs()).toEqual(dbRfqs);
+    });
+
+    test('falls back to the in-memory seed when the domain DB tables are empty', async () => {
+      let freshStore;
+      jest.isolateModules(() => {
+        jest.doMock('../src/db/pool', () => ({ pool: {} }));
+        jest.doMock('../src/db/domainQueries', () => ({
+          getVendorsFromDB: jest.fn().mockResolvedValue([]),
+          getRFQsFromDB: jest.fn().mockResolvedValue([]),
+        }));
+        freshStore = require('../src/services/storeService');
+      });
+
+      const beforeVendors = freshStore.getVendors().length;
+      const result = await freshStore.hydrateFromDB();
+
+      expect(result).toEqual({ hydrated: false, source: 'in_memory_seed' });
+      expect(freshStore.isHydratedFromDB).toBe(false);
+      expect(freshStore.getVendors().length).toBe(beforeVendors);
+    });
+
+    test('falls back to the in-memory seed when the domain DB query throws', async () => {
+      let freshStore;
+      jest.isolateModules(() => {
+        jest.doMock('../src/db/pool', () => ({ pool: {} }));
+        jest.doMock('../src/db/domainQueries', () => ({
+          getVendorsFromDB: jest.fn().mockRejectedValue(new Error('ECONNREFUSED')),
+          getRFQsFromDB: jest.fn().mockResolvedValue([]),
+        }));
+        freshStore = require('../src/services/storeService');
+      });
+
+      const result = await freshStore.hydrateFromDB();
+
+      expect(result).toEqual({ hydrated: false, source: 'in_memory_seed' });
+      expect(freshStore.isHydratedFromDB).toBe(false);
     });
   });
 

@@ -1,16 +1,18 @@
 // ==============================================================================
 // DATABASE STATUS CONTROLLER
 // ==============================================================================
-// Reports on the shared MySQL identity database that backs authentication.
-// This backend has no PostgreSQL connection: domain records are served from the
-// in-memory enterprise store, and user accounts live in the identity schema
-// owned by the Procucev p2pservices application.
+// Reports on the shared MySQL identity database that backs authentication, plus
+// the Neon PostgreSQL connection that persists vendors + RFQs (when
+// DATABASE_URL is configured — otherwise those fall back to the in-memory
+// seed too). Every other domain record (evaluations, audit logs, buyer
+// accounts, catalogue) is served from the in-memory enterprise store.
 // ==============================================================================
 
 const identityPoolModule = require('../db/identityPool');
 // Referenced through the module object rather than destructured so the helper
 // stays observable to tests.
 const optimizationMetrics = require('../db/optimizationMetrics');
+const domainPool = require('../db/pool');
 const storeService = require('../services/storeService');
 const { logger } = require('../services/loggerService');
 
@@ -20,10 +22,14 @@ const { logger } = require('../services/loggerService');
 async function getDBStatus(req, res, next) {
   try {
     logger.info('Checking identity database connection status', {}, 'DB_CONTROLLER');
-    const health = await identityPoolModule.checkIdentityHealth();
+    const [health, domainDatabase] = await Promise.all([
+      identityPoolModule.checkIdentityHealth(),
+      domainPool.checkDomainDBHealth(),
+    ]);
     res.json({
       success: true,
       ...health,
+      domainDatabase,
       domainStore: {
         mode: storeService.isHydratedFromDB ? 'persisted' : 'in_memory_seed',
         buyerAccounts: storeService.getBuyerAccounts().length,

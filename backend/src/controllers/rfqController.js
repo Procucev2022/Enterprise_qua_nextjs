@@ -206,7 +206,7 @@ function getRFQSummary(req, res, next) {
  * something to be read. Only the returned metadata goes onto the RFQ; the bytes
  * stay on disk and are fetched by id.
  */
-function uploadRFQAttachment(req, res, next) {
+async function uploadRFQAttachment(req, res, next) {
   try {
     const body = req.body || {};
 
@@ -216,7 +216,7 @@ function uploadRFQAttachment(req, res, next) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
     }
 
-    const result = rfqAttachmentService.saveAttachment({
+    const result = await rfqAttachmentService.saveAttachment({
       fileName: body.fileName,
       mimeType: body.mimeType,
       content: body.content,
@@ -251,10 +251,10 @@ function uploadRFQAttachment(req, res, next) {
  * so a caller cannot influence how the file is served. Content-Disposition is
  * `inline` so the browser previews a PDF or image instead of forcing a download.
  */
-function downloadRFQAttachment(req, res, next) {
+async function downloadRFQAttachment(req, res, next) {
   try {
     const { attachmentId } = req.params;
-    const stored = rfqAttachmentService.loadAttachment(attachmentId);
+    const stored = await rfqAttachmentService.loadAttachment(attachmentId);
 
     if (!stored) {
       logger.warn('Attachment not found', { attachmentId }, 'RFQ_CONTROLLER');

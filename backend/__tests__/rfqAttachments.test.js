@@ -1,6 +1,76 @@
-const fs = require('fs');
-const path = require('path');
 const request = require('supertest');
+
+// Fake, fully in-memory Cloudflare R2 (S3-compatible) client so this suite can
+// exercise rfqAttachmentService.js's real read/write logic without a real
+// bucket. Mirrors just enough of the AWS SDK v3 shape (Command classes
+// carrying their params on `.input`, `client.send(command)`) for that
+// service's actual code to run unmodified against it.
+const fakeR2Store = new Map();
+let nextSendError = null;
+
+class FakePutObjectCommand {
+  constructor(input) {
+    this.input = input;
+  }
+}
+class FakeGetObjectCommand {
+  constructor(input) {
+    this.input = input;
+  }
+}
+
+/** Minimal async-iterable so `for await (const chunk of body)` works. */
+function makeReadable(buffer) {
+  return {
+    [Symbol.asyncIterator]() {
+      let done = false;
+      return {
+        next() {
+          if (done) return Promise.resolve({ done: true, value: undefined });
+          done = true;
+          return Promise.resolve({ done: false, value: buffer });
+        },
+      };
+    },
+  };
+}
+
+jest.doMock('@aws-sdk/client-s3', () => ({
+  PutObjectCommand: FakePutObjectCommand,
+  GetObjectCommand: FakeGetObjectCommand,
+  S3Client: jest.fn().mockImplementation(() => ({
+    send: jest.fn(async (command) => {
+      if (nextSendError) {
+        const err = nextSendError;
+        nextSendError = null;
+        throw err;
+      }
+      if (command instanceof FakePutObjectCommand) {
+        fakeR2Store.set(command.input.Key, {
+          body: command.input.Body,
+          ContentType: command.input.ContentType,
+          Metadata: command.input.Metadata,
+        });
+        return {};
+      }
+      if (command instanceof FakeGetObjectCommand) {
+        const stored = fakeR2Store.get(command.input.Key);
+        if (!stored) {
+          const err = new Error('The specified key does not exist.');
+          err.name = 'NoSuchKey';
+          throw err;
+        }
+        return { Body: makeReadable(stored.body), ContentType: stored.ContentType, Metadata: stored.Metadata };
+      }
+      throw new Error('Unsupported command in fake R2 client');
+    }),
+  })),
+}));
+
+process.env.R2_ACCOUNT_ID = 'test-account';
+process.env.R2_ACCESS_KEY_ID = 'test-key';
+process.env.R2_SECRET_ACCESS_KEY = 'test-secret';
+process.env.R2_BUCKET = 'test-bucket';
 
 const { app } = require('../src/server');
 const { RFQ_ATTACHMENT_CONFIG } = require('../src/config/constants');
@@ -22,15 +92,14 @@ function authHeader(role = 'buyer') {
 
 const pdfBody = () => Buffer.from('%PDF-1.4 line item annexure').toString('base64');
 
-/** Everything this suite writes lands in the real storage dir, so it is cleared. */
 afterAll(() => {
-  fs.rmSync(attachments.storageDir(), { recursive: true, force: true });
+  fakeR2Store.clear();
 });
 
 describe('RFQ attachment storage service', () => {
-  describe('path safety', () => {
+  describe('resolveObjectKey', () => {
     // An id is only ever generated server-side; refusing anything else is what
-    // keeps a traversal attempt out of the storage directory.
+    // keeps a malformed/foreign id out of R2 entirely.
     test.each([
       '../../etc/passwd',
       '..\\..\\windows\\system32',
@@ -38,27 +107,26 @@ describe('RFQ attachment storage service', () => {
       'short',
       '',
       'NOT-HEX-@@',
-    ])('refuses to resolve a path for %p', (id) => {
-      expect(attachments.resolveStoredPath(id, '.bin')).toBeNull();
+    ])('refuses to build a key for %p', (id) => {
+      expect(attachments.resolveObjectKey(id)).toBeNull();
     });
 
     test.each([null, undefined, 42, {}])('refuses a non-string id %p', (id) => {
-      expect(attachments.resolveStoredPath(id, '.bin')).toBeNull();
+      expect(attachments.resolveObjectKey(id)).toBeNull();
     });
 
-    test('resolves a generated id inside the storage directory', () => {
-      const resolved = attachments.resolveStoredPath('a1b2c3d4-0000-4000-8000-abcdefabcdef', '.bin');
-      expect(resolved).not.toBeNull();
-      expect(path.dirname(resolved)).toBe(attachments.storageDir());
+    test('builds a key inside the configured storage prefix', () => {
+      const key = attachments.resolveObjectKey('a1b2c3d4-0000-4000-8000-abcdefabcdef');
+      expect(key).toBe(`${RFQ_ATTACHMENT_CONFIG.STORAGE_DIR}/a1b2c3d4-0000-4000-8000-abcdefabcdef`);
     });
   });
 
   describe('safeFileName', () => {
-    // The stored path uses the generated id, but the name is echoed into the RFQ,
+    // The stored key uses the generated id, but the name is echoed into the RFQ,
     // so it is reduced to a leaf first.
     test.each([
       ['../../evil/report.pdf', 'report.pdf'],
-      ['C:\\\\Users\\\\navin\\\\boq.xlsx', 'boq.xlsx'],
+      ['C:\\Users\\navin\\boq.xlsx', 'boq.xlsx'],
       ['plain.pdf', 'plain.pdf'],
     ])('reduces %p to %p', (input, expected) => {
       expect(attachments.safeFileName(input)).toBe(expected);
@@ -105,8 +173,8 @@ describe('RFQ attachment storage service', () => {
   });
 
   describe('saveAttachment and loadAttachment', () => {
-    test('stores a document and reads it back byte for byte', () => {
-      const saved = attachments.saveAttachment({
+    test('stores a document and reads it back byte for byte', async () => {
+      const saved = await attachments.saveAttachment({
         fileName: 'annexure.pdf',
         mimeType: 'application/pdf',
         content: pdfBody(),
@@ -117,13 +185,27 @@ describe('RFQ attachment storage service', () => {
       expect(saved.attachment.size).toBeGreaterThan(0);
       expect(saved.attachment.uploadedAt).toBeDefined();
 
-      const loaded = attachments.loadAttachment(saved.attachment.id);
+      const loaded = await attachments.loadAttachment(saved.attachment.id);
       expect(loaded.content.toString()).toBe('%PDF-1.4 line item annexure');
       expect(loaded.meta.mimeType).toBe('application/pdf');
+      expect(loaded.meta.fileName).toBe('annexure.pdf');
     });
 
-    test('strips a directory component from the supplied name', () => {
-      const saved = attachments.saveAttachment({
+    // Non-ASCII filenames are realistic here and R2 metadata travels as HTTP
+    // headers, so the round-trip must survive URL-encoding transparently.
+    test('round-trips a non-ASCII filename', async () => {
+      const saved = await attachments.saveAttachment({
+        fileName: 'ऑर्डर विवरण.pdf',
+        mimeType: 'application/pdf',
+        content: pdfBody(),
+      });
+
+      const loaded = await attachments.loadAttachment(saved.attachment.id);
+      expect(loaded.meta.fileName).toBe('ऑर्डर विवरण.pdf');
+    });
+
+    test('strips a directory component from the supplied name', async () => {
+      const saved = await attachments.saveAttachment({
         fileName: '../../evil/report.pdf',
         mimeType: 'application/pdf',
         content: pdfBody(),
@@ -134,8 +216,8 @@ describe('RFQ attachment storage service', () => {
     test.each([
       [{ content: '' }, ATTACHMENT_STATUS.NO_CONTENT],
       [{ content: undefined }, ATTACHMENT_STATUS.NO_CONTENT],
-    ])('refuses an empty body %p', (overrides, expected) => {
-      const result = attachments.saveAttachment({
+    ])('refuses an empty body %p', async (overrides, expected) => {
+      const result = await attachments.saveAttachment({
         fileName: 'a.pdf',
         mimeType: 'application/pdf',
         ...overrides,
@@ -144,8 +226,8 @@ describe('RFQ attachment storage service', () => {
       expect(result.attachment).toBeNull();
     });
 
-    test('refuses a body that decodes to nothing', () => {
-      const result = attachments.saveAttachment({
+    test('refuses a body that decodes to nothing', async () => {
+      const result = await attachments.saveAttachment({
         fileName: 'a.pdf',
         mimeType: 'application/pdf',
         content: '   ',
@@ -153,8 +235,8 @@ describe('RFQ attachment storage service', () => {
       expect(result.status).toBe(ATTACHMENT_STATUS.NO_CONTENT);
     });
 
-    test('refuses a type outside the allow-list', () => {
-      const result = attachments.saveAttachment({
+    test('refuses a type outside the allow-list', async () => {
+      const result = await attachments.saveAttachment({
         fileName: 'payload.exe',
         mimeType: 'application/x-msdownload',
         content: pdfBody(),
@@ -163,9 +245,9 @@ describe('RFQ attachment storage service', () => {
     });
 
     // Checked before decoding, so an oversized upload is never materialised.
-    test('refuses a document over the size ceiling', () => {
+    test('refuses a document over the size ceiling', async () => {
       const oversize = 'A'.repeat(RFQ_ATTACHMENT_CONFIG.MAX_BYTES * 2);
-      const result = attachments.saveAttachment({
+      const result = await attachments.saveAttachment({
         fileName: 'huge.pdf',
         mimeType: 'application/pdf',
         content: oversize,
@@ -173,54 +255,101 @@ describe('RFQ attachment storage service', () => {
       expect(result.status).toBe(ATTACHMENT_STATUS.TOO_LARGE);
     });
 
-    test('defaults to an empty payload when called with no arguments', () => {
-      expect(attachments.saveAttachment().status).toBe(ATTACHMENT_STATUS.NO_CONTENT);
+    test('defaults to an empty payload when called with no arguments', async () => {
+      expect((await attachments.saveAttachment()).status).toBe(ATTACHMENT_STATUS.NO_CONTENT);
     });
 
-    test('reports a write failure rather than throwing', () => {
-      const spy = jest.spyOn(fs, 'writeFileSync').mockImplementation(() => {
-        throw new Error('ENOSPC: no space left on device');
+    test('reports a write failure rather than throwing', async () => {
+      nextSendError = new Error('ENOSPC: no space left on device');
+      const result = await attachments.saveAttachment({
+        fileName: 'a.pdf',
+        mimeType: 'application/pdf',
+        content: pdfBody(),
       });
+      expect(result.status).toBe(ATTACHMENT_STATUS.WRITE_FAILED);
+      expect(result.error).toContain('ENOSPC');
+    });
+
+    test('fails closed (WRITE_FAILED) when R2 is not configured', async () => {
+      const savedEnv = {
+        R2_ACCOUNT_ID: process.env.R2_ACCOUNT_ID,
+        R2_ACCESS_KEY_ID: process.env.R2_ACCESS_KEY_ID,
+        R2_SECRET_ACCESS_KEY: process.env.R2_SECRET_ACCESS_KEY,
+      };
+      let freshAttachments;
+      jest.isolateModules(() => {
+        delete process.env.R2_ACCOUNT_ID;
+        delete process.env.R2_ACCESS_KEY_ID;
+        delete process.env.R2_SECRET_ACCESS_KEY;
+        freshAttachments = require('../src/services/rfqAttachmentService');
+      });
+
       try {
-        const result = attachments.saveAttachment({
+        // getClient() is lazy — it only reads process.env on its first real
+        // call, which happens here, so the env vars must stay deleted through
+        // these calls rather than being restored right after isolateModules.
+        const result = await freshAttachments.saveAttachment({
           fileName: 'a.pdf',
           mimeType: 'application/pdf',
           content: pdfBody(),
         });
         expect(result.status).toBe(ATTACHMENT_STATUS.WRITE_FAILED);
-        expect(result.error).toContain('ENOSPC');
+
+        const loaded = await freshAttachments.loadAttachment('a1b2c3d4-0000-4000-8000-abcdefabcdef');
+        expect(loaded).toBeNull();
       } finally {
-        spy.mockRestore();
+        Object.assign(process.env, savedEnv);
       }
     });
 
     test.each(['a1b2c3d4-0000-4000-8000-ffffffffffff', '../../etc/passwd'])(
       'returns null for the unknown or unsafe id %p',
-      (id) => {
-        expect(attachments.loadAttachment(id)).toBeNull();
+      async (id) => {
+        expect(await attachments.loadAttachment(id)).toBeNull();
       }
     );
 
-    test('returns null when the content is present but the sidecar is gone', () => {
-      const saved = attachments.saveAttachment({
-        fileName: 'orphan.pdf',
+    test('returns null rather than throwing when the R2 read fails', async () => {
+      const saved = await attachments.saveAttachment({
+        fileName: 'flaky.pdf',
         mimeType: 'application/pdf',
         content: pdfBody(),
       });
-      fs.rmSync(attachments.resolveStoredPath(saved.attachment.id, '.json'));
+      nextSendError = new Error('ETIMEDOUT');
 
-      expect(attachments.loadAttachment(saved.attachment.id)).toBeNull();
+      expect(await attachments.loadAttachment(saved.attachment.id)).toBeNull();
     });
 
-    test('returns null rather than throwing when the sidecar is corrupt', () => {
-      const saved = attachments.saveAttachment({
-        fileName: 'corrupt.pdf',
-        mimeType: 'application/pdf',
-        content: pdfBody(),
+    // Defensive fallbacks for an object whose metadata is missing entirely —
+    // shouldn't happen via saveAttachment, but the read side must not throw.
+    test('falls back sensible defaults when the stored object has no metadata', async () => {
+      const id = 'a1b2c3d4-1111-4000-8000-abcdefabcdef';
+      fakeR2Store.set(attachments.resolveObjectKey(id), {
+        body: Buffer.from('raw bytes, no metadata'),
+        ContentType: 'application/pdf',
+        Metadata: undefined,
       });
-      fs.writeFileSync(attachments.resolveStoredPath(saved.attachment.id, '.json'), 'not json', 'utf8');
 
-      expect(attachments.loadAttachment(saved.attachment.id)).toBeNull();
+      const loaded = await attachments.loadAttachment(id);
+
+      expect(loaded.meta.fileName).toBe('attachment');
+      expect(loaded.meta.size).toBe(Buffer.byteLength('raw bytes, no metadata'));
+      expect(loaded.meta.uploadedAt).toBeNull();
+    });
+
+    // The SDK's response body can yield Uint8Array chunks rather than Buffers;
+    // bufferBody must normalise either shape.
+    test('buffers a non-Buffer chunk from the response body', async () => {
+      const id = 'a1b2c3d4-2222-4000-8000-abcdefabcdef';
+      fakeR2Store.set(attachments.resolveObjectKey(id), {
+        body: new Uint8Array(Buffer.from('uint8 bytes')),
+        ContentType: 'application/pdf',
+        Metadata: { filename: encodeURIComponent('u8.pdf'), size: '11', uploadedat: '2026-01-01T00:00:00.000Z' },
+      });
+
+      const loaded = await attachments.loadAttachment(id);
+
+      expect(loaded.content.toString()).toBe('uint8 bytes');
     });
   });
 });
@@ -284,7 +413,7 @@ describe('RFQ attachment HTTP routes', () => {
 
     // A storage fault is ours, not the buyer's, so it is a 500 rather than a 422.
     test('returns 500 when storage fails', async () => {
-      const spy = jest.spyOn(attachments, 'saveAttachment').mockReturnValue({
+      const spy = jest.spyOn(attachments, 'saveAttachment').mockResolvedValue({
         status: ATTACHMENT_STATUS.WRITE_FAILED,
         attachment: null,
         error: 'disk full',
@@ -303,9 +432,7 @@ describe('RFQ attachment HTTP routes', () => {
     });
 
     test('surfaces an unexpected fault through the error handler', async () => {
-      const spy = jest.spyOn(attachments, 'saveAttachment').mockImplementation(() => {
-        throw new Error('boom');
-      });
+      const spy = jest.spyOn(attachments, 'saveAttachment').mockRejectedValue(new Error('boom'));
       try {
         const res = await request(app)
           .post('/api/rfqs/attachments')
@@ -351,8 +478,8 @@ describe('RFQ attachment HTTP routes', () => {
       expect(res.body.error).toMatch(/no longer available/i);
     });
 
-    // The route must not be usable to read arbitrary files off the volume.
-    test('returns 404 rather than a file for a traversal attempt', async () => {
+    // The route must not be usable to read arbitrary objects by a crafted id.
+    test('returns 404 rather than an object for a traversal-shaped id', async () => {
       const res = await request(app)
         .get('/api/rfqs/attachments/..%2F..%2Fpackage.json')
         .set(authHeader('buyer'));
@@ -361,9 +488,7 @@ describe('RFQ attachment HTTP routes', () => {
     });
 
     test('surfaces an unexpected fault through the error handler', async () => {
-      const spy = jest.spyOn(attachments, 'loadAttachment').mockImplementation(() => {
-        throw new Error('boom');
-      });
+      const spy = jest.spyOn(attachments, 'loadAttachment').mockRejectedValue(new Error('boom'));
       try {
         const res = await request(app)
           .get('/api/rfqs/attachments/a1b2c3d4-0000-4000-8000-abcdefabcdef')

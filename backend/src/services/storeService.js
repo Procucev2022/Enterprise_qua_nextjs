@@ -7,6 +7,8 @@ const {
   SEED_AI_FEED,
 } = require('../db/seed');
 const { INITIAL_SYSTEM_CONFIG, INITIAL_AZURE_HEALTH } = require('../config/constants');
+const domainPool = require('../db/pool');
+const domainQueries = require('../db/domainQueries');
 const { createAuditEntry, verifyAuditTrail } = require('./auditService');
 const { evaluateQuotes, calculate360Evaluation, calculateRevisedRating } = require('./evaluationService');
 const { simulateChaserOutreach } = require('./aiChaserService');
@@ -88,20 +90,54 @@ class StoreService {
   }
 
   /**
-   * Domain records (buyer accounts, vendors, RFQs, evaluations, audit logs and
-   * system config) are served from the reference seed dataset held in this
-   * process.
+   * Domain records (buyer accounts, evaluations, audit logs and system config)
+   * are served from the reference seed dataset held in this process.
    *
-   * User accounts are the exception: they are read from and written to the
-   * shared MySQL identity schema via db/identityQueries.js. This backend has no
-   * PostgreSQL connection.
+   * Vendors and RFQs are the exception: when DATABASE_URL is configured (Neon
+   * PostgreSQL), they hydrate from there instead, and every mutation below
+   * writes through fire-and-forget. An empty table (e.g. right after the schema
+   * was first created, before `db:migrate` has seeded it) is treated the same
+   * as "not configured" — falling back to the in-memory seed rather than
+   * booting with a blank vendor/RFQ list.
    *
-   * Kept as an async no-op so the bootstrap path and callers keep a stable
-   * contract if a domain persistence layer is introduced later.
+   * User accounts are a separate exception: they are read from and written to
+   * the shared MySQL identity schema via db/identityQueries.js.
    */
   async hydrateFromDB() {
-    this.isHydratedFromDB = false;
-    return { hydrated: false, source: 'in_memory_seed' };
+    if (!domainPool.pool) {
+      this.isHydratedFromDB = false;
+      return { hydrated: false, source: 'in_memory_seed' };
+    }
+
+    try {
+      const [vendors, rfqs] = await Promise.all([domainQueries.getVendorsFromDB(), domainQueries.getRFQsFromDB()]);
+      if (vendors.length > 0) this.vendors = vendors;
+      if (rfqs.length > 0) this.rfqs = rfqs;
+      this.isHydratedFromDB = vendors.length > 0 || rfqs.length > 0;
+      return { hydrated: this.isHydratedFromDB, source: this.isHydratedFromDB ? 'persisted' : 'in_memory_seed' };
+    } catch (err) {
+      logger.error('Failed to hydrate vendors/RFQs from the domain database', err, 'STORE_SERVICE');
+      this.isHydratedFromDB = false;
+      return { hydrated: false, source: 'in_memory_seed' };
+    }
+  }
+
+  // Fire-and-forget write-through helpers — never awaited by callers, mirroring
+  // the pattern already used for identity-DB writes elsewhere in this backend.
+  _persistVendor(vendor) {
+    domainQueries.upsertVendorInDB(vendor).catch((err) => logger.error('Failed to persist vendor', err, 'STORE_SERVICE'));
+  }
+
+  _removeVendor(id) {
+    domainQueries.deleteVendorInDB(id).catch((err) => logger.error('Failed to delete persisted vendor', err, 'STORE_SERVICE'));
+  }
+
+  _persistRFQ(rfq) {
+    domainQueries.upsertRFQInDB(rfq).catch((err) => logger.error('Failed to persist RFQ', err, 'STORE_SERVICE'));
+  }
+
+  _removeRFQ(id) {
+    domainQueries.deleteRFQInDB(id).catch((err) => logger.error('Failed to delete persisted RFQ', err, 'STORE_SERVICE'));
   }
 
   // ==========================================
@@ -211,6 +247,7 @@ class StoreService {
     };
 
     this.vendors.unshift(newVendor);
+    this._persistVendor(newVendor);
     this.addAuditLog({
       userEmail: 'procurement@enterprise.com',
       action: `Registered vendor ${newVendor.name} in category ${newVendor.majorCategory}`,
@@ -228,6 +265,7 @@ class StoreService {
     const { id: _ignoredId, ...safeUpdates } = updates;
     const updated = { ...this.vendors[idx], ...safeUpdates };
     this.vendors[idx] = updated;
+    this._persistVendor(updated);
 
     return updated;
   }
@@ -236,6 +274,7 @@ class StoreService {
     const beforeLen = this.vendors.length;
     this.vendors = this.vendors.filter((v) => v.id !== id);
     if (this.vendors.length < beforeLen) {
+      this._removeVendor(id);
       return true;
     }
     return false;
@@ -349,6 +388,7 @@ class StoreService {
     };
 
     this.rfqs.unshift(newRFQ);
+    this._persistRFQ(newRFQ);
 
     this.addAuditLog({
       userEmail: 'buyer@enterprise.com',
@@ -380,6 +420,7 @@ class StoreService {
       quotesCount: quotes.length,
     };
     this.rfqs[idx] = updated;
+    this._persistRFQ(updated);
 
     return updated;
   }
@@ -400,7 +441,9 @@ class StoreService {
   deleteRFQ(id) {
     const beforeLen = this.rfqs.length;
     this.rfqs = this.rfqs.filter((r) => r.id !== id && r.rfqNumber !== id);
-    return this.rfqs.length < beforeLen;
+    const removed = this.rfqs.length < beforeLen;
+    if (removed) this._removeRFQ(id);
+    return removed;
   }
 
   /**
@@ -596,6 +639,7 @@ class StoreService {
           isCategoryAligned: true,
         };
         this.vendors.push(newVendor);
+        this._persistVendor(newVendor);
         importedCount++;
 
       }
@@ -781,6 +825,7 @@ class StoreService {
     rfq.awardedVendorId = vendorId || null;
     rfq.awardedVendor = vendorName;
     rfq.awardedAmount = totalAmount;
+    this._persistRFQ(rfq);
 
     const poNumber = `PO-2026-` + (rfqNumber || '').replace('RFQ-2026-', '');
     const issueDate = new Date().toISOString().substring(0, 10);
