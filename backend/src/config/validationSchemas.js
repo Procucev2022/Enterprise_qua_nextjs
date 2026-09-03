@@ -7,6 +7,12 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i;
 const PHONE_REGEX = /^[+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{7,15}$/;
 
+// Delivery pincode or zipcode. Broader than an Indian six-digit PIN because the
+// same field carries international zipcodes for export orders, which are
+// alphanumeric and may contain a space or hyphen. Mirrors PINCODE_PATTERN in
+// frontend/lib/validationSchemas.ts.
+const PINCODE_REGEX = /^[A-Za-z0-9][A-Za-z0-9\s-]{2,9}$/;
+
 // Indian mobile number accepted at sign-in and registration. Mirrors
 // INDIAN_MOBILE_PATTERN in frontend/lib/validationSchemas.ts. The identity
 // schema stores these normalised to +91XXXXXXXXXX, so the submitted value must
@@ -24,7 +30,18 @@ const VALIDATION_SCHEMAS = {
   createRFQ: {
     title: { type: 'string', required: true, minLength: 3, maxLength: 200 },
     category: { type: 'string', required: true, minLength: 2 },
-    budget: { type: 'number', required: true, min: 1 },
+    // Optional. A document that prices nothing yields no budget, and requiring
+    // one forced the buyer to invent a ceiling vendors would then quote against.
+    budget: { type: 'number', required: false, min: 0 },
+    deliveryLocation: { type: 'string', required: false, maxLength: 200 },
+    deliveryPincode: {
+      type: 'string',
+      required: false,
+      pattern: PINCODE_REGEX,
+      message: 'Pincode must be 3 to 10 letters, digits, spaces or hyphens.',
+    },
+    // Metadata for documents already stored by POST /api/rfqs/attachments.
+    attachments: { type: 'array', required: false },
     targetDeliveryDate: { type: 'string', required: true },
     lineItems: { type: 'array', required: false },
   },
@@ -41,6 +58,14 @@ const VALIDATION_SCHEMAS = {
   },
 
   // Raw extracted rows handed to POST /api/rfqs/ingest. The rows themselves are
+  // A supporting document attached to an RFQ. The MIME allow-list and the size
+  // ceiling are enforced by rfqAttachmentService, which owns those limits.
+  uploadRFQAttachment: {
+    fileName: { type: 'string', required: true, minLength: 1, maxLength: 260 },
+    mimeType: { type: 'string', required: true, minLength: 3, maxLength: 150 },
+    content: { type: 'string', required: true, minLength: 1, message: 'content must be base64 file data.' },
+  },
+
   // deliberately loose because they come from arbitrary spreadsheets; each row is
   // normalised and validated per-field by rfqIngestionService instead.
   ingestRFQ: {
@@ -246,6 +271,7 @@ function validatePayload(schema, data = {}) {
 
 module.exports = {
   EMAIL_REGEX,
+  PINCODE_REGEX,
   GSTIN_REGEX,
   PHONE_REGEX,
   INDIAN_MOBILE_REGEX,

@@ -468,15 +468,15 @@ export const OTP_CODE_LENGTH = 6;
 export const OTP_EXPIRY_MINUTES = 15;
 
 /**
- * Neutral defaults for a line item the buyer adds by hand, used when an AI
- * extraction came back empty. Only the structural fields are pre-filled; the
- * description and specification stay blank so a vendor is never asked to quote
- * against placeholder text. The values mirror RFQ_INGESTION_CONFIG on the backend
- * so a keyed row and an ingested row carry the same defaults.
+ * Fallback used when an RFQ reaches dispatch without a target delivery date.
+ *
+ * A row the buyer adds by hand starts entirely blank — no quantity, unit,
+ * category or date — because pre-filled values read as answers the buyer never
+ * gave. This offset only backfills the RFQ header when no line item carries a
+ * date, and mirrors DELIVERY_DATE_OFFSET_DAYS in RFQ_INGESTION_CONFIG on the
+ * backend so a keyed RFQ and an ingested one land on the same default.
  */
 export const MANUAL_LINE_ITEM_DEFAULTS = {
-  QUANTITY: 1,
-  UNIT: 'Nos',
   TARGET_DATE_OFFSET_DAYS: 5,
 } as const;
 
@@ -503,6 +503,27 @@ export function formatCurrency(amount: number): string {
   return `${CURRENCY.SYMBOL}${Math.round(safe).toLocaleString(CURRENCY.LOCALE)}`;
 }
 
+/**
+ * Human-readable file size, e.g. 1536 -> "1.5 KB".
+ *
+ * Uses 1024-based units because that is what the browser and the server both
+ * report, and keeps one decimal from KB upwards so a 1.4MB and a 1.9MB document
+ * are distinguishable in a list.
+ */
+export function formatFileSize(bytes: number): string {
+  const safe = Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
+  if (safe < 1024) return `${safe} B`;
+
+  const units = ['KB', 'MB', 'GB'];
+  let value = safe / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(1)} ${units[unitIndex]}`;
+}
+
 /** URL prefix that scopes each role's workspace, used to guard route access. */
 export const ROLE_ROUTE_PREFIX: Record<UserRole, string> = {
   buyer: '/buyer',
@@ -517,5 +538,6 @@ export {
   EMAIL_PATTERN,
   GSTIN_PATTERN,
   PHONE_PATTERN,
+  PINCODE_PATTERN,
 } from './validationSchemas';
 

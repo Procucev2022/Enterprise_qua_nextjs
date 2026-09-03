@@ -19,6 +19,11 @@ export default function BuyerRFQSummaryPage() {
         router.push('/buyer/quote-matrix');
       }}
       onCreateRFQ={() => router.push('/buyer/ingestion-wizard')}
+      onViewDetails={(rfq: RFQItem) => {
+        // Addressable by RFQ number so the detail view survives a reload and can
+        // be linked to, rather than depending on transient store state.
+        router.push(`/buyer/rfq-details?rfq=${encodeURIComponent(rfq.rfqNumber)}`);
+      }}
     />
   );
 }

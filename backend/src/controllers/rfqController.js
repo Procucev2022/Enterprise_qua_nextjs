@@ -4,8 +4,25 @@ const { generateStandardRFQEmail } = require('../services/emailService');
 // pipeline stays substitutable in tests rather than being bound at import time.
 const rfqIngestionService = require('../services/rfqIngestionService');
 const geminiService = require('../services/geminiService');
+const rfqAttachmentService = require('../services/rfqAttachmentService');
 const { logger } = require('../services/loggerService');
-const { VALIDATION_SCHEMAS, validatePayload, EXTRACTION_REASON_MESSAGES } = require('../config/constants');
+const {
+  VALIDATION_SCHEMAS,
+  validatePayload,
+  EXTRACTION_REASON_MESSAGES,
+  RFQ_ATTACHMENT_CONFIG,
+} = require('../config/constants');
+
+/** Buyer-facing reason for each attachment rejection. */
+const ATTACHMENT_ERRORS = {
+  NO_CONTENT: 'That file appears to be empty. Choose a file with content and try again.',
+  TOO_LARGE: `That file is larger than the ${Math.floor(
+    RFQ_ATTACHMENT_CONFIG.MAX_BYTES / (1024 * 1024)
+  )}MB limit. Attach a smaller file.`,
+  UNSUPPORTED_TYPE:
+    'That file type cannot be attached. Use a PDF, spreadsheet, Word document, text file or image.',
+  WRITE_FAILED: 'The document could not be stored. Try again, and if it persists the storage volume may be full.',
+};
 
 function getRFQs(req, res, next) {
   try {
@@ -181,6 +198,81 @@ function getRFQSummary(req, res, next) {
   }
 }
 
+/**
+ * Store a supporting document for an RFQ and return its metadata.
+ *
+ * Deliberately does not invoke Gemini. This is the manual path: the buyer is
+ * keying the line items themselves and the document is evidence to attach, not
+ * something to be read. Only the returned metadata goes onto the RFQ; the bytes
+ * stay on disk and are fetched by id.
+ */
+function uploadRFQAttachment(req, res, next) {
+  try {
+    const body = req.body || {};
+
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.uploadRFQAttachment, body);
+    if (!isValid) {
+      logger.warn('Attachment upload rejected: payload validation failed', { errors }, 'RFQ_CONTROLLER');
+      return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
+    }
+
+    const result = rfqAttachmentService.saveAttachment({
+      fileName: body.fileName,
+      mimeType: body.mimeType,
+      content: body.content,
+    });
+
+    if (result.status !== rfqAttachmentService.ATTACHMENT_STATUS.SAVED) {
+      logger.warn(
+        `Attachment upload refused (${result.status})`,
+        { fileName: body.fileName, mimeType: body.mimeType, status: result.status },
+        'RFQ_CONTROLLER'
+      );
+      // A refused upload is an expected outcome the buyer can act on, not a fault.
+      const status = result.status === rfqAttachmentService.ATTACHMENT_STATUS.WRITE_FAILED ? 500 : 422;
+      return res.status(status).json({
+        success: false,
+        reason: result.status,
+        error: ATTACHMENT_ERRORS[result.status] || ATTACHMENT_ERRORS.WRITE_FAILED,
+      });
+    }
+
+    res.status(201).json({ success: true, data: result.attachment });
+  } catch (err) {
+    logger.error('Error storing RFQ attachment', err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
+/**
+ * Stream one stored attachment back to the buyer.
+ *
+ * The name and content type come from the stored sidecar rather than the request,
+ * so a caller cannot influence how the file is served. Content-Disposition is
+ * `inline` so the browser previews a PDF or image instead of forcing a download.
+ */
+function downloadRFQAttachment(req, res, next) {
+  try {
+    const { attachmentId } = req.params;
+    const stored = rfqAttachmentService.loadAttachment(attachmentId);
+
+    if (!stored) {
+      logger.warn('Attachment not found', { attachmentId }, 'RFQ_CONTROLLER');
+      return res.status(404).json({ success: false, error: 'That document is no longer available.' });
+    }
+
+    res.setHeader('Content-Type', stored.meta.mimeType);
+    res.setHeader('Content-Length', stored.content.length);
+    // The stored name is already reduced to a leaf and quoted, so it cannot inject
+    // extra header directives.
+    res.setHeader('Content-Disposition', `inline; filename="${stored.meta.fileName.replace(/"/g, '')}"`);
+    res.send(stored.content);
+  } catch (err) {
+    logger.error('Error reading RFQ attachment', err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
 function updateRFQ(req, res, next) {
   try {
     const { id } = req.params;
@@ -279,6 +371,8 @@ module.exports = {
   createRFQ,
   ingestRFQ,
   extractRFQFromDocument,
+  uploadRFQAttachment,
+  downloadRFQAttachment,
   updateRFQ,
   addQuote,
   generateEmailPreview,

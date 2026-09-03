@@ -308,6 +308,12 @@ class StoreService {
       // zero and the quote matrix crashed reading it. It is validated as a
       // required positive number by VALIDATION_SCHEMAS.createRFQ.
       budget: Number(rfqData.budget) || 0,
+      // Vendors price freight against these, so they round-trip with the RFQ.
+      deliveryLocation: rfqData.deliveryLocation || '',
+      deliveryPincode: rfqData.deliveryPincode || '',
+      // Metadata only. The bytes live on disk under rfqAttachmentService, so the
+      // bootstrap payload stays a fixed size no matter how much is attached.
+      attachments: Array.isArray(rfqData.attachments) ? rfqData.attachments : [],
       status: rfqData.status || 'open',
       sourcingMode: rfqData.sourcingMode || 'mode_1',
       quotesCount: rfqData.quotes ? rfqData.quotes.length : 0,

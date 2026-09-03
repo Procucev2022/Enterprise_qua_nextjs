@@ -443,6 +443,39 @@ const GEMINI_CONFIG = {
   TEMPERATURE: 0,
 };
 
+// ==============================================================================
+// RFQ DOCUMENT ATTACHMENTS
+// ==============================================================================
+// Supporting documents a buyer attaches to an RFQ. These are stored and served
+// back verbatim and are never sent to Gemini: the manual flow exists precisely
+// because the buyer is keying the line items themselves.
+//
+// Content is held on disk rather than on the RFQ record. A 10MB PDF is ~13MB of
+// base64, and the bootstrap payload returns every RFQ, so inlining attachments
+// would make that response grow without bound.
+const RFQ_ATTACHMENT_CONFIG = {
+  STORAGE_DIR: process.env.RFQ_ATTACHMENT_DIR || 'uploads/rfq-attachments',
+  MAX_BYTES: Number(process.env.RFQ_ATTACHMENT_MAX_BYTES || 10 * 1024 * 1024),
+  MAX_PER_RFQ: Number(process.env.RFQ_ATTACHMENT_MAX_PER_RFQ || 10),
+  // Allow-list rather than a block-list: anything not named here is refused, so a
+  // new executable or script type cannot be introduced by omission.
+  ALLOWED_MIME_TYPES: [
+    'application/pdf',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/msword',
+    'text/plain',
+    'text/csv',
+    'image/png',
+    'image/jpeg',
+    'image/webp',
+  ],
+  // Identifiers are generated server-side and must match this before ever being
+  // joined onto a path, which is what keeps `../` out of the storage directory.
+  ID_PATTERN: /^[a-f0-9-]{8,64}$/,
+};
+
 // Buyer-facing explanation for each extraction outcome. Every one of these ends
 // by pointing at manual line-item entry, because that is the recovery path.
 const EXTRACTION_REASON_MESSAGES = {
@@ -503,6 +536,8 @@ const {
   INDIAN_MOBILE_MESSAGE,
   OTP_CODE_REGEX,
   OTP_CODE_MESSAGE,
+  PINCODE_REGEX,
+  PINCODE_MESSAGE,
   VALIDATION_SCHEMAS,
   validatePayload,
 } = require('./validationSchemas');
@@ -522,6 +557,7 @@ module.exports = {
   IDENTITY_OTP_CONFIG,
   RFQ_CATEGORY_CLASSIFICATION,
   RFQ_INGESTION_CONFIG,
+  RFQ_ATTACHMENT_CONFIG,
   GEMINI_CONFIG,
   GEMINI_INLINE_MIME_TYPES,
   EXTRACTION_REASON_MESSAGES,
@@ -532,6 +568,8 @@ module.exports = {
   INDIAN_MOBILE_MESSAGE,
   OTP_CODE_REGEX,
   OTP_CODE_MESSAGE,
+  PINCODE_REGEX,
+  PINCODE_MESSAGE,
   VALIDATION_SCHEMAS,
   validatePayload,
 };
