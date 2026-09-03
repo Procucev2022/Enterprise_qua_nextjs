@@ -90,15 +90,16 @@ class StoreService {
   }
 
   /**
-   * Domain records (buyer accounts, evaluations, audit logs and system config)
-   * are served from the reference seed dataset held in this process.
-   *
-   * Vendors and RFQs are the exception: when DATABASE_URL is configured (Neon
-   * PostgreSQL), they hydrate from there instead, and every mutation below
-   * writes through fire-and-forget. An empty table (e.g. right after the schema
-   * was first created, before `db:migrate` has seeded it) is treated the same
-   * as "not configured" — falling back to the in-memory seed rather than
-   * booting with a blank vendor/RFQ list.
+   * All seven domain collections (vendors, RFQs, evaluations, vendor
+   * catalogue, buyer accounts, AI feed, audit logs) hydrate from Neon
+   * Postgres when DATABASE_URL is configured, falling back to the in-memory
+   * seed per-collection when its table is empty (e.g. right after the schema
+   * was first created, before `db:migrate` has seeded it) so one empty table
+   * doesn't blank out an otherwise-healthy boot. `isHydratedFromDB` is a
+   * single shared flag — true if ANY collection actually loaded real rows —
+   * matching how it was already being read by several controllers before
+   * this covered more than vendors/RFQs; system config stays a static
+   * in-memory default regardless.
    *
    * User accounts are a separate exception: they are read from and written to
    * the shared MySQL identity schema via db/identityQueries.js.
@@ -110,13 +111,43 @@ class StoreService {
     }
 
     try {
-      const [vendors, rfqs] = await Promise.all([domainQueries.getVendorsFromDB(), domainQueries.getRFQsFromDB()]);
+      const [vendors, rfqs, evaluations, vendorCatalogue, buyerAccountsResult, aiFeed, auditLogs] = await Promise.all([
+        domainQueries.getVendorsFromDB(),
+        domainQueries.getRFQsFromDB(),
+        domainQueries.getEvaluationsFromDB(),
+        domainQueries.getVendorCatalogueFromDB(),
+        domainQueries.getBuyerAccountsFromDB(),
+        domainQueries.getAIFeedFromDB(),
+        domainQueries.getAuditLogsFromDB(),
+      ]);
+
       if (vendors.length > 0) this.vendors = vendors;
       if (rfqs.length > 0) this.rfqs = rfqs;
-      this.isHydratedFromDB = vendors.length > 0 || rfqs.length > 0;
-      return { hydrated: this.isHydratedFromDB, source: this.isHydratedFromDB ? 'persisted' : 'in_memory_seed' };
+      if (evaluations.length > 0) this.evaluations = evaluations;
+      if (vendorCatalogue.length > 0) this.vendorCatalogue = vendorCatalogue;
+      if (buyerAccountsResult.accounts.length > 0) {
+        this.buyerAccounts = buyerAccountsResult.accounts;
+        // activeBuyerAccount must stay a reference into this.buyerAccounts
+        // (same invariant the constructor and every mutator already keep),
+        // not a separately-hydrated duplicate.
+        this.activeBuyerAccount =
+          this.buyerAccounts.find((a) => a.id === buyerAccountsResult.activeId) || this.buyerAccounts[0] || null;
+      }
+      if (aiFeed.length > 0) this.aiFeed = aiFeed;
+      if (auditLogs.length > 0) this.auditLogs = auditLogs;
+
+      const hydrated =
+        vendors.length > 0 ||
+        rfqs.length > 0 ||
+        evaluations.length > 0 ||
+        vendorCatalogue.length > 0 ||
+        buyerAccountsResult.accounts.length > 0 ||
+        aiFeed.length > 0 ||
+        auditLogs.length > 0;
+      this.isHydratedFromDB = hydrated;
+      return { hydrated, source: hydrated ? 'persisted' : 'in_memory_seed' };
     } catch (err) {
-      logger.error('Failed to hydrate vendors/RFQs from the domain database', err, 'STORE_SERVICE');
+      logger.error('Failed to hydrate domain data from the database', err, 'STORE_SERVICE');
       this.isHydratedFromDB = false;
       return { hydrated: false, source: 'in_memory_seed' };
     }
@@ -138,6 +169,54 @@ class StoreService {
 
   _removeRFQ(id) {
     domainQueries.deleteRFQInDB(id).catch((err) => logger.error('Failed to delete persisted RFQ', err, 'STORE_SERVICE'));
+  }
+
+  _persistEvaluation(evaluation) {
+    domainQueries
+      .upsertEvaluationInDB(evaluation)
+      .catch((err) => logger.error('Failed to persist evaluation', err, 'STORE_SERVICE'));
+  }
+
+  _persistCatalogueProduct(product) {
+    domainQueries
+      .upsertCatalogueProductInDB(product)
+      .catch((err) => logger.error('Failed to persist catalogue product', err, 'STORE_SERVICE'));
+  }
+
+  _removeCatalogueProduct(id) {
+    domainQueries
+      .deleteCatalogueProductInDB(id)
+      .catch((err) => logger.error('Failed to delete persisted catalogue product', err, 'STORE_SERVICE'));
+  }
+
+  _persistBuyerAccount(account) {
+    domainQueries
+      .upsertBuyerAccountInDB(account)
+      .catch((err) => logger.error('Failed to persist buyer account', err, 'STORE_SERVICE'));
+  }
+
+  _removeBuyerAccount(id) {
+    domainQueries
+      .deleteBuyerAccountInDB(id)
+      .catch((err) => logger.error('Failed to delete persisted buyer account', err, 'STORE_SERVICE'));
+  }
+
+  _setActiveBuyerAccount(id) {
+    domainQueries
+      .setActiveBuyerAccountInDB(id)
+      .catch((err) => logger.error('Failed to persist active buyer account', err, 'STORE_SERVICE'));
+  }
+
+  _persistAIFeedItem(item) {
+    domainQueries
+      .upsertAIFeedItemInDB(item)
+      .catch((err) => logger.error('Failed to persist AI feed item', err, 'STORE_SERVICE'));
+  }
+
+  _persistAuditLog(entry) {
+    domainQueries
+      .upsertAuditLogInDB(entry)
+      .catch((err) => logger.error('Failed to persist audit log entry', err, 'STORE_SERVICE'));
   }
 
   // ==========================================
@@ -166,6 +245,7 @@ class StoreService {
     };
 
     this.buyerAccounts.unshift(newAcc);
+    this._persistBuyerAccount(newAcc);
     this.addAuditLog({
       userEmail: newAcc.corporateEmail,
       action: `Created buyer account for ${newAcc.organizationName} (${newAcc.corporateEmail})`,
@@ -184,6 +264,7 @@ class StoreService {
       syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
     };
     this.buyerAccounts[idx] = updated;
+    this._persistBuyerAccount(updated);
 
     if (this.activeBuyerAccount && this.activeBuyerAccount.id === id) {
       this.activeBuyerAccount = updated;
@@ -196,8 +277,10 @@ class StoreService {
     const beforeLen = this.buyerAccounts.length;
     this.buyerAccounts = this.buyerAccounts.filter((a) => a.id !== id);
     if (this.buyerAccounts.length < beforeLen) {
+      this._removeBuyerAccount(id);
       if (this.activeBuyerAccount && this.activeBuyerAccount.id === id) {
         this.activeBuyerAccount = this.buyerAccounts[0] || null;
+        if (this.activeBuyerAccount) this._setActiveBuyerAccount(this.activeBuyerAccount.id);
       }
       return true;
     }
@@ -208,6 +291,7 @@ class StoreService {
     const target = this.buyerAccounts.find((a) => a.id === id);
     if (!target) return null;
     this.activeBuyerAccount = target;
+    this._setActiveBuyerAccount(id);
     return target;
   }
 
@@ -527,9 +611,14 @@ class StoreService {
       systemAction: evalData.systemAction || systemAction,
       moduleScores: evalData.moduleScores || moduleScores,
       documents: evalData.documents || [],
+      // The per-question detail was previously silently dropped here even
+      // though the client always sent it — only the rolled-up moduleScores
+      // survived.
+      questionBreakdown: evalData.questionBreakdown || [],
     };
 
     this.evaluations.unshift(newEval);
+    this._persistEvaluation(newEval);
 
     this.addAuditLog({
       userEmail: 'auditor@procucev.ai',
@@ -550,6 +639,7 @@ class StoreService {
     const previousHash = this.auditLogs.length > 0 ? this.auditLogs[0].shaSignature : '';
     const entry = createAuditEntry({ userEmail, action, rfqNumber, ipAddress, previousHash });
     this.auditLogs.unshift(entry);
+    this._persistAuditLog(entry);
 
     logger.audit(action, userEmail || 'system@procucev.ai', { rfqNumber, ipAddress, shaSignature: entry.shaSignature }, rfqNumber);
 
@@ -584,6 +674,10 @@ class StoreService {
 
     this.aiFeed.unshift(item);
     if (this.aiFeed.length > 100) this.aiFeed.pop();
+    // The DB-side upsert trims to the newest 100 rows itself (see
+    // domainQueries.upsertAIFeedItemInDB), so it stays in sync with the
+    // in-memory cap without needing to know which item .pop() just evicted.
+    this._persistAIFeedItem(item);
     return item;
   }
 
@@ -762,6 +856,7 @@ class StoreService {
       moq: Number(product.moq) || 1,
     };
     this.vendorCatalogue.unshift(newProd);
+    this._persistCatalogueProduct(newProd);
     this.addAuditLog({
       userEmail: userEmail || 'unknown',
       action: `Added product ${newProd.sku} (${newProd.name}) to item SKU catalogue`,
@@ -774,6 +869,7 @@ class StoreService {
     if (idx === -1) return null;
     const { vendorId: _ignoredVendorId, id: _ignoredId, ...safeUpdates } = updates;
     this.vendorCatalogue[idx] = { ...this.vendorCatalogue[idx], ...safeUpdates };
+    this._persistCatalogueProduct(this.vendorCatalogue[idx]);
     this.addAuditLog({
       userEmail: userEmail || 'unknown',
       action: `Updated SKU ${this.vendorCatalogue[idx].sku} in catalogue`,
@@ -785,6 +881,7 @@ class StoreService {
     const idx = this.vendorCatalogue.findIndex((p) => p.id === id);
     if (idx === -1) return false;
     const removed = this.vendorCatalogue.splice(idx, 1)[0];
+    this._removeCatalogueProduct(id);
     this.addAuditLog({
       userEmail: userEmail || 'unknown',
       action: `Removed product ${removed.sku} from SKU catalogue`,
@@ -808,6 +905,11 @@ class StoreService {
     });
 
     this.aiFeed.unshift(...outreachLogs);
+    // This bulk path bypassed addAIFeedItem's 100-item cap entirely before —
+    // trim here too so the in-memory list and the DB-side trim (which runs
+    // per insert regardless of which path added the row) stay consistent.
+    if (this.aiFeed.length > 100) this.aiFeed.splice(100);
+    outreachLogs.forEach((log) => this._persistAIFeedItem(log));
     this.addAuditLog({
       userEmail: 'chaser.bot@procucev.com',
       action: `Executed batch multi-channel outreach (${channels.join(' + ')}) for ${rfq.rfqNumber} to ${vendors.length} vendors`,

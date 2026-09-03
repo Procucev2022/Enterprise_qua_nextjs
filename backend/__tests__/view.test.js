@@ -111,10 +111,16 @@ describe('Domain database viewer (Neon PostgreSQL)', () => {
       });
       jest.spyOn(console, 'log').mockImplementation(() => {});
       const exitSpy = jest.spyOn(process, 'exit').mockImplementation(() => {});
+      // runCli() reads the ambient process.exitCode, a true Node global (not
+      // test-isolated) — pin it so this assertion can't be polluted by
+      // whatever another test file in the same worker left behind.
+      const originalExitCode = process.exitCode;
+      process.exitCode = undefined;
 
       await freshView.runCli();
 
       expect(exitSpy).toHaveBeenCalledWith(0);
+      process.exitCode = originalExitCode;
     });
 
     test('logs the failure and exits 1 when view() rejects', async () => {
