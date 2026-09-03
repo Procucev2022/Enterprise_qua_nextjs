@@ -281,32 +281,35 @@ describe('Category Manager Screens Suite', () => {
 
       renderWithProvider(<VendorConsole onNavigateToMatrix={onMatrix} onNavigateToEvaluation={onEval} />);
 
+      // Vendor cards now come from the real vendor directory (loaded via
+      // AppProvider's async bootstrap fetch, mocked in jest.setup.ts) rather
+      // than an instantly-available hardcoded list — wait for it to land.
       await waitFor(() => {
         expect(screen.getByText(/Vendor Summary & Performance Analytics/i)).toBeInTheDocument();
+        expect(screen.getAllByText(/Apex Supplies Ltd\./i)[0]).toBeInTheDocument();
       });
-
-      expect(screen.getAllByText(/Apex Supplies Ltd\./i)[0]).toBeInTheDocument();
 
       // Test search
       const searchInput = screen.getByPlaceholderText(/Search Vendor name or category/i);
       fireEvent.change(searchInput, { target: { value: 'Kiran' } });
-      expect(screen.getAllByText(/Kiran Valve Industries/i)[0]).toBeInTheDocument();
+      expect(screen.getAllByText(/Kiran Valves & Actuators/i)[0]).toBeInTheDocument();
 
       // Test company filter dropdown and dependent contact dropdown
       const selects = screen.getAllByRole('combobox');
       if (selects.length >= 2) {
-        fireEvent.change(selects[0], { target: { value: 'Kiran Valve Industries' } });
-        fireEvent.change(selects[1], { target: { value: 'v-002' } });
+        fireEvent.change(selects[0], { target: { value: 'Kiran Valves & Actuators' } });
+        fireEvent.change(selects[1], { target: { value: 'vendor-2' } });
         fireEvent.change(selects[0], { target: { value: 'all' } });
       }
 
-      // Test vendor with no active bids (Voltas Electro Mech)
-      fireEvent.change(searchInput, { target: { value: 'Voltas' } });
-      const voltasVendor = screen.getAllByText(/Voltas Electro Mech/i)[0];
-      fireEvent.click(voltasVendor);
-      const reviewBtnsForVoltas = screen.queryAllByRole('button', { name: /Review Performance/i });
-      if (reviewBtnsForVoltas.length > 0) {
-        fireEvent.click(reviewBtnsForVoltas[0]);
+      // Test vendor with no active bids — the bootstrap mock's only quote
+      // belongs to vendor-1 (Apex), so vendor-2 (Kiran) genuinely has none.
+      fireEvent.change(searchInput, { target: { value: 'Kiran' } });
+      const kiranVendor = screen.getAllByText(/Kiran Valves & Actuators/i)[0];
+      fireEvent.click(kiranVendor);
+      const reviewBtnsForKiran = screen.queryAllByRole('button', { name: /Review Performance/i });
+      if (reviewBtnsForKiran.length > 0) {
+        fireEvent.click(reviewBtnsForKiran[0]);
         expect(screen.getByText(/No active bids or quotes found in category database for this vendor/i)).toBeInTheDocument();
         const hideBtn = screen.getByRole('button', { name: /Hide Details/i });
         fireEvent.click(hideBtn);
@@ -460,6 +463,7 @@ describe('Category Manager Screens Suite', () => {
 
       await waitFor(() => {
         expect(screen.getByText(/Vendor Summary & Performance Analytics/i)).toBeInTheDocument();
+        expect(screen.getAllByText(/Apex Supplies Ltd\./i)[0]).toBeInTheDocument();
       });
 
       // Click Review Performance for first vendor

@@ -18,8 +18,11 @@ const BUYER_COMPANY_RIL = 'Reliance Industries Ltd. (RIL)';
 const BUYER_ID_RAJESH = 'buyer-1';
 const BUYER_ID_SUNITA = 'buyer-2';
 
+// VendorConsole now renders the real vendor directory loaded via
+// AppProvider's bootstrap fetch (jest.setup.ts's global fetch mock), rather
+// than an internal hardcoded list — these must match that mock's vendors.
 const VENDOR_COMPANY_APEX = 'Apex Supplies Ltd.';
-const VENDOR_COMPANY_KIRAN = 'Kiran Valve Industries';
+const VENDOR_COMPANY_KIRAN = 'Kiran Valves & Actuators';
 const VENDOR_ID_APEX = 'vendor-1';
 const VENDOR_ID_KIRAN = 'vendor-2';
 
@@ -148,6 +151,10 @@ describe('Category Manager drill-down collapse precedence', () => {
       renderWithProvider(<VendorConsole onNavigateToMatrix={onNavigateToMatrix} />);
       await waitFor(() => {
         expect(screen.getByText(/Vendor Summary & Performance Analytics/i)).toBeInTheDocument();
+        // Vendor cards now depend on the real vendor directory loading via
+        // AppProvider's async bootstrap fetch, not an instantly-available
+        // hardcoded list — wait for it before interacting with the dropdowns.
+        expect(screen.getByText(VENDOR_COMPANY_APEX)).toBeInTheDocument();
       });
     }
 
