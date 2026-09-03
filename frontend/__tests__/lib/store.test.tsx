@@ -1140,6 +1140,48 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     jest.useRealTimers();
   });
 
+  it('projects a vendor opportunity from an RFQ with no deadline or budget without inventing values', async () => {
+    let contextValue: any;
+    const Consumer = () => {
+      contextValue = useApp();
+      return <div>RFQs: {contextValue.rfqs.length}</div>;
+    };
+
+    render(
+      <AppProvider>
+        <Consumer />
+      </AppProvider>
+    );
+
+    await waitFor(() => expect(contextValue.buyerVendors.length).toBeGreaterThan(0));
+
+    act(() => {
+      contextValue.setActiveSubscription('version_3');
+    });
+
+    let created: RFQItem;
+    act(() => {
+      created = contextValue.addNewRFQ({
+        rfqNumber: 'RFQ-NO-DEADLINE',
+        title: 'Undated Sourcing Request',
+        category: 'Mechanical',
+        targetDeliveryDate: '',
+        sourcingMode: 'mode_1',
+        budget: 0,
+        extractedEntities: [],
+      });
+    });
+
+    const opportunity = contextValue.vendorOpportunities.find((o: any) => o.rfqNumber === 'RFQ-NO-DEADLINE');
+    expect(opportunity).toBeDefined();
+    // No deadline was ever set — daysRemaining must not fall back to a
+    // fabricated countdown, and estimatedValue must not fall back to a
+    // fabricated budget ceiling the buyer never stated.
+    expect(opportunity.deadline).toBe('');
+    expect(opportunity.daysRemaining).toBe(0);
+    expect(opportunity.estimatedValue).toBeUndefined();
+  });
+
   it('handles vendor evaluation, rating revisions, audit logs, and feed items', async () => {
     let contextValue: any;
     const Consumer = () => {

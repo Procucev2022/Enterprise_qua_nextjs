@@ -29,7 +29,6 @@ import {
   SOURCING_MODES,
   INITIAL_SYSTEM_CONFIG,
   INITIAL_AZURE_HEALTH,
-  CURRENCY,
   formatCurrency,
 } from './constants';
 
@@ -40,6 +39,58 @@ function authFetchHeaders(): Record<string, string> {
   return {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+/**
+ * Whole days between now and a target delivery date.
+ *
+ * The vendor-facing feed used to hardcode `daysRemaining: 7` on every RFQ,
+ * which put a countdown in front of suppliers that had nothing to do with the
+ * buyer's actual deadline. An unparseable or absent date yields 0 rather than
+ * an invented figure.
+ */
+function daysUntil(targetDate?: string): number {
+  if (!targetDate) return 0;
+  const target = Date.parse(targetDate);
+  if (Number.isNaN(target)) return 0;
+  return Math.max(0, Math.ceil((target - Date.now()) / 86400000));
+}
+
+/**
+ * Project a real RFQ onto the vendor-facing opportunity it becomes.
+ *
+ * Every field here is read off the RFQ record itself. Both call sites (initial
+ * hydration and a freshly created RFQ) previously invented the buyer name, the
+ * delivery location and the countdown, and hydration additionally substituted a
+ * flat ₹1,50,000 whenever the buyer had stated no budget — putting a ceiling in
+ * front of vendors that the buyer never set. An RFQ with no budget now simply
+ * carries no estimated value, exactly as `RFQItem.budget` documents.
+ */
+function buildOpportunityFromRFQ(rfq: RFQItem): VendorOpportunity {
+  return {
+    id: `opp-${rfq.id}`,
+    rfqNumber: rfq.rfqNumber,
+    title: rfq.title,
+    buyer: rfq.buyerAccountName || 'Buyer identity not disclosed',
+    deadline: rfq.targetDeliveryDate || '',
+    daysRemaining: daysUntil(rfq.targetDeliveryDate),
+    type: rfq.sourcingMode === 'mode_3' ? 'network_marketplace' : 'direct_invitation',
+    estimatedValue: rfq.budget > 0 ? formatCurrency(rfq.budget) : undefined,
+    deliveryLocation: rfq.deliveryLocation || '',
+    status: rfq.quotes && rfq.quotes.length > 0 ? 'under_review' : 'pending_bid',
+    lineItems: (rfq.extractedEntities || []).map((ent: ExtractedEntity, idx: number) => ({
+      id: ent.id || `item-${idx}`,
+      description: ent.itemName,
+      quantity: ent.quantity,
+      // Price, lead time and payment terms are the vendor's own bid fields and
+      // stay empty until they actually quote — seeding them with 14 days and
+      // "Net 30" showed a commitment nobody had made.
+      unitPrice: 0,
+      leadTimeDays: 0,
+      marketBandStatus: 'optimal',
+      paymentTerms: '',
+    })),
   };
 }
 
@@ -460,28 +511,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
           setSelectedRFQForMatrix((prev) => prev || hydratedRfqs[0]);
           setSelectedRFQForDeepDive((prev) => prev || hydratedRfqs[0]);
 
-          const mappedOpps: VendorOpportunity[] = hydratedRfqs.map((rfq: RFQItem) => ({
-            id: `opp-${rfq.id}`,
-            rfqNumber: rfq.rfqNumber,
-            title: rfq.title,
-            buyer: 'Enterprise Procurement Division',
-            deadline: rfq.targetDeliveryDate || '2026-09-15',
-            daysRemaining: 7,
-            type: rfq.sourcingMode === 'mode_3' ? 'network_marketplace' : 'direct_invitation',
-            estimatedValue: rfq.budget ? formatCurrency(rfq.budget) : formatCurrency(150000),
-            deliveryLocation: 'Pune / Mumbai Plant Site',
-            status: rfq.quotes && rfq.quotes.length > 0 ? 'under_review' : 'pending_bid',
-            lineItems: (rfq.extractedEntities || []).map((ent: ExtractedEntity, idx: number) => ({
-              id: ent.id || `item-${idx}`,
-              description: ent.itemName,
-              quantity: ent.quantity,
-              unitPrice: 0,
-              leadTimeDays: 14,
-              marketBandStatus: 'optimal',
-              paymentTerms: '45 Days Net',
-            })),
-          }));
-          setVendorOpportunities(mappedOpps);
+          setVendorOpportunities(hydratedRfqs.map(buildOpportunityFromRFQ));
         }
         if (d.evaluations && d.evaluations.length > 0) {
           setVendorEvaluations(d.evaluations);
@@ -1986,27 +2016,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
     }).catch((e) => console.error('Failed to save RFQ to DB:', e));
     
     // Create opportunity in vendor portal
-    const newOpp: VendorOpportunity = {
-      id: `opp-${Date.now()}`,
-      rfqNumber: newRFQ.rfqNumber,
-      title: newRFQ.title,
-      buyer: 'Larsen & Toubro Limited (Heavy Engineering)',
-      deadline: newRFQ.targetDeliveryDate,
-      daysRemaining: 7,
-      type: newRFQ.sourcingMode === 'mode_1' ? 'direct_invitation' : 'network_marketplace',
-      estimatedValue: newRFQ.budget > 0 ? `${CURRENCY.SYMBOL}${(newRFQ.budget / 1000).toFixed(0)}k` : undefined,
-      deliveryLocation: 'Enterprise Logistics Hub (Navi Mumbai)',
-      status: 'pending_bid',
-      lineItems: newRFQ.extractedEntities.map((e, idx) => ({
-        id: `li-new-${idx}`,
-        description: `${e.itemName} [${e.minorCategory || 'Minor Spec'}] (${e.technicalSpecs})`,
-        quantity: e.quantity,
-        unitPrice: 0,
-        leadTimeDays: 14,
-        marketBandStatus: 'optimal',
-        paymentTerms: 'Net 30 Days',
-      })),
-    };
+    const newOpp = buildOpportunityFromRFQ(newRFQ);
     setVendorOpportunities((prev) => [newOpp, ...prev]);
 
     // Dispatch Standard RFQ Email Package to each suitable vendor
