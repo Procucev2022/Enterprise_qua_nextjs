@@ -175,3 +175,59 @@ Separate constant file configuration: Add the configuration in assistant instruc
 ```text
 AES Encryption: Incorporate AES encryption algorithms to guarantee the protection and secure processing of data.
 ```
+---
+### Prompt 17
+**Timestamp**: 2026-09-03T11:38:00Z
+```text
+Please implement the existing Buyer Profile functionality from the old repository into the new repository.
+
+Old repositories — use these only as a reference for functionality, API flow, login/authentication, business logic, and existing Buyer Profile behavior:
+
+Old Frontend:
+`C:\Users\navin\OneDrive\Desktop\procucev\p2pui_v1`
+
+Old Backend:
+`C:\Users\navin\OneDrive\Desktop\procucev\p2pservices_v1_qua`
+
+New repository where the functionality must be implemented:
+
+`C:\Users\navin\OneDrive\Desktop\procucev\Enterprise_qua_nextjs`
+
+Requirements:
+
+1. First, carefully inspect the old frontend and backend to understand the complete Buyer Profile functionality.
+2. Check how login/authentication works in the old application and identify how the Buyer Profile data is fetched, updated, validated, and saved.
+3. Understand all APIs, request/response structures, validations, permissions, and business logic related to the Buyer Profile.
+4. Then inspect the new `Enterprise_qua_nextjs` project and understand its current architecture, routing, API structure, state management, components, and authentication flow.
+5. Re-implement the same Buyer Profile functionality in the new project using the new project's existing tech stack and coding patterns.
+6. Adapt the old functionality/API integration where necessary instead of blindly copying old code, since the old and new projects use different technology stacks.
+7. Preserve all existing functionality of the new project. Do not break or modify unrelated features.
+8. IMPORTANT: Do NOT change the existing UI/design in the new project. Keep the current Buyer Profile UI exactly as it is.
+9. Only connect the existing new UI with the required functionality, APIs, authentication, validation, and backend logic.
+10. Do not copy the old UI or styling from the old repository.
+11. If the new project is missing any required API/backend functionality, identify it from the old backend and implement the equivalent functionality using the new project's architecture.
+12. Make sure the logged-in buyer can access and manage their own profile correctly, just like in the old application.
+13. Handle loading, error, success, validation, authentication, and API failure states properly without changing the UI design.
+14. After implementation, verify the complete Buyer Profile flow end-to-end and fix any TypeScript, lint, build, or runtime issues.
+
+Before making changes, provide a short summary of:
+
+* Old Buyer Profile flow
+* Old frontend APIs/components involved
+* Old backend APIs/services involved
+* New project's corresponding files/components
+* What needs to be implemented or connected
+
+Then implement the changes.
+
+IMPORTANT:
+The old repositories are reference implementations only. The final implementation must follow the architecture and tech stack of `Enterprise_qua_nextjs`.
+
+UI must remain unchanged in the new project.
+```
+---
+### Prompt 18
+**Timestamp**: 2026-09-03T12:20:00Z
+```text
+for buyer profile use actual database dont use inmemory or dummy data
+```

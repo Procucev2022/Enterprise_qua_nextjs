@@ -316,6 +316,108 @@ export interface MajorMinorCategory {
   minorCategories: string[];
 }
 
+/** Legal constitutions a buyer organisation can be registered under. */
+export type OrganizationType =
+  | 'Private Limited'
+  | 'Public Limited'
+  | 'Partnership'
+  | 'Sole Proprietorship'
+  | 'LLP';
+
+/**
+ * One selected procurement category, flattened to a major/minor pair.
+ *
+ * This is the wire format `/api/buyer-profile/me` speaks in both directions, and
+ * it is one row of `org_division_category` in the shared schema. The screen holds
+ * the same selection as a nested map because that is what the category tree
+ * renders from; the pairs are the transport shape.
+ */
+export interface BuyerProfileCategory {
+  major: string;
+  minor: string;
+}
+
+/**
+ * The signed-in buyer's organisation profile, as returned by
+ * GET /api/buyer-profile/me.
+ *
+ * `contactEmail` and `contactPhone` come from the account's own `user` row rather
+ * than the organisation, so they identify the signed-in buyer and are not
+ * editable through this endpoint.
+ */
+export interface BuyerProfile {
+  organizationId: string;
+  userId: string;
+  companyName: string;
+  brandName: string;
+  organizationType: OrganizationType | string;
+  panNumber: string;
+  gstNumber: string;
+  cinNumber: string;
+  website: string;
+  annualTurnover: string;
+  street: string;
+  city: string;
+  state: string;
+  pincode: string;
+  country: string;
+  contactName: string;
+  contactDesignation: string;
+  contactEmail: string;
+  contactPhone: string;
+  categories: BuyerProfileCategory[];
+}
+
+/**
+ * Fields a buyer may patch via PUT /api/buyer-profile/me.
+ *
+ * Every key is optional because the endpoint applies null-skip semantics: an
+ * omitted field keeps its stored value. `companyName` is required by the server
+ * whenever a save is attempted, and `categories` replaces the whole selection.
+ */
+export interface BuyerProfileUpdatePayload {
+  companyName: string;
+  brandName?: string;
+  organizationType?: OrganizationType | string;
+  panNumber?: string;
+  gstNumber?: string;
+  cinNumber?: string;
+  website?: string;
+  annualTurnover?: string;
+  street?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  country?: string;
+  contactName?: string;
+  contactDesignation?: string;
+  categories?: BuyerProfileCategory[];
+}
+
+/** Outcome of a buyer profile read. Never throws, so the screen can show why. */
+export interface BuyerProfileResult {
+  success: boolean;
+  data?: BuyerProfile;
+  error?: string;
+  /** Per-field validation messages keyed by payload field name. */
+  fieldErrors?: Record<string, string>;
+  /** HTTP status, so the caller can distinguish auth from availability faults. */
+  status?: number;
+}
+
+/** Outcome of a buyer profile save, carrying the re-read record on success. */
+export interface BuyerProfileSaveResult extends BuyerProfileResult {
+  message?: string;
+  categoryCount?: number | null;
+}
+
+/** Outcome of a procurement category taxonomy read. */
+export interface CategoryTaxonomyResult {
+  success: boolean;
+  data: MajorMinorCategory[];
+  error?: string;
+}
+
 export interface OrganizationProfile {
   companyName: string;
   brandName: string;

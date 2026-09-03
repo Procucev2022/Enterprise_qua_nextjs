@@ -1,17 +1,25 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
-import categoriesData from '@/lib/categories.json';
+import {
+  expandCategorySelection,
+  fetchBuyerProfile,
+  fetchCategoryTaxonomy,
+  flattenCategorySelection,
+  saveBuyerProfile,
+} from '@/lib/buyerProfileClient';
+import { BUYER_PROFILE_LIMITS, ORGANIZATION_TYPE_OPTIONS } from '@/lib/constants';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { FORM_SCHEMAS, validateFormData } from '@/lib/validationSchemas';
+import { logger } from '@/lib/logger';
+import type { BuyerProfileUpdatePayload, MajorMinorCategory, OrganizationType } from '@/lib/types';
 import {
   Building2,
-  FileCheck,
   ShieldCheck,
   CheckCircle2,
   MapPin,
   User,
-  Mail,
-  Phone,
   Search,
   CheckSquare,
   Square,
@@ -20,64 +28,211 @@ import {
   Save,
   Globe,
   Sliders,
-  Layers,
-  Sparkles,
-  AlertCircle,
 } from 'lucide-react';
 
+/**
+ * Buyer Organization Profile.
+ *
+ * Every field on this screen is a column of the buyer's own `organization` row in
+ * the shared Procucev database, and every category checkbox is a row of
+ * `org_division_category`. Nothing is seeded, defaulted from a fixture, or held
+ * in memory between sessions: the form is populated by GET /api/buyer-profile/me
+ * on mount and persisted by PUT /api/buyer-profile/me on save.
+ *
+ * The organisation is resolved server-side from the session token, so the screen
+ * never names an organisation and a buyer can only ever reach their own record.
+ */
 export default function BuyerProfilePage() {
   const { addAuditLog, showToast } = useApp();
 
+  const { MAX_MAJOR_CATEGORIES, MAX_MINOR_CATEGORIES } = BUYER_PROFILE_LIMITS;
+
   // Organization Form State
-  const [companyName, setCompanyName] = useState('Larsen & Toubro Limited');
-  const [brandName, setBrandName] = useState('L&T Heavy Engineering & Construction');
-  const [orgType, setOrgType] = useState<'Private Limited' | 'Public Limited' | 'Partnership' | 'Sole Proprietorship' | 'LLP'>('Public Limited');
-  const [panNumber, setPanNumber] = useState('AAACL1234F');
-  const [gstNumber, setGstNumber] = useState('27AAACL1234F1Z5');
-  const [cinNumber, setCinNumber] = useState('L28920MH1946PLC004768');
-  const [website, setWebsite] = useState('https://www.larsentoubro.com');
-  const [annualTurnover, setAnnualTurnover] = useState('₹ 1,80,000 Cr+');
+  const [companyName, setCompanyName] = useState('');
+  const [brandName, setBrandName] = useState('');
+  const [orgType, setOrgType] = useState<OrganizationType>('Public Limited');
+  const [panNumber, setPanNumber] = useState('');
+  const [gstNumber, setGstNumber] = useState('');
+  const [cinNumber, setCinNumber] = useState('');
+  const [website, setWebsite] = useState('');
+  const [annualTurnover, setAnnualTurnover] = useState('');
 
   // Address State
-  const [street, setStreet] = useState('L&T House, Ballard Estate, N.M. Marg');
-  const [city, setCity] = useState('Mumbai');
-  const [state, setState] = useState('Maharashtra');
-  const [pincode, setPincode] = useState('400001');
-  const [country, setCountry] = useState('India');
+  const [street, setStreet] = useState('');
+  const [city, setCity] = useState('');
+  const [state, setState] = useState('');
+  const [pincode, setPincode] = useState('');
+  const [country, setCountry] = useState('');
 
-  // Contact Person State
-  const [contactName, setContactName] = useState('Rajesh Sharma');
-  const [contactDesignation, setContactDesignation] = useState('Chief Procurement Officer (CPO)');
-  const [contactEmail, setContactEmail] = useState('buyer@procucev.com');
-  const [contactPhone, setContactPhone] = useState('+91 98201 44820');
+  // Contact Person State. Email and mobile belong to the signed-in account's
+  // `user` row and are shown as loaded; the save endpoint ignores them so a
+  // profile edit can never reassign the login identity.
+  const [contactName, setContactName] = useState('');
+  const [contactDesignation, setContactDesignation] = useState('');
+  const [contactEmail, setContactEmail] = useState('');
+  const [contactPhone, setContactPhone] = useState('');
 
   // Category Selection State: Selected Major Categories and Minor Categories
-  const [selectedMajor, setSelectedMajor] = useState<string[]>([
-    'Civil Works',
-    'Engineering Spares - Electrical',
-    'Engineering Spares - Mechanical',
-    'IT',
-  ]);
-
-  const [selectedMinor, setSelectedMinor] = useState<Record<string, string[]>>({
-    'Civil Works': ['Piling', 'Excavation', 'Waterproofing', 'PEB Structure', 'Roofing Sheets'],
-    'Engineering Spares - Electrical': ['Cables', 'Circuit Breakers', 'Panels', 'DG Parts', 'Transformers'],
-    'Engineering Spares - Mechanical': ['Bearings & Accessories', 'Compressors & Accessories', 'Pipes & Pipe Fittings', 'Pumps & Accessories', 'Valves & Fittings'],
-    'IT': ['Computer', 'Laptop', 'Servers', 'Software', 'Networking Equipment'],
-  });
+  const [selectedMajor, setSelectedMajor] = useState<string[]>([]);
+  const [selectedMinor, setSelectedMinor] = useState<Record<string, string[]>>({});
 
   const [searchTerm, setSearchTerm] = useState('');
-  const [expandedMajor, setExpandedMajor] = useState<Record<string, boolean>>({
-    'Civil Works': true,
-    'Engineering Spares - Electrical': true,
-    'Engineering Spares - Mechanical': true,
-    'IT': true,
-  });
+  const [expandedMajor, setExpandedMajor] = useState<Record<string, boolean>>({});
+
+  // The major/minor taxonomy, read from the `category_division` master table.
+  // Starts empty because there is no offline copy to show: an unreachable API
+  // means the buyer is told the tree could not be loaded, not offered categories
+  // that might not exist.
+  const [taxonomy, setTaxonomy] = useState<MajorMinorCategory[]>([]);
+
+  // Request state. `isLoaded` gates saving: without a resolved organisation there
+  // is nothing to patch, and submitting would post a form the buyer never saw
+  // filled in.
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  /**
+   * Latest `showToast`, read through a ref.
+   *
+   * The store recreates `showToast` on every provider render, so it must not be a
+   * dependency of the load below. It used to be, and the result was an unbounded
+   * request loop: reporting a failed load calls `showToast`, which sets state in
+   * the provider, which re-renders it, which yields a new `showToast` identity,
+   * which re-creates the loader, which re-runs the mount effect, which requests
+   * again. A failing endpoint drove that round indefinitely, and the toast's own
+   * auto-dismiss timer would have driven it even on success.
+   *
+   * A ref keeps the loader's identity stable while still calling the current
+   * function, so the profile is fetched once per mount.
+   */
+  const showToastRef = useRef(showToast);
+  useEffect(() => {
+    showToastRef.current = showToast;
+  }, [showToast]);
+
+  /** Set once the component unmounts, so a late response cannot set state. */
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  /**
+   * Load the taxonomy and the buyer's stored profile.
+   *
+   * Both are requested together because the category tree cannot be rendered
+   * without the taxonomy and the selection cannot be shown without the profile,
+   * so serialising them would only add a round trip.
+   *
+   * Deliberately has no dependencies: it reads the store callback through a ref
+   * and only ever calls state setters, whose identities React guarantees are
+   * stable. That is what keeps the mount effect from re-firing.
+   */
+  const loadProfile = useCallback(async () => {
+    setIsLoading(true);
+
+    const [taxonomyResult, profileResult] = await Promise.all([
+      fetchCategoryTaxonomy(),
+      fetchBuyerProfile(),
+    ]);
+
+    if (!isMountedRef.current) return;
+
+    setTaxonomy(taxonomyResult.data);
+    if (!taxonomyResult.success) {
+      showToastRef.current(UI_STRINGS.buyerProfile.loadFailedTitle, taxonomyResult.error || '', 'warning');
+    }
+
+    if (!profileResult.success || !profileResult.data) {
+      setIsLoaded(false);
+      setIsLoading(false);
+      showToastRef.current(UI_STRINGS.buyerProfile.loadFailedTitle, profileResult.error || '', 'warning');
+      return;
+    }
+
+    const profile = profileResult.data;
+    setCompanyName(profile.companyName);
+    setBrandName(profile.brandName);
+    // Guard against a stored constitution outside the offered set, which would
+    // leave the select bound to a value none of its options carry.
+    setOrgType(
+      ORGANIZATION_TYPE_OPTIONS.includes(profile.organizationType as OrganizationType)
+        ? (profile.organizationType as OrganizationType)
+        : 'Public Limited'
+    );
+    setPanNumber(profile.panNumber);
+    setGstNumber(profile.gstNumber);
+    setCinNumber(profile.cinNumber);
+    setWebsite(profile.website);
+    setAnnualTurnover(profile.annualTurnover);
+    setStreet(profile.street);
+    setCity(profile.city);
+    setState(profile.state);
+    setPincode(profile.pincode);
+    setCountry(profile.country);
+    setContactName(profile.contactName);
+    setContactDesignation(profile.contactDesignation);
+    setContactEmail(profile.contactEmail);
+    setContactPhone(profile.contactPhone);
+
+    const { selectedMajor: majors, selectedMinor: minors } = expandCategorySelection(profile.categories);
+    setSelectedMajor(majors);
+    setSelectedMinor(minors);
+    // Open the majors the buyer already sources in, so their existing scope is
+    // visible without hunting for it.
+    setExpandedMajor(majors.reduce<Record<string, boolean>>((acc, major) => ({ ...acc, [major]: true }), {}));
+
+    setIsLoaded(true);
+    setIsLoading(false);
+  }, []);
+
+  // Runs once per mount: `loadProfile` is dependency-free, so this effect has a
+  // stable dependency and cannot be re-triggered by a provider re-render.
+  useEffect(() => {
+    void loadProfile();
+  }, [loadProfile]);
 
   // PAN Validation Helper
   const isPanValid = (pan: string) => /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(pan.toUpperCase());
   // GST Validation Helper
   const isGstValid = (gst: string) => /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(gst.toUpperCase());
+
+  // Calculate totals
+  const totalSelectedMinorCount = Object.values(selectedMinor).reduce((acc, curr) => acc + curr.length, 0);
+
+  /** Minors of a major, from the taxonomy the database returned. */
+  const minorsOf = (majorName: string) =>
+    taxonomy.find((c) => c.majorCategory === majorName)?.minorCategories || [];
+
+  /**
+   * Report that a cardinality cap blocked a selection.
+   *
+   * The caps exist because the RFQ distribution engine fans out per selected
+   * category, so an unbounded scope would broadcast every RFQ to the whole vendor
+   * base. The old screen let "Select All" bypass them; here every path goes
+   * through these checks.
+   */
+  const rejectForMajorCap = () => {
+    showToast(
+      UI_STRINGS.buyerProfile.limitReachedTitle,
+      formatString(UI_STRINGS.buyerProfile.maxMajorReached, { max: MAX_MAJOR_CATEGORIES }),
+      'warning'
+    );
+  };
+
+  const rejectForMinorCap = () => {
+    showToast(
+      UI_STRINGS.buyerProfile.limitReachedTitle,
+      formatString(UI_STRINGS.buyerProfile.maxMinorReached, {
+        count: totalSelectedMinorCount,
+        max: MAX_MINOR_CATEGORIES,
+      }),
+      'warning'
+    );
+  };
 
   // Toggle Major Category
   const toggleMajorCategory = (majorName: string) => {
@@ -88,43 +243,85 @@ export default function BuyerProfilePage() {
         delete next[majorName];
         return next;
       });
-    } else {
-      setSelectedMajor((prev) => [...prev, majorName]);
-      // Select all minor by default when major is turned on
-      const allMinor = categoriesData.find((c) => c.majorCategory === majorName)?.minorCategories || [];
-      setSelectedMinor((prev) => ({ ...prev, [majorName]: allMinor }));
+      return;
     }
+
+    if (selectedMajor.length >= MAX_MAJOR_CATEGORIES) {
+      rejectForMajorCap();
+      return;
+    }
+
+    const remainingSlots = MAX_MINOR_CATEGORIES - totalSelectedMinorCount;
+    if (remainingSlots <= 0) {
+      rejectForMinorCap();
+      return;
+    }
+
+    setSelectedMajor((prev) => [...prev, majorName]);
+    // Select as many minors as the remaining allowance permits, rather than all
+    // of them and then silently discarding the overflow at save time.
+    setSelectedMinor((prev) => ({ ...prev, [majorName]: minorsOf(majorName).slice(0, remainingSlots) }));
   };
 
   // Toggle Minor Category
   const toggleMinorCategory = (majorName: string, minorName: string) => {
+    const currentList = selectedMinor[majorName] || [];
+    const isChecked = currentList.includes(minorName);
+
+    if (isChecked) {
+      const updated = currentList.filter((m) => m !== minorName);
+      setSelectedMinor((prev) => {
+        const next = { ...prev, [majorName]: updated };
+        if (updated.length === 0) delete next[majorName];
+        return next;
+      });
+      // If no minor selected, deselect major
+      if (updated.length === 0) {
+        setSelectedMajor((prev) => prev.filter((m) => m !== majorName));
+      }
+      return;
+    }
+
+    if (totalSelectedMinorCount >= MAX_MINOR_CATEGORIES) {
+      rejectForMinorCap();
+      return;
+    }
+    if (!selectedMajor.includes(majorName) && selectedMajor.length >= MAX_MAJOR_CATEGORIES) {
+      rejectForMajorCap();
+      return;
+    }
+
     if (!selectedMajor.includes(majorName)) {
       setSelectedMajor((prev) => [...prev, majorName]);
     }
-
-    const currentList = selectedMinor[majorName] || [];
-    let updated: string[] = [];
-    if (currentList.includes(minorName)) {
-      updated = currentList.filter((m) => m !== minorName);
-    } else {
-      updated = [...currentList, minorName];
-    }
-
-    setSelectedMinor((prev) => ({ ...prev, [majorName]: updated }));
-
-    // If no minor selected, deselect major
-    if (updated.length === 0) {
-      setSelectedMajor((prev) => prev.filter((m) => m !== majorName));
-    }
+    setSelectedMinor((prev) => ({ ...prev, [majorName]: [...(prev[majorName] || []), minorName] }));
   };
 
   // Select all minor for a major
   const selectAllMinorInMajor = (majorName: string) => {
-    const allMinor = categoriesData.find((c) => c.majorCategory === majorName)?.minorCategories || [];
+    const alreadySelected = selectedMinor[majorName] || [];
+    if (!selectedMajor.includes(majorName) && selectedMajor.length >= MAX_MAJOR_CATEGORIES) {
+      rejectForMajorCap();
+      return;
+    }
+
+    // Room left once this major's current selection is set aside, since those
+    // minors are being replaced rather than added to.
+    const remainingSlots = MAX_MINOR_CATEGORIES - (totalSelectedMinorCount - alreadySelected.length);
+    if (remainingSlots <= 0) {
+      rejectForMinorCap();
+      return;
+    }
+
+    const allMinor = minorsOf(majorName);
+    if (allMinor.length > remainingSlots) {
+      rejectForMinorCap();
+    }
+
     if (!selectedMajor.includes(majorName)) {
       setSelectedMajor((prev) => [...prev, majorName]);
     }
-    setSelectedMinor((prev) => ({ ...prev, [majorName]: allMinor }));
+    setSelectedMinor((prev) => ({ ...prev, [majorName]: allMinor.slice(0, remainingSlots) }));
   };
 
   // Clear minor for a major
@@ -137,11 +334,8 @@ export default function BuyerProfilePage() {
     setSelectedMajor((prev) => prev.filter((m) => m !== majorName));
   };
 
-  // Calculate totals
-  const totalSelectedMinorCount = Object.values(selectedMinor).reduce((acc, curr) => acc + curr.length, 0);
-
   // Filtered Categories based on search
-  const filteredCategories = categoriesData.filter((cat) => {
+  const filteredCategories = taxonomy.filter((cat) => {
     if (!searchTerm.trim()) return true;
     const term = searchTerm.toLowerCase();
     const matchesMajor = cat.majorCategory.toLowerCase().includes(term);
@@ -149,17 +343,99 @@ export default function BuyerProfilePage() {
     return matchesMajor || matchesMinor;
   });
 
-  const handleSaveProfile = (e: React.FormEvent) => {
+  /**
+   * Persist the profile.
+   *
+   * Validated against FORM_SCHEMAS.buyerProfile first so a malformed statutory
+   * identifier is reported before a request is made, then re-validated by the
+   * server, which owns the `organization` row. The response is applied back to the
+   * form so the buyer sees exactly what was stored, including the server-side
+   * uppercasing of PAN/GSTIN/CIN and the currency-symbol rewrite.
+   */
+  const handleSaveProfile = async (e: React.FormEvent | React.MouseEvent) => {
     e.preventDefault();
-    if (!companyName.trim() || !panNumber.trim() || !gstNumber.trim()) {
-      showToast('Validation Error', 'Company Name, PAN, and GSTIN are required.', 'warning');
+    if (isSaving) return;
+
+    if (!isLoaded) {
+      showToast(UI_STRINGS.buyerProfile.saveFailedTitle, UI_STRINGS.buyerProfile.loadUnreachable, 'warning');
       return;
+    }
+
+    const { isValid, fieldErrors } = validateFormData(FORM_SCHEMAS.buyerProfile, {
+      companyName,
+      panNumber,
+      gstNumber,
+      cinNumber,
+      website,
+      pincode,
+    });
+
+    if (!isValid) {
+      showToast(
+        UI_STRINGS.buyerProfile.validationErrorTitle,
+        Object.values(fieldErrors).join(' '),
+        'warning'
+      );
+      return;
+    }
+
+    const categories = flattenCategorySelection(selectedMajor, selectedMinor);
+    if (categories.length === 0) {
+      showToast(
+        UI_STRINGS.buyerProfile.validationErrorTitle,
+        UI_STRINGS.buyerProfile.categoriesRequired,
+        'warning'
+      );
+      return;
+    }
+
+    const payload: BuyerProfileUpdatePayload = {
+      companyName,
+      brandName,
+      organizationType: orgType,
+      panNumber,
+      gstNumber,
+      cinNumber,
+      website,
+      annualTurnover,
+      street,
+      city,
+      state,
+      pincode,
+      country,
+      contactName,
+      contactDesignation,
+      categories,
+    };
+
+    setIsSaving(true);
+    logger.info('Saving buyer organization profile', { categoryCount: categories.length }, 'BUYER_PROFILE');
+    const result = await saveBuyerProfile(payload);
+    setIsSaving(false);
+
+    if (!result.success) {
+      showToast(UI_STRINGS.buyerProfile.saveFailedTitle, result.error || '', 'warning');
+      return;
+    }
+
+    // Re-apply the stored record: the server normalises several fields, and
+    // leaving the pre-save text on screen would misrepresent what was persisted.
+    if (result.data) {
+      setCompanyName(result.data.companyName);
+      setBrandName(result.data.brandName);
+      setPanNumber(result.data.panNumber);
+      setGstNumber(result.data.gstNumber);
+      setCinNumber(result.data.cinNumber);
+      setAnnualTurnover(result.data.annualTurnover);
+      setContactName(result.data.contactName);
     }
 
     addAuditLog(`Updated Buyer Organization Profile & Procurement Categories for ${companyName}`);
     showToast(
-      'Profile Saved Successfully',
-      `Organization details and ${totalSelectedMinorCount} procurement categories updated.`,
+      UI_STRINGS.buyerProfile.savedTitle,
+      formatString(UI_STRINGS.buyerProfile.savedMessage, {
+        categoryCount: result.categoryCount ?? categories.length,
+      }),
       'success'
     );
   };
@@ -182,6 +458,8 @@ export default function BuyerProfilePage() {
 
         <button
           onClick={handleSaveProfile}
+          disabled={isLoading || isSaving}
+          aria-busy={isSaving}
           className="btn btn-primary btn-md shadow-lg shadow-indigo-600/20 font-bold flex items-center gap-2"
         >
           <Save size={16} /> Save Organization Profile
@@ -235,7 +513,7 @@ export default function BuyerProfilePage() {
               </label>
               <select
                 value={orgType}
-                onChange={(e) => setOrgType(e.target.value as any)}
+                onChange={(e) => setOrgType(e.target.value as OrganizationType)}
                 className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-semibold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
               >
                 <option value="Public Limited">Public Limited Company</option>
@@ -585,6 +863,8 @@ export default function BuyerProfilePage() {
         <div className="flex justify-end pt-2">
           <button
             type="submit"
+            disabled={isLoading || isSaving}
+            aria-busy={isSaving}
             className="btn btn-primary btn-lg shadow-xl shadow-indigo-600/20 font-bold flex items-center gap-2 px-8"
           >
             <Save size={18} /> Save Buyer Organization Profile
