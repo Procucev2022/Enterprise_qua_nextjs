@@ -65,6 +65,9 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
   test('Buyer Account Controller Error & 404 Branches', async () => {
     const next = jest.fn();
     const res = mockRes();
+    // Every mutating endpoint is now buyer/admin-gated, so these branch probes
+    // have to carry a buyer session to reach the code under test.
+    const buyerUser = { role: 'buyer', email: 'buyer@procucev.com' };
 
     jest.spyOn(storeService, 'getActiveBuyerAccount').mockImplementationOnce(() => {
       throw new Error('Active Acc Error');
@@ -75,49 +78,49 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     jest.spyOn(storeService, 'addBuyerAccount').mockImplementationOnce(() => {
       throw new Error('Create Acc Error');
     });
-    await buyerAccountController.createBuyerAccount({ body: { organizationName: 'Org', corporateEmail: 'e@o.com' } }, res, next);
+    await buyerAccountController.createBuyerAccount({ body: { organizationName: 'Org', corporateEmail: 'e@o.com' }, user: buyerUser }, res, next);
     expect(next).toHaveBeenCalled();
 
     jest.spyOn(storeService, 'updateBuyerAccount').mockImplementationOnce(() => {
       throw new Error('Update Acc Error');
     });
-    await buyerAccountController.updateBuyerAccount({ params: { id: 'b-1' }, body: {} }, res, next);
+    await buyerAccountController.updateBuyerAccount({ params: { id: 'b-1' }, body: {}, user: buyerUser }, res, next);
     expect(next).toHaveBeenCalled();
 
     jest.spyOn(storeService, 'deleteBuyerAccount').mockImplementationOnce(() => {
       throw new Error('Delete Acc Error');
     });
-    await buyerAccountController.deleteBuyerAccount({ params: { id: 'b-1' } }, res, next);
+    await buyerAccountController.deleteBuyerAccount({ params: { id: 'b-1' }, user: buyerUser }, res, next);
     expect(next).toHaveBeenCalled();
 
     const notFoundDelete = mockRes();
     jest.spyOn(storeService, 'deleteBuyerAccount').mockReturnValueOnce(false);
-    await buyerAccountController.deleteBuyerAccount({ params: { id: 'b-99' } }, notFoundDelete, next);
+    await buyerAccountController.deleteBuyerAccount({ params: { id: 'b-99' }, user: buyerUser }, notFoundDelete, next);
     expect(notFoundDelete.status).toHaveBeenCalledWith(404);
 
     jest.spyOn(storeService, 'alignActiveBuyerAccount').mockImplementationOnce(() => {
       throw new Error('Set Active Error');
     });
-    await buyerAccountController.setActiveAccount({ params: { id: 'b-1' } }, res, next);
+    await buyerAccountController.setActiveAccount({ params: { id: 'b-1' }, user: buyerUser }, res, next);
     expect(next).toHaveBeenCalled();
 
     const notFoundRes = mockRes();
     jest.spyOn(storeService, 'alignActiveBuyerAccount').mockReturnValueOnce(null);
-    await buyerAccountController.setActiveAccount({ params: { id: 'b-99' } }, notFoundRes, next);
+    await buyerAccountController.setActiveAccount({ params: { id: 'b-99' }, user: buyerUser }, notFoundRes, next);
     expect(notFoundRes.status).toHaveBeenCalledWith(404);
 
     const noPeriodRes = mockRes();
-    await buyerAccountController.ingestHistoricalData({ body: {} }, noPeriodRes, next);
+    await buyerAccountController.ingestHistoricalData({ body: {}, user: buyerUser }, noPeriodRes, next);
     expect(noPeriodRes.status).toHaveBeenCalledWith(400);
 
     const histRes = mockRes();
-    await buyerAccountController.ingestHistoricalData({ body: { period: 'FY26', vendorRecords: [] } }, histRes, next);
+    await buyerAccountController.ingestHistoricalData({ body: { period: 'FY26', vendorRecords: [] }, user: buyerUser }, histRes, next);
     expect(histRes.json).toHaveBeenCalled();
 
     jest.spyOn(storeService, 'processHistoricalPurchaseData').mockImplementationOnce(() => {
       throw new Error('Hist error');
     });
-    await buyerAccountController.ingestHistoricalData({ body: { period: 'FY26', vendorRecords: [] } }, histRes, next);
+    await buyerAccountController.ingestHistoricalData({ body: { period: 'FY26', vendorRecords: [] }, user: buyerUser }, histRes, next);
     expect(next).toHaveBeenCalled();
   });
 
