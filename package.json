@@ -12,6 +12,7 @@
     "typecheck": "npm run typecheck --prefix frontend",
     "lint": "npm run lint --prefix frontend",
     "db:migrate": "npm run db:migrate --prefix backend",
+    "db:view": "npm run db:view --prefix backend",
     "test": "npm test --prefix backend && npm test --prefix frontend",
     "test:backend": "npm test --prefix backend",
     "test:frontend": "npm test --prefix frontend",
