@@ -22,102 +22,88 @@ describe('CompanyHoverTooltip', () => {
     expect(screen.queryByText('Enterprise Buyer')).not.toBeInTheDocument();
   });
 
-  it('renders hover card with all known buyer contacts in DB on mouse enter for category_manager', () => {
+  it('shows "no contact details on file" instead of fabricating a contact when none is supplied', () => {
     (storeModule.useApp as jest.Mock).mockReturnValue({
       currentRole: 'category_manager',
     });
 
-    const buyers = [
-      { name: 'Larsen & Toubro Ltd.', contact: 'Rajesh Sharma' },
-      { name: 'Tata Projects Ltd.', contact: 'Vikram Malhotra' },
-      { name: 'Reliance Industries', contact: 'Anil Deshmukh' },
-      { name: 'Shapoorji Pallonji', contact: 'Sandeep Varma' },
-    ];
+    render(<CompanyHoverTooltip name="Reliance Industries" type="buyer" />);
+    const trigger = screen.getByText('Reliance Industries');
+    fireEvent.mouseEnter(trigger);
 
-    buyers.forEach((b) => {
-      const { unmount } = render(<CompanyHoverTooltip name={b.name} type="buyer" />);
-      const trigger = screen.getByText(b.name);
-      fireEvent.mouseEnter(trigger);
-      expect(screen.getByText(b.contact)).toBeInTheDocument();
-      expect(screen.getByText('Enterprise Buyer')).toBeInTheDocument();
-      fireEvent.mouseLeave(trigger);
-      unmount();
-    });
+    expect(screen.getByText('No contact details on file for this company.')).toBeInTheDocument();
+    expect(screen.getByText('Enterprise Buyer')).toBeInTheDocument();
+    expect(screen.queryByText('Verified')).not.toBeInTheDocument();
+
+    fireEvent.mouseLeave(trigger);
+    expect(screen.queryByText('No contact details on file for this company.')).not.toBeInTheDocument();
   });
 
-  it('renders hover card with all known vendor contacts in DB on mouse enter for category_manager', () => {
+  it('renders the real contact the caller supplies, without a Verified badge when not marked verified', () => {
     (storeModule.useApp as jest.Mock).mockReturnValue({
       currentRole: 'category_manager',
     });
 
-    const vendors = [
-      { name: 'Apex Supplies Ltd.', contact: 'Srinivas Rao' },
-      { name: 'WPIL Pumps Ltd.', contact: 'Amitabh Sen' },
-      { name: 'Kirloskar Brothers', contact: 'Milind Kulkarni' },
-      { name: 'Havells Switchgear', contact: 'Rohan Kapoor' },
-    ];
+    render(
+      <CompanyHoverTooltip
+        name="Apex Supplies Ltd."
+        type="vendor"
+        contact={{
+          contactPerson: 'Real Contact Person',
+          mobile: '+91 90000 00001',
+          email: 'real.contact@apexsupplies.in',
+        }}
+      />
+    );
+    fireEvent.mouseEnter(screen.getByText('Apex Supplies Ltd.'));
 
-    vendors.forEach((v) => {
-      const { unmount } = render(<CompanyHoverTooltip name={v.name} type="vendor" />);
-      const trigger = screen.getByText(v.name);
-      fireEvent.mouseEnter(trigger);
-      expect(screen.getByText(v.contact)).toBeInTheDocument();
-      expect(screen.getByText('Verified Supplier')).toBeInTheDocument();
-      fireEvent.mouseLeave(trigger);
-      unmount();
-    });
+    expect(screen.getByText('Real Contact Person')).toBeInTheDocument();
+    expect(screen.getByText('+91 90000 00001')).toBeInTheDocument();
+    expect(screen.getByText('real.contact@apexsupplies.in')).toBeInTheDocument();
+    expect(screen.getByText('Supplier')).toBeInTheDocument();
+    expect(screen.queryByText('Verified')).not.toBeInTheDocument();
+    // Optional fields not supplied are simply omitted, not fabricated.
+    expect(screen.queryByText(/Key Account Manager/)).not.toBeInTheDocument();
   });
 
-  it('generates fallback deterministic contact for unknown buyer and vendor and special characters and empty names', () => {
+  it('shows the Verified badge only when the caller explicitly marks the contact verified', () => {
     (storeModule.useApp as jest.Mock).mockReturnValue({
       currentRole: 'category_manager',
     });
 
-    // Unknown buyer with children
-    const { unmount } = render(
-      <CompanyHoverTooltip name="Unknown Global Energy Corp" type="buyer">
-        <span>Custom Child Element</span>
+    render(
+      <CompanyHoverTooltip
+        name="Verified Vendor Co"
+        type="vendor"
+        contact={{
+          contactPerson: 'Verified Person',
+          designation: 'Procurement Lead',
+          location: 'Pune, Maharashtra',
+          verified: true,
+        }}
+      />
+    );
+    fireEvent.mouseEnter(screen.getByText('Verified Vendor Co'));
+
+    expect(screen.getByText('Verified Person')).toBeInTheDocument();
+    expect(screen.getByText('Procurement Lead')).toBeInTheDocument();
+    expect(screen.getByText('Pune, Maharashtra')).toBeInTheDocument();
+    expect(screen.getByText('Verified')).toBeInTheDocument();
+  });
+
+  it('falls back to a generic label and still avoids fabricating contact details for an empty name', () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      currentRole: 'category_manager',
+    });
+
+    render(
+      <CompanyHoverTooltip name="" type="buyer">
+        <span>EmptyBuyer</span>
       </CompanyHoverTooltip>
     );
+    fireEvent.mouseEnter(screen.getByText('EmptyBuyer'));
 
-    const trigger = screen.getByText('Custom Child Element');
-    fireEvent.mouseEnter(trigger);
-    expect(screen.getByText('Enterprise Buyer')).toBeInTheDocument();
-    expect(screen.getByText('Lead Procurement Manager')).toBeInTheDocument();
-    unmount();
-
-    // Unknown vendor without children
-    const { unmount: unmount2 } = render(<CompanyHoverTooltip name="Custom Dynamics Ltd" type="vendor" />);
-    const customTrigger = screen.getByText('Custom Dynamics Ltd');
-    fireEvent.mouseEnter(customTrigger);
-    expect(screen.getByText('Verified Supplier')).toBeInTheDocument();
-    unmount2();
-
-    // Unknown buyer without children
-    const { unmount: unmount3 } = render(<CompanyHoverTooltip name="Beta Corp Sourcing" type="buyer" />);
-    const betaTrigger = screen.getByText('Beta Corp Sourcing');
-    fireEvent.mouseEnter(betaTrigger);
-    expect(screen.getByText('Enterprise Buyer')).toBeInTheDocument();
-    unmount3();
-
-    // Non-alphanumeric domain name
-    const { unmount: unmount4 } = render(<CompanyHoverTooltip name="*** $$$" type="vendor"><span>Special</span></CompanyHoverTooltip>);
-    const specialTrigger = screen.getByText('Special');
-    fireEvent.mouseEnter(specialTrigger);
-    expect(screen.getByText(/@company\.com/)).toBeInTheDocument();
-    unmount4();
-
-    // Empty name with buyer type
-    const { unmount: unmount5 } = render(<CompanyHoverTooltip name="" type="buyer"><span>EmptyBuyer</span></CompanyHoverTooltip>);
-    const emptyBuyer = screen.getByText('EmptyBuyer');
-    fireEvent.mouseEnter(emptyBuyer);
-    expect(screen.getByText('Enterprise Buyer')).toBeInTheDocument();
-    unmount5();
-
-    // Empty name with vendor type
-    render(<CompanyHoverTooltip name="" type="vendor"><span>EmptyVendor</span></CompanyHoverTooltip>);
-    const emptyVendor = screen.getByText('EmptyVendor');
-    fireEvent.mouseEnter(emptyVendor);
-    expect(screen.getByText('Verified Supplier')).toBeInTheDocument();
+    expect(screen.getByText('Enterprise Partner')).toBeInTheDocument();
+    expect(screen.getByText('No contact details on file for this company.')).toBeInTheDocument();
   });
 });

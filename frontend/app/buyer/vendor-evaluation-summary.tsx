@@ -174,7 +174,16 @@ export default function VendorEvaluationSummary({
             </div>
 
             <h2 className="text-2xl font-black text-slate-900 dark:text-white flex items-center gap-2">
-              <CompanyHoverTooltip name={record.vendorName} type="vendor" />
+              <CompanyHoverTooltip
+                name={record.vendorName}
+                type="vendor"
+                contact={{
+                  contactPerson: record.contactPerson,
+                  mobile: record.phone,
+                  email: record.email,
+                  verified: record.status === 'PREFERRED ENTERPRISE SUPPLIER',
+                }}
+              />
               <ShieldCheck className="text-emerald-500" size={24} />
             </h2>
 
