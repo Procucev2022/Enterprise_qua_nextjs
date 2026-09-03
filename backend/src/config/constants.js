@@ -528,9 +528,77 @@ const IDENTITY_OTP_CONFIG = {
   OTP_KEY_SEPARATOR: '_EMAIL_',
 };
 
+// ==============================================================================
+// BUYER ORGANISATION PROFILE
+// ==============================================================================
+// Behaviour ported from ProcUserServiceImpl.updateBuyer and
+// GMTServiceImpl.getOrgByUserId in the Java p2pservices app, which own the
+// `organization` and `org_division_category` rows this feature reads and writes.
+const BUYER_PROFILE_CONFIG = {
+  // Cardinality caps the old Angular screen enforced for a ClientInitiator: at
+  // most 5 divisions, at most 10 minor categories in total. They exist because
+  // the RFQ distribution engine fans out per selected category, so an unbounded
+  // selection would broadcast every RFQ to the entire vendor base.
+  MAX_MAJOR_CATEGORIES: 5,
+  MAX_MINOR_CATEGORIES: 10,
+
+  // The rupee sign is rewritten before storage, exactly as updateBuyer does.
+  // `organization.annual_turnover` is latin1 in the shared schema, so a literal ₹
+  // is written back as mojibake; the Java service sidesteps that by substituting
+  // an ASCII currency code, and both applications must agree on the stored form.
+  CURRENCY_SYMBOL: '₹',
+  CURRENCY_REPLACEMENT: 'INR ',
+
+  // Default constitution applied when the stored row has none, matching the
+  // buyer form's initial `orgType` value.
+  DEFAULT_ORGANIZATION_TYPE: 'Public Limited',
+  DEFAULT_COUNTRY: 'India',
+};
+
+const BUYER_PROFILE_MESSAGES = {
+  NOT_A_BUYER: 'Only a buyer account can view or manage a buyer organization profile.',
+  SESSION_MISSING_USER:
+    'Your session does not identify a user account, so the organization profile could not be resolved. Please sign in again.',
+  USER_NOT_FOUND:
+    'Your user account could not be found in the Procucev identity database. Please sign in again or contact support.',
+  ORGANIZATION_NOT_LINKED:
+    'Your user account is not linked to an organization yet, so there is no buyer profile to manage. Contact your Procucev administrator to have your account attached to an organization.',
+  ORGANIZATION_NOT_FOUND: 'The organization linked to your account no longer exists in the identity database.',
+  PROFILE_LOAD_FAILED:
+    'The buyer organization profile could not be read from the identity database. The record was not changed. Please retry in a moment.',
+  PROFILE_SAVE_FAILED:
+    'The buyer organization profile could not be saved to the identity database. No changes were applied. Please retry in a moment.',
+  TAXONOMY_LOAD_FAILED:
+    'The procurement category taxonomy could not be read from the identity database. Please retry in a moment.',
+  PROFILE_SAVED: 'Buyer organization profile updated successfully.',
+  CATEGORIES_INVALID:
+    'Each procurement category must supply both a major category and a minor category.',
+  TOO_MANY_MAJOR_CATEGORIES:
+    'You can select at most {max} major procurement categories. Clear one before adding another.',
+  TOO_MANY_MINOR_CATEGORIES:
+    'You can select at most {max} minor procurement categories in total. Clear one before adding another.',
+};
+
+/**
+ * Substitute {placeholder} tokens in a message template.
+ *
+ * Keeps parameterised copy in this module rather than assembling strings at the
+ * call site, so every user-facing message stays translatable in one place.
+ * An unknown placeholder is left verbatim, which makes the omission visible in
+ * the message instead of rendering "undefined".
+ */
+function formatMessage(template, values) {
+  if (!template) return '';
+  if (!values) return template;
+  return String(template).replace(/\{(\w+)\}/g, (match, key) =>
+    values[key] === undefined || values[key] === null ? match : String(values[key])
+  );
+}
+
 const {
   EMAIL_REGEX,
   GSTIN_REGEX,
+  GSTIN_MESSAGE,
   PHONE_REGEX,
   INDIAN_MOBILE_REGEX,
   INDIAN_MOBILE_MESSAGE,
@@ -538,6 +606,15 @@ const {
   OTP_CODE_MESSAGE,
   PINCODE_REGEX,
   PINCODE_MESSAGE,
+  PAN_REGEX,
+  PAN_MESSAGE,
+  CIN_REGEX,
+  CIN_MESSAGE,
+  WEBSITE_REGEX,
+  WEBSITE_MESSAGE,
+  INDIAN_PINCODE_REGEX,
+  INDIAN_PINCODE_MESSAGE,
+  ORGANIZATION_TYPES,
   VALIDATION_SCHEMAS,
   validatePayload,
 } = require('./validationSchemas');
@@ -555,6 +632,9 @@ module.exports = {
   IDENTITY_MASTER_DATA,
   IDENTITY_PHONE_CONFIG,
   IDENTITY_OTP_CONFIG,
+  BUYER_PROFILE_CONFIG,
+  BUYER_PROFILE_MESSAGES,
+  formatMessage,
   RFQ_CATEGORY_CLASSIFICATION,
   RFQ_INGESTION_CONFIG,
   RFQ_ATTACHMENT_CONFIG,
@@ -563,6 +643,7 @@ module.exports = {
   EXTRACTION_REASON_MESSAGES,
   EMAIL_REGEX,
   GSTIN_REGEX,
+  GSTIN_MESSAGE,
   PHONE_REGEX,
   INDIAN_MOBILE_REGEX,
   INDIAN_MOBILE_MESSAGE,
@@ -570,6 +651,15 @@ module.exports = {
   OTP_CODE_MESSAGE,
   PINCODE_REGEX,
   PINCODE_MESSAGE,
+  PAN_REGEX,
+  PAN_MESSAGE,
+  CIN_REGEX,
+  CIN_MESSAGE,
+  WEBSITE_REGEX,
+  WEBSITE_MESSAGE,
+  INDIAN_PINCODE_REGEX,
+  INDIAN_PINCODE_MESSAGE,
+  ORGANIZATION_TYPES,
   VALIDATION_SCHEMAS,
   validatePayload,
 };
