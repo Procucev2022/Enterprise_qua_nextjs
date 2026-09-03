@@ -19,6 +19,6 @@ router.put('/:id', authenticate, rfqController.updateRFQ);
 router.post('/:id/quotes', authenticate, rfqController.addQuote);
 router.post('/:id/batch-chaser', authenticate, rfqController.triggerBatchChaser);
 router.post('/:id/approve-po', authenticate, rfqController.approvePO);
-router.get('/:id/email-preview', rfqController.generateEmailPreview);
+router.get('/:id/email-preview', authenticate, rfqController.generateEmailPreview);
 
 module.exports = router;

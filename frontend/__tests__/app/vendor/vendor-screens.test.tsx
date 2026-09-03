@@ -163,7 +163,7 @@ describe('Vendor Screens Comprehensive Suite', () => {
   });
 
   describe('VendorQualificationForm Screen', () => {
-    test('navigates through 6 module tabs, updates question scores/remarks and submits qualification', () => {
+    test('navigates through 6 module tabs, updates question scores/remarks and submits qualification', async () => {
       jest.useFakeTimers();
       const onBack = jest.fn();
       const onSuccess = jest.fn();
@@ -221,8 +221,11 @@ describe('Vendor Screens Comprehensive Suite', () => {
       const submitBtn = screen.getByRole('button', { name: /Submit Final Qualification/i });
       fireEvent.click(submitBtn);
 
-      act(() => {
-        jest.advanceTimersByTime(2000);
+      // The submit handler's setTimeout callback is now async (it awaits a
+      // real fetch), so advancing fake timers must also flush that
+      // microtask chain, not just fire the timer synchronously.
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(2000);
       });
 
       expect(onSuccess).toHaveBeenCalled();

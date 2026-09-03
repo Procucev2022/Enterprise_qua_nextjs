@@ -1165,11 +1165,26 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       ],
     };
 
-    act(() => {
-      contextValue.addVendorEvaluation(evalRecord);
+    await act(async () => {
+      const saved = await contextValue.addVendorEvaluation(evalRecord);
+      expect(saved).toBe(true);
       contextValue.openVendorEvaluationSummary(evalRecord);
     });
     expect(contextValue.evaluationModalOpen).toBe(true);
+
+    // Failure paths: the caller must learn a submission was NOT saved,
+    // whether the request itself failed or the server reported success:false.
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({ success: false, error: 'Server error' }) });
+    await act(async () => {
+      const saved = await contextValue.addVendorEvaluation({ ...evalRecord, id: 'eval-fail-1' });
+      expect(saved).toBe(false);
+    });
+
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ success: false, error: 'Rejected' }) });
+    await act(async () => {
+      const saved = await contextValue.addVendorEvaluation({ ...evalRecord, id: 'eval-fail-2' });
+      expect(saved).toBe(false);
+    });
 
     // 2. Revise Vendor Rating (preferred, conditional, disqualified, and unknown vendor)
     act(() => {

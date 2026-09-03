@@ -186,15 +186,38 @@ describe('Controllers Error & Edge-Case Coverage', () => {
   test('evaluationController methods & error handling', async () => {
     const next = jest.fn();
     const res = mockRes();
+    const vendorUser = { role: 'vendor', email: 'rajesh@apexindustrial.in', name: 'Rajesh Nair' };
+    const documents = [{ name: 'evidence.pdf' }];
 
     await evaluationController.getEvaluations({}, res, next);
     expect(res.json).toHaveBeenCalled();
 
-    await evaluationController.createEvaluation({ body: { vendorName: 'Apex' } }, res, next);
+    await evaluationController.createEvaluation({ body: { vendorName: 'Apex', documents }, user: vendorUser }, res, next);
     expect(res.status).toHaveBeenCalledWith(201);
 
-    await evaluationController.createEvaluation({ body: {} }, res, next);
+    // A non-vendor role is rejected before ever reaching the evidence check.
+    await evaluationController.createEvaluation({ body: {}, user: { role: 'buyer', email: 'buyer@x.com' } }, res, next);
+    expect(res.status).toHaveBeenCalledWith(403);
+
+    // A vendor with incomplete evidence is rejected.
+    await evaluationController.createEvaluation({ body: { documents: [{ name: '' }] }, user: vendorUser }, res, next);
     expect(res.status).toHaveBeenCalledWith(400);
+
+    // A body-less request must fall back to {} rather than throwing on property access.
+    await evaluationController.createEvaluation({ user: vendorUser }, res, next);
+    expect(res.status).toHaveBeenCalledWith(400);
+
+    // A vendor with no profile record yet falls back to their session identity.
+    const noProfileRes = mockRes();
+    await evaluationController.createEvaluation(
+      { body: { documents }, user: { role: 'vendor', email: 'no-profile-vendor@test.com', name: 'No Profile', orgName: 'No Profile Org' } },
+      noProfileRes,
+      next
+    );
+    expect(noProfileRes.status).toHaveBeenCalledWith(201);
+    expect(noProfileRes.json).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ vendorName: 'No Profile Org', email: 'no-profile-vendor@test.com' }) })
+    );
   });
 
   test('rfqController methods & error handling', async () => {

@@ -392,14 +392,16 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
 
     setSubmitting(true);
 
-    setTimeout(() => {
+    setTimeout(async () => {
       const questionItems: QuestionEvaluationItem[] = Object.values(qState).map(q => ({
         refId: q.refId,
         pillarId: q.pillarId,
         pillarName: q.pillarName,
         criteria: q.criteria,
         attachmentName: q.attachmentName,
-        attachmentVerified: !!q.attachmentName,
+        // Never actually verified — see the honest "Not OCR-Verified" badge
+        // rendered for each question below.
+        attachmentVerified: false,
         score: q.score,
         weightedScore: q.weightedScore,
         remarks: q.remarks
@@ -418,7 +420,11 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
         overallScore: totalScorePercent,
         systemAction:
           totalScorePercent >= 80
-            ? 'AUTOMATIC DIRECT RFQ DISPATCH TO VENDOR INBOX. 24/24 mandatory attachments verified via AI OCR engine. Vendor added to Mode 3 active bidding roster.'
+            // "Verified via AI OCR engine" was a false claim — this app has no
+            // OCR/document-verification backend (see the honest disclosure
+            // badge on each attachment below); a file being attached is not
+            // the same as its contents being checked.
+            ? 'AUTOMATIC DIRECT RFQ DISPATCH TO VENDOR INBOX. 24/24 mandatory attachments received (not independently verified). Vendor added to Mode 3 active bidding roster.'
             : totalScorePercent >= 65
             ? 'RFQ DISPATCH HELD. System triggered Corrective Action Plan (CAPA) or requested document clarification.'
             : 'EXCLUDED FROM ACTIVE RFQ DISPATCH. Re-audit option unlocked after 90 days.',
@@ -435,13 +441,30 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
           name: q.attachmentName,
           type: q.criteria,
           uploadDate: new Date().toISOString().substring(0, 10),
-          verified: !!q.attachmentName,
-          status: q.attachmentName ? 'Verified' : 'Missing'
+          // A filename being attached was previously labeled "Verified" —
+          // this app has no real document-verification backend, so an
+          // attached file is only ever "Pending Review", never confirmed.
+          verified: false,
+          status: q.attachmentName ? 'Pending Review' : 'Missing'
         })),
         questionBreakdown: questionItems
       };
 
-      addVendorEvaluation(record);
+      // Was fire-and-forget: this screen showed "success", marked the vendor
+      // as evaluated, and navigated away regardless of whether the backend
+      // actually accepted the submission. Now the whole success path is
+      // gated on a real, confirmed response.
+      const saved = await addVendorEvaluation(record);
+      if (!saved) {
+        setSubmitting(false);
+        showToast(
+          'Submission Failed',
+          'Could not save your qualification evaluation. Please try again.',
+          'warning'
+        );
+        return;
+      }
+
       addAuditLog(
         `Mode 3 Vendor Qualification Survey submitted by ${record.vendorName}. Score: ${totalScorePercent}% (${currentStatus})`,
         undefined,
@@ -498,7 +521,7 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
       <div className="p-4 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white shadow-xl border border-indigo-500/30 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="space-y-1">
           <div className="flex items-center gap-2 text-xs text-indigo-300 font-bold uppercase tracking-wider">
-            <Sparkles size={14} className="text-emerald-400" /> Apex Supplies Ltd. — Live AI Capability Rating
+            <Sparkles size={14} className="text-emerald-400" /> {myVendorRecord?.name || currentUserSession?.orgName || currentUserSession?.name || 'Vendor'} — Live AI Capability Rating
           </div>
           <div className="text-xs text-indigo-200/80">
             Step {currentTabIndex + 1} of {MODULE_TABS.length}: <strong className="text-white">{activeModuleMeta.name}</strong> ({activeModuleMeta.weight}% weight)

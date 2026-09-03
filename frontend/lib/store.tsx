@@ -150,7 +150,7 @@ interface AppContextType {
   setDeepDiveModalOpen: (open: boolean) => void;
   openRFQDeepDive: (rfq: RFQItem) => void;
   vendorEvaluations: VendorEvaluationRecord[];
-  addVendorEvaluation: (record: VendorEvaluationRecord) => void;
+  addVendorEvaluation: (record: VendorEvaluationRecord) => Promise<boolean>;
   selectedVendorEvaluation: VendorEvaluationRecord | null;
   setSelectedVendorEvaluation: (evalRecord: VendorEvaluationRecord | null) => void;
   evaluationModalOpen: boolean;
@@ -619,13 +619,27 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
     setEvaluationModalOpen(true);
   };
 
-  const addVendorEvaluation = (record: VendorEvaluationRecord) => {
-    setVendorEvaluations((prev) => [record, ...prev.filter((r) => r.id !== record.id)]);
-    fetch('/api/evaluations', {
-      method: 'POST',
-      headers: authFetchHeaders(),
-      body: JSON.stringify(record),
-    }).catch((e) => console.error('Failed to save evaluation to DB:', e));
+  // Was fire-and-forget (optimistic local update, response never checked) —
+  // now awaits the real response and only updates local state on confirmed
+  // success, so a caller can gate its own success UI on the actual outcome.
+  const addVendorEvaluation = async (record: VendorEvaluationRecord): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/evaluations', {
+        method: 'POST',
+        headers: authFetchHeaders(),
+        body: JSON.stringify(record),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        console.error('Failed to save evaluation to DB:', data?.error || res.statusText);
+        return false;
+      }
+      setVendorEvaluations((prev) => [record, ...prev.filter((r) => r.id !== record.id)]);
+      return true;
+    } catch (e) {
+      console.error('Failed to save evaluation to DB:', e);
+      return false;
+    }
   };
 
   // Helper to check if vendor exists in platform central database

@@ -95,7 +95,7 @@ describe('VendorQualificationForm Comprehensive Suite', () => {
     fireEvent.click(prevBtn); // Back to M2
   });
 
-  test('Question Option Selection, Remarks Editing, File Upload, and Disqualified Score Submission (<65)', () => {
+  test('Question Option Selection, Remarks Editing, File Upload, and Disqualified Score Submission (<65)', async () => {
     jest.useFakeTimers();
     const onBack = jest.fn();
     const onSuccess = jest.fn();
@@ -153,15 +153,18 @@ describe('VendorQualificationForm Comprehensive Suite', () => {
     const submitBtn = screen.getByRole('button', { name: /Submit Final Qualification/i });
     fireEvent.click(submitBtn);
 
-    act(() => {
-      jest.advanceTimersByTime(2000);
+    // The submit handler's setTimeout callback is now async (it awaits a
+    // real fetch), so advancing fake timers must also flush that microtask
+    // chain, not just fire the timer synchronously.
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(2000);
     });
 
     expect(onSuccess).toHaveBeenCalled();
     jest.useRealTimers();
   });
 
-  test('Conditional Score Threshold (65-79) and Enterprise Plan Waived Banner', () => {
+  test('Conditional Score Threshold (65-79) and Enterprise Plan Waived Banner', async () => {
     jest.useFakeTimers();
     const onBack = jest.fn();
     const onSuccess = jest.fn();
@@ -190,15 +193,18 @@ describe('VendorQualificationForm Comprehensive Suite', () => {
     const submitBtn = screen.getByRole('button', { name: /Submit Final Qualification/i });
     fireEvent.click(submitBtn);
 
-    act(() => {
-      jest.advanceTimersByTime(2000);
+    // The submit handler's setTimeout callback is now async (it awaits a
+    // real fetch), so advancing fake timers must also flush that microtask
+    // chain, not just fire the timer synchronously.
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(2000);
     });
 
     expect(onSuccess).toHaveBeenCalled();
     jest.useRealTimers();
   });
 
-  test('High Score Submission (>=80 PREFERRED ENTERPRISE SUPPLIER) with Select Subscription Plan (Waived Fee)', () => {
+  test('High Score Submission (>=80 PREFERRED ENTERPRISE SUPPLIER) with Select Subscription Plan (Waived Fee)', async () => {
     jest.useFakeTimers();
     const onBack = jest.fn();
     const onSuccess = jest.fn();
@@ -226,15 +232,18 @@ describe('VendorQualificationForm Comprehensive Suite', () => {
     const submitBtn = screen.getByRole('button', { name: /Submit Final Qualification/i });
     fireEvent.click(submitBtn);
 
-    act(() => {
-      jest.advanceTimersByTime(2000);
+    // The submit handler's setTimeout callback is now async (it awaits a
+    // real fetch), so advancing fake timers must also flush that microtask
+    // chain, not just fire the timer synchronously.
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(2000);
     });
 
     expect(onSuccess).toHaveBeenCalled();
     jest.useRealTimers();
   });
 
-  test('High Score Submission (>=80 PREFERRED ENTERPRISE SUPPLIER) with Standard Subscription Plan', () => {
+  test('High Score Submission (>=80 PREFERRED ENTERPRISE SUPPLIER) with Standard Subscription Plan', async () => {
     jest.useFakeTimers();
     const onBack = jest.fn();
     const onSuccess = jest.fn();
@@ -260,11 +269,47 @@ describe('VendorQualificationForm Comprehensive Suite', () => {
     const submitBtn = screen.getByRole('button', { name: /Submit Final Qualification/i });
     fireEvent.click(submitBtn);
 
-    act(() => {
-      jest.advanceTimersByTime(2000);
+    // The submit handler's setTimeout callback is now async (it awaits a
+    // real fetch), so advancing fake timers must also flush that microtask
+    // chain, not just fire the timer synchronously.
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(2000);
     });
 
     expect(onSuccess).toHaveBeenCalled();
+    jest.useRealTimers();
+  });
+
+  test('shows a failure toast and does not navigate away when the backend rejects the submission', async () => {
+    jest.useFakeTimers();
+    global.fetch = jest.fn(() => Promise.resolve({ ok: false, status: 500, json: async () => ({ success: false, error: 'Server error' }) })) as any;
+    const onBack = jest.fn();
+    const onSuccess = jest.fn();
+
+    renderWithProvider(<QualificationFormCustomWrapper onBack={onBack} onSuccess={onSuccess} customSubscription="standard" />);
+
+    MODULE_TAB_NAMES.forEach((tabName) => {
+      const tabBtn = screen.getAllByRole('button', { name: new RegExp(tabName, 'i') })[0];
+      fireEvent.click(tabBtn);
+      screen.getAllByRole('combobox').forEach((sel) => fireEvent.change(sel, { target: { value: '5' } }));
+    });
+
+    attachEvidenceToAllTabs();
+
+    const tab6 = screen.getAllByRole('button', { name: /Governance & ESG/i })[0];
+    fireEvent.click(tab6);
+
+    const submitBtn = screen.getByRole('button', { name: /Submit Final Qualification/i });
+    fireEvent.click(submitBtn);
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(2000);
+    });
+
+    // Was fire-and-forget: previously this would have shown success and
+    // navigated away regardless of the backend response.
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Submit Final Qualification/i })).toBeInTheDocument();
     jest.useRealTimers();
   });
 

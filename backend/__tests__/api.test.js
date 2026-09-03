@@ -363,7 +363,7 @@ describe('API Route Endpoints', () => {
     });
 
     test('GET /api/rfqs/:id/email-preview generates standard RFQ email', async () => {
-      const res = await request(app).get(`/api/rfqs/${testRfqId}/email-preview`);
+      const res = await request(app).get(`/api/rfqs/${testRfqId}/email-preview`).set(authHeader('vendor'));
       expect(res.statusCode).toBe(200);
       expect(res.body.data).toHaveProperty('htmlBody');
     });
@@ -372,15 +372,25 @@ describe('API Route Endpoints', () => {
   // 5. Evaluations & Audit
   describe('Evaluations & Audit API', () => {
     test('GET /api/evaluations and POST /api/evaluations', async () => {
-      const getRes = await request(app).get('/api/evaluations');
+      const getRes = await request(app).get('/api/evaluations').set(authHeader('category_manager'));
       expect(getRes.statusCode).toBe(200);
 
-      const postRes = await request(app).post('/api/evaluations').set(authHeader('category_manager')).send({
-        vendorName: 'Godrej Precision Tooling',
+      // A qualification evaluation is a vendor's own self-assessment — identity
+      // is resolved server-side from the caller's session, not the body.
+      const postRes = await request(app).post('/api/evaluations').set(authHeader('vendor')).send({
         moduleScores: { commercial: { score: 95 } },
+        documents: [{ name: 'evidence.pdf' }],
       });
       expect(postRes.statusCode).toBe(201);
-      expect(postRes.body.data.vendorName).toBe('Godrej Precision Tooling');
+      expect(postRes.body.data.email).toBe('vendor@apexsupplies.com');
+    });
+
+    test('POST /api/evaluations returns 403 for a non-vendor role', async () => {
+      const res = await request(app).post('/api/evaluations').set(authHeader('buyer')).send({
+        vendorName: 'X',
+        documents: [{ name: 'evidence.pdf' }],
+      });
+      expect(res.statusCode).toBe(403);
     });
 
     test('POST /api/evaluations requires authentication', async () => {
@@ -506,12 +516,12 @@ describe('API Route Endpoints', () => {
     });
 
     test('GET /api/rfqs/:id/email-preview returns 404 for invalid id', async () => {
-      const res = await request(app).get('/api/rfqs/nonexistent-rfq/email-preview');
+      const res = await request(app).get('/api/rfqs/nonexistent-rfq/email-preview').set(authHeader('vendor'));
       expect(res.statusCode).toBe(404);
     });
 
-    test('POST /api/evaluations returns 400 when missing vendorName', async () => {
-      const res = await request(app).post('/api/evaluations').set(authHeader('category_manager')).send({});
+    test('POST /api/evaluations returns 400 when evidence is missing', async () => {
+      const res = await request(app).post('/api/evaluations').set(authHeader('vendor')).send({});
       expect(res.statusCode).toBe(400);
     });
 
