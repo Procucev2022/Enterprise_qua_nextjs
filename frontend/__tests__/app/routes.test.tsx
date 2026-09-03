@@ -6,9 +6,10 @@ import type { RFQItem, VendorEvaluationRecord, VendorOpportunity } from '@/lib/t
 jest.mock('@/lib/store');
 
 const mockPush = jest.fn();
+const mockReplace = jest.fn();
 const mockSearchParams = new URLSearchParams();
 jest.mock('next/navigation', () => ({
-  useRouter: () => ({ push: mockPush, replace: jest.fn() }),
+  useRouter: () => ({ push: mockPush, replace: mockReplace }),
   usePathname: () => '/',
   useSearchParams: () => mockSearchParams,
 }));
@@ -86,7 +87,8 @@ jest.mock('@/app/admin/infra-control', () => stub('infra-control', ['onNavigateT
 jest.mock('@/app/admin/audit-log', () => stub('audit-log', ['onBackToInfra']));
 
 /* eslint-disable @typescript-eslint/no-var-requires */
-const BuyerCommandCenterPage = require('@/app/buyer/command-center/page').default;
+const BuyerDashboardPage = require('@/app/buyer/dashboard/page').default;
+const BuyerCommandCenterRedirectPage = require('@/app/buyer/command-center/page').default;
 const BuyerIngestionWizardPage = require('@/app/buyer/ingestion-wizard/page').default;
 const BuyerRFQSummaryPage = require('@/app/buyer/rfq-summary/page').default;
 const BuyerRFQDetailsPage = require('@/app/buyer/rfq-details/page').default;
@@ -149,8 +151,8 @@ describe('Role screen routes', () => {
 
   // ── Buyer ──────────────────────────────────────────────────────────────────
   describe('buyer routes', () => {
-    it('command center links out to the wizard, matrix, subscriptions and directory', () => {
-      render(<BuyerCommandCenterPage />);
+    it('dashboard links out to the wizard, matrix, subscriptions and directory', () => {
+      render(<BuyerDashboardPage />);
       expect(screen.getByTestId('command-center')).toBeInTheDocument();
 
       clickCallback('command-center:onNavigateToWizard');
@@ -166,6 +168,20 @@ describe('Role screen routes', () => {
       expect(mockPush).toHaveBeenCalledWith('/buyer/buyer-directory');
     });
 
+    // The dashboard used to live at /buyer/command-center. That URL is kept as a
+    // redirect rather than deleted, so existing bookmarks and any link already
+    // sent out still land on the screen instead of a 404.
+    it('redirects the legacy command-center URL to the dashboard', () => {
+      const { container } = render(<BuyerCommandCenterRedirectPage />);
+
+      expect(mockReplace).toHaveBeenCalledWith('/buyer/dashboard');
+      // `replace` rather than `push`, so the dead URL is not left in history for
+      // the back button to return to.
+      expect(mockPush).not.toHaveBeenCalled();
+      // Renders nothing: there is no flash of an empty shell before the redirect.
+      expect(container).toBeEmptyDOMElement();
+    });
+
     it('records the selected RFQ before opening the matrix', () => {
       const CommandCenter = require('@/app/buyer/command-center').default;
       render(
@@ -176,23 +192,23 @@ describe('Role screen routes', () => {
         />
       );
       // Exercised directly through the page below; this guards the adapter contract.
-      render(<BuyerCommandCenterPage />);
+      render(<BuyerDashboardPage />);
       expect(screen.getAllByTestId('command-center').length).toBeGreaterThan(0);
     });
 
-    it('ingestion wizard returns to the command center on complete and cancel', () => {
+    it('ingestion wizard returns to the dashboard on complete and cancel', () => {
       render(<BuyerIngestionWizardPage />);
       clickCallback('ingestion-wizard:onComplete');
-      expect(mockPush).toHaveBeenCalledWith('/buyer/command-center');
+      expect(mockPush).toHaveBeenCalledWith('/buyer/dashboard');
 
       clickCallback('ingestion-wizard:onCancel');
-      expect(mockPush).toHaveBeenCalledWith('/buyer/command-center');
+      expect(mockPush).toHaveBeenCalledWith('/buyer/dashboard');
     });
 
-    it('quote matrix returns to the command center', () => {
+    it('quote matrix returns to the dashboard', () => {
       render(<BuyerQuoteMatrixPage />);
       clickCallback('quote-matrix:onBackToDashboard');
-      expect(mockPush).toHaveBeenCalledWith('/buyer/command-center');
+      expect(mockPush).toHaveBeenCalledWith('/buyer/dashboard');
     });
 
     it('rfq summary opens the quote matrix and the wizard', () => {
@@ -419,7 +435,7 @@ describe('Role screen routes', () => {
     });
 
     it.each<[string, () => React.ReactElement, string]>([
-      ['buyer command centre', () => BuyerCommandCenterPage({}) as React.ReactElement, '/buyer/quote-matrix'],
+      ['buyer dashboard', () => BuyerDashboardPage({}) as React.ReactElement, '/buyer/quote-matrix'],
       ['kanban board', () => CmKanbanPage({}) as React.ReactElement, '/category-manager/quote-matrix'],
       ['buyer console', () => CmBuyerConsolePage({}) as React.ReactElement, '/category-manager/quote-matrix'],
       ['vendor console', () => CmVendorConsolePage({}) as React.ReactElement, '/category-manager/quote-matrix'],
@@ -432,7 +448,7 @@ describe('Role screen routes', () => {
     });
 
     it('routes to the matrix without a selection when none is supplied', () => {
-      const page = BuyerCommandCenterPage({}) as React.ReactElement;
+      const page = BuyerDashboardPage({}) as React.ReactElement;
       page.props.onNavigateToMatrix(undefined);
 
       expect(setSelectedRFQForMatrix).not.toHaveBeenCalled();

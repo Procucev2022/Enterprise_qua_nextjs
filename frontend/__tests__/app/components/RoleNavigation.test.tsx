@@ -10,7 +10,7 @@ jest.mock('@/lib/store');
 
 // The rail derives its active module from the URL, so the pathname hook is the
 // value under test rather than an activeScreen prop.
-let mockPathname = '/buyer/command-center';
+let mockPathname = '/buyer/dashboard';
 jest.mock('next/navigation', () => ({
   usePathname: () => mockPathname,
 }));
@@ -31,7 +31,7 @@ describe('RoleNavigation Sidebar Dashboard', () => {
   };
 
   beforeEach(() => {
-    mockPathname = '/buyer/command-center';
+    mockPathname = '/buyer/dashboard';
   });
 
   afterEach(() => {

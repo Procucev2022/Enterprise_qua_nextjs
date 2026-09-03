@@ -10,7 +10,7 @@ export const UI_STRINGS = {
 
   screens: {
     commandCenter: {
-      title: 'Enterprise Procurement Command Center',
+      title: 'Buyer Dashboard',
       screenTag: 'Screen 1.1',
       subtitle: 'Real-time multi-channel supplier chasing & automated quote evaluation telemetry.',
     },
@@ -107,11 +107,11 @@ export const UI_STRINGS = {
     },
     items: {
       commandCenter: {
-        label: 'Command Center',
+        label: 'Dashboard',
         description: 'Live RFQ pipeline & AI chaser telemetry',
       },
       ingestionWizard: {
-        label: 'AI Ingestion & Mode Wizard',
+        label: 'AI RFQ Create',
         description: 'Parse BOM inputs & pick a sourcing version',
       },
       rfqSummary: {

@@ -165,11 +165,14 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
       {/* ── Header ── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-extrabold tracking-tight text-slate-900 dark:text-white">
-            Buyer Command Center
+          <h1 className="text-xl font-extrabold tracking-tight text-slate-900 dark:text-white flex items-center gap-2 flex-wrap">
+            <span>Enterprise Sourcing Dashboard</span>
+            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+              Sourcing Operations
+            </span>
           </h1>
-          <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-            Intake sources summary · Multi-mode sourcing · Chaser follow-ups
+          <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
+            Active RFQ pipeline tracking · Autonomous multi-channel follow-ups (Voice, WhatsApp, SMS) · Parametric quote matrix
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">

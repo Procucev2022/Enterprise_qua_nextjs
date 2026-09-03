@@ -191,7 +191,7 @@ describe('app/buyer/command-center.tsx', () => {
       />
     );
 
-    expect(screen.getByText('Buyer Command Center')).toBeInTheDocument();
+    expect(screen.getByText('Enterprise Sourcing Dashboard')).toBeInTheDocument();
     expect(screen.getByText('Active Pipeline')).toBeInTheDocument();
     expect(screen.getByText('Intake Sources')).toBeInTheDocument();
     expect(screen.getByText('Live Outreach')).toBeInTheDocument();
