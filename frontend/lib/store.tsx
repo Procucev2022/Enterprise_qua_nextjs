@@ -81,7 +81,7 @@ interface AppContextType {
   setInitialSetupCompleted: (completed: boolean) => void;
   historicalPurchaseDataPeriod: '1_year' | '2_years' | '3_years';
   setHistoricalPurchaseDataPeriod: (period: '1_year' | '2_years' | '3_years') => void;
-  processHistoricalPurchaseData: (period: '1_year' | '2_years' | '3_years', vendors: HistoricalPurchaseVendorRecord[]) => number;
+  processHistoricalPurchaseData: (period: '1_year' | '2_years' | '3_years', vendors: HistoricalPurchaseVendorRecord[]) => Promise<number>;
 
   // Buyer Uploaded Vendors, Database Check & Automated Onboarding Emails
   buyerVendors: VendorEntry[];
@@ -751,85 +751,85 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
   const [initialSetupCompleted, setInitialSetupCompleted] = useState<boolean>(false);
   const [historicalPurchaseDataPeriod, setHistoricalPurchaseDataPeriod] = useState<'1_year' | '2_years' | '3_years'>('1_year');
 
-  const processHistoricalPurchaseData = (
+  const processHistoricalPurchaseData = async (
     period: '1_year' | '2_years' | '3_years',
     vendors: HistoricalPurchaseVendorRecord[]
-  ): number => {
-    const buyerCompany = activeBuyerAccount?.organizationName || 'Larsen & Toubro Limited';
-    const buyerContact = activeBuyerAccount?.contactPerson || 'Rajesh Sharma (CPO)';
-    const nextDate = new Date(Date.now() + 3 * 86400000).toISOString().substring(0, 10) + ' (Day 3)';
-    const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC';
+  ): Promise<number> => {
+    // Used to build the full VendorEntry list purely client-side and never
+    // call the backend at all — every "imported" vendor vanished on refresh
+    // and the "onboarding credentials dispatched" claim was never true. A
+    // real endpoint for exactly this already exists (POST
+    // /api/buyer-accounts/historical-data -> storeService's own
+    // processHistoricalPurchaseData, which dedupes by email/name and
+    // persists real vendor records) — use it and refresh from the DB
+    // afterwards instead of reconstructing vendor records by hand.
+    const mappedCount = vendors.filter((v) => v.categoriesMappedByBuyer).length;
+    const unmappedCount = vendors.length - mappedCount;
+    const periodLabel =
+      period === '1_year' ? 'Last 1 Year (12 Months)' : period === '2_years' ? 'Last 2 Years (24 Months)' : 'Last 3 Years (36 Months)';
 
-    let existingInDbCount = 0;
-    let newVendorsCount = 0;
-    let mappedCount = 0;
-    let unmappedCount = 0;
+    let res: Response;
+    try {
+      res = await fetch('/api/buyer-accounts/historical-data', {
+        method: 'POST',
+        headers: authFetchHeaders(),
+        body: JSON.stringify({
+          period,
+          vendorRecords: vendors.map((v) => ({
+            companyName: v.companyName,
+            contactPerson: v.contactPerson,
+            email: v.email,
+            phone: v.phone,
+            location: v.address,
+            majorCategory: v.categoriesMappedByBuyer
+              ? v.firstSetMajorCategory || 'Engineering Spares - Mechanical'
+              : 'Uncategorized (No Past POs)',
+            minorCategories: v.categoriesMappedByBuyer && v.secondSetMinorCategories?.length ? v.secondSetMinorCategories : [],
+            rating: v.vendorRatingScore ? Number((v.vendorRatingScore / 20).toFixed(1)) : undefined,
+            score: v.vendorRatingScore,
+          })),
+        }),
+      });
+    } catch (e) {
+      console.error('Failed to ingest historical purchase data:', e);
+      showToast('Import Failed', 'Could not reach the server. Please try again.', 'warning');
+      return 0;
+    }
 
-    const newEntries: VendorEntry[] = vendors.map((v, i) => {
-      const isExisting = checkVendorInPlatformDatabase(v);
-      if (isExisting) existingInDbCount++;
-      else newVendorsCount++;
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.success) {
+      showToast(
+        'Import Failed',
+        data?.error || 'Could not process the historical purchase data. Please try again.',
+        'warning'
+      );
+      return 0;
+    }
 
-      if (v.categoriesMappedByBuyer) mappedCount++;
-      else unmappedCount++;
-
-      const tempPassword = v.tempPassword || generateTempPassword(v.companyName);
-
-      return {
-        id: `v-hist-${Date.now()}-${i}`,
-        name: v.companyName,
-        contactPerson: v.contactPerson || 'Sales & Accounts Manager',
-        email: v.email,
-        phone: v.phone,
-        location: v.address,
-        majorCategory: v.categoriesMappedByBuyer ? (v.firstSetMajorCategory || 'Engineering Spares - Mechanical') : 'Uncategorized (No Past POs)',
-        minorCategories: v.categoriesMappedByBuyer && v.secondSetMinorCategories && v.secondSetMinorCategories.length > 0 ? v.secondSetMinorCategories : [],
-        rating: v.vendorRatingScore ? Number((v.vendorRatingScore / 20).toFixed(1)) : 4.5,
-        score: v.vendorRatingScore || null,
-        source: 'buyer_excel',
-        status: v.vendorRatingScore && v.vendorRatingScore >= 80 ? 'PREFERRED ENTERPRISE SUPPLIER' : 'REGISTERED / NOT EVALUATED',
-        evaluated: !!v.vendorRatingScore,
-        hasRecord: true,
-        isExistingInDatabase: isExisting,
-        onboardingEmailStatus: 'sent',
-        onboardingEmailDispatchedAt: timestamp,
-        tempPassword,
-        firstLoginCompleted: false,
-        reminderCadence: 'every_3_days',
-        nextReminderDate: nextDate,
-        remindersSentCount: 0,
-        addedByBuyerCompany: buyerCompany,
-        addedByBuyerName: buyerContact,
-        profileCompletionStatus: 'pending',
-      };
-    });
-
-    setBuyerVendors((prev) => [...newEntries, ...prev]);
+    await refreshFromDB();
     setInitialSetupCompleted(true);
     setInitialSetupModalOpen(false);
 
-    const periodLabel = period === '1_year' ? 'Last 1 Year (12 Months)' : period === '2_years' ? 'Last 2 Years (24 Months)' : 'Last 3 Years (36 Months)';
-
     addFeedItem(
-      `Historical Purchase & Vendor Master Ingestion Complete: ${newEntries.length} Vendors`,
-      `Processed separate Vendor Master & ${periodLabel} PO dumps. ${mappedCount} suppliers categorized into 1st/2nd sets. ${unmappedCount} suppliers notified to self-map categories. Onboarding credentials dispatched.`,
+      `Historical Purchase & Vendor Master Ingestion Complete: ${data.importedCount} Vendors`,
+      `Processed separate Vendor Master & ${periodLabel} PO dumps. ${mappedCount} suppliers categorized into 1st/2nd sets. ${unmappedCount} suppliers notified to self-map categories.`,
       'invitation',
       undefined,
-      `${newEntries.length} Ingested Vendors`,
+      `${data.importedCount} Ingested Vendors`,
       'email'
     );
 
     addAuditLog(
-      `Ingested separate Vendor Master & ${periodLabel} PO files (${newEntries.length} total: ${mappedCount} PO-mapped, ${unmappedCount} self-mapping required). Dispatched onboarding emails with credentials & category notifications.`
+      `Ingested separate Vendor Master & ${periodLabel} PO files (${vendors.length} submitted, ${data.importedCount} new: ${mappedCount} PO-mapped, ${unmappedCount} self-mapping required).`
     );
 
     showToast(
       'Initial Setup Completed',
-      `Processed ${periodLabel} PO dump & Vendor Master. ${mappedCount} categorized, ${unmappedCount} requested to self-map.`,
+      `Processed ${periodLabel} PO dump & Vendor Master. ${data.importedCount} new suppliers added (of ${vendors.length} submitted).`,
       'success'
     );
 
-    return newEntries.length;
+    return data.importedCount;
   };
 
   const openOnboardingEmailModal = (vendor: VendorEntry) => {

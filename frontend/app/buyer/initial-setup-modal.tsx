@@ -89,6 +89,7 @@ export default function InitialSetupModal() {
   const poFileInputRef = useRef<HTMLInputElement>(null);
 
   const [isProcessingPOJoin, setIsProcessingPOJoin] = useState(false);
+  const [isConfirmingIngestion, setIsConfirmingIngestion] = useState(false);
   const [activeReviewTab, setActiveReviewTab] = useState<'all' | 'mapped' | 'unmapped'>('all');
 
   if (!initialSetupModalOpen) return null;
@@ -428,8 +429,11 @@ export default function InitialSetupModal() {
     }, 800);
   };
 
-  const handleConfirmFinalIngestion = () => {
-    processHistoricalPurchaseData(selectedPeriod, joinedVendors);
+  const handleConfirmFinalIngestion = async () => {
+    if (isConfirmingIngestion) return;
+    setIsConfirmingIngestion(true);
+    await processHistoricalPurchaseData(selectedPeriod, joinedVendors);
+    setIsConfirmingIngestion(false);
   };
 
   return (
@@ -1119,15 +1123,22 @@ export default function InitialSetupModal() {
             </div>
 
             <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-gray-800">
-              <button type="button" onClick={() => setStep(4)} className="btn btn-secondary btn-sm">
+              <button
+                type="button"
+                onClick={() => setStep(4)}
+                className="btn btn-secondary btn-sm"
+                disabled={isConfirmingIngestion}
+              >
                 Back to Category Join
               </button>
               <button
                 type="button"
                 onClick={handleConfirmFinalIngestion}
-                className="btn btn-primary font-bold text-xs py-3 px-6 shadow-lg shadow-indigo-600/30 flex items-center gap-2"
+                disabled={isConfirmingIngestion}
+                className="btn btn-primary font-bold text-xs py-3 px-6 shadow-lg shadow-indigo-600/30 flex items-center gap-2 disabled:opacity-60"
               >
-                <CheckCircle2 size={16} /> [ COMPLETE SETUP & INGEST {joinedVendors.length} VENDORS ]
+                <CheckCircle2 size={16} />{' '}
+                {isConfirmingIngestion ? 'PROCESSING...' : `[ COMPLETE SETUP & INGEST ${joinedVendors.length} VENDORS ]`}
               </button>
             </div>
           </div>

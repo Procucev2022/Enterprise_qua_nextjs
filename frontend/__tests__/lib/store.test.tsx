@@ -2,6 +2,7 @@ import React from 'react';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { AppProvider, useApp } from '@/lib/store';
 import { RFQItem, VendorEntry, BuyerAccount, VendorEvaluationRecord, ExtractedEntity } from '@/lib/types';
+import { authClient } from '@/lib/authClient';
 
 // Mock global fetch for API calls triggered by store
 const mockFetch = jest.fn();
@@ -1113,6 +1114,21 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       await contextValue.approvePO('RFQ-2026-NONEXISTENT', null, 'Unknown', 100);
     });
 
+    // Approve PO failure paths: a rejected response and a network-level throw
+    // must both resolve to { success: false } without navigating or updating
+    // RFQ state, rather than throwing out of the handler.
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({ success: false, error: 'PO rejected' }) });
+    await act(async () => {
+      const result = await contextValue.approvePO('RFQ-2026-999', 'v-apex-b', 'Apex Supplies Ltd.', 580000, 'Rejected case');
+      expect(result.success).toBe(false);
+    });
+
+    mockFetch.mockRejectedValueOnce(new Error('Network down'));
+    await act(async () => {
+      const result = await contextValue.approvePO('RFQ-2026-999', 'v-apex-b', 'Apex Supplies Ltd.', 580000, 'Network failure case');
+      expect(result.success).toBe(false);
+    });
+
     // 7. Open Deep Dive & Modal triggers
     act(() => {
       contextValue.openRFQDeepDive(createdRfqMode1!);
@@ -1299,9 +1315,19 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     });
     expect(contextValue.toastMessage).toBeNull();
 
-    // 5. Process Historical Purchase Data (1_year, 2_years, 3_years)
-    act(() => {
-      const processedCount1 = contextValue.processHistoricalPurchaseData('1_year', [
+    // 5. Process Historical Purchase Data (1_year, 2_years, 3_years). This now
+    // awaits the real POST /api/buyer-accounts/historical-data and returns
+    // whatever importedCount the server reports (dedup happens server-side),
+    // so each call needs its own mocked response.
+    const mockIngestResponse = (importedCount: number) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, importedCount, period: '1_year', totalVendors: importedCount }),
+    });
+
+    await act(async () => {
+      mockFetch.mockResolvedValueOnce(mockIngestResponse(1));
+      const processedCount1 = await contextValue.processHistoricalPurchaseData('1_year', [
         {
           id: 'h-0',
           companyName: 'One Year Vendor Ltd',
@@ -1320,7 +1346,8 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       ]);
       expect(processedCount1).toBe(1);
 
-      const processedCount2 = contextValue.processHistoricalPurchaseData('2_years', [
+      mockFetch.mockResolvedValueOnce(mockIngestResponse(2));
+      const processedCount2 = await contextValue.processHistoricalPurchaseData('2_years', [
         {
           id: 'h-1',
           companyName: 'Historical Steel Dynamics Ltd',
@@ -1354,7 +1381,8 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       expect(processedCount2).toBe(2);
 
       // Process 3_years with unmapped categories and custom tempPassword
-      const processedCount3 = contextValue.processHistoricalPurchaseData('3_years', [
+      mockFetch.mockResolvedValueOnce(mockIngestResponse(1));
+      const processedCount3 = await contextValue.processHistoricalPurchaseData('3_years', [
         {
           id: 'h-3',
           companyName: 'Three Year Vendor Ltd',
@@ -1373,6 +1401,26 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
         },
       ]);
       expect(processedCount3).toBe(1);
+    });
+
+    // Failure paths: the caller must learn the import did NOT happen, whether
+    // the request itself failed or the server reported success:false.
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({ success: false, error: 'Server error' }) });
+    await act(async () => {
+      const processedCount = await contextValue.processHistoricalPurchaseData('1_year', []);
+      expect(processedCount).toBe(0);
+    });
+
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ success: false, error: 'Rejected' }) });
+    await act(async () => {
+      const processedCount = await contextValue.processHistoricalPurchaseData('1_year', []);
+      expect(processedCount).toBe(0);
+    });
+
+    mockFetch.mockRejectedValueOnce(new Error('Network down'));
+    await act(async () => {
+      const processedCount = await contextValue.processHistoricalPurchaseData('1_year', []);
+      expect(processedCount).toBe(0);
     });
   });
 
@@ -1461,6 +1509,56 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
         documents: [],
       });
     });
+  });
+
+  it('falls back to matching activeBuyerAccount by the signed-in session email when the previous id is gone', async () => {
+    authClient.setSession({
+      id: 'u-1',
+      email: 'pub@procucev.com',
+      name: 'Test User',
+      role: 'buyer',
+      orgId: 'org-1',
+      orgName: 'Test Org',
+    });
+
+    let contextValue: any;
+    const Consumer = () => {
+      contextValue = useApp();
+      return <div>Test</div>;
+    };
+    render(
+      <AppProvider>
+        <Consumer />
+      </AppProvider>
+    );
+    await waitFor(() => {
+      expect(contextValue.isLoadingDB).toBe(false);
+    });
+
+    // Prime activeBuyerAccount with an id that will NOT be present in the
+    // next refreshFromDB response, forcing the sessionEmail fallback lookup.
+    act(() => {
+      contextValue.alignActiveBuyerAccount('buyer-acc-1');
+    });
+    expect(contextValue.activeBuyerAccount?.id).toBe('buyer-acc-1');
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        success: true,
+        data: {
+          buyerAccounts: [
+            { id: 'buyer-acc-99', organizationName: 'Session Matched Org', corporateEmail: 'pub@procucev.com' },
+          ],
+        },
+      }),
+    });
+    await act(async () => {
+      await contextValue.refreshFromDB();
+    });
+
+    expect(contextValue.activeBuyerAccount?.id).toBe('buyer-acc-99');
+    authClient.setSession(null);
   });
 
   it('handles error gracefully when refreshFromDB fetch fails or returns false', async () => {
