@@ -1186,20 +1186,81 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       expect(saved).toBe(false);
     });
 
-    // 2. Revise Vendor Rating (preferred, conditional, disqualified, and unknown vendor)
-    act(() => {
-      const revision1 = contextValue.reviseVendorRating('v-001', 92, 94, 90, 'Excellent quality performance');
+    // 2. Revise Vendor Rating (preferred, conditional, disqualified, and unknown vendor).
+    // reviseVendorRating awaits the real POST /api/vendors/:id/rating-revision and
+    // uses the server's response as the source of truth, so each call needs an
+    // explicit mocked response shaped like the real endpoint's { success, data:
+    // { revisionRecord, updatedVendor } } payload.
+    const mockRevisionResponse = (overrides: Record<string, unknown> = {}) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: {
+          revisionRecord: {
+            id: `rev-${Date.now()}`,
+            vendorId: 'v-001',
+            vendorName: 'Apex Supplies Ltd.',
+            buyerCompany: 'Larsen & Toubro Limited',
+            buyerName: 'Vikram Malhotra',
+            buyerEmail: 'buyer@procucev.com',
+            timestamp: new Date().toISOString(),
+            qualityScore: 92,
+            costScore: 94,
+            deliveryScore: 90,
+            buyerAverage: 92,
+            previousScore: 85,
+            newCompositeScore: 90,
+            previousRating: 4.3,
+            newRating: 4.5,
+            remarks: 'Excellent quality performance',
+            emailDispatched: true,
+            shaSignature: 'sha256-test',
+            ...overrides,
+          },
+          updatedVendor: { id: 'v-001', score: 90, rating: 4.5 },
+        },
+      }),
+    });
+
+    let revision1: any;
+    await act(async () => {
+      mockFetch.mockResolvedValueOnce(mockRevisionResponse());
+      revision1 = await contextValue.reviseVendorRating('v-001', 92, 94, 90, 'Excellent quality performance');
       contextValue.openRatingRevisionEmailModal(revision1);
-      const revision2 = contextValue.reviseVendorRating('v-001', 65, 70, 60, 'Conditional review');
+
+      mockFetch.mockResolvedValueOnce(mockRevisionResponse({ newCompositeScore: 65, remarks: 'Conditional review' }));
+      const revision2 = await contextValue.reviseVendorRating('v-001', 65, 70, 60, 'Conditional review');
       expect(revision2.newCompositeScore).toBeDefined();
-      const revision3 = contextValue.reviseVendorRating('v-001', 40, 45, 40, 'Disqualified due to performance');
+
+      mockFetch.mockResolvedValueOnce(
+        mockRevisionResponse({ newCompositeScore: 40, remarks: 'Disqualified due to performance' })
+      );
+      const revision3 = await contextValue.reviseVendorRating('v-001', 40, 45, 40, 'Disqualified due to performance');
       expect(revision3.newCompositeScore).toBeDefined();
+
       // Revise with empty remarks and unknown vendor
-      contextValue.reviseVendorRating('unknown-vendor-id', 80, 80, 80, '');
+      mockFetch.mockResolvedValueOnce(mockRevisionResponse({ vendorId: 'unknown-vendor-id', remarks: '' }));
+      await contextValue.reviseVendorRating('unknown-vendor-id', 80, 80, 80, '');
       // Revise vendor with score 0
-      contextValue.reviseVendorRating('v-003', 70, 70, 70, 'Revised score 0 vendor');
+      mockFetch.mockResolvedValueOnce(mockRevisionResponse({ vendorId: 'v-003' }));
+      await contextValue.reviseVendorRating('v-003', 70, 70, 70, 'Revised score 0 vendor');
     });
     expect(contextValue.ratingRevisionEmailModalOpen).toBe(true);
+
+    // Failure paths: the caller must learn a revision was NOT saved, whether the
+    // request itself failed or the server reported success:false.
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({ success: false, error: 'Server error' }) });
+    await act(async () => {
+      const saved = await contextValue.reviseVendorRating('v-001', 50, 50, 50, 'Network failure case');
+      expect(saved).toBeNull();
+    });
+
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ success: false, error: 'Rejected' }) });
+    await act(async () => {
+      const saved = await contextValue.reviseVendorRating('v-001', 50, 50, 50, 'Rejected case');
+      expect(saved).toBeNull();
+    });
 
     // 3. Add Audit Log & Feed Item across all role contexts and feed types
     act(() => {

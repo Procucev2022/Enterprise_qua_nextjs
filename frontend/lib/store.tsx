@@ -114,7 +114,7 @@ interface AppContextType {
   openStandardEmailModal: (rfq: RFQItem, vendor?: VendorEntry) => void;
 
   // Buyer Vendor Rating Revision Engine
-  reviseVendorRating: (vendorId: string, qualityScore: number, costScore: number, deliveryScore: number, remarks: string) => VendorRatingRevisionRecord;
+  reviseVendorRating: (vendorId: string, qualityScore: number, costScore: number, deliveryScore: number, remarks: string) => Promise<VendorRatingRevisionRecord | null>;
   selectedRatingRevisionEmail: VendorRatingRevisionEmailPayload | null;
   setSelectedRatingRevisionEmail: (email: VendorRatingRevisionEmailPayload | null) => void;
   ratingRevisionEmailModalOpen: boolean;
@@ -1007,94 +1007,74 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
     setRatingRevisionEmailModalOpen(true);
   };
 
-  const reviseVendorRating = (
+  const reviseVendorRating = async (
     vendorId: string,
     qualityScore: number,
     costScore: number,
     deliveryScore: number,
     remarks: string
-  ): VendorRatingRevisionRecord => {
+  ): Promise<VendorRatingRevisionRecord | null> => {
     const buyerCompany = activeBuyerAccount?.organizationName || 'Larsen & Toubro Limited';
     const buyerName = activeBuyerAccount?.contactPerson || 'Rajesh Sharma (CPO)';
     const buyerEmail = activeBuyerAccount?.corporateEmail || 'buyer@procucev.com';
-    const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC';
-
-    // 1. Calculate Buyer Input Average across Quality, Cost, Delivery
-    const buyerAverage = Math.round((qualityScore + costScore + deliveryScore) / 3);
-
-    // 2. Find target vendor and calculate composite average with actual existing rating
     const targetVendor = buyerVendors.find((v) => v.id === vendorId) || buyerVendors[0];
-    const previousScore = targetVendor?.score || (targetVendor?.rating ? Math.round(targetVendor.rating * 20) : 88);
-    const previousRating = targetVendor?.rating || Number((previousScore / 20).toFixed(1));
+    const trimmedRemarks = remarks.trim() || 'Quarterly operational performance review & ratings alignment.';
 
-    // 3. Average between buyer evaluation and actual vendor rating
-    const newCompositeScore = Math.round((previousScore + buyerAverage) / 2);
-    const newRating = Number((newCompositeScore / 20).toFixed(1));
-    const newStatus = newCompositeScore >= 80 ? 'PREFERRED ENTERPRISE SUPPLIER' : 'CONDITIONAL / UNDER REVIEW';
+    // Persist rating revision to the backend and use ITS canonical result —
+    // this used to PATCH '/api/vendors' with a client-computed payload; that
+    // route/method doesn't exist (routes/vendors.js has no PATCH handler at
+    // all), so it silently 404'd on every revision and nothing ever reached
+    // the backend, while the UI unconditionally showed a client-recomputed
+    // score as if it had saved. Worse, that client formula
+    // (Math.round((previousScore + buyerAverage) / 2)) never matched the
+    // server's real weighting (storeService.reviseVendorRating /
+    // calculateRevisedRating: previousScore*0.6 + buyerAverage*0.4), so even
+    // a successful save would have shown the wrong number. The real endpoint
+    // is POST '/api/vendors/:id/rating-revision' — await it and use its
+    // response as the source of truth for what actually got saved.
+    let res: Response;
+    try {
+      res = await fetch(`/api/vendors/${encodeURIComponent(targetVendor?.id || vendorId)}/rating-revision`, {
+        method: 'POST',
+        headers: authFetchHeaders(),
+        body: JSON.stringify({
+          qualityScore,
+          costScore,
+          deliveryScore,
+          remarks: trimmedRemarks,
+          buyerCompany,
+          buyerName,
+          buyerEmail,
+        }),
+      });
+    } catch (e) {
+      console.error('Failed to save rating revision to DB:', e);
+      showToast('Rating Revision Failed', 'Could not reach the server. Please try again.', 'warning');
+      return null;
+    }
 
-    const shaSignature = '0xREV' + Math.random().toString(36).substring(2, 10).toUpperCase() + Date.now().toString(36).toUpperCase();
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.success) {
+      showToast(
+        'Rating Revision Failed',
+        data?.error || 'Could not save your rating revision. Please try again.',
+        'warning'
+      );
+      return null;
+    }
 
-    const revisionRecord: VendorRatingRevisionRecord = {
-      id: `rev-${Date.now()}`,
-      vendorId: targetVendor?.id || vendorId,
-      vendorName: targetVendor?.name || 'Apex Supplies Ltd.',
-      buyerCompany,
-      buyerName,
-      buyerEmail,
-      timestamp,
-      qualityScore,
-      costScore,
-      deliveryScore,
-      buyerAverage,
-      previousScore,
-      newCompositeScore,
-      previousRating,
-      newRating,
-      remarks: remarks.trim() || 'Quarterly operational performance review & ratings alignment.',
-      emailDispatched: true,
-      shaSignature,
-    };
+    const revisionRecord: VendorRatingRevisionRecord = data.data.revisionRecord;
+    const updatedVendorFromServer = data.data.updatedVendor;
 
     // Update in buyerVendors list (accessible across all buyer accounts & directories)
-    const updatedTargetVendor: VendorEntry = {
-      ...targetVendor,
-      rating: newRating,
-      score: newCompositeScore,
-      status: newStatus,
-      latestRatingRevision: revisionRecord,
-      ratingRevisionHistory: [revisionRecord, ...(targetVendor?.ratingRevisionHistory || [])],
-    };
-
     setBuyerVendors((prev) =>
       prev.map((v) => {
         if (v.id === vendorId || v.name === targetVendor?.name) {
-          return updatedTargetVendor;
+          return { ...v, ...updatedVendorFromServer };
         }
         return v;
       })
     );
-
-    // Persist rating revision to the backend. Was PATCHing '/api/vendors'
-    // with a client-computed payload — that route/method doesn't exist
-    // (routes/vendors.js has no PATCH handler at all), so this silently
-    // 404'd on every single revision and nothing ever reached the backend.
-    // The real, working, already-authenticated endpoint is POST
-    // '/api/vendors/:id/rating-revision', which computes its own canonical
-    // score server-side (see storeService.reviseVendorRating) — sending it
-    // the same raw buyer inputs the client used for its optimistic UI.
-    fetch(`/api/vendors/${encodeURIComponent(targetVendor?.id || vendorId)}/rating-revision`, {
-      method: 'POST',
-      headers: authFetchHeaders(),
-      body: JSON.stringify({
-        qualityScore,
-        costScore,
-        deliveryScore,
-        remarks: revisionRecord.remarks,
-        buyerCompany,
-        buyerName,
-        buyerEmail,
-      }),
-    }).catch((e) => console.error('Failed to save rating revision to DB:', e));
 
     // Update in vendorEvaluations list as well
     setVendorEvaluations((prev) =>
@@ -1110,8 +1090,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
           };
           return {
             ...e,
-            overallScore: newCompositeScore,
-            status: newStatus,
+            overallScore: revisionRecord.newCompositeScore,
             moduleScores: {
               ...modScores,
               quality: { ...modScores.quality, score: Number((qualityScore / 20).toFixed(1)), remarks: `Buyer Score: ${qualityScore}/100` },
@@ -1127,7 +1106,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
     // AI Bot Feed item
     addFeedItem(
       `Vendor Rating Revised: ${targetVendor?.name}`,
-      `Buyer ${buyerName} (${buyerCompany}) revised performance rating. Quality: ${qualityScore}/100, Cost: ${costScore}/100, Delivery: ${deliveryScore}/100 (Buyer Avg: ${buyerAverage}%). New Platform Aggregate Rating: ${newRating} / 5.0 (${newCompositeScore}%). Remarks: "${remarks}". Notification email dispatched to ${targetVendor?.email}.`,
+      `Buyer ${buyerName} (${buyerCompany}) revised performance rating. Quality: ${qualityScore}/100, Cost: ${costScore}/100, Delivery: ${deliveryScore}/100 (Buyer Avg: ${revisionRecord.buyerAverage}%). New Platform Aggregate Rating: ${revisionRecord.newRating} / 5.0 (${revisionRecord.newCompositeScore}%). Remarks: "${revisionRecord.remarks}". Notification email dispatched to ${targetVendor?.email}.`,
       'system',
       undefined,
       targetVendor?.name,
@@ -1136,7 +1115,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
 
     // Immutable Audit Log
     addAuditLog(
-      `Buyer Rating Revision for ${targetVendor?.name}: Q=${qualityScore}, C=${costScore}, D=${deliveryScore} (Buyer Avg: ${buyerAverage}%). Previous: ${previousScore}% (${previousRating}★) -> New Composite: ${newCompositeScore}% (${newRating}★). Remarks: "${remarks}". Dispatched notification email to ${targetVendor?.email}.`,
+      `Buyer Rating Revision for ${targetVendor?.name}: Q=${qualityScore}, C=${costScore}, D=${deliveryScore} (Buyer Avg: ${revisionRecord.buyerAverage}%). Previous: ${revisionRecord.previousScore}% (${revisionRecord.previousRating}★) -> New Composite: ${revisionRecord.newCompositeScore}% (${revisionRecord.newRating}★). Remarks: "${revisionRecord.remarks}". Dispatched notification email to ${targetVendor?.email}.`,
       undefined,
       buyerEmail
     );
@@ -1149,22 +1128,22 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
       buyerCompany,
       buyerContactName: buyerName,
       buyerContactEmail: buyerEmail,
-      dispatchedAt: timestamp,
+      dispatchedAt: revisionRecord.timestamp,
       qualityScore,
       costScore,
       deliveryScore,
-      buyerAverage,
-      previousScore,
-      newCompositeScore,
-      newRating,
-      remarks: remarks.trim() || 'Quarterly operational performance review & ratings alignment.',
-      shaSignature,
+      buyerAverage: revisionRecord.buyerAverage,
+      previousScore: revisionRecord.previousScore,
+      newCompositeScore: revisionRecord.newCompositeScore,
+      newRating: revisionRecord.newRating,
+      remarks: revisionRecord.remarks,
+      shaSignature: revisionRecord.shaSignature,
     });
     setRatingRevisionEmailModalOpen(true);
 
     showToast(
       'Vendor Rating Revised & Email Dispatched',
-      `Updated ${targetVendor?.name} rating to ${newRating}★ (${newCompositeScore}%). Performance notification email dispatched.`,
+      `Updated ${targetVendor?.name} rating to ${revisionRecord.newRating}★ (${revisionRecord.newCompositeScore}%). Performance notification email dispatched.`,
       'success'
     );
 
