@@ -9,11 +9,13 @@ const { logger } = require('../services/loggerService');
  * be able to mutate them.
  *
  * This is deliberately a role-level gate and NOT a per-record ownership check
- * like vendorController's assertVendorOwnership: this app has no per-request
- * "this buyer account belongs to this buyer" concept at all — there is a
- * single, globally active buyer account (storeService.activeBuyerAccount), and
- * storeService.createRFQ stamps new RFQs from that system-wide value rather
- * than from req.user. Inventing ownership semantics here would be fiction.
+ * like vendorController's assertVendorOwnership: any buyer/admin can still
+ * mutate any buyer account record, not just their own — there is no
+ * "this buyer account belongs to this specific buyer" concept enforced here.
+ * (rfqController.createRFQ *does* resolve the requesting buyer's own account
+ * from req.user — via storeService.getBuyerAccountByEmail — to attribute new
+ * RFQs correctly; that's a separate, already-solved concern from the
+ * buyer-account-record ownership gap this comment is about.)
  */
 function assertBuyerAccountRole(req, res) {
   const user = req.user;
@@ -127,7 +129,8 @@ function ingestHistoricalData(req, res, next) {
       return res.status(400).json({ success: false, error: 'period is required.' });
     }
     logger.info(`Ingesting historical purchase data for period: ${period}`, { period }, 'BUYER_ACCOUNT_CONTROLLER');
-    const result = storeService.processHistoricalPurchaseData(period, vendorRecords || []);
+    const requestingBuyerAccount = storeService.getBuyerAccountByEmail(req.user.email);
+    const result = storeService.processHistoricalPurchaseData(period, vendorRecords || [], requestingBuyerAccount);
     res.json(result);
   } catch (err) {
     logger.error('Error ingesting historical purchase data', err, 'BUYER_ACCOUNT_CONTROLLER');

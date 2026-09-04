@@ -64,7 +64,11 @@ function createRFQ(req, res, next) {
     }
 
     logger.info(`Creating new RFQ: ${body.title}`, { title: body.title, category: body.category, budget: body.budget }, 'RFQ_CONTROLLER');
-    const created = storeService.createRFQ(body);
+    // Resolved server-side from the authenticated session, never trusted from
+    // the request body, so the RFQ is attributed to whoever is actually
+    // logged in rather than a client-supplied or globally-shared value.
+    const requestingBuyerAccount = req.user ? storeService.getBuyerAccountByEmail(req.user.email) : null;
+    const created = storeService.createRFQ(body, requestingBuyerAccount);
     res.status(201).json({ success: true, data: created });
   } catch (err) {
     logger.error('Error creating RFQ', err, 'RFQ_CONTROLLER');

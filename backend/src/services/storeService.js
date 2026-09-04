@@ -230,6 +230,13 @@ class StoreService {
     return this.activeBuyerAccount;
   }
 
+  /** Resolves a buyer account by its login email, case-insensitively. */
+  getBuyerAccountByEmail(email) {
+    if (!email) return null;
+    const target = email.toLowerCase();
+    return this.buyerAccounts.find((a) => (a.corporateEmail || '').toLowerCase() === target) || null;
+  }
+
   addBuyerAccount(accData) {
     const newAcc = {
       ...accData,
@@ -431,7 +438,7 @@ class StoreService {
     return this.rfqs.find((r) => r.id === id || r.rfqNumber === id);
   }
 
-  createRFQ(rfqData) {
+  createRFQ(rfqData, requestingBuyerAccount = null) {
     const nextNum = this.rfqs.length + 893;
     const rfqNumber = rfqData.rfqNumber || `RFQ-2026-0${nextNum}`;
     const id = rfqData.id || `rfq-${Date.now()}`;
@@ -454,13 +461,19 @@ class StoreService {
       // Metadata only. The bytes live on disk under rfqAttachmentService, so the
       // bootstrap payload stays a fixed size no matter how much is attached.
       attachments: Array.isArray(rfqData.attachments) ? rfqData.attachments : [],
-      status: rfqData.status || 'open',
-      // The app has one globally "active" buyer account rather than a
-      // per-request buyer identity (see activeBuyerAccount elsewhere in this
-      // file), so that's what an RFQ is stamped with at creation — same
-      // buyer-context convention approvePurchaseOrder already falls back to.
-      buyerAccountId: this.activeBuyerAccount ? this.activeBuyerAccount.id : null,
-      buyerAccountName: this.activeBuyerAccount ? this.activeBuyerAccount.organizationName : null,
+      status: rfqData.status || 'Quotes Pending',
+      // Stamped from the authenticated caller's own buyer account (resolved
+      // by the controller/resolver from the session, never trusted from the
+      // client body) so an RFQ is attributed to whoever actually created it.
+      // Falls back to the legacy system-wide "active" buyer account only for
+      // callers that don't have a per-request buyer identity to resolve
+      // (e.g. historical-data ingestion, admin-driven creation).
+      buyerAccountId: requestingBuyerAccount
+        ? requestingBuyerAccount.id
+        : this.activeBuyerAccount ? this.activeBuyerAccount.id : null,
+      buyerAccountName: requestingBuyerAccount
+        ? requestingBuyerAccount.organizationName
+        : this.activeBuyerAccount ? this.activeBuyerAccount.organizationName : null,
       sourcingMode: rfqData.sourcingMode || 'mode_1',
       quotesCount: rfqData.quotes ? rfqData.quotes.length : 0,
       chasingActive: rfqData.chasingActive !== undefined ? rfqData.chasingActive : true,
@@ -468,7 +481,15 @@ class StoreService {
       elapsedTime: rfqData.elapsedTime || '0 hrs',
       targetSavings: rfqData.targetSavings || '12-18%',
       quotes: evaluateQuotes(rfqData.quotes || []),
-      lineItems: rfqData.lineItems || [],
+      // Real line items the buyer's document extraction produced. Previously
+      // only the legacy `lineItems` key was read here, so a real RFQ created
+      // through the actual app flow (which sends `extractedEntities`, the
+      // RFQItem field) silently lost every item on persistence — the buyer's
+      // own optimistic client state showed them, but a refresh (re-hydrated
+      // from this persisted shape) showed none, and PO generation
+      // (approvePurchaseOrder, which reads rfq.extractedEntities) produced
+      // an empty line-item PO for any RFQ created this way.
+      extractedEntities: rfqData.extractedEntities || rfqData.lineItems || [],
       assignedVendors: rfqData.assignedVendors || [],
       followUpData: rfqData.followUpData || {
         rfqNumber,
@@ -711,7 +732,7 @@ class StoreService {
   // ==========================================
   // 9. HISTORICAL PURCHASE DATA INGESTION & SETUP
   // ==========================================
-  processHistoricalPurchaseData(period, vendorRecords = []) {
+  processHistoricalPurchaseData(period, vendorRecords = [], requestingBuyerAccount = null) {
     let importedCount = 0;
     const dateStr = new Date().toISOString().substring(0, 10);
 
@@ -750,8 +771,12 @@ class StoreService {
       }
     });
 
+    // Attributed to the requesting buyer's own account when resolved from the
+    // session (same convention as createRFQ) — falls back to the legacy
+    // global active account only when no per-request identity is available.
+    const attributedAccount = requestingBuyerAccount || this.activeBuyerAccount;
     this.addAuditLog({
-      userEmail: this.activeBuyerAccount ? this.activeBuyerAccount.corporateEmail : 'buyer@enterprise.com',
+      userEmail: attributedAccount ? attributedAccount.corporateEmail : 'buyer@enterprise.com',
       action: `Processed ${period.replace('_', ' ')} historical purchase dump: ${importedCount} unique suppliers empanelled into vendor master roster.`,
     });
 

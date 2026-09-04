@@ -118,6 +118,71 @@ describe('Store Service & Business Operations', () => {
       expect(storeService.getRFQById('invalid-id')).toBeUndefined();
     });
 
+    test('createRFQ attributes the RFQ to the requesting buyer account, not the global active one', () => {
+      const requestingBuyerAccount = storeService.addBuyerAccount({
+        organizationName: 'Attribution Test Co',
+        corporateEmail: 'attribution-test@example.com',
+      });
+
+      const rfq = storeService.createRFQ(
+        { title: 'Attribution Test RFQ', category: 'Raw Material' },
+        requestingBuyerAccount
+      );
+
+      expect(rfq.buyerAccountId).toBe(requestingBuyerAccount.id);
+      expect(rfq.buyerAccountName).toBe('Attribution Test Co');
+      expect(rfq.buyerAccountId).not.toBe(
+        storeService.getActiveBuyerAccount() && storeService.getActiveBuyerAccount().id
+      );
+    });
+
+    test('createRFQ falls back to the global active buyer account when no requesting account is given', () => {
+      const rfq = storeService.createRFQ({ title: 'No Requester RFQ', category: 'Raw Material' });
+      const active = storeService.getActiveBuyerAccount();
+      expect(rfq.buyerAccountId).toBe(active ? active.id : null);
+    });
+
+    test('createRFQ preserves real extractedEntities instead of silently dropping them into the legacy lineItems shape', () => {
+      const entities = [{ id: 'e1', itemName: 'Steel Beam', quantity: 5, unit: 'Units', confidence: 90 }];
+      const rfq = storeService.createRFQ({
+        title: 'Line Item Preservation RFQ',
+        category: 'Raw Material',
+        extractedEntities: entities,
+      });
+      expect(rfq.extractedEntities).toEqual(entities);
+    });
+
+    test('createRFQ defaults an unset status to a real, valid RFQ status', () => {
+      const rfq = storeService.createRFQ({ title: 'Default Status RFQ', category: 'Raw Material' });
+      expect(rfq.status).toBe('Quotes Pending');
+    });
+
+    test('getBuyerAccountByEmail resolves case-insensitively, and returns null when unmatched or unset', () => {
+      const acc = storeService.addBuyerAccount({
+        organizationName: 'Lookup Test Co',
+        corporateEmail: 'Lookup-Test@Example.com',
+      });
+      expect(storeService.getBuyerAccountByEmail('lookup-test@example.com')).toEqual(acc);
+      expect(storeService.getBuyerAccountByEmail('nobody@example.com')).toBeNull();
+      expect(storeService.getBuyerAccountByEmail(undefined)).toBeNull();
+    });
+
+    test('processHistoricalPurchaseData attributes its audit log to the requesting buyer account, not the global active one', () => {
+      const requestingBuyerAccount = storeService.addBuyerAccount({
+        organizationName: 'Historical Ingest Test Co',
+        corporateEmail: 'historical-ingest@example.com',
+      });
+
+      storeService.processHistoricalPurchaseData(
+        '1_year',
+        [{ companyName: 'Some Vendor', email: 'vendor@some.co' }],
+        requestingBuyerAccount
+      );
+
+      const lastLog = storeService.getAuditLogs()[0];
+      expect(lastLog.userEmail).toBe('historical-ingest@example.com');
+    });
+
     test('updateRFQ & addQuoteToRFQ', () => {
       const updated = storeService.updateRFQ(rfqId, { targetSavings: '20%' });
       expect(updated.targetSavings).toBe('20%');

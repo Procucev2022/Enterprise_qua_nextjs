@@ -314,6 +314,22 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     await rfqController.createRFQ({ body: { title: 'Only a title' } }, res, next);
     expect(res.status).toHaveBeenCalledWith(400);
 
+    // The RFQ must be attributed to the authenticated requester's own buyer
+    // account (resolved server-side from req.user.email), not a client-
+    // supplied or globally-shared value.
+    const attributedRes = mockRes();
+    await rfqController.createRFQ(
+      {
+        body: { title: 'Attributed RFQ', category: 'Raw Material', targetDeliveryDate: '2026-10-01' },
+        user: { role: 'buyer', email: 'sourcing.commercial@tatamotors.com' },
+      },
+      attributedRes,
+      next
+    );
+    expect(attributedRes.status).toHaveBeenCalledWith(201);
+    const attributedRFQ = attributedRes.json.mock.calls[0][0].data;
+    expect(attributedRFQ.buyerAccountName).toBe('Tata Motors Commercial Vehicles Ltd.');
+
     // 'rfq-001' is a real seeded RFQ; 'rfq-1' never matches anything and was
     // silently always hitting the not-found path.
     await rfqController.updateRFQ({ params: { id: 'rfq-001' }, body: { title: 'Updated' } }, res, next);

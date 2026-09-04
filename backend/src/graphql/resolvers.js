@@ -173,9 +173,10 @@ const rootResolvers = {
   },
 
   createRFQ: ({ input }, context) => {
-    requireAuth(context);
+    const user = requireAuth(context);
     logger.info('GraphQL Mutation: createRFQ', { title: input.title }, 'GRAPHQL_MUTATION');
-    return storeService.createRFQ(input);
+    const requestingBuyerAccount = storeService.getBuyerAccountByEmail(user.email);
+    return storeService.createRFQ(input, requestingBuyerAccount);
   },
 
   updateRFQ: ({ id, input }, context) => {

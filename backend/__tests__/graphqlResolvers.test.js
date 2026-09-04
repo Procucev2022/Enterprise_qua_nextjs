@@ -129,6 +129,17 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
     }, buyerCtx);
     expect(createdRFQ.title).toBe('Direct Resolver RFQ');
 
+    // Attributed to the requesting buyer's own account when one matches
+    // their session email, resolved server-side — not a client-supplied value.
+    const attributionAccount = storeService.addBuyerAccount({
+      organizationName: 'GraphQL Attribution Test Co',
+      corporateEmail: 'buyer@procucev.com',
+    });
+    const attributedRFQ = rootResolvers.createRFQ({
+      input: { title: 'Attributed Resolver RFQ', category: 'Raw Materials' },
+    }, buyerCtx);
+    expect(attributedRFQ.buyerAccountId).toBe(attributionAccount.id);
+
     const updatedRFQ = rootResolvers.updateRFQ({
       id: createdRFQ.id,
       input: { status: 'awarded' },

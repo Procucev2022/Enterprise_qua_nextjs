@@ -53,7 +53,8 @@ export interface RFQSummaryProps {
  */
 export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }: RFQSummaryProps) {
   const {
-    rfqs,
+    rfqs: allRfqs,
+    activeBuyerAccount,
     showToast,
     setSelectedRFQForMatrix,
     openRFQDeepDive,
@@ -64,6 +65,15 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
     setDeepDiveModalOpen,
     selectedRFQForDeepDive,
   } = useApp();
+
+  // Scoped to the logged-in buyer's own company — see command-center.tsx for
+  // why this can't just render the full global rfqs list. Memoized because
+  // it feeds the summary/filteredRFQs useMemos below — an unmemoized filter()
+  // would produce a new array every render and defeat those memos entirely.
+  const rfqs = useMemo(
+    () => (activeBuyerAccount ? allRfqs.filter((r) => r.buyerAccountId === activeBuyerAccount.id) : []),
+    [allRfqs, activeBuyerAccount]
+  );
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>(ALL);
