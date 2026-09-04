@@ -51,6 +51,8 @@ describe('Backend Validation Schemas Unit Tests', () => {
       category: 'Mechanical',
       budget: 50000,
       targetDeliveryDate: '2026-04-15',
+      deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+      deliveryPincode: '400701',
       lineItems: [{ name: 'Pump', qty: 2 }],
     };
     const res = validatePayload(VALIDATION_SCHEMAS.createRFQ, validRFQ);

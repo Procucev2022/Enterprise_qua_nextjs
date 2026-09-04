@@ -210,6 +210,8 @@ describe('Controllers Error & Edge-Case Coverage', () => {
           category: 'Mechanical',
           budget: 50000,
           targetDeliveryDate: '2026-10-01',
+          deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+          deliveryPincode: '400701',
         },
       },
       res,

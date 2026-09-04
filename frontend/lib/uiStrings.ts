@@ -254,13 +254,32 @@ export const UI_STRINGS = {
     budgetOptionalTag: 'Optional',
     budgetFromDocumentHint: 'Read from {fileName}. Edit it if the document under-states the true value.',
     budgetMissingHint: 'Optional. Leave it at zero if you would rather not publish a ceiling to vendors.',
+    /**
+     * Delivery destination. Both fields are mandatory: vendors price freight
+     * against the location and the pincode, so a quote raised without them
+     * cannot be compared against one that has them.
+     */
+    /**
+     * Decorative marker only. It is rendered aria-hidden because the inputs carry
+     * aria-required, which is what a screen reader announces; showing the glyph to
+     * assistive tech as well would just read out a stray asterisk.
+     */
+    deliveryRequiredMarker: '*',
     deliveryLocationLabel: 'Delivery Location',
     deliveryLocationPlaceholder: 'Plant, warehouse or site address',
+    deliveryLocationRequiredMessage:
+      'Enter the delivery location. Vendors price freight against it, so it cannot be left blank.',
+    deliveryLocationSchemaMessage: 'Delivery location is required and must be 3 to 200 characters.',
     deliveryPincodeLabel: 'Pincode / Zipcode',
     deliveryPincodePlaceholder: 'e.g. 400701',
-    deliveryPincodeInvalidTitle: 'Check the Pincode',
+    deliveryPincodeRequiredMessage:
+      'Enter the delivery pincode or zipcode. Freight is rated on it, so it cannot be left blank.',
+    deliveryPincodeInvalidTitle: 'Check the Delivery Details',
     deliveryPincodeInvalidMessage:
-      'Enter a valid pincode or zipcode of 3 to 10 letters, digits, spaces or hyphens, or clear the field.',
+      'Enter a pincode or zipcode of 3 to 10 letters, digits, spaces or hyphens, for example 400701.',
+    deliveryIncompleteTitle: 'Delivery Details Needed',
+    deliveryIncompleteMessage:
+      'Add the delivery location and a valid pincode or zipcode before choosing a sourcing mode. Vendors quote freight against both.',
 
     /**
      * Step strip. Rendered in order, and a step only becomes reachable once the
@@ -301,7 +320,8 @@ export const UI_STRINGS = {
     // Step strip gating
     stepLockedTitle: 'Finish the Current Step First',
     stepLockedExtractMessage: 'Upload a document and extract its line items before opening the review step.',
-    stepLockedReviewMessage: 'Review the line items and give each one a description before choosing a sourcing mode.',
+    stepLockedReviewMessage:
+      'Review the line items, give each one a description, and fill in the delivery location and pincode before choosing a sourcing mode.',
     stepLockedHint: 'Complete the previous step',
 
     // Step 1 manual intake
