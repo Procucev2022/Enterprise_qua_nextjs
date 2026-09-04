@@ -58,14 +58,16 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
 
   const [rfqSourceFilter, setRfqSourceFilter] = useState<'all' | 'email_gateway' | 'web_portal' | 'email_upload'>('all');
 
-  // Scoped to the logged-in buyer's own company. Without this every buyer saw
-  // every RFQ ever created by any company — a real cross-tenant data leak,
-  // not a display quirk. An RFQ predating buyerAccountId tracking, or created
-  // while no buyer account matched the session, has no owner to scope to and
-  // is excluded rather than shown to everyone by default.
-  const rfqs = activeBuyerAccount
-    ? allRfqs.filter((r) => r.buyerAccountId === activeBuyerAccount.id)
-    : [];
+  // GET /api/rfqs is itself scoped to the signed-in buyer's own account now
+  // (server-side, via the same buyer_accounts record RFQs are stamped with —
+  // see rfqController.js's resolveRfqReadScope), so allRfqs already contains
+  // only this buyer's own RFQs. Re-filtering here by activeBuyerAccount.id
+  // was comparing against the wrong identity system: activeBuyerAccount
+  // resolves from the shared MySQL identity schema's organizationId, a
+  // different id space than buyer_accounts' Neon-generated id that
+  // r.buyerAccountId actually holds — the two never matched, silently
+  // zeroing out a real, correctly-scoped list.
+  const rfqs = allRfqs;
 
   const totalActiveRFQs = rfqs.length;
   const totalPendingQuotes = rfqs.reduce((acc, r) => acc + (r.quotesCount || (r.quotes ? r.quotes.length : 0)), 0);
