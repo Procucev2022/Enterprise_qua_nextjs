@@ -6,7 +6,7 @@ import IngestionWizard from '@/app/buyer/ingestion-wizard';
 
 export default function BuyerIngestionWizardPage() {
   const router = useRouter();
-  const backToCommandCenter = () => router.push('/buyer/command-center');
+  const backToDashboard = () => router.push('/buyer/dashboard');
 
-  return <IngestionWizard onComplete={backToCommandCenter} onCancel={backToCommandCenter} />;
+  return <IngestionWizard onComplete={backToDashboard} onCancel={backToDashboard} />;
 }

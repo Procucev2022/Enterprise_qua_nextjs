@@ -218,7 +218,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.commandCenter.description,
       icon: 'Layers',
       group: NAV_GROUPS.buyerSourcing,
-      route: '/buyer/command-center',
+      route: '/buyer/dashboard',
     },
     {
       id: 'ingestion_wizard',
@@ -451,7 +451,7 @@ export const SIDEBAR_LAYOUT = {
 
 /** Route the sign-in flow redirects to, chosen by the role on the user record. */
 export const ROLE_LANDING_ROUTE: Record<UserRole, string> = {
-  buyer: '/buyer/command-center',
+  buyer: '/buyer/dashboard',
   category_manager: '/category-manager/kanban-board',
   vendor: '/vendor/opportunity-feed',
   admin: '/admin/infra-control',

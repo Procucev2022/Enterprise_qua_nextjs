@@ -11,7 +11,7 @@ jest.mock('@/lib/store');
 const mockReplace = jest.fn();
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ replace: mockReplace, push: jest.fn() }),
-  usePathname: () => '/buyer/command-center',
+  usePathname: () => '/buyer/dashboard',
 }));
 
 jest.mock('@/lib/authClient', () => ({
