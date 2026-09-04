@@ -78,6 +78,8 @@ describe('lib/constants', () => {
       category: 'Mechanical',
       budget: 20000,
       targetDeliveryDate: '2026-03-30',
+      deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+      deliveryPincode: '400701',
     });
     expect(result.isValid).toBe(true);
   });

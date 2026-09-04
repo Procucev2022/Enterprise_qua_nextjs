@@ -188,6 +188,8 @@ describe('API Route Endpoints', () => {
         targetDeliveryDate: '2026-09-30',
         deadline: '2026-09-30',
         sourcingMode: 'mode_2',
+        deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+        deliveryPincode: '400701',
       };
       const res = await request(app).post('/api/rfqs').set(authHeader('buyer')).send(rfq);
       expect(res.statusCode).toBe(201);
@@ -218,8 +220,9 @@ describe('API Route Endpoints', () => {
       expect(res.body.data.budget).toBe(90000);
     });
 
-    // The budget is optional: a document that prices nothing yields no figure, and
-    // requiring one only made buyers invent a ceiling vendors would quote against.
+    // The budget stays optional even though the destination is now mandatory: a
+    // document that prices nothing yields no figure, and requiring one only made
+    // buyers invent a ceiling vendors would quote against.
     test('POST /api/rfqs accepts an RFQ with no budget', async () => {
       const res = await request(app)
         .post('/api/rfqs')
@@ -229,11 +232,66 @@ describe('API Route Endpoints', () => {
           category: 'Engineering Spares - Mechanical',
           targetDeliveryDate: '2026-10-05',
           sourcingMode: 'mode_1',
+          deliveryLocation: 'Pune Facility, Dock 2',
+          deliveryPincode: '411057',
         });
 
       expect(res.statusCode).toBe(201);
       expect(res.body.data.budget).toBe(0);
-      expect(res.body.data.deliveryLocation).toBe('');
+      expect(res.body.data.deliveryLocation).toBe('Pune Facility, Dock 2');
+    });
+
+    // Freight is rated on the destination, so an RFQ without one produces quotes
+    // that cannot be compared against quotes that have one.
+    test('POST /api/rfqs rejects a missing delivery location', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({
+          title: 'Procurement of Bearing Housings',
+          category: 'Engineering Spares - Mechanical',
+          targetDeliveryDate: '2026-10-05',
+          sourcingMode: 'mode_1',
+          deliveryPincode: '400701',
+        });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.fieldErrors.deliveryLocation).toMatch(/delivery location is required/i);
+    });
+
+    test('POST /api/rfqs rejects a delivery location shorter than three characters', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({
+          title: 'Procurement of Bearing Housings',
+          category: 'Engineering Spares - Mechanical',
+          targetDeliveryDate: '2026-10-05',
+          sourcingMode: 'mode_1',
+          deliveryLocation: 'X',
+          deliveryPincode: '400701',
+        });
+
+      // The schema `message` only covers the required case; the shared validator
+      // generates its own text for a minLength breach, as it does for `title`.
+      expect(res.statusCode).toBe(400);
+      expect(res.body.fieldErrors.deliveryLocation).toMatch(/at least 3 characters/i);
+    });
+
+    test('POST /api/rfqs rejects a missing pincode', async () => {
+      const res = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({
+          title: 'Procurement of Bearing Housings',
+          category: 'Engineering Spares - Mechanical',
+          targetDeliveryDate: '2026-10-05',
+          sourcingMode: 'mode_1',
+          deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+        });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.fieldErrors.deliveryPincode).toMatch(/pincode is required/i);
     });
 
     test('POST /api/rfqs rejects a malformed pincode', async () => {
@@ -245,6 +303,7 @@ describe('API Route Endpoints', () => {
           category: 'Engineering Spares - Mechanical',
           targetDeliveryDate: '2026-10-05',
           sourcingMode: 'mode_1',
+          deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '!!',
         });
 
@@ -261,6 +320,7 @@ describe('API Route Endpoints', () => {
           category: 'Engineering Spares - Mechanical',
           targetDeliveryDate: '2026-10-05',
           sourcingMode: 'mode_1',
+          deliveryLocation: 'Tilbury Docks, Berth 4',
           deliveryPincode: 'SW1A 1AA',
         });
 

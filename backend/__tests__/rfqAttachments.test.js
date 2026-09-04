@@ -391,6 +391,8 @@ describe('RFQ attachment HTTP routes', () => {
           category: 'Engineering Spares - Mechanical',
           targetDeliveryDate: '2026-10-05',
           sourcingMode: 'mode_1',
+          deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+          deliveryPincode: '400701',
           attachments: [upload.body.data],
         });
 
@@ -408,6 +410,8 @@ describe('RFQ attachment HTTP routes', () => {
           category: 'Engineering Spares - Mechanical',
           targetDeliveryDate: '2026-10-05',
           sourcingMode: 'mode_1',
+          deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+          deliveryPincode: '400701',
         });
 
       expect(res.statusCode).toBe(201);

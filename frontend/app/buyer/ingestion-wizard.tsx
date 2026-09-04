@@ -155,6 +155,16 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
   const [deliveryLocation, setDeliveryLocation] = useState('');
   const [deliveryPincode, setDeliveryPincode] = useState('');
 
+  /**
+   * Whether the buyer has tried to leave Step 2 yet.
+   *
+   * Both delivery fields start empty, so validating them on first render greeted
+   * the buyer with two red errors against fields they had not reached. The blank
+   * warnings are held back until Proceed is pressed, which is the first moment the
+   * omission actually matters.
+   */
+  const [sourcingAttempted, setSourcingAttempted] = useState(false);
+
   // Supporting documents on the manual path. Stored server-side and kept with the
   // RFQ for reference; never sent for extraction.
   const [attachments, setAttachments] = useState<RFQAttachment[]>([]);
@@ -520,8 +530,31 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
 
   const hasCompleteLineItems = entities.length > 0 && entities.every(isLineItemComplete);
 
+  /**
+   * Delivery destination, mandatory before sourcing.
+   *
+   * Unlike the budget, this cannot be left blank: vendors rate freight on the
+   * location and its pincode, so a quote raised without them is not comparable
+   * against one that has them. Extraction never supplies these, so they are
+   * always keyed by the buyer on Step 2.
+   */
+  const trimmedDeliveryLocation = deliveryLocation.trim();
+  const trimmedDeliveryPincode = deliveryPincode.trim();
+  const isDeliveryLocationMissing = trimmedDeliveryLocation === '';
+  const isDeliveryPincodeMissing = trimmedDeliveryPincode === '';
+  const isDeliveryPincodeMalformed =
+    !isDeliveryPincodeMissing && !PINCODE_PATTERN.test(trimmedDeliveryPincode);
+  const hasDeliveryDestination =
+    !isDeliveryLocationMissing && !isDeliveryPincodeMissing && !isDeliveryPincodeMalformed;
+
+  // A blank field is only worth flagging once the buyer has tried to move on. A
+  // malformed pincode is flagged immediately: it can only exist because something
+  // was typed, so the buyer is already looking at the field.
+  const showDeliveryLocationRequired = sourcingAttempted && isDeliveryLocationMissing;
+  const showDeliveryPincodeRequired = sourcingAttempted && isDeliveryPincodeMissing;
+
   /** Highest step the buyer has earned access to. */
-  const unlockedStep = !isExtractionAttempted ? 1 : hasCompleteLineItems ? 3 : 2;
+  const unlockedStep = !isExtractionAttempted ? 1 : hasCompleteLineItems && hasDeliveryDestination ? 3 : 2;
 
   /**
    * Strip navigation. Going back is always allowed; jumping ahead explains which
@@ -542,11 +575,18 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
   /**
    * Gate Step 2 -> Step 3. Every line item needs a description, whether it came
    * from AI extraction or was keyed after a failed extraction, otherwise vendors
-   * would be asked to quote against a blank row.
+   * would be asked to quote against a blank row. The delivery destination is
+   * checked separately so the toast names the actual blocker rather than
+   * reporting a line-item problem for a missing pincode.
    */
   const handleProceedToSourcing = () => {
+    setSourcingAttempted(true);
     if (!hasCompleteLineItems) {
       showToast(EXTRACTION.incompleteItemsTitle, EXTRACTION.incompleteItemsMessage, 'warning');
+      return;
+    }
+    if (!hasDeliveryDestination) {
+      showToast(EXTRACTION.deliveryIncompleteTitle, EXTRACTION.deliveryIncompleteMessage, 'warning');
       return;
     }
     setActiveStep(3);
@@ -574,14 +614,10 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
     // and requiring a figure only made buyers invent a ceiling that vendors would
     // then quote against.
     //
-    // The pincode is checked because a malformed one silently misdirects freight.
-    const pincode = deliveryPincode.trim();
-    if (pincode !== '' && !PINCODE_PATTERN.test(pincode)) {
-      showToast(EXTRACTION.deliveryPincodeInvalidTitle, EXTRACTION.deliveryPincodeInvalidMessage, 'warning');
-      setActiveStep(2);
-      return;
-    }
-
+    // The delivery destination is not re-checked here either, for the same reason:
+    // both fields only render on Step 2, so they cannot be cleared while this
+    // screen is showing, and `unlockedStep` drops back to 2 the moment one is
+    // emptied, which re-locks the strip before dispatch can be reached.
     setCurrentMode(selectedMode);
     // No fallback needed: `hasCompleteLineItems` requires a major category on
     // every row before Step 3 unlocks, so the leading item always carries one.
@@ -599,8 +635,8 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
         sourcingMode: selectedMode,
         targetDeliveryDate: entities[0].targetDate || defaultTargetDate(),
         budget,
-        deliveryLocation: deliveryLocation.trim(),
-        deliveryPincode: pincode,
+        deliveryLocation: trimmedDeliveryLocation,
+        deliveryPincode: trimmedDeliveryPincode,
         attachments,
         extractedEntities: entities,
         aiScore: selectedMode === 'mode_3' ? 95 : 88,
@@ -1156,16 +1192,27 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                 className="block text-slate-600 dark:text-gray-400 font-semibold mb-1 flex items-center gap-1"
               >
                 <MapPin size={11} /> {EXTRACTION.deliveryLocationLabel}
+                <span className="text-rose-600 dark:text-rose-400 font-bold" aria-hidden="true">
+                  {EXTRACTION.deliveryRequiredMarker}
+                </span>
               </label>
               <input
                 id="rfq-delivery-location"
                 type="text"
+                required
+                aria-required
+                aria-invalid={showDeliveryLocationRequired}
                 value={deliveryLocation}
                 onChange={(e) => setDeliveryLocation(e.target.value)}
                 placeholder={EXTRACTION.deliveryLocationPlaceholder}
                 maxLength={200}
                 className="font-medium"
               />
+              {showDeliveryLocationRequired && (
+                <p className="text-[10px] text-rose-700 dark:text-rose-400 mt-1">
+                  {EXTRACTION.deliveryLocationRequiredMessage}
+                </p>
+              )}
             </div>
 
             <div>
@@ -1174,19 +1221,32 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                 className="block text-slate-600 dark:text-gray-400 font-semibold mb-1"
               >
                 {EXTRACTION.deliveryPincodeLabel}
+                <span className="text-rose-600 dark:text-rose-400 font-bold" aria-hidden="true">
+                  {EXTRACTION.deliveryRequiredMarker}
+                </span>
               </label>
               <input
                 id="rfq-delivery-pincode"
                 type="text"
+                required
+                aria-required
+                aria-invalid={showDeliveryPincodeRequired || isDeliveryPincodeMalformed}
                 value={deliveryPincode}
                 onChange={(e) => setDeliveryPincode(e.target.value)}
                 placeholder={EXTRACTION.deliveryPincodePlaceholder}
                 maxLength={10}
                 className="mono font-semibold"
               />
-              {/* Flagged inline as well as on save, so a typo is caught while the
-                  buyer is still looking at the field. */}
-              {deliveryPincode.trim() !== '' && !PINCODE_PATTERN.test(deliveryPincode.trim()) && (
+              {/* Blank and malformed are reported separately: telling a buyer who
+                  has typed nothing that the format is wrong sends them looking for
+                  a typo that is not there. Both are flagged inline as well as on
+                  save, so the problem surfaces while the field is still in view. */}
+              {showDeliveryPincodeRequired && (
+                <p className="text-[10px] text-rose-700 dark:text-rose-400 mt-1">
+                  {EXTRACTION.deliveryPincodeRequiredMessage}
+                </p>
+              )}
+              {isDeliveryPincodeMalformed && (
                 <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-1">
                   {EXTRACTION.deliveryPincodeInvalidMessage}
                 </p>

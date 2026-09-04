@@ -224,7 +224,16 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     // The payload must satisfy VALIDATION_SCHEMAS.createRFQ, otherwise the
     // handler returns 400 and never reaches the store call under test.
     await rfqController.createRFQ(
-      { body: { title: 'RFQ Title', category: 'Mechanical', budget: 1000, targetDeliveryDate: '2026-10-01' } },
+      {
+        body: {
+          title: 'RFQ Title',
+          category: 'Mechanical',
+          budget: 1000,
+          targetDeliveryDate: '2026-10-01',
+          deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+          deliveryPincode: '400701',
+        },
+      },
       res,
       next
     );

@@ -77,12 +77,22 @@ const VALIDATION_SCHEMAS = {
     // Optional. A document that prices nothing yields no budget, and requiring
     // one forced the buyer to invent a ceiling vendors would then quote against.
     budget: { type: 'number', required: false, min: 0 },
-    deliveryLocation: { type: 'string', required: false, maxLength: 200 },
+    // Required, unlike budget. Vendors rate freight on the destination and its
+    // pincode, so a quote raised without them cannot be compared against one
+    // that has them. Enforced here as well as in the wizard so an RFQ posted
+    // straight to the API cannot skip the destination.
+    deliveryLocation: {
+      type: 'string',
+      required: true,
+      minLength: 3,
+      maxLength: 200,
+      message: 'Delivery location is required and must be 3 to 200 characters.',
+    },
     deliveryPincode: {
       type: 'string',
-      required: false,
+      required: true,
       pattern: PINCODE_REGEX,
-      message: 'Pincode must be 3 to 10 letters, digits, spaces or hyphens.',
+      message: 'Pincode is required and must be 3 to 10 letters, digits, spaces or hyphens.',
     },
     // Metadata for documents already stored by POST /api/rfqs/attachments.
     attachments: { type: 'array', required: false },

@@ -113,6 +113,35 @@ const fillBlankRow = (row: HTMLElement) => {
 const clickExtract = () =>
   fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.extractAction, 'i') }));
 
+const clickProceed = () =>
+  fireEvent.click(screen.getByRole('button', { name: /Proceed to Sourcing Mode/i }));
+
+const setDeliveryLocation = (value: string) =>
+  fireEvent.change(screen.getByLabelText(new RegExp(EXTRACTION.deliveryLocationLabel, 'i')), {
+    target: { value },
+  });
+
+const setDeliveryPincode = (value: string) =>
+  fireEvent.change(screen.getByLabelText(new RegExp(EXTRACTION.deliveryPincodeLabel, 'i')), {
+    target: { value },
+  });
+
+/**
+ * The delivery destination, which is mandatory before Step 3 unlocks. Extraction
+ * never supplies it, so every test that needs the sourcing step keys it by hand
+ * exactly as a buyer does.
+ */
+const fillDelivery = () => {
+  setDeliveryLocation('Navi Mumbai Plant, Gate 3');
+  setDeliveryPincode('400701');
+};
+
+/** Supplies the mandatory delivery destination, then leaves Step 2. */
+const proceedToSourcing = () => {
+  fillDelivery();
+  clickProceed();
+};
+
 describe('IngestionWizard: Step 1 AI document extraction', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -266,7 +295,7 @@ describe('IngestionWizard: Step 2 review of extracted line items', () => {
   it('blocks sourcing while a line item has no description', async () => {
     await extractThen(successResult([entity({ itemName: '' })]));
 
-    fireEvent.click(screen.getByRole('button', { name: /Proceed to Sourcing Mode/i }));
+    proceedToSourcing();
 
     // Held on Step 2: the Coming Soon panel that only Step 3 renders is absent.
     expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument();
@@ -276,7 +305,7 @@ describe('IngestionWizard: Step 2 review of extracted line items', () => {
   it('blocks sourcing when there are no line items at all', async () => {
     await extractThen({ success: false, reason: 'AI_FAILED', error: 'unreadable' });
 
-    fireEvent.click(screen.getByRole('button', { name: /Proceed to Sourcing Mode/i }));
+    proceedToSourcing();
 
     expect(screen.getByText(EXTRACTION.emptyTitle)).toBeInTheDocument();
     expect(screen.queryByText(EXTRACTION.vendorComingSoonTitle)).not.toBeInTheDocument();
@@ -285,7 +314,7 @@ describe('IngestionWizard: Step 2 review of extracted line items', () => {
   it('reaches sourcing once every line item is described', async () => {
     await extractThen(successResult());
 
-    fireEvent.click(screen.getByRole('button', { name: /Proceed to Sourcing Mode/i }));
+    proceedToSourcing();
 
     expect(screen.getByText(EXTRACTION.vendorComingSoonTitle)).toBeInTheDocument();
   });
@@ -299,7 +328,7 @@ describe('IngestionWizard: Step 3 sourcing mode only', () => {
     uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
     clickExtract();
     await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /Proceed to Sourcing Mode/i }));
+    proceedToSourcing();
     return onComplete;
   };
 
@@ -376,7 +405,7 @@ describe('IngestionWizard: Step 3 sourcing mode only', () => {
     uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
     clickExtract();
     await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /Proceed to Sourcing Mode/i }));
+    proceedToSourcing();
     fireEvent.click(screen.getByTestId('mode-card-mode_2'));
     fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') }));
 
@@ -501,7 +530,7 @@ describe('IngestionWizard: Step 1 intake controls', () => {
     uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
     clickExtract();
     await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /Proceed to Sourcing Mode/i }));
+    proceedToSourcing();
 
     expect(screen.getByText(/Free Starter Account/i)).toBeInTheDocument();
     expect(screen.getByText(/All 3 Versions Unlocked/i)).toBeInTheDocument();
@@ -575,7 +604,7 @@ describe('IngestionWizard: Step 2 line-item editing', () => {
 
     fireEvent.change(screen.getByDisplayValue('12'), { target: { value: '0' } });
 
-    fireEvent.click(screen.getByRole('button', { name: /Proceed to Sourcing Mode/i }));
+    proceedToSourcing();
     expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument();
     expect(screen.getByTestId('wizard-step-3').getAttribute('aria-disabled')).toBe('true');
   });
@@ -783,7 +812,7 @@ describe('IngestionWizard: edge cases', () => {
     await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
 
     // Reach Step 3 while every row is still valid, then blank one from there.
-    fireEvent.click(screen.getByRole('button', { name: /Proceed to Sourcing Mode/i }));
+    proceedToSourcing();
     expect(screen.getByText(EXTRACTION.vendorComingSoonTitle)).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('wizard-step-2'));
@@ -872,7 +901,7 @@ describe('IngestionWizard: fallback branches', () => {
 
     // The RFQ header category is taken from the leading item, so an unclassified
     // row cannot reach dispatch.
-    fireEvent.click(screen.getByRole('button', { name: /Proceed to Sourcing Mode/i }));
+    proceedToSourcing();
     expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument();
   });
 
@@ -882,7 +911,7 @@ describe('IngestionWizard: fallback branches', () => {
     uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
     clickExtract();
     await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /Proceed to Sourcing Mode/i }));
+    proceedToSourcing();
 
     fireEvent.click(screen.getByTestId('mode-card-mode_2'));
     expect(screen.getByTestId('mode-card-mode_2').className).toContain('border-indigo-600');
@@ -896,7 +925,7 @@ describe('IngestionWizard: fallback branches', () => {
     uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
     clickExtract();
     await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /Proceed to Sourcing Mode/i }));
+    proceedToSourcing();
 
     // Mode 3 is gated behind the Version 3 plan, so the click must be rejected.
     fireEvent.click(screen.getByTestId('mode-card-mode_3'));
@@ -909,7 +938,7 @@ describe('IngestionWizard: fallback branches', () => {
     uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
     clickExtract();
     await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /Proceed to Sourcing Mode/i }));
+    proceedToSourcing();
 
     // Version 1 only unlocks Mode 1, so the upgrade path for Mode 2 is taken.
     fireEvent.click(screen.getByTestId('mode-card-mode_2'));
@@ -1000,7 +1029,11 @@ describe('IngestionWizard: step gating', () => {
     await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
 
     expect(screen.getByTestId('wizard-step-2').getAttribute('aria-disabled')).toBe('false');
-    // Valid line items unlock sourcing at the same time.
+    // Valid line items are not enough on their own: the delivery destination is
+    // mandatory too, and extraction never supplies it.
+    expect(screen.getByTestId('wizard-step-3').getAttribute('aria-disabled')).toBe('true');
+
+    fillDelivery();
     expect(screen.getByTestId('wizard-step-3').getAttribute('aria-disabled')).toBe('false');
   });
 
@@ -1113,14 +1146,9 @@ describe('IngestionWizard: manual entry and delivery details', () => {
     });
     // The row starts completely blank, so every quoted-against field is keyed.
     fillBlankRow(itemRow);
-    fireEvent.change(screen.getByLabelText(new RegExp(EXTRACTION.deliveryLocationLabel, 'i')), {
-      target: { value: 'Navi Mumbai Plant, Gate 3' },
-    });
-    fireEvent.change(screen.getByLabelText(new RegExp(EXTRACTION.deliveryPincodeLabel, 'i')), {
-      target: { value: '400701' },
-    });
 
-    fireEvent.click(screen.getByRole('button', { name: /Proceed to Sourcing Mode/i }));
+    // proceedToSourcing keys the destination asserted on below.
+    proceedToSourcing();
     fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') }));
 
     await waitFor(() => expect(captured).toBeDefined());
@@ -1156,7 +1184,7 @@ describe('IngestionWizard: manual entry and delivery details', () => {
     });
     fillBlankRow(row);
 
-    fireEvent.click(screen.getByRole('button', { name: /Proceed to Sourcing Mode/i }));
+    proceedToSourcing();
     fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') }));
 
     // The API requires a title of at least three characters, so an empty one
@@ -1175,7 +1203,7 @@ describe('IngestionWizard: manual entry and delivery details', () => {
     await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
     expect(budgetField()).toHaveValue(0);
 
-    fireEvent.click(screen.getByRole('button', { name: /Proceed to Sourcing Mode/i }));
+    proceedToSourcing();
     fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') }));
 
     await waitFor(() => expect(onComplete).toHaveBeenCalled());
@@ -1188,17 +1216,59 @@ describe('IngestionWizard: manual entry and delivery details', () => {
     clickExtract();
     await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
 
-    fireEvent.change(screen.getByLabelText(new RegExp(EXTRACTION.deliveryPincodeLabel, 'i')), {
-      target: { value: '-!' },
-    });
-    // Flagged inline while the buyer is still on the field.
+    // The location is supplied so the malformed pincode is the only blocker.
+    setDeliveryLocation('Navi Mumbai Plant, Gate 3');
+    setDeliveryPincode('-!');
+    // Flagged inline while the buyer is still on the field. A malformed value is
+    // reported straight away, unlike a blank one, which waits for Proceed.
     expect(screen.getByText(EXTRACTION.deliveryPincodeInvalidMessage)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /Proceed to Sourcing Mode/i }));
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') }));
+    // A malformed pincode now blocks the Step 2 gate rather than only failing on
+    // save, so sourcing is never reached and there is no dispatch button to press.
+    clickProceed();
 
-    expect(onComplete).not.toHaveBeenCalled();
     expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') })
+    ).not.toBeInTheDocument();
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  // Both fields start empty, so validating on first render greeted the buyer with
+  // two errors against fields they had not reached yet.
+  it('holds back the blank-field warnings until the buyer tries to move on', async () => {
+    renderWizard();
+    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
+    clickExtract();
+    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
+
+    expect(screen.queryByText(EXTRACTION.deliveryLocationRequiredMessage)).not.toBeInTheDocument();
+    expect(screen.queryByText(EXTRACTION.deliveryPincodeRequiredMessage)).not.toBeInTheDocument();
+
+    clickProceed();
+
+    expect(screen.getByText(EXTRACTION.deliveryLocationRequiredMessage)).toBeInTheDocument();
+    expect(screen.getByText(EXTRACTION.deliveryPincodeRequiredMessage)).toBeInTheDocument();
+    expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument();
+  });
+
+  // Each warning clears on its own so the buyer can see which field is still open.
+  it('clears each blank-field warning as that field is filled', async () => {
+    renderWizard();
+    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
+    clickExtract();
+    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
+
+    clickProceed();
+    setDeliveryLocation('Navi Mumbai Plant, Gate 3');
+
+    expect(screen.queryByText(EXTRACTION.deliveryLocationRequiredMessage)).not.toBeInTheDocument();
+    expect(screen.getByText(EXTRACTION.deliveryPincodeRequiredMessage)).toBeInTheDocument();
+
+    setDeliveryPincode('400701');
+
+    expect(screen.queryByText(EXTRACTION.deliveryPincodeRequiredMessage)).not.toBeInTheDocument();
+    expect(screen.getByTestId('wizard-step-3').getAttribute('aria-disabled')).toBe('false');
   });
 
   it('accepts an international zipcode with a space or hyphen', async () => {
@@ -1208,12 +1278,11 @@ describe('IngestionWizard: manual entry and delivery details', () => {
     clickExtract();
     await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
 
-    fireEvent.change(screen.getByLabelText(new RegExp(EXTRACTION.deliveryPincodeLabel, 'i')), {
-      target: { value: 'SW1A 1AA' },
-    });
+    setDeliveryLocation('Tilbury Docks, Berth 4');
+    setDeliveryPincode('SW1A 1AA');
     expect(screen.queryByText(EXTRACTION.deliveryPincodeInvalidMessage)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /Proceed to Sourcing Mode/i }));
+    clickProceed();
     fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') }));
 
     await waitFor(() => expect(onComplete).toHaveBeenCalled());
@@ -1281,6 +1350,7 @@ describe('IngestionWizard: blank added row', () => {
 
     fireEvent.change(within(row).getAllByRole('textbox')[0], { target: { value: 'Gasket Set' } });
     fillBlankRow(row);
+    fillDelivery();
 
     expect(screen.getByTestId('wizard-step-3').getAttribute('aria-disabled')).toBe('false');
   });
@@ -1423,7 +1493,7 @@ describe('IngestionWizard: manual attachments', () => {
     fireEvent.change(within(row).getAllByRole('textbox')[0], { target: { value: 'Gasket Set' } });
     fillBlankRow(row);
 
-    fireEvent.click(screen.getByRole('button', { name: /Proceed to Sourcing Mode/i }));
+    proceedToSourcing();
     fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') }));
 
     await waitFor(() => expect(captured).toBeDefined());

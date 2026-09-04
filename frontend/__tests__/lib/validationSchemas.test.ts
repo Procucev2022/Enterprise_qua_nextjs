@@ -60,6 +60,8 @@ describe('Frontend validationSchemas Unit Tests', () => {
       category: 'Mechanical',
       budget: 15000,
       targetDeliveryDate: '2026-03-30',
+      deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+      deliveryPincode: '400701',
     };
     const res = validateFormData(FORM_SCHEMAS.rfqIngestion, validData);
     expect(res.isValid).toBe(true);
@@ -236,13 +238,40 @@ describe('PINCODE_PATTERN', () => {
 
 describe('rfqIngestion schema', () => {
   // Optional so a document that prices nothing can still be saved.
+  // The budget stays optional even though the destination is now mandatory.
   test('accepts a payload with no budget', () => {
     const { isValid } = validateFormData(FORM_SCHEMAS.rfqIngestion, {
       title: 'Procurement of Bearing Housings',
       category: 'Engineering Spares - Mechanical',
       targetDeliveryDate: '2026-10-05',
+      deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+      deliveryPincode: '400701',
     });
     expect(isValid).toBe(true);
+  });
+
+  // Freight is rated on the destination, so a quote raised without one cannot be
+  // compared against a quote that has one.
+  test('requires a delivery location', () => {
+    const { isValid, fieldErrors } = validateFormData(FORM_SCHEMAS.rfqIngestion, {
+      title: 'Procurement of Bearing Housings',
+      category: 'Engineering Spares - Mechanical',
+      targetDeliveryDate: '2026-10-05',
+      deliveryPincode: '400701',
+    });
+    expect(isValid).toBe(false);
+    expect(fieldErrors.deliveryLocation).toBe(UI_STRINGS.rfqExtraction.deliveryLocationSchemaMessage);
+  });
+
+  test('requires a delivery pincode', () => {
+    const { isValid, fieldErrors } = validateFormData(FORM_SCHEMAS.rfqIngestion, {
+      title: 'Procurement of Bearing Housings',
+      category: 'Engineering Spares - Mechanical',
+      targetDeliveryDate: '2026-10-05',
+      deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+    });
+    expect(isValid).toBe(false);
+    expect(fieldErrors.deliveryPincode).toBe(UI_STRINGS.rfqExtraction.deliveryPincodeInvalidMessage);
   });
 
   test('rejects a negative budget', () => {
