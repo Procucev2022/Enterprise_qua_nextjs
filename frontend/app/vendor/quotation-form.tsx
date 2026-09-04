@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 import { VendorOpportunity } from '@/lib/types';
@@ -74,12 +74,25 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   // as the real authenticated identity rather than a hardcoded fake vendor.
   const [myVendorId, setMyVendorId] = useState<string | null>(null);
   const [myVendorName, setMyVendorName] = useState<string>('');
+  const [myAddedByBuyerCompany, setMyAddedByBuyerCompany] = useState<string | null>(null);
+  // isOwnBuyerRfq depends on myAddedByBuyerCompany, which only exists once
+  // this fetch resolves — the deep-link auto-open effect below waits on this
+  // flag so it doesn't judge a real direct-buyer RFQ as locked just because
+  // the vendor record hadn't loaded yet.
+  const [myVendorRecordLoaded, setMyVendorRecordLoaded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     async function loadMyVendorRecord() {
       const email = currentUserSession?.email;
-      if (!email) return;
+      if (!email) {
+        setMyVendorRecordLoaded(true);
+        return;
+      }
+      // Session arrived after an earlier no-session pass already flipped this
+      // true — reset it so the flag's true->false->true transition still
+      // fires the deep-link effect once the real fetch below resolves.
+      setMyVendorRecordLoaded(false);
       try {
         const res = await fetch(`/api/vendors/${encodeURIComponent(email)}`);
         if (!res.ok) return;
@@ -87,10 +100,13 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         if (!cancelled && data.success && data.data) {
           setMyVendorId(data.data.id);
           setMyVendorName(data.data.name);
+          setMyAddedByBuyerCompany(data.data.addedByBuyerCompany || null);
         }
       } catch {
         // Leave myVendorId null — bidding/download actions will surface a
         // clear error rather than silently attributing them to nobody.
+      } finally {
+        if (!cancelled) setMyVendorRecordLoaded(true);
       }
     }
     loadMyVendorRecord();
@@ -125,10 +141,15 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       };
     });
 
-  // Rajesh Nair (L&T) uploaded Apex Supplies, so their RFQs are free to bid on.
-  // Other buyer RFQs require premium vendor subscription.
+  // Was a hardcoded list of 4 specific RFQ numbers standing in for "this
+  // vendor's own buyer roster" — direct-vs-marketplace now reflects the real
+  // relationship: this vendor's real addedByBuyerCompany against the RFQ's
+  // real buyer (same real fields opportunity-feed.tsx and the backend's own
+  // quota enforcement in GET /api/rfqs/:id/email-preview check).
   const isOwnBuyerRfq = (rfqNumber: string) => {
-    return ['RFQ-2026-00421', 'RFQ-2026-00423', 'RFQ-2026-00425', 'RFQ-2026-00427'].includes(rfqNumber);
+    if (!myAddedByBuyerCompany) return false;
+    const rfq = vendorOpportunities.find((o) => o.rfqNumber === rfqNumber);
+    return !!rfq && rfq.buyer === myAddedByBuyerCompany;
   };
 
   // Compile RFQ Bidding summaries
@@ -165,18 +186,25 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   // received but never used, so the navigation just dropped the vendor on
   // the same undifferentiated table regardless of which RFQ they clicked.
   // Auto-open the bid form for it once, if it's actually biddable.
+  const autoOpenedRef = useRef(false);
   useEffect(() => {
-    if (!opportunity) return;
+    if (!opportunity || autoOpenedRef.current) return;
+    // isOwnBuyerRfq needs myAddedByBuyerCompany, which only exists once the
+    // vendor-record fetch resolves — deciding "locked" before that would
+    // wrongly treat a real direct-buyer RFQ as marketplace-locked.
+    if (!myVendorRecordLoaded) return;
+    autoOpenedRef.current = true;
     const alreadyQuoted = submittedQuotes.some((q) => q.rfqNumber === opportunity.rfqNumber);
     const locked = !isOwnBuyerRfq(opportunity.rfqNumber) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
     if (!alreadyQuoted && !locked) {
       openBidForm(opportunity);
     }
-    // Intentionally mount-only: this is "deep link" landing behavior, not a
-    // reaction to subsequent submittedQuotes/vendorSubscription changes
-    // (which would otherwise re-open the modal right after a successful submit).
+    // Intentionally not reacting to subsequent submittedQuotes/vendorSubscription
+    // changes (which would otherwise re-open the modal right after a successful
+    // submit) — autoOpenedRef ensures this only ever runs once, on the first
+    // render after the vendor record has loaded.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [myVendorRecordLoaded]);
 
   const handleSubmitQuote = async () => {
     if (!biddingOn) return;
@@ -327,8 +355,8 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 const parentCompany = getParentCompany(opp.buyer);
                 // 'connect'/'select' are the real marketplace-unlock tiers (see
                 // vendor-subscription.tsx's own plan copy) — 'premium_network'
-                // is a value nothing in the app ever sets, so this used to be
-                // permanently locked outside the 4-item isOwnBuyerRfq allow-list.
+                // is a value nothing in the app ever sets, so this is locked
+                // unless the vendor's real buyer relationship covers this RFQ.
                 const isLocked = !isOwnBuyerRfq(opp.rfqNumber) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
                 
                 // Condition: If buyer uploaded this vendor (isOwnBuyerRfq), show even before quote is submitted.
