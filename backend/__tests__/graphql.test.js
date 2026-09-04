@@ -1,13 +1,43 @@
 const request = require('supertest');
+// RFQ persistence and id allocation are doubled so GraphQL can be exercised
+// without a MySQL connection. See helpers/fakeRfqQueries.js.
+jest.mock('../src/db/rfqQueries', () => require('./helpers/fakeRfqQueries'));
+jest.mock('../src/services/rfqIdService', () => {
+  let counter = 0;
+  return {
+    generateRfqId: jest.fn(async () => {
+      counter += 1;
+      return `RFQ260409${String(100 + counter).padStart(6, '0')}`;
+    }),
+  };
+});
+
 const app = require('../src/app');
 const storeService = require('../src/services/storeService');
 const { queryCache } = require('../src/db/queryCache');
 const { handleGraphQL } = require('../src/controllers/graphqlController');
-const { authHeader } = require('./testHelpers');
+const { authHeader, TEST_USERS } = require('./testHelpers');
+const fakeRfqQueries = require('./helpers/fakeRfqQueries');
 
 describe('GraphQL API & Controller Integration Tests', () => {
+  // RFQ resolvers are org-scoped, so a fixture owned by the test buyer's
+  // organisation has to exist for the read queries to return anything.
+  const SEEDED_RFQ = {
+    rfqId: 'RFQ260409000777',
+    buyerOrgId: TEST_USERS.buyer.orgId,
+    buyerUserId: TEST_USERS.buyer.id,
+    buyerEmail: TEST_USERS.buyer.email,
+    title: 'GraphQL Fixture RFQ',
+    category: 'Engineering Spares - Mechanical',
+    sourcingMode: 'mode_2',
+    status: 'Quotes Pending',
+    budget: 145000,
+  };
+
   beforeEach(() => {
     queryCache.clear();
+    fakeRfqQueries.__reset();
+    fakeRfqQueries.__seed([SEEDED_RFQ]);
   });
 
   test('POST /graphql executes rfqs, vendors, and buyerAccounts queries', async () => {
@@ -42,6 +72,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
 
     const res = await request(app)
       .post('/graphql')
+      .set(authHeader('buyer'))
       .send({ query })
       .expect(200);
 
@@ -53,9 +84,10 @@ describe('GraphQL API & Controller Integration Tests', () => {
   });
 
   test('POST /graphql supports filtered queries for RFQ and Vendor by id/rfqNumber/email', async () => {
-    const rfqList = storeService.getRFQs();
     const vendorList = storeService.getVendors();
-    const testRFQ = rfqList[0];
+    // Read back through the scoped query, which is the only way to obtain an RFQ
+    // now that there is no global list.
+    const testRFQ = await fakeRfqQueries.findRFQByRfqId(SEEDED_RFQ.rfqId, SEEDED_RFQ.buyerOrgId);
     const testVendor = vendorList[0];
 
     const query = `
@@ -88,6 +120,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
 
     const res = await request(app)
       .post('/graphql')
+      .set(authHeader('buyer'))
       .send({ query, variables })
       .expect(200);
 
@@ -176,10 +209,20 @@ describe('GraphQL API & Controller Integration Tests', () => {
     const createdRFQ = resCreateRFQ.body.data.createRFQ;
     expect(createdRFQ.title).toBe('GraphQL Sourcing RFQ Test');
 
-    // 2. Update RFQ
+    // The server allocates the RFQ number, so it follows the Java scheme rather
+    // than anything the client sent.
+    expect(createdRFQ.rfqNumber).toMatch(/^RFQ\d+$/);
+
+    // 2. Update RFQ. Still backed by the in-memory store: status transitions and
+    // quotations are not modelled in qua_enterprice_rfq yet, so this is given an
+    // in-memory record rather than the persisted one created above.
+    const inMemoryRfq = storeService.createRFQ({
+      title: 'In-memory RFQ for the update mutation',
+      category: 'Specialized Alloys',
+    });
     const updateRFQMutation = `
       mutation {
-        updateRFQ(id: "${createdRFQ.id}", input: {
+        updateRFQ(id: "${inMemoryRfq.id}", input: {
           status: "awarded"
           budget: 280000
         }) {

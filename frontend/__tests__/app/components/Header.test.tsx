@@ -14,6 +14,8 @@ jest.mock('@/lib/authClient', () => ({
   authClient: { logout: jest.fn().mockResolvedValue(undefined) },
 }));
 
+const mockToggleThemeSignedOut = jest.fn();
+
 describe('Header', () => {
   const mockSetCurrentRole = jest.fn();
   const mockSetIsLoggedIn = jest.fn();
@@ -314,5 +316,204 @@ describe('Header', () => {
     const closeBottomBtn = screen.getByText('Close Settings');
     fireEvent.click(closeBottomBtn);
     expect(screen.queryByText('Account & Security Settings')).not.toBeInTheDocument();
+  });
+});
+
+// ==============================================================================
+// SESSION IDENTITY IN THE HEADER
+// ==============================================================================
+// Everything the header shows about the signed-in account comes from the session
+// claims, so the cases with a partial session matter: an account with no display
+// name has to fall back to the login email rather than showing a blank chip, and
+// signing out has to work whether or not an email was recorded.
+// ==============================================================================
+
+describe('Header session identity', () => {
+  const baseStore = () => ({
+    currentRole: 'buyer',
+    setCurrentRole: jest.fn(),
+    isLoggedIn: true,
+    setIsLoggedIn: jest.fn(),
+    currentMode: 'mode_1',
+    setCurrentMode: jest.fn(),
+    vendorSubscription: 'connect',
+    setVendorSubscription: jest.fn(),
+    vendorRfqDownloadsUsed: 5,
+    aiFeed: [],
+    theme: 'light',
+    toggleTheme: jest.fn(),
+    showToast: jest.fn(),
+    addAuditLog: jest.fn(),
+    activeBuyerAccount: null,
+    currentUserSession: null,
+    setCurrentUserSession: jest.fn(),
+  });
+
+  const mountWith = (overrides: Record<string, unknown>) => {
+    (storeModule.useApp as jest.Mock).mockReturnValue({ ...baseStore(), ...overrides });
+    return render(<Header />);
+  };
+
+  const openProfile = () => fireEvent.click(screen.getByTitle('Signed-in account details'));
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  // A one-word account name has no surname to take a second initial from.
+  it('derives two initials from a single-word account name', () => {
+    mountWith({
+      currentUserSession: {
+        id: 'u1',
+        email: 'navin@procucev.com',
+        name: 'Navin',
+        role: 'buyer',
+        orgId: 'o1',
+        orgName: 'Procucev',
+      },
+    });
+
+    expect(screen.getAllByText('NA').length).toBeGreaterThan(0);
+  });
+
+  it('falls back to the login email when the account has no display name', () => {
+    mountWith({
+      currentUserSession: {
+        id: 'u1',
+        email: 'buyer@procucev.com',
+        name: '',
+        role: 'buyer',
+        orgId: 'o1',
+        orgName: 'Procucev',
+      },
+    });
+    openProfile();
+    // Shown on the trigger and again on the persona card inside the popover.
+    expect(screen.getAllByText('buyer@procucev.com').length).toBeGreaterThan(1);
+
+    fireEvent.click(screen.getByText(/Account & Security/));
+    expect(screen.getByPlaceholderText('Enter your full display name...')).toHaveValue(
+      'buyer@procucev.com'
+    );
+  });
+
+  it('names the one-time-code method the session was verified with', () => {
+    mountWith({
+      currentUserSession: {
+        id: 'u1',
+        email: 'buyer@procucev.com',
+        name: 'Procucev Buyer',
+        role: 'buyer',
+        orgId: 'o1',
+        orgName: 'Procucev',
+        authMethod: 'EMAIL_OTP',
+      },
+    });
+    openProfile();
+
+    expect(screen.getByText('Email OTP verified')).toBeInTheDocument();
+  });
+
+  // The session can be gone by the time the buyer presses Logout, and the
+  // audit entry and the API call both have to cope with that.
+  it('signs out even when no session email was recorded', () => {
+    const setIsLoggedIn = jest.fn();
+    const addAuditLog = jest.fn();
+    mountWith({ currentUserSession: null, setIsLoggedIn, addAuditLog });
+    openProfile();
+
+    fireEvent.click(screen.getByText(/Logout/i));
+
+    expect(addAuditLog).toHaveBeenCalledWith('User logged out of session', undefined, undefined);
+    expect(setIsLoggedIn).toHaveBeenCalledWith(false);
+    expect(mockReplace).toHaveBeenCalled();
+  });
+
+  // The local session is already cleared by then, so a failed server-side logout
+  // must not surface as an unhandled rejection.
+  it('completes the sign-out when the logout call is rejected', async () => {
+    const { authClient } = jest.requireMock('@/lib/authClient');
+    authClient.logout.mockRejectedValueOnce(new Error('offline'));
+    const setIsLoggedIn = jest.fn();
+    mountWith({ setIsLoggedIn });
+    openProfile();
+
+    fireEvent.click(screen.getByText(/Logout/i));
+
+    expect(setIsLoggedIn).toHaveBeenCalledWith(false);
+    await Promise.resolve();
+  });
+});
+
+describe('Header vendor subscription pill', () => {
+  const vendorStore = (vendorSubscription: string) => ({
+    currentRole: 'vendor',
+    setCurrentRole: jest.fn(),
+    isLoggedIn: true,
+    setIsLoggedIn: jest.fn(),
+    currentMode: 'mode_1',
+    setCurrentMode: jest.fn(),
+    vendorSubscription,
+    setVendorSubscription: jest.fn(),
+    vendorRfqDownloadsUsed: 5,
+    aiFeed: [],
+    theme: 'dark',
+    toggleTheme: jest.fn(),
+    showToast: jest.fn(),
+    addAuditLog: jest.fn(),
+    activeBuyerAccount: null,
+    currentUserSession: {
+      id: 'v1',
+      email: 'vendor@apex.com',
+      name: 'Apex Supplies',
+      role: 'vendor',
+      orgId: 'o2',
+      orgName: 'Apex Supplies Ltd.',
+    },
+    setCurrentUserSession: jest.fn(),
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('names the Connect tier on the pill and marks it active in the dropdown', () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue(vendorStore('connect'));
+    render(<Header />);
+
+    expect(screen.getByText('Connect Model ($149 / 3mo)')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle('Vendor Subscription Access Model'));
+    expect(screen.getByText('Connect Model ($149 / 3 Months)')).toBeInTheDocument();
+    expect(screen.getByText(/5\/50 used/)).toBeInTheDocument();
+  });
+
+  it('names the Select tier when that is the active plan', () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue(vendorStore('select'));
+    render(<Header />);
+
+    expect(screen.getByText('Select Model ($349 / 3mo)')).toBeInTheDocument();
+  });
+});
+
+describe('Header theme control while signed out', () => {
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('offers dark mode and labels the current one as light', () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      isLoggedIn: false,
+      theme: 'light',
+      toggleTheme: mockToggleThemeSignedOut,
+    });
+
+    render(<Header />);
+
+    expect(screen.getByTitle('Switch to Dark Mode')).toBeInTheDocument();
+    expect(screen.getByText('Light')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle('Switch to Dark Mode'));
+    expect(mockToggleThemeSignedOut).toHaveBeenCalled();
   });
 });

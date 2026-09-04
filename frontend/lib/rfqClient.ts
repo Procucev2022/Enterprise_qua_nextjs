@@ -4,9 +4,16 @@ import type {
   ExtractedEntity,
   RFQAttachment,
   RFQAttachmentResult,
+  RFQCreatePayload,
+  RFQDeleteResult,
   RFQExtractionRequest,
   RFQExtractionResult,
+  RFQFetchResult,
   RFQIngestionResponse,
+  RFQItem,
+  RFQListResult,
+  RFQMutationResult,
+  RFQUpdatePayload,
 } from './types';
 
 /**
@@ -203,3 +210,244 @@ function readFileAsBase64(file: File): Promise<string> {
 const rfqClient = { extractLineItemsFromDocument, classifyLineItems, uploadRFQAttachment, rfqAttachmentUrl };
 
 export default rfqClient;
+
+/**
+ * Create an RFQ.
+ *
+ * The response is the authority on what was saved, so callers must adopt it
+ * rather than keeping the object they submitted. The server owns the RFQ number
+ * (allocated under the same scheme the Java p2pservices app uses), the row id,
+ * the created timestamp and the generated summary — none of which the client can
+ * know in advance. The previous fire-and-forget POST discarded all of it, leaving
+ * the browser and the database holding different records for the same RFQ.
+ */
+export async function createRFQ(payload: RFQCreatePayload): Promise<RFQMutationResult> {
+  const token = authClient.getToken();
+
+  let res: Response;
+  try {
+    res = await fetch('/api/rfqs', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
+  }
+
+  let body: { success?: boolean; data?: RFQItem; error?: string; fieldErrors?: Record<string, string> } = {};
+  try {
+    body = await res.json();
+  } catch {
+    return {
+      success: false,
+      reason: 'NETWORK',
+      error: formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: res.status }),
+    };
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
+  }
+  if (!res.ok || !body.success || !body.data) {
+    // Field errors are surfaced so the wizard can put each message against the
+    // input that caused it rather than showing one generic failure.
+    return {
+      success: false,
+      reason: res.status === 400 ? 'VALIDATION' : 'SERVER',
+      error: body.error || UI_STRINGS.rfqDetails.loadFailed,
+      fieldErrors: body.fieldErrors,
+    };
+  }
+
+  return { success: true, rfq: body.data };
+}
+
+/**
+ * Fetch one RFQ by its number or row id.
+ *
+ * Reads through the authenticated, organisation-scoped endpoint, so an RFQ
+ * belonging to another buyer reports as not found rather than being returned.
+ */
+export async function fetchRFQById(identifier: string): Promise<RFQFetchResult> {
+  const token = authClient.getToken();
+
+  let res: Response;
+  try {
+    res = await fetch(`/api/rfqs/${encodeURIComponent(identifier)}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  } catch {
+    return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
+  }
+
+  let body: { success?: boolean; data?: RFQItem; error?: string } = {};
+  try {
+    body = await res.json();
+  } catch {
+    return {
+      success: false,
+      reason: 'NETWORK',
+      error: formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: res.status }),
+    };
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
+  }
+  if (res.status === 404) {
+    return { success: false, reason: 'NOT_FOUND', error: body.error || UI_STRINGS.rfqDetails.notFoundMessage };
+  }
+  if (!res.ok || !body.success || !body.data) {
+    return { success: false, reason: 'SERVER', error: body.error || UI_STRINGS.rfqDetails.loadFailed };
+  }
+
+  return { success: true, rfq: body.data };
+}
+
+/**
+ * List the signed-in buyer organisation's RFQs.
+ *
+ * Reads the authenticated, org-scoped endpoint. There is no way to ask for
+ * anything wider: the previous global list is what leaked RFQs between buyers.
+ */
+export async function fetchRFQList(): Promise<RFQListResult> {
+  const token = authClient.getToken();
+
+  let res: Response;
+  try {
+    res = await fetch('/api/rfqs', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  } catch {
+    return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
+  }
+
+  let body: { success?: boolean; data?: RFQItem[]; error?: string } = {};
+  try {
+    body = await res.json();
+  } catch {
+    return {
+      success: false,
+      reason: 'NETWORK',
+      error: formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: res.status }),
+    };
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
+  }
+  if (!res.ok || !body.success || !Array.isArray(body.data)) {
+    return { success: false, reason: 'SERVER', error: body.error || UI_STRINGS.rfqDetails.loadFailed };
+  }
+
+  return { success: true, rfqs: body.data };
+}
+
+/**
+ * Apply an edit to one RFQ.
+ *
+ * Partial by design: only the fields the caller supplies are sent, and the API
+ * writes only those columns. The response is again the authority — it carries the
+ * stored record including the new `updatedAt` — so the caller adopts it rather
+ * than patching its own copy and hoping the two agree.
+ *
+ * An RFQ belonging to another organisation reports NOT_FOUND, the same as an id
+ * that does not exist.
+ */
+export async function updateRFQ(
+  identifier: string,
+  changes: RFQUpdatePayload
+): Promise<RFQMutationResult> {
+  const token = authClient.getToken();
+
+  let res: Response;
+  try {
+    res = await fetch(`/api/rfqs/${encodeURIComponent(identifier)}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(changes),
+    });
+  } catch {
+    return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
+  }
+
+  let body: { success?: boolean; data?: RFQItem; error?: string; fieldErrors?: Record<string, string> } = {};
+  try {
+    body = await res.json();
+  } catch {
+    return {
+      success: false,
+      reason: 'NETWORK',
+      error: formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: res.status }),
+    };
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
+  }
+  if (res.status === 404) {
+    return { success: false, reason: 'NOT_FOUND', error: body.error || UI_STRINGS.rfqDetails.notFoundMessage };
+  }
+  if (!res.ok || !body.success || !body.data) {
+    return {
+      success: false,
+      reason: res.status === 400 ? 'VALIDATION' : 'SERVER',
+      error: body.error || UI_STRINGS.rfqEdit.saveFailed,
+      fieldErrors: body.fieldErrors,
+    };
+  }
+
+  return { success: true, rfq: body.data };
+}
+
+/**
+ * Delete one RFQ.
+ *
+ * Returns the number that was removed so the caller can drop that row without
+ * having to know whether it addressed the RFQ by number or by row id.
+ */
+export async function deleteRFQ(identifier: string): Promise<RFQDeleteResult> {
+  const token = authClient.getToken();
+
+  let res: Response;
+  try {
+    res = await fetch(`/api/rfqs/${encodeURIComponent(identifier)}`, {
+      method: 'DELETE',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  } catch {
+    return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
+  }
+
+  let body: { success?: boolean; data?: { rfqNumber?: string }; error?: string } = {};
+  try {
+    body = await res.json();
+  } catch {
+    return {
+      success: false,
+      reason: 'NETWORK',
+      error: formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: res.status }),
+    };
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
+  }
+  if (res.status === 404) {
+    return { success: false, reason: 'NOT_FOUND', error: body.error || UI_STRINGS.rfqDetails.notFoundMessage };
+  }
+  if (!res.ok || !body.success) {
+    return { success: false, reason: 'SERVER', error: body.error || UI_STRINGS.rfqEdit.deleteFailed };
+  }
+
+  // Falls back to what the caller asked for: the row still has to be dropped even
+  // if the response omitted the echo.
+  return { success: true, rfqNumber: body.data?.rfqNumber || identifier };
+}

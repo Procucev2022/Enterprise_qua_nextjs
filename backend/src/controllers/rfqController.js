@@ -5,6 +5,10 @@ const { generateStandardRFQEmail } = require('../services/emailService');
 const rfqIngestionService = require('../services/rfqIngestionService');
 const geminiService = require('../services/geminiService');
 const rfqAttachmentService = require('../services/rfqAttachmentService');
+const rfqIdService = require('../services/rfqIdService');
+const rfqSummaryService = require('../services/rfqSummaryService');
+const rfqQueries = require('../db/rfqQueries');
+const { requireBuyerScope } = require('../services/buyerScopeService');
 const { logger } = require('../services/loggerService');
 const {
   VALIDATION_SCHEMAS,
@@ -12,6 +16,20 @@ const {
   EXTRACTION_REASON_MESSAGES,
   RFQ_ATTACHMENT_CONFIG,
 } = require('../config/constants');
+
+// A newly created RFQ is awaiting vendor quotations.
+const RFQ_DEFAULT_STATUS = 'Quotes Pending';
+
+/**
+ * Reasons an RFQ mutation cannot proceed.
+ *
+ * NOT_FOUND deliberately covers both "no RFQ has that id" and "that RFQ belongs
+ * to another organisation". Distinguishing them would let a caller enumerate
+ * which ids exist elsewhere.
+ */
+const RFQ_ERRORS = {
+  NOT_FOUND: 'That RFQ was not found under your organisation.',
+};
 
 /** Buyer-facing reason for each attachment rejection. */
 const ATTACHMENT_ERRORS = {
@@ -24,35 +42,69 @@ const ATTACHMENT_ERRORS = {
   WRITE_FAILED: 'The document could not be stored. Try again, and if it persists the storage volume may be full.',
 };
 
-function getRFQs(req, res, next) {
+/**
+ * List the signed-in buyer organisation's RFQs.
+ *
+ * This used to be `storeService.getRFQs()` — the entire global array, on an
+ * unauthenticated route. That is what put one buyer's RFQs on another buyer's
+ * dashboard. There is deliberately no way to ask this endpoint for anything
+ * wider than the caller's own organisation.
+ */
+async function getRFQs(req, res, next) {
   try {
-    logger.info('Fetching all RFQs list', { query: req.query }, 'RFQ_CONTROLLER');
-    const rfqs = storeService.getRFQs();
-    res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: rfqs });
+    const scope = requireBuyerScope(req, res);
+    if (!scope) return undefined;
+
+    logger.info('Listing RFQs for buyer organisation', { orgId: scope.orgId }, 'RFQ_CONTROLLER');
+    const rfqs = await rfqQueries.listRFQsByOrg(scope.orgId);
+    return res.json({ success: true, source: 'persisted', data: rfqs });
   } catch (err) {
-    logger.error('Error fetching RFQs list', err, 'RFQ_CONTROLLER');
-    next(err);
+    logger.error('Error listing RFQs', err, 'RFQ_CONTROLLER');
+    return next(err);
   }
 }
 
-function getRFQById(req, res, next) {
+/**
+ * One RFQ, by RFQ number or row id, scoped to the caller's organisation.
+ *
+ * A hit on another organisation's RFQ returns the same 404 as an id that does
+ * not exist, so the response cannot be used to probe what other organisations
+ * have raised.
+ */
+async function getRFQById(req, res, next) {
   try {
+    const scope = requireBuyerScope(req, res);
+    if (!scope) return undefined;
+
     const { id } = req.params;
-    logger.info(`Fetching RFQ by ID: ${id}`, { id }, 'RFQ_CONTROLLER');
-    const rfq = storeService.getRFQById(id);
+    logger.info(`Fetching RFQ ${id}`, { id, orgId: scope.orgId }, 'RFQ_CONTROLLER');
+    const rfq = await rfqQueries.findRFQByAnyId(id, scope.orgId);
     if (!rfq) {
-      logger.warn(`RFQ not found for ID: ${id}`, { id }, 'RFQ_CONTROLLER');
-      return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+      logger.warn(`RFQ not found in this organisation: ${id}`, { id, orgId: scope.orgId }, 'RFQ_CONTROLLER');
+      return res.status(404).json({
+        success: false,
+        error: `RFQ ${id} was not found under your organisation.`,
+      });
     }
-    res.json({ success: true, data: rfq });
+    return res.json({ success: true, data: rfq });
   } catch (err) {
     logger.error(`Error fetching RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
-    next(err);
+    return next(err);
   }
 }
 
-function createRFQ(req, res, next) {
+/**
+ * Create an RFQ owned by the signed-in buyer organisation.
+ *
+ * The RFQ number is allocated here, not by the client. The wizard used to mint
+ * one with Math.random(), which could collide and bore no relation to the id
+ * scheme the Java p2pservices app allocates from the same space.
+ */
+async function createRFQ(req, res, next) {
   try {
+    const scope = requireBuyerScope(req, res);
+    if (!scope) return undefined;
+
     const body = req.body || {};
 
     // Validated against the centralized schema at the entry boundary so a
@@ -63,12 +115,48 @@ function createRFQ(req, res, next) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
     }
 
-    logger.info(`Creating new RFQ: ${body.title}`, { title: body.title, category: body.category, budget: body.budget }, 'RFQ_CONTROLLER');
-    const created = storeService.createRFQ(body);
-    res.status(201).json({ success: true, data: created });
+    const rfqId = await rfqIdService.generateRfqId();
+    const lineItems = Array.isArray(body.extractedEntities)
+      ? body.extractedEntities
+      : body.lineItems || [];
+
+    // Generated from the line items the buyer confirmed, so the summary always
+    // describes what was actually dispatched.
+    const aiSummary = await rfqSummaryService.buildRFQSummary(
+      { ...body, rfqId, extractedEntities: lineItems },
+      { orgName: (req.user && req.user.orgName) || '' }
+    );
+
+    logger.info(
+      `Creating RFQ ${rfqId}`,
+      { rfqId, title: body.title, orgId: scope.orgId, itemCount: lineItems.length },
+      'RFQ_CONTROLLER'
+    );
+
+    const created = await rfqQueries.insertRFQ({
+      rfqId,
+      buyerOrgId: scope.orgId,
+      buyerUserId: scope.userId,
+      buyerEmail: scope.email,
+      title: body.title,
+      category: body.category,
+      sourcingMode: body.sourcingMode,
+      status: body.status || RFQ_DEFAULT_STATUS,
+      source: body.source,
+      sourceFileName: body.sourceFileName,
+      budget: body.budget,
+      targetDeliveryDate: body.targetDeliveryDate,
+      deliveryLocation: body.deliveryLocation,
+      deliveryPincode: body.deliveryPincode,
+      extractedEntities: lineItems,
+      attachments: body.attachments,
+      aiSummary,
+    });
+
+    return res.status(201).json({ success: true, data: created });
   } catch (err) {
     logger.error('Error creating RFQ', err, 'RFQ_CONTROLLER');
-    next(err);
+    return next(err);
   }
 }
 
@@ -186,15 +274,24 @@ async function extractRFQFromDocument(req, res, next) {
   }
 }
 
-/** Portfolio roll-up backing the buyer RFQ Summary screen. */
-function getRFQSummary(req, res, next) {
+/**
+ * Portfolio roll-up backing the buyer RFQ Summary screen.
+ *
+ * Derived from this organisation's RFQs only. The previous version reduced over
+ * the global array, so every buyer saw the same portfolio totals — including
+ * spend figures belonging to other companies.
+ */
+async function getRFQSummary(req, res, next) {
   try {
-    logger.info('Fetching buyer RFQ portfolio summary', {}, 'RFQ_CONTROLLER');
-    const summary = storeService.getRFQSummary();
-    res.json({ success: true, data: summary });
+    const scope = requireBuyerScope(req, res);
+    if (!scope) return undefined;
+
+    logger.info('Building RFQ portfolio summary', { orgId: scope.orgId }, 'RFQ_CONTROLLER');
+    const rfqs = await rfqQueries.listRFQsByOrg(scope.orgId);
+    return res.json({ success: true, data: rfqSummaryService.buildPortfolioSummary(rfqs) });
   } catch (err) {
     logger.error('Error building RFQ summary', err, 'RFQ_CONTROLLER');
-    next(err);
+    return next(err);
   }
 }
 
@@ -273,20 +370,83 @@ function downloadRFQAttachment(req, res, next) {
   }
 }
 
-function updateRFQ(req, res, next) {
+/**
+ * Apply a buyer's edit to one of their own RFQs.
+ *
+ * Rewired onto the persisted table. It previously called the in-memory
+ * storeService, which no longer holds anything the dashboard reads, so every edit
+ * of a real RFQ 404'd. It also ran unscoped and unvalidated: any authenticated
+ * user could address any id, and the raw request body was spread over the record.
+ *
+ * The organisation comes from the verified session claims and goes into the WHERE
+ * clause, so editing another organisation's RFQ reports the same 404 as an id
+ * that does not exist.
+ */
+async function updateRFQ(req, res, next) {
+  const { id } = req.params;
   try {
-    const { id } = req.params;
-    const updates = req.body;
-    logger.info(`Updating RFQ ${id}`, { id, updates }, 'RFQ_CONTROLLER');
-    const updated = storeService.updateRFQ(id, updates);
-    if (!updated) {
-      logger.warn(`RFQ not found for update: ${id}`, { id }, 'RFQ_CONTROLLER');
-      return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+    const scope = requireBuyerScope(req, res);
+    if (!scope) return undefined;
+
+    const body = req.body || {};
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.updateRFQ, body);
+    if (!isValid) {
+      logger.warn('RFQ edit rejected: payload validation failed', { id, errors }, 'RFQ_CONTROLLER');
+      return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
     }
-    res.json({ success: true, data: updated });
+
+    // Resolved first so the caller may address the RFQ by either its number or its
+    // row id, exactly as GET /api/rfqs/:id allows.
+    const existing = await rfqQueries.findRFQByAnyId(id, scope.orgId);
+    if (!existing) {
+      logger.warn('RFQ edit rejected: not found for this organisation', { id, orgId: scope.orgId }, 'RFQ_CONTROLLER');
+      return res.status(404).json({ success: false, error: RFQ_ERRORS.NOT_FOUND });
+    }
+
+    logger.info('Updating RFQ', { rfqId: existing.rfqId, orgId: scope.orgId, fields: Object.keys(body) }, 'RFQ_CONTROLLER');
+    const updated = await rfqQueries.updateRFQ(existing.rfqId, scope.orgId, body);
+    if (!updated) {
+      return res.status(404).json({ success: false, error: RFQ_ERRORS.NOT_FOUND });
+    }
+
+    return res.json({ success: true, source: 'persisted', data: updated });
   } catch (err) {
-    logger.error(`Error updating RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
-    next(err);
+    logger.error(`Error updating RFQ ${id}`, err, 'RFQ_CONTROLLER');
+    return next(err);
+  }
+}
+
+/**
+ * Withdraw one of the buyer's own RFQs.
+ *
+ * A hard delete, scoped to the organisation the same way. Reports 404 rather than
+ * 403 for another organisation's RFQ, so the response cannot be used to discover
+ * which ids exist elsewhere.
+ */
+async function deleteRFQ(req, res, next) {
+  const { id } = req.params;
+  try {
+    const scope = requireBuyerScope(req, res);
+    if (!scope) return undefined;
+
+    const existing = await rfqQueries.findRFQByAnyId(id, scope.orgId);
+    if (!existing) {
+      logger.warn('RFQ delete rejected: not found for this organisation', { id, orgId: scope.orgId }, 'RFQ_CONTROLLER');
+      return res.status(404).json({ success: false, error: RFQ_ERRORS.NOT_FOUND });
+    }
+
+    const removed = await rfqQueries.deleteRFQ(existing.rfqId, scope.orgId);
+    if (!removed) {
+      return res.status(404).json({ success: false, error: RFQ_ERRORS.NOT_FOUND });
+    }
+
+    logger.info('Deleted RFQ', { rfqId: existing.rfqId, orgId: scope.orgId }, 'RFQ_CONTROLLER');
+    // The deleted number is echoed so the client can drop that row without
+    // guessing which of the two identifiers it had sent.
+    return res.json({ success: true, data: { rfqNumber: existing.rfqNumber, rfqId: existing.rfqId } });
+  } catch (err) {
+    logger.error(`Error deleting RFQ ${id}`, err, 'RFQ_CONTROLLER');
+    return next(err);
   }
 }
 
@@ -311,22 +471,30 @@ function addQuote(req, res, next) {
   }
 }
 
-function generateEmailPreview(req, res, next) {
+async function generateEmailPreview(req, res, next) {
   try {
+    const scope = requireBuyerScope(req, res);
+    if (!scope) return undefined;
+
     const { id } = req.params;
     const { vendorId } = req.query;
     logger.info(`Generating email preview for RFQ ${id}`, { id, vendorId }, 'RFQ_CONTROLLER');
-    const rfq = storeService.getRFQById(id);
+    // Org-scoped: the preview embeds pricing, quantities and delivery detail, so
+    // it must not be renderable for another organisation's RFQ.
+    const rfq = await rfqQueries.findRFQByAnyId(id, scope.orgId);
     if (!rfq) {
-      logger.warn(`RFQ not found for email preview: ${id}`, { id }, 'RFQ_CONTROLLER');
-      return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+      logger.warn(`RFQ not found for email preview: ${id}`, { id, orgId: scope.orgId }, 'RFQ_CONTROLLER');
+      return res.status(404).json({
+        success: false,
+        error: `RFQ ${id} was not found under your organisation.`,
+      });
     }
     const vendor = vendorId ? storeService.getVendorById(vendorId) : null;
     const emailPayload = generateStandardRFQEmail(rfq, vendor);
-    res.json({ success: true, data: emailPayload });
+    return res.json({ success: true, data: emailPayload });
   } catch (err) {
     logger.error(`Error generating email preview for RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
-    next(err);
+    return next(err);
   }
 }
 
@@ -374,6 +542,7 @@ module.exports = {
   uploadRFQAttachment,
   downloadRFQAttachment,
   updateRFQ,
+  deleteRFQ,
   addQuote,
   generateEmailPreview,
   triggerBatchChaser,

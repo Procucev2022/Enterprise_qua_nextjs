@@ -3,9 +3,15 @@ import {
   classifyLineItems,
   uploadRFQAttachment,
   rfqAttachmentUrl,
+  createRFQ,
+  fetchRFQById,
+  fetchRFQList,
+  updateRFQ,
+  deleteRFQ,
 } from '@/lib/rfqClient';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import type { RFQCreatePayload, RFQItem } from '@/lib/types';
 
 describe('rfqClient.extractLineItemsFromDocument', () => {
   const originalFetch = global.fetch;
@@ -510,5 +516,804 @@ describe('rfqAttachmentUrl', () => {
 
   test('encodes an id so it cannot alter the path', () => {
     expect(rfqAttachmentUrl('../secret')).toBe('/api/rfqs/attachments/..%2Fsecret');
+  });
+});
+
+// ==============================================================================
+// PERSISTENCE CALLS
+// ==============================================================================
+// createRFQ / fetchRFQById / fetchRFQList are the only routes RFQ data travels
+// on now, and all three are authenticated and organisation-scoped server-side.
+// The cases below pin down what each one reports back, because the caller has to
+// distinguish "the server said no" from "the server never answered": the wizard
+// keeps the buyer's keyed rows in one case and not the other.
+// ==============================================================================
+
+describe('rfqClient RFQ persistence', () => {
+  const originalFetch = global.fetch;
+
+  const RFQ: RFQItem = {
+    id: '41',
+    rfqNumber: 'RFQ260409000512',
+    title: 'Mechanical Spares Procurement',
+    category: 'Engineering Spares - Mechanical',
+    sourcingMode: 'mode_1',
+    status: 'Quotes Pending',
+    quotesCount: 0,
+    targetDeliveryDate: '2026-09-30',
+    budget: 0,
+    createdAt: '2026-09-04T10:00:00.000Z',
+    extractedEntities: [],
+    quotes: [],
+    chasingActive: false,
+  };
+
+  const PAYLOAD: RFQCreatePayload = {
+    title: 'Mechanical Spares Procurement',
+    category: 'Engineering Spares - Mechanical',
+    sourcingMode: 'mode_1',
+    status: 'Quotes Pending',
+    source: 'manual_entry',
+    budget: 0,
+    targetDeliveryDate: '2026-09-30',
+    deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+    deliveryPincode: '400701',
+    extractedEntities: [],
+    attachments: [],
+  };
+
+  /** A minimal Response double. `status` is always set: the client reads it. */
+  const reply = (status: number, body: unknown) =>
+    jest.fn().mockResolvedValue({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+    });
+
+  const unreadable = (status: number) =>
+    jest.fn().mockResolvedValue({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => {
+        throw new Error('not json');
+      },
+    });
+
+  const signIn = () =>
+    authClient.setSession(
+      { id: 'u1', email: 'b@x.com', name: 'B', role: 'buyer', orgId: 'o1', orgName: 'O' },
+      'jwt-token'
+    );
+
+  const lastInit = () => (global.fetch as jest.Mock).mock.calls[0][1];
+  const lastPath = () => (global.fetch as jest.Mock).mock.calls[0][0];
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    authClient.setSession(null, null);
+    jest.restoreAllMocks();
+  });
+
+  describe('createRFQ', () => {
+    test('posts the payload and returns the record the server saved', async () => {
+      global.fetch = reply(201, { success: true, data: RFQ });
+
+      const res = await createRFQ(PAYLOAD);
+
+      expect(res.success).toBe(true);
+      // The server's record, not the object that went in: it owns the number.
+      expect(res.success && res.rfq).toEqual(RFQ);
+      expect(lastPath()).toBe('/api/rfqs');
+      expect(lastInit().method).toBe('POST');
+      expect(JSON.parse(lastInit().body)).toEqual(PAYLOAD);
+    });
+
+    test('attaches the session token when one is held', async () => {
+      signIn();
+      global.fetch = reply(201, { success: true, data: RFQ });
+
+      await createRFQ(PAYLOAD);
+
+      expect(lastInit().headers.Authorization).toBe('Bearer jwt-token');
+      expect(lastInit().headers['Content-Type']).toBe('application/json');
+    });
+
+    test('sends no Authorization header when there is no session', async () => {
+      global.fetch = reply(201, { success: true, data: RFQ });
+
+      await createRFQ(PAYLOAD);
+
+      expect(lastInit().headers.Authorization).toBeUndefined();
+    });
+
+    test('reports an unreachable API rather than claiming the RFQ was saved', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('offline'));
+
+      const res = await createRFQ(PAYLOAD);
+
+      expect(res).toEqual({
+        success: false,
+        reason: 'NETWORK',
+        error: UI_STRINGS.auth.networkUnreachable,
+      });
+    });
+
+    test('names the status when the reply cannot be read', async () => {
+      global.fetch = unreadable(502);
+
+      const res = await createRFQ(PAYLOAD);
+
+      expect(res.success).toBe(false);
+      expect(res.success === false && res.reason).toBe('NETWORK');
+      expect(res.success === false && res.error).toBe(
+        formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: 502 })
+      );
+    });
+
+    test('reports an expired session on a 401', async () => {
+      global.fetch = reply(401, { success: false, error: 'Token expired.' });
+
+      const res = await createRFQ(PAYLOAD);
+
+      expect(res).toEqual({ success: false, reason: 'UNAUTHORIZED', error: 'Token expired.' });
+    });
+
+    test('falls back to the session message when a 403 explains nothing', async () => {
+      global.fetch = reply(403, {});
+
+      const res = await createRFQ(PAYLOAD);
+
+      expect(res).toEqual({
+        success: false,
+        reason: 'UNAUTHORIZED',
+        error: UI_STRINGS.auth.sessionExpired,
+      });
+    });
+
+    // Surfaced per field so the dialog can mark the input that caused it.
+    test('passes field errors through on a 400', async () => {
+      global.fetch = reply(400, {
+        success: false,
+        error: 'The RFQ was rejected.',
+        fieldErrors: { deliveryPincode: 'PIN Code must be 6 digits.' },
+      });
+
+      const res = await createRFQ(PAYLOAD);
+
+      expect(res).toEqual({
+        success: false,
+        reason: 'VALIDATION',
+        error: 'The RFQ was rejected.',
+        fieldErrors: { deliveryPincode: 'PIN Code must be 6 digits.' },
+      });
+    });
+
+    test('reports a server fault on a 500', async () => {
+      global.fetch = reply(500, { success: false, error: 'Database unavailable.' });
+
+      const res = await createRFQ(PAYLOAD);
+
+      expect(res.success === false && res.reason).toBe('SERVER');
+      expect(res.success === false && res.error).toBe('Database unavailable.');
+    });
+
+    test('falls back to a default message when the server sends none', async () => {
+      global.fetch = reply(500, {});
+
+      const res = await createRFQ(PAYLOAD);
+
+      expect(res.success === false && res.error).toBe(UI_STRINGS.rfqDetails.loadFailed);
+    });
+
+    // A 200 that carries no record is a failure: adopting nothing would leave the
+    // dialog reporting success over an RFQ that was never written.
+    test('rejects a 200 that carries no record', async () => {
+      global.fetch = reply(200, { success: true });
+
+      const res = await createRFQ(PAYLOAD);
+
+      expect(res.success).toBe(false);
+      expect(res.success === false && res.reason).toBe('SERVER');
+    });
+
+    test('rejects a 200 whose body denies success', async () => {
+      global.fetch = reply(200, { success: false, data: RFQ, error: 'Not saved.' });
+
+      const res = await createRFQ(PAYLOAD);
+
+      expect(res.success === false && res.error).toBe('Not saved.');
+    });
+  });
+
+  describe('fetchRFQById', () => {
+    test('reads one RFQ through the scoped endpoint', async () => {
+      global.fetch = reply(200, { success: true, data: RFQ });
+
+      const res = await fetchRFQById('RFQ260409000512');
+
+      expect(res.success && res.rfq).toEqual(RFQ);
+      expect(lastPath()).toBe('/api/rfqs/RFQ260409000512');
+    });
+
+    // An identifier is part of the path, so it cannot be allowed to alter it.
+    test('encodes the identifier into the path', async () => {
+      global.fetch = reply(200, { success: true, data: RFQ });
+
+      await fetchRFQById('../bootstrap');
+
+      expect(lastPath()).toBe('/api/rfqs/..%2Fbootstrap');
+    });
+
+    test('attaches the session token when one is held', async () => {
+      signIn();
+      global.fetch = reply(200, { success: true, data: RFQ });
+
+      await fetchRFQById('41');
+
+      expect(lastInit().headers).toEqual({ Authorization: 'Bearer jwt-token' });
+    });
+
+    test('sends no headers when there is no session', async () => {
+      global.fetch = reply(200, { success: true, data: RFQ });
+
+      await fetchRFQById('41');
+
+      expect(lastInit().headers).toEqual({});
+    });
+
+    test('reports an unreachable API', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('offline'));
+
+      const res = await fetchRFQById('41');
+
+      expect(res).toEqual({
+        success: false,
+        reason: 'NETWORK',
+        error: UI_STRINGS.auth.networkUnreachable,
+      });
+    });
+
+    test('names the status when the reply cannot be read', async () => {
+      global.fetch = unreadable(503);
+
+      const res = await fetchRFQById('41');
+
+      expect(res.success === false && res.error).toBe(
+        formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: 503 })
+      );
+    });
+
+    test('reports an expired session on a 403', async () => {
+      global.fetch = reply(403, { error: 'No organisation on the session.' });
+
+      const res = await fetchRFQById('41');
+
+      expect(res).toEqual({
+        success: false,
+        reason: 'UNAUTHORIZED',
+        error: 'No organisation on the session.',
+      });
+    });
+
+    test('falls back to the session message on an unexplained 401', async () => {
+      global.fetch = reply(401, {});
+
+      const res = await fetchRFQById('41');
+
+      expect(res.success === false && res.error).toBe(UI_STRINGS.auth.sessionExpired);
+    });
+
+    // Another organisation's RFQ reports as not found, which is what the backend
+    // returns for it: the same answer as a number that never existed.
+    test('reports a 404 as not found', async () => {
+      global.fetch = reply(404, { success: false, error: 'No such RFQ.' });
+
+      const res = await fetchRFQById('RFQ-OTHER-ORG');
+
+      expect(res).toEqual({ success: false, reason: 'NOT_FOUND', error: 'No such RFQ.' });
+    });
+
+    test('falls back to the not-found message when the server sends none', async () => {
+      global.fetch = reply(404, {});
+
+      const res = await fetchRFQById('nope');
+
+      expect(res.success === false && res.error).toBe(UI_STRINGS.rfqDetails.notFoundMessage);
+    });
+
+    test('reports a server fault on a 500', async () => {
+      global.fetch = reply(500, { error: 'Query failed.' });
+
+      const res = await fetchRFQById('41');
+
+      expect(res).toEqual({ success: false, reason: 'SERVER', error: 'Query failed.' });
+    });
+
+    test('rejects a 200 that carries no record', async () => {
+      global.fetch = reply(200, { success: true });
+
+      const res = await fetchRFQById('41');
+
+      expect(res.success === false && res.reason).toBe('SERVER');
+      expect(res.success === false && res.error).toBe(UI_STRINGS.rfqDetails.loadFailed);
+    });
+  });
+
+  describe('fetchRFQList', () => {
+    test('reads the organisation-scoped list', async () => {
+      global.fetch = reply(200, { success: true, data: [RFQ] });
+
+      const res = await fetchRFQList();
+
+      expect(res.success && res.rfqs).toEqual([RFQ]);
+      expect(lastPath()).toBe('/api/rfqs');
+    });
+
+    // An empty list is a valid answer: a buyer who has raised nothing has none.
+    test('accepts an empty list', async () => {
+      global.fetch = reply(200, { success: true, data: [] });
+
+      const res = await fetchRFQList();
+
+      expect(res).toEqual({ success: true, rfqs: [] });
+    });
+
+    test('attaches the session token when one is held', async () => {
+      signIn();
+      global.fetch = reply(200, { success: true, data: [] });
+
+      await fetchRFQList();
+
+      expect(lastInit().headers).toEqual({ Authorization: 'Bearer jwt-token' });
+    });
+
+    test('sends no headers when there is no session', async () => {
+      global.fetch = reply(200, { success: true, data: [] });
+
+      await fetchRFQList();
+
+      expect(lastInit().headers).toEqual({});
+    });
+
+    test('reports an unreachable API', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('offline'));
+
+      const res = await fetchRFQList();
+
+      expect(res).toEqual({
+        success: false,
+        reason: 'NETWORK',
+        error: UI_STRINGS.auth.networkUnreachable,
+      });
+    });
+
+    test('names the status when the reply cannot be read', async () => {
+      global.fetch = unreadable(500);
+
+      const res = await fetchRFQList();
+
+      expect(res.success === false && res.error).toBe(
+        formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: 500 })
+      );
+    });
+
+    test('reports an expired session on a 401', async () => {
+      global.fetch = reply(401, { error: 'Missing token.' });
+
+      const res = await fetchRFQList();
+
+      expect(res).toEqual({ success: false, reason: 'UNAUTHORIZED', error: 'Missing token.' });
+    });
+
+    test('falls back to the session message on an unexplained 403', async () => {
+      global.fetch = reply(403, {});
+
+      const res = await fetchRFQList();
+
+      expect(res.success === false && res.error).toBe(UI_STRINGS.auth.sessionExpired);
+    });
+
+    test('reports a server fault on a 500', async () => {
+      global.fetch = reply(500, { error: 'Query failed.' });
+
+      const res = await fetchRFQList();
+
+      expect(res).toEqual({ success: false, reason: 'SERVER', error: 'Query failed.' });
+    });
+
+    // Anything other than an array would be spread onto the dashboard as though
+    // it were RFQs, so the shape is checked rather than trusted.
+    test('rejects a body whose data is not an array', async () => {
+      global.fetch = reply(200, { success: true, data: { rfqNumber: 'RFQ-1' } });
+
+      const res = await fetchRFQList();
+
+      expect(res.success === false && res.reason).toBe('SERVER');
+      expect(res.success === false && res.error).toBe(UI_STRINGS.rfqDetails.loadFailed);
+    });
+
+    test('rejects a 200 whose body denies success', async () => {
+      global.fetch = reply(200, { success: false, data: [], error: 'Not available.' });
+
+      const res = await fetchRFQList();
+
+      expect(res.success === false && res.error).toBe('Not available.');
+    });
+  });
+});
+
+// ==============================================================================
+// EDIT AND DELETE
+// ==============================================================================
+// Both are partial by design and both are organisation-scoped server-side, so the
+// case that matters most is NOT_FOUND: it is what another organisation's RFQ
+// reports, indistinguishable from an id that never existed.
+// ==============================================================================
+
+describe('rfqClient.updateRFQ', () => {
+  const originalFetch = global.fetch;
+
+  const RFQ: RFQItem = {
+    id: '41',
+    rfqNumber: 'RFQ260409000512',
+    title: 'Mechanical Spares Procurement',
+    category: 'Engineering Spares - Mechanical',
+    sourcingMode: 'mode_1',
+    status: 'Quotes Pending',
+    quotesCount: 0,
+    targetDeliveryDate: '2026-09-30',
+    budget: 0,
+    createdAt: '2026-09-04T10:00:00.000Z',
+    extractedEntities: [],
+    quotes: [],
+    chasingActive: false,
+  };
+
+  const reply = (status: number, body: unknown) =>
+    jest.fn().mockResolvedValue({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+    });
+
+  const unreadable = (status: number) =>
+    jest.fn().mockResolvedValue({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => {
+        throw new Error('not json');
+      },
+    });
+
+  const lastInit = () => (global.fetch as jest.Mock).mock.calls[0][1];
+  const lastPath = () => (global.fetch as jest.Mock).mock.calls[0][0];
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    authClient.setSession(null, null);
+    jest.restoreAllMocks();
+  });
+
+  test('PUTs only the fields it was given and adopts the stored record', async () => {
+    global.fetch = reply(200, { success: true, data: { ...RFQ, title: 'Revised' } });
+
+    const res = await updateRFQ('RFQ260409000512', { title: 'Revised' });
+
+    expect(res.success).toBe(true);
+    expect(res.success && res.rfq.title).toBe('Revised');
+    expect(lastPath()).toBe('/api/rfqs/RFQ260409000512');
+    expect(lastInit().method).toBe('PUT');
+    expect(JSON.parse(lastInit().body)).toEqual({ title: 'Revised' });
+  });
+
+  test('attaches the session token when one is held', async () => {
+    authClient.setSession(
+      { id: 'u1', email: 'b@x.com', name: 'B', role: 'buyer', orgId: 'o1', orgName: 'O' },
+      'jwt-token'
+    );
+    global.fetch = reply(200, { success: true, data: RFQ });
+
+    await updateRFQ('41', { status: 'In Evaluation' });
+
+    expect(lastInit().headers.Authorization).toBe('Bearer jwt-token');
+    expect(lastInit().headers['Content-Type']).toBe('application/json');
+  });
+
+  test('sends no Authorization header when there is no session', async () => {
+    global.fetch = reply(200, { success: true, data: RFQ });
+
+    await updateRFQ('41', { status: 'In Evaluation' });
+
+    expect(lastInit().headers.Authorization).toBeUndefined();
+  });
+
+  // An identifier is part of the path, so it cannot be allowed to alter it.
+  test('encodes the identifier into the path', async () => {
+    global.fetch = reply(200, { success: true, data: RFQ });
+
+    await updateRFQ('../bootstrap', { title: 'Revised' });
+
+    expect(lastPath()).toBe('/api/rfqs/..%2Fbootstrap');
+  });
+
+  test('reports an unreachable API rather than claiming the edit was saved', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error('offline'));
+
+    const res = await updateRFQ('41', { title: 'Revised' });
+
+    expect(res).toEqual({
+      success: false,
+      reason: 'NETWORK',
+      error: UI_STRINGS.auth.networkUnreachable,
+    });
+  });
+
+  test('names the status when the reply cannot be read', async () => {
+    global.fetch = unreadable(502);
+
+    const res = await updateRFQ('41', { title: 'Revised' });
+
+    expect(res.success === false && res.error).toBe(
+      formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: 502 })
+    );
+  });
+
+  test('reports an expired session on a 401', async () => {
+    global.fetch = reply(401, { error: 'Token expired.' });
+
+    const res = await updateRFQ('41', { title: 'Revised' });
+
+    expect(res).toEqual({ success: false, reason: 'UNAUTHORIZED', error: 'Token expired.' });
+  });
+
+  test('falls back to the session message on an unexplained 403', async () => {
+    global.fetch = reply(403, {});
+
+    const res = await updateRFQ('41', { title: 'Revised' });
+
+    expect(res.success === false && res.error).toBe(UI_STRINGS.auth.sessionExpired);
+  });
+
+  // Another organisation's RFQ answers exactly as a nonexistent one does.
+  test('reports a 404 as not found', async () => {
+    global.fetch = reply(404, { error: 'No such RFQ.' });
+
+    const res = await updateRFQ('RFQ-OTHER-ORG', { title: 'Rewritten' });
+
+    expect(res).toEqual({ success: false, reason: 'NOT_FOUND', error: 'No such RFQ.' });
+  });
+
+  test('falls back to the not-found message when the server sends none', async () => {
+    global.fetch = reply(404, {});
+
+    const res = await updateRFQ('nope', { title: 'Revised' });
+
+    expect(res.success === false && res.error).toBe(UI_STRINGS.rfqDetails.notFoundMessage);
+  });
+
+  test('passes field errors through on a 400', async () => {
+    global.fetch = reply(400, {
+      error: 'The edit was rejected.',
+      fieldErrors: { deliveryPincode: 'PIN Code must be 6 digits.' },
+    });
+
+    const res = await updateRFQ('41', { deliveryPincode: '!!' });
+
+    expect(res).toEqual({
+      success: false,
+      reason: 'VALIDATION',
+      error: 'The edit was rejected.',
+      fieldErrors: { deliveryPincode: 'PIN Code must be 6 digits.' },
+    });
+  });
+
+  test('reports a server fault on a 500', async () => {
+    global.fetch = reply(500, { error: 'Query failed.' });
+
+    const res = await updateRFQ('41', { title: 'Revised' });
+
+    expect(res.success === false && res.reason).toBe('SERVER');
+    expect(res.success === false && res.error).toBe('Query failed.');
+  });
+
+  test('falls back to a default message when the server sends none', async () => {
+    global.fetch = reply(500, {});
+
+    const res = await updateRFQ('41', { title: 'Revised' });
+
+    expect(res.success === false && res.error).toBe(UI_STRINGS.rfqEdit.saveFailed);
+  });
+
+  // A 200 with no record would leave the caller reporting success over an edit
+  // that may not have been written.
+  test('rejects a 200 that carries no record', async () => {
+    global.fetch = reply(200, { success: true });
+
+    const res = await updateRFQ('41', { title: 'Revised' });
+
+    expect(res.success === false && res.reason).toBe('SERVER');
+  });
+
+  test('rejects a 200 whose body denies success', async () => {
+    global.fetch = reply(200, { success: false, data: RFQ, error: 'Not saved.' });
+
+    const res = await updateRFQ('41', { title: 'Revised' });
+
+    expect(res.success === false && res.error).toBe('Not saved.');
+  });
+
+  test('sends line items and attachments when the edit changed them', async () => {
+    global.fetch = reply(200, { success: true, data: RFQ });
+    const items = [
+      {
+        id: 'e1',
+        itemName: 'Gate valve',
+        quantity: 9,
+        unit: 'Nos',
+        targetDate: '2026-10-01',
+        technicalSpecs: '',
+        confidence: 0,
+        category: 'Hoses, Valves & Fittings',
+        majorCategory: 'Engineering Spares - Mechanical',
+        minorCategory: 'Hoses, Valves & Fittings',
+      },
+    ];
+
+    await updateRFQ('41', { extractedEntities: items, attachments: [] });
+
+    expect(JSON.parse(lastInit().body)).toEqual({ extractedEntities: items, attachments: [] });
+  });
+});
+
+describe('rfqClient.deleteRFQ', () => {
+  const originalFetch = global.fetch;
+
+  const reply = (status: number, body: unknown) =>
+    jest.fn().mockResolvedValue({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+    });
+
+  const lastInit = () => (global.fetch as jest.Mock).mock.calls[0][1];
+  const lastPath = () => (global.fetch as jest.Mock).mock.calls[0][0];
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    authClient.setSession(null, null);
+    jest.restoreAllMocks();
+  });
+
+  test('DELETEs the RFQ and returns the number that was removed', async () => {
+    global.fetch = reply(200, { success: true, data: { rfqNumber: 'RFQ260409000512' } });
+
+    const res = await deleteRFQ('41');
+
+    expect(res).toEqual({ success: true, rfqNumber: 'RFQ260409000512' });
+    expect(lastPath()).toBe('/api/rfqs/41');
+    expect(lastInit().method).toBe('DELETE');
+  });
+
+  // The row still has to be dropped even if the response omitted the echo.
+  test('falls back to the identifier it was asked to delete', async () => {
+    global.fetch = reply(200, { success: true });
+
+    const res = await deleteRFQ('RFQ260409000512');
+
+    expect(res).toEqual({ success: true, rfqNumber: 'RFQ260409000512' });
+  });
+
+  test('attaches the session token when one is held', async () => {
+    authClient.setSession(
+      { id: 'u1', email: 'b@x.com', name: 'B', role: 'buyer', orgId: 'o1', orgName: 'O' },
+      'jwt-token'
+    );
+    global.fetch = reply(200, { success: true, data: { rfqNumber: 'R1' } });
+
+    await deleteRFQ('R1');
+
+    expect(lastInit().headers).toEqual({ Authorization: 'Bearer jwt-token' });
+  });
+
+  test('sends no headers when there is no session', async () => {
+    global.fetch = reply(200, { success: true, data: { rfqNumber: 'R1' } });
+
+    await deleteRFQ('R1');
+
+    expect(lastInit().headers).toEqual({});
+  });
+
+  test('encodes the identifier into the path', async () => {
+    global.fetch = reply(200, { success: true, data: { rfqNumber: 'R1' } });
+
+    await deleteRFQ('../bootstrap');
+
+    expect(lastPath()).toBe('/api/rfqs/..%2Fbootstrap');
+  });
+
+  test('reports an unreachable API rather than dropping the row', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error('offline'));
+
+    const res = await deleteRFQ('41');
+
+    expect(res).toEqual({
+      success: false,
+      reason: 'NETWORK',
+      error: UI_STRINGS.auth.networkUnreachable,
+    });
+  });
+
+  test('names the status when the reply cannot be read', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      json: async () => {
+        throw new Error('not json');
+      },
+    });
+
+    const res = await deleteRFQ('41');
+
+    expect(res.success === false && res.error).toBe(
+      formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: 503 })
+    );
+  });
+
+  test('reports an expired session on a 401', async () => {
+    global.fetch = reply(401, { error: 'Missing token.' });
+
+    const res = await deleteRFQ('41');
+
+    expect(res).toEqual({ success: false, reason: 'UNAUTHORIZED', error: 'Missing token.' });
+  });
+
+  test('falls back to the session message on an unexplained 403', async () => {
+    global.fetch = reply(403, {});
+
+    const res = await deleteRFQ('41');
+
+    expect(res.success === false && res.error).toBe(UI_STRINGS.auth.sessionExpired);
+  });
+
+  // The case that matters: deleting another organisation's RFQ must not appear
+  // to have worked.
+  test('reports a 404 as not found', async () => {
+    global.fetch = reply(404, { error: 'No such RFQ.' });
+
+    const res = await deleteRFQ('RFQ-OTHER-ORG');
+
+    expect(res).toEqual({ success: false, reason: 'NOT_FOUND', error: 'No such RFQ.' });
+  });
+
+  test('falls back to the not-found message when the server sends none', async () => {
+    global.fetch = reply(404, {});
+
+    const res = await deleteRFQ('nope');
+
+    expect(res.success === false && res.error).toBe(UI_STRINGS.rfqDetails.notFoundMessage);
+  });
+
+  test('reports a server fault on a 500', async () => {
+    global.fetch = reply(500, { error: 'Delete failed.' });
+
+    const res = await deleteRFQ('41');
+
+    expect(res).toEqual({ success: false, reason: 'SERVER', error: 'Delete failed.' });
+  });
+
+  test('falls back to a default message when the server sends none', async () => {
+    global.fetch = reply(500, {});
+
+    const res = await deleteRFQ('41');
+
+    expect(res.success === false && res.error).toBe(UI_STRINGS.rfqEdit.deleteFailed);
+  });
+
+  test('rejects a 200 whose body denies success', async () => {
+    global.fetch = reply(200, { success: false, error: 'Not deleted.' });
+
+    const res = await deleteRFQ('41');
+
+    expect(res.success === false && res.error).toBe('Not deleted.');
   });
 });

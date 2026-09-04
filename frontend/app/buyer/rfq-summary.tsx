@@ -3,7 +3,8 @@
 import React, { useMemo, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
-import { SOURCING_MODES, formatCurrency } from '@/lib/constants';
+import { RFQDeleteDialog, RFQEditModal } from '@/app/buyer/RFQEditModal';
+import { SOURCING_MODES, formatCurrency, formatIndianDate } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type { RFQItem, RFQPortfolioSummary, RFQSource, SourcingMode } from '@/lib/types';
 import {
@@ -22,10 +23,12 @@ import {
   Plus,
   Eye,
   FileText,
+  Trash2,
 } from 'lucide-react';
 
 const SCREEN = UI_STRINGS.screens.rfqSummary;
 const RFQ = UI_STRINGS.rfqSummary;
+const EDIT = UI_STRINGS.rfqEdit;
 
 /** Page sizes offered by the portfolio table. */
 const PAGE_SIZE_OPTIONS = [5, 10, 20, 50] as const;
@@ -63,7 +66,14 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
     deepDiveModalOpen,
     setDeepDiveModalOpen,
     selectedRFQForDeepDive,
+    updateRFQ,
+    deleteRFQ,
   } = useApp();
+
+  // Held as the RFQ itself rather than an id, so the dialogs can name the record
+  // they are about without looking it up again.
+  const [rfqBeingEdited, setRfqBeingEdited] = useState<RFQItem | null>(null);
+  const [rfqBeingDeleted, setRfqBeingDeleted] = useState<RFQItem | null>(null);
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>(ALL);
@@ -428,34 +438,40 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
         </div>
       ) : (
         <div className="glass-panel rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 overflow-hidden">
+          {/* Six columns instead of nine. RFQ number and title were two columns
+              describing the same thing, as were items and quotes; folding each
+              pair into one cell with a sub-line drops the minimum width from
+              1040px to 760px, so the table stops scrolling sideways on a laptop
+              and the title has room not to truncate. */}
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs min-w-[1040px]">
+            <table className="w-full text-left text-xs min-w-[760px]">
               <caption className="sr-only">{RFQ.tableCaption}</caption>
-              <thead className="bg-slate-100 dark:bg-gray-950 text-slate-700 dark:text-gray-300 text-[10px] uppercase tracking-wider font-bold border-b border-slate-200 dark:border-gray-800">
+              <thead className="sticky top-0 z-10 bg-slate-100 dark:bg-gray-950 text-slate-700 dark:text-gray-300 text-[10px] uppercase tracking-wider font-bold border-b border-slate-200 dark:border-gray-800">
                 <tr>
                   <th scope="col" className="p-3">{RFQ.colRfqNumber}</th>
-                  <th scope="col" className="p-3">{RFQ.colTitle}</th>
-                  <th scope="col" className="p-3">{RFQ.colMode}</th>
                   <th scope="col" className="p-3">{RFQ.colStatus}</th>
                   <th scope="col" className="p-3 text-center">{RFQ.colItems}</th>
-                  <th scope="col" className="p-3 text-center">{RFQ.colQuotes}</th>
                   <th scope="col" className="p-3 text-right">{RFQ.colBudget}</th>
                   <th scope="col" className="p-3">{RFQ.colDelivery}</th>
-                  <th scope="col" className="p-3 text-center">{RFQ.colActions}</th>
+                  <th scope="col" className="p-3 text-right">{RFQ.colActions}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-gray-800 text-slate-800 dark:text-gray-200">
                 {visibleRFQs.map((rfq) => (
-                  <tr key={rfq.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition-colors">
+                  <tr key={rfq.id} className="hover:bg-indigo-50/40 dark:hover:bg-indigo-950/20 transition-colors">
+                    {/* Number, title and category in one cell: they identify the
+                        same record, and the title now has the width not to truncate. */}
                     <td className="p-3 align-top">
                       <span className="mono font-bold text-indigo-700 dark:text-indigo-300">{rfq.rfqNumber}</span>
-                      <div className="mt-1">{sourceBadge(rfq.source)}</div>
+                      <span className="block font-bold text-slate-900 dark:text-white mt-0.5 leading-snug">
+                        {rfq.title}
+                      </span>
+                      <span className="flex items-center gap-1.5 flex-wrap mt-1">
+                        {modeBadge(rfq.sourcingMode)}
+                        {sourceBadge(rfq.source)}
+                        <span className="text-[10px] text-slate-500 dark:text-gray-400">{rfq.category}</span>
+                      </span>
                     </td>
-                    <td className="p-3 align-top max-w-[240px]">
-                      <span className="font-bold block truncate">{rfq.title}</span>
-                      <span className="text-[10px] text-slate-500 dark:text-gray-400">{rfq.category}</span>
-                    </td>
-                    <td className="p-3 align-top">{modeBadge(rfq.sourcingMode)}</td>
                     <td className="p-3 align-top">
                       {statusBadge(rfq.status)}
                       {rfq.chasingActive && (
@@ -464,35 +480,30 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
                         </span>
                       )}
                     </td>
-                    <td className="p-3 align-top text-center mono">{(rfq.extractedEntities || []).length}</td>
-                    <td className="p-3 align-top text-center">
-                      <span
-                        className={`mono font-bold ${
-                          (rfq.quotesCount || 0) > 0
-                            ? 'text-emerald-700 dark:text-emerald-400'
-                            : 'text-slate-400 dark:text-gray-500'
-                        }`}
-                      >
-                        {rfq.quotesCount || 0}
+                    {/* Line items and quotations received, stacked: both count what
+                        is on the RFQ, and quotes are only meaningful against items. */}
+                    <td className="p-3 align-top text-center whitespace-nowrap">
+                      <span className="mono font-bold text-slate-900 dark:text-white tabular-nums">
+                        {(rfq.extractedEntities || []).length}
                       </span>
-                      {rfq.followUpData && (
-                        <span className="block text-[10px] text-slate-400">
-                          {formatString(RFQ.ofInvited, { invited: rfq.followUpData.totalInvited })}
-                        </span>
-                      )}
+                      <span className="block text-[10px] text-slate-500 dark:text-gray-400">
+                        {formatString(RFQ.quotesReceivedLabel, { count: rfq.quotesCount || 0 })}
+                      </span>
                     </td>
                     {/* A zero budget means none was stated, so it reads as unset
                         rather than as a real ceiling of nil. */}
-                    <td className="p-3 align-top text-right mono font-semibold">
+                    <td className="p-3 align-top text-right mono font-semibold tabular-nums whitespace-nowrap">
                       {rfq.budget > 0 ? (
                         formatCurrency(rfq.budget)
                       ) : (
                         <span className="text-slate-400 dark:text-gray-500 font-normal">{RFQ.budgetUnset}</span>
                       )}
                     </td>
-                    <td className="p-3 align-top">{rfq.targetDeliveryDate || RFQ.deliveryDateUnset}</td>
+                    <td className="p-3 align-top mono tabular-nums whitespace-nowrap">
+                      {formatIndianDate(rfq.targetDeliveryDate) || RFQ.deliveryDateUnset}
+                    </td>
                     <td className="p-3 align-top">
-                      <div className="flex items-center justify-center gap-1.5">
+                      <div className="flex items-center justify-end gap-1">
                         <button
                           type="button"
                           onClick={() => onViewDetails(rfq)}
@@ -503,19 +514,40 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
                         </button>
                         <button
                           type="button"
-                          onClick={() => openRFQDeepDive(rfq)}
-                          className="btn btn-secondary btn-xs font-bold flex items-center gap-1"
-                          aria-label={formatString(RFQ.viewFollowUpsAria, { rfqNumber: rfq.rfqNumber })}
-                        >
-                          <Eye size={11} /> {RFQ.followUpsAction}
-                        </button>
-                        <button
-                          type="button"
                           onClick={() => handleViewQuotes(rfq)}
                           className="btn btn-primary btn-xs font-bold flex items-center gap-1"
                           aria-label={formatString(RFQ.viewQuotesAria, { rfqNumber: rfq.rfqNumber })}
                         >
                           {RFQ.quotesAction} <ArrowRight size={11} />
+                        </button>
+                        {/* Icon-only from here: three labelled buttons per row read
+                            as a wall of text, and each carries its own aria-label. */}
+                        <button
+                          type="button"
+                          onClick={() => openRFQDeepDive(rfq)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-700 dark:hover:text-indigo-300 hover:bg-slate-100 dark:hover:bg-gray-800"
+                          aria-label={formatString(RFQ.viewFollowUpsAria, { rfqNumber: rfq.rfqNumber })}
+                          title={RFQ.followUpsAction}
+                        >
+                          <Eye size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setRfqBeingEdited(rfq)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-700 dark:hover:text-indigo-300 hover:bg-slate-100 dark:hover:bg-gray-800"
+                          aria-label={formatString(EDIT.editAria, { rfqNumber: rfq.rfqNumber })}
+                          title={EDIT.editAction}
+                        >
+                          <Pencil size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setRfqBeingDeleted(rfq)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                          aria-label={formatString(EDIT.deleteAria, { rfqNumber: rfq.rfqNumber })}
+                          title={EDIT.deleteAction}
+                        >
+                          <Trash2 size={13} />
                         </button>
                       </div>
                     </td>
@@ -524,7 +556,7 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
 
                 {filteredRFQs.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="p-8 text-center text-slate-400 dark:text-gray-500">
+                    <td colSpan={6} className="p-8 text-center text-slate-400 dark:text-gray-500">
                       {RFQ.noMatchesMessage}
                     </td>
                   </tr>
@@ -599,6 +631,13 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
         isOpen={deepDiveModalOpen}
         onClose={() => setDeepDiveModalOpen(false)}
         rfq={selectedRFQForDeepDive}
+      />
+
+      <RFQEditModal rfq={rfqBeingEdited} onClose={() => setRfqBeingEdited(null)} onSave={updateRFQ} />
+      <RFQDeleteDialog
+        rfq={rfqBeingDeleted}
+        onClose={() => setRfqBeingDeleted(null)}
+        onConfirm={deleteRFQ}
       />
     </div>
   );

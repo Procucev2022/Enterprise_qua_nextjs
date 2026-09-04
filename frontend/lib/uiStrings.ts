@@ -20,7 +20,7 @@ export const UI_STRINGS = {
       subtitle: 'Parse structured, tabular, and unstructured industrial BOM requirements.',
     },
     rfqSummary: {
-      title: 'Buyer RFQ Portfolio Summary',
+      title: 'RFQ Summary',
       screenTag: 'Screen 1.3',
       subtitle: 'Every RFQ raised by this organisation with intake source, sourcing mode and quote progress.',
     },
@@ -206,6 +206,86 @@ export const UI_STRINGS = {
   },
   /** Buyer RFQ Portfolio Summary (Screen 1.3). */
   /** AI document extraction inside the ingestion wizard (Screen 1.2). */
+  /**
+   * Manual RFQ entry. Every message names the offending field and says why the
+   * value is needed, because "invalid input" tells a buyer nothing about what to
+   * type instead.
+   */
+  manualRfq: {
+    defaultStatus: 'Quotes Pending',
+
+    // Line item
+    itemNameRequired: 'Describe the item. Vendors quote against this text, so it cannot be blank.',
+    quantityRequired: 'Enter a quantity above zero.',
+    unitRequired: 'Enter a unit, for example Nos, Kg or Mtr.',
+    majorCategoryRequired: 'Choose a major category so the RFQ routes to the right vendors.',
+    minorCategoryRequired: 'Choose a minor category.',
+
+    // Header
+    titleLength: 'The RFQ title must be between {min} and {max} characters, or left blank to use the first line item.',
+    deliveryLocationRequired:
+      'Enter the delivery location. Vendors price freight against it, so it cannot be left blank.',
+    deliveryLocationLength: 'The delivery location must be between {min} and {max} characters.',
+    deliveryPincodeRequired:
+      'Enter the delivery pincode or zipcode. Freight is rated on it, so it cannot be left blank.',
+    deliveryPincodeInvalid:
+      'Enter a pincode or zipcode of 3 to 10 letters, digits, spaces or hyphens, for example 400701.',
+    budgetNegative: 'An estimated budget cannot be negative. Leave it blank to publish no ceiling.',
+    lineItemsRequired: 'Add at least one line item so vendors have something to quote against.',
+  },
+
+  /** The Manual RFQ Entry dialog opened from the wizard's Manual tab. */
+  manualRfqModal: {
+    title: 'Manual RFQ Entry',
+    subtitle:
+      '',
+    closeAria: 'Close manual RFQ entry',
+
+    titleLabel: 'RFQ Title',
+    titlePlaceholder: 'Leave blank to use the first line item',
+    budgetLabel: 'Estimated Budget ({symbol})',
+    budgetPlaceholder: 'Leave blank to publish no ceiling',
+    optionalTag: 'Optional',
+    deliveryLocationLabel: 'Delivery Location',
+    deliveryLocationPlaceholder: 'Plant, warehouse or site address',
+    deliveryPincodeLabel: 'Pincode / Zipcode',
+    deliveryPincodePlaceholder: 'e.g. 400701',
+    targetDateLabel: 'Target Delivery Date',
+    sourcingModeLabel: 'Sourcing Mode',
+
+    lineItemsHeading: 'Line Items ({count})',
+    addItemAction: 'Add Line Item',
+    noItemsMessage: 'No line items yet. Add at least one so vendors have something to quote against.',
+    colItem: 'Item Description',
+    colSpecs: 'Specification',
+    colMajor: 'Major Category',
+    colMinor: 'Minor Category',
+    colQty: 'Quantity',
+    colUnit: 'Unit',
+    colTargetDate: 'Target Date',
+    itemPlaceholder: 'e.g. Centrifugal water pump',
+    specsPlaceholder: 'e.g. SS316 impeller',
+    qtyPlaceholder: 'Qty',
+    unitPlaceholder: 'Nos',
+    selectPlaceholder: 'Select…',
+    removeItemAria: 'Remove {item}',
+    untitledItem: 'this line item',
+
+    attachHeading: 'Supporting Documents',
+    attachHint:
+      'Attach a BOQ, drawings or a signed requisition. They are stored with the RFQ, and you can optionally read the line items out of them into the table below.',
+    attachAction: 'Attach Documents',
+    attachingAction: 'Uploading…',
+    extractAction: 'Extract Line Items',
+    extractingAction: 'Reading…',
+    removeAttachmentAria: 'Remove {fileName}',
+
+    serverAllocatesNumber: 'The RFQ number is allocated when you save.',
+    cancelAction: 'Cancel',
+    saveAction: 'Create RFQ',
+    savingAction: 'Creating…',
+  },
+
   rfqExtraction: {
     // Step 1
     noFileTitle: 'No Document Selected',
@@ -274,6 +354,10 @@ export const UI_STRINGS = {
     deliveryPincodePlaceholder: 'e.g. 400701',
     deliveryPincodeRequiredMessage:
       'Enter the delivery pincode or zipcode. Freight is rated on it, so it cannot be left blank.',
+    // Manual entry saves through its own dialog, so it reports its own outcome.
+    manualCreatedTitle: 'RFQ Created',
+    manualCreatedMessage: '{rfqNumber} was saved and is now in your RFQ portfolio.',
+
     deliveryPincodeInvalidTitle: 'Check the Delivery Details',
     deliveryPincodeInvalidMessage:
       'Enter a pincode or zipcode of 3 to 10 letters, digits, spaces or hyphens, for example 400701.',
@@ -326,8 +410,14 @@ export const UI_STRINGS = {
 
     // Step 1 manual intake
     manualMethodLabel: 'Manual RFQ Entry',
-    manualStartAction: 'Continue to Line Items',
+    manualStartAction: 'Add Manual RFQ',
     manualHint: 'You will add each line item and its minor category in Step 2.',
+    // The Manual tab now opens a dialog rather than routing through the review
+    // step, so the tab itself just explains the path and offers the way in.
+    manualPanelTitle: 'Enter RFQ Details Manually',
+    manualPanelMessage:
+      'Enter your RFQ details, including line items, delivery location, and supporting information, directly in the form. AI document extraction is not required for manual RFQ creation. Use document upload only when you want AI to extract RFQ details automatically.',
+
     manualBannerTitle: 'Manual Entry',
     manualBannerMessage: 'These line items were keyed by hand, so no AI confidence is reported against them.',
 
@@ -356,19 +446,37 @@ export const UI_STRINGS = {
 
   /** Buyer RFQ Details (Screen 1.4) — everything submitted for one RFQ. */
   rfqDetails: {
-    backAction: 'Back to RFQ Portfolio',
+    backAction: 'Back to RFQs',
     notFoundTitle: 'RFQ Not Found',
+    // Reworded now that the page reads from the API rather than store state: a
+    // miss means this RFQ is not under the signed-in buyer's organisation, which
+    // is also the answer another organisation's RFQ gives.
     notFoundMessage:
-      'This RFQ is no longer in your portfolio. It may have been raised in a previous session before the records were reloaded.',
+      'This RFQ was not found under your organisation. Check the RFQ number, or return to the portfolio to pick one.',
 
-    // Provenance strip
+    // API-backed loading
+    loadingTitle: 'Loading RFQ',
+    loadingMessage: 'Fetching the RFQ record and its line items.',
+    loadFailedTitle: 'RFQ Could Not Be Loaded',
+    loadFailed: 'The RFQ could not be read. Try again, and if it persists the API may be unavailable.',
+    retryAction: 'Try Again',
+    missingReferenceTitle: 'No RFQ Selected',
+    missingReferenceMessage:
+      'Open an RFQ from the portfolio so this page knows which record to display.',
+
+    // Provenance strip. No "audit immutable" claim: nothing in the record backs
+    // it, and the RFQ is in fact editable.
     documentTypeBadge: 'Request for Quotation (RFQ)',
-    auditImmutable: 'Audit Immutable',
     raisedOnStrip: 'Raised {timestamp}',
+    updatedOnStrip: 'Edited {timestamp}',
 
     // Header & submission provenance
     submittedHeading: 'Submission Detail',
     sourceLabel: 'Intake Source',
+    sourceWebPortal: 'Web Portal Upload',
+    sourceEmailGateway: 'Email Gateway',
+    sourceEmailUpload: 'Emailed Document',
+    sourceManualEntry: 'Manual Entry',
     sourceFileLabel: 'Source Document',
     sourceEmailLabel: 'Source Email',
     createdLabel: 'Raised On',
@@ -396,27 +504,33 @@ export const UI_STRINGS = {
     minorFilterAria: 'Filter line items by minor category',
     exportCsvAction: 'Export CSV',
     exportCsvAria: 'Download the line items of {rfqNumber} as CSV',
+    colIndex: '#',
     colItem: 'Item Description',
     colSpecs: 'Technical Specification',
     colMajor: 'Major Category',
     colMinor: 'Minor Category',
+    colCategory: 'Category',
     colQty: 'Qty',
     colUnit: 'Unit',
     colTargetDate: 'Required By',
     colConfidence: 'Confidence',
     noLineItems: 'No line items were recorded against this RFQ.',
     noLineItemMatches: 'No line items match the current search and filter.',
+    clearFiltersAction: 'Clear search and filter',
     manualConfidence: 'Keyed manually',
     confidenceHigh: '{confidence}% High Confidence',
     confidenceReview: '{confidence}% Needs Review',
     displayingCount: 'Displaying {shown} of {total} line items',
     parsedSuccessfully: '{percent}% classified automatically',
+    totalQuantityLabel: 'Total quantity',
+    // Column sorting. The label names what clicking does next, so a screen reader
+    // announces the action rather than the current state.
+    sortAscAria: 'Sort by {column}, ascending',
+    sortDescAria: 'Sort by {column}, descending',
+    specsInlineLabel: 'Spec',
 
     // Quotes
     quotesHeading: 'Vendor Quotations',
-    quotesTabAll: 'All Quotes ({count})',
-    quotesTabUnderReview: 'Under Review ({count})',
-    quotesTabShortlisted: 'Shortlisted ({count})',
     colVendor: 'Vendor',
     colUnitPrice: 'Unit Price',
     colTotalPrice: 'Total',
@@ -427,7 +541,6 @@ export const UI_STRINGS = {
     noQuotes: 'No vendor quotations have been received yet.',
     noQuotesMessage:
       'Vendor matching and standard RFQ email dispatch are being rebuilt on the new sourcing engine, so this RFQ has not yet been circulated. Quotations will appear here once it goes live.',
-    noQuotesTabMessage: 'No quotations are in this state yet.',
 
     // Attachments
     attachmentsHeading: 'Supporting Documents',
@@ -435,17 +548,6 @@ export const UI_STRINGS = {
     attachmentViewAria: 'Open {fileName} in a new tab',
     attachmentUploadedOn: 'Attached {date}',
     noAttachments: 'No supporting documents were attached to this RFQ.',
-
-    // Follow-ups
-    followUpsHeading: 'Multi-Channel Follow-Ups',
-    followUpsTag: 'Outreach Analytics',
-    invitedLabel: 'Vendors Invited',
-    respondedLabel: 'Vendors Responded',
-    callsLabel: 'Calls Connected',
-    whatsappLabel: 'WhatsApp Read',
-    smsLabel: 'SMS Delivered',
-    awaitingTrigger: 'Awaiting initial trigger',
-    noFollowUps: 'Vendor matching and dispatch are still to come for this RFQ, so there is nothing to chase yet.',
   },
 
   rfqSummary: {
@@ -495,6 +597,7 @@ export const UI_STRINGS = {
     colActions: 'Actions',
     chasingActive: 'Chasers running',
     deliveryDateUnset: 'Not set',
+    quotesReceivedLabel: '{count} quotes',
     ofInvited: 'of {invited} invited',
     budgetUnset: 'Not set',
     detailsAction: 'View Details',
@@ -559,11 +662,116 @@ export const UI_STRINGS = {
     otpDispatched:
       'A {codeLength}-digit verification code has been emailed to {email}. It expires in {expiryMinutes} minutes.',
     loggedOutMessage: 'Successfully signed out of the secure workspace.',
+    sessionExpired: 'Your session has expired. Sign in again to continue.',
     redirecting: 'Redirecting to your workspace…',
     showPassword: 'Show password',
     hidePassword: 'Hide password',
     registrationSuccessMessage:
       'Account created for {email}. You are signed in and can start configuring your workspace.',
+  },
+
+  // Editing and withdrawing an RFQ.
+  rfqEdit: {
+    editAction: 'Edit',
+    editAria: 'Edit {rfqNumber}',
+    deleteAction: 'Delete',
+    deleteAria: 'Delete {rfqNumber}',
+
+    // Edit dialog
+    dialogTitle: 'Edit RFQ',
+    dialogSubtitle:
+      'Change the title, terms, line items and documents of {rfqNumber}. Only what you change is sent.',
+    titleLabel: 'RFQ Title',
+    categoryLabel: 'RFQ Major Category',
+    statusLabel: 'Status',
+    budgetLabel: 'Estimated Budget ({symbol})',
+    targetDateLabel: 'Target Delivery Date',
+    deliveryLocationLabel: 'Delivery Location',
+    deliveryPincodeLabel: 'PIN / ZIP Code',
+    optionalTag: 'Optional',
+
+    // Section headings inside the dialog, mirroring the details page so the buyer
+    // is editing the same groupings they were just reading.
+    sectionCommercial: 'Commercial & Delivery',
+    sectionLineItems: 'Line Items',
+    sectionDocuments: 'Supporting Documents',
+    sectionProvenance: 'Submission Detail',
+
+    // Read-only provenance, shown so the buyer can see what an edit cannot change.
+    readOnlyNote: 'Allocated by the server and not editable.',
+    rfqNumberLabel: 'RFQ Number',
+    raisedOnLabel: 'Raised On',
+    raisedByLabel: 'Raised By',
+    intakeSourceLabel: 'Intake Source',
+
+    // Line items
+    addItemAction: 'Add Line Item',
+    removeItemAria: 'Remove line item {item}',
+    untitledItem: 'this row',
+    noItemsMessage: 'This RFQ has no line items. Add at least one before saving.',
+    colItem: 'Item Description',
+    colSpecs: 'Technical Specification',
+    colMajor: 'Major Category',
+    colMinor: 'Minor Category',
+    colQty: 'Qty',
+    colUnit: 'Unit',
+    colTargetDate: 'Required By',
+    selectMajorFirst: 'Select a major category first',
+    itemNameRequired: 'Every line item needs a description.',
+    quantityRequired: 'Every line item needs a quantity above zero.',
+    unitRequired: 'Every line item needs a unit.',
+    majorCategoryRequired: 'Every line item needs a major category.',
+    lineItemsRequired: 'An RFQ needs at least one line item.',
+    lineItemErrorSummary: 'Row {row}: {message}',
+
+    // Documents
+    attachAction: 'Attach Document',
+    attachingAction: 'Uploading…',
+    removeAttachmentAria: 'Remove {fileName}',
+    noAttachmentsMessage: 'No supporting documents are attached.',
+    attachHint: 'Stored against the RFQ and downloadable from its details page.',
+
+    saveAction: 'Save Changes',
+    savingAction: 'Saving…',
+    cancelAction: 'Cancel',
+    closeAria: 'Close the edit dialog',
+    noChanges: 'Nothing has been changed yet.',
+
+    // Validation. Same rules as creation, so an edit cannot introduce a value that
+    // could not have been created.
+    titleRequired: 'RFQ Title is required and must be at least 3 characters.',
+    categoryRequired: 'Major Category is required.',
+    budgetNegative: 'Estimated Budget cannot be negative. Leave it blank if no ceiling is set.',
+    deliveryLocationRequired: 'Delivery Location is required so vendors can price freight.',
+    deliveryPincodeRequired: 'PIN / ZIP Code is required so vendors can price freight.',
+    deliveryPincodeInvalid:
+      'PIN / ZIP Code must be 3 to 10 letters, digits, spaces or hyphens, for example 400701 or SW1A 1AA.',
+
+    // Outcomes
+    savedTitle: 'RFQ Updated',
+    savedMessage: '{rfqNumber} has been updated.',
+    saveFailedTitle: 'RFQ Not Updated',
+    saveFailed: 'The RFQ could not be updated. Try again, and if it persists the API may be unavailable.',
+
+    // Delete confirmation. Named explicitly, because the RFQ number is the only
+    // thing distinguishing one row from the next.
+    deleteTitle: 'Delete this RFQ?',
+    deleteConfirmMessage:
+      'This permanently deletes {rfqNumber} ({title}) and its {itemCount} line items. This cannot be undone.',
+    deleteConfirmAction: 'Delete RFQ',
+    deletingAction: 'Deleting…',
+    deletedTitle: 'RFQ Deleted',
+    deletedMessage: '{rfqNumber} has been deleted.',
+    deleteFailedTitle: 'RFQ Not Deleted',
+    deleteFailed: 'The RFQ could not be deleted. Try again, and if it persists the API may be unavailable.',
+  },
+
+  vendorFeed: {
+    // The direct-invitation buyer filter. Options are the buyers actually present
+    // in the feed, so the label names the identity an RFQ carries (the raising
+    // buyer's corporate email) rather than a company the RFQ has no field for.
+    buyerFilterLabel: 'Raising Buyer',
+    buyerFilterAll: '🌐 All Inviting Buyers',
   },
 
   buyerProfile: {

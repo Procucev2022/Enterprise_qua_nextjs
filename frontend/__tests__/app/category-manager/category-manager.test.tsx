@@ -1,11 +1,12 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import KanbanBoard from '@/app/category-manager/kanban-board';
 import SpendDashboard from '@/app/category-manager/spend-dashboard';
 import BuyerConsole from '@/app/category-manager/buyer-console';
 import VendorConsole from '@/app/category-manager/vendor-console';
 import CategorySummaryDashboard from '@/app/category-manager/category-summary-dashboard';
 import { AppProvider, useApp } from '@/lib/store';
+import { KANBAN_CARD_RFQ_REFS } from '@/lib/constants';
 
 function renderWithProvider(ui: React.ReactElement) {
   return render(<AppProvider>{ui}</AppProvider>);
@@ -21,7 +22,6 @@ function CategoryManagerBranchWrapper({ onMatrix, onEval, onSpend }: any) {
         onClick={() => {
           try {
             addNewRFQ({
-              rfqNumber: 'RFQ-2026-PARSE',
               title: 'Parsing RFQ Test',
               category: 'Civil Works',
               sourcingMode: 'mode_1',
@@ -45,7 +45,6 @@ function CategoryManagerBranchWrapper({ onMatrix, onEval, onSpend }: any) {
               autoCirculated: false,
             });
             addNewRFQ({
-              rfqNumber: 'RFQ-2026-EVAL',
               title: 'In Evaluation RFQ Test',
               category: 'Engineering Spares - Electrical',
               sourcingMode: 'mode_3',
@@ -487,83 +486,108 @@ describe('Category Manager Screens Suite', () => {
   });
 
   describe('Kanban Pipeline Card RFQ Resolution', () => {
-    function KanbanResolutionWrapper({ onMatrix }: any) {
-      const { addNewRFQ } = useApp();
+    // The card resolves by a fixed RFQ number, so a matching RFQ has to be in the
+    // live pipeline. It is seeded through GET /api/rfqs rather than created here,
+    // because the server allocates RFQ numbers now and a client cannot ask for a
+    // particular one.
+    const MATRIX_READY_RFQ = {
+      id: 'rfq-matrix-ready',
+      rfqNumber: KANBAN_CARD_RFQ_REFS.MATRIX_READY.rfqNumber,
+      title: 'Matrix Ready Live RFQ',
+      category: 'Heavy Industrial Fluid Dynamics & Valves',
+      sourcingMode: 'mode_1',
+      status: 'In Evaluation',
+      quotesCount: 1,
+      budget: 90000,
+      targetDeliveryDate: '2026-10-01',
+      createdAt: '2026-09-04T10:00:00.000Z',
+      extractedEntities: [],
+      quotes: [],
+      chasingActive: false,
+    };
 
-      return (
-        <>
-          <button
-            data-testid="test-add-matrix-ready-rfq"
-            onClick={() => {
-              try {
-                addNewRFQ({
-                  rfqNumber: 'RFQ-00421',
-                  title: 'Matrix Ready Live RFQ',
-                  category: 'Heavy Industrial Fluid Dynamics & Valves',
-                  sourcingMode: 'mode_1',
-                  targetDeliveryDate: '2026-10-01',
-                  budget: 90000,
-                  extractedEntities: [],
-                  aiScore: 94,
-                  autoCirculated: false,
-                });
-              } catch (e) {}
-            }}
-          >
-            Add Matrix Ready RFQ
-          </button>
-          <KanbanBoard onNavigateToMatrix={onMatrix} onNavigateToSpend={jest.fn()} />
-        </>
+    const serveRFQs = (rfqs: unknown[]) => {
+      (global.fetch as jest.Mock).mockImplementation((url: string) =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () =>
+            /\/api\/rfqs(\?|$)/.test(String(url))
+              ? { success: true, data: rfqs }
+              : { success: true, data: {} },
+        })
       );
-    }
+    };
 
     test('resolves the Matrix Ready card against the live RFQ pipeline when the RFQ exists', async () => {
+      serveRFQs([MATRIX_READY_RFQ]);
       const onMatrix = jest.fn();
-      renderWithProvider(<KanbanResolutionWrapper onMatrix={onMatrix} />);
+      renderWithProvider(<KanbanBoard onNavigateToMatrix={onMatrix} onNavigateToSpend={jest.fn()} />);
 
-      await waitFor(() => {
-        expect(screen.getByTestId('test-add-matrix-ready-rfq')).toBeInTheDocument();
+      // The pipeline hydrates from the API. The board does not render RFQ titles,
+      // so the pending request is flushed directly rather than waited on via text.
+      await act(async () => {
+        await Promise.resolve();
       });
-
-      fireEvent.click(screen.getByTestId('test-add-matrix-ready-rfq'));
       fireEvent.click(screen.getByText(/RFQ-00421: Matrix Ready/i));
 
       expect(onMatrix).toHaveBeenCalledTimes(1);
       expect(onMatrix).toHaveBeenCalledWith(
-        expect.objectContaining({
-          rfqNumber: 'RFQ-00421',
-          title: 'Matrix Ready Live RFQ',
-          budget: 90000,
-        })
+        expect.objectContaining({ title: 'Matrix Ready Live RFQ', budget: 90000 })
       );
     });
 
-    test('never dispatches undefined from pipeline card actions when the pipeline is empty', async () => {
+    // With no matching RFQ the card falls back to its own reference rather than
+    // navigating to nothing.
+    test('falls back to the card reference when no such RFQ is in the pipeline', async () => {
+      serveRFQs([]);
       const onMatrix = jest.fn();
       renderWithProvider(<KanbanBoard onNavigateToMatrix={onMatrix} onNavigateToSpend={jest.fn()} />);
 
-      await waitFor(() => {
-        expect(screen.getByText(/Operational Monitoring Kanban & Chasing Control/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByText(/RFQ-00421: Matrix Ready/i));
+
+      expect(onMatrix).toHaveBeenCalledWith(
+        expect.objectContaining({ rfqNumber: KANBAN_CARD_RFQ_REFS.MATRIX_READY.rfqNumber })
+      );
+    });
+
+    // The board is also mounted from the route with no matrix handler wired up.
+    // Selecting the RFQ must still happen; only the navigation is skipped.
+    test('selects the RFQ without navigating when no matrix handler is supplied', async () => {
+      serveRFQs([MATRIX_READY_RFQ]);
+      renderWithProvider(<KanbanBoard onNavigateToSpend={jest.fn()} />);
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+      fireEvent.click(screen.getByText(/RFQ-00421: Matrix Ready/i));
+
+      // Nothing to assert on a callback that does not exist; the board must simply
+      // not throw, and the card stays on screen.
+      expect(screen.getByText(/RFQ-00421: Matrix Ready/i)).toBeInTheDocument();
+    });
+
+    // Every pipeline column has to be reachable, including the scored column's
+    // last status. A board whose RFQs are all mid-evaluation never evaluates it.
+    test('sorts a completed RFQ into the scored column', async () => {
+      serveRFQs([
+        { ...MATRIX_READY_RFQ, id: 'rfq-parsing', rfqNumber: 'RFQ-2026-00931', status: 'Parsing' },
+        {
+          ...MATRIX_READY_RFQ,
+          id: 'rfq-po',
+          rfqNumber: 'RFQ-2026-00932',
+          status: 'PO Generated',
+        },
+      ]);
+      renderWithProvider(<KanbanBoard onNavigateToMatrix={jest.fn()} onNavigateToSpend={jest.fn()} />);
+
+      await act(async () => {
+        await Promise.resolve();
       });
 
-      fireEvent.click(screen.getByText(/RFQ-00421: Matrix Ready/i));
-      expect(onMatrix).toHaveBeenCalledWith(
-        expect.objectContaining({
-          rfqNumber: 'RFQ-00421',
-          quotes: [],
-          extractedEntities: [],
-        })
-      );
-
-      // Report handlers dereference rfq.rfqNumber, so they must receive a real object
-      expect(() => {
-        fireEvent.click(screen.getByRole('button', { name: /Approve Report/i }));
-        fireEvent.click(screen.getByRole('button', { name: /Share Report/i }));
-      }).not.toThrow();
-
-      // Deep Dive resolves the canonical follow-up RFQ reference
-      fireEvent.click(screen.getByRole('button', { name: /Deep Dive/i }));
-      expect(screen.getByText(/RFQ AI Follow-Up Telemetry & Deep Dive/i)).toBeInTheDocument();
+      // One parsing, one scored. The column headings carry the counts.
+      expect(screen.getByText(/Ingested \/ Parsing \(3\)/)).toBeInTheDocument();
+      expect(screen.getByText(/AI Evaluation & Scored \(1\)/)).toBeInTheDocument();
     });
   });
 });

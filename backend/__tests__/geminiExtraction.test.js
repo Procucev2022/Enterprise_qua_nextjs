@@ -576,3 +576,133 @@ describe('POST /api/rfqs/extract', () => {
     expect(res.body.classification.needsReview).toBe(1);
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// generateJson: the reusable prompt path
+//
+// Added so callers needing a different prompt — the RFQ summary is the first —
+// share the model chain, the per-attempt timeout and the one shared deadline
+// instead of each re-implementing the transport. Like extractLineItems it must
+// never throw: every failure comes back as a status the caller can act on.
+// ══════════════════════════════════════════════════════════════════════════════
+describe('geminiService.generateJson', () => {
+  const originalKey = GEMINI_CONFIG.API_KEY;
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    GEMINI_CONFIG.API_KEY = originalKey;
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
+  test('returns the parsed JSON and the model that produced it', async () => {
+    GEMINI_CONFIG.API_KEY = 'test-key';
+    global.fetch = jest.fn(async () => geminiReply('{"headline":"Two pumps","scope":"A package."}'));
+
+    const result = await gemini.generateJson({ prompt: 'Summarise this', label: 'RFQ summary' });
+
+    expect(result.status).toBe(EXTRACTION_STATUS.SUCCESS);
+    expect(result.data).toEqual({ headline: 'Two pumps', scope: 'A package.' });
+    expect(result.model).toBeTruthy();
+    expect(result.error).toBeNull();
+  });
+
+  test('sends the prompt and asks for a JSON response', async () => {
+    GEMINI_CONFIG.API_KEY = 'test-key';
+    const fetchMock = jest.fn(async () => geminiReply('{"ok":true}'));
+    global.fetch = fetchMock;
+
+    await gemini.generateJson({ prompt: 'My exact prompt' });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.contents[0].parts[0].text).toBe('My exact prompt');
+    expect(body.generationConfig.response_mime_type).toBe('application/json');
+    // The key travels in a header, never the URL, so it stays out of logs.
+    expect(fetchMock.mock.calls[0][1].headers['x-goog-api-key']).toBe('test-key');
+    expect(fetchMock.mock.calls[0][0]).not.toContain('test-key');
+  });
+
+  test('reports NOT_CONFIGURED without calling out when no key is set', async () => {
+    GEMINI_CONFIG.API_KEY = '';
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock;
+
+    const result = await gemini.generateJson({ prompt: 'Summarise this' });
+
+    expect(result.status).toBe(EXTRACTION_STATUS.NOT_CONFIGURED);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test.each([[''], ['   '], [undefined], [null], [42]])(
+    'reports NO_CONTENT for a prompt of %p',
+    async (prompt) => {
+      GEMINI_CONFIG.API_KEY = 'test-key';
+      const fetchMock = jest.fn();
+      global.fetch = fetchMock;
+
+      const result = await gemini.generateJson({ prompt });
+
+      expect(result.status).toBe(EXTRACTION_STATUS.NO_CONTENT);
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  );
+
+  test('reports NO_CONTENT when called with no input at all', async () => {
+    GEMINI_CONFIG.API_KEY = 'test-key';
+    expect((await gemini.generateJson()).status).toBe(EXTRACTION_STATUS.NO_CONTENT);
+  });
+
+  test('falls through the model chain and reports every failure', async () => {
+    GEMINI_CONFIG.API_KEY = 'test-key';
+    global.fetch = jest.fn(async () => ({ ok: false, status: 503, text: async () => 'unavailable' }));
+
+    const result = await gemini.generateJson({ prompt: 'Summarise this' });
+
+    expect(result.status).toBe(EXTRACTION_STATUS.AI_FAILED);
+    expect(result.data).toBeNull();
+    expect(result.error).toContain('503');
+  });
+
+  test('recovers on a later model in the chain', async () => {
+    GEMINI_CONFIG.API_KEY = 'test-key';
+    let calls = 0;
+    global.fetch = jest.fn(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('socket hang up');
+      return geminiReply('{"headline":"h","scope":"s"}');
+    });
+
+    const result = await gemini.generateJson({ prompt: 'Summarise this' });
+
+    expect(result.status).toBe(EXTRACTION_STATUS.SUCCESS);
+    expect(calls).toBe(2);
+  });
+
+  test('reports AI_FAILED when a model returns no parseable JSON', async () => {
+    GEMINI_CONFIG.API_KEY = 'test-key';
+    global.fetch = jest.fn(async () => geminiReply('I cannot help with that.'));
+
+    const result = await gemini.generateJson({ prompt: 'Summarise this' });
+    expect(result.status).toBe(EXTRACTION_STATUS.AI_FAILED);
+  });
+
+  // One deadline covers the whole chain, so a run of slow failures degrades into
+  // a reported fallback rather than a request nobody is still waiting on.
+  test('stops trying once the shared time budget is exhausted', async () => {
+    GEMINI_CONFIG.API_KEY = 'test-key';
+    const originalBudget = GEMINI_CONFIG.TOTAL_BUDGET_MS;
+    GEMINI_CONFIG.TOTAL_BUDGET_MS = 0;
+    try {
+      const fetchMock = jest.fn();
+      global.fetch = fetchMock;
+
+      const result = await gemini.generateJson({ prompt: 'Summarise this' });
+
+      expect(result.status).toBe(EXTRACTION_STATUS.AI_FAILED);
+      expect(result.error).toContain('time budget exhausted');
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      GEMINI_CONFIG.TOTAL_BUDGET_MS = originalBudget;
+    }
+  });
+});
