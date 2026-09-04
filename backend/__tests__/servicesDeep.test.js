@@ -128,10 +128,30 @@ describe('Services Deep Branch Unit Tests', () => {
     const emptyCheck = auditService.verifyAuditTrail([]);
     expect(emptyCheck.valid).toBe(true);
 
-    const validCheck = auditService.verifyAuditTrail([log1, log2]);
+    // verifyAuditTrail walks the chain newest-first (matching how
+    // storeService.addAuditLog actually stores entries via unshift).
+    const validCheck = auditService.verifyAuditTrail([log2, log1]);
     expect(validCheck.valid).toBe(true);
 
     const invalidCheck = auditService.verifyAuditTrail([{ id: 'log-bad', shaSignature: 'short' }]);
     expect(invalidCheck.valid).toBe(false);
+
+    // Content tamper: mutating a field after sealing must invalidate the
+    // recomputed hash, not just its length.
+    const tamperedLog2 = { ...log2, action: 'TAMPERED_ACTION' };
+    const tamperedCheck = auditService.verifyAuditTrail([tamperedLog2, log1]);
+    expect(tamperedCheck.valid).toBe(false);
+    expect(tamperedCheck.compromisedEntries[0].reason).toMatch(/Hash does not match/);
+
+    // Broken chain: an internally-consistent entry paired with the wrong
+    // "older" neighbor must still be caught by the previousHash linkage check.
+    const log3 = auditService.createAuditEntry({
+      userEmail: 'admin@procucev.com',
+      action: 'UNRELATED_ACTION',
+      previousHash: 'SOME_OTHER_GENESIS',
+    });
+    const brokenChainCheck = auditService.verifyAuditTrail([log2, log3]);
+    expect(brokenChainCheck.valid).toBe(false);
+    expect(brokenChainCheck.compromisedEntries[0].reason).toMatch(/chain broken/);
   });
 });

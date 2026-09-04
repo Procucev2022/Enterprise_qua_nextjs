@@ -426,6 +426,12 @@ export interface RFQItem {
   sourceFileName?: string;
   autoCirculated?: boolean;
   followUpData?: RFQFollowUpBreakdown;
+  awardedVendorId?: string;
+  awardedVendor?: string;
+  awardedAmount?: number;
+  /** The buyer account this RFQ was created under (the app's single globally "active" buyer account at creation time, not a per-request identity). */
+  buyerAccountId?: string | null;
+  buyerAccountName?: string | null;
 }
 
 export interface AIBotFeedItem {
@@ -728,6 +734,12 @@ export interface VendorEntry {
   // Buyer Performance Ratings & Revisions
   latestRatingRevision?: VendorRatingRevisionRecord;
   ratingRevisionHistory?: VendorRatingRevisionRecord[];
+
+  // Marketplace subscription & the download quota it grants — persisted
+  // server-side and enforced there (see PUT /api/vendors/:id/subscription
+  // and GET /api/rfqs/:id/email-preview's quota check), not just local state.
+  subscriptionPlan?: VendorSubscriptionPlan;
+  rfqDownloadsUsed?: number;
 }
 
 export interface VendorRatingRevisionRecord {

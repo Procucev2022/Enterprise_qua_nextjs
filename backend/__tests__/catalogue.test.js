@@ -1,9 +1,48 @@
 const request = require('supertest');
 const app = require('../src/app');
+const authService = require('../src/services/authService');
 const { authHeader } = require('./testHelpers');
+
+// A real seeded vendor's own session (v-001), distinct from the generic
+// 'vendor' test user — used to prove ownership scoping actually rejects a
+// vendor editing someone else's catalogue item.
+function otherVendorAuthHeader() {
+  const token = authService.generateSessionToken({
+    id: 'usr-vendor-v001',
+    email: 'rajesh@apexindustrial.in',
+    name: 'Rajesh Nair',
+    role: 'vendor',
+    orgId: 'org-vendor-v001',
+    orgName: 'Apex Industrial Dynamics Pvt Ltd',
+  });
+  return { Authorization: `Bearer ${token}` };
+}
 
 describe('Vendor Item SKU Catalogue API', () => {
   let createdProdId;
+
+  // Catalogue items are now scoped to the caller's own vendor record
+  // (resolveOwnVendorId in catalogueController), so one must exist first.
+  beforeAll(async () => {
+    await request(app).post('/api/vendors').set(authHeader('vendor')).send({
+      name: 'Apex Industrial Dynamics Pvt Ltd',
+      majorCategory: 'Valves & Actuators',
+    });
+  });
+
+  test('POST /api/catalogue returns 403 for a role that cannot add to a catalogue', async () => {
+    const res = await request(app).post('/api/catalogue').set(authHeader('buyer')).send({ name: 'X', sku: 'SKU-X', unitPrice: 10 });
+    expect(res.statusCode).toBe(403);
+  });
+
+  test('POST /api/catalogue returns 400 when the vendor has no profile yet', async () => {
+    const token = authService.generateSessionToken({ id: 'usr-no-profile', email: 'no-profile-vendor@test.com', name: 'No Profile', role: 'vendor' });
+    const res = await request(app)
+      .post('/api/catalogue')
+      .set({ Authorization: `Bearer ${token}` })
+      .send({ name: 'X', sku: 'SKU-X', unitPrice: 10 });
+    expect(res.statusCode).toBe(400);
+  });
 
   test('GET /api/catalogue returns list of products', async () => {
     const res = await request(app).get('/api/catalogue');
@@ -54,6 +93,16 @@ describe('Vendor Item SKU Catalogue API', () => {
   test('PUT /api/catalogue/:id returns 404 for invalid product', async () => {
     const res = await request(app).put('/api/catalogue/invalid-prod-id').set(authHeader('vendor')).send({});
     expect(res.statusCode).toBe(404);
+  });
+
+  test('PUT /api/catalogue/:id returns 403 for a vendor who does not own the item', async () => {
+    const res = await request(app).put(`/api/catalogue/${createdProdId}`).set(otherVendorAuthHeader()).send({ unitPrice: 1 });
+    expect(res.statusCode).toBe(403);
+  });
+
+  test('DELETE /api/catalogue/:id returns 403 for a vendor who does not own the item', async () => {
+    const res = await request(app).delete(`/api/catalogue/${createdProdId}`).set(otherVendorAuthHeader());
+    expect(res.statusCode).toBe(403);
   });
 
   test('DELETE /api/catalogue/:id removes product', async () => {

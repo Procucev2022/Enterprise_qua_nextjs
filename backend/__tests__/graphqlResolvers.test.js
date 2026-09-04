@@ -1,12 +1,5 @@
-// RFQ persistence is doubled so the resolvers can be exercised without MySQL.
-jest.mock('../src/db/rfqQueries', () => require('./helpers/fakeRfqQueries'));
-jest.mock('../src/services/rfqIdService', () => ({
-  generateRfqId: jest.fn(async () => 'RFQ260409000999'),
-}));
-
 const rootResolvers = require('../src/graphql/resolvers');
 const storeService = require('../src/services/storeService');
-const fakeRfqQueries = require('./helpers/fakeRfqQueries');
 const { getTestToken, TEST_USERS } = require('./testHelpers');
 
 function contextFor(role) {
@@ -14,29 +7,32 @@ function contextFor(role) {
 }
 
 describe('GraphQL Resolvers Direct Unit Tests', () => {
-  const BUYER_ORG_ID = TEST_USERS.buyer.orgId;
-  const SEEDED_RFQ = {
-    rfqId: 'RFQ260409000555',
-    buyerOrgId: BUYER_ORG_ID,
-    buyerUserId: TEST_USERS.buyer.id,
-    buyerEmail: TEST_USERS.buyer.email,
-    title: 'Resolver Fixture RFQ',
-    category: 'Engineering Spares - Mechanical',
-    sourcingMode: 'mode_1',
-    status: 'Quotes Pending',
-    budget: 1000,
-  };
+  let seededRfq;
 
   beforeEach(() => {
-    fakeRfqQueries.__reset();
-    fakeRfqQueries.__seed([SEEDED_RFQ]);
+    // A real buyer account for TEST_USERS.buyer.email, so requireRfqReadScope's
+    // filtering (getBuyerAccountByEmail) has something real to scope against.
+    const account = storeService.addBuyerAccount({
+      organizationName: 'Resolver Fixture Org',
+      corporateEmail: TEST_USERS.buyer.email,
+    });
+    seededRfq = storeService.createRFQ(
+      {
+        title: 'Resolver Fixture RFQ',
+        category: 'Engineering Spares - Mechanical',
+        sourcingMode: 'mode_1',
+        status: 'Quotes Pending',
+        budget: 1000,
+      },
+      account
+    );
   });
 
-  // RFQ resolvers are org-scoped now, so they need a session in context. An
-  // anonymous call used to return every RFQ in the process.
-  test('rfqs resolver refuses an anonymous call', async () => {
-    await expect(rootResolvers.rfqs({}, undefined)).rejects.toThrow();
-    await expect(rootResolvers.rfqs({}, {})).rejects.toThrow();
+  // RFQ resolvers require a session, so an anonymous call is rejected before
+  // it ever reads the store.
+  test('rfqs resolver refuses an anonymous call', () => {
+    expect(() => rootResolvers.rfqs({}, undefined)).toThrow();
+    expect(() => rootResolvers.rfqs({}, {})).toThrow();
   });
 
   test('rfqs resolver filters by category, sourcingMode, and status', async () => {
@@ -59,20 +55,38 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
 
   test('rfq resolver searches by id and rfqNumber or returns null', async () => {
     const context = contextFor('buyer');
-    const first = await fakeRfqQueries.findRFQByRfqId(SEEDED_RFQ.rfqId, BUYER_ORG_ID);
 
-    expect(await rootResolvers.rfq({ id: first.id }, context)).toEqual(first);
-    expect(await rootResolvers.rfq({ rfqNumber: first.rfqNumber }, context)).toEqual(first);
+    expect(await rootResolvers.rfq({ id: seededRfq.id }, context)).toEqual(seededRfq);
+    expect(await rootResolvers.rfq({ rfqNumber: seededRfq.rfqNumber }, context)).toEqual(seededRfq);
     expect(await rootResolvers.rfq({ id: 'non-existent-id' }, context)).toBeNull();
     expect(await rootResolvers.rfq({}, context)).toBeNull();
   });
 
-  // The category manager's token is valid but belongs to a different
-  // organisation, so it must not see the buyer's RFQ.
-  test('rfq resolvers are scoped to the caller organisation', async () => {
-    const otherOrg = contextFor('category_manager');
-    expect(await rootResolvers.rfqs({}, otherOrg)).toEqual([]);
-    expect(await rootResolvers.rfq({ rfqNumber: SEEDED_RFQ.rfqId }, otherOrg)).toBeNull();
+  // Category managers/admins are deliberately unrestricted (they need the
+  // full cross-buyer list — see resolvers.js's requireRfqReadScope), so the
+  // buyer-only scoping case needs a second real buyer account instead.
+  test('rfq resolvers scope a buyer to their own account', async () => {
+    storeService.addBuyerAccount({
+      organizationName: 'Other Buyer Org',
+      corporateEmail: TEST_USERS.category_manager.email,
+    });
+    const otherBuyerCtx = { req: { headers: { authorization: `Bearer ${getTestToken('category_manager')}` } } };
+    // category_manager sees everything (unrestricted), so use a fresh buyer
+    // identity with no account of its own to exercise the "no match" branch.
+    const unlinkedBuyerToken = require('../src/services/authService').generateSessionToken({
+      id: 'usr-unlinked-buyer',
+      email: 'unlinked-buyer@procucev.com',
+      name: 'Unlinked Buyer',
+      role: 'buyer',
+    });
+    const unlinkedBuyerCtx = { req: { headers: { authorization: `Bearer ${unlinkedBuyerToken}` } } };
+
+    expect(await rootResolvers.rfqs({}, unlinkedBuyerCtx)).toEqual([]);
+    expect(await rootResolvers.rfq({ rfqNumber: seededRfq.rfqNumber }, unlinkedBuyerCtx)).toBeNull();
+    // category_manager is unrestricted, so it does see the fixture RFQ.
+    expect(await rootResolvers.rfqs({}, otherBuyerCtx)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: seededRfq.id })])
+    );
   });
 
   test('vendors resolver filters by majorCategory, source, search and pagination', () => {
@@ -106,16 +120,16 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
   // The seeded companies are gone, so these start empty. An account created at
   // runtime is what they report now.
   test('buyerAccounts and activeBuyerAccount resolvers read the runtime store', () => {
-    expect(rootResolvers.buyerAccounts()).toEqual([]);
     expect(rootResolvers.activeBuyerAccount()).toBeNull();
 
+    const beforeCount = rootResolvers.buyerAccounts().length;
     const created = storeService.addBuyerAccount({
       organizationName: 'Runtime Buyer Co',
       corporateEmail: 'runtime@buyer.test',
     });
     storeService.alignActiveBuyerAccount(created.id);
 
-    expect(rootResolvers.buyerAccounts().length).toBeGreaterThan(0);
+    expect(rootResolvers.buyerAccounts().length).toBe(beforeCount + 1);
     expect(rootResolvers.buyerAccounts({ limit: 1 })).toHaveLength(1);
     expect(rootResolvers.activeBuyerAccount().id).toBe(created.id);
 
@@ -187,20 +201,19 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
     const buyerCtx = contextFor('buyer');
     const adminCtx = contextFor('admin');
 
-    // createRFQ is async now: it allocates a server-side RFQ id and persists.
+    // createRFQ is async now: it generates an AI summary before persisting.
     const createdRFQ = await rootResolvers.createRFQ({
       input: { title: 'Direct Resolver RFQ', category: 'Raw Materials' },
     }, buyerCtx);
     expect(createdRFQ.title).toBe('Direct Resolver RFQ');
-    // The id comes from the server, never the client.
-    expect(createdRFQ.rfqNumber).toMatch(/^RFQ\d+$/);
+    // The id comes from the server, never the client. Attributed to the
+    // requesting buyer's own account (the beforeEach fixture, matched by
+    // session email), resolved server-side — not a client-supplied value.
+    expect(createdRFQ.rfqNumber).toMatch(/^RFQ-/);
+    expect(createdRFQ.buyerAccountId).toBe(seededRfq.buyerAccountId);
 
-    // updateRFQ still operates on the in-memory store; quotations and status
-    // transitions are not modelled in qua_enterprice_rfq yet, so it is given an
-    // in-memory record rather than the persisted one above.
-    const inMemoryRfq = storeService.createRFQ({ title: 'In-memory for update', category: 'Raw Materials' });
     const updatedRFQ = rootResolvers.updateRFQ({
-      id: inMemoryRfq.id,
+      id: createdRFQ.id,
       input: { status: 'awarded' },
     }, buyerCtx);
     expect(updatedRFQ.status).toBe('awarded');

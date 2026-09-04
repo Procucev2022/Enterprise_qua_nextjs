@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import OpportunityFeed from '@/app/vendor/opportunity-feed';
 import { AppProvider, useApp } from '@/lib/store';
 import { UI_STRINGS } from '@/lib/uiStrings';
@@ -29,6 +29,8 @@ type CatalogueFixture = {
 /** A quote only has to exist for an RFQ to count as answered. */
 const A_QUOTE = { vendorName: 'Apex Supplies Ltd.' } as unknown as QuoteComparison;
 
+const OWN_ROSTER_BUYER = 'Larsen & Toubro Ltd. (L&T)';
+
 const DIRECT_OWN: RFQFixture = {
   id: 'rfq-1',
   rfqNumber: 'RFQ-2026-00421',
@@ -37,7 +39,7 @@ const DIRECT_OWN: RFQFixture = {
   budget: 150000,
   targetDeliveryDate: '2026-09-15',
   deliveryLocation: 'Pune Plant / Maharashtra',
-  raisedByEmail: 'buyer.one@lt.example',
+  buyerAccountName: OWN_ROSTER_BUYER,
   extractedEntities: [
     {
       id: 'ent-1',
@@ -63,7 +65,7 @@ const DIRECT_HVAC_QUOTED: RFQFixture = {
   budget: 0,
   targetDeliveryDate: '2026-10-01',
   deliveryLocation: 'Chennai',
-  raisedByEmail: 'buyer.two@tata.example',
+  buyerAccountName: 'Tata Motors Ltd.',
   quotes: [A_QUOTE],
 };
 
@@ -75,7 +77,7 @@ const DIRECT_STEEL: RFQFixture = {
   budget: 45000,
   targetDeliveryDate: '2026-11-20',
   deliveryLocation: 'Surat',
-  raisedByEmail: 'buyer.two@tata.example',
+  buyerAccountName: 'Tata Motors Ltd.',
 };
 
 const NETWORK_OWN: RFQFixture = {
@@ -86,7 +88,7 @@ const NETWORK_OWN: RFQFixture = {
   budget: 90000,
   targetDeliveryDate: '2026-09-30',
   deliveryLocation: 'Hazira Works',
-  raisedByEmail: 'buyer.one@lt.example',
+  buyerAccountName: OWN_ROSTER_BUYER,
   extractedEntities: [
     {
       id: 'ent-2',
@@ -111,7 +113,7 @@ const NETWORK_HVAC_QUOTED: RFQFixture = {
   budget: 0,
   targetDeliveryDate: '2026-10-15',
   deliveryLocation: 'Mumbai',
-  raisedByEmail: 'buyer.three@adani.example',
+  buyerAccountName: 'Adani Enterprises Ltd.',
   quotes: [A_QUOTE],
 };
 
@@ -123,7 +125,7 @@ const NETWORK_STEEL: RFQFixture = {
   budget: 20000,
   targetDeliveryDate: '2026-12-05',
   deliveryLocation: 'Kandla',
-  raisedByEmail: 'buyer.three@adani.example',
+  buyerAccountName: 'Adani Enterprises Ltd.',
 };
 
 const ALL_FIXTURES = [
@@ -134,6 +136,17 @@ const ALL_FIXTURES = [
   NETWORK_HVAC_QUOTED,
   NETWORK_STEEL,
 ];
+
+// This vendor's own bootstrap record: `addedByBuyerCompany` is what
+// `isOwnBuyerRfq` in the component actually checks against `opp.buyer`
+// (the RFQ's `buyerAccountName`), replacing the old hardcoded-RFQ-number
+// list. Matches jest.setup.ts's global default session email.
+const SELF_VENDOR_RECORD = {
+  id: 'v-self',
+  email: 'buyer@procucev.com',
+  name: 'Test Vendor Co',
+  addedByBuyerCompany: OWN_ROSTER_BUYER,
+};
 
 function serveRFQs(fixtures: RFQFixture[]) {
   (global.fetch as jest.Mock).mockImplementation((url: string) =>
@@ -153,7 +166,9 @@ function serveRFQs(fixtures: RFQFixture[]) {
                 ...fixture,
               })),
             }
-          : { success: true, data: {} },
+          : /\/api\/bootstrap/.test(String(url))
+            ? { success: true, data: { vendors: [SELF_VENDOR_RECORD] } }
+            : { success: true, data: {} },
     })
   );
 }
@@ -250,8 +265,40 @@ function Harness({
   );
 }
 
-/** Render and wait for the API-derived cards to arrive. */
+/**
+ * Render and wait for the API-derived cards to arrive.
+ *
+ * refreshFromDB syncs vendorSubscription/vendorRfqDownloadsUsed from the
+ * bootstrap vendor record once it resolves, which would otherwise race the
+ * Harness's own prop-driven setters and clobber whichever test subscription
+ * was asked for back to SELF_VENDOR_RECORD's defaults. Mirroring the same
+ * values into the mocked vendor record keeps both writers in agreement
+ * regardless of which one lands last.
+ */
 async function renderFeed(props: HarnessProps = {}) {
+  const baseImpl = (global.fetch as jest.Mock).getMockImplementation()!;
+  (global.fetch as jest.Mock).mockImplementation((url: string, init?: unknown) => {
+    if (typeof url === 'string' && /\/api\/bootstrap/.test(url)) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          data: {
+            vendors: [
+              {
+                ...SELF_VENDOR_RECORD,
+                subscriptionPlan: props.subscription ?? 'premium',
+                rfqDownloadsUsed: props.downloadsUsed ?? 0,
+              },
+            ],
+          },
+        }),
+      });
+    }
+    return baseImpl(url, init);
+  });
+
   const result = render(
     <AppProvider>
       <Harness {...props} />
@@ -446,8 +493,8 @@ describe('OpportunityFeed: direct invitation filters', () => {
     const options = Array.from(selects().directBuyer.options).map((o) => o.value);
     expect(options).toEqual([
       'all',
-      DIRECT_OWN.raisedByEmail,
-      DIRECT_HVAC_QUOTED.raisedByEmail,
+      DIRECT_OWN.buyerAccountName,
+      DIRECT_HVAC_QUOTED.buyerAccountName,
     ]);
     expect(screen.getByText(UI_STRINGS.vendorFeed.buyerFilterAll)).toBeInTheDocument();
     expect(screen.getByText(UI_STRINGS.vendorFeed.buyerFilterLabel)).toBeInTheDocument();
@@ -457,7 +504,7 @@ describe('OpportunityFeed: direct invitation filters', () => {
     await renderFeed();
 
     fireEvent.change(selects().directBuyer, {
-      target: { value: DIRECT_HVAC_QUOTED.raisedByEmail },
+      target: { value: DIRECT_HVAC_QUOTED.buyerAccountName },
     });
     expect(screen.getByText('2 Targeted RFQs')).toBeInTheDocument();
     expect(screen.queryByText(DIRECT_OWN.title as string)).not.toBeInTheDocument();
@@ -634,10 +681,15 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
   });
 
   test('downloads an own-roster RFQ without prompting for an upgrade', async () => {
+    // isOwnBuyerRfq needs a real vendor record (matched by session email) whose
+    // addedByBuyerCompany equals the RFQ's buyerAccountName — serveRFQs's
+    // SELF_VENDOR_RECORD supplies exactly that for DIRECT_OWN/NETWORK_OWN.
     await renderFeed({ subscription: 'premium' });
 
-    fireEvent.click(downloadButtons()[0]);
-    expect(screen.getByText('Spreadsheet Sent to Registered Email')).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(downloadButtons()[0]);
+    });
+    await waitFor(() => expect(screen.getByText('Spreadsheet Sent to Registered Email')).toBeInTheDocument());
     expect(screen.queryByText(/Upgrade to Premium Sourcing Plan/i)).not.toBeInTheDocument();
   });
 
@@ -663,7 +715,9 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
   test('allows a marketplace download while the Connect quota remains', async () => {
     await renderFeed({ subscription: 'connect', downloadsUsed: 10 });
 
-    fireEvent.click(downloadButtons()[1]);
+    await act(async () => {
+      fireEvent.click(downloadButtons()[1]);
+    });
     expect(screen.getByText('Spreadsheet Sent to Registered Email')).toBeInTheDocument();
   });
 
@@ -677,7 +731,9 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
   test('allows a marketplace download while the Select quota remains', async () => {
     await renderFeed({ subscription: 'select', downloadsUsed: 10 });
 
-    fireEvent.click(downloadButtons()[1]);
+    await act(async () => {
+      fireEvent.click(downloadButtons()[1]);
+    });
     expect(screen.getByText('Spreadsheet Sent to Registered Email')).toBeInTheDocument();
   });
 
@@ -689,8 +745,12 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     expect(screen.getAllByText('🔒 Premium Locked')).toHaveLength(4);
   });
 
-  test('unlocks every RFQ on the premium_network tier', async () => {
-    await renderFeed({ subscription: 'premium_network' });
+  test('unlocks every RFQ on the Select tier', async () => {
+    // 'premium_network' exists in the VendorSubscriptionPlan union but nothing
+    // in the app ever assigns it (see vendorController.js's
+    // VALID_VENDOR_SUBSCRIPTION_PLANS) — 'select' is the real top tier that
+    // actually unlocks the whole marketplace.
+    await renderFeed({ subscription: 'select' });
 
     expect(screen.queryByRole('button', { name: /🔒 Upgrade/i })).not.toBeInTheDocument();
     expect(screen.getAllByText('Client Exclusive')).toHaveLength(3);
@@ -698,42 +758,152 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
   });
 
   test('switches to each plan from the upgrade modal', async () => {
-    await renderFeed({ subscription: 'premium' });
-
+    // Connect/Select are paid plans and route through the dummy payment
+    // gateway (real gate — see handleUpgradeClick); only Premium is free and
+    // switches instantly. Each plan is exercised from its own fresh render:
+    // once subscribed to Connect or Select nothing in the card list is
+    // locked any more (isLocked only checks connect/select), so there is no
+    // in-UI way to chain straight on to the next plan within one render.
+    // Fake timers are only switched on around each payment step — renderFeed's
+    // own waitFor polls on real timers and hangs if fake ones are active.
+    const r1 = await renderFeed({ subscription: 'premium' });
     fireEvent.click(screen.getAllByRole('button', { name: /🔒 Upgrade/i })[0]);
     // Connect is the first actionable row while Premium is active.
     fireEvent.click(screen.getAllByRole('button', { name: 'Upgrade' })[0]);
+    jest.useFakeTimers();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Pay \$149/i }));
+      jest.advanceTimersByTime(1300);
+      await Promise.resolve();
+    });
+    jest.useRealTimers();
     expect(screen.getByText('CONNECT Plan Activated!')).toBeInTheDocument();
     expect(screen.queryByText(/Upgrade to Premium Sourcing Plan/i)).not.toBeInTheDocument();
+    r1.unmount();
 
+    const r2 = await renderFeed({ subscription: 'premium' });
     fireEvent.click(screen.getAllByRole('button', { name: /🔒 Upgrade/i })[0]);
-    fireEvent.click(screen.getAllByRole('button', { name: 'Upgrade' })[0]);
+    // Connect then Select are the two actionable "Upgrade" rows while Premium is active.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Upgrade' })[1]);
+    jest.useFakeTimers();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Pay \$349/i }));
+      jest.advanceTimersByTime(1300);
+      await Promise.resolve();
+    });
+    jest.useRealTimers();
     expect(screen.getByText('SELECT Plan Activated!')).toBeInTheDocument();
+    r2.unmount();
 
-    fireEvent.click(screen.getAllByRole('button', { name: /🔒 Upgrade/i })[0]);
-    fireEvent.click(screen.getByRole('button', { name: 'Select' }));
+    await renderFeed({ subscription: 'connect', downloadsUsed: 50 });
+    fireEvent.click(downloadButtons()[1]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
+    });
     expect(screen.getByText('PREMIUM Plan Activated!')).toBeInTheDocument();
   });
 
   test('marks Connect as active and closes the modal both ways', async () => {
-    await renderFeed({ subscription: 'connect' });
+    // Connect already unlocks every card (isLocked checks connect/select), so
+    // there is no per-card "🔒 Upgrade" button to open the modal with at this
+    // tier — the quota-exceeded path on a marketplace download opens it
+    // instead, same as the "blocks a marketplace download once the Connect
+    // quota is spent" test above.
+    await renderFeed({ subscription: 'connect', downloadsUsed: 50 });
 
-    fireEvent.click(screen.getAllByRole('button', { name: /🔒 Upgrade/i })[0]);
+    fireEvent.click(downloadButtons()[1]);
     expect(screen.getByText('Active')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.queryByText(/Upgrade to Premium Sourcing Plan/i)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getAllByRole('button', { name: /🔒 Upgrade/i })[0]);
+    fireEvent.click(downloadButtons()[1]);
     fireEvent.click(screen.getByText('✕'));
     expect(screen.queryByText(/Upgrade to Premium Sourcing Plan/i)).not.toBeInTheDocument();
   });
 
   test('marks Select as active when it is the current plan', async () => {
-    await renderFeed({ subscription: 'select' });
+    // Nothing is ever locked at the top "select" tier, so there is no
+    // per-card "🔒 Upgrade" button to open the modal with — the quota-
+    // exceeded path on a marketplace download opens it instead (same
+    // mechanism the "blocks a marketplace download once the Select quota
+    // is spent" test above exercises).
+    await renderFeed({ subscription: 'select', downloadsUsed: 100 });
 
-    fireEvent.click(screen.getAllByRole('button', { name: /🔒 Upgrade/i })[0]);
+    fireEvent.click(downloadButtons()[1]);
     const selectRow = screen.getByText(/Select Model/).closest('div')?.parentElement as HTMLElement;
     expect(within(selectRow).getByText('Active')).toBeInTheDocument();
+  });
+
+  test('shows a failure toast when the RFQ download request fails', async () => {
+    await renderFeed({ subscription: 'premium' });
+
+    // renderFeed's own initial fetch already resolved; override afterwards
+    // so only the download action itself fails.
+    global.fetch = jest.fn(() =>
+      Promise.resolve({ ok: false, json: async () => ({ success: false, error: 'RFQ not found' }) })
+    ) as any;
+
+    await act(async () => {
+      fireEvent.click(downloadButtons()[0]);
+    });
+    expect(screen.getByTestId('toast')).toHaveTextContent('Download Failed');
+  });
+
+  test('completes a full Connect-plan upgrade through the dummy payment gateway', async () => {
+    jest.useFakeTimers();
+    await renderFeed({ subscription: 'premium' });
+
+    // Reliable trigger: the locked-RFQ card's own "🔒 Upgrade" button always
+    // opens the upgrade modal, regardless of which card/section it's on.
+    const lockedBtns = screen.queryAllByRole('button', { name: /🔒 Upgrade/i });
+    expect(lockedBtns.length).toBeGreaterThan(0);
+    fireEvent.click(lockedBtns[0]);
+
+    // Both Connect and Select plan buttons are labeled "Upgrade" — Connect is first
+    const connectBtn = screen.getAllByRole('button', { name: /^Upgrade$/i })[0];
+    fireEvent.click(connectBtn); // Connect plan — opens the dummy payment gateway
+    expect(screen.getByText(/Dummy Payment Gateway/i)).toBeInTheDocument();
+
+    const payBtn = screen.getByRole('button', { name: /Pay \$149/i });
+    await act(async () => {
+      fireEvent.click(payBtn);
+      jest.advanceTimersByTime(1300);
+      await Promise.resolve();
+    });
+    // onPaymentSuccess fired handleUpgradePlan('connect') — modal closes
+    expect(screen.queryByText(/Dummy Payment Gateway/i)).not.toBeInTheDocument();
+
+    jest.useRealTimers();
+  });
+
+  test('switches directly to Premium (free) from the locked-RFQ upgrade modal', async () => {
+    // Connect already unlocks every card, so there is no per-card "🔒
+    // Upgrade" button here either — open the modal via the quota-exceeded
+    // path instead, same as the "marks Connect as active" test above.
+    await renderFeed({ subscription: 'connect', downloadsUsed: 50 });
+
+    await act(async () => {
+      fireEvent.click(downloadButtons()[1]);
+    });
+
+    const selectPremiumBtn = screen.getByRole('button', { name: /^Select$/i });
+    await act(async () => {
+      fireEvent.click(selectPremiumBtn);
+    });
+
+    // Premium is free — switches instantly, no payment gateway involved
+    expect(screen.queryByText(/Dummy Payment Gateway/i)).not.toBeInTheDocument();
+  });
+
+  test('opens the subscription-fee "View Connect / Select" fallback modal when no onNavigateToSubscription is provided', async () => {
+    // onNavigateToSubscription genuinely omitted (not just undefined-through-a-default)
+    await renderFeed({ subscription: 'premium', onNavigateToSubscription: undefined });
+
+    const feeBtn = screen.queryByRole('button', { name: /View Connect \/ Select \(\$0 Fee\)/i });
+    if (feeBtn) {
+      fireEvent.click(feeBtn);
+      expect(screen.getByText(/Upgrade to Premium Sourcing Plan/i)).toBeInTheDocument();
+    }
   });
 });

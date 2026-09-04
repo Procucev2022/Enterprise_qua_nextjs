@@ -4,10 +4,10 @@ const storeService = require('../src/services/storeService');
 const { authHeader } = require('./testHelpers');
 
 describe('Batch Chaser & Purchase Order API', () => {
-  // The chaser and PO flows still read the in-memory store; quotations are not
-  // modelled in qua_enterprice_rfq yet. This used to rely on the seeded
-  // 'rfq-001', which is gone, so the fixture is created explicitly instead.
+  // The RFQs these flows act on are created explicitly rather than relying on
+  // a fixed, seeded id/number — storeService starts with no RFQs at all.
   let chaserRfqId;
+  let poRfqNumber;
 
   beforeAll(() => {
     chaserRfqId = storeService.createRFQ({
@@ -18,6 +18,10 @@ describe('Batch Chaser & Purchase Order API', () => {
       // defaults it to an empty array, which is truthy and yields no outreach.
       assignedVendors: storeService.getVendors().slice(0, 2),
     }).id;
+    poRfqNumber = storeService.createRFQ({
+      title: 'RFQ pending purchase order approval',
+      category: 'Engineering Spares - Mechanical',
+    }).rfqNumber;
   });
 
   test('POST /api/rfqs/:id/batch-chaser triggers multi-channel chasers', async () => {
@@ -46,7 +50,7 @@ describe('Batch Chaser & Purchase Order API', () => {
 
   test('POST /api/rfqs/:id/approve-po approves and seals PO with SHA-256', async () => {
     const res = await request(app)
-      .post('/api/rfqs/RFQ-2026-0891/approve-po')
+      .post(`/api/rfqs/${poRfqNumber}/approve-po`)
       .set(authHeader('buyer'))
       .send({
         vendorName: 'Apex Industrial Dynamics Pvt Ltd',
@@ -62,14 +66,30 @@ describe('Batch Chaser & Purchase Order API', () => {
 
   test('POST /api/rfqs/:id/approve-po returns 400 for missing fields', async () => {
     const res = await request(app)
-      .post('/api/rfqs/RFQ-2026-0891/approve-po')
+      .post(`/api/rfqs/${poRfqNumber}/approve-po`)
       .set(authHeader('buyer'))
       .send({});
     expect(res.statusCode).toBe(400);
   });
 
   test('POST /api/rfqs/:id/approve-po requires authentication', async () => {
-    const res = await request(app).post('/api/rfqs/RFQ-2026-0891/approve-po').send({});
+    const res = await request(app).post(`/api/rfqs/${poRfqNumber}/approve-po`).send({});
     expect(res.statusCode).toBe(401);
+  });
+
+  test('POST /api/rfqs/:id/approve-po returns 403 for a vendor (only buyer-side roles award a PO)', async () => {
+    const res = await request(app)
+      .post('/api/rfqs/RFQ-2026-0891/approve-po')
+      .set(authHeader('vendor'))
+      .send({ vendorName: 'Apex', totalAmount: 1000 });
+    expect(res.statusCode).toBe(403);
+  });
+
+  test('POST /api/rfqs/:id/approve-po returns 404 for an invalid RFQ id', async () => {
+    const res = await request(app)
+      .post('/api/rfqs/nonexistent-rfq/approve-po')
+      .set(authHeader('buyer'))
+      .send({ vendorName: 'Apex', totalAmount: 1000 });
+    expect(res.statusCode).toBe(404);
   });
 });

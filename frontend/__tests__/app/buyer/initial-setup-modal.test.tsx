@@ -433,6 +433,12 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       fireEvent.change(vInput, { target: { files: [corruptFile] } });
     }
 
+    // Unsupported file type — rejected before parsing even starts (BUGS.md #34)
+    const badTypeFile: any = new File(['not a spreadsheet'], 'resume.pdf', { type: 'application/pdf' });
+    if (vInput) {
+      fireEvent.change(vInput, { target: { files: [badTypeFile] } });
+    }
+
     // Go to Step 3 (PO Dump)
     fireEvent.click(screen.getByText('3. PO Dump'));
 
@@ -455,6 +461,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       fireEvent.change(poInput, { target: { files: [emptyFile] } });
       fireEvent.change(poInput, { target: { files: [errFile] } });
       fireEvent.change(poInput, { target: { files: [corruptFile] } });
+      fireEvent.change(poInput, { target: { files: [badTypeFile] } }); // rejected before parsing (BUGS.md #34)
     }
 
     // Test PO edge cases for unitPrice and totalSpend calculation

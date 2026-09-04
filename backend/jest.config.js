@@ -6,6 +6,7 @@ module.exports = {
   // schema; now it fails loudly instead. See __tests__/setup/noRealDatabase.js.
   setupFilesAfterEnv: ['<rootDir>/__tests__/setup/noRealDatabase.js'],
   testTimeout: 20000,
+  setupFiles: ['<rootDir>/jest.setup.js'],
   collectCoverageFrom: [
     'src/**/*.js',
     '!src/public/**',

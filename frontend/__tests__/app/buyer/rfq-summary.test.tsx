@@ -11,6 +11,9 @@ jest.mock('@/lib/store', () => ({ useApp: jest.fn() }));
 const RFQ = UI_STRINGS.rfqSummary;
 const SCREEN = UI_STRINGS.screens.rfqSummary;
 
+/** Matches the activeBuyerAccount mockStore supplies, so a buildRFQ() default is in scope. */
+const TEST_BUYER_ACCOUNT = { id: 'buyer-acc-test', organizationName: 'Test Buyer Co' };
+
 /** Minimal but type-complete RFQ, so tests only state what they care about. */
 function buildRFQ(overrides: Partial<RFQItem> = {}): RFQItem {
   return {
@@ -24,6 +27,7 @@ function buildRFQ(overrides: Partial<RFQItem> = {}): RFQItem {
     targetDeliveryDate: '2026-09-15',
     budget: 145000,
     createdAt: '2026-09-01 10:00 UTC',
+    buyerAccountId: TEST_BUYER_ACCOUNT.id,
     extractedEntities: [
       {
         id: 'ent-1',
@@ -64,6 +68,7 @@ describe('Buyer RFQ Summary (Screen 1.3)', () => {
   const mockStore = (rfqs: RFQItem[]) => {
     (useApp as jest.Mock).mockReturnValue({
       rfqs,
+      activeBuyerAccount: TEST_BUYER_ACCOUNT,
       showToast,
       setSelectedRFQForMatrix,
       openRFQDeepDive,
@@ -490,6 +495,7 @@ describe('Buyer RFQ Summary: details action and unset budget', () => {
   const renderWith = (rfqs: RFQItem[]) => {
     (useApp as jest.Mock).mockReturnValue({
       rfqs,
+      activeBuyerAccount: TEST_BUYER_ACCOUNT,
       showToast: jest.fn(),
       setSelectedRFQForMatrix: jest.fn(),
       openRFQDeepDive: jest.fn(),

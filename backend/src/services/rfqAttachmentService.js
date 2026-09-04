@@ -1,10 +1,10 @@
 /**
  * RFQ Document Attachment Storage
  *
- * Supporting documents a buyer attaches to an RFQ, held on disk and served back
- * verbatim. Nothing here touches Gemini: attachments exist for the manual flow,
- * where the buyer keys the line items and the document is evidence rather than
- * something to be read.
+ * Supporting documents a buyer attaches to an RFQ, held in Cloudflare R2 and
+ * served back verbatim. Nothing here touches Gemini: attachments exist for the
+ * manual flow, where the buyer keys the line items and the document is
+ * evidence rather than something to be read.
  *
  * Content deliberately does not live on the RFQ record. A 10MB PDF is roughly
  * 13MB of base64, and /api/bootstrap returns every RFQ, so inlining attachments
@@ -13,19 +13,19 @@
  *
  * Security posture:
  *   - identifiers are generated here, never taken from the client
- *   - an id is matched against ID_PATTERN before it is joined onto a path, so a
- *     traversal attempt cannot escape the storage directory
+ *   - an id is matched against ID_PATTERN before it is used as an object key
  *   - the MIME type must appear in an allow-list, so an executable or script
  *     cannot be stored by omission
  *   - the decoded size is checked against MAX_BYTES before anything is written
+ *   - when R2 isn't configured, uploads fail closed (never fall back to disk)
  */
 
-const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
+const { PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
 
 const { RFQ_ATTACHMENT_CONFIG } = require('../config/constants');
 const { logger } = require('./loggerService');
+const r2Client = require('./r2Client');
 
 /** Machine-readable outcomes the controller maps onto responses. */
 const ATTACHMENT_STATUS = {
@@ -36,20 +36,16 @@ const ATTACHMENT_STATUS = {
   WRITE_FAILED: 'WRITE_FAILED',
 };
 
-/** Absolute storage directory, resolved once from the backend package root. */
-function storageDir() {
-  return path.resolve(__dirname, '..', '..', RFQ_ATTACHMENT_CONFIG.STORAGE_DIR);
-}
-
 /**
- * Absolute path for one stored file, or null when the id is not one we issued.
+ * R2 object key for one stored attachment, or null when the id is not one we
+ * issued.
  *
- * Returning null rather than a path is what stops `../../etc/passwd` and any
- * other traversal attempt: an id that fails the pattern never reaches path.join.
+ * Returning null rather than a key is what stops a malformed/foreign id from
+ * ever reaching a request: an id that fails the pattern never reaches R2.
  */
-function resolveStoredPath(id, extension) {
+function resolveObjectKey(id) {
   if (typeof id !== 'string' || !RFQ_ATTACHMENT_CONFIG.ID_PATTERN.test(id)) return null;
-  return path.join(storageDir(), `${id}${extension}`);
+  return `${RFQ_ATTACHMENT_CONFIG.STORAGE_DIR}/${id}`;
 }
 
 /** True when the buyer may attach a document of this type. */
@@ -73,12 +69,13 @@ function decodedByteLength(base64) {
 /**
  * Strip any directory component a browser may have supplied.
  *
- * The stored path never uses this — the generated id does — but the name is
+ * The stored key never uses this — the generated id does — but the name is
  * echoed back to the UI and into the RFQ, so it is reduced to a leaf first.
  */
 function safeFileName(fileName) {
-  const leaf = path.basename(String(fileName || '').trim());
-  return leaf === '' || leaf === '.' || leaf === '..' ? 'attachment' : leaf;
+  const trimmed = String(fileName || '').trim();
+  const leaf = trimmed.split(/[/\\]/).pop();
+  return !leaf || leaf === '.' || leaf === '..' ? 'attachment' : leaf;
 }
 
 /**
@@ -91,9 +88,9 @@ function safeFileName(fileName) {
  * @param {string} input.fileName
  * @param {string} input.mimeType
  * @param {string} input.content base64-encoded file body
- * @returns {{status: string, attachment: Object|null, error: string|null}}
+ * @returns {Promise<{status: string, attachment: Object|null, error: string|null}>}
  */
-function saveAttachment({ fileName, mimeType, content } = {}) {
+async function saveAttachment({ fileName, mimeType, content } = {}) {
   const failure = (status, error = null) => ({ status, attachment: null, error });
 
   if (!content) return failure(ATTACHMENT_STATUS.NO_CONTENT);
@@ -102,6 +99,12 @@ function saveAttachment({ fileName, mimeType, content } = {}) {
   const size = decodedByteLength(content);
   if (size === 0) return failure(ATTACHMENT_STATUS.NO_CONTENT);
   if (size > RFQ_ATTACHMENT_CONFIG.MAX_BYTES) return failure(ATTACHMENT_STATUS.TOO_LARGE);
+
+  const client = r2Client.getClient();
+  if (!client) {
+    logger.error('Failed to store RFQ attachment: R2 is not configured', null, 'RFQ_ATTACHMENT');
+    return failure(ATTACHMENT_STATUS.WRITE_FAILED, 'Object storage is not configured.');
+  }
 
   const id = crypto.randomUUID();
   const meta = {
@@ -113,11 +116,23 @@ function saveAttachment({ fileName, mimeType, content } = {}) {
   };
 
   try {
-    fs.mkdirSync(storageDir(), { recursive: true });
-    // The metadata sidecar means a download can report the original name and type
-    // without trusting whatever the client sends at download time.
-    fs.writeFileSync(resolveStoredPath(id, '.bin'), Buffer.from(content, 'base64'));
-    fs.writeFileSync(resolveStoredPath(id, '.json'), JSON.stringify(meta), 'utf8');
+    await client.send(
+      new PutObjectCommand({
+        Bucket: r2Client.bucket(),
+        Key: resolveObjectKey(id),
+        Body: Buffer.from(content, 'base64'),
+        ContentType: mimeType,
+        // S3/R2 metadata values travel as HTTP headers, so a non-ASCII original
+        // filename (realistic here) is encoded going in and decoded on read.
+        // Keys are written lowercase because S3/R2 normalises header names to
+        // lowercase on the way back (loadAttachment reads them lowercase too).
+        Metadata: {
+          filename: encodeURIComponent(meta.fileName),
+          size: String(size),
+          uploadedat: meta.uploadedAt,
+        },
+      })
+    );
   } catch (err) {
     logger.error('Failed to store RFQ attachment', err, 'RFQ_ATTACHMENT');
     return failure(ATTACHMENT_STATUS.WRITE_FAILED, err.message);
@@ -131,22 +146,43 @@ function saveAttachment({ fileName, mimeType, content } = {}) {
   return { status: ATTACHMENT_STATUS.SAVED, attachment: meta, error: null };
 }
 
+/** Buffers a Node Readable (the SDK v3 response body shape) into a Buffer. */
+async function bufferBody(body) {
+  const chunks = [];
+  for await (const chunk of body) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
 /**
  * Read one attachment back.
  *
- * @returns {{meta: Object, content: Buffer}|null} null when the id is unknown,
- *   malformed, or its files are missing.
+ * @returns {Promise<{meta: Object, content: Buffer}|null>} null when the id is
+ *   unknown, malformed, R2 isn't configured, or the object is missing.
  */
-function loadAttachment(id) {
-  const binPath = resolveStoredPath(id, '.bin');
-  const metaPath = resolveStoredPath(id, '.json');
-  if (!binPath || !metaPath) return null;
+async function loadAttachment(id) {
+  const key = resolveObjectKey(id);
+  if (!key) return null;
+
+  const client = r2Client.getClient();
+  if (!client) return null;
 
   try {
-    if (!fs.existsSync(binPath) || !fs.existsSync(metaPath)) return null;
+    const response = await client.send(new GetObjectCommand({ Bucket: r2Client.bucket(), Key: key }));
+    const content = await bufferBody(response.Body);
+    // S3/R2 returns custom metadata keys lowercased regardless of how they
+    // were set (HTTP header names are case-insensitive) — read them lowercase.
+    const metadata = response.Metadata || {};
     return {
-      meta: JSON.parse(fs.readFileSync(metaPath, 'utf8')),
-      content: fs.readFileSync(binPath),
+      meta: {
+        id,
+        fileName: metadata.filename ? decodeURIComponent(metadata.filename) : 'attachment',
+        mimeType: response.ContentType,
+        size: Number(metadata.size) || content.length,
+        uploadedAt: metadata.uploadedat || null,
+      },
+      content,
     };
   } catch (err) {
     logger.error(`Failed to read RFQ attachment ${id}`, err, 'RFQ_ATTACHMENT');
@@ -156,8 +192,7 @@ function loadAttachment(id) {
 
 module.exports = {
   ATTACHMENT_STATUS,
-  storageDir,
-  resolveStoredPath,
+  resolveObjectKey,
   isAllowedType,
   decodedByteLength,
   safeFileName,

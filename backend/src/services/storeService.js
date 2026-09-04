@@ -3,6 +3,8 @@ const {
   SEED_EVALUATIONS,
 } = require('../db/seed');
 const { INITIAL_SYSTEM_CONFIG, INITIAL_AZURE_HEALTH } = require('../config/constants');
+const domainPool = require('../db/pool');
+const domainQueries = require('../db/domainQueries');
 const { createAuditEntry, verifyAuditTrail } = require('./auditService');
 const { evaluateQuotes, calculate360Evaluation, calculateRevisedRating } = require('./evaluationService');
 const { simulateChaserOutreach } = require('./aiChaserService');
@@ -10,31 +12,23 @@ const { logger } = require('./loggerService');
 
 class StoreService {
   constructor() {
-    // Buyer accounts are no longer seeded. The signed-in buyer's account is read
-    // from the shared identity schema by buyerAccountResolver, scoped to their
-    // session. The seed shipped four fabricated companies with invented spend, and
-    // `activeBuyerAccount` was just `buyerAccounts[0]` — so whoever signed in, the
-    // dashboard attributed their work to Tata Motors.
-    //
-    // This array stays for accounts created at runtime through
-    // POST /api/buyer-accounts, which is a separate admin-style flow.
+    // Buyer accounts are no longer seeded — the seed shipped four fabricated
+    // companies with invented spend, and `activeBuyerAccount` was just
+    // `buyerAccounts[0]`, so whoever signed in, the dashboard attributed their
+    // work to Tata Motors. This array holds accounts created at runtime
+    // through POST /api/buyer-accounts (RFQ attribution resolves a buyer's
+    // own account from it via getBuyerAccountByEmail); the single-record
+    // "my own account" read (GET /api/buyer-accounts/active) resolves from
+    // the shared identity schema instead, via buyerAccountResolver, which
+    // doesn't depend on this array's email matching being reliable.
     this.buyerAccounts = [];
     this.activeBuyerAccount = null;
     this.vendors = JSON.parse(JSON.stringify(SEED_VENDORS));
-    // RFQs are no longer held here at all. They live in `qua_enterprice_rfq`,
-    // owned by a buyer organisation and read back through rfqQueries, which is
-    // what makes one buyer's dashboard show only that buyer's RFQs.
-    //
-    // The demo RFQ seed and its SEED_DEMO_RFQS flag are gone permanently. They
-    // were written into the same collection a buyer's real RFQs landed in, and
-    // the portfolio summary reduced over all of it, so the dashboard reported
-    // fabricated spend and quote counts beside genuine work with no way to tell
-    // them apart.
-    //
-    // This array remains, empty, only for the quote, chaser and PO flows that
-    // still run in memory. Those are the next migration: quotations are not
-    // modelled in the RFQ table yet, and every quote that used to exist came
-    // from the seed being deleted here.
+    // RFQs start empty on every restart by design — SEED_DEMO_RFQS defaults to
+    // false. The demo seed used to be written into the same collection a
+    // buyer's real RFQs landed in, and the portfolio summary reduced over all
+    // of it, so the dashboard reported fabricated spend and quote counts
+    // beside genuine work with no way to tell them apart.
     this.rfqs = [];
     this.evaluations = JSON.parse(JSON.stringify(SEED_EVALUATIONS));
     this.auditLogs = [];
@@ -77,20 +71,133 @@ class StoreService {
   }
 
   /**
-   * Domain records (buyer accounts, vendors, RFQs, evaluations, audit logs and
-   * system config) are served from the reference seed dataset held in this
-   * process.
+   * All seven domain collections (vendors, RFQs, evaluations, vendor
+   * catalogue, buyer accounts, AI feed, audit logs) hydrate from Neon
+   * Postgres when DATABASE_URL is configured, falling back to the in-memory
+   * seed per-collection when its table is empty (e.g. right after the schema
+   * was first created, before `db:migrate` has seeded it) so one empty table
+   * doesn't blank out an otherwise-healthy boot. `isHydratedFromDB` is a
+   * single shared flag — true if ANY collection actually loaded real rows —
+   * matching how it was already being read by several controllers before
+   * this covered more than vendors/RFQs; system config stays a static
+   * in-memory default regardless.
    *
-   * User accounts are the exception: they are read from and written to the
-   * shared MySQL identity schema via db/identityQueries.js. This backend has no
-   * PostgreSQL connection.
-   *
-   * Kept as an async no-op so the bootstrap path and callers keep a stable
-   * contract if a domain persistence layer is introduced later.
+   * User accounts are a separate exception: they are read from and written to
+   * the shared MySQL identity schema via db/identityQueries.js.
    */
   async hydrateFromDB() {
-    this.isHydratedFromDB = false;
-    return { hydrated: false, source: 'in_memory_seed' };
+    if (!domainPool.pool) {
+      this.isHydratedFromDB = false;
+      return { hydrated: false, source: 'in_memory_seed' };
+    }
+
+    try {
+      const [vendors, rfqs, evaluations, vendorCatalogue, buyerAccountsResult, aiFeed, auditLogs] = await Promise.all([
+        domainQueries.getVendorsFromDB(),
+        domainQueries.getRFQsFromDB(),
+        domainQueries.getEvaluationsFromDB(),
+        domainQueries.getVendorCatalogueFromDB(),
+        domainQueries.getBuyerAccountsFromDB(),
+        domainQueries.getAIFeedFromDB(),
+        domainQueries.getAuditLogsFromDB(),
+      ]);
+
+      if (vendors.length > 0) this.vendors = vendors;
+      if (rfqs.length > 0) this.rfqs = rfqs;
+      if (evaluations.length > 0) this.evaluations = evaluations;
+      if (vendorCatalogue.length > 0) this.vendorCatalogue = vendorCatalogue;
+      if (buyerAccountsResult.accounts.length > 0) {
+        this.buyerAccounts = buyerAccountsResult.accounts;
+        // activeBuyerAccount must stay a reference into this.buyerAccounts
+        // (same invariant the constructor and every mutator already keep),
+        // not a separately-hydrated duplicate.
+        this.activeBuyerAccount =
+          this.buyerAccounts.find((a) => a.id === buyerAccountsResult.activeId) || this.buyerAccounts[0] || null;
+      }
+      if (aiFeed.length > 0) this.aiFeed = aiFeed;
+      if (auditLogs.length > 0) this.auditLogs = auditLogs;
+
+      const hydrated =
+        vendors.length > 0 ||
+        rfqs.length > 0 ||
+        evaluations.length > 0 ||
+        vendorCatalogue.length > 0 ||
+        buyerAccountsResult.accounts.length > 0 ||
+        aiFeed.length > 0 ||
+        auditLogs.length > 0;
+      this.isHydratedFromDB = hydrated;
+      return { hydrated, source: hydrated ? 'persisted' : 'in_memory_seed' };
+    } catch (err) {
+      logger.error('Failed to hydrate domain data from the database', err, 'STORE_SERVICE');
+      this.isHydratedFromDB = false;
+      return { hydrated: false, source: 'in_memory_seed' };
+    }
+  }
+
+  // Fire-and-forget write-through helpers — never awaited by callers, mirroring
+  // the pattern already used for identity-DB writes elsewhere in this backend.
+  _persistVendor(vendor) {
+    domainQueries.upsertVendorInDB(vendor).catch((err) => logger.error('Failed to persist vendor', err, 'STORE_SERVICE'));
+  }
+
+  _removeVendor(id) {
+    domainQueries.deleteVendorInDB(id).catch((err) => logger.error('Failed to delete persisted vendor', err, 'STORE_SERVICE'));
+  }
+
+  _persistRFQ(rfq) {
+    domainQueries.upsertRFQInDB(rfq).catch((err) => logger.error('Failed to persist RFQ', err, 'STORE_SERVICE'));
+  }
+
+  _removeRFQ(id) {
+    domainQueries.deleteRFQInDB(id).catch((err) => logger.error('Failed to delete persisted RFQ', err, 'STORE_SERVICE'));
+  }
+
+  _persistEvaluation(evaluation) {
+    domainQueries
+      .upsertEvaluationInDB(evaluation)
+      .catch((err) => logger.error('Failed to persist evaluation', err, 'STORE_SERVICE'));
+  }
+
+  _persistCatalogueProduct(product) {
+    domainQueries
+      .upsertCatalogueProductInDB(product)
+      .catch((err) => logger.error('Failed to persist catalogue product', err, 'STORE_SERVICE'));
+  }
+
+  _removeCatalogueProduct(id) {
+    domainQueries
+      .deleteCatalogueProductInDB(id)
+      .catch((err) => logger.error('Failed to delete persisted catalogue product', err, 'STORE_SERVICE'));
+  }
+
+  _persistBuyerAccount(account) {
+    domainQueries
+      .upsertBuyerAccountInDB(account)
+      .catch((err) => logger.error('Failed to persist buyer account', err, 'STORE_SERVICE'));
+  }
+
+  _removeBuyerAccount(id) {
+    domainQueries
+      .deleteBuyerAccountInDB(id)
+      .catch((err) => logger.error('Failed to delete persisted buyer account', err, 'STORE_SERVICE'));
+  }
+
+  _setActiveBuyerAccount(id) {
+    domainQueries
+      .setActiveBuyerAccountInDB(id)
+      .catch((err) => logger.error('Failed to persist active buyer account', err, 'STORE_SERVICE'));
+  }
+
+  _persistAIFeedItem(item) {
+    domainQueries
+      .upsertAIFeedItemInDB(item)
+      .catch((err) => logger.error('Failed to persist AI feed item', err, 'STORE_SERVICE'));
+  }
+
+  _persistAuditLog(entry) {
+    domainQueries
+      .upsertAuditLogInDB(entry)
+      .catch((err) => logger.error('Failed to persist audit log entry', err, 'STORE_SERVICE'));
   }
 
   // ==========================================
@@ -102,6 +209,13 @@ class StoreService {
 
   getActiveBuyerAccount() {
     return this.activeBuyerAccount;
+  }
+
+  /** Resolves a buyer account by its login email, case-insensitively. */
+  getBuyerAccountByEmail(email) {
+    if (!email) return null;
+    const target = email.toLowerCase();
+    return this.buyerAccounts.find((a) => (a.corporateEmail || '').toLowerCase() === target) || null;
   }
 
   addBuyerAccount(accData) {
@@ -119,6 +233,7 @@ class StoreService {
     };
 
     this.buyerAccounts.unshift(newAcc);
+    this._persistBuyerAccount(newAcc);
     this.addAuditLog({
       userEmail: newAcc.corporateEmail,
       action: `Created buyer account for ${newAcc.organizationName} (${newAcc.corporateEmail})`,
@@ -137,6 +252,7 @@ class StoreService {
       syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
     };
     this.buyerAccounts[idx] = updated;
+    this._persistBuyerAccount(updated);
 
     if (this.activeBuyerAccount && this.activeBuyerAccount.id === id) {
       this.activeBuyerAccount = updated;
@@ -149,8 +265,10 @@ class StoreService {
     const beforeLen = this.buyerAccounts.length;
     this.buyerAccounts = this.buyerAccounts.filter((a) => a.id !== id);
     if (this.buyerAccounts.length < beforeLen) {
+      this._removeBuyerAccount(id);
       if (this.activeBuyerAccount && this.activeBuyerAccount.id === id) {
         this.activeBuyerAccount = this.buyerAccounts[0] || null;
+        if (this.activeBuyerAccount) this._setActiveBuyerAccount(this.activeBuyerAccount.id);
       }
       return true;
     }
@@ -161,6 +279,7 @@ class StoreService {
     const target = this.buyerAccounts.find((a) => a.id === id);
     if (!target) return null;
     this.activeBuyerAccount = target;
+    this._setActiveBuyerAccount(id);
     return target;
   }
 
@@ -176,9 +295,18 @@ class StoreService {
   }
 
   addVendor(vendorData) {
+    // A client-supplied id was previously trusted as-is (never checked for
+    // uniqueness) and the auto-generated fallback was only the last 4 digits
+    // of Date.now() — collision-prone within the same ~10s window, and a
+    // deliberate duplicate `id` in the request body would shadow an existing
+    // vendor for every future id-based lookup (getVendorById/updateVendor
+    // resolve by the *first* array match). The id is now always generated
+    // server-side; nothing in the app currently has a legitimate reason to
+    // request a specific vendor id.
+    const { id: _ignoredClientId, ...safeVendorData } = vendorData;
     const newVendor = {
-      ...vendorData,
-      id: vendorData.id || `v-${Date.now().toString().slice(-4)}`,
+      ...safeVendorData,
+      id: `v-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       rating: vendorData.rating || 4.5,
       score: vendorData.score || 85.0,
       source: vendorData.source || 'buyer_manual',
@@ -188,9 +316,15 @@ class StoreService {
       isExistingInDatabase: vendorData.isExistingInDatabase !== undefined ? vendorData.isExistingInDatabase : true,
       onboardingEmailStatus: vendorData.onboardingEmailStatus || 'sent',
       isCategoryAligned: vendorData.isCategoryAligned !== undefined ? vendorData.isCategoryAligned : true,
+      // Every vendor starts on the free client-uploaded tier with a clean
+      // download counter — these used to exist only as frontend useState
+      // (reset on every page refresh, never actually persisted or enforced).
+      subscriptionPlan: vendorData.subscriptionPlan || 'premium',
+      rfqDownloadsUsed: vendorData.rfqDownloadsUsed || 0,
     };
 
     this.vendors.unshift(newVendor);
+    this._persistVendor(newVendor);
     this.addAuditLog({
       userEmail: 'procurement@enterprise.com',
       action: `Registered vendor ${newVendor.name} in category ${newVendor.majorCategory}`,
@@ -200,11 +334,15 @@ class StoreService {
   }
 
   updateVendor(id, updates) {
-    const idx = this.vendors.findIndex((v) => v.id === id);
+    const idx = this.vendors.findIndex((v) => v.id === id || v.email === id);
     if (idx === -1) return null;
 
-    const updated = { ...this.vendors[idx], ...updates };
+    // A client payload must never be able to reassign the record's primary
+    // key (would corrupt this.vendors' id-uniqueness and orphan the old id).
+    const { id: _ignoredId, ...safeUpdates } = updates;
+    const updated = { ...this.vendors[idx], ...safeUpdates };
     this.vendors[idx] = updated;
+    this._persistVendor(updated);
 
     return updated;
   }
@@ -213,6 +351,7 @@ class StoreService {
     const beforeLen = this.vendors.length;
     this.vendors = this.vendors.filter((v) => v.id !== id);
     if (this.vendors.length < beforeLen) {
+      this._removeVendor(id);
       return true;
     }
     return false;
@@ -280,7 +419,7 @@ class StoreService {
     return this.rfqs.find((r) => r.id === id || r.rfqNumber === id);
   }
 
-  createRFQ(rfqData) {
+  createRFQ(rfqData, requestingBuyerAccount = null) {
     const nextNum = this.rfqs.length + 893;
     const rfqNumber = rfqData.rfqNumber || `RFQ-2026-0${nextNum}`;
     const id = rfqData.id || `rfq-${Date.now()}`;
@@ -303,7 +442,19 @@ class StoreService {
       // Metadata only. The bytes live on disk under rfqAttachmentService, so the
       // bootstrap payload stays a fixed size no matter how much is attached.
       attachments: Array.isArray(rfqData.attachments) ? rfqData.attachments : [],
-      status: rfqData.status || 'open',
+      status: rfqData.status || 'Quotes Pending',
+      // Stamped from the authenticated caller's own buyer account (resolved
+      // by the controller/resolver from the session, never trusted from the
+      // client body) so an RFQ is attributed to whoever actually created it.
+      // Falls back to the legacy system-wide "active" buyer account only for
+      // callers that don't have a per-request buyer identity to resolve
+      // (e.g. historical-data ingestion, admin-driven creation).
+      buyerAccountId: requestingBuyerAccount
+        ? requestingBuyerAccount.id
+        : this.activeBuyerAccount ? this.activeBuyerAccount.id : null,
+      buyerAccountName: requestingBuyerAccount
+        ? requestingBuyerAccount.organizationName
+        : this.activeBuyerAccount ? this.activeBuyerAccount.organizationName : null,
       sourcingMode: rfqData.sourcingMode || 'mode_1',
       quotesCount: rfqData.quotes ? rfqData.quotes.length : 0,
       chasingActive: rfqData.chasingActive !== undefined ? rfqData.chasingActive : true,
@@ -311,7 +462,20 @@ class StoreService {
       elapsedTime: rfqData.elapsedTime || '0 hrs',
       targetSavings: rfqData.targetSavings || '12-18%',
       quotes: evaluateQuotes(rfqData.quotes || []),
-      lineItems: rfqData.lineItems || [],
+      // Real line items the buyer's document extraction produced. Previously
+      // only the legacy `lineItems` key was read here, so a real RFQ created
+      // through the actual app flow (which sends `extractedEntities`, the
+      // RFQItem field) silently lost every item on persistence — the buyer's
+      // own optimistic client state showed them, but a refresh (re-hydrated
+      // from this persisted shape) showed none, and PO generation
+      // (approvePurchaseOrder, which reads rfq.extractedEntities) produced
+      // an empty line-item PO for any RFQ created this way.
+      extractedEntities: rfqData.extractedEntities || rfqData.lineItems || [],
+      // AI-generated headline/scope/risk-notes built from the line items above,
+      // before the RFQ is constructed here (see rfqController.createRFQ) — a
+      // deterministic fallback when there's nothing to summarise or the model
+      // call fails, never fabricated content.
+      aiSummary: rfqData.aiSummary || null,
       assignedVendors: rfqData.assignedVendors || [],
       followUpData: rfqData.followUpData || {
         rfqNumber,
@@ -326,6 +490,7 @@ class StoreService {
     };
 
     this.rfqs.unshift(newRFQ);
+    this._persistRFQ(newRFQ);
 
     this.addAuditLog({
       userEmail: 'buyer@enterprise.com',
@@ -357,6 +522,7 @@ class StoreService {
       quotesCount: quotes.length,
     };
     this.rfqs[idx] = updated;
+    this._persistRFQ(updated);
 
     return updated;
   }
@@ -365,14 +531,21 @@ class StoreService {
     const rfq = this.getRFQById(rfqId);
     if (!rfq) return null;
 
-    const quotes = [...(rfq.quotes || []), quote];
+    // A resubmission from the same vendor replaces their previous quote on
+    // this RFQ rather than piling up duplicates (nothing enforced this before).
+    const existingQuotes = rfq.quotes || [];
+    const quotes = quote.vendorId
+      ? [...existingQuotes.filter((q) => q.vendorId !== quote.vendorId), quote]
+      : [...existingQuotes, quote];
     return this.updateRFQ(rfq.id, { quotes });
   }
 
   deleteRFQ(id) {
     const beforeLen = this.rfqs.length;
     this.rfqs = this.rfqs.filter((r) => r.id !== id && r.rfqNumber !== id);
-    return this.rfqs.length < beforeLen;
+    const removed = this.rfqs.length < beforeLen;
+    if (removed) this._removeRFQ(id);
+    return removed;
   }
 
   // getRFQSummary was removed with the RFQ seeds. The portfolio roll-up now
@@ -404,9 +577,14 @@ class StoreService {
       systemAction: evalData.systemAction || systemAction,
       moduleScores: evalData.moduleScores || moduleScores,
       documents: evalData.documents || [],
+      // The per-question detail was previously silently dropped here even
+      // though the client always sent it — only the rolled-up moduleScores
+      // survived.
+      questionBreakdown: evalData.questionBreakdown || [],
     };
 
     this.evaluations.unshift(newEval);
+    this._persistEvaluation(newEval);
 
     this.addAuditLog({
       userEmail: 'auditor@procucev.ai',
@@ -427,6 +605,7 @@ class StoreService {
     const previousHash = this.auditLogs.length > 0 ? this.auditLogs[0].shaSignature : '';
     const entry = createAuditEntry({ userEmail, action, rfqNumber, ipAddress, previousHash });
     this.auditLogs.unshift(entry);
+    this._persistAuditLog(entry);
 
     logger.audit(action, userEmail || 'system@procucev.ai', { rfqNumber, ipAddress, shaSignature: entry.shaSignature }, rfqNumber);
 
@@ -461,6 +640,10 @@ class StoreService {
 
     this.aiFeed.unshift(item);
     if (this.aiFeed.length > 100) this.aiFeed.pop();
+    // The DB-side upsert trims to the newest 100 rows itself (see
+    // domainQueries.upsertAIFeedItemInDB), so it stays in sync with the
+    // in-memory cap without needing to know which item .pop() just evicted.
+    this._persistAIFeedItem(item);
     return item;
   }
 
@@ -483,7 +666,7 @@ class StoreService {
   // ==========================================
   // 9. HISTORICAL PURCHASE DATA INGESTION & SETUP
   // ==========================================
-  processHistoricalPurchaseData(period, vendorRecords = []) {
+  processHistoricalPurchaseData(period, vendorRecords = [], requestingBuyerAccount = null) {
     let importedCount = 0;
     const dateStr = new Date().toISOString().substring(0, 10);
 
@@ -516,13 +699,18 @@ class StoreService {
           isCategoryAligned: true,
         };
         this.vendors.push(newVendor);
+        this._persistVendor(newVendor);
         importedCount++;
 
       }
     });
 
+    // Attributed to the requesting buyer's own account when resolved from the
+    // session (same convention as createRFQ) — falls back to the legacy
+    // global active account only when no per-request identity is available.
+    const attributedAccount = requestingBuyerAccount || this.activeBuyerAccount;
     this.addAuditLog({
-      userEmail: this.activeBuyerAccount ? this.activeBuyerAccount.corporateEmail : 'buyer@enterprise.com',
+      userEmail: attributedAccount ? attributedAccount.corporateEmail : 'buyer@enterprise.com',
       action: `Processed ${period.replace('_', ' ')} historical purchase dump: ${importedCount} unique suppliers empanelled into vendor master roster.`,
     });
 
@@ -616,43 +804,56 @@ class StoreService {
   // ==========================================
   // 12. VENDOR ITEM SKU CATALOGUE CRUD
   // ==========================================
-  getVendorCatalogue() {
-    return this.vendorCatalogue;
+  // Was one global array with no vendorId anywhere — every vendor shared and
+  // could read/mutate the same catalogue. Now scoped per vendor; the seeded
+  // demo items have no owner and are excluded once a real vendorId is given.
+  getVendorCatalogue(vendorId) {
+    if (!vendorId) return this.vendorCatalogue;
+    return this.vendorCatalogue.filter((p) => p.vendorId === vendorId);
   }
 
-  addProductToCatalogue(product) {
+  getCatalogueProductById(id) {
+    return this.vendorCatalogue.find((p) => p.id === id);
+  }
+
+  addProductToCatalogue(product, vendorId, userEmail) {
     const newProd = {
       ...product,
       id: product.id || `prod-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+      vendorId,
       unitPrice: Number(product.unitPrice) || 0,
       leadTimeDays: Number(product.leadTimeDays) || 7,
       moq: Number(product.moq) || 1,
     };
     this.vendorCatalogue.unshift(newProd);
+    this._persistCatalogueProduct(newProd);
     this.addAuditLog({
-      userEmail: 'vendor@apex.com',
+      userEmail: userEmail || 'unknown',
       action: `Added product ${newProd.sku} (${newProd.name}) to item SKU catalogue`,
     });
     return newProd;
   }
 
-  updateCatalogueProduct(id, updates) {
+  updateCatalogueProduct(id, updates, userEmail) {
     const idx = this.vendorCatalogue.findIndex((p) => p.id === id);
     if (idx === -1) return null;
-    this.vendorCatalogue[idx] = { ...this.vendorCatalogue[idx], ...updates };
+    const { vendorId: _ignoredVendorId, id: _ignoredId, ...safeUpdates } = updates;
+    this.vendorCatalogue[idx] = { ...this.vendorCatalogue[idx], ...safeUpdates };
+    this._persistCatalogueProduct(this.vendorCatalogue[idx]);
     this.addAuditLog({
-      userEmail: 'vendor@apex.com',
+      userEmail: userEmail || 'unknown',
       action: `Updated SKU ${this.vendorCatalogue[idx].sku} in catalogue`,
     });
     return this.vendorCatalogue[idx];
   }
 
-  deleteCatalogueProduct(id) {
+  deleteCatalogueProduct(id, userEmail) {
     const idx = this.vendorCatalogue.findIndex((p) => p.id === id);
     if (idx === -1) return false;
     const removed = this.vendorCatalogue.splice(idx, 1)[0];
+    this._removeCatalogueProduct(id);
     this.addAuditLog({
-      userEmail: 'vendor@apex.com',
+      userEmail: userEmail || 'unknown',
       action: `Removed product ${removed.sku} from SKU catalogue`,
     });
     return true;
@@ -674,6 +875,11 @@ class StoreService {
     });
 
     this.aiFeed.unshift(...outreachLogs);
+    // This bulk path bypassed addAIFeedItem's 100-item cap entirely before —
+    // trim here too so the in-memory list and the DB-side trim (which runs
+    // per insert regardless of which path added the row) stay consistent.
+    if (this.aiFeed.length > 100) this.aiFeed.splice(100);
+    outreachLogs.forEach((log) => this._persistAIFeedItem(log));
     this.addAuditLog({
       userEmail: 'chaser.bot@procucev.com',
       action: `Executed batch multi-channel outreach (${channels.join(' + ')}) for ${rfq.rfqNumber} to ${vendors.length} vendors`,
@@ -683,17 +889,20 @@ class StoreService {
     return { success: true, count: outreachLogs.length, logs: outreachLogs };
   }
 
-  approvePurchaseOrder(rfqNumber, vendorName, totalAmount, approverNotes = '') {
+  approvePurchaseOrder(rfqNumber, vendorId, vendorName, totalAmount, approverNotes = '', approverEmail = null) {
     const rfq = this.rfqs.find((r) => r.rfqNumber === rfqNumber || r.id === rfqNumber);
-    if (rfq) {
-      rfq.status = 'PO Generated';
-      rfq.awardedVendor = vendorName;
-      rfq.awardedAmount = totalAmount;
-    }
+    if (!rfq) return null;
+
+    rfq.status = 'PO Generated';
+    rfq.awardedVendorId = vendorId || null;
+    rfq.awardedVendor = vendorName;
+    rfq.awardedAmount = totalAmount;
+    this._persistRFQ(rfq);
 
     const poNumber = `PO-2026-` + (rfqNumber || '').replace('RFQ-2026-', '');
+    const issueDate = new Date().toISOString().substring(0, 10);
     const auditRecord = this.addAuditLog({
-      userEmail: this.activeBuyerAccount ? this.activeBuyerAccount.corporateEmail : 'buyer@enterprise.com',
+      userEmail: approverEmail || (this.activeBuyerAccount ? this.activeBuyerAccount.corporateEmail : 'buyer@enterprise.com'),
       action: `Formally approved & sealed Purchase Order ${poNumber} awarded to ${vendorName} ($${Number(totalAmount).toLocaleString()}). Notes: ${approverNotes}`,
       rfqNumber,
     });
@@ -702,8 +911,17 @@ class StoreService {
       success: true,
       poNumber,
       rfqNumber,
+      vendorId: vendorId || null,
       vendorName,
       totalAmount,
+      issueDate,
+      // Real RFQ line items, not a hardcoded pump description — the PO
+      // document should reflect what was actually procured.
+      lineItems: (rfq.extractedEntities || []).map((ent) => ({
+        description: ent.itemName,
+        quantity: ent.quantity,
+        unit: ent.unit,
+      })),
       shaSignature: auditRecord.shaSignature,
     };
   }

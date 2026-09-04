@@ -1,11 +1,17 @@
 import React from 'react';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import RFQDetails, { daysUntil, lineItemsToCsv } from '@/app/buyer/rfq-details';
+import { useApp } from '@/lib/store';
+import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { SOURCING_MODES, formatCurrency, formatIndianDate, formatIndianDateTime } from '@/lib/constants';
 import type { ExtractedEntity, QuoteComparison, RFQAttachment, RFQItem } from '@/lib/types';
 
+jest.mock('@/lib/store', () => ({ useApp: jest.fn() }));
+jest.mock('@/lib/authClient', () => ({ authClient: { getToken: jest.fn() } }));
+
 const DETAILS = UI_STRINGS.rfqDetails;
+const mockShowToast = jest.fn();
 
 function entity(overrides: Partial<ExtractedEntity> = {}): ExtractedEntity {
   return {
@@ -95,6 +101,11 @@ const quotesTable = () => {
 
 /** The section wrapping a heading, so an assertion is not matched page-wide. */
 const sectionFor = (heading: HTMLElement) => heading.closest('section') as HTMLElement;
+
+beforeEach(() => {
+  (useApp as jest.Mock).mockReturnValue({ showToast: mockShowToast });
+  (authClient.getToken as jest.Mock).mockReturnValue('test-token');
+});
 
 afterEach(() => {
   jest.clearAllMocks();
@@ -710,16 +721,61 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       ).toBeInTheDocument();
     });
 
-    it('links each document to the authenticated download route', () => {
+    // GET /api/rfqs/attachments/:id requires auth, and the session token lives
+    // only in localStorage — a plain <a href> can never carry it, so it would
+    // always 401 regardless of login state. The button below fetches with the
+    // Authorization header manually and opens the result as a blob URL instead.
+    it('fetches the attachment with the Authorization header and opens it as a blob URL', async () => {
+      const openSpy = jest.spyOn(window, 'open').mockImplementation(() => null);
+      const mockBlob = new Blob(['pdf-bytes'], { type: 'application/pdf' });
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, blob: async () => mockBlob });
+
       renderDetails(buildRFQ({ attachments: [attachment()] }));
 
-      const link = screen.getByRole('link', {
+      const viewBtn = screen.getByRole('button', {
         name: formatString(DETAILS.attachmentViewAria, { fileName: 'annexure.pdf' }),
       });
-      expect(link).toHaveAttribute('href', '/api/rfqs/attachments/a1b2c3d4-0000-4000-8000-abcdefabcdef');
-      expect(link).toHaveAttribute('target', '_blank');
-      // Opening in a new tab without this leaks window.opener to the document.
-      expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+      fireEvent.click(viewBtn);
+
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledWith(
+          '/api/rfqs/attachments/a1b2c3d4-0000-4000-8000-abcdefabcdef',
+          { headers: { Authorization: 'Bearer test-token' } }
+        );
+      });
+      await waitFor(() => expect(openSpy).toHaveBeenCalledWith('blob:mock-url', '_blank', 'noopener,noreferrer'));
+    });
+
+    it('shows a toast instead of throwing when the attachment fetch fails', async () => {
+      global.fetch = jest.fn().mockResolvedValue({ ok: false });
+
+      renderDetails(buildRFQ({ attachments: [attachment()] }));
+
+      const viewBtn = screen.getByRole('button', {
+        name: formatString(DETAILS.attachmentViewAria, { fileName: 'annexure.pdf' }),
+      });
+      fireEvent.click(viewBtn);
+
+      await waitFor(() => expect(mockShowToast).toHaveBeenCalledWith(
+        'Could Not Open Attachment',
+        'Could not load the attachment.',
+        'warning'
+      ));
+    });
+
+    it('omits the Authorization header when there is no session token', async () => {
+      (authClient.getToken as jest.Mock).mockReturnValue(null);
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, blob: async () => new Blob([]) });
+
+      renderDetails(buildRFQ({ attachments: [attachment()] }));
+
+      fireEvent.click(screen.getByRole('button', {
+        name: formatString(DETAILS.attachmentViewAria, { fileName: 'annexure.pdf' }),
+      }));
+
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledWith('/api/rfqs/attachments/a1b2c3d4-0000-4000-8000-abcdefabcdef', { headers: {} });
+      });
     });
 
     it('omits the upload date when the record carries none', () => {

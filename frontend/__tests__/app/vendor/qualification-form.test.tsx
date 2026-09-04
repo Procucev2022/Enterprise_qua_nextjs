@@ -1,7 +1,24 @@
 import React from 'react';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import VendorQualificationForm from '@/app/vendor/qualification-form';
 import { AppProvider, useApp } from '@/lib/store';
+import { authClient } from '@/lib/authClient';
+
+function QualificationFormWithSession() {
+  const { setCurrentUserSession } = useApp();
+  React.useEffect(() => {
+    setCurrentUserSession({
+      id: 'user-1',
+      email: 'vendor@test.com',
+      name: 'Test Vendor',
+      role: 'vendor',
+      orgId: 'org-1',
+      orgName: 'Test Vendor Co',
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return <VendorQualificationForm onBack={jest.fn()} onSuccess={jest.fn()} />;
+}
 
 function renderWithProvider(ui: React.ReactElement) {
   return render(<AppProvider>{ui}</AppProvider>);
@@ -25,7 +42,29 @@ function QualificationFormCustomWrapper({
   return <VendorQualificationForm onBack={onBack} onSuccess={onSuccess} />;
 }
 
+const MODULE_TAB_NAMES = ['Commercial Terms', 'Technical Capabilities', 'Quality & Warranty', 'Operational Delivery', 'Financial Stability', 'Governance & ESG'];
+
+// Submission is now blocked until every one of the 24 questions has a real
+// evidence file attached (BUGS.md #50) — walk every tab and attach one.
+function attachEvidenceToAllTabs() {
+  MODULE_TAB_NAMES.forEach((tabName, idx) => {
+    const tabBtn = screen.getAllByRole('button', { name: new RegExp(tabName, 'i') })[0];
+    fireEvent.click(tabBtn);
+    const fileInputs = document.querySelectorAll('input[type="file"]');
+    fileInputs.forEach((input, fileIdx) => {
+      const file = new File(['dummy'], `evidence-${idx}-${fileIdx}.pdf`, { type: 'application/pdf' });
+      fireEvent.change(input, { target: { files: [file] } });
+    });
+  });
+}
+
 describe('VendorQualificationForm Comprehensive Suite', () => {
+  // Several tests here attach evidence across all 24 questions and advance
+  // real async timers — CPU-heavy in jsdom, and this file has grown enough
+  // of them that the global 20s budget (jest.setup.ts) gets tight under a
+  // full-suite run's resource contention, not just when run alone.
+  jest.setTimeout(30000);
+
   beforeEach(() => {
     jest.clearAllMocks();
   });
@@ -63,7 +102,7 @@ describe('VendorQualificationForm Comprehensive Suite', () => {
     fireEvent.click(prevBtn); // Back to M2
   });
 
-  test('Question Option Selection, Remarks Editing, File Upload, and Disqualified Score Submission (<65)', () => {
+  test('Question Option Selection, Remarks Editing, File Upload, and Disqualified Score Submission (<65)', async () => {
     jest.useFakeTimers();
     const onBack = jest.fn();
     const onSuccess = jest.fn();
@@ -114,19 +153,25 @@ describe('VendorQualificationForm Comprehensive Suite', () => {
     const tab6 = screen.getAllByRole('button', { name: /Governance & ESG/i })[0];
     fireEvent.click(tab6);
 
+    attachEvidenceToAllTabs();
+    fireEvent.click(screen.getAllByRole('button', { name: /Governance & ESG/i })[0]);
+
     // On Module 6, click Submit (with disqualified score <65)
     const submitBtn = screen.getByRole('button', { name: /Submit Final Qualification/i });
     fireEvent.click(submitBtn);
 
-    act(() => {
-      jest.advanceTimersByTime(2000);
+    // The submit handler's setTimeout callback is now async (it awaits a
+    // real fetch), so advancing fake timers must also flush that microtask
+    // chain, not just fire the timer synchronously.
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(2000);
     });
 
     expect(onSuccess).toHaveBeenCalled();
     jest.useRealTimers();
   });
 
-  test('Conditional Score Threshold (65-79) and Enterprise Plan Waived Banner', () => {
+  test('Conditional Score Threshold (65-79) and Enterprise Plan Waived Banner', async () => {
     jest.useFakeTimers();
     const onBack = jest.fn();
     const onSuccess = jest.fn();
@@ -135,20 +180,17 @@ describe('VendorQualificationForm Comprehensive Suite', () => {
       <QualificationFormCustomWrapper onBack={onBack} onSuccess={onSuccess} customSubscription="connect" />
     );
 
-    // Module 1: Lower only 2 questions to reach Conditional band (65-79)
-    const m1Selects = screen.getAllByRole('combobox');
-    if (m1Selects.length >= 2) {
-      fireEvent.change(m1Selects[0], { target: { value: '0' } });
-      fireEvent.change(m1Selects[1], { target: { value: '0' } });
-    }
+    // Every question now defaults to its own lowest option (BUGS.md #50), so
+    // to land in the Conditional band (65-79%) deliberately: max out every
+    // module except Module 1 (25% weight), left at its low defaults — total
+    // lands around 79%.
+    ['Technical Capabilities', 'Quality & Warranty', 'Operational Delivery', 'Financial Stability', 'Governance & ESG'].forEach((tabName) => {
+      const tabBtn = screen.getAllByRole('button', { name: new RegExp(tabName, 'i') })[0];
+      fireEvent.click(tabBtn);
+      screen.getAllByRole('combobox').forEach((sel) => fireEvent.change(sel, { target: { value: '5' } }));
+    });
 
-    // Step to Module 2 and lower one question
-    const tab2 = screen.getAllByRole('button', { name: /Technical Capabilities/i })[0];
-    fireEvent.click(tab2);
-    const m2Selects = screen.getAllByRole('combobox');
-    if (m2Selects.length > 0) {
-      fireEvent.change(m2Selects[0], { target: { value: '2' } });
-    }
+    attachEvidenceToAllTabs();
 
     // Navigate to Module 6 directly
     const tab6 = screen.getAllByRole('button', { name: /Governance & ESG/i })[0];
@@ -158,15 +200,18 @@ describe('VendorQualificationForm Comprehensive Suite', () => {
     const submitBtn = screen.getByRole('button', { name: /Submit Final Qualification/i });
     fireEvent.click(submitBtn);
 
-    act(() => {
-      jest.advanceTimersByTime(2000);
+    // The submit handler's setTimeout callback is now async (it awaits a
+    // real fetch), so advancing fake timers must also flush that microtask
+    // chain, not just fire the timer synchronously.
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(2000);
     });
 
     expect(onSuccess).toHaveBeenCalled();
     jest.useRealTimers();
   });
 
-  test('High Score Submission (>=80 PREFERRED ENTERPRISE SUPPLIER) with Select Subscription Plan (Waived Fee)', () => {
+  test('High Score Submission (>=80 PREFERRED ENTERPRISE SUPPLIER) with Select Subscription Plan (Waived Fee)', async () => {
     jest.useFakeTimers();
     const onBack = jest.fn();
     const onSuccess = jest.fn();
@@ -175,23 +220,37 @@ describe('VendorQualificationForm Comprehensive Suite', () => {
       <QualificationFormCustomWrapper onBack={onBack} onSuccess={onSuccess} customSubscription="select" />
     );
 
+    // Max out every question across every tab (defaults are now the lowest
+    // option per question, not the highest — see BUGS.md #50) to reach a
+    // high (>=80%) PREFERRED score.
+    MODULE_TAB_NAMES.forEach((tabName) => {
+      const tabBtn = screen.getAllByRole('button', { name: new RegExp(tabName, 'i') })[0];
+      fireEvent.click(tabBtn);
+      screen.getAllByRole('combobox').forEach((sel) => fireEvent.change(sel, { target: { value: '5' } }));
+    });
+
+    attachEvidenceToAllTabs();
+
     // Navigate to Module 6 directly
     const tab6 = screen.getAllByRole('button', { name: /Governance & ESG/i })[0];
     fireEvent.click(tab6);
 
-    // Submit qualification with default high score (>90%)
+    // Submit qualification with a maxed-out high score (>=80%)
     const submitBtn = screen.getByRole('button', { name: /Submit Final Qualification/i });
     fireEvent.click(submitBtn);
 
-    act(() => {
-      jest.advanceTimersByTime(2000);
+    // The submit handler's setTimeout callback is now async (it awaits a
+    // real fetch), so advancing fake timers must also flush that microtask
+    // chain, not just fire the timer synchronously.
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(2000);
     });
 
     expect(onSuccess).toHaveBeenCalled();
     jest.useRealTimers();
   });
 
-  test('High Score Submission (>=80 PREFERRED ENTERPRISE SUPPLIER) with Standard Subscription Plan', () => {
+  test('High Score Submission (>=80 PREFERRED ENTERPRISE SUPPLIER) with Standard Subscription Plan', async () => {
     jest.useFakeTimers();
     const onBack = jest.fn();
     const onSuccess = jest.fn();
@@ -200,19 +259,166 @@ describe('VendorQualificationForm Comprehensive Suite', () => {
       <QualificationFormCustomWrapper onBack={onBack} onSuccess={onSuccess} customSubscription="standard" />
     );
 
+    // Max out every question across every tab — see previous test's comment.
+    MODULE_TAB_NAMES.forEach((tabName) => {
+      const tabBtn = screen.getAllByRole('button', { name: new RegExp(tabName, 'i') })[0];
+      fireEvent.click(tabBtn);
+      screen.getAllByRole('combobox').forEach((sel) => fireEvent.change(sel, { target: { value: '5' } }));
+    });
+
+    attachEvidenceToAllTabs();
+
     // Navigate to Module 6 directly
     const tab6 = screen.getAllByRole('button', { name: /Governance & ESG/i })[0];
     fireEvent.click(tab6);
 
-    // Submit qualification with default high score (>90%)
+    // Submit qualification with a maxed-out high score (>=80%)
     const submitBtn = screen.getByRole('button', { name: /Submit Final Qualification/i });
     fireEvent.click(submitBtn);
 
-    act(() => {
-      jest.advanceTimersByTime(2000);
+    // The submit handler's setTimeout callback is now async (it awaits a
+    // real fetch), so advancing fake timers must also flush that microtask
+    // chain, not just fire the timer synchronously.
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(2000);
     });
 
     expect(onSuccess).toHaveBeenCalled();
     jest.useRealTimers();
+  });
+
+  test('shows a failure toast and does not navigate away when the backend rejects the submission', async () => {
+    jest.useFakeTimers();
+    global.fetch = jest.fn(() => Promise.resolve({ ok: false, status: 500, json: async () => ({ success: false, error: 'Server error' }) })) as any;
+    const onBack = jest.fn();
+    const onSuccess = jest.fn();
+
+    renderWithProvider(<QualificationFormCustomWrapper onBack={onBack} onSuccess={onSuccess} customSubscription="standard" />);
+
+    MODULE_TAB_NAMES.forEach((tabName) => {
+      const tabBtn = screen.getAllByRole('button', { name: new RegExp(tabName, 'i') })[0];
+      fireEvent.click(tabBtn);
+      screen.getAllByRole('combobox').forEach((sel) => fireEvent.change(sel, { target: { value: '5' } }));
+    });
+
+    attachEvidenceToAllTabs();
+
+    const tab6 = screen.getAllByRole('button', { name: /Governance & ESG/i })[0];
+    fireEvent.click(tab6);
+
+    const submitBtn = screen.getByRole('button', { name: /Submit Final Qualification/i });
+    fireEvent.click(submitBtn);
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(2000);
+    });
+
+    // Was fire-and-forget: previously this would have shown success and
+    // navigated away regardless of the backend response.
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Submit Final Qualification/i })).toBeInTheDocument();
+    jest.useRealTimers();
+  });
+
+  test('blocks submission with missing evidence attachments', () => {
+    const onBack = jest.fn();
+    const onSuccess = jest.fn();
+
+    renderWithProvider(<QualificationFormCustomWrapper onBack={onBack} onSuccess={onSuccess} />);
+
+    // Deliberately skip attachEvidenceToAllTabs() — every question's
+    // attachmentName stays empty (see the fixtures' own `attachmentName: ''`).
+    const tab6 = screen.getAllByRole('button', { name: /Governance & ESG/i })[0];
+    fireEvent.click(tab6);
+
+    const submitBtn = screen.getByRole('button', { name: /Submit Final Qualification/i });
+    fireEvent.click(submitBtn);
+
+    // handleSubmit's missing-evidence guard returns before setSubmitting(true)
+    // or any submission fetch, so the button stays exactly as it was.
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Submit Final Qualification/i })).toBeInTheDocument();
+  });
+
+  test('loads the caller\'s own vendor record on mount to attribute the evaluation correctly', async () => {
+    global.fetch = jest.fn((url: string) => {
+      if (/\/api\/vendors\/[^/]+$/.test(url)) {
+        return Promise.resolve({ ok: true, json: async () => ({ success: true, data: { id: 'v-q1', name: 'Real Vendor Co', contactPerson: 'Jane Doe', majorCategory: 'Valves' } }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+    }) as any;
+
+    render(
+      <AppProvider>
+        <QualificationFormWithSession />
+      </AppProvider>
+    );
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith('/api/vendors/vendor%40test.com');
+    });
+  });
+
+  test('handles a failed/network-error vendor record lookup gracefully, falling back to the session identity', async () => {
+    jest.useFakeTimers();
+    global.fetch = jest.fn((url: string) => {
+      if (/\/api\/vendors\/[^/]+$/.test(url)) return Promise.reject(new Error('offline'));
+      return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+    }) as any;
+    render(
+      <AppProvider>
+        <QualificationFormWithSession />
+      </AppProvider>
+    );
+    await waitFor(() => expect(screen.getByText(/360-Degree AI Self-Evaluation/i)).toBeInTheDocument());
+
+    // myVendorRecord stays null, so the header and the submitted record both
+    // fall back to currentUserSession's orgName/name instead.
+    expect(screen.getByText(/Test Vendor Co — Live AI Capability Rating/i)).toBeInTheDocument();
+
+    attachEvidenceToAllTabs();
+    fireEvent.click(screen.getAllByRole('button', { name: /Governance & ESG/i })[0]);
+    fireEvent.click(screen.getByRole('button', { name: /Submit Final Qualification/i }));
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(2000);
+    });
+    jest.useRealTimers();
+  });
+
+  test('falls all the way back to "Vendor" when there is no session at all', async () => {
+    jest.useFakeTimers();
+    // No currentUserSession means loadMyVendorRecord's `if (!email) return`
+    // guard fires first (myVendorRecord never even attempts to load), and
+    // the name/vendorName/email fallback chains all exhaust down to their
+    // final literal — the previous test only ever got as far as orgName.
+    authClient.setSession(null, null);
+    global.fetch = jest.fn(() => Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) })) as any;
+
+    renderWithProvider(<VendorQualificationForm onBack={jest.fn()} onSuccess={jest.fn()} />);
+    expect(screen.getByText(/Vendor — Live AI Capability Rating/i)).toBeInTheDocument();
+
+    attachEvidenceToAllTabs();
+    fireEvent.click(screen.getAllByRole('button', { name: /Governance & ESG/i })[0]);
+    fireEvent.click(screen.getByRole('button', { name: /Submit Final Qualification/i }));
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(2000);
+    });
+    jest.useRealTimers();
+  });
+
+  test('the Re-scan Document button is disabled until a file is attached, then clickable', () => {
+    renderWithProvider(<VendorQualificationForm onBack={jest.fn()} onSuccess={jest.fn()} />);
+
+    const rescanBtns = screen.getAllByRole('button', { name: /Re-scan Document/i });
+    expect(rescanBtns[0]).toBeDisabled();
+
+    const fileInput = document.querySelectorAll('input[type="file"]')[0];
+    const file = new File(['dummy'], 'evidence.pdf', { type: 'application/pdf' });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    expect(rescanBtns[0]).not.toBeDisabled();
+    fireEvent.click(rescanBtns[0]);
   });
 });

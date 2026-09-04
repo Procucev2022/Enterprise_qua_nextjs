@@ -1,5 +1,7 @@
 'use client';
 import React, { useMemo, useState } from 'react';
+import { useApp } from '@/lib/store';
+import { authClient } from '@/lib/authClient';
 import {
   SOURCING_MODES,
   formatCurrency,
@@ -9,7 +11,7 @@ import {
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { rfqAttachmentUrl } from '@/lib/rfqClient';
-import type { ExtractedEntity, QuoteComparison, RFQItem, RFQSource } from '@/lib/types';
+import type { ExtractedEntity, QuoteComparison, RFQAttachment, RFQItem, RFQSource } from '@/lib/types';
 import {
   ArrowLeft,
   ClipboardList,
@@ -323,10 +325,37 @@ function ConfidenceBadge({ confidence }: { confidence: number }) {
  * them, so a card per row is used instead of `overflow-x-auto` there.
  */
 export default function RFQDetails({ rfq, onBack, onEdit, onDelete }: RFQDetailsProps) {
+  const { showToast } = useApp();
   const [itemSearch, setItemSearch] = useState('');
   const [minorFilter, setMinorFilter] = useState<string>(ALL_MINORS);
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+
+  // GET /api/rfqs/attachments/:id requires authentication, and this app's
+  // session token lives only in localStorage (never a cookie) — a plain
+  // `<a href>` navigation carries no Authorization header, so it always 401s
+  // regardless of whether the user is logged in. Fetching it manually with
+  // the header and opening the resulting blob preserves the original inline
+  // PDF/image preview behavior while actually authenticating the request.
+  const handleViewAttachment = async (file: RFQAttachment) => {
+    try {
+      const token = authClient.getToken();
+      const res = await fetch(rfqAttachmentUrl(file.id), {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        throw new Error('Could not load the attachment.');
+      }
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      window.open(objectUrl, '_blank', 'noopener,noreferrer');
+      // The opened tab has its own reference to the blob; safe to release
+      // this one once the browser has had a chance to load it.
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 30000);
+    } catch (err: any) {
+      showToast('Could Not Open Attachment', err?.message || 'Could not load the attachment.', 'warning');
+    }
+  };
 
   // Memoised because the `|| []` fallback would otherwise hand every dependent
   // memo a fresh array on each render, recomputing the filter and the CSV needlessly.
@@ -875,17 +904,18 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete }: RFQDetails
                       </span>
                     </span>
                   </span>
-                  {/* A plain link, so the browser previews a PDF or image inline and
-                      the endpoint supplies the name and type from its own metadata. */}
-                  <a
-                    href={rfqAttachmentUrl(file.id)}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                  {/* Fetched with the session's Authorization header and opened as a
+                      blob URL — a plain <a href> can't carry that header, and this
+                      endpoint requires it. The browser still previews a PDF or image
+                      inline from the blob exactly as it would from a direct URL. */}
+                  <button
+                    type="button"
+                    onClick={() => handleViewAttachment(file)}
                     aria-label={formatString(DETAILS.attachmentViewAria, { fileName: file.fileName })}
                     className="btn btn-secondary btn-xs font-bold flex items-center justify-center gap-1 shrink-0 self-start sm:self-auto"
                   >
                     <ExternalLink size={11} /> {DETAILS.attachmentViewAction}
-                  </a>
+                  </button>
                 </li>
               ))}
             </ul>

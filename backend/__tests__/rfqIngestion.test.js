@@ -1,12 +1,8 @@
 const request = require('supertest');
-// Doubled so the summary route does not need a MySQL connection. See
-// helpers/fakeRfqQueries.js for why.
-jest.mock('../src/db/rfqQueries', () => require('./helpers/fakeRfqQueries'));
 
 const app = require('../src/app');
 const ingestion = require('../src/services/rfqIngestionService');
 const storeService = require('../src/services/storeService');
-const rfqQueries = require('../src/db/rfqQueries');
 const rfqSummaryService = require('../src/services/rfqSummaryService');
 const { RFQ_CATEGORY_CLASSIFICATION, RFQ_INGESTION_CONFIG } = require('../src/config/constants');
 const taxonomy = require('../src/config/categories.json');
@@ -558,7 +554,9 @@ describe('RFQ ingestion & summary HTTP routes', () => {
     });
 
     test('surfaces an unexpected failure through the error handler', async () => {
-      const spy = jest.spyOn(rfqQueries, 'listRFQsByOrg').mockRejectedValue(new Error('boom'));
+      const spy = jest.spyOn(rfqSummaryService, 'buildPortfolioSummary').mockImplementation(() => {
+        throw new Error('boom');
+      });
       try {
         const res = await request(app).get('/api/rfqs/summary').set(authHeader('buyer'));
         expect(res.statusCode).toBeGreaterThanOrEqual(500);

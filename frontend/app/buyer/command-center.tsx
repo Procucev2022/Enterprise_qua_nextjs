@@ -15,13 +15,11 @@ import {
   Bot,
   Layers,
   ChevronRight,
-  Download,
   Search,
   MessageSquare,
   Phone,
   Smartphone,
   Mail,
-  Database,
   FileSpreadsheet,
 } from 'lucide-react';
 
@@ -34,7 +32,7 @@ interface CommandCenterProps {
 
 export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, onNavigateToSubscription, onNavigateToDirectory }: CommandCenterProps) {
   const {
-    rfqs,
+    rfqs: allRfqs,
     aiFeed,
     currentMode,
     setSelectedRFQForMatrix,
@@ -59,6 +57,15 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   });
 
   const [rfqSourceFilter, setRfqSourceFilter] = useState<'all' | 'email_gateway' | 'web_portal' | 'email_upload'>('all');
+
+  // Scoped to the logged-in buyer's own company. Without this every buyer saw
+  // every RFQ ever created by any company — a real cross-tenant data leak,
+  // not a display quirk. An RFQ predating buyerAccountId tracking, or created
+  // while no buyer account matched the session, has no owner to scope to and
+  // is excluded rather than shown to everyone by default.
+  const rfqs = activeBuyerAccount
+    ? allRfqs.filter((r) => r.buyerAccountId === activeBuyerAccount.id)
+    : [];
 
   const totalActiveRFQs = rfqs.length;
   const totalPendingQuotes = rfqs.reduce((acc, r) => acc + (r.quotesCount || (r.quotes ? r.quotes.length : 0)), 0);
@@ -185,6 +192,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
             <FileSpreadsheet size={13} className={initialSetupCompleted ? 'text-emerald-600' : 'text-indigo-600'} />
             <span>{initialSetupCompleted ? '✓ PO History Ingested' : '⚡ 1-3 Yr Purchase Setup'}</span>
           </button>
+
           <button onClick={onNavigateToWizard} className="btn btn-primary btn-sm font-bold shadow-md">
             <Plus size={14} /> AI RFQ Generator
           </button>

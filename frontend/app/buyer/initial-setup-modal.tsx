@@ -89,13 +89,27 @@ export default function InitialSetupModal() {
   const poFileInputRef = useRef<HTMLInputElement>(null);
 
   const [isProcessingPOJoin, setIsProcessingPOJoin] = useState(false);
+  const [isConfirmingIngestion, setIsConfirmingIngestion] = useState(false);
   const [activeReviewTab, setActiveReviewTab] = useState<'all' | 'mapped' | 'unmapped'>('all');
 
   if (!initialSetupModalOpen) return null;
 
+  // Neither the file-picker (`accept=".xlsx,..."` is a browser-only hint,
+  // trivially bypassed) nor drag-and-drop checked the file type before
+  // handing it to the spreadsheet parser — any file went straight in.
+  const ALLOWED_UPLOAD_EXTENSIONS = ['.xlsx', '.xls', '.csv', '.tsv', '.txt'];
+  const isAllowedSpreadsheetFile = (file: File): boolean => {
+    const name = file.name.toLowerCase();
+    return ALLOWED_UPLOAD_EXTENSIONS.some((ext) => name.endsWith(ext));
+  };
+
   // Real File Upload & SheetJS/CSV Parsing for File 1: Vendor Master
   const handleVendorFileUpload = (file: File) => {
     if (!file) return;
+    if (!isAllowedSpreadsheetFile(file)) {
+      showToast('Unsupported File Type', `"${file.name}" is not a supported spreadsheet file. Accepted: ${ALLOWED_UPLOAD_EXTENSIONS.join(', ')}.`, 'warning');
+      return;
+    }
     setIsParsingVendor(true);
     const reader = new FileReader();
 
@@ -172,6 +186,10 @@ export default function InitialSetupModal() {
   // Real File Upload & SheetJS/CSV Parsing for File 2: PO Purchase Dump
   const handlePODataFileUpload = (file: File) => {
     if (!file) return;
+    if (!isAllowedSpreadsheetFile(file)) {
+      showToast('Unsupported File Type', `"${file.name}" is not a supported spreadsheet file. Accepted: ${ALLOWED_UPLOAD_EXTENSIONS.join(', ')}.`, 'warning');
+      return;
+    }
     setIsParsingPo(true);
     const reader = new FileReader();
 
@@ -411,8 +429,11 @@ export default function InitialSetupModal() {
     }, 800);
   };
 
-  const handleConfirmFinalIngestion = () => {
-    processHistoricalPurchaseData(selectedPeriod, joinedVendors);
+  const handleConfirmFinalIngestion = async () => {
+    if (isConfirmingIngestion) return;
+    setIsConfirmingIngestion(true);
+    await processHistoricalPurchaseData(selectedPeriod, joinedVendors);
+    setIsConfirmingIngestion(false);
   };
 
   return (
@@ -1102,15 +1123,22 @@ export default function InitialSetupModal() {
             </div>
 
             <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-gray-800">
-              <button type="button" onClick={() => setStep(4)} className="btn btn-secondary btn-sm">
+              <button
+                type="button"
+                onClick={() => setStep(4)}
+                className="btn btn-secondary btn-sm"
+                disabled={isConfirmingIngestion}
+              >
                 Back to Category Join
               </button>
               <button
                 type="button"
                 onClick={handleConfirmFinalIngestion}
-                className="btn btn-primary font-bold text-xs py-3 px-6 shadow-lg shadow-indigo-600/30 flex items-center gap-2"
+                disabled={isConfirmingIngestion}
+                className="btn btn-primary font-bold text-xs py-3 px-6 shadow-lg shadow-indigo-600/30 flex items-center gap-2 disabled:opacity-60"
               >
-                <CheckCircle2 size={16} /> [ COMPLETE SETUP & INGEST {joinedVendors.length} VENDORS ]
+                <CheckCircle2 size={16} />{' '}
+                {isConfirmingIngestion ? 'PROCESSING...' : `[ COMPLETE SETUP & INGEST ${joinedVendors.length} VENDORS ]`}
               </button>
             </div>
           </div>

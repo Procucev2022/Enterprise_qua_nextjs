@@ -301,45 +301,8 @@ const IDENTITY_PHONE_CONFIG = {
 };
 
 // ==============================================================================
-// RFQ PERSISTENCE (shared Procucev MySQL schema)
+// RFQ SUMMARY
 // ==============================================================================
-// RFQs are stored in the same MySQL schema the Java p2pservices app owns, in a
-// table namespaced to this workspace so the Java app's own migrations can never
-// collide with it. Underscores rather than hyphens because every other table in
-// that schema uses them, and a hyphenated identifier would need backquoting in
-// every statement that touches it.
-//
-// The id reservation table is deliberately SHARED with the Java app. Both
-// services allocate from the same `RFQ + yyddMM + 6 digits` space, so reserving
-// through a single table is what stops the two minting the same id.
-const RFQ_PERSISTENCE = {
-  RFQ_TABLE: 'qua_enterprice_rfq',
-  MIGRATIONS_TABLE: 'qua_enterprice_migrations',
-  // Owned by the Java app; this workspace only ever INSERTs reservations.
-  ID_RESERVATION_TABLE: 'rfq_id_reservations',
-  // Legacy Java tables consulted so a generated id cannot clash with theirs.
-  LEGACY_RFQ_RECORDS_TABLE: 'rfq_records',
-  LEGACY_RFQ_HEADER_TABLE: 'rfq_header',
-};
-
-// RFQ id format, ported from AutomaticRfqServiceImpl.generateRfqId in the Java
-// p2pservices app so ids minted here are indistinguishable from ids minted
-// there. Called with "RFQ", giving e.g. RFQ260409000512.
-//   prefix   : first 3 characters, uppercased
-//   datePart : yyddMM  (note the day-before-month ordering, which is what the
-//              Java SimpleDateFormat pattern actually produces)
-//   suffix   : 6 zero-padded digits, seeded from the clock and probed upwards
-const RFQ_ID_CONFIG = {
-  COMPANY: 'RFQ',
-  PREFIX_LENGTH: 3,
-  SUFFIX_MODULUS: 1000000,
-  SUFFIX_PAD: 6,
-  // The Java loop probes the whole space; this is capped far lower because a
-  // hosted request cannot sit through a million round trips, and exhausting
-  // even a few hundred candidates already means something is badly wrong.
-  MAX_ATTEMPTS: 250,
-};
-
 // Bounds on the generated per-RFQ summary. The item cap keeps a 300-line BOQ
 // from producing a prompt large enough to blow the model's context or the
 // request timeout; the head of the list is representative enough to summarise.
@@ -369,27 +332,6 @@ const BUYER_ACCOUNT_RESOLUTION = {
     ORG_NOT_LINKED:
       'Your account is not linked to a buyer organisation yet. Ask your administrator to link it, then sign in again.',
   },
-};
-
-// ==============================================================================
-// BUYER SCOPE (who an RFQ belongs to)
-// ==============================================================================
-// Every RFQ read is filtered by the buyer organisation taken from the verified
-// session. These are the ways that can fail, and what the buyer is told.
-const BUYER_SCOPE_REASONS = {
-  NO_SESSION: 'NO_SESSION',
-  NO_ORGANISATION: 'NO_ORGANISATION',
-};
-
-const BUYER_SCOPE_MESSAGES = {
-  [BUYER_SCOPE_REASONS.NO_SESSION]:
-    'Your session has expired or is missing. Sign in again to view your RFQs.',
-  // A real state in the shared schema: a user row can exist with no linked
-  // organisation. Without one there is no owner to attribute an RFQ to, and
-  // showing every organisation's RFQs instead would be the leak this scoping
-  // exists to prevent.
-  [BUYER_SCOPE_REASONS.NO_ORGANISATION]:
-    'Your account is not linked to a buyer organisation yet, so no RFQs can be listed or created. Ask your administrator to link your account, then sign in again.',
 };
 
 // ==============================================================================
@@ -553,10 +495,12 @@ const GEMINI_CONFIG = {
 // back verbatim and are never sent to Gemini: the manual flow exists precisely
 // because the buyer is keying the line items themselves.
 //
-// Content is held on disk rather than on the RFQ record. A 10MB PDF is ~13MB of
-// base64, and the bootstrap payload returns every RFQ, so inlining attachments
-// would make that response grow without bound.
+// Content lives in Cloudflare R2 rather than on the RFQ record. A 10MB PDF is
+// ~13MB of base64, and the bootstrap payload returns every RFQ, so inlining
+// attachments would make that response grow without bound.
 const RFQ_ATTACHMENT_CONFIG = {
+  // Object key prefix within the R2 bucket (was the local disk directory
+  // before the R2 migration — same env var, reinterpreted).
   STORAGE_DIR: process.env.RFQ_ATTACHMENT_DIR || 'uploads/rfq-attachments',
   MAX_BYTES: Number(process.env.RFQ_ATTACHMENT_MAX_BYTES || 10 * 1024 * 1024),
   MAX_PER_RFQ: Number(process.env.RFQ_ATTACHMENT_MAX_PER_RFQ || 10),
@@ -723,12 +667,8 @@ const {
 } = require('./validationSchemas');
 
 module.exports = {
-  RFQ_PERSISTENCE,
-  RFQ_ID_CONFIG,
   RFQ_SUMMARY_CONFIG,
   BUYER_ACCOUNT_RESOLUTION,
-  BUYER_SCOPE_REASONS,
-  BUYER_SCOPE_MESSAGES,
   SOURCING_MODES,
   BUYER_SUBSCRIPTION_PLANS,
   VENDOR_SUBSCRIPTION_PLANS,
