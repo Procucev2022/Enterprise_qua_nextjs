@@ -473,7 +473,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
               </p>
             ) : (
               <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-gray-800">
-                <table className="w-full text-left min-w-[1000px]">
+                <table className="w-full text-left min-w-[1080px]">
                   <thead className="bg-slate-50 dark:bg-gray-950/60 text-[10px] uppercase tracking-wide text-slate-500 dark:text-gray-400">
                     <tr>
                       <th className="px-2 py-2 font-bold">{MODAL.colItem}</th>
@@ -563,7 +563,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                                 })
                               }
                               placeholder={MODAL.qtyPlaceholder}
-                              className="mono w-20"
+                              className="mono w-28"
                             />
                             <FieldError message={errors.quantity} />
                           </td>
@@ -575,7 +575,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                               value={item.unit}
                               onChange={(e) => patchItem(item.id, { unit: e.target.value })}
                               placeholder={MODAL.unitPlaceholder}
-                              className="w-20"
+                              className="w-28"
                             />
                             <FieldError message={errors.unit} />
                           </td>

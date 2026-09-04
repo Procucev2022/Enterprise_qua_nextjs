@@ -154,3 +154,146 @@ describe('SupportChatWidget', () => {
     expect(screen.getByText(/Hello!/)).toBeInTheDocument();
   });
 });
+
+// ==============================================================================
+// ROLE ATTRIBUTION, THE HOVER BADGE, COPY AND CLEAR
+// ==============================================================================
+// The escalation names the role it came from, so a support desk reading the audit
+// log knows whether a buyer or a vendor raised it. The remaining cases cover the
+// controls that sit on an open conversation.
+// ==============================================================================
+
+describe('SupportChatWidget: escalation attributes the role', () => {
+  const mockAddAuditLog = jest.fn();
+
+  /**
+   * Escalate the conversation.
+   *
+   * Triggered by a dissatisfaction keyword rather than by any unrecognised
+   * question — an unmatched prompt still gets a canned reply.
+   */
+  const escalate = () => {
+    fireEvent.click(screen.getByLabelText('Open support chat'));
+    const input = screen.getByPlaceholderText('Ask a question...');
+    fireEvent.change(input, { target: { value: 'this is no help at all' } });
+    fireEvent.submit(input.closest('form') as HTMLFormElement);
+    act(() => {
+      jest.runOnlyPendingTimers();
+    });
+  };
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    mockAddAuditLog.mockClear();
+  });
+
+  afterEach(() => {
+    act(() => {
+      jest.runOnlyPendingTimers();
+    });
+    jest.useRealTimers();
+    jest.clearAllMocks();
+  });
+
+  it.each([
+    ['buyer', 'Buyer'],
+    ['vendor', 'Vendor'],
+    ['category_manager', 'Category Manager'],
+    // Anything else is a category manager as far as the escalation is concerned,
+    // rather than being reported with a blank role.
+    ['admin', 'Category Manager'],
+  ])('records a %s escalation as %s', (role, expected) => {
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      currentRole: role,
+      addAuditLog: mockAddAuditLog,
+    });
+
+    render(<SupportChatWidget />);
+    escalate();
+
+    expect(mockAddAuditLog).toHaveBeenCalledWith(
+      expect.stringContaining(expected),
+      undefined,
+      'system'
+    );
+  });
+});
+
+describe('SupportChatWidget: conversation controls', () => {
+  const mockAddAuditLog = jest.fn();
+  const writeText = jest.fn();
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      currentRole: 'buyer',
+      addAuditLog: mockAddAuditLog,
+    });
+    Object.assign(navigator, { clipboard: { writeText } });
+  });
+
+  afterEach(() => {
+    act(() => {
+      jest.runOnlyPendingTimers();
+    });
+    jest.useRealTimers();
+    jest.clearAllMocks();
+  });
+
+  // The badge is the second way into the conversation, alongside the round button.
+  it('opens the conversation from the hover badge', () => {
+    render(<SupportChatWidget />);
+
+    fireEvent.click(screen.getByText(/Need help/i));
+
+    expect(screen.getByText('QUA AI Support')).toBeInTheDocument();
+  });
+
+  it('copies a reply and stops confirming after a moment', () => {
+    render(<SupportChatWidget />);
+    fireEvent.click(screen.getByLabelText('Open support chat'));
+
+    const copyButton = screen.getAllByTitle(/Copy/i)[0];
+    fireEvent.click(copyButton);
+
+    expect(writeText).toHaveBeenCalled();
+    // The tick is the confirmation, and it is not supposed to stay forever.
+    expect(document.querySelector('svg.lucide-check')).not.toBeNull();
+
+    act(() => {
+      jest.advanceTimersByTime(2500);
+    });
+    expect(document.querySelector('svg.lucide-check')).toBeNull();
+  });
+
+  it('clears a half-typed question without sending it', () => {
+    render(<SupportChatWidget />);
+    fireEvent.click(screen.getByLabelText('Open support chat'));
+
+    const input = screen.getByPlaceholderText('Ask a question...');
+    fireEvent.change(input, { target: { value: 'half typed' } });
+
+    // Appears only once there is something to clear, and carries an X rather than
+    // a label, so it is located by that icon inside the composer.
+    const clear = input.parentElement?.querySelector('button');
+    expect(clear).not.toBeNull();
+    fireEvent.click(clear as HTMLButtonElement);
+
+    expect(input).toHaveValue('');
+    expect(screen.queryByText('half typed')).not.toBeInTheDocument();
+  });
+
+  // Submitting an empty box must not post a blank message.
+  it('ignores an empty submission', () => {
+    render(<SupportChatWidget />);
+    fireEvent.click(screen.getByLabelText('Open support chat'));
+
+    const input = screen.getByPlaceholderText('Ask a question...');
+    const before = screen.getAllByText(/./).length;
+    fireEvent.change(input, { target: { value: '   ' } });
+    fireEvent.submit(input.closest('form') as HTMLFormElement);
+
+    expect(mockAddAuditLog).not.toHaveBeenCalled();
+    expect(screen.getAllByText(/./).length).toBe(before);
+  });
+});

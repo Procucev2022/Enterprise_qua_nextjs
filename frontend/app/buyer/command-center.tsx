@@ -167,9 +167,6 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
         <div>
           <h1 className="text-xl font-extrabold tracking-tight text-slate-900 dark:text-white flex items-center gap-2 flex-wrap">
             <span>Enterprise Sourcing Dashboard</span>
-            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-              Sourcing Operations
-            </span>
           </h1>
           <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
             Active RFQ pipeline tracking · Autonomous multi-channel follow-ups (Voice, WhatsApp, SMS) · Parametric quote matrix
@@ -188,34 +185,8 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
             <FileSpreadsheet size={13} className={initialSetupCompleted ? 'text-emerald-600' : 'text-indigo-600'} />
             <span>{initialSetupCompleted ? '✓ PO History Ingested' : '⚡ 1-3 Yr Purchase Setup'}</span>
           </button>
-
-          {onNavigateToDirectory && (
-            <button
-              onClick={onNavigateToDirectory}
-              className="btn btn-secondary btn-sm flex items-center gap-1.5 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800/60 hover:bg-amber-50 dark:hover:bg-amber-950/40"
-              title="View Integrated Buyer Directory & Public System Database"
-            >
-              <Database size={13} />
-              <span>Public Buyer DB ({activeBuyerAccount?.organizationName || 'L&T'})</span>
-            </button>
-          )}
           <button onClick={onNavigateToWizard} className="btn btn-primary btn-sm font-bold shadow-md">
-            <Plus size={14} /> Create / Ingest RFQ
-          </button>
-          <button
-            onClick={() => {
-              onNavigateToWizard();
-              showToast('Upload BOQ Ready', 'Drag and drop your BOQ spreadsheet for automated entity extraction.', 'info');
-            }}
-            className="btn btn-secondary btn-sm"
-          >
-            <UploadCloud size={13} /> Upload BOQ
-          </button>
-          <button
-            onClick={() => showToast('Analytics Exported', 'Executive spend & procurement pipeline exported to Excel.', 'info')}
-            className="btn btn-secondary btn-sm"
-          >
-            <Download size={13} />
+            <Plus size={14} /> AI RFQ Generator
           </button>
         </div>
       </div>
