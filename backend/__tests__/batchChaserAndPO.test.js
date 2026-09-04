@@ -55,4 +55,20 @@ describe('Batch Chaser & Purchase Order API', () => {
     const res = await request(app).post('/api/rfqs/RFQ-2026-0891/approve-po').send({});
     expect(res.statusCode).toBe(401);
   });
+
+  test('POST /api/rfqs/:id/approve-po returns 403 for a vendor (only buyer-side roles award a PO)', async () => {
+    const res = await request(app)
+      .post('/api/rfqs/RFQ-2026-0891/approve-po')
+      .set(authHeader('vendor'))
+      .send({ vendorName: 'Apex', totalAmount: 1000 });
+    expect(res.statusCode).toBe(403);
+  });
+
+  test('POST /api/rfqs/:id/approve-po returns 404 for an invalid RFQ id', async () => {
+    const res = await request(app)
+      .post('/api/rfqs/nonexistent-rfq/approve-po')
+      .set(authHeader('buyer'))
+      .send({ vendorName: 'Apex', totalAmount: 1000 });
+    expect(res.statusCode).toBe(404);
+  });
 });

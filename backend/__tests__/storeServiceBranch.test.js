@@ -145,7 +145,7 @@ describe('Store Service Deep Branch & Fallback Tests', () => {
       const chaserRes = storeService.triggerBatchChaser(allRFQs[0].id, ['call', 'whatsapp']);
       expect(chaserRes.success).toBe(true);
 
-      const poRes = storeService.approvePurchaseOrder(allRFQs[0].rfqNumber, 'Apex', 45000, 'Notes');
+      const poRes = storeService.approvePurchaseOrder(allRFQs[0].rfqNumber, 'v-001', 'Apex', 45000, 'Notes');
       expect(poRes.poNumber).toBeDefined();
       expect(poRes.success).toBe(true);
     }

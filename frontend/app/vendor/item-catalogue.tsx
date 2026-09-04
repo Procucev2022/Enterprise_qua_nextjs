@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '@/lib/store';
+import { authClient } from '@/lib/authClient';
 import {
   Layers,
   Plus,
@@ -28,11 +29,66 @@ interface ProductItem {
 }
 
 export default function ItemCatalogue() {
-  const { showToast, addAuditLog, vendorCatalogue, setVendorCatalogue, vendorOpportunities, vendorSubscription } = useApp();
+  const { showToast, addAuditLog, vendorCatalogue, setVendorCatalogue, vendorOpportunities, vendorSubscription, currentUserSession } = useApp();
+  const vendorLabel = currentUserSession?.orgName || currentUserSession?.name || 'Vendor';
 
   // Use shared store state as the products list
   const products = vendorCatalogue as ProductItem[];
   const setProducts = setVendorCatalogue;
+
+  // This vendor's own backend record id — the catalogue is now scoped per
+  // vendor server-side (was one global shared array, see BUGS.md #24), so
+  // every read/write needs to know who "my catalogue" actually belongs to.
+  const [myVendorId, setMyVendorId] = useState<string | null>(null);
+  const [isLoadingCatalogue, setIsLoadingCatalogue] = useState(true);
+
+  const authHeaders = (): Record<string, string> => {
+    const token = authClient.getToken();
+    return {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadCatalogue() {
+      const email = currentUserSession?.email;
+      if (!email) {
+        setIsLoadingCatalogue(false);
+        return;
+      }
+      try {
+        const vendorRes = await fetch(`/api/vendors/${encodeURIComponent(email)}`);
+        if (!vendorRes.ok) {
+          if (!cancelled) setProducts([]);
+          return;
+        }
+        const vendorData = await vendorRes.json();
+        const vendorId = vendorData?.data?.id;
+        if (!vendorId) {
+          if (!cancelled) setProducts([]);
+          return;
+        }
+        if (!cancelled) setMyVendorId(vendorId);
+
+        const catRes = await fetch(`/api/catalogue?vendorId=${encodeURIComponent(vendorId)}`);
+        const catData = await catRes.json();
+        if (!cancelled && catRes.ok && catData.success) {
+          setProducts(catData.data || []);
+        }
+      } catch {
+        // Network failure: leave whatever local state exists rather than wiping it.
+      } finally {
+        if (!cancelled) setIsLoadingCatalogue(false);
+      }
+    }
+    loadCatalogue();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUserSession?.email]);
 
   // Form states
   const [isEditing, setIsEditing] = useState(false);
@@ -44,6 +100,7 @@ export default function ItemCatalogue() {
   const [unitPrice, setUnitPrice] = useState('');
   const [leadTimeDays, setLeadTimeDays] = useState('');
   const [moq, setMoq] = useState(''); // MOQ Form Field
+  const [isSavingProduct, setIsSavingProduct] = useState(false);
 
   // Search filter & Summary filter states
   const [searchTerm, setSearchTerm] = useState('');
@@ -53,7 +110,7 @@ export default function ItemCatalogue() {
   const MAX_LIMIT = 100;
   const currentCount = products.length;
 
-  const handleAddOrEditProduct = (e: React.FormEvent) => {
+  const handleAddOrEditProduct = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!name.trim() || !sku.trim() || !unitPrice.trim() || !leadTimeDays.trim() || !moq.trim()) {
@@ -80,40 +137,43 @@ export default function ItemCatalogue() {
       return;
     }
 
-    if (isEditing && editingId) {
-      // Edit existing product
-      setProducts((prev) =>
-        prev.map((prod) =>
-          prod.id === editingId
-            ? { ...prod, name, category, sku, specs, unitPrice: priceNum, leadTimeDays: leadTimeNum, moq: moqNum }
-            : prod
-        )
-      );
-      showToast('Product Updated', `Successfully updated ${sku} in your catalog.`, 'success');
-      addAuditLog(`Apex Supplies updated product ${sku} inside catalogue`, 'VN-APEX-4920', 'vendor@apex.com');
-      resetForm();
-    } else {
-      // Check maximum limit constraint
-      if (products.length >= MAX_LIMIT) {
-        showToast('Limit Reached', `Unable to add product. Catalogue size is capped at ${MAX_LIMIT} items.`, 'warning');
-        return;
+    setIsSavingProduct(true);
+    try {
+      if (isEditing && editingId) {
+        const res = await fetch(`/api/catalogue/${encodeURIComponent(editingId)}`, {
+          method: 'PUT',
+          headers: authHeaders(),
+          body: JSON.stringify({ name, category, sku, specs, unitPrice: priceNum, leadTimeDays: leadTimeNum, moq: moqNum }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.error || 'Failed to update product.');
+
+        setProducts((prev) => prev.map((prod) => (prod.id === editingId ? data.data : prod)));
+        showToast('Product Updated', `Successfully updated ${sku} in your catalog.`, 'success');
+        addAuditLog(`${vendorLabel} updated product ${sku} inside catalogue`, undefined, currentUserSession?.email);
+      } else {
+        if (products.length >= MAX_LIMIT) {
+          showToast('Limit Reached', `Unable to add product. Catalogue size is capped at ${MAX_LIMIT} items.`, 'warning');
+          return;
+        }
+
+        const res = await fetch('/api/catalogue', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({ name, category, sku: sku.toUpperCase(), specs, unitPrice: priceNum, leadTimeDays: leadTimeNum, moq: moqNum }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.error || 'Failed to add product.');
+
+        setProducts((prev) => [data.data, ...prev]);
+        showToast('Product Added', `Successfully added product ${data.data.sku} to your catalog.`, 'success');
+        addAuditLog(`${vendorLabel} created new catalogue item ${data.data.sku}`, undefined, currentUserSession?.email);
       }
-
-      const newProduct: ProductItem = {
-        id: `prod-${Date.now()}`,
-        name,
-        category,
-        sku: sku.toUpperCase(),
-        specs,
-        unitPrice: priceNum,
-        leadTimeDays: leadTimeNum,
-        moq: moqNum,
-      };
-
-      setProducts((prev) => [newProduct, ...prev]);
-      showToast('Product Added', `Successfully added product ${newProduct.sku} to your catalog.`, 'success');
-      addAuditLog(`Apex Supplies created new catalogue item ${newProduct.sku}`, 'VN-APEX-4920', 'vendor@apex.com');
       resetForm();
+    } catch (err: any) {
+      showToast('Save Failed', err?.message || 'Could not save the product. Please try again.', 'warning');
+    } finally {
+      setIsSavingProduct(false);
     }
   };
 
@@ -129,39 +189,58 @@ export default function ItemCatalogue() {
     setMoq(prod.moq.toString());
   };
 
-  const handleDeleteClick = (id: string, productSku: string) => {
-    setProducts((prev) => prev.filter((p) => p.id !== id));
-    showToast('Product Deleted', `Removed ${productSku} from catalogue.`, 'success');
-    addAuditLog(`Apex Supplies deleted product ${productSku} from catalogue`, 'VN-APEX-4920', 'vendor@apex.com');
+  const handleDeleteClick = async (id: string, productSku: string) => {
+    try {
+      const res = await fetch(`/api/catalogue/${encodeURIComponent(id)}`, { method: 'DELETE', headers: authHeaders() });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to delete product.');
+
+      setProducts((prev) => prev.filter((p) => p.id !== id));
+      showToast('Product Deleted', `Removed ${productSku} from catalogue.`, 'success');
+      addAuditLog(`${vendorLabel} deleted product ${productSku} from catalogue`, undefined, currentUserSession?.email);
+    } catch (err: any) {
+      showToast('Delete Failed', err?.message || 'Could not delete the product. Please try again.', 'warning');
+    }
   };
 
-  const handleSimulateBulkImport = () => {
+  const handleSimulateBulkImport = async () => {
     if (products.length >= MAX_LIMIT) {
       showToast('Limit Reached', `Unable to import. Catalogue size is already at the ${MAX_LIMIT} item cap.`, 'warning');
       return;
     }
 
-    // Generate mock bulk products up to 40 items to showcase limit bar
+    // Generate mock bulk products up to 40 items to showcase limit bar, then
+    // actually persist each one (was: local state only — vanished on refresh).
     const importItemsCount = Math.min(35, MAX_LIMIT - products.length);
-    const importedList: ProductItem[] = [];
-
-    for (let i = 1; i <= importItemsCount; i++) {
-      const idx = products.length + i;
-      importedList.push({
-        id: `bulk-prod-${idx}`,
+    const importPayloads = Array.from({ length: importItemsCount }, (_, i) => {
+      const idx = products.length + i + 1;
+      return {
         name: `Industrial Flanged Adapter Fitting (Model: FLG-${100 + idx})`,
         category: 'Pipes & Fittings',
-        sku: `SKU-PIPE-F${100 + idx}`,
+        sku: `SKU-PIPE-F${100 + idx}-${Date.now().toString().slice(-4)}`,
         specs: `Standard carbon steel flanged connector pipe adapter fitting, size ${2 + (idx % 4)} inches.`,
         unitPrice: 150 + (idx * 5),
         leadTimeDays: 3 + (idx % 5),
         moq: 5 + (idx % 3),
-      });
-    }
+      };
+    });
 
-    setProducts((prev) => [...prev, ...importedList]);
-    showToast('Bulk Import Successful', `Ingested ${importedList.length} products with MOQ details from template.`, 'success');
-    addAuditLog(`Apex Supplies performed bulk catalogue import of ${importedList.length} products`, 'VN-APEX-4920', 'vendor@apex.com');
+    try {
+      const headers = authHeaders();
+      const results = await Promise.all(
+        importPayloads.map((payload) =>
+          fetch('/api/catalogue', { method: 'POST', headers, body: JSON.stringify(payload) }).then((r) => r.json())
+        )
+      );
+      const created = results.filter((r) => r.success).map((r) => r.data);
+      if (created.length > 0) {
+        setProducts((prev) => [...prev, ...created]);
+      }
+      showToast('Bulk Import Successful', `Ingested ${created.length} products with MOQ details from template.`, 'success');
+      addAuditLog(`${vendorLabel} performed bulk catalogue import of ${created.length} products`, undefined, currentUserSession?.email);
+    } catch (err: any) {
+      showToast('Import Failed', err?.message || 'Could not complete the bulk import.', 'warning');
+    }
   };
 
   const resetForm = () => {
@@ -176,10 +255,19 @@ export default function ItemCatalogue() {
     setMoq('');
   };
 
-  // Cross-match: find marketplace RFQs matching a product by keyword comparison
+  // Cross-match: find marketplace RFQs matching a product by keyword overlap.
+  // Was: the filter callback ignored its own parameter and always tested the
+  // product's own text against a hardcoded 'pump' literal — every product
+  // either matched every RFQ or none, never based on the RFQ's actual content.
   const getMatchingRfqsForProduct = (prod: ProductItem) => {
-    const prodText = `${prod.name} ${prod.category} ${prod.specs}`.toLowerCase();
-    return vendorOpportunities.filter(() => prodText.includes('pump'));
+    const prodTokens = `${prod.name} ${prod.category} ${prod.specs}`
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((t) => t.length > 3);
+    return vendorOpportunities.filter((opp) => {
+      const oppText = `${opp.title} ${opp.buyer}`.toLowerCase();
+      return prodTokens.some((token) => oppText.includes(token));
+    });
   };
 
   // Total count of catalogue items that have matching open RFQs
@@ -272,7 +360,7 @@ export default function ItemCatalogue() {
             ></div>
           </div>
           <div className="text-[10px] text-slate-400 dark:text-gray-500">
-            Automated Sourcing matching chasers read this catalogue to prioritize direct invitations to Apex Supplies.
+            Automated Sourcing matching chasers read this catalogue to prioritize direct invitations to {vendorLabel}.
           </div>
         </div>
 
@@ -391,13 +479,14 @@ export default function ItemCatalogue() {
             <div className="flex gap-2 pt-2">
               <button
                 type="submit"
-                className={`btn flex-1 text-xs font-bold py-2 ${
+                disabled={isSavingProduct || isLoadingCatalogue}
+                className={`btn flex-1 text-xs font-bold py-2 disabled:opacity-60 disabled:cursor-not-allowed ${
                   isEditing
                     ? 'btn-primary bg-indigo-650 hover:bg-indigo-600'
                     : 'btn-success bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 border-none'
                 }`}
               >
-                {isEditing ? 'Update Item' : 'Add Item'}
+                {isSavingProduct ? 'Saving...' : isEditing ? 'Update Item' : 'Add Item'}
               </button>
               {isEditing && (
                 <button

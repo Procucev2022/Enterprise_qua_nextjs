@@ -1,6 +1,12 @@
 const request = require('supertest');
 const app = require('../src/app');
+const authService = require('../src/services/authService');
+const storeService = require('../src/services/storeService');
 const { authHeader } = require('./testHelpers');
+
+function customAuthHeader(user) {
+  return { Authorization: `Bearer ${authService.generateSessionToken(user)}` };
+}
 
 describe('API Route Endpoints', () => {
   // 1. Bootstrap
@@ -89,6 +95,60 @@ describe('API Route Endpoints', () => {
       const res = await request(app).delete('/api/buyer-accounts/nonexistent-id').set(authHeader('buyer'));
       expect(res.statusCode).toBe(404);
     });
+
+    // Buyer accounts are buyer-side org records. Every mutating endpoint used
+    // to accept any authenticated role, so a vendor or category manager could
+    // create, edit, delete or re-point the globally active buyer account, and
+    // run the buyer-only historical-purchase vendor ingestion.
+    describe.each(['vendor', 'category_manager'])('returns 403 for the %s role', (role) => {
+      test('POST /api/buyer-accounts', async () => {
+        const res = await request(app)
+          .post('/api/buyer-accounts')
+          .set(authHeader(role))
+          .send({ organizationName: 'Rogue Org', corporateEmail: 'rogue@org.com' });
+        expect(res.statusCode).toBe(403);
+        expect(res.body.success).toBe(false);
+      });
+
+      test('PUT /api/buyer-accounts/:id', async () => {
+        const res = await request(app).put('/api/buyer-accounts/buyer-acc-001').set(authHeader(role)).send({ totalSpend: '₹0' });
+        expect(res.statusCode).toBe(403);
+      });
+
+      test('DELETE /api/buyer-accounts/:id', async () => {
+        const res = await request(app).delete('/api/buyer-accounts/buyer-acc-001').set(authHeader(role));
+        expect(res.statusCode).toBe(403);
+      });
+
+      test('POST /api/buyer-accounts/:id/activate', async () => {
+        const res = await request(app).post('/api/buyer-accounts/buyer-acc-001/activate').set(authHeader(role));
+        expect(res.statusCode).toBe(403);
+      });
+
+      test('POST /api/buyer-accounts/historical-data', async () => {
+        const res = await request(app)
+          .post('/api/buyer-accounts/historical-data')
+          .set(authHeader(role))
+          .send({ period: '2_years', vendorRecords: [] });
+        expect(res.statusCode).toBe(403);
+      });
+    });
+
+    test('POST /api/buyer-accounts/historical-data is allowed for an admin', async () => {
+      const res = await request(app)
+        .post('/api/buyer-accounts/historical-data')
+        .set(authHeader('admin'))
+        .send({ period: '2_years', vendorRecords: [] });
+      expect(res.statusCode).toBe(200);
+    });
+
+    // The two read-only endpoints stay open to any role: the identical
+    // buyerAccounts payload is already served by the unauthenticated
+    // GET /api/bootstrap, which is what the frontend actually reads.
+    test('GET /api/buyer-accounts stays readable by a non-buyer role', async () => {
+      const res = await request(app).get('/api/buyer-accounts').set(authHeader('vendor'));
+      expect(res.statusCode).toBe(200);
+    });
   });
 
   // 3. Vendors
@@ -103,15 +163,17 @@ describe('API Route Endpoints', () => {
     });
 
     test('POST /api/vendors creates new vendor', async () => {
+      // Only the vendor themselves (self-registration) or an admin may create
+      // a vendor profile now — a buyer creating a vendor was never a real
+      // product flow, see vendorController.createVendor.
       const newVendor = {
         name: 'Siemens Energy Spares Pvt Ltd',
         contactPerson: 'Rohan Sharma',
-        email: 'rohan.sharma@siemens.com',
         phone: '+91 98333 44555',
         majorCategory: 'Engineering Spares - Electrical',
         minorCategories: ['Turbines', 'Transformers'],
       };
-      const res = await request(app).post('/api/vendors').set(authHeader('buyer')).send(newVendor);
+      const res = await request(app).post('/api/vendors').set(authHeader('vendor')).send(newVendor);
       expect(res.statusCode).toBe(201);
       expect(res.body.success).toBe(true);
       expect(res.body.data.name).toBe(newVendor.name);
@@ -123,8 +185,13 @@ describe('API Route Endpoints', () => {
       expect(res.statusCode).toBe(401);
     });
 
+    test('POST /api/vendors returns 403 for a role that cannot create a vendor profile', async () => {
+      const res = await request(app).post('/api/vendors').set(authHeader('buyer')).send({ name: 'X', majorCategory: 'Y' });
+      expect(res.statusCode).toBe(403);
+    });
+
     test('POST /api/vendors returns 400 when missing name or majorCategory', async () => {
-      const res = await request(app).post('/api/vendors').set(authHeader('buyer')).send({ email: 'test@vendor.com' });
+      const res = await request(app).post('/api/vendors').set(authHeader('vendor')).send({ email: 'test@vendor.com' });
       expect(res.statusCode).toBe(400);
     });
 
@@ -157,14 +224,43 @@ describe('API Route Endpoints', () => {
     });
 
     test('GET /api/vendors/:id/onboarding-email returns email preview payload', async () => {
-      const res = await request(app).get(`/api/vendors/${testVendorId}/onboarding-email`);
+      // Carries the vendor's real tempPassword, so it's now restricted to the
+      // buyer-side roles that actually onboard vendors (or an admin).
+      const res = await request(app).get(`/api/vendors/${testVendorId}/onboarding-email`).set(authHeader('buyer'));
       expect(res.statusCode).toBe(200);
       expect(res.body.data).toHaveProperty('htmlBody');
       expect(res.body.data).toHaveProperty('to');
     });
 
+    test('PUT /api/vendors/:id updates the profile as the owning vendor, ignoring smuggled fields', async () => {
+      const created = await request(app).post('/api/vendors').set(authHeader('vendor')).send({
+        name: 'Whitelist Test Vendor',
+        majorCategory: 'Engineering Spares - Electrical',
+      });
+      const id = created.body.data.id;
+
+      const res = await request(app)
+        .put(`/api/vendors/${id}`)
+        .set(authHeader('vendor'))
+        .send({ contactPerson: 'Updated Contact', rating: 999, status: 'HACKED' });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data.contactPerson).toBe('Updated Contact');
+      // rating/status aren't in VENDOR_SELF_EDIT_FIELDS, so a vendor's own PUT
+      // can't smuggle them through.
+      expect(res.body.data.rating).not.toBe(999);
+      expect(res.body.data.status).not.toBe('HACKED');
+    });
+
+    test('PUT /api/vendors/:id returns 403 for a caller who is neither the owning vendor nor an admin', async () => {
+      const res = await request(app).put(`/api/vendors/${testVendorId}`).set(authHeader('buyer')).send({ name: 'X' });
+      expect(res.statusCode).toBe(403);
+    });
+
     test('DELETE /api/vendors/:id removes vendor', async () => {
-      const res = await request(app).delete(`/api/vendors/${testVendorId}`).set(authHeader('buyer'));
+      // Only the owning vendor (or an admin) may delete the profile; it was
+      // created above under the 'vendor' test user's own session email.
+      const res = await request(app).delete(`/api/vendors/${testVendorId}`).set(authHeader('vendor'));
       expect(res.statusCode).toBe(200);
     });
   });
@@ -344,9 +440,33 @@ describe('API Route Endpoints', () => {
       expect(res.body.data.id).toBe(testRfqId);
     });
 
+    test('PUT /api/rfqs/:id updates RFQ successfully', async () => {
+      const res = await request(app).put(`/api/rfqs/${testRfqId}`).set(authHeader('buyer')).send({ status: 'In Evaluation' });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data.status).toBe('In Evaluation');
+    });
+
+    test('POST /api/rfqs/:id/quotes returns 403 for a non-vendor role', async () => {
+      const res = await request(app).post(`/api/rfqs/${testRfqId}/quotes`).set(authHeader('buyer')).send({ unitPrice: 100 });
+      expect(res.statusCode).toBe(403);
+    });
+
+    test('POST /api/rfqs/:id/quotes returns 400 when the vendor has no profile yet', async () => {
+      const res = await request(app)
+        .post(`/api/rfqs/${testRfqId}/quotes`)
+        .set(customAuthHeader({ id: 'usr-no-profile', email: 'no-profile-vendor@test.com', name: 'No Profile', role: 'vendor' }))
+        .send({ unitPrice: 100 });
+      expect(res.statusCode).toBe(400);
+    });
+
     test('POST /api/rfqs/:id/quotes adds quote and recalculates matrix', async () => {
+      // A quote's vendor identity is resolved server-side from the caller's
+      // own vendor record now, so one must exist before a vendor can bid.
+      await request(app).post('/api/vendors').set(authHeader('vendor')).send({
+        name: 'Apex Industrial Dynamics Pvt Ltd',
+        majorCategory: 'Engineering Spares - Mechanical',
+      });
       const quote = {
-        vendorName: 'Apex Industrial Dynamics Pvt Ltd',
         unitPrice: 5200,
         totalPrice: 52000,
         leadTimeDays: 10,
@@ -358,24 +478,79 @@ describe('API Route Endpoints', () => {
     });
 
     test('GET /api/rfqs/:id/email-preview generates standard RFQ email', async () => {
-      const res = await request(app).get(`/api/rfqs/${testRfqId}/email-preview`);
+      // This RFQ isn't a direct-roster invite for this vendor, so downloading
+      // it is a marketplace download gated by subscription — grant a plan
+      // with quota first (also exercises PUT /api/vendors/:id/subscription).
+      await request(app)
+        .put(`/api/vendors/${encodeURIComponent('vendor@apexsupplies.com')}/subscription`)
+        .set(authHeader('vendor'))
+        .send({ plan: 'connect' });
+      const res = await request(app).get(`/api/rfqs/${testRfqId}/email-preview`).set(authHeader('vendor'));
       expect(res.statusCode).toBe(200);
       expect(res.body.data).toHaveProperty('htmlBody');
+    });
+
+    test('GET /api/rfqs/:id/email-preview rejects a free-tier vendor downloading a marketplace RFQ', async () => {
+      const header = customAuthHeader({
+        id: 'usr-free-tier-vendor',
+        email: 'free-tier@vendor.com',
+        name: 'Free Tier Vendor',
+        role: 'vendor',
+      });
+      await request(app).post('/api/vendors').set(header).send({
+        name: 'Free Tier Supplier Co',
+        majorCategory: 'Engineering Spares - Mechanical',
+      });
+      // Left on the default 'premium' (free, client-uploaded-only) plan —
+      // this RFQ was never raised by a buyer who added this vendor, so it's
+      // a marketplace download outside what that plan grants.
+      const res = await request(app).get(`/api/rfqs/${testRfqId}/email-preview`).set(header);
+      expect(res.statusCode).toBe(403);
+      expect(res.body.error).toMatch(/Connect or Select subscription/i);
+    });
+
+    test('GET /api/rfqs/:id/email-preview rejects a vendor who has exhausted their quota', async () => {
+      const header = customAuthHeader({
+        id: 'usr-exhausted-vendor',
+        email: 'exhausted@vendor.com',
+        name: 'Exhausted Quota Vendor',
+        role: 'vendor',
+      });
+      const created = await request(app).post('/api/vendors').set(header).send({
+        name: 'Exhausted Quota Supplier Co',
+        majorCategory: 'Engineering Spares - Mechanical',
+      });
+      await request(app).put(`/api/vendors/${created.body.data.id}/subscription`).set(header).send({ plan: 'connect' });
+      storeService.updateVendor(created.body.data.id, { rfqDownloadsUsed: 50 });
+
+      const res = await request(app).get(`/api/rfqs/${testRfqId}/email-preview`).set(header);
+      expect(res.statusCode).toBe(403);
+      expect(res.body.error).toMatch(/reached your 50-RFQ download quota/i);
     });
   });
 
   // 5. Evaluations & Audit
   describe('Evaluations & Audit API', () => {
     test('GET /api/evaluations and POST /api/evaluations', async () => {
-      const getRes = await request(app).get('/api/evaluations');
+      const getRes = await request(app).get('/api/evaluations').set(authHeader('category_manager'));
       expect(getRes.statusCode).toBe(200);
 
-      const postRes = await request(app).post('/api/evaluations').set(authHeader('category_manager')).send({
-        vendorName: 'Godrej Precision Tooling',
+      // A qualification evaluation is a vendor's own self-assessment — identity
+      // is resolved server-side from the caller's session, not the body.
+      const postRes = await request(app).post('/api/evaluations').set(authHeader('vendor')).send({
         moduleScores: { commercial: { score: 95 } },
+        documents: [{ name: 'evidence.pdf' }],
       });
       expect(postRes.statusCode).toBe(201);
-      expect(postRes.body.data.vendorName).toBe('Godrej Precision Tooling');
+      expect(postRes.body.data.email).toBe('vendor@apexsupplies.com');
+    });
+
+    test('POST /api/evaluations returns 403 for a non-vendor role', async () => {
+      const res = await request(app).post('/api/evaluations').set(authHeader('buyer')).send({
+        vendorName: 'X',
+        documents: [{ name: 'evidence.pdf' }],
+      });
+      expect(res.statusCode).toBe(403);
     });
 
     test('POST /api/evaluations requires authentication', async () => {
@@ -501,12 +676,12 @@ describe('API Route Endpoints', () => {
     });
 
     test('GET /api/rfqs/:id/email-preview returns 404 for invalid id', async () => {
-      const res = await request(app).get('/api/rfqs/nonexistent-rfq/email-preview');
+      const res = await request(app).get('/api/rfqs/nonexistent-rfq/email-preview').set(authHeader('vendor'));
       expect(res.statusCode).toBe(404);
     });
 
-    test('POST /api/evaluations returns 400 when missing vendorName', async () => {
-      const res = await request(app).post('/api/evaluations').set(authHeader('category_manager')).send({});
+    test('POST /api/evaluations returns 400 when evidence is missing', async () => {
+      const res = await request(app).post('/api/evaluations').set(authHeader('vendor')).send({});
       expect(res.statusCode).toBe(400);
     });
 
@@ -516,7 +691,7 @@ describe('API Route Endpoints', () => {
     });
 
     test('GET /api/vendors/:id/onboarding-email and rating revision 404 on invalid vendor', async () => {
-      const emailRes = await request(app).get('/api/vendors/invalid-id/onboarding-email');
+      const emailRes = await request(app).get('/api/vendors/invalid-id/onboarding-email').set(authHeader('buyer'));
       expect(emailRes.statusCode).toBe(404);
 
       const ratingRes = await request(app).post('/api/vendors/invalid-id/rating-revision').set(authHeader('buyer')).send({

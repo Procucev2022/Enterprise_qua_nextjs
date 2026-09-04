@@ -1,5 +1,6 @@
 const app = require('./app');
 const identityPoolModule = require('./db/identityPool');
+const storeService = require('./services/storeService');
 const { logger } = require('./services/loggerService');
 
 const PORT = process.env.PORT || 4000;
@@ -60,6 +61,7 @@ function installCrashHandlers(proc = process) {
 
 async function bootstrapServer(port = PORT) {
   await reportIdentityHealth();
+  await storeService.hydrateFromDB();
   const server = app.listen(port);
   return server;
 }

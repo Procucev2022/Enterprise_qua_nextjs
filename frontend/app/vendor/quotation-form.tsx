@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '@/lib/store';
+import { authClient } from '@/lib/authClient';
 import { VendorOpportunity } from '@/lib/types';
 import {
   ArrowLeft,
@@ -17,6 +18,9 @@ import {
   Lock,
   X,
   Copy,
+  IndianRupee,
+  Send,
+  Download,
 } from 'lucide-react';
 
 interface QuotationFormProps {
@@ -61,30 +65,65 @@ const BUYER_CONTACTS_MAP: Record<string, Omit<BuyerContactInfo, 'source'>> = {
 };
 
 export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: QuotationFormProps) {
-  const { rfqs, vendorOpportunities, showToast, addAuditLog, vendorSubscription } = useApp();
+  const { rfqs, vendorOpportunities, showToast, addAuditLog, vendorSubscription, currentUserSession, refreshFromDB } = useApp();
   const [selectedBuyerModal, setSelectedBuyerModal] = useState<(BuyerContactInfo & { rfqNumber: string }) | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  // This vendor's own backend record id — needed to tell "my submitted quote"
+  // apart from any other vendor's quote on the same RFQ, and to submit/download
+  // as the real authenticated identity rather than a hardcoded fake vendor.
+  const [myVendorId, setMyVendorId] = useState<string | null>(null);
+  const [myVendorName, setMyVendorName] = useState<string>('');
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadMyVendorRecord() {
+      const email = currentUserSession?.email;
+      if (!email) return;
+      try {
+        const res = await fetch(`/api/vendors/${encodeURIComponent(email)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled && data.success && data.data) {
+          setMyVendorId(data.data.id);
+          setMyVendorName(data.data.name);
+        }
+      } catch {
+        // Leave myVendorId null — bidding/download actions will surface a
+        // clear error rather than silently attributing them to nobody.
+      }
+    }
+    loadMyVendorRecord();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUserSession?.email]);
+
+  const authHeaders = (): Record<string, string> => {
+    const token = authClient.getToken();
+    return {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
+  };
 
   // Helper to map RFQs to Parent Companies
   const getParentCompany = (buyerName: string) => buyerName;
 
-  // Baseline submitted quotes details (Method, Date, and Sourcing status details)
-  const submittedQuotes = [
-    {
-      rfqNumber: 'RFQ-2026-00421',
-      title: 'Centrifugal Water Pumps (500 GPM) & Valves',
-      submittedDate: '20-Aug-2026 11:20 UTC',
-      status: 'Under Evaluation',
-      submissionMethod: 'Email Submission',
-    },
-    {
-      rfqNumber: 'RFQ-2026-00423',
-      title: 'High Pressure Gate Valve System',
-      submittedDate: '18-Aug-2026 09:45 UTC',
-      status: 'PO Generated',
-      submissionMethod: 'Email Submission',
-    }
-  ];
+  // This vendor's real submitted quotes, read back from the actual RFQ
+  // records (rfq.quotes[]) instead of a hardcoded 2-row placeholder list.
+  const submittedQuotes = rfqs
+    .filter((rfq) => (rfq.quotes || []).some((q) => q.vendorId === myVendorId))
+    .map((rfq) => {
+      const myQuote: any = (rfq.quotes || []).find((q: any) => q.vendorId === myVendorId);
+      return {
+        rfqNumber: rfq.rfqNumber,
+        title: rfq.title,
+        submittedDate: myQuote?.submittedAt ? new Date(myQuote.submittedAt).toLocaleString() : '-',
+        status: rfq.status === 'PO Generated' ? 'PO Generated' : 'Under Evaluation',
+        submissionMethod: 'Portal Submission',
+      };
+    });
 
   // Rajesh Nair (L&T) uploaded Apex Supplies, so their RFQs are free to bid on.
   // Other buyer RFQs require premium vendor subscription.
@@ -101,6 +140,109 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     setCopiedField(label);
     showToast('Copied to Clipboard', `${label} copied: ${text}`, 'info');
     setTimeout(() => setCopiedField(null), 2000);
+  };
+
+  // ─── Real quote/bid submission ─────────────────────────────────────────
+  const [biddingOn, setBiddingOn] = useState<VendorOpportunity | null>(null);
+  const [bidUnitPrice, setBidUnitPrice] = useState('');
+  const [bidLeadTimeDays, setBidLeadTimeDays] = useState('');
+  const [bidWarrantyYears, setBidWarrantyYears] = useState('');
+  const [bidPaymentTerms, setBidPaymentTerms] = useState('45 Days Net');
+  const [bidRemarks, setBidRemarks] = useState('');
+  const [isSubmittingQuote, setIsSubmittingQuote] = useState(false);
+
+  const openBidForm = (opp: VendorOpportunity) => {
+    setBiddingOn(opp);
+    setBidUnitPrice('');
+    setBidLeadTimeDays('');
+    setBidWarrantyYears('');
+    setBidPaymentTerms('45 Days Net');
+    setBidRemarks('');
+  };
+
+  // Landing here via "Submit Quote Now" (opportunity-feed's reminder banner)
+  // passes the specific RFQ as `opportunity` — previously that prop was
+  // received but never used, so the navigation just dropped the vendor on
+  // the same undifferentiated table regardless of which RFQ they clicked.
+  // Auto-open the bid form for it once, if it's actually biddable.
+  useEffect(() => {
+    if (!opportunity) return;
+    const alreadyQuoted = submittedQuotes.some((q) => q.rfqNumber === opportunity.rfqNumber);
+    const locked = !isOwnBuyerRfq(opportunity.rfqNumber) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
+    if (!alreadyQuoted && !locked) {
+      openBidForm(opportunity);
+    }
+    // Intentionally mount-only: this is "deep link" landing behavior, not a
+    // reaction to subsequent submittedQuotes/vendorSubscription changes
+    // (which would otherwise re-open the modal right after a successful submit).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleSubmitQuote = async () => {
+    if (!biddingOn) return;
+    const unitPrice = Number(bidUnitPrice);
+    if (!unitPrice || unitPrice <= 0) {
+      showToast('Validation Error', 'Enter a valid unit price.', 'warning');
+      return;
+    }
+    const quantity = biddingOn.lineItems?.[0]?.quantity || 1;
+
+    setIsSubmittingQuote(true);
+    try {
+      const res = await fetch(`/api/rfqs/${encodeURIComponent(biddingOn.rfqNumber)}/quotes`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          unitPrice,
+          totalPrice: unitPrice * quantity,
+          leadTimeDays: Number(bidLeadTimeDays) || 0,
+          warrantyYears: Number(bidWarrantyYears) || 0,
+          paymentTerms: bidPaymentTerms,
+          remarks: bidRemarks,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to submit quote.');
+      }
+      addAuditLog(
+        `${myVendorName || currentUserSession?.name || 'Vendor'} submitted a quotation for ${biddingOn.rfqNumber} (Unit Price: ${unitPrice})`,
+        biddingOn.rfqNumber,
+        currentUserSession?.email
+      );
+      showToast('Quote Submitted', `Your quotation for ${biddingOn.rfqNumber} was submitted successfully.`, 'success');
+      setBiddingOn(null);
+      await refreshFromDB();
+    } catch (err: any) {
+      showToast('Submission Failed', err?.message || 'Could not submit the quote. Please try again.', 'warning');
+    } finally {
+      setIsSubmittingQuote(false);
+    }
+  };
+
+  // ─── Real RFQ document download ────────────────────────────────────────
+  const handleDownloadRfq = async (opp: VendorOpportunity) => {
+    try {
+      const params = myVendorId ? `?vendorId=${encodeURIComponent(myVendorId)}` : '';
+      // This route requires authentication (and, for a vendor, now enforces
+      // their real download quota server-side) — the request was previously
+      // sent with no Authorization header at all and would 401 for real.
+      const res = await fetch(`/api/rfqs/${encodeURIComponent(opp.rfqNumber)}/email-preview${params}`, {
+        headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Could not generate the RFQ specification.');
+      }
+      addAuditLog(
+        `${myVendorName || currentUserSession?.name || 'Vendor'} downloaded RFQ specification for ${opp.rfqNumber}`,
+        opp.rfqNumber,
+        currentUserSession?.email
+      );
+      showToast('RFQ Downloaded', `📨 RFQ specification for ${opp.rfqNumber} sent to ${currentUserSession?.email || 'your registered email'}.`, 'success');
+    } catch (err: any) {
+      showToast('Download Failed', err?.message || 'Could not download the RFQ specification.', 'warning');
+    }
   };
 
   return (
@@ -183,7 +325,11 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
               {vendorOpportunities.map((opp) => {
                 const quote = submittedQuotes.find((q) => q.rfqNumber === opp.rfqNumber);
                 const parentCompany = getParentCompany(opp.buyer);
-                const isLocked = !isOwnBuyerRfq(opp.rfqNumber) && vendorSubscription !== 'premium_network';
+                // 'connect'/'select' are the real marketplace-unlock tiers (see
+                // vendor-subscription.tsx's own plan copy) — 'premium_network'
+                // is a value nothing in the app ever sets, so this used to be
+                // permanently locked outside the 4-item isOwnBuyerRfq allow-list.
+                const isLocked = !isOwnBuyerRfq(opp.rfqNumber) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
                 
                 // Condition: If buyer uploaded this vendor (isOwnBuyerRfq), show even before quote is submitted.
                 // Otherwise, show only after quote is submitted and updated in the system (quote !== undefined || opp.status === 'submitted').
@@ -255,14 +401,13 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                           if (isLocked) {
                             showToast('Premium Locked', 'Please upgrade your subscription to download specifications for this external buyer.', 'warning');
                           } else {
-                            addAuditLog(`Apex Supplies downloaded RFQ for ${opp.rfqNumber} again via email`, opp.rfqNumber, 'vendor@apex.com');
-                            showToast('RFQ Downloaded', `📨 RFQ for ${opp.rfqNumber} successfully sent to your email (vendor@apex.com).`, 'success');
+                            handleDownloadRfq(opp);
                           }
                         }}
                         className="btn btn-secondary btn-xs py-1 px-2.5 flex items-center justify-center gap-1 text-[9px] font-bold mx-auto border border-slate-200"
-                        title="Download RFQ Details on Email"
+                        title="Download RFQ Specification"
                       >
-                        <Mail size={11} className="text-indigo-655" />
+                        <Download size={11} className="text-indigo-655" />
                         <span>Download RFQ</span>
                       </button>
                     </td>
@@ -298,7 +443,12 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                       ) : isLocked ? (
                         <span className="text-amber-500 font-bold text-[10px]">🔒 Premium Locked</span>
                       ) : (
-                        <span className="text-slate-400 font-medium">Pending Quote</span>
+                        <button
+                          onClick={() => openBidForm(opp)}
+                          className="btn btn-emerald btn-xs py-1 px-2.5 inline-flex items-center gap-1 text-[9px] font-bold"
+                        >
+                          <Send size={10} /> Submit Quote
+                        </button>
                       )}
                     </td>
                   </tr>
@@ -414,6 +564,104 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 className="btn btn-primary btn-sm px-4 text-xs font-bold"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {/* BID / QUOTE SUBMISSION MODAL */}
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {biddingOn && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4 text-xs text-slate-800 dark:text-gray-200 animate-scale-up">
+            <div className="flex items-start justify-between pb-3 border-b border-slate-100 dark:border-gray-800">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/70 text-emerald-600 dark:text-emerald-400">
+                  <Send size={20} />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm text-slate-900 dark:text-white">Submit Quotation</h3>
+                  <span className="text-[10px] text-slate-400 mono">{biddingOn.rfqNumber} — {biddingOn.title}</span>
+                </div>
+              </div>
+              <button
+                onClick={() => !isSubmittingQuote && setBiddingOn(null)}
+                title="Close"
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Unit Price (₹) *</label>
+                <div className="relative">
+                  <IndianRupee size={12} className="absolute left-3 top-2.5 text-slate-400" />
+                  <input
+                    type="number"
+                    min={0}
+                    value={bidUnitPrice}
+                    onChange={(e) => setBidUnitPrice(e.target.value)}
+                    disabled={isSubmittingQuote}
+                    className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Lead Time (Days)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={bidLeadTimeDays}
+                    onChange={(e) => setBidLeadTimeDays(e.target.value)}
+                    disabled={isSubmittingQuote}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Warranty (Years)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={bidWarrantyYears}
+                    onChange={(e) => setBidWarrantyYears(e.target.value)}
+                    disabled={isSubmittingQuote}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Payment Terms</label>
+                <input
+                  type="text"
+                  value={bidPaymentTerms}
+                  onChange={(e) => setBidPaymentTerms(e.target.value)}
+                  disabled={isSubmittingQuote}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Remarks</label>
+                <textarea
+                  value={bidRemarks}
+                  onChange={(e) => setBidRemarks(e.target.value)}
+                  disabled={isSubmittingQuote}
+                  rows={2}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white resize-none"
+                />
+              </div>
+            </div>
+
+            <div className="pt-2 flex justify-end gap-2 border-t border-slate-100 dark:border-gray-800">
+              <button onClick={() => setBiddingOn(null)} disabled={isSubmittingQuote} className="btn btn-ghost btn-sm">
+                Cancel
+              </button>
+              <button onClick={handleSubmitQuote} disabled={isSubmittingQuote} className="btn btn-primary btn-sm px-4 text-xs font-bold">
+                <Send size={13} /> {isSubmittingQuote ? 'Submitting...' : 'Submit Quotation'}
               </button>
             </div>
           </div>

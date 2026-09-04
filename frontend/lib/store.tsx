@@ -29,7 +29,6 @@ import {
   SOURCING_MODES,
   INITIAL_SYSTEM_CONFIG,
   INITIAL_AZURE_HEALTH,
-  CURRENCY,
   formatCurrency,
 } from './constants';
 
@@ -40,6 +39,58 @@ function authFetchHeaders(): Record<string, string> {
   return {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+/**
+ * Whole days between now and a target delivery date.
+ *
+ * The vendor-facing feed used to hardcode `daysRemaining: 7` on every RFQ,
+ * which put a countdown in front of suppliers that had nothing to do with the
+ * buyer's actual deadline. An unparseable or absent date yields 0 rather than
+ * an invented figure.
+ */
+function daysUntil(targetDate?: string): number {
+  if (!targetDate) return 0;
+  const target = Date.parse(targetDate);
+  if (Number.isNaN(target)) return 0;
+  return Math.max(0, Math.ceil((target - Date.now()) / 86400000));
+}
+
+/**
+ * Project a real RFQ onto the vendor-facing opportunity it becomes.
+ *
+ * Every field here is read off the RFQ record itself. Both call sites (initial
+ * hydration and a freshly created RFQ) previously invented the buyer name, the
+ * delivery location and the countdown, and hydration additionally substituted a
+ * flat ₹1,50,000 whenever the buyer had stated no budget — putting a ceiling in
+ * front of vendors that the buyer never set. An RFQ with no budget now simply
+ * carries no estimated value, exactly as `RFQItem.budget` documents.
+ */
+function buildOpportunityFromRFQ(rfq: RFQItem): VendorOpportunity {
+  return {
+    id: `opp-${rfq.id}`,
+    rfqNumber: rfq.rfqNumber,
+    title: rfq.title,
+    buyer: rfq.buyerAccountName || 'Buyer identity not disclosed',
+    deadline: rfq.targetDeliveryDate || '',
+    daysRemaining: daysUntil(rfq.targetDeliveryDate),
+    type: rfq.sourcingMode === 'mode_3' ? 'network_marketplace' : 'direct_invitation',
+    estimatedValue: rfq.budget > 0 ? formatCurrency(rfq.budget) : undefined,
+    deliveryLocation: rfq.deliveryLocation || '',
+    status: rfq.quotes && rfq.quotes.length > 0 ? 'under_review' : 'pending_bid',
+    lineItems: (rfq.extractedEntities || []).map((ent: ExtractedEntity, idx: number) => ({
+      id: ent.id || `item-${idx}`,
+      description: ent.itemName,
+      quantity: ent.quantity,
+      // Price, lead time and payment terms are the vendor's own bid fields and
+      // stay empty until they actually quote — seeding them with 14 days and
+      // "Net 30" showed a commitment nobody had made.
+      unitPrice: 0,
+      leadTimeDays: 0,
+      marketBandStatus: 'optimal',
+      paymentTerms: '',
+    })),
   };
 }
 
@@ -81,7 +132,7 @@ interface AppContextType {
   setInitialSetupCompleted: (completed: boolean) => void;
   historicalPurchaseDataPeriod: '1_year' | '2_years' | '3_years';
   setHistoricalPurchaseDataPeriod: (period: '1_year' | '2_years' | '3_years') => void;
-  processHistoricalPurchaseData: (period: '1_year' | '2_years' | '3_years', vendors: HistoricalPurchaseVendorRecord[]) => number;
+  processHistoricalPurchaseData: (period: '1_year' | '2_years' | '3_years', vendors: HistoricalPurchaseVendorRecord[]) => Promise<number>;
 
   // Buyer Uploaded Vendors, Database Check & Automated Onboarding Emails
   buyerVendors: VendorEntry[];
@@ -114,7 +165,7 @@ interface AppContextType {
   openStandardEmailModal: (rfq: RFQItem, vendor?: VendorEntry) => void;
 
   // Buyer Vendor Rating Revision Engine
-  reviseVendorRating: (vendorId: string, qualityScore: number, costScore: number, deliveryScore: number, remarks: string) => VendorRatingRevisionRecord;
+  reviseVendorRating: (vendorId: string, qualityScore: number, costScore: number, deliveryScore: number, remarks: string) => Promise<VendorRatingRevisionRecord | null>;
   selectedRatingRevisionEmail: VendorRatingRevisionEmailPayload | null;
   setSelectedRatingRevisionEmail: (email: VendorRatingRevisionEmailPayload | null) => void;
   ratingRevisionEmailModalOpen: boolean;
@@ -127,7 +178,13 @@ interface AppContextType {
   triggerChannelChaser: (rfqNumber: string, channel: 'call' | 'whatsapp' | 'sms' | 'email', vendorName?: string, customNote?: string) => void;
   triggerBatchChannelChaser: (rfqNumber: string, channels: ('call' | 'whatsapp' | 'sms')[]) => void;
   submitVendorBid: (rfqNumber: string, unitPrice: number, leadTimeDays: number, remarks: string) => void;
-  approvePO: (rfqNumber: string, vendorName: string, amount: number) => void;
+  approvePO: (
+    rfqNumber: string,
+    vendorId: string | null,
+    vendorName: string,
+    amount: number,
+    approverNotes?: string
+  ) => Promise<{ success: boolean; poNumber?: string; issueDate?: string; shaSignature?: string; lineItems?: { description: string; quantity: number; unit: string }[]; error?: string }>;
   addAuditLog: (action: string, rfqNumber?: string, user?: string) => void;
   addFeedItem: (title: string, message: string, type: AIBotFeedItem['type'], rfqNumber?: string, recipient?: string, channel?: 'call' | 'whatsapp' | 'sms' | 'email' | 'system', channelDetails?: AIBotFeedItem['channelDetails']) => void;
   selectedRFQForMatrix: RFQItem | null;
@@ -144,7 +201,7 @@ interface AppContextType {
   setDeepDiveModalOpen: (open: boolean) => void;
   openRFQDeepDive: (rfq: RFQItem) => void;
   vendorEvaluations: VendorEvaluationRecord[];
-  addVendorEvaluation: (record: VendorEvaluationRecord) => void;
+  addVendorEvaluation: (record: VendorEvaluationRecord) => Promise<boolean>;
   selectedVendorEvaluation: VendorEvaluationRecord | null;
   setSelectedVendorEvaluation: (evalRecord: VendorEvaluationRecord | null) => void;
   evaluationModalOpen: boolean;
@@ -168,6 +225,7 @@ interface AppContextType {
   setActiveSubscription: React.Dispatch<React.SetStateAction<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none'>>;
   vendorSubscription: VendorSubscriptionPlan;
   setVendorSubscription: React.Dispatch<React.SetStateAction<VendorSubscriptionPlan>>;
+  updateVendorSubscription: (plan: 'premium' | 'connect' | 'select') => Promise<boolean>;
   vendorRfqDownloadsUsed: number;
   setVendorRfqDownloadsUsed: React.Dispatch<React.SetStateAction<number>>;
   vendorCatalogue: any[];
@@ -307,7 +365,50 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [remainingFreeRFQs, setRemainingFreeRFQs] = useState<number>(5);
   const [activeSubscription, setActiveSubscription] = useState<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none'>('free_trial');
   const [vendorSubscription, setVendorSubscription] = useState<VendorSubscriptionPlan>('premium');
-  const [vendorRfqDownloadsUsed, setVendorRfqDownloadsUsed] = useState<number>(3);
+  // Was a fabricated "already used 3" starting point — real usage is hydrated
+  // from the vendor's actual record in refreshFromDB once it loads.
+  const [vendorRfqDownloadsUsed, setVendorRfqDownloadsUsed] = useState<number>(0);
+
+  // Was pure local state (setVendorSubscription called directly) — reset on
+  // every page refresh and never persisted anywhere. Now calls the real
+  // PUT /api/vendors/:id/subscription and only updates local state once the
+  // backend confirms it, mirroring the vendor rating-revision fix.
+  const updateVendorSubscription = async (plan: 'premium' | 'connect' | 'select'): Promise<boolean> => {
+    const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
+    const myVendor = buyerVendors.find((v) => v.email?.toLowerCase() === sessionEmail);
+    if (!myVendor) {
+      showToast('Subscription Update Failed', 'Could not find your vendor profile.', 'warning');
+      return false;
+    }
+
+    let res: Response;
+    try {
+      res = await fetch(`/api/vendors/${encodeURIComponent(myVendor.id)}/subscription`, {
+        method: 'PUT',
+        headers: authFetchHeaders(),
+        body: JSON.stringify({ plan }),
+      });
+    } catch (e) {
+      console.error('Failed to update vendor subscription:', e);
+      showToast('Subscription Update Failed', 'Could not reach the server. Please try again.', 'warning');
+      return false;
+    }
+
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.success) {
+      showToast(
+        'Subscription Update Failed',
+        data?.error || 'Could not update your subscription. Please try again.',
+        'warning'
+      );
+      return false;
+    }
+
+    setVendorSubscription(plan);
+    setVendorRfqDownloadsUsed(data.data.rfqDownloadsUsed || 0);
+    setBuyerVendors((prev) => prev.map((v) => (v.id === myVendor.id ? { ...v, ...data.data } : v)));
+    return true;
+  };
 
   const toggleTheme = () => {
     setTheme((prev) => {
@@ -447,6 +548,18 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
         }
         if (d.vendors && d.vendors.length > 0) {
           setBuyerVendors(d.vendors);
+          // Subscription plan and download quota used to live only as local
+          // useState (defaulted to 'premium' / 3, reset on every refresh,
+          // never actually persisted). Sync them from the real vendor
+          // record now that the backend tracks both.
+          const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
+          if (sessionEmail) {
+            const myVendor = d.vendors.find((v: VendorEntry) => v.email?.toLowerCase() === sessionEmail);
+            if (myVendor) {
+              setVendorSubscription(myVendor.subscriptionPlan || 'premium');
+              setVendorRfqDownloadsUsed(myVendor.rfqDownloadsUsed || 0);
+            }
+          }
         }
         if (d.rfqs && d.rfqs.length > 0) {
           const hydratedRfqs: RFQItem[] = d.rfqs.map(normalizeHydratedRFQ);
@@ -454,28 +567,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
           setSelectedRFQForMatrix((prev) => prev || hydratedRfqs[0]);
           setSelectedRFQForDeepDive((prev) => prev || hydratedRfqs[0]);
 
-          const mappedOpps: VendorOpportunity[] = hydratedRfqs.map((rfq: RFQItem) => ({
-            id: `opp-${rfq.id}`,
-            rfqNumber: rfq.rfqNumber,
-            title: rfq.title,
-            buyer: 'Enterprise Procurement Division',
-            deadline: rfq.targetDeliveryDate || '2026-09-15',
-            daysRemaining: 7,
-            type: rfq.sourcingMode === 'mode_3' ? 'network_marketplace' : 'direct_invitation',
-            estimatedValue: rfq.budget ? formatCurrency(rfq.budget) : formatCurrency(150000),
-            deliveryLocation: 'Pune / Mumbai Plant Site',
-            status: rfq.quotes && rfq.quotes.length > 0 ? 'under_review' : 'pending_bid',
-            lineItems: (rfq.extractedEntities || []).map((ent: ExtractedEntity, idx: number) => ({
-              id: ent.id || `item-${idx}`,
-              description: ent.itemName,
-              quantity: ent.quantity,
-              unitPrice: 0,
-              leadTimeDays: 14,
-              marketBandStatus: 'optimal',
-              paymentTerms: '45 Days Net',
-            })),
-          }));
-          setVendorOpportunities(mappedOpps);
+          setVendorOpportunities(hydratedRfqs.map(buildOpportunityFromRFQ));
         }
         if (d.evaluations && d.evaluations.length > 0) {
           setVendorEvaluations(d.evaluations);
@@ -613,13 +705,27 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
     setEvaluationModalOpen(true);
   };
 
-  const addVendorEvaluation = (record: VendorEvaluationRecord) => {
-    setVendorEvaluations((prev) => [record, ...prev.filter((r) => r.id !== record.id)]);
-    fetch('/api/evaluations', {
-      method: 'POST',
-      headers: authFetchHeaders(),
-      body: JSON.stringify(record),
-    }).catch((e) => console.error('Failed to save evaluation to DB:', e));
+  // Was fire-and-forget (optimistic local update, response never checked) —
+  // now awaits the real response and only updates local state on confirmed
+  // success, so a caller can gate its own success UI on the actual outcome.
+  const addVendorEvaluation = async (record: VendorEvaluationRecord): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/evaluations', {
+        method: 'POST',
+        headers: authFetchHeaders(),
+        body: JSON.stringify(record),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        console.error('Failed to save evaluation to DB:', data?.error || res.statusText);
+        return false;
+      }
+      setVendorEvaluations((prev) => [record, ...prev.filter((r) => r.id !== record.id)]);
+      return true;
+    } catch (e) {
+      console.error('Failed to save evaluation to DB:', e);
+      return false;
+    }
   };
 
   // Helper to check if vendor exists in platform central database
@@ -731,85 +837,85 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
   const [initialSetupCompleted, setInitialSetupCompleted] = useState<boolean>(false);
   const [historicalPurchaseDataPeriod, setHistoricalPurchaseDataPeriod] = useState<'1_year' | '2_years' | '3_years'>('1_year');
 
-  const processHistoricalPurchaseData = (
+  const processHistoricalPurchaseData = async (
     period: '1_year' | '2_years' | '3_years',
     vendors: HistoricalPurchaseVendorRecord[]
-  ): number => {
-    const buyerCompany = activeBuyerAccount?.organizationName || 'Larsen & Toubro Limited';
-    const buyerContact = activeBuyerAccount?.contactPerson || 'Rajesh Sharma (CPO)';
-    const nextDate = new Date(Date.now() + 3 * 86400000).toISOString().substring(0, 10) + ' (Day 3)';
-    const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC';
+  ): Promise<number> => {
+    // Used to build the full VendorEntry list purely client-side and never
+    // call the backend at all — every "imported" vendor vanished on refresh
+    // and the "onboarding credentials dispatched" claim was never true. A
+    // real endpoint for exactly this already exists (POST
+    // /api/buyer-accounts/historical-data -> storeService's own
+    // processHistoricalPurchaseData, which dedupes by email/name and
+    // persists real vendor records) — use it and refresh from the DB
+    // afterwards instead of reconstructing vendor records by hand.
+    const mappedCount = vendors.filter((v) => v.categoriesMappedByBuyer).length;
+    const unmappedCount = vendors.length - mappedCount;
+    const periodLabel =
+      period === '1_year' ? 'Last 1 Year (12 Months)' : period === '2_years' ? 'Last 2 Years (24 Months)' : 'Last 3 Years (36 Months)';
 
-    let existingInDbCount = 0;
-    let newVendorsCount = 0;
-    let mappedCount = 0;
-    let unmappedCount = 0;
+    let res: Response;
+    try {
+      res = await fetch('/api/buyer-accounts/historical-data', {
+        method: 'POST',
+        headers: authFetchHeaders(),
+        body: JSON.stringify({
+          period,
+          vendorRecords: vendors.map((v) => ({
+            companyName: v.companyName,
+            contactPerson: v.contactPerson,
+            email: v.email,
+            phone: v.phone,
+            location: v.address,
+            majorCategory: v.categoriesMappedByBuyer
+              ? v.firstSetMajorCategory || 'Engineering Spares - Mechanical'
+              : 'Uncategorized (No Past POs)',
+            minorCategories: v.categoriesMappedByBuyer && v.secondSetMinorCategories?.length ? v.secondSetMinorCategories : [],
+            rating: v.vendorRatingScore ? Number((v.vendorRatingScore / 20).toFixed(1)) : undefined,
+            score: v.vendorRatingScore,
+          })),
+        }),
+      });
+    } catch (e) {
+      console.error('Failed to ingest historical purchase data:', e);
+      showToast('Import Failed', 'Could not reach the server. Please try again.', 'warning');
+      return 0;
+    }
 
-    const newEntries: VendorEntry[] = vendors.map((v, i) => {
-      const isExisting = checkVendorInPlatformDatabase(v);
-      if (isExisting) existingInDbCount++;
-      else newVendorsCount++;
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.success) {
+      showToast(
+        'Import Failed',
+        data?.error || 'Could not process the historical purchase data. Please try again.',
+        'warning'
+      );
+      return 0;
+    }
 
-      if (v.categoriesMappedByBuyer) mappedCount++;
-      else unmappedCount++;
-
-      const tempPassword = v.tempPassword || generateTempPassword(v.companyName);
-
-      return {
-        id: `v-hist-${Date.now()}-${i}`,
-        name: v.companyName,
-        contactPerson: v.contactPerson || 'Sales & Accounts Manager',
-        email: v.email,
-        phone: v.phone,
-        location: v.address,
-        majorCategory: v.categoriesMappedByBuyer ? (v.firstSetMajorCategory || 'Engineering Spares - Mechanical') : 'Uncategorized (No Past POs)',
-        minorCategories: v.categoriesMappedByBuyer && v.secondSetMinorCategories && v.secondSetMinorCategories.length > 0 ? v.secondSetMinorCategories : [],
-        rating: v.vendorRatingScore ? Number((v.vendorRatingScore / 20).toFixed(1)) : 4.5,
-        score: v.vendorRatingScore || null,
-        source: 'buyer_excel',
-        status: v.vendorRatingScore && v.vendorRatingScore >= 80 ? 'PREFERRED ENTERPRISE SUPPLIER' : 'REGISTERED / NOT EVALUATED',
-        evaluated: !!v.vendorRatingScore,
-        hasRecord: true,
-        isExistingInDatabase: isExisting,
-        onboardingEmailStatus: 'sent',
-        onboardingEmailDispatchedAt: timestamp,
-        tempPassword,
-        firstLoginCompleted: false,
-        reminderCadence: 'every_3_days',
-        nextReminderDate: nextDate,
-        remindersSentCount: 0,
-        addedByBuyerCompany: buyerCompany,
-        addedByBuyerName: buyerContact,
-        profileCompletionStatus: 'pending',
-      };
-    });
-
-    setBuyerVendors((prev) => [...newEntries, ...prev]);
+    await refreshFromDB();
     setInitialSetupCompleted(true);
     setInitialSetupModalOpen(false);
 
-    const periodLabel = period === '1_year' ? 'Last 1 Year (12 Months)' : period === '2_years' ? 'Last 2 Years (24 Months)' : 'Last 3 Years (36 Months)';
-
     addFeedItem(
-      `Historical Purchase & Vendor Master Ingestion Complete: ${newEntries.length} Vendors`,
-      `Processed separate Vendor Master & ${periodLabel} PO dumps. ${mappedCount} suppliers categorized into 1st/2nd sets. ${unmappedCount} suppliers notified to self-map categories. Onboarding credentials dispatched.`,
+      `Historical Purchase & Vendor Master Ingestion Complete: ${data.importedCount} Vendors`,
+      `Processed separate Vendor Master & ${periodLabel} PO dumps. ${mappedCount} suppliers categorized into 1st/2nd sets. ${unmappedCount} suppliers notified to self-map categories.`,
       'invitation',
       undefined,
-      `${newEntries.length} Ingested Vendors`,
+      `${data.importedCount} Ingested Vendors`,
       'email'
     );
 
     addAuditLog(
-      `Ingested separate Vendor Master & ${periodLabel} PO files (${newEntries.length} total: ${mappedCount} PO-mapped, ${unmappedCount} self-mapping required). Dispatched onboarding emails with credentials & category notifications.`
+      `Ingested separate Vendor Master & ${periodLabel} PO files (${vendors.length} submitted, ${data.importedCount} new: ${mappedCount} PO-mapped, ${unmappedCount} self-mapping required).`
     );
 
     showToast(
       'Initial Setup Completed',
-      `Processed ${periodLabel} PO dump & Vendor Master. ${mappedCount} categorized, ${unmappedCount} requested to self-map.`,
+      `Processed ${periodLabel} PO dump & Vendor Master. ${data.importedCount} new suppliers added (of ${vendors.length} submitted).`,
       'success'
     );
 
-    return newEntries.length;
+    return data.importedCount;
   };
 
   const openOnboardingEmailModal = (vendor: VendorEntry) => {
@@ -987,83 +1093,74 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
     setRatingRevisionEmailModalOpen(true);
   };
 
-  const reviseVendorRating = (
+  const reviseVendorRating = async (
     vendorId: string,
     qualityScore: number,
     costScore: number,
     deliveryScore: number,
     remarks: string
-  ): VendorRatingRevisionRecord => {
+  ): Promise<VendorRatingRevisionRecord | null> => {
     const buyerCompany = activeBuyerAccount?.organizationName || 'Larsen & Toubro Limited';
     const buyerName = activeBuyerAccount?.contactPerson || 'Rajesh Sharma (CPO)';
     const buyerEmail = activeBuyerAccount?.corporateEmail || 'buyer@procucev.com';
-    const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC';
-
-    // 1. Calculate Buyer Input Average across Quality, Cost, Delivery
-    const buyerAverage = Math.round((qualityScore + costScore + deliveryScore) / 3);
-
-    // 2. Find target vendor and calculate composite average with actual existing rating
     const targetVendor = buyerVendors.find((v) => v.id === vendorId) || buyerVendors[0];
-    const previousScore = targetVendor?.score || (targetVendor?.rating ? Math.round(targetVendor.rating * 20) : 88);
-    const previousRating = targetVendor?.rating || Number((previousScore / 20).toFixed(1));
+    const trimmedRemarks = remarks.trim() || 'Quarterly operational performance review & ratings alignment.';
 
-    // 3. Average between buyer evaluation and actual vendor rating
-    const newCompositeScore = Math.round((previousScore + buyerAverage) / 2);
-    const newRating = Number((newCompositeScore / 20).toFixed(1));
-    const newStatus = newCompositeScore >= 80 ? 'PREFERRED ENTERPRISE SUPPLIER' : 'CONDITIONAL / UNDER REVIEW';
+    // Persist rating revision to the backend and use ITS canonical result —
+    // this used to PATCH '/api/vendors' with a client-computed payload; that
+    // route/method doesn't exist (routes/vendors.js has no PATCH handler at
+    // all), so it silently 404'd on every revision and nothing ever reached
+    // the backend, while the UI unconditionally showed a client-recomputed
+    // score as if it had saved. Worse, that client formula
+    // (Math.round((previousScore + buyerAverage) / 2)) never matched the
+    // server's real weighting (storeService.reviseVendorRating /
+    // calculateRevisedRating: previousScore*0.6 + buyerAverage*0.4), so even
+    // a successful save would have shown the wrong number. The real endpoint
+    // is POST '/api/vendors/:id/rating-revision' — await it and use its
+    // response as the source of truth for what actually got saved.
+    let res: Response;
+    try {
+      res = await fetch(`/api/vendors/${encodeURIComponent(targetVendor?.id || vendorId)}/rating-revision`, {
+        method: 'POST',
+        headers: authFetchHeaders(),
+        body: JSON.stringify({
+          qualityScore,
+          costScore,
+          deliveryScore,
+          remarks: trimmedRemarks,
+          buyerCompany,
+          buyerName,
+          buyerEmail,
+        }),
+      });
+    } catch (e) {
+      console.error('Failed to save rating revision to DB:', e);
+      showToast('Rating Revision Failed', 'Could not reach the server. Please try again.', 'warning');
+      return null;
+    }
 
-    const shaSignature = '0xREV' + Math.random().toString(36).substring(2, 10).toUpperCase() + Date.now().toString(36).toUpperCase();
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.success) {
+      showToast(
+        'Rating Revision Failed',
+        data?.error || 'Could not save your rating revision. Please try again.',
+        'warning'
+      );
+      return null;
+    }
 
-    const revisionRecord: VendorRatingRevisionRecord = {
-      id: `rev-${Date.now()}`,
-      vendorId: targetVendor?.id || vendorId,
-      vendorName: targetVendor?.name || 'Apex Supplies Ltd.',
-      buyerCompany,
-      buyerName,
-      buyerEmail,
-      timestamp,
-      qualityScore,
-      costScore,
-      deliveryScore,
-      buyerAverage,
-      previousScore,
-      newCompositeScore,
-      previousRating,
-      newRating,
-      remarks: remarks.trim() || 'Quarterly operational performance review & ratings alignment.',
-      emailDispatched: true,
-      shaSignature,
-    };
+    const revisionRecord: VendorRatingRevisionRecord = data.data.revisionRecord;
+    const updatedVendorFromServer = data.data.updatedVendor;
 
     // Update in buyerVendors list (accessible across all buyer accounts & directories)
-    const updatedTargetVendor: VendorEntry = {
-      ...targetVendor,
-      rating: newRating,
-      score: newCompositeScore,
-      status: newStatus,
-      latestRatingRevision: revisionRecord,
-      ratingRevisionHistory: [revisionRecord, ...(targetVendor?.ratingRevisionHistory || [])],
-    };
-
     setBuyerVendors((prev) =>
       prev.map((v) => {
         if (v.id === vendorId || v.name === targetVendor?.name) {
-          return updatedTargetVendor;
+          return { ...v, ...updatedVendorFromServer };
         }
         return v;
       })
     );
-
-    // Persist rating revision to PostgreSQL
-    fetch('/api/vendors', {
-      method: 'PATCH',
-      headers: authFetchHeaders(),
-      body: JSON.stringify({
-        action: 'rating_revision',
-        vendor: updatedTargetVendor,
-        revision: revisionRecord,
-      }),
-    }).catch((e) => console.error('Failed to save rating revision to DB:', e));
 
     // Update in vendorEvaluations list as well
     setVendorEvaluations((prev) =>
@@ -1079,8 +1176,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
           };
           return {
             ...e,
-            overallScore: newCompositeScore,
-            status: newStatus,
+            overallScore: revisionRecord.newCompositeScore,
             moduleScores: {
               ...modScores,
               quality: { ...modScores.quality, score: Number((qualityScore / 20).toFixed(1)), remarks: `Buyer Score: ${qualityScore}/100` },
@@ -1096,7 +1192,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
     // AI Bot Feed item
     addFeedItem(
       `Vendor Rating Revised: ${targetVendor?.name}`,
-      `Buyer ${buyerName} (${buyerCompany}) revised performance rating. Quality: ${qualityScore}/100, Cost: ${costScore}/100, Delivery: ${deliveryScore}/100 (Buyer Avg: ${buyerAverage}%). New Platform Aggregate Rating: ${newRating} / 5.0 (${newCompositeScore}%). Remarks: "${remarks}". Notification email dispatched to ${targetVendor?.email}.`,
+      `Buyer ${buyerName} (${buyerCompany}) revised performance rating. Quality: ${qualityScore}/100, Cost: ${costScore}/100, Delivery: ${deliveryScore}/100 (Buyer Avg: ${revisionRecord.buyerAverage}%). New Platform Aggregate Rating: ${revisionRecord.newRating} / 5.0 (${revisionRecord.newCompositeScore}%). Remarks: "${revisionRecord.remarks}". Notification email dispatched to ${targetVendor?.email}.`,
       'system',
       undefined,
       targetVendor?.name,
@@ -1105,7 +1201,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
 
     // Immutable Audit Log
     addAuditLog(
-      `Buyer Rating Revision for ${targetVendor?.name}: Q=${qualityScore}, C=${costScore}, D=${deliveryScore} (Buyer Avg: ${buyerAverage}%). Previous: ${previousScore}% (${previousRating}★) -> New Composite: ${newCompositeScore}% (${newRating}★). Remarks: "${remarks}". Dispatched notification email to ${targetVendor?.email}.`,
+      `Buyer Rating Revision for ${targetVendor?.name}: Q=${qualityScore}, C=${costScore}, D=${deliveryScore} (Buyer Avg: ${revisionRecord.buyerAverage}%). Previous: ${revisionRecord.previousScore}% (${revisionRecord.previousRating}★) -> New Composite: ${revisionRecord.newCompositeScore}% (${revisionRecord.newRating}★). Remarks: "${revisionRecord.remarks}". Dispatched notification email to ${targetVendor?.email}.`,
       undefined,
       buyerEmail
     );
@@ -1118,22 +1214,22 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
       buyerCompany,
       buyerContactName: buyerName,
       buyerContactEmail: buyerEmail,
-      dispatchedAt: timestamp,
+      dispatchedAt: revisionRecord.timestamp,
       qualityScore,
       costScore,
       deliveryScore,
-      buyerAverage,
-      previousScore,
-      newCompositeScore,
-      newRating,
-      remarks: remarks.trim() || 'Quarterly operational performance review & ratings alignment.',
-      shaSignature,
+      buyerAverage: revisionRecord.buyerAverage,
+      previousScore: revisionRecord.previousScore,
+      newCompositeScore: revisionRecord.newCompositeScore,
+      newRating: revisionRecord.newRating,
+      remarks: revisionRecord.remarks,
+      shaSignature: revisionRecord.shaSignature,
     });
     setRatingRevisionEmailModalOpen(true);
 
     showToast(
       'Vendor Rating Revised & Email Dispatched',
-      `Updated ${targetVendor?.name} rating to ${newRating}★ (${newCompositeScore}%). Performance notification email dispatched.`,
+      `Updated ${targetVendor?.name} rating to ${revisionRecord.newRating}★ (${revisionRecord.newCompositeScore}%). Performance notification email dispatched.`,
       'success'
     );
 
@@ -1745,28 +1841,62 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
     );
   };
 
-  const approvePO = (rfqNumber: string, vendorName: string, amount: number) => {
-    setRfqs((prev) =>
-      prev.map((r) => (r.rfqNumber === rfqNumber ? { ...r, status: 'PO Generated' } : r))
-    );
+  // Was entirely local-state — the real, already-working POST /:id/approve-po
+  // endpoint was never called at all (BUGS.md #37), and the PO document shown
+  // to the user (Modals.tsx) fabricated its own line items, vendor id, issue
+  // date, and even a hardcoded "SHA-256" string that never changed no matter
+  // what was actually approved (#36). Now calls the real endpoint and returns
+  // its real response so the modal can render the real document instead.
+  const approvePO = async (
+    rfqNumber: string,
+    vendorId: string | null,
+    vendorName: string,
+    amount: number,
+    approverNotes?: string
+  ): Promise<{ success: boolean; poNumber?: string; issueDate?: string; shaSignature?: string; lineItems?: { description: string; quantity: number; unit: string }[]; error?: string }> => {
+    try {
+      const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqNumber)}/approve-po`, {
+        method: 'POST',
+        headers: authFetchHeaders(),
+        body: JSON.stringify({ vendorId, vendorName, totalAmount: amount, approverNotes }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        showToast('PO Approval Failed', data.error || 'Could not approve the purchase order.', 'warning');
+        return { success: false, error: data.error };
+      }
 
-    addFeedItem(
-      `Purchase Order Generated: ${rfqNumber}`,
-      `Approved PO generated for ${vendorName} totaling ${formatCurrency(amount)}. Dispatched to ERP & Vendor Portal.`,
-      'approval',
-      rfqNumber
-    );
+      setRfqs((prev) =>
+        prev.map((r) =>
+          r.rfqNumber === rfqNumber
+            ? { ...r, status: 'PO Generated' as const, awardedVendor: vendorName, awardedAmount: amount }
+            : r
+        )
+      );
 
-    addAuditLog(
-      `Approved PO Generation & Dispatched Contract for ${rfqNumber} to ${vendorName} (${formatCurrency(amount)})`,
-      rfqNumber
-    );
+      addFeedItem(
+        `Purchase Order Generated: ${rfqNumber}`,
+        `Approved PO ${data.poNumber} generated for ${vendorName} totaling ${formatCurrency(amount)}. Dispatched to ERP & Vendor Portal.`,
+        'approval',
+        rfqNumber
+      );
 
-    showToast(
-      'Purchase Order Issued!',
-      `Official PO contract generated and signed with SHA-256 digital stamp for ${vendorName}.`,
-      'success'
-    );
+      addAuditLog(
+        `Approved PO Generation & Dispatched Contract for ${rfqNumber} to ${vendorName} (${formatCurrency(amount)})`,
+        rfqNumber
+      );
+
+      showToast(
+        'Purchase Order Issued!',
+        `Official PO ${data.poNumber} generated and signed with a real SHA-256 digital stamp for ${vendorName}.`,
+        'success'
+      );
+
+      return { success: true, poNumber: data.poNumber, issueDate: data.issueDate, shaSignature: data.shaSignature, lineItems: data.lineItems };
+    } catch (err: any) {
+      showToast('PO Approval Failed', err?.message || 'Network error while approving the purchase order.', 'warning');
+      return { success: false, error: err?.message };
+    }
   };
 
   const addNewRFQ = (
@@ -1905,6 +2035,11 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
       ...rfqData,
       id,
       createdAt: createdAtStr,
+      // Mirrors what storeService.createRFQ independently stamps server-side
+      // from its own activeBuyerAccount — the app has one globally "active"
+      // buyer account rather than a per-request buyer identity.
+      buyerAccountId: activeBuyerAccount?.id || null,
+      buyerAccountName: activeBuyerAccount?.organizationName || null,
       source: rfqData.source || 'web_portal',
       autoCirculated: rfqData.autoCirculated ?? (rfqData.source === 'email_gateway'),
       quotesCount: 0,
@@ -1937,27 +2072,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
     }).catch((e) => console.error('Failed to save RFQ to DB:', e));
     
     // Create opportunity in vendor portal
-    const newOpp: VendorOpportunity = {
-      id: `opp-${Date.now()}`,
-      rfqNumber: newRFQ.rfqNumber,
-      title: newRFQ.title,
-      buyer: 'Larsen & Toubro Limited (Heavy Engineering)',
-      deadline: newRFQ.targetDeliveryDate,
-      daysRemaining: 7,
-      type: newRFQ.sourcingMode === 'mode_1' ? 'direct_invitation' : 'network_marketplace',
-      estimatedValue: newRFQ.budget > 0 ? `${CURRENCY.SYMBOL}${(newRFQ.budget / 1000).toFixed(0)}k` : undefined,
-      deliveryLocation: 'Enterprise Logistics Hub (Navi Mumbai)',
-      status: 'pending_bid',
-      lineItems: newRFQ.extractedEntities.map((e, idx) => ({
-        id: `li-new-${idx}`,
-        description: `${e.itemName} [${e.minorCategory || 'Minor Spec'}] (${e.technicalSpecs})`,
-        quantity: e.quantity,
-        unitPrice: 0,
-        leadTimeDays: 14,
-        marketBandStatus: 'optimal',
-        paymentTerms: 'Net 30 Days',
-      })),
-    };
+    const newOpp = buildOpportunityFromRFQ(newRFQ);
     setVendorOpportunities((prev) => [newOpp, ...prev]);
 
     // Dispatch Standard RFQ Email Package to each suitable vendor
@@ -2283,6 +2398,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
         setActiveSubscription,
         vendorSubscription,
         setVendorSubscription,
+        updateVendorSubscription,
         vendorRfqDownloadsUsed,
         setVendorRfqDownloadsUsed,
         vendorCatalogue,

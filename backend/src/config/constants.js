@@ -450,10 +450,12 @@ const GEMINI_CONFIG = {
 // back verbatim and are never sent to Gemini: the manual flow exists precisely
 // because the buyer is keying the line items themselves.
 //
-// Content is held on disk rather than on the RFQ record. A 10MB PDF is ~13MB of
-// base64, and the bootstrap payload returns every RFQ, so inlining attachments
-// would make that response grow without bound.
+// Content lives in Cloudflare R2 rather than on the RFQ record. A 10MB PDF is
+// ~13MB of base64, and the bootstrap payload returns every RFQ, so inlining
+// attachments would make that response grow without bound.
 const RFQ_ATTACHMENT_CONFIG = {
+  // Object key prefix within the R2 bucket (was the local disk directory
+  // before the R2 migration — same env var, reinterpreted).
   STORAGE_DIR: process.env.RFQ_ATTACHMENT_DIR || 'uploads/rfq-attachments',
   MAX_BYTES: Number(process.env.RFQ_ATTACHMENT_MAX_BYTES || 10 * 1024 * 1024),
   MAX_PER_RFQ: Number(process.env.RFQ_ATTACHMENT_MAX_PER_RFQ || 10),

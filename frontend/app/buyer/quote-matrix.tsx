@@ -372,11 +372,17 @@ export default function QuoteMatrix({ onBackToDashboard }: QuoteMatrixProps) {
           isOpen={poModalOpen}
           onClose={() => setPoModalOpen(false)}
           rfqNumber={currentRFQ.rfqNumber}
+          vendorId={selectedVendorForPO.vendorId}
           vendorName={selectedVendorForPO.vendorName}
           totalAmount={selectedVendorForPO.totalPrice}
           unitPrice={selectedVendorForPO.unitPrice}
           leadTime={selectedVendorForPO.leadTimeDays}
           deliveryDate={currentRFQ.targetDeliveryDate}
+          lineItems={(currentRFQ.extractedEntities || []).map((ent) => ({
+            description: ent.itemName,
+            quantity: ent.quantity,
+            unit: ent.unit,
+          }))}
         />
       )}
 

@@ -15,7 +15,13 @@ import { RFQItem, VendorEvaluationRecord } from '@/lib/types';
 jest.mock('@/lib/store');
 
 describe('Modals.tsx', () => {
-  const mockApprovePO = jest.fn();
+  const mockApprovePO = jest.fn().mockResolvedValue({
+    success: true,
+    poNumber: 'PO-2026-001',
+    issueDate: '2026-09-02',
+    shaSignature: 'a'.repeat(64),
+    lineItems: [{ description: 'Test Item', quantity: 5, unit: 'Nos' }],
+  });
   const mockShowToast = jest.fn();
   const mockTriggerEscalation = jest.fn();
   const mockTriggerChannelChaser = jest.fn();
@@ -42,23 +48,27 @@ describe('Modals.tsx', () => {
   describe('PurchaseOrderModal', () => {
     const mockOnClose = jest.fn();
 
+    const baseLineItems = [{ description: 'Centrifugal Water Pump', quantity: 12, unit: 'Nos' }];
+
     it('returns null when closed', () => {
       const { container } = render(
         <PurchaseOrderModal
           isOpen={false}
           onClose={mockOnClose}
           rfqNumber="RFQ-2026-001"
+          vendorId="v-001"
           vendorName="Apex Industrial"
           totalAmount={150000}
           unitPrice={37500}
           leadTime={14}
           deliveryDate="2026-09-20"
+          lineItems={baseLineItems}
         />
       );
       expect(container.firstChild).toBeNull();
     });
 
-    it('renders and handles PO approval, export PDF, print, cancel and close', () => {
+    it('renders and handles PO approval, export PDF, print, cancel and close', async () => {
       jest.useFakeTimers();
       window.print = jest.fn();
 
@@ -67,26 +77,28 @@ describe('Modals.tsx', () => {
           isOpen={true}
           onClose={mockOnClose}
           rfqNumber="RFQ-2026-001"
+          vendorId="v-001"
           vendorName="Apex Industrial"
           totalAmount={150000}
           unitPrice={37500}
           leadTime={14}
           deliveryDate="2026-09-20"
+          lineItems={baseLineItems}
         />
       );
 
       expect(screen.getByText('Purchase Order Generation & Dispatch')).toBeInTheDocument();
       expect(screen.getByText('PURCHASE ORDER: PO-2026-001')).toBeInTheDocument();
 
-      // Export PDF button
+      // Export PDF button — now just triggers the browser print dialog
       const exportBtn = screen.getByText(/Export PDF/);
       fireEvent.click(exportBtn);
-      expect(mockShowToast).toHaveBeenCalledWith('PO Exported', expect.any(String), 'info');
+      expect(window.print).toHaveBeenCalled();
 
       // Print button
       const printBtn = screen.getByText(/Print/);
       fireEvent.click(printBtn);
-      expect(window.print).toHaveBeenCalled();
+      expect(window.print).toHaveBeenCalledTimes(2);
 
       // Cancel button
       const cancelBtn = screen.getByText('Cancel');
@@ -97,14 +109,18 @@ describe('Modals.tsx', () => {
       const notesInput = screen.getByDisplayValue(/Approved based on AI/);
       fireEvent.change(notesInput, { target: { value: 'Custom approver note' } });
 
-      // Approve button
+      // Approve button — approvePO is now async and only resolves via the
+      // real backend response
       const approveBtn = screen.getByText(/APPROVE & GENERATE PO/);
-      fireEvent.click(approveBtn);
+      await act(async () => {
+        fireEvent.click(approveBtn);
+        await Promise.resolve();
+      });
 
-      expect(mockApprovePO).toHaveBeenCalledWith('RFQ-2026-001', 'Apex Industrial', 150000);
+      expect(mockApprovePO).toHaveBeenCalledWith('RFQ-2026-001', 'v-001', 'Apex Industrial', 150000, 'Custom approver note');
 
       act(() => {
-        jest.advanceTimersByTime(1600);
+        jest.advanceTimersByTime(1900);
       });
       expect(mockOnClose).toHaveBeenCalled();
       jest.useRealTimers();

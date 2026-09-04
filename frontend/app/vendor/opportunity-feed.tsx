@@ -2,6 +2,8 @@
 
 import React from 'react';
 import { useApp } from '@/lib/store';
+import { authClient } from '@/lib/authClient';
+import { VendorSubscriptionPaymentModal } from '@/app/components/Modals';
 import { VendorOpportunity } from '@/lib/types';
 import {
   Truck,
@@ -33,20 +35,23 @@ export default function OpportunityFeed({
   onNavigateToEvaluation,
   onNavigateToSubscription,
 }: OpportunityFeedProps) {
-  const { 
-    vendorOpportunities, 
-    showToast, 
-    addAuditLog, 
-    vendorSubscription, 
-    setVendorSubscription,
+  const {
+    vendorOpportunities,
+    showToast,
+    addAuditLog,
+    vendorSubscription,
+    updateVendorSubscription,
     vendorRfqDownloadsUsed,
-    setVendorRfqDownloadsUsed,
     vendorCatalogue,
     vendorSelfEvaluationCompleted,
     vendorSelfEvaluationScore,
     isVendorEvaluationFeeWaived,
     buyerAccounts,
+    buyerVendors,
+    currentUserSession,
+    refreshFromDB,
   } = useApp();
+  const vendorLabel = currentUserSession?.orgName || currentUserSession?.name || 'Vendor';
 
   const [showUpgradeModal, setShowUpgradeModal] = React.useState(false);
   const openUpgradeModal = () => setShowUpgradeModal(true);
@@ -78,8 +83,12 @@ export default function OpportunityFeed({
     </option>
   );
 
+  // Was always navigating to vendorOpportunities[0] regardless of which RFQ
+  // the reminder banner actually names below — fixed to target that RFQ.
+  const REMINDER_RFQ_NUMBER = 'RFQ-2026-00421';
   const handleDirectReminderBid = () => {
-    onNavigateToBidForm(vendorOpportunities[0]);
+    const target = vendorOpportunities.find((opp) => opp.rfqNumber === REMINDER_RFQ_NUMBER) || vendorOpportunities[0];
+    onNavigateToBidForm(target);
   };
 
   // 2. Open Network Marketplace Filter States (Buyers list removed as they are not applicable here)
@@ -107,15 +116,21 @@ export default function OpportunityFeed({
     return { major: 'Mechanical & Fluid Equipment', minor: 'Structural Steel & Beams' };
   };
 
-  // Rajesh Nair (L&T) uploaded Apex Supplies, so their RFQs are free to bid on.
-  // Other buyer RFQs require premium vendor subscription.
-  const isOwnBuyerRfq = (rfqNumber: string) => {
-    return ['RFQ-2026-00421', 'RFQ-2026-00423', 'RFQ-2026-00425', 'RFQ-2026-00427'].includes(rfqNumber);
+  // Was a hardcoded list of 4 specific RFQ numbers standing in for "this
+  // vendor's own buyer roster" — direct-vs-marketplace now reflects the real
+  // relationship: this vendor's real addedByBuyerCompany against the RFQ's
+  // real buyerAccountName (the same real fields the backend's own quota
+  // enforcement in GET /api/rfqs/:id/email-preview checks).
+  const myVendorRecord = buyerVendors.find((v) => v.email?.toLowerCase() === currentUserSession?.email?.toLowerCase());
+  const isOwnBuyerRfq = (opp: VendorOpportunity) => {
+    return !!myVendorRecord?.addedByBuyerCompany && myVendorRecord.addedByBuyerCompany === opp.buyer;
   };
 
-  const handleDownloadRfq = (opp: VendorOpportunity) => {
-    const isDirect = isOwnBuyerRfq(opp.rfqNumber);
+  const handleDownloadRfq = async (opp: VendorOpportunity) => {
+    const isDirect = isOwnBuyerRfq(opp);
 
+    // Instant client-side feedback for the obviously-blocked cases — the
+    // backend is the real authority below and enforces this regardless.
     if (vendorSubscription === 'premium' && !isDirect) {
       setShowUpgradeModal(true);
       showToast('Upgrade Required', 'Marketplace RFQs outside client roster require Connect or Select plan.', 'info');
@@ -134,8 +149,32 @@ export default function OpportunityFeed({
       return;
     }
 
-    showToast('Spreadsheet Sent to Registered Email', `Downloaded BOQ Excel spreadsheet for ${opp.rfqNumber}.`, 'success');
-    addAuditLog(`Downloaded RFQ specifications for ${opp.rfqNumber}`, 'VN-APEX-4920', 'vendor@apex.com');
+    // Was a no-op fake toast with no backend call at all, and the fetch it
+    // did make had no Authorization header at all (this route requires
+    // authentication — it would 401 for real). Now calls the real,
+    // authenticated email-preview endpoint, which enforces the vendor's
+    // download quota server-side too — the checks above are just UX, not
+    // the actual gate. Refreshes from the DB afterward so the quota shown
+    // reflects what the server actually counted, not a local guess.
+    try {
+      const res = await fetch(`/api/rfqs/${encodeURIComponent(opp.rfqNumber)}/email-preview`, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authClient.getToken() ? { Authorization: `Bearer ${authClient.getToken()}` } : {}),
+        },
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Could not generate the RFQ specification.');
+      }
+      if (!isDirect) {
+        await refreshFromDB();
+      }
+      showToast('Spreadsheet Sent to Registered Email', `Downloaded BOQ Excel spreadsheet for ${opp.rfqNumber}.`, 'success');
+      addAuditLog(`${vendorLabel} downloaded RFQ specifications for ${opp.rfqNumber}`, opp.rfqNumber, currentUserSession?.email);
+    } catch (err: any) {
+      showToast('Download Failed', err?.message || 'Could not download the RFQ specification.', 'warning');
+    }
   };
 
   const handleDownloadClick = (e: React.MouseEvent<HTMLButtonElement>) => {
@@ -244,16 +283,28 @@ export default function OpportunityFeed({
   const directInvites = eligibleDirectOpportunities;
   const networkOpps = eligibleNetworkOpportunities;
 
-  const handleUpgradePlan = (plan: any) => {
-    setVendorSubscription(plan);
+  const handleUpgradePlan = async (plan: 'premium' | 'connect' | 'select') => {
+    const saved = await updateVendorSubscription(plan);
+    if (!saved) return;
     setShowUpgradeModal(false);
     showToast(`${plan.toUpperCase()} Plan Activated!`, `Updated vendor subscription to ${plan}.`, 'success');
-    addAuditLog(`Apex Supplies upgraded to ${plan} plan`, 'VN-APEX-4920', 'vendor@apex.com');
+    addAuditLog(`${vendorLabel} upgraded to ${plan} plan`, undefined, currentUserSession?.email);
   };
+
+  // Connect/Select advertise real $ prices, so — same as vendor-subscription.tsx
+  // — they go through the dummy payment gateway rather than flipping the plan
+  // for free on click. This modal previously bypassed that gate entirely.
+  const [pendingPayment, setPendingPayment] = React.useState<{ planId: 'connect' | 'select'; planName: string; price: string } | null>(null);
 
   const handleUpgradeClick = (e: React.MouseEvent<HTMLButtonElement>) => {
     const plan = e.currentTarget.getAttribute('data-plan') || 'premium';
-    handleUpgradePlan(plan);
+    if (plan === 'premium') {
+      handleUpgradePlan(plan);
+      return;
+    }
+    const planName = plan === 'connect' ? 'Connect Model (50 RFQs / 3 Months)' : 'Select Model (Catalogue & 100 RFQs / 3 Months)';
+    const price = plan === 'connect' ? '$149' : '$349';
+    setPendingPayment({ planId: plan as 'connect' | 'select', planName, price });
   };
 
   return (
@@ -371,7 +422,7 @@ export default function OpportunityFeed({
           <AlertTriangle size={18} className="text-amber-600 dark:text-amber-400 shrink-0" />
           <div>
             <span className="font-bold text-slate-900 dark:text-white">AUTOMATED SYSTEM REMINDER:</span>{' '}
-            <span>1 quotation requires action within 24 hours (<span className="mono font-bold text-slate-900 dark:text-white">RFQ-2026-00421</span>). High win probability based on your stock readiness.</span>
+            <span>1 quotation requires action within 24 hours (<span className="mono font-bold text-slate-900 dark:text-white">{REMINDER_RFQ_NUMBER}</span>). High win probability based on your stock readiness.</span>
           </div>
         </div>
         <button
@@ -531,7 +582,11 @@ export default function OpportunityFeed({
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {directInvites.map((opp) => {
-                const isLocked = !isOwnBuyerRfq(opp.rfqNumber) && vendorSubscription !== 'premium_network';
+                // Kept consistent with the network-opportunities section below
+                // (was two contradictory definitions) — 'connect'/'select' are
+                // the real marketplace-unlock tiers, not the unreachable
+                // 'premium_network'.
+                const isLocked = !isOwnBuyerRfq(opp) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
                 const categories = getOpportunityCategories(opp);
                 const isCategoryMatch = categories.minor === 'Pumps & Valves' || categories.major === 'Mechanical & Fluid Equipment';
                 const catalogueMatches = vendorCatalogue || [];
@@ -886,7 +941,7 @@ export default function OpportunityFeed({
               </div>
             ) : (
               networkOpps.map((opp) => {
-                const isLocked = !isOwnBuyerRfq(opp.rfqNumber) && vendorSubscription === 'premium';
+                const isLocked = !isOwnBuyerRfq(opp) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
                 const categories = getOpportunityCategories(opp);
                 const isCategoryMatch = categories.minor === 'Pumps & Valves' || categories.major === 'Mechanical & Fluid Equipment';
                 const catalogueMatches = vendorCatalogue || [];
@@ -1086,6 +1141,16 @@ export default function OpportunityFeed({
           </div>
         </div>
       )}
+
+      <VendorSubscriptionPaymentModal
+        isOpen={!!pendingPayment}
+        onClose={() => setPendingPayment(null)}
+        planName={pendingPayment?.planName || ''}
+        price={pendingPayment?.price || ''}
+        onPaymentSuccess={() => {
+          if (pendingPayment) handleUpgradePlan(pendingPayment.planId);
+        }}
+      />
     </div>
   );
 }

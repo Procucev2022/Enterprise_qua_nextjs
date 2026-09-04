@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '@/lib/store';
 import { VendorEvaluationRecord, QuestionEvaluationItem } from '@/lib/types';
 import {
@@ -68,7 +68,32 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
     isVendorEvaluationFeeWaived,
     setVendorSelfEvaluationCompleted,
     setVendorSelfEvaluationScore,
+    currentUserSession,
   } = useApp();
+
+  // This evaluation record was always attributed to a hardcoded 'v-1' / 'Apex
+  // Supplies Ltd.' regardless of who actually took the survey. Load the real
+  // logged-in vendor's own record so the evaluation is attributed correctly.
+  const [myVendorRecord, setMyVendorRecord] = useState<any>(null);
+  useEffect(() => {
+    let cancelled = false;
+    async function loadMyVendorRecord() {
+      const email = currentUserSession?.email;
+      if (!email) return;
+      try {
+        const res = await fetch(`/api/vendors/${encodeURIComponent(email)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled && data.success && data.data) setMyVendorRecord(data.data);
+      } catch {
+        // Leave myVendorRecord null — falls back to session-derived identity below.
+      }
+    }
+    loadMyVendorRecord();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUserSession?.email]);
 
   const [activeTab, setActiveTab] = useState<'M1' | 'M2' | 'M3' | 'M4' | 'M5' | 'M6'>('M1');
   const [submitting, setSubmitting] = useState(false);
@@ -76,8 +101,16 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
 
   // 24 Detailed Question States with their specific descriptive options
   const [qState, setQState] = useState<Record<string, QuestionFormState>>({
+    // Every question below used to start pre-filled with a fake attachment, a
+    // near-max score, and a fabricated "verified" remark — a vendor could
+    // submit without touching anything and score ~94% on fictitious evidence
+    // (BUGS.md #50). Defaults now start at the *lowest* value actually offered
+    // by that question's own options (the "unproven / no evidence" answer,
+    // since not every question offers a literal 0), with no attachment and no
+    // remarks, so a genuine compliance claim requires the vendor to actually
+    // make it.
     'M1-Q1': {
-      refId: 'M1-Q1', pillarId: 'M1', pillarName: 'Commercial Terms (25%)', criteria: 'Commercial Payment Terms', attachmentName: 'Terms_Net60.pdf', score: 5.0, weightedScore: 6.25, maxWeight: 6.25, remarks: 'Agreed to Net 60 payment terms without price escalation penalty.',
+      refId: 'M1-Q1', pillarId: 'M1', pillarName: 'Commercial Terms (25%)', criteria: 'Commercial Payment Terms', attachmentName: '', score: 0, weightedScore: 0, maxWeight: 6.25, remarks: '',
       options: [
         { label: 'Net 60+ Days (5 pts - Optimal)', value: 5 },
         { label: 'Net 30 Days (4 pts - Standard)', value: 4 },
@@ -86,14 +119,14 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
       ]
     },
     'M1-Q2': {
-      refId: 'M1-Q2', pillarId: 'M1', pillarName: 'Commercial Terms (25%)', criteria: 'Fixed Price Contract (12 Mo)', attachmentName: 'Rate_Contract_Agreement_12Mo.pdf', score: 5.0, weightedScore: 6.25, maxWeight: 6.25, remarks: 'Signed 12-month fixed rate agreement attached; no commodity indexation.',
+      refId: 'M1-Q2', pillarId: 'M1', pillarName: 'Commercial Terms (25%)', criteria: 'Fixed Price Contract (12 Mo)', attachmentName: '', score: 1, weightedScore: 1.25, maxWeight: 6.25, remarks: '',
       options: [
         { label: 'Yes (Fixed 12 Months - 5 pts)', value: 5 },
         { label: 'No (Variable Pricing - 1 pt)', value: 1 }
       ]
     },
     'M1-Q3': {
-      refId: 'M1-Q3', pillarId: 'M1', pillarName: 'Commercial Terms (25%)', criteria: 'Inclusivity of Freight (DDP)', attachmentName: 'Freight_Policy.pdf', score: 4.0, weightedScore: 5.00, maxWeight: 6.25, remarks: 'DDP terms confirmed for regional sites; remote sites capped at 2%.',
+      refId: 'M1-Q3', pillarId: 'M1', pillarName: 'Commercial Terms (25%)', criteria: 'Inclusivity of Freight (DDP)', attachmentName: '', score: 1, weightedScore: 1.25, maxWeight: 6.25, remarks: '',
       options: [
         { label: 'Full DDP / Door Delivery Included (5 pts)', value: 5 },
         { label: 'FOR Destination Only (3 pts)', value: 3 },
@@ -101,7 +134,7 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
       ]
     },
     'M1-Q4': {
-      refId: 'M1-Q4', pillarId: 'M1', pillarName: 'Commercial Terms (25%)', criteria: 'Volume Tier Discounting', attachmentName: 'Volume_Discount_Matrix_Tier.xlsx', score: 5.0, weightedScore: 6.25, maxWeight: 6.25, remarks: 'Verified tier structure: 6.5% discount unlocked on volumes >500 units.',
+      refId: 'M1-Q4', pillarId: 'M1', pillarName: 'Commercial Terms (25%)', criteria: 'Volume Tier Discounting', attachmentName: '', score: 1, weightedScore: 1.25, maxWeight: 6.25, remarks: '',
       options: [
         { label: '> 5% Volume Discount (5 pts)', value: 5 },
         { label: '2% - 5% Volume Discount (3 pts)', value: 3 },
@@ -110,7 +143,7 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
     },
 
     'M2-Q1': {
-      refId: 'M2-Q1', pillarId: 'M2', pillarName: 'Technical Capabilities (15%)', criteria: 'BOQ Spec Compliance', attachmentName: 'Technical_BOQ_Compliance_Datasheet.pdf', score: 5.0, weightedScore: 3.75, maxWeight: 3.75, remarks: 'Technical datasheet verified via OCR; 100% parameter compliance.',
+      refId: 'M2-Q1', pillarId: 'M2', pillarName: 'Technical Capabilities (15%)', criteria: 'BOQ Spec Compliance', attachmentName: '', score: 0, weightedScore: 0, maxWeight: 3.75, remarks: '',
       options: [
         { label: '100% Full Spec Compliance (5 pts)', value: 5 },
         { label: 'Partial Compliance / Deviations (2 pts)', value: 2 },
@@ -118,7 +151,7 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
       ]
     },
     'M2-Q2': {
-      refId: 'M2-Q2', pillarId: 'M2', pillarName: 'Technical Capabilities (15%)', criteria: 'Equipment Automation', attachmentName: 'Factory_Equipment_Automation_Log.pdf', score: 5.0, weightedScore: 3.75, maxWeight: 3.75, remarks: 'Multi-axis CNC machines and robotic welding verified via audit log.',
+      refId: 'M2-Q2', pillarId: 'M2', pillarName: 'Technical Capabilities (15%)', criteria: 'Equipment Automation', attachmentName: '', score: 1, weightedScore: 0.75, maxWeight: 3.75, remarks: '',
       options: [
         { label: 'Fully Automated / Robotic CNC Lines (5 pts)', value: 5 },
         { label: 'Semi-Automated Lines (3 pts)', value: 3 },
@@ -126,14 +159,14 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
       ]
     },
     'M2-Q3': {
-      refId: 'M2-Q3', pillarId: 'M2', pillarName: 'Technical Capabilities (15%)', criteria: 'In-House R&D / Testing', attachmentName: 'NABL_Lab_Accreditation_Certificate.pdf', score: 5.0, weightedScore: 3.75, maxWeight: 3.75, remarks: 'In-house NABL-accredited metallurgical testing laboratory confirmed.',
+      refId: 'M2-Q3', pillarId: 'M2', pillarName: 'Technical Capabilities (15%)', criteria: 'In-House R&D / Testing', attachmentName: '', score: 1, weightedScore: 0.75, maxWeight: 3.75, remarks: '',
       options: [
         { label: 'Yes + Lab Accreditation Cert (5 pts)', value: 5 },
         { label: 'No In-House Lab (1 pt)', value: 1 }
       ]
     },
     'M2-Q4': {
-      refId: 'M2-Q4', pillarId: 'M2', pillarName: 'Technical Capabilities (15%)', criteria: '24/7 Technical Support', attachmentName: 'Technical_Service_SLA_Agreement.pdf', score: 4.0, weightedScore: 3.00, maxWeight: 3.75, remarks: 'Dedicated field service team available in key regions; 4-hour SLA.',
+      refId: 'M2-Q4', pillarId: 'M2', pillarName: 'Technical Capabilities (15%)', criteria: '24/7 Technical Support', attachmentName: '', score: 0, weightedScore: 0, maxWeight: 3.75, remarks: '',
       options: [
         { label: '24/7 On-Site Engineering Support (5 pts)', value: 5 },
         { label: 'Remote Engineering Support Only (3 pts)', value: 3 },
@@ -142,14 +175,14 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
     },
 
     'M3-Q1': {
-      refId: 'M3-Q1', pillarId: 'M3', pillarName: 'Quality & Warranty (20%)', criteria: 'ISO 9001:2015 Certification', attachmentName: 'ISO_9001_TUV_Certificate.pdf', score: 5.0, weightedScore: 5.00, maxWeight: 5.00, remarks: 'ISO 9001:2015 certificate valid through Nov 2028 (TÜV SÜD).',
+      refId: 'M3-Q1', pillarId: 'M3', pillarName: 'Quality & Warranty (20%)', criteria: 'ISO 9001:2015 Certification', attachmentName: '', score: 0, weightedScore: 0, maxWeight: 5.00, remarks: '',
       options: [
         { label: 'ISO 9001:2015 Verified Upload (5 pts)', value: 5 },
         { label: 'No ISO Quality Certification (0 pts)', value: 0 }
       ]
     },
     'M3-Q2': {
-      refId: 'M3-Q2', pillarId: 'M3', pillarName: 'Quality & Warranty (20%)', criteria: 'Defect Rate (PPM History)', attachmentName: 'Historical_12M_Quality_Defect_Log.pdf', score: 5.0, weightedScore: 5.00, maxWeight: 5.00, remarks: 'Past 12-month quality log verified: 280 PPM recorded.',
+      refId: 'M3-Q2', pillarId: 'M3', pillarName: 'Quality & Warranty (20%)', criteria: 'Defect Rate (PPM History)', attachmentName: '', score: 1, weightedScore: 1.00, maxWeight: 5.00, remarks: '',
       options: [
         { label: '< 500 PPM Defect Rate (5 pts - Six Sigma)', value: 5 },
         { label: '500 - 1000 PPM (3 pts)', value: 3 },
@@ -157,7 +190,7 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
       ]
     },
     'M3-Q3': {
-      refId: 'M3-Q3', pillarId: 'M3', pillarName: 'Quality & Warranty (20%)', criteria: 'Comprehensive Warranty', attachmentName: 'Enterprise_Warranty_Policy_24Mo.pdf', score: 5.0, weightedScore: 5.00, maxWeight: 5.00, remarks: 'Standard 24-month warranty provided; 36-month option available.',
+      refId: 'M3-Q3', pillarId: 'M3', pillarName: 'Quality & Warranty (20%)', criteria: 'Comprehensive Warranty', attachmentName: '', score: 1, weightedScore: 1.00, maxWeight: 5.00, remarks: '',
       options: [
         { label: '≥ 24 Months Warranty (5 pts)', value: 5 },
         { label: '12 - 23 Months Warranty (3 pts)', value: 3 },
@@ -165,7 +198,7 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
       ]
     },
     'M3-Q4': {
-      refId: 'M3-Q4', pillarId: 'M3', pillarName: 'Quality & Warranty (20%)', criteria: 'Batch Traceability (RFID)', attachmentName: 'RFID_Batch_Traceability_Manual.pdf', score: 5.0, weightedScore: 5.00, maxWeight: 5.00, remarks: 'RFID tracking active at receiving, assembly, and dispatch stages.',
+      refId: 'M3-Q4', pillarId: 'M3', pillarName: 'Quality & Warranty (20%)', criteria: 'Batch Traceability (RFID)', attachmentName: '', score: 0, weightedScore: 0, maxWeight: 5.00, remarks: '',
       options: [
         { label: 'RFID batch tracing (5 pts)', value: 5 },
         { label: 'Manual log tracking (3 pts)', value: 3 },
@@ -174,7 +207,7 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
     },
 
     'M4-Q1': {
-      refId: 'M4-Q1', pillarId: 'M4', pillarName: 'Operational Delivery (20%)', criteria: 'Verified OTIF Rate', attachmentName: '4_Quarter_OTIF_Audit_Report.pdf', score: 3.0, weightedScore: 3.00, maxWeight: 5.00, remarks: 'Verified average OTIF of 92.4% over past 4 quarters (Q2 port delay).',
+      refId: 'M4-Q1', pillarId: 'M4', pillarName: 'Operational Delivery (20%)', criteria: 'Verified OTIF Rate', attachmentName: '', score: 1, weightedScore: 1.00, maxWeight: 5.00, remarks: '',
       options: [
         { label: '≥ 95% OTIF delivery rate (5 pts)', value: 5 },
         { label: '90% - 94% OTIF (3 pts)', value: 3 },
@@ -182,7 +215,7 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
       ]
     },
     'M4-Q2': {
-      refId: 'M4-Q2', pillarId: 'M4', pillarName: 'Operational Delivery (20%)', criteria: 'Manufacturing Lead Time', attachmentName: 'Production_SLA_Timeline_Doc.pdf', score: 5.0, weightedScore: 5.00, maxWeight: 5.00, remarks: 'Standard lead time is 12 days, well within the 15-day SLA requirement.',
+      refId: 'M4-Q2', pillarId: 'M4', pillarName: 'Operational Delivery (20%)', criteria: 'Manufacturing Lead Time', attachmentName: '', score: 1, weightedScore: 1.00, maxWeight: 5.00, remarks: '',
       options: [
         { label: 'Standard lead time <= 12 days (SLA) (5 pts)', value: 5 },
         { label: '13-15 days (3 pts)', value: 3 },
@@ -190,7 +223,7 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
       ]
     },
     'M4-Q3': {
-      refId: 'M4-Q3', pillarId: 'M4', pillarName: 'Operational Delivery (20%)', criteria: 'Capacity Utilization Rate', attachmentName: 'Plant_Capacity_Utilization_Audit.pdf', score: 5.0, weightedScore: 5.00, maxWeight: 5.00, remarks: 'Plant operating at 74% capacity, leaving room for surge demand.',
+      refId: 'M4-Q3', pillarId: 'M4', pillarName: 'Operational Delivery (20%)', criteria: 'Capacity Utilization Rate', attachmentName: '', score: 1, weightedScore: 1.00, maxWeight: 5.00, remarks: '',
       options: [
         { label: '60% - 85% capacity utilization (5 pts - Optimal)', value: 5 },
         { label: '86% - 95% capacity (3 pts)', value: 3 },
@@ -198,7 +231,7 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
       ]
     },
     'M4-Q4': {
-      refId: 'M4-Q4', pillarId: 'M4', pillarName: 'Operational Delivery (20%)', criteria: 'Disaster Recovery (BCP)', attachmentName: 'Business_Continuity_Plan_BCP.pdf', score: 5.0, weightedScore: 5.00, maxWeight: 5.00, remarks: 'BCP document attached; includes dual-sourcing & generator backup.',
+      refId: 'M4-Q4', pillarId: 'M4', pillarName: 'Operational Delivery (20%)', criteria: 'Disaster Recovery (BCP)', attachmentName: '', score: 0, weightedScore: 0, maxWeight: 5.00, remarks: '',
       options: [
         { label: 'Active tested BCP Plan (5 pts)', value: 5 },
         { label: 'No active BCP Plan (0 pts)', value: 0 }
@@ -206,7 +239,7 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
     },
 
     'M5-Q1': {
-      refId: 'M5-Q1', pillarId: 'M5', pillarName: 'Financial Stability (10%)', criteria: 'Annual Financial Turnover', attachmentName: '3_Year_Audited_Financial_Statements.pdf', score: 5.0, weightedScore: 2.50, maxWeight: 2.50, remarks: 'Audited statements confirm turnover of $18.5M (≥ 5x contract value).',
+      refId: 'M5-Q1', pillarId: 'M5', pillarName: 'Financial Stability (10%)', criteria: 'Annual Financial Turnover', attachmentName: '', score: 0, weightedScore: 0, maxWeight: 2.50, remarks: '',
       options: [
         { label: '>= 3x turnover (5 pts)', value: 5 },
         { label: '1.5x - 3x turnover (3 pts)', value: 3 },
@@ -214,21 +247,21 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
       ]
     },
     'M5-Q2': {
-      refId: 'M5-Q2', pillarId: 'M5', pillarName: 'Financial Stability (10%)', criteria: 'Credit Rating Score', attachmentName: 'CRISIL_Credit_Rating_Report.pdf', score: 5.0, weightedScore: 2.50, maxWeight: 2.50, remarks: 'CRISIL A+ rating verified; low default risk profile.',
+      refId: 'M5-Q2', pillarId: 'M5', pillarName: 'Financial Stability (10%)', criteria: 'Credit Rating Score', attachmentName: '', score: 0, weightedScore: 0, maxWeight: 2.50, remarks: '',
       options: [
         { label: 'Investment Grade (AAA/A/BBB) (5 pts)', value: 5 },
         { label: 'Non-Investment Grade (0 pts)', value: 0 }
       ]
     },
     'M5-Q3': {
-      refId: 'M5-Q3', pillarId: 'M5', pillarName: 'Financial Stability (10%)', criteria: 'Current Liquidity Ratio', attachmentName: 'Certified_Liquidity_Solvency_Sheet.pdf', score: 5.0, weightedScore: 2.50, maxWeight: 2.50, remarks: 'Liquidity ratio stands at 1.82; sufficient working capital.',
+      refId: 'M5-Q3', pillarId: 'M5', pillarName: 'Financial Stability (10%)', criteria: 'Current Liquidity Ratio', attachmentName: '', score: 2, weightedScore: 1.00, maxWeight: 2.50, remarks: '',
       options: [
         { label: 'Current ratio >= 1.5 (5 pts)', value: 5 },
         { label: 'Current ratio < 1.5 (2 pts)', value: 2 }
       ]
     },
     'M5-Q4': {
-      refId: 'M5-Q4', pillarId: 'M5', pillarName: 'Financial Stability (10%)', criteria: 'Active Litigation Claims', attachmentName: 'Legal_Compliance_Non_Insolvency_Cert.pdf', score: 5.0, weightedScore: 2.50, maxWeight: 2.50, remarks: 'Legal compliance check clear; no outstanding bankruptcy or litigation.',
+      refId: 'M5-Q4', pillarId: 'M5', pillarName: 'Financial Stability (10%)', criteria: 'Active Litigation Claims', attachmentName: '', score: 0, weightedScore: 0, maxWeight: 2.50, remarks: '',
       options: [
         { label: 'No active litigation claims (5 pts)', value: 5 },
         { label: 'Active litigation claims (0 pts)', value: 0 }
@@ -236,14 +269,14 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
     },
 
     'M6-Q1': {
-      refId: 'M6-Q1', pillarId: 'M6', pillarName: 'Governance & ESG (10%)', criteria: 'Statutory KYC & Tax Uploads', attachmentName: 'GSTIN_PAN_Incorporation_KYC.pdf', score: 5.0, weightedScore: 2.50, maxWeight: 2.50, remarks: 'GSTIN, PAN, and Tax Incorporation verified against govt database.',
+      refId: 'M6-Q1', pillarId: 'M6', pillarName: 'Governance & ESG (10%)', criteria: 'Statutory KYC & Tax Uploads', attachmentName: '', score: 0, weightedScore: 0, maxWeight: 2.50, remarks: '',
       options: [
         { label: 'GSTIN, PAN & statutory compliance verified (5 pts)', value: 5 },
         { label: 'Pending verification (0 pts)', value: 0 }
       ]
     },
     'M6-Q2': {
-      refId: 'M6-Q2', pillarId: 'M6', pillarName: 'Governance & ESG (10%)', criteria: 'ISO 14001 / ISO 45001 Certs', attachmentName: 'ISO_14001_EHS_Certificate.pdf', score: 3.0, weightedScore: 1.50, maxWeight: 2.50, remarks: 'ISO 14001 verified; ISO 45001 pending renewal in 3 months.',
+      refId: 'M6-Q2', pillarId: 'M6', pillarName: 'Governance & ESG (10%)', criteria: 'ISO 14001 / ISO 45001 Certs', attachmentName: '', score: 0, weightedScore: 0, maxWeight: 2.50, remarks: '',
       options: [
         { label: 'ISO 14001 + 45001 certificates (5 pts)', value: 5 },
         { label: 'Single certificate only (3 pts)', value: 3 },
@@ -251,14 +284,14 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
       ]
     },
     'M6-Q3': {
-      refId: 'M6-Q3', pillarId: 'M6', pillarName: 'Governance & ESG (10%)', criteria: 'Anti-Bribery & Ethics Policy', attachmentName: 'Signed_Anti_Bribery_Code_of_Conduct.pdf', score: 5.0, weightedScore: 2.50, maxWeight: 2.50, remarks: 'Code of Conduct & Anti-Bribery agreement signed by MD.',
+      refId: 'M6-Q3', pillarId: 'M6', pillarName: 'Governance & ESG (10%)', criteria: 'Anti-Bribery & Ethics Policy', attachmentName: '', score: 0, weightedScore: 0, maxWeight: 2.50, remarks: '',
       options: [
         { label: 'Signed Code of Conduct & Ethics (5 pts)', value: 5 },
         { label: 'Pending Code signing (0 pts)', value: 0 }
       ]
     },
     'M6-Q4': {
-      refId: 'M6-Q4', pillarId: 'M6', pillarName: 'Governance & ESG (10%)', criteria: 'ISO 27001 / GDPR Privacy', attachmentName: 'ISO_27001_Information_Security.pdf', score: 5.0, weightedScore: 2.50, maxWeight: 2.50, remarks: 'ISO 27001 certification active; enterprise security standards met.',
+      refId: 'M6-Q4', pillarId: 'M6', pillarName: 'Governance & ESG (10%)', criteria: 'ISO 27001 / GDPR Privacy', attachmentName: '', score: 0, weightedScore: 0, maxWeight: 2.50, remarks: '',
       options: [
         { label: 'ISO 27001 / GDPR Privacy (5 pts)', value: 5 },
         { label: 'GDPR compliance only (3 pts)', value: 3 },
@@ -290,7 +323,10 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
       ...prev,
       [refId]: { ...prev[refId], attachmentName: filename }
     }));
-    showToast('File Attached', `Document "${filename}" attached to ${refId}. AI OCR verified.`, 'success');
+    // Was claiming "AI OCR verified" here — this only ever reads the picked
+    // file's name, never its contents, and there is no OCR/verification
+    // backend anywhere in this app to have actually checked it.
+    showToast('File Attached', `Document "${filename}" attached to ${refId}.`, 'success');
   };
 
   // Stepper calculations
@@ -299,6 +335,7 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
 
   const getPillarTotal = (pillarId: string) => {
     const qList = Object.values(qState).filter(q => q.pillarId === pillarId);
+    if (qList.length === 0) return { avg: 0, weighted: 0 };
     const scoreSum = qList.reduce((acc, q) => acc + q.score, 0);
     const weightedSum = qList.reduce((acc, q) => acc + q.weightedScore, 0);
     return {
@@ -339,16 +376,32 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Was previously possible to submit a full 24-question evaluation with
+    // zero evidence attached (see BUGS.md #50) — now require every question
+    // to actually have a file attached before the survey can be submitted.
+    const missingEvidence = Object.values(qState).filter((q) => !q.attachmentName);
+    if (missingEvidence.length > 0) {
+      showToast(
+        'Evidence Required',
+        `Attach supporting evidence for all 24 questions before submitting (${missingEvidence.length} missing).`,
+        'warning'
+      );
+      return;
+    }
+
     setSubmitting(true);
 
-    setTimeout(() => {
+    setTimeout(async () => {
       const questionItems: QuestionEvaluationItem[] = Object.values(qState).map(q => ({
         refId: q.refId,
         pillarId: q.pillarId,
         pillarName: q.pillarName,
         criteria: q.criteria,
         attachmentName: q.attachmentName,
-        attachmentVerified: true,
+        // Never actually verified — see the honest "Not OCR-Verified" badge
+        // rendered for each question below.
+        attachmentVerified: false,
         score: q.score,
         weightedScore: q.weightedScore,
         remarks: q.remarks
@@ -356,18 +409,22 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
 
       const record: VendorEvaluationRecord = {
         id: `eval-${Date.now()}`,
-        vendorId: 'v-1',
-        vendorName: 'Apex Supplies Ltd.',
-        contactPerson: 'Rajesh Nair',
-        email: 'rajesh@apexsupplies.in',
-        phone: '+91 98201 44820',
-        category: 'Heavy Mechanical & Fluid Dynamics',
+        vendorId: myVendorRecord?.id || '',
+        vendorName: myVendorRecord?.name || currentUserSession?.orgName || currentUserSession?.name || 'Vendor',
+        contactPerson: myVendorRecord?.contactPerson || currentUserSession?.name || '',
+        email: currentUserSession?.email || myVendorRecord?.email || '',
+        phone: myVendorRecord?.phone || '',
+        category: myVendorRecord?.majorCategory || 'Uncategorized',
         submissionDate: new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC',
         status: currentStatus,
         overallScore: totalScorePercent,
         systemAction:
           totalScorePercent >= 80
-            ? 'AUTOMATIC DIRECT RFQ DISPATCH TO VENDOR INBOX. 24/24 mandatory attachments verified via AI OCR engine. Vendor added to Mode 3 active bidding roster.'
+            // "Verified via AI OCR engine" was a false claim — this app has no
+            // OCR/document-verification backend (see the honest disclosure
+            // badge on each attachment below); a file being attached is not
+            // the same as its contents being checked.
+            ? 'AUTOMATIC DIRECT RFQ DISPATCH TO VENDOR INBOX. 24/24 mandatory attachments received (not independently verified). Vendor added to Mode 3 active bidding roster.'
             : totalScorePercent >= 65
             ? 'RFQ DISPATCH HELD. System triggered Corrective Action Plan (CAPA) or requested document clarification.'
             : 'EXCLUDED FROM ACTIVE RFQ DISPATCH. Re-audit option unlocked after 90 days.',
@@ -383,26 +440,43 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
           id: `doc-${q.refId}`,
           name: q.attachmentName,
           type: q.criteria,
-          uploadDate: '2026-08-22',
-          verified: true,
-          status: 'Verified'
+          uploadDate: new Date().toISOString().substring(0, 10),
+          // A filename being attached was previously labeled "Verified" —
+          // this app has no real document-verification backend, so an
+          // attached file is only ever "Pending Review", never confirmed.
+          verified: false,
+          status: q.attachmentName ? 'Pending Review' : 'Missing'
         })),
         questionBreakdown: questionItems
       };
 
-      addVendorEvaluation(record);
+      // Was fire-and-forget: this screen showed "success", marked the vendor
+      // as evaluated, and navigated away regardless of whether the backend
+      // actually accepted the submission. Now the whole success path is
+      // gated on a real, confirmed response.
+      const saved = await addVendorEvaluation(record);
+      if (!saved) {
+        setSubmitting(false);
+        showToast(
+          'Submission Failed',
+          'Could not save your qualification evaluation. Please try again.',
+          'warning'
+        );
+        return;
+      }
+
       addAuditLog(
-        `Mode 3 Vendor Qualification Survey submitted by Apex Supplies Ltd. Score: ${totalScorePercent}% (${currentStatus})`,
-        'Mode-3-Audit',
-        'rajesh@apexsupplies.in'
+        `Mode 3 Vendor Qualification Survey submitted by ${record.vendorName}. Score: ${totalScorePercent}% (${currentStatus})`,
+        undefined,
+        record.email
       );
 
       addFeedItem(
         `Mode 3 Qualification Score: ${totalScorePercent}%`,
-        `Apex Supplies Ltd. scored ${totalScorePercent}% in Mode 3 AI Evaluation. Status: ${currentStatus}. ${record.systemAction}`,
+        `${record.vendorName} scored ${totalScorePercent}% in Mode 3 AI Evaluation. Status: ${currentStatus}. ${record.systemAction}`,
         'scoring',
-        'RFQ-2026-00421',
-        'Apex Supplies Ltd.'
+        undefined,
+        record.vendorName
       );
 
       setSubmitting(false);
@@ -447,7 +521,7 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
       <div className="p-4 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white shadow-xl border border-indigo-500/30 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="space-y-1">
           <div className="flex items-center gap-2 text-xs text-indigo-300 font-bold uppercase tracking-wider">
-            <Sparkles size={14} className="text-emerald-400" /> Apex Supplies Ltd. — Live AI Capability Rating
+            <Sparkles size={14} className="text-emerald-400" /> {myVendorRecord?.name || currentUserSession?.orgName || currentUserSession?.name || 'Vendor'} — Live AI Capability Rating
           </div>
           <div className="text-xs text-indigo-200/80">
             Step {currentTabIndex + 1} of {MODULE_TABS.length}: <strong className="text-white">{activeModuleMeta.name}</strong> ({activeModuleMeta.weight}% weight)
@@ -608,16 +682,25 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
                       <span className="font-bold text-slate-700 dark:text-gray-300 flex items-center gap-1">
                         <Paperclip size={11} className="text-indigo-600" /> Attached Evidence File:
                       </span>
-                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                        ✓ OCR Verified
-                      </span>
+                      {q.attachmentName ? (
+                        <span
+                          className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800"
+                          title="This app has no real OCR/document-verification backend — a filename being attached is not the same as its contents being checked."
+                        >
+                          📎 File Attached (Not OCR-Verified)
+                        </span>
+                      ) : (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-500 dark:text-gray-400 border border-slate-200 dark:border-gray-700">
+                          No File Attached
+                        </span>
+                      )}
                     </div>
                     <div className="text-[11px] font-mono font-semibold text-slate-700 dark:text-gray-300 truncate">
-                      {q.attachmentName}
+                      {q.attachmentName || 'No file selected'}
                     </div>
                     <div className="flex gap-2">
                       <label className="btn btn-secondary btn-xs cursor-pointer flex items-center gap-1 text-[9px]">
-                        <UploadCloud size={10} /> Change File
+                        <UploadCloud size={10} /> {q.attachmentName ? 'Change File' : 'Attach File'}
                         <input
                           type="file"
                           className="hidden"
@@ -630,8 +713,9 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
                       </label>
                       <button
                         type="button"
-                        onClick={() => showToast('OCR Re-run Initiated', 'Comparing file parameters against enterprise specification.', 'info')}
-                        className="btn btn-ghost btn-xs text-[9px] text-indigo-600 dark:text-indigo-400 font-bold"
+                        disabled={!q.attachmentName}
+                        onClick={() => showToast('Not Available', 'This is a demo evidence-attachment step — there is no real document verification behind it.', 'info')}
+                        className="btn btn-ghost btn-xs text-[9px] text-indigo-600 dark:text-indigo-400 font-bold disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         Re-scan Document
                       </button>

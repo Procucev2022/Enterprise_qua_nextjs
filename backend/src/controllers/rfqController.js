@@ -206,7 +206,7 @@ function getRFQSummary(req, res, next) {
  * something to be read. Only the returned metadata goes onto the RFQ; the bytes
  * stay on disk and are fetched by id.
  */
-function uploadRFQAttachment(req, res, next) {
+async function uploadRFQAttachment(req, res, next) {
   try {
     const body = req.body || {};
 
@@ -216,7 +216,7 @@ function uploadRFQAttachment(req, res, next) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
     }
 
-    const result = rfqAttachmentService.saveAttachment({
+    const result = await rfqAttachmentService.saveAttachment({
       fileName: body.fileName,
       mimeType: body.mimeType,
       content: body.content,
@@ -251,10 +251,10 @@ function uploadRFQAttachment(req, res, next) {
  * so a caller cannot influence how the file is served. Content-Disposition is
  * `inline` so the browser previews a PDF or image instead of forcing a download.
  */
-function downloadRFQAttachment(req, res, next) {
+async function downloadRFQAttachment(req, res, next) {
   try {
     const { attachmentId } = req.params;
-    const stored = rfqAttachmentService.loadAttachment(attachmentId);
+    const stored = await rfqAttachmentService.loadAttachment(attachmentId);
 
     if (!stored) {
       logger.warn('Attachment not found', { attachmentId }, 'RFQ_CONTROLLER');
@@ -293,11 +293,35 @@ function updateRFQ(req, res, next) {
 function addQuote(req, res, next) {
   try {
     const { id } = req.params;
-    const quote = req.body;
-    if (!quote.vendorName || !quote.unitPrice) {
-      logger.warn(`Failed to add quote to RFQ ${id}: Missing vendorName or unitPrice`, { id, quote }, 'RFQ_CONTROLLER');
-      return res.status(400).json({ success: false, error: 'vendorName and unitPrice are required.' });
+    // A quote's vendor identity must come from the authenticated session, not
+    // whatever vendorName/vendorId the client body claims — otherwise any
+    // authenticated user could submit a bid posing as any vendor by name.
+    if (req.user.role !== 'vendor') {
+      return res.status(403).json({ success: false, error: 'Only a vendor can submit a quote.' });
     }
+    const vendorRecord = storeService.getVendorById(req.user.email);
+    if (!vendorRecord) {
+      return res.status(400).json({ success: false, error: 'Create your vendor profile before submitting a quote.' });
+    }
+    const { unitPrice, totalPrice, leadTimeDays, warrantyYears, paymentTerms, remarks, vendorCategory, complianceStatus } = req.body;
+    if (!unitPrice) {
+      logger.warn(`Failed to add quote to RFQ ${id}: Missing unitPrice`, { id }, 'RFQ_CONTROLLER');
+      return res.status(400).json({ success: false, error: 'unitPrice is required.' });
+    }
+    const quote = {
+      vendorId: vendorRecord.id,
+      vendorName: vendorRecord.name,
+      vendorCategory: vendorCategory || 'Client List',
+      unitPrice,
+      totalPrice: totalPrice || unitPrice,
+      leadTimeDays: leadTimeDays || 0,
+      aiMatchScore: 0,
+      warrantyYears: warrantyYears || 0,
+      complianceStatus: complianceStatus || 'Pending Review',
+      paymentTerms: paymentTerms || '',
+      remarks: remarks || '',
+      submittedAt: new Date().toISOString(),
+    };
     logger.info(`Adding quote from ${quote.vendorName} to RFQ ${id}`, { id, vendorName: quote.vendorName, price: quote.unitPrice }, 'RFQ_CONTROLLER');
     const updatedRFQ = storeService.addQuoteToRFQ(id, quote);
     if (!updatedRFQ) {
@@ -321,6 +345,50 @@ function generateEmailPreview(req, res, next) {
       logger.warn(`RFQ not found for email preview: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
+
+    // This is the real "download RFQ" action both opportunity-feed.tsx and
+    // quotation-form.tsx call. A vendor downloading a marketplace RFQ (one
+    // not raised by the buyer who added them) is subject to their
+    // subscription's download quota — previously enforced only client-side,
+    // so any vendor could bypass their plan's limit by calling this endpoint
+    // directly. Buyers/category managers/admins downloading their own RFQ's
+    // spec are never subject to this.
+    if (req.user && req.user.role === 'vendor') {
+      const requestingVendor = storeService.getVendorById(req.user.email);
+      if (requestingVendor) {
+        const isDirect =
+          !!requestingVendor.addedByBuyerCompany && requestingVendor.addedByBuyerCompany === rfq.buyerAccountName;
+        if (!isDirect) {
+          const plan = requestingVendor.subscriptionPlan || 'premium';
+          const used = requestingVendor.rfqDownloadsUsed || 0;
+          const quota = plan === 'connect' ? 50 : plan === 'select' ? 100 : 0;
+          if (quota === 0) {
+            logger.warn(
+              `Rejected marketplace RFQ download: vendor ${requestingVendor.email} has no marketplace access (plan: ${plan})`,
+              { id, vendorEmail: requestingVendor.email },
+              'RFQ_CONTROLLER'
+            );
+            return res.status(403).json({
+              success: false,
+              error: 'Marketplace RFQs outside your client roster require a Connect or Select subscription.',
+            });
+          }
+          if (used >= quota) {
+            logger.warn(
+              `Rejected marketplace RFQ download: vendor ${requestingVendor.email} reached their ${plan} quota (${used}/${quota})`,
+              { id, vendorEmail: requestingVendor.email },
+              'RFQ_CONTROLLER'
+            );
+            return res.status(403).json({
+              success: false,
+              error: `You have reached your ${quota}-RFQ download quota for this period.`,
+            });
+          }
+          storeService.updateVendor(requestingVendor.id, { rfqDownloadsUsed: used + 1 });
+        }
+      }
+    }
+
     const vendor = vendorId ? storeService.getVendorById(vendorId) : null;
     const emailPayload = generateStandardRFQEmail(rfq, vendor);
     res.json({ success: true, data: emailPayload });
@@ -350,13 +418,21 @@ function triggerBatchChaser(req, res, next) {
 function approvePO(req, res, next) {
   try {
     const { id } = req.params;
-    const { vendorName, totalAmount, approverNotes } = req.body;
+    // Awarding a PO is a buyer-side decision — a vendor has no business
+    // approving their own (or anyone else's) award.
+    if (!['buyer', 'category_manager', 'admin'].includes(req.user.role)) {
+      return res.status(403).json({ success: false, error: 'You do not have permission to approve a purchase order.' });
+    }
+    const { vendorId, vendorName, totalAmount, approverNotes } = req.body;
     if (!vendorName || !totalAmount) {
       logger.warn(`Failed to approve PO for RFQ ${id}: Missing vendorName or totalAmount`, { id, body: req.body }, 'RFQ_CONTROLLER');
       return res.status(400).json({ success: false, error: 'vendorName and totalAmount are required.' });
     }
-    logger.info(`Approving Purchase Order for RFQ ${id}`, { id, vendorName, totalAmount, approverNotes }, 'RFQ_CONTROLLER');
-    const result = storeService.approvePurchaseOrder(id, vendorName, totalAmount, approverNotes);
+    logger.info(`Approving Purchase Order for RFQ ${id}`, { id, vendorId, vendorName, totalAmount, approverNotes }, 'RFQ_CONTROLLER');
+    const result = storeService.approvePurchaseOrder(id, vendorId, vendorName, totalAmount, approverNotes, req.user.email);
+    if (!result) {
+      return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+    }
     res.json(result);
   } catch (err) {
     logger.error(`Error approving PO for RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');

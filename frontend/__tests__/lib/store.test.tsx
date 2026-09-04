@@ -2,6 +2,7 @@ import React from 'react';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { AppProvider, useApp } from '@/lib/store';
 import { RFQItem, VendorEntry, BuyerAccount, VendorEvaluationRecord, ExtractedEntity } from '@/lib/types';
+import { authClient } from '@/lib/authClient';
 
 // Mock global fetch for API calls triggered by store
 const mockFetch = jest.fn();
@@ -1108,9 +1109,24 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     });
 
     // 6. Approve PO
-    act(() => {
-      contextValue.approvePO('RFQ-2026-999', 'Apex Supplies Ltd.', 580000);
-      contextValue.approvePO('RFQ-2026-NONEXISTENT', 'Unknown', 100);
+    await act(async () => {
+      await contextValue.approvePO('RFQ-2026-999', 'v-apex-b', 'Apex Supplies Ltd.', 580000, 'Test approval note');
+      await contextValue.approvePO('RFQ-2026-NONEXISTENT', null, 'Unknown', 100);
+    });
+
+    // Approve PO failure paths: a rejected response and a network-level throw
+    // must both resolve to { success: false } without navigating or updating
+    // RFQ state, rather than throwing out of the handler.
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({ success: false, error: 'PO rejected' }) });
+    await act(async () => {
+      const result = await contextValue.approvePO('RFQ-2026-999', 'v-apex-b', 'Apex Supplies Ltd.', 580000, 'Rejected case');
+      expect(result.success).toBe(false);
+    });
+
+    mockFetch.mockRejectedValueOnce(new Error('Network down'));
+    await act(async () => {
+      const result = await contextValue.approvePO('RFQ-2026-999', 'v-apex-b', 'Apex Supplies Ltd.', 580000, 'Network failure case');
+      expect(result.success).toBe(false);
     });
 
     // 7. Open Deep Dive & Modal triggers
@@ -1122,6 +1138,48 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     expect(contextValue.emailModalOpen).toBe(true);
 
     jest.useRealTimers();
+  });
+
+  it('projects a vendor opportunity from an RFQ with no deadline or budget without inventing values', async () => {
+    let contextValue: any;
+    const Consumer = () => {
+      contextValue = useApp();
+      return <div>RFQs: {contextValue.rfqs.length}</div>;
+    };
+
+    render(
+      <AppProvider>
+        <Consumer />
+      </AppProvider>
+    );
+
+    await waitFor(() => expect(contextValue.buyerVendors.length).toBeGreaterThan(0));
+
+    act(() => {
+      contextValue.setActiveSubscription('version_3');
+    });
+
+    let created: RFQItem;
+    act(() => {
+      created = contextValue.addNewRFQ({
+        rfqNumber: 'RFQ-NO-DEADLINE',
+        title: 'Undated Sourcing Request',
+        category: 'Mechanical',
+        targetDeliveryDate: '',
+        sourcingMode: 'mode_1',
+        budget: 0,
+        extractedEntities: [],
+      });
+    });
+
+    const opportunity = contextValue.vendorOpportunities.find((o: any) => o.rfqNumber === 'RFQ-NO-DEADLINE');
+    expect(opportunity).toBeDefined();
+    // No deadline was ever set — daysRemaining must not fall back to a
+    // fabricated countdown, and estimatedValue must not fall back to a
+    // fabricated budget ceiling the buyer never stated.
+    expect(opportunity.deadline).toBe('');
+    expect(opportunity.daysRemaining).toBe(0);
+    expect(opportunity.estimatedValue).toBeUndefined();
   });
 
   it('handles vendor evaluation, rating revisions, audit logs, and feed items', async () => {
@@ -1165,26 +1223,102 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       ],
     };
 
-    act(() => {
-      contextValue.addVendorEvaluation(evalRecord);
+    await act(async () => {
+      const saved = await contextValue.addVendorEvaluation(evalRecord);
+      expect(saved).toBe(true);
       contextValue.openVendorEvaluationSummary(evalRecord);
     });
     expect(contextValue.evaluationModalOpen).toBe(true);
 
-    // 2. Revise Vendor Rating (preferred, conditional, disqualified, and unknown vendor)
-    act(() => {
-      const revision1 = contextValue.reviseVendorRating('v-001', 92, 94, 90, 'Excellent quality performance');
+    // Failure paths: the caller must learn a submission was NOT saved,
+    // whether the request itself failed or the server reported success:false.
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({ success: false, error: 'Server error' }) });
+    await act(async () => {
+      const saved = await contextValue.addVendorEvaluation({ ...evalRecord, id: 'eval-fail-1' });
+      expect(saved).toBe(false);
+    });
+
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ success: false, error: 'Rejected' }) });
+    await act(async () => {
+      const saved = await contextValue.addVendorEvaluation({ ...evalRecord, id: 'eval-fail-2' });
+      expect(saved).toBe(false);
+    });
+
+    // 2. Revise Vendor Rating (preferred, conditional, disqualified, and unknown vendor).
+    // reviseVendorRating awaits the real POST /api/vendors/:id/rating-revision and
+    // uses the server's response as the source of truth, so each call needs an
+    // explicit mocked response shaped like the real endpoint's { success, data:
+    // { revisionRecord, updatedVendor } } payload.
+    const mockRevisionResponse = (overrides: Record<string, unknown> = {}) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: {
+          revisionRecord: {
+            id: `rev-${Date.now()}`,
+            vendorId: 'v-001',
+            vendorName: 'Apex Supplies Ltd.',
+            buyerCompany: 'Larsen & Toubro Limited',
+            buyerName: 'Vikram Malhotra',
+            buyerEmail: 'buyer@procucev.com',
+            timestamp: new Date().toISOString(),
+            qualityScore: 92,
+            costScore: 94,
+            deliveryScore: 90,
+            buyerAverage: 92,
+            previousScore: 85,
+            newCompositeScore: 90,
+            previousRating: 4.3,
+            newRating: 4.5,
+            remarks: 'Excellent quality performance',
+            emailDispatched: true,
+            shaSignature: 'sha256-test',
+            ...overrides,
+          },
+          updatedVendor: { id: 'v-001', score: 90, rating: 4.5 },
+        },
+      }),
+    });
+
+    let revision1: any;
+    await act(async () => {
+      mockFetch.mockResolvedValueOnce(mockRevisionResponse());
+      revision1 = await contextValue.reviseVendorRating('v-001', 92, 94, 90, 'Excellent quality performance');
       contextValue.openRatingRevisionEmailModal(revision1);
-      const revision2 = contextValue.reviseVendorRating('v-001', 65, 70, 60, 'Conditional review');
+
+      mockFetch.mockResolvedValueOnce(mockRevisionResponse({ newCompositeScore: 65, remarks: 'Conditional review' }));
+      const revision2 = await contextValue.reviseVendorRating('v-001', 65, 70, 60, 'Conditional review');
       expect(revision2.newCompositeScore).toBeDefined();
-      const revision3 = contextValue.reviseVendorRating('v-001', 40, 45, 40, 'Disqualified due to performance');
+
+      mockFetch.mockResolvedValueOnce(
+        mockRevisionResponse({ newCompositeScore: 40, remarks: 'Disqualified due to performance' })
+      );
+      const revision3 = await contextValue.reviseVendorRating('v-001', 40, 45, 40, 'Disqualified due to performance');
       expect(revision3.newCompositeScore).toBeDefined();
+
       // Revise with empty remarks and unknown vendor
-      contextValue.reviseVendorRating('unknown-vendor-id', 80, 80, 80, '');
+      mockFetch.mockResolvedValueOnce(mockRevisionResponse({ vendorId: 'unknown-vendor-id', remarks: '' }));
+      await contextValue.reviseVendorRating('unknown-vendor-id', 80, 80, 80, '');
       // Revise vendor with score 0
-      contextValue.reviseVendorRating('v-003', 70, 70, 70, 'Revised score 0 vendor');
+      mockFetch.mockResolvedValueOnce(mockRevisionResponse({ vendorId: 'v-003' }));
+      await contextValue.reviseVendorRating('v-003', 70, 70, 70, 'Revised score 0 vendor');
     });
     expect(contextValue.ratingRevisionEmailModalOpen).toBe(true);
+
+    // Failure paths: the caller must learn a revision was NOT saved, whether the
+    // request itself failed or the server reported success:false.
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({ success: false, error: 'Server error' }) });
+    await act(async () => {
+      const saved = await contextValue.reviseVendorRating('v-001', 50, 50, 50, 'Network failure case');
+      expect(saved).toBeNull();
+    });
+
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ success: false, error: 'Rejected' }) });
+    await act(async () => {
+      const saved = await contextValue.reviseVendorRating('v-001', 50, 50, 50, 'Rejected case');
+      expect(saved).toBeNull();
+    });
 
     // 3. Add Audit Log & Feed Item across all role contexts and feed types
     act(() => {
@@ -1223,9 +1357,19 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     });
     expect(contextValue.toastMessage).toBeNull();
 
-    // 5. Process Historical Purchase Data (1_year, 2_years, 3_years)
-    act(() => {
-      const processedCount1 = contextValue.processHistoricalPurchaseData('1_year', [
+    // 5. Process Historical Purchase Data (1_year, 2_years, 3_years). This now
+    // awaits the real POST /api/buyer-accounts/historical-data and returns
+    // whatever importedCount the server reports (dedup happens server-side),
+    // so each call needs its own mocked response.
+    const mockIngestResponse = (importedCount: number) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, importedCount, period: '1_year', totalVendors: importedCount }),
+    });
+
+    await act(async () => {
+      mockFetch.mockResolvedValueOnce(mockIngestResponse(1));
+      const processedCount1 = await contextValue.processHistoricalPurchaseData('1_year', [
         {
           id: 'h-0',
           companyName: 'One Year Vendor Ltd',
@@ -1244,7 +1388,8 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       ]);
       expect(processedCount1).toBe(1);
 
-      const processedCount2 = contextValue.processHistoricalPurchaseData('2_years', [
+      mockFetch.mockResolvedValueOnce(mockIngestResponse(2));
+      const processedCount2 = await contextValue.processHistoricalPurchaseData('2_years', [
         {
           id: 'h-1',
           companyName: 'Historical Steel Dynamics Ltd',
@@ -1278,7 +1423,8 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       expect(processedCount2).toBe(2);
 
       // Process 3_years with unmapped categories and custom tempPassword
-      const processedCount3 = contextValue.processHistoricalPurchaseData('3_years', [
+      mockFetch.mockResolvedValueOnce(mockIngestResponse(1));
+      const processedCount3 = await contextValue.processHistoricalPurchaseData('3_years', [
         {
           id: 'h-3',
           companyName: 'Three Year Vendor Ltd',
@@ -1297,6 +1443,26 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
         },
       ]);
       expect(processedCount3).toBe(1);
+    });
+
+    // Failure paths: the caller must learn the import did NOT happen, whether
+    // the request itself failed or the server reported success:false.
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({ success: false, error: 'Server error' }) });
+    await act(async () => {
+      const processedCount = await contextValue.processHistoricalPurchaseData('1_year', []);
+      expect(processedCount).toBe(0);
+    });
+
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ success: false, error: 'Rejected' }) });
+    await act(async () => {
+      const processedCount = await contextValue.processHistoricalPurchaseData('1_year', []);
+      expect(processedCount).toBe(0);
+    });
+
+    mockFetch.mockRejectedValueOnce(new Error('Network down'));
+    await act(async () => {
+      const processedCount = await contextValue.processHistoricalPurchaseData('1_year', []);
+      expect(processedCount).toBe(0);
     });
   });
 
@@ -1385,6 +1551,56 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
         documents: [],
       });
     });
+  });
+
+  it('falls back to matching activeBuyerAccount by the signed-in session email when the previous id is gone', async () => {
+    authClient.setSession({
+      id: 'u-1',
+      email: 'pub@procucev.com',
+      name: 'Test User',
+      role: 'buyer',
+      orgId: 'org-1',
+      orgName: 'Test Org',
+    });
+
+    let contextValue: any;
+    const Consumer = () => {
+      contextValue = useApp();
+      return <div>Test</div>;
+    };
+    render(
+      <AppProvider>
+        <Consumer />
+      </AppProvider>
+    );
+    await waitFor(() => {
+      expect(contextValue.isLoadingDB).toBe(false);
+    });
+
+    // Prime activeBuyerAccount with an id that will NOT be present in the
+    // next refreshFromDB response, forcing the sessionEmail fallback lookup.
+    act(() => {
+      contextValue.alignActiveBuyerAccount('buyer-acc-1');
+    });
+    expect(contextValue.activeBuyerAccount?.id).toBe('buyer-acc-1');
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        success: true,
+        data: {
+          buyerAccounts: [
+            { id: 'buyer-acc-99', organizationName: 'Session Matched Org', corporateEmail: 'pub@procucev.com' },
+          ],
+        },
+      }),
+    });
+    await act(async () => {
+      await contextValue.refreshFromDB();
+    });
+
+    expect(contextValue.activeBuyerAccount?.id).toBe('buyer-acc-99');
+    authClient.setSession(null);
   });
 
   it('handles error gracefully when refreshFromDB fetch fails or returns false', async () => {
