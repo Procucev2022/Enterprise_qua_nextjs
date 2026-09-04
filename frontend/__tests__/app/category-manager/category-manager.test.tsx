@@ -86,7 +86,13 @@ describe('Category Manager Screens Suite', () => {
   });
 
   describe('KanbanBoard Screen', () => {
-    test('renders Kanban columns, summary strip, and handles all actions and overrides', async () => {
+    const originalFetch = global.fetch;
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
+    test('renders real portfolio metrics and the scored column from the live RFQ pipeline, handles toolbar overrides', async () => {
       const onMatrix = jest.fn();
       const onSpend = jest.fn();
 
@@ -96,83 +102,277 @@ describe('Category Manager Screens Suite', () => {
         expect(screen.getByText(/Operational Monitoring Kanban & Chasing Control/i)).toBeInTheDocument();
       });
 
-      expect(screen.getByText(/Mode & Performance Analytics/i)).toBeInTheDocument();
+      // Portfolio metrics derive from the single bootstrap-seeded RFQ
+      // (RFQ-2026-00421, quotesCount 3) — never hardcoded.
+      await waitFor(() => {
+        expect(screen.getByText('1 Total')).toBeInTheDocument(); // RFQs In Pipeline
+      });
+      expect(screen.getByText('3 Total')).toBeInTheDocument(); // Quotes Received
+      expect(screen.getByText(/Avg 3 \/ RFQ/i)).toBeInTheDocument();
+      expect(screen.getByText('—')).toBeInTheDocument(); // Vendor Response Rate: no follow-ups recorded
+      expect(screen.getByText('0 Active')).toBeInTheDocument(); // Awaiting Quotes: the seeded RFQ already has quotes
+
+      // Empty-state messaging for the two columns with no real RFQ in them
+      expect(screen.getByText(/No RFQs currently at the OCR\/parsing stage/i)).toBeInTheDocument();
+      expect(screen.getByText(/No RFQs currently awaiting vendor quotes/i)).toBeInTheDocument();
 
       const spendBtn = screen.getByRole('button', { name: /Mode & Performance Analytics/i });
       fireEvent.click(spendBtn);
       expect(onSpend).toHaveBeenCalled();
 
-      // Test batch multi-channel chaser override
-      const batchBtn = screen.getByRole('button', { name: /Batch Multi-Channel Chaser/i });
-      fireEvent.click(batchBtn);
+      // Batch chaser with an empty Quotes Pending column is a real no-op, not silently ignored
+      const batchBtn = screen.getByRole('button', { name: /Batch Multi-Channel Chaser \(0\)/i });
+      expect(() => fireEvent.click(batchBtn)).not.toThrow();
 
-      // Test override AI score
       const overrideBtn = screen.getByRole('button', { name: /Override AI Score/i });
       fireEvent.click(overrideBtn);
 
-      // Test survey modal button and close it
       const surveyBtn = screen.getByRole('button', { name: /Conduct Mode 3 Vendor Survey/i });
       fireEvent.click(surveyBtn);
       expect(screen.getByText(/Mode 3 AI Vendor Survey/i)).toBeInTheDocument();
-
       const cancelSurveyBtn = screen.getByRole('button', { name: /Cancel/i });
       fireEvent.click(cancelSurveyBtn);
 
-      // Test open chaser modal (Call) and close it
-      const allButtons = screen.getAllByRole('button');
-      const callBtn = allButtons.find(b => b.textContent?.includes('Call') && !b.textContent?.includes('Voice'));
-      if (callBtn) {
-        fireEvent.click(callBtn);
-        expect(screen.getByText(/Dispatch AI Follow-Up/i)).toBeInTheDocument();
-        const cancelChaserBtn = screen.getByRole('button', { name: /Cancel/i });
-        fireEvent.click(cancelChaserBtn);
-      }
+      // The scored card renders real RFQ fields — number, title, AI score, status, quote count
+      expect(screen.getByText('RFQ-2026-00421')).toBeInTheDocument();
+      expect(screen.getByText(/94% AI Match/i)).toBeInTheDocument();
+      expect(screen.getByText(/3 quotes evaluated/i)).toBeInTheDocument();
+      expect(screen.getByText('AI Recommended')).toBeInTheDocument();
 
-      // Test open chaser modal (WA)
-      const waBtn = allButtons.find(b => b.textContent?.includes('WA'));
+      const approveBtn = screen.getByRole('button', { name: /Approve Report/i });
+      fireEvent.click(approveBtn);
+
+      const shareBtn = screen.getByRole('button', { name: /Share Report/i });
+      fireEvent.click(shareBtn);
+
+      // The real RFQ has quotes, so its card links straight into the real quote matrix
+      const matrixBtn = screen.getByRole('button', { name: /View Comparative Quote Matrix/i });
+      fireEvent.click(matrixBtn);
+      expect(onMatrix).toHaveBeenCalledWith(expect.objectContaining({ rfqNumber: 'RFQ-2026-00421' }));
+    });
+
+    test('renders real Parsing and Quotes Pending pipeline cards, with per-card chaser/deep-dive/escalate actions', async () => {
+      const onMatrix = jest.fn();
+
+      global.fetch = jest.fn().mockImplementation((url: string) => {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => {
+            if (typeof url === 'string' && url.includes('/api/bootstrap')) {
+              return {
+                success: true,
+                data: {
+                  buyerAccounts: [],
+                  vendors: [],
+                  rfqs: [
+                    {
+                      id: 'rfq-parse-1',
+                      rfqNumber: 'RFQ-2026-00901',
+                      title: 'Stainless Steel Reactor Vessels',
+                      category: 'Process Equipment',
+                      sourcingMode: 'mode_2',
+                      status: 'Parsing',
+                      createdAt: '2026-09-01',
+                      targetDeliveryDate: '2026-10-01',
+                      quotesCount: 0,
+                      budget: 0,
+                      extractedEntities: [
+                        { id: 'e1', itemName: 'Reactor Vessel', quantity: 2, unit: 'Units', targetDate: '2026-10-01', technicalSpecs: 'SS316L', confidence: 92, category: 'Process Equipment', majorCategory: 'Process Equipment', minorCategory: 'Vessels' },
+                        { id: 'e2', itemName: 'Agitator', quantity: 2, unit: 'Units', targetDate: '2026-10-01', technicalSpecs: '5HP', confidence: 88, category: 'Process Equipment', majorCategory: 'Process Equipment', minorCategory: 'Agitators' },
+                      ],
+                      quotes: [],
+                    },
+                    {
+                      id: 'rfq-parse-2',
+                      rfqNumber: 'RFQ-2026-00904',
+                      title: 'Untitled Intake Awaiting OCR',
+                      category: 'Uncategorised',
+                      sourcingMode: 'mode_1',
+                      status: 'Parsing',
+                      createdAt: '2026-09-01',
+                      targetDeliveryDate: '',
+                      quotesCount: 0,
+                      budget: 0,
+                      extractedEntities: [],
+                      quotes: [],
+                    },
+                    {
+                      id: 'rfq-pending-1',
+                      rfqNumber: 'RFQ-2026-00902',
+                      title: 'Industrial Gearbox Assemblies',
+                      category: 'Mechanical Power Transmission',
+                      sourcingMode: 'mode_2',
+                      status: 'Quotes Pending',
+                      createdAt: '2026-09-01',
+                      targetDeliveryDate: '2026-10-05',
+                      quotesCount: 0,
+                      budget: 40000,
+                      extractedEntities: [],
+                      quotes: [],
+                      chasingActive: true,
+                      followUpData: {
+                        rfqNumber: 'RFQ-2026-00902',
+                        totalInvited: 3,
+                        respondedCount: 1,
+                        callStats: { total: 3, connected: 2, avgDuration: '1m 30s' },
+                        whatsappStats: { total: 3, delivered: 3, read: 2, replied: 1 },
+                        smsStats: { total: 3, delivered: 3, clicked: 1 },
+                        vendors: [
+                          {
+                            vendorId: 'vendor-9',
+                            vendorName: 'Precision Gear Works',
+                            phone: '+91 90000 00000',
+                            contactPerson: 'S. Rao',
+                            call: { status: 'connected', lastAttempt: 'Today' },
+                            whatsapp: { status: 'read', lastAttempt: 'Today' },
+                            sms: { status: 'delivered', lastAttempt: 'Today' },
+                            overallStatus: 'Follow-up Active',
+                            lastInteraction: 'Today',
+                            attemptsCount: 2,
+                            bidStatus: 'In Progress',
+                          },
+                        ],
+                      },
+                    },
+                    {
+                      id: 'rfq-pending-2',
+                      rfqNumber: 'RFQ-2026-00903',
+                      title: 'Unassigned Bulk Chemical Drums',
+                      category: 'Chemicals',
+                      sourcingMode: 'mode_3',
+                      status: 'Quotes Pending',
+                      createdAt: '2026-09-01',
+                      targetDeliveryDate: '2026-10-05',
+                      quotesCount: 0,
+                      budget: 0,
+                      extractedEntities: [],
+                      quotes: [],
+                    },
+                    {
+                      id: 'rfq-scored-zero',
+                      rfqNumber: 'RFQ-2026-00905',
+                      title: 'Newly Scored, No Quotes Yet',
+                      category: 'Process Equipment',
+                      sourcingMode: 'mode_3',
+                      status: 'PO Generated',
+                      createdAt: '2026-09-01',
+                      targetDeliveryDate: '2026-10-10',
+                      quotesCount: 0,
+                      budget: 0,
+                      extractedEntities: [],
+                      quotes: [],
+                    },
+                    {
+                      id: 'rfq-scored-one',
+                      rfqNumber: 'RFQ-2026-00906',
+                      title: 'Single Quote In Evaluation',
+                      category: 'Process Equipment',
+                      sourcingMode: 'mode_3',
+                      status: 'In Evaluation',
+                      createdAt: '2026-09-01',
+                      targetDeliveryDate: '2026-10-10',
+                      quotesCount: 1,
+                      budget: 0,
+                      extractedEntities: [],
+                      quotes: [{ vendorId: 'v-x', vendorName: 'Test Vendor', vendorCategory: 'General', unitPrice: 1, totalPrice: 1, leadTimeDays: 1, aiMatchScore: 1, isBestPrice: false, isPreferred: false, warrantyYears: 1, complianceStatus: 'Compliant', paymentTerms: 'Net 30', remarks: '' }],
+                    },
+                  ],
+                  evaluations: [],
+                  auditLogs: [],
+                  aiFeed: [],
+                  systemConfig: {},
+                },
+              };
+            }
+            return { success: true, data: {} };
+          },
+          text: async () => '',
+          blob: async () => new Blob([]),
+        });
+      }) as any;
+
+      renderWithProvider(<KanbanBoard onNavigateToMatrix={onMatrix} onNavigateToSpend={jest.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('RFQ-2026-00901')).toBeInTheDocument();
+      });
+
+      // Column 1 — real per-RFQ fields, including an average confidence
+      // computed from the RFQ's own extracted entities (no invented OCR %).
+      expect(screen.getByText('Stainless Steel Reactor Vessels')).toBeInTheDocument();
+      expect(screen.getByText('90%')).toBeInTheDocument(); // avg of 92 and 88
+      expect(screen.getByText('RFQ-2026-00904')).toBeInTheDocument(); // entity-less parsing RFQ renders with no confidence line
+
+      // Column 2 — both a chasing-active RFQ with real follow-up telemetry
+      // and a plain one with neither chasingActive nor followUpData set.
+      expect(screen.getByText('RFQ-2026-00902')).toBeInTheDocument();
+      expect(screen.getByText(/2\/3 Connected/i)).toBeInTheDocument();
+      expect(screen.getByText(/2\/3 Read/i)).toBeInTheDocument();
+      expect(screen.getByText(/3\/3 Delivered/i)).toBeInTheDocument();
+      expect(screen.getByText('RFQ-2026-00903')).toBeInTheDocument();
+      expect(screen.getAllByText(/Chasing Paused/i).length).toBeGreaterThan(0);
+
+      // Real, non-empty batch chaser dispatches to every RFQ actually in Quotes Pending
+      const batchBtn = screen.getByRole('button', { name: /Batch Multi-Channel Chaser \(2\)/i });
+      expect(() => fireEvent.click(batchBtn)).not.toThrow();
+
+      // Chaser buttons use the RFQ's own real vendor, not a hardcoded name
+      const allButtons = screen.getAllByRole('button');
+      const callBtns = allButtons.filter((b) => b.textContent?.includes('📞') && b.textContent?.includes('Call'));
+      expect(callBtns.length).toBeGreaterThanOrEqual(2);
+      fireEvent.click(callBtns[0]);
+      expect(screen.getByText(/Dispatch AI Follow-Up/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
+
+      // RFQ-2026-00903 has no followUpData, so its chaser falls back to a
+      // generic vendor label instead of inventing a vendor name.
+      fireEvent.click(callBtns[1]);
+      expect(screen.getByText(/Dispatch AI Follow-Up/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
+
+      // Scored-column cards with real, varied quotesCount — no quotes yet vs. exactly one
+      expect(screen.getByText('RFQ-2026-00905')).toBeInTheDocument();
+      expect(screen.getByText(/0 quotes evaluated/i)).toBeInTheDocument();
+      expect(screen.getByText('RFQ-2026-00906')).toBeInTheDocument();
+      expect(screen.getByText(/1 quote evaluated/i)).toBeInTheDocument();
+
+      const waBtn = allButtons.find((b) => b.textContent?.includes('WA'));
       if (waBtn) {
         fireEvent.click(waBtn);
-        const cancelWaBtn = screen.getByRole('button', { name: /Cancel/i });
-        fireEvent.click(cancelWaBtn);
+        fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
       }
 
-      // Test open chaser modal (SMS)
-      const smsBtn = allButtons.find(b => b.textContent?.includes('SMS') && !b.textContent?.includes('Broadcast'));
+      const smsBtn = allButtons.find((b) => b.textContent?.includes('📱') && b.textContent?.includes('SMS'));
       if (smsBtn) {
         fireEvent.click(smsBtn);
-        const cancelSmsBtn = screen.getByRole('button', { name: /Cancel/i });
-        fireEvent.click(cancelSmsBtn);
+        fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
       }
 
-      // Test 24h Email button
-      const emailBtn = allButtons.find(b => b.textContent?.includes('24h Email'));
+      const emailBtn = allButtons.find((b) => b.textContent?.includes('24h Email'));
       if (emailBtn) {
         fireEvent.click(emailBtn);
       }
 
-      // Test Deep Dive button and close it
-      const deepDiveBtn = screen.getByRole('button', { name: /Deep Dive/i });
-      fireEvent.click(deepDiveBtn);
+      // Deep Dive opens with the specific real RFQ the card belongs to
+      const deepDiveBtns = screen.getAllByRole('button', { name: /Deep Dive/i });
+      fireEvent.click(deepDiveBtns[0]);
       expect(screen.getByText(/RFQ AI Follow-Up Telemetry & Deep Dive/i)).toBeInTheDocument();
-      const closeDeepDiveBtn = screen.getByRole('button', { name: /Close Deep Dive/i });
-      fireEvent.click(closeDeepDiveBtn);
+      fireEvent.click(screen.getByRole('button', { name: /Close Deep Dive/i }));
 
-      // Test Escalate to Buyer
-      const escalateBtn = screen.getByRole('button', { name: /Escalate to Buyer/i });
-      fireEvent.click(escalateBtn);
+      const escalateBtns = screen.getAllByRole('button', { name: /Escalate to Buyer/i });
+      fireEvent.click(escalateBtns[0]);
+    });
 
-      // Test Approve Report
-      const approveBtn = screen.getByRole('button', { name: /Approve Report/i });
-      fireEvent.click(approveBtn);
+    test('the scored card never throws when no matrix-navigation callback is supplied', async () => {
+      renderWithProvider(<KanbanBoard onNavigateToSpend={jest.fn()} />);
 
-      // Test Share Report
-      const shareBtn = screen.getByRole('button', { name: /Share Report/i });
-      fireEvent.click(shareBtn);
+      await waitFor(() => {
+        expect(screen.getByText('RFQ-2026-00421')).toBeInTheDocument();
+      });
 
-      // Test Matrix ready card click
-      const matrixCard = screen.getByText(/RFQ-00421: Matrix Ready/i);
-      fireEvent.click(matrixCard);
-      expect(onMatrix).toHaveBeenCalled();
+      const matrixBtn = screen.getByRole('button', { name: /View Comparative Quote Matrix/i });
+      expect(() => fireEvent.click(matrixBtn)).not.toThrow();
     });
   });
 
@@ -406,7 +606,7 @@ describe('Category Manager Screens Suite', () => {
   });
 
   describe('Quote Matrix Navigation Tests', () => {
-    test('KanbanBoard Matrix Ready card navigates to quote_matrix screen', async () => {
+    test('KanbanBoard scored-column card navigates to quote_matrix screen with the real RFQ', async () => {
       const onMatrix = jest.fn();
       renderWithProvider(<KanbanBoard onNavigateToMatrix={onMatrix} onNavigateToSpend={jest.fn()} />);
 
@@ -414,12 +614,12 @@ describe('Category Manager Screens Suite', () => {
         expect(screen.getByText(/Operational Monitoring Kanban & Chasing Control/i)).toBeInTheDocument();
       });
 
-      const matrixCard = screen.getByText(/RFQ-00421: Matrix Ready/i);
-      fireEvent.click(matrixCard);
-      
+      const matrixBtn = screen.getByRole('button', { name: /View Comparative Quote Matrix/i });
+      fireEvent.click(matrixBtn);
+
       expect(onMatrix).toHaveBeenCalledTimes(1);
       expect(onMatrix).toHaveBeenCalledWith(expect.objectContaining({
-        rfqNumber: expect.stringContaining('RFQ-00421')
+        rfqNumber: 'RFQ-2026-00421'
       }));
     });
 
@@ -496,21 +696,21 @@ describe('Category Manager Screens Suite', () => {
     });
   });
 
-  describe('Kanban Pipeline Card RFQ Resolution', () => {
-    function KanbanResolutionWrapper({ onMatrix }: any) {
+  describe('Kanban Pipeline — new RFQ added to a live-rendered board', () => {
+    function KanbanLiveAddWrapper({ onMatrix }: any) {
       const { addNewRFQ } = useApp();
 
       return (
         <>
           <button
-            data-testid="test-add-matrix-ready-rfq"
+            data-testid="test-add-pending-rfq"
             onClick={() => {
               try {
                 addNewRFQ({
-                  rfqNumber: 'RFQ-00421',
-                  title: 'Matrix Ready Live RFQ',
+                  rfqNumber: 'RFQ-2026-LIVE',
+                  title: 'Live-Added Pipeline RFQ',
                   category: 'Heavy Industrial Fluid Dynamics & Valves',
-                  sourcingMode: 'mode_1',
+                  sourcingMode: 'mode_3',
                   targetDeliveryDate: '2026-10-01',
                   budget: 90000,
                   extractedEntities: [],
@@ -520,60 +720,33 @@ describe('Category Manager Screens Suite', () => {
               } catch (e) {}
             }}
           >
-            Add Matrix Ready RFQ
+            Add Live RFQ
           </button>
           <KanbanBoard onNavigateToMatrix={onMatrix} onNavigateToSpend={jest.fn()} />
         </>
       );
     }
 
-    test('resolves the Matrix Ready card against the live RFQ pipeline when the RFQ exists', async () => {
+    test('a newly created RFQ appears as a real Quotes Pending card without a page refresh', async () => {
       const onMatrix = jest.fn();
-      renderWithProvider(<KanbanResolutionWrapper onMatrix={onMatrix} />);
+      renderWithProvider(<KanbanLiveAddWrapper onMatrix={onMatrix} />);
 
       await waitFor(() => {
-        expect(screen.getByTestId('test-add-matrix-ready-rfq')).toBeInTheDocument();
+        expect(screen.getByTestId('test-add-pending-rfq')).toBeInTheDocument();
       });
 
-      fireEvent.click(screen.getByTestId('test-add-matrix-ready-rfq'));
-      fireEvent.click(screen.getByText(/RFQ-00421: Matrix Ready/i));
+      // Before creation the pipeline still only holds the one bootstrap-seeded (scored) RFQ
+      expect(screen.getByText(/No RFQs currently awaiting vendor quotes/i)).toBeInTheDocument();
 
-      expect(onMatrix).toHaveBeenCalledTimes(1);
-      expect(onMatrix).toHaveBeenCalledWith(
-        expect.objectContaining({
-          rfqNumber: 'RFQ-00421',
-          title: 'Matrix Ready Live RFQ',
-          budget: 90000,
-        })
-      );
-    });
+      fireEvent.click(screen.getByTestId('test-add-pending-rfq'));
 
-    test('never dispatches undefined from pipeline card actions when the pipeline is empty', async () => {
-      const onMatrix = jest.fn();
-      renderWithProvider(<KanbanBoard onNavigateToMatrix={onMatrix} onNavigateToSpend={jest.fn()} />);
-
+      // addNewRFQ always lands a fresh RFQ in 'Quotes Pending' — the real store's
+      // own transition, not something the Kanban board invents.
       await waitFor(() => {
-        expect(screen.getByText(/Operational Monitoring Kanban & Chasing Control/i)).toBeInTheDocument();
+        expect(screen.getByText('RFQ-2026-LIVE')).toBeInTheDocument();
       });
-
-      fireEvent.click(screen.getByText(/RFQ-00421: Matrix Ready/i));
-      expect(onMatrix).toHaveBeenCalledWith(
-        expect.objectContaining({
-          rfqNumber: 'RFQ-00421',
-          quotes: [],
-          extractedEntities: [],
-        })
-      );
-
-      // Report handlers dereference rfq.rfqNumber, so they must receive a real object
-      expect(() => {
-        fireEvent.click(screen.getByRole('button', { name: /Approve Report/i }));
-        fireEvent.click(screen.getByRole('button', { name: /Share Report/i }));
-      }).not.toThrow();
-
-      // Deep Dive resolves the canonical follow-up RFQ reference
-      fireEvent.click(screen.getByRole('button', { name: /Deep Dive/i }));
-      expect(screen.getByText(/RFQ AI Follow-Up Telemetry & Deep Dive/i)).toBeInTheDocument();
+      expect(screen.getByText('Live-Added Pipeline RFQ')).toBeInTheDocument();
+      expect(screen.queryByText(/No RFQs currently awaiting vendor quotes/i)).not.toBeInTheDocument();
     });
   });
 });

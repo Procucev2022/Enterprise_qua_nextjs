@@ -2,7 +2,6 @@ import type {
   SourcingModeDetail,
   SystemConfig,
   AzureServiceHealth,
-  RFQItem,
   SidebarNavItem,
   RoleWorkspaceMeta,
   UserRole,
@@ -140,37 +139,6 @@ export const AES_CONFIG = {
   PBKDF2_ITERATIONS: 100000,
   VERSION: 'v1',
   SERIALIZATION_PREFIX: 'enc:v1:aes-256-gcm:',
-};
-
-/**
- * Canonical RFQ references rendered on the static Category Manager Kanban
- * pipeline cards (Screen 2.1). Card action handlers resolve these references
- * against live store data instead of indexing `rfqs[0]`, which is `undefined`
- * while the pipeline is empty or still hydrating from PostgreSQL.
- */
-export const KANBAN_CARD_RFQ_REFS = {
-  FOLLOW_UP_DEEP_DIVE: { rfqNumber: 'RFQ-2026-00421', title: 'Centrifugal Water Pumps & Spares' },
-  SCORED_REPORT: { rfqNumber: 'RFQ-00418', title: 'Low Voltage Switchgear Panels' },
-  MATRIX_READY: { rfqNumber: 'RFQ-00421', title: 'Vendor Scored Quote Matrix' },
-};
-
-/**
- * Neutral RFQ skeleton used when a pipeline card reference cannot be resolved
- * against the live RFQ collection. Guarantees downstream handlers, modals, and
- * navigation callbacks always receive a well-formed `RFQItem`.
- */
-export const FALLBACK_RFQ_TEMPLATE: Omit<RFQItem, 'rfqNumber' | 'title'> = {
-  id: 'rfq-unresolved',
-  category: 'Uncategorised',
-  sourcingMode: 'mode_3',
-  status: 'In Evaluation',
-  quotesCount: 0,
-  targetDeliveryDate: '',
-  budget: 0,
-  createdAt: '',
-  extractedEntities: [],
-  quotes: [],
-  chasingActive: false,
 };
 
 /**
