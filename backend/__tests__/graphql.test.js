@@ -1,13 +1,32 @@
 const request = require('supertest');
+
 const app = require('../src/app');
 const storeService = require('../src/services/storeService');
 const { queryCache } = require('../src/db/queryCache');
 const { handleGraphQL } = require('../src/controllers/graphqlController');
-const { authHeader } = require('./testHelpers');
+const { authHeader, TEST_USERS } = require('./testHelpers');
 
 describe('GraphQL API & Controller Integration Tests', () => {
+  // RFQ resolvers are buyer-scoped, so a fixture owned by the test buyer's
+  // own account has to exist for the read queries to return anything.
+  let seededRfq;
+
   beforeEach(() => {
     queryCache.clear();
+    const account = storeService.addBuyerAccount({
+      organizationName: 'GraphQL Fixture Org',
+      corporateEmail: TEST_USERS.buyer.email,
+    });
+    seededRfq = storeService.createRFQ(
+      {
+        title: 'GraphQL Fixture RFQ',
+        category: 'Engineering Spares - Mechanical',
+        sourcingMode: 'mode_2',
+        status: 'Quotes Pending',
+        budget: 145000,
+      },
+      account
+    );
   });
 
   test('POST /graphql executes rfqs, vendors, and buyerAccounts queries', async () => {
@@ -42,6 +61,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
 
     const res = await request(app)
       .post('/graphql')
+      .set(authHeader('buyer'))
       .send({ query })
       .expect(200);
 
@@ -53,9 +73,8 @@ describe('GraphQL API & Controller Integration Tests', () => {
   });
 
   test('POST /graphql supports filtered queries for RFQ and Vendor by id/rfqNumber/email', async () => {
-    const rfqList = storeService.getRFQs();
     const vendorList = storeService.getVendors();
-    const testRFQ = rfqList[0];
+    const testRFQ = seededRfq;
     const testVendor = vendorList[0];
 
     const query = `
@@ -88,6 +107,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
 
     const res = await request(app)
       .post('/graphql')
+      .set(authHeader('buyer'))
       .send({ query, variables })
       .expect(200);
 
@@ -176,7 +196,10 @@ describe('GraphQL API & Controller Integration Tests', () => {
     const createdRFQ = resCreateRFQ.body.data.createRFQ;
     expect(createdRFQ.title).toBe('GraphQL Sourcing RFQ Test');
 
-    // 2. Update RFQ
+    // The server allocates the RFQ number, never the client.
+    expect(createdRFQ.rfqNumber).toMatch(/^RFQ-/);
+
+    // 2. Update RFQ.
     const updateRFQMutation = `
       mutation {
         updateRFQ(id: "${createdRFQ.id}", input: {

@@ -5,6 +5,7 @@ import {
   UserRole,
   SourcingMode,
   RFQItem,
+  NewRFQInput,
   AIBotFeedItem,
   VendorOpportunity,
   AuditLogEntry,
@@ -23,8 +24,16 @@ import {
   VendorRatingRevisionRecord,
   VendorRatingRevisionEmailPayload,
   UserSession,
+  RFQUpdatePayload,
 } from './types';
 import { authClient } from './authClient';
+import { UI_STRINGS, formatString } from './uiStrings';
+import {
+  createRFQ,
+  fetchRFQList,
+  updateRFQ as updateRFQRequest,
+  deleteRFQ as deleteRFQRequest,
+} from './rfqClient';
 import {
   SOURCING_MODES,
   INITIAL_SYSTEM_CONFIG,
@@ -50,13 +59,6 @@ function authFetchHeaders(): Record<string, string> {
  * buyer's actual deadline. An unparseable or absent date yields 0 rather than
  * an invented figure.
  */
-function daysUntil(targetDate?: string): number {
-  if (!targetDate) return 0;
-  const target = Date.parse(targetDate);
-  if (Number.isNaN(target)) return 0;
-  return Math.max(0, Math.ceil((target - Date.now()) / 86400000));
-}
-
 /**
  * Project a real RFQ onto the vendor-facing opportunity it becomes.
  *
@@ -74,7 +76,7 @@ function buildOpportunityFromRFQ(rfq: RFQItem): VendorOpportunity {
     title: rfq.title,
     buyer: rfq.buyerAccountName || 'Buyer identity not disclosed',
     deadline: rfq.targetDeliveryDate || '',
-    daysRemaining: daysUntil(rfq.targetDeliveryDate),
+    daysRemaining: daysUntilDate(rfq.targetDeliveryDate),
     type: rfq.sourcingMode === 'mode_3' ? 'network_marketplace' : 'direct_invitation',
     estimatedValue: rfq.budget > 0 ? formatCurrency(rfq.budget) : undefined,
     deliveryLocation: rfq.deliveryLocation || '',
@@ -173,7 +175,39 @@ interface AppContextType {
   openRatingRevisionEmailModal: (revision: VendorRatingRevisionRecord) => void;
 
   // Actions
-  addNewRFQ: (rfq: Omit<RFQItem, 'id' | 'createdAt' | 'quotes' | 'quotesCount' | 'status' | 'chasingActive'>, customMatchedVendors?: VendorEntry[]) => RFQItem;
+  /**
+   * Persist an RFQ and adopt the server's record.
+   *
+   * Async because the API is the authority on the RFQ number, the row id, the
+   * created timestamp and the generated summary. Rejects when the save fails, so
+   * no RFQ appears on screen that the database does not hold.
+   */
+  addNewRFQ: (rfq: NewRFQInput, customMatchedVendors?: VendorEntry[]) => Promise<RFQItem>;
+  /**
+   * Take a server-created RFQ into local state exactly as returned.
+   *
+   * Used by flows that post to the API themselves. The server owns the RFQ
+   * number, the row id, the created timestamp and the generated summary, so the
+   * record is adopted rather than rebuilt — the old fire-and-forget POST threw
+   * the response away and left the browser and the database disagreeing about
+   * the same RFQ.
+   */
+  adoptCreatedRFQ: (rfq: RFQItem) => void;
+  /**
+   * Apply an edit to one RFQ and adopt the stored result.
+   *
+   * Resolves with the record the API saved, or throws with the reason. Local state
+   * is only touched on success, so a rejected edit never leaves the dashboard
+   * showing a change the database does not hold.
+   */
+  updateRFQ: (identifier: string, changes: RFQUpdatePayload) => Promise<RFQItem>;
+  /**
+   * Delete one RFQ and drop it from local state.
+   *
+   * Throws with the reason on failure, so the row stays on screen rather than
+   * disappearing from a list the database still holds it in.
+   */
+  deleteRFQ: (identifier: string) => Promise<void>;
   triggerWhatsAppChaser: (rfqNumber: string, vendorName?: string) => void;
   triggerChannelChaser: (rfqNumber: string, channel: 'call' | 'whatsapp' | 'sms' | 'email', vendorName?: string, customNote?: string) => void;
   triggerBatchChannelChaser: (rfqNumber: string, channels: ('call' | 'whatsapp' | 'sms')[]) => void;
@@ -242,33 +276,15 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 // Helper to generate realistic SHA-256 format strings
-/**
- * Reconcile a persisted RFQ into the shape the `RFQItem` contract promises.
- *
- * The API stores line items under `lineItems` and the due date under `deadline`
- * (its own column names), while every screen reads `extractedEntities` and
- * `targetDeliveryDate`. Without this bridge any RFQ loaded from the database —
- * rather than created in this session — crashes the RFQ summary and the
- * category-manager consoles on `extractedEntities.length`.
- *
- * Line items already share the ExtractedEntity field names, so only the keys
- * differ. Missing collections default to empty rather than undefined so callers
- * can rely on the declared types.
- */
-function normalizeHydratedRFQ(
-  raw: RFQItem & { lineItems?: ExtractedEntity[]; deadline?: string }
-): RFQItem {
-  const quotes = raw.quotes ?? [];
-  return {
-    ...raw,
-    extractedEntities: raw.extractedEntities ?? raw.lineItems ?? [],
-    targetDeliveryDate: raw.targetDeliveryDate ?? raw.deadline ?? '',
-    // Coerced rather than trusted: a record written before budget was persisted
-    // carries no value, and every screen formats this as a number.
-    budget: Number(raw.budget) || 0,
-    quotes,
-    quotesCount: raw.quotesCount ?? quotes.length,
-  };
+
+/** Whole days from today until a target date, or 0 when there is no date. */
+function daysUntilDate(target?: string): number {
+  if (!target) return 0;
+  const parsed = Date.parse(target);
+  if (Number.isNaN(parsed)) return 0;
+  const MS_PER_DAY = 86400000;
+  const todayUtc = Date.parse(new Date().toISOString().slice(0, 10));
+  return Math.round((Date.parse(target.slice(0, 10)) - todayUtc) / MS_PER_DAY);
 }
 
 function generateShaHash(): string {
@@ -279,69 +295,6 @@ function generateShaHash(): string {
   }
   return hash;
 }
-
-const INITIAL_VENDOR_OPPORTUNITIES: VendorOpportunity[] = [
-  {
-    id: 'opp-1',
-    rfqNumber: 'RFQ-2026-00421',
-    title: 'Centrifugal Water Pump Package (15 HP)',
-    buyer: 'Larsen & Toubro Ltd. (L&T)',
-    deadline: '2026-09-15',
-    daysRemaining: 7,
-    type: 'direct_invitation',
-    estimatedValue: '₹1,50,000',
-    deliveryLocation: 'Navi Mumbai Hub',
-    status: 'pending_bid',
-    lineItems: [
-      { id: 'li-1', description: 'Centrifugal industrial water pump 15HP', quantity: 10, unitPrice: 0, leadTimeDays: 7, marketBandStatus: 'optimal', paymentTerms: 'Net 60' }
-    ]
-  },
-  {
-    id: 'opp-2',
-    rfqNumber: 'RFQ-2026-00423',
-    title: 'High Pressure Gate Valve System',
-    buyer: 'Tata Projects Ltd.',
-    deadline: '2026-09-20',
-    daysRemaining: 12,
-    type: 'direct_invitation',
-    estimatedValue: '₹85,000',
-    deliveryLocation: 'Pune Facility',
-    status: 'pending_bid',
-    lineItems: [
-      { id: 'li-2', description: 'SS316 high pressure gate valves', quantity: 25, unitPrice: 0, leadTimeDays: 14, marketBandStatus: 'optimal', paymentTerms: 'Net 30' }
-    ]
-  },
-  {
-    id: 'opp-3',
-    rfqNumber: 'RFQ-2026-00501',
-    title: 'HVAC Air Handling Unit & Smart Chiller Control',
-    buyer: 'NTPC Limited',
-    deadline: '2026-09-25',
-    daysRemaining: 17,
-    type: 'network_marketplace',
-    estimatedValue: '₹2,20,000',
-    deliveryLocation: 'Delhi Enterprise Logistics',
-    status: 'pending_bid',
-    lineItems: [
-      { id: 'li-3', description: 'Commercial building automation HVAC controller', quantity: 5, unitPrice: 0, leadTimeDays: 21, marketBandStatus: 'optimal', paymentTerms: 'Net 45' }
-    ]
-  },
-  {
-    id: 'opp-4',
-    rfqNumber: 'RFQ-2026-00502',
-    title: 'Structural Steel Beams & Pipe Fittings',
-    buyer: 'BHEL Power Sector',
-    deadline: '2026-09-30',
-    daysRemaining: 22,
-    type: 'network_marketplace',
-    estimatedValue: '₹3,10,000',
-    deliveryLocation: 'Chennai Logistics Site',
-    status: 'pending_bid',
-    lineItems: [
-      { id: 'li-4', description: 'Standard carbon steel flanged connector pipe adapter fitting', quantity: 50, unitPrice: 0, leadTimeDays: 10, marketBandStatus: 'optimal', paymentTerms: 'Net 60' }
-    ]
-  }
-];
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   // Session bootstrap. The only source of truth is the token + session that
@@ -449,54 +402,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [isLoadingDB, setIsLoadingDB] = useState<boolean>(true);
   const [dbConnected, setDbConnected] = useState<boolean>(false);
 
-const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
-  {
-    id: 'ba-1',
-    organizationName: 'Larsen & Toubro Ltd. (L&T)',
-    contactPerson: 'Rajesh Nair',
-    corporateEmail: 'rajesh.nair@larsentoubro.com',
-    mobileNumber: '+919820011223',
-    gstin: '27AABCL1234F1Z5',
-    industrySector: 'Heavy Engineering',
-    sourcingMode: 'mode_2',
-    subscriptionPlan: 'version_2',
-    remainingFreeRFQs: 0,
-    accountSource: 'public_system',
-    status: 'ACTIVE_VERIFIED',
-    primaryPlantLocation: 'Mumbai',
-    supportedMajorCategories: ['Mechanical & Fluid Equipment'],
-    totalRFQsCreated: 12,
-    totalSpend: '₹12,50,000',
-    syncTimestamp: '2026-08-30 00:00:00 UTC',
-    createdDate: '2026-01-01',
-  },
-  {
-    id: 'ba-2',
-    organizationName: 'Tata Projects Ltd.',
-    contactPerson: 'Amit Kumar Tata',
-    corporateEmail: 'amit.kumar@tataprojects.com',
-    mobileNumber: '+919820044556',
-    gstin: '27AABCT5678F1Z9',
-    industrySector: 'Infrastructure',
-    sourcingMode: 'mode_1',
-    subscriptionPlan: 'version_1',
-    remainingFreeRFQs: 0,
-    accountSource: 'public_system',
-    status: 'ACTIVE_VERIFIED',
-    primaryPlantLocation: 'Pune',
-    supportedMajorCategories: ['Mechanical & Fluid Equipment'],
-    totalRFQsCreated: 8,
-    totalSpend: '₹8,50,000',
-    syncTimestamp: '2026-08-30 00:00:00 UTC',
-    createdDate: '2026-01-01',
-  }
-];
-
   const [rfqs, setRfqs] = useState<RFQItem[]>([]);
   const [aiFeed, setAiFeed] = useState<AIBotFeedItem[]>([]);
-  const [vendorOpportunities, setVendorOpportunities] = useState<VendorOpportunity[]>(INITIAL_VENDOR_OPPORTUNITIES);
+  const [vendorOpportunities, setVendorOpportunities] = useState<VendorOpportunity[]>([]);
   const [buyerVendors, setBuyerVendors] = useState<VendorEntry[]>([]);
-  const [buyerAccounts, setBuyerAccounts] = useState<BuyerAccount[]>(INITIAL_BUYER_ACCOUNTS);
+  const [buyerAccounts, setBuyerAccounts] = useState<BuyerAccount[]>([]);
   const [activeBuyerAccount, setActiveBuyerAccount] = useState<BuyerAccount | null>(null);
   const [selectedEmailForModal, setSelectedEmailForModal] = useState<StandardRFQEmailPayload | null>(null);
   const [emailModalOpen, setEmailModalOpen] = useState<boolean>(false);
@@ -518,7 +428,39 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
   const [selectedVendorEvaluation, setSelectedVendorEvaluation] = useState<VendorEvaluationRecord | null>(null);
   const [evaluationModalOpen, setEvaluationModalOpen] = useState<boolean>(false);
 
-  // Hydrate all platform data directly from PostgreSQL database
+  /**
+   * Load this buyer organisation's RFQs from the authenticated API.
+   *
+   * RFQs are no longer in the bootstrap payload. That endpoint is anonymous, and
+   * shipping the global RFQ array from it is what put one buyer's RFQs on another
+   * buyer's dashboard. `GET /api/rfqs` is authenticated and scoped to the caller's
+   * organisation, so it returns only what this buyer raised.
+   *
+   * Signed out, this clears the list rather than leaving a previous session's RFQs
+   * on screen.
+   */
+  const refreshRFQs = async () => {
+    if (!authClient.getToken()) {
+      setRfqs([]);
+      setVendorOpportunities([]);
+      return;
+    }
+
+    const result = await fetchRFQList();
+    if (!result.success) {
+      // Reported rather than silently swallowed, but the list is left alone: a
+      // transient failure should not blank a dashboard the buyer is reading.
+      console.error('Failed to load RFQs:', result.error);
+      return;
+    }
+
+    setRfqs(result.rfqs);
+    setSelectedRFQForMatrix((prev) => prev || result.rfqs[0] || null);
+    setSelectedRFQForDeepDive((prev) => prev || result.rfqs[0] || null);
+    setVendorOpportunities(result.rfqs.map(buildOpportunityFromRFQ));
+  };
+
+  // Hydrate reference data. RFQs come from refreshRFQs, not from here.
   const refreshFromDB = async () => {
     setIsLoadingDB(true);
     try {
@@ -528,23 +470,6 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
         const d = json.data;
         if (d.buyerAccounts && d.buyerAccounts.length > 0) {
           setBuyerAccounts(d.buyerAccounts);
-          // Only ever align to an account that actually belongs to the signed-in
-          // user. Previously this fell back to buyerAccounts[0], which attached
-          // whichever company happened to be first in the directory to the
-          // current session and surfaced it as their own organisation.
-          setActiveBuyerAccount((prev) => {
-            if (prev) {
-              const matchedById = d.buyerAccounts.find((a: BuyerAccount) => a.id === prev.id);
-              if (matchedById) return matchedById;
-            }
-            const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
-            if (!sessionEmail) return null;
-            return (
-              d.buyerAccounts.find(
-                (a: BuyerAccount) => a.corporateEmail?.toLowerCase() === sessionEmail
-              ) || null
-            );
-          });
         }
         if (d.vendors && d.vendors.length > 0) {
           setBuyerVendors(d.vendors);
@@ -560,14 +485,6 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
               setVendorRfqDownloadsUsed(myVendor.rfqDownloadsUsed || 0);
             }
           }
-        }
-        if (d.rfqs && d.rfqs.length > 0) {
-          const hydratedRfqs: RFQItem[] = d.rfqs.map(normalizeHydratedRFQ);
-          setRfqs(hydratedRfqs);
-          setSelectedRFQForMatrix((prev) => prev || hydratedRfqs[0]);
-          setSelectedRFQForDeepDive((prev) => prev || hydratedRfqs[0]);
-
-          setVendorOpportunities(hydratedRfqs.map(buildOpportunityFromRFQ));
         }
         if (d.evaluations && d.evaluations.length > 0) {
           setVendorEvaluations(d.evaluations);
@@ -585,16 +502,51 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
         setDbConnected(true);
       }
     } catch (err) {
-      console.error('Failed to load data from PostgreSQL DB:', err);
+      // The reference-data endpoint is unreachable, not "PostgreSQL" — there is
+      // no PostgreSQL in this stack.
+      console.error('Failed to load reference data:', err);
       setDbConnected(false);
     } finally {
       setIsLoadingDB(false);
     }
   };
 
+  /**
+   * Resolve the signed-in buyer's own organisation from the identity schema.
+   *
+   * Replaces matching the session email against a seeded directory. The shared
+   * schema has no unique index on the login email, so that match was never
+   * reliable, and the seeded fallback attributed whichever company came first to
+   * the current session.
+   */
+  const refreshActiveBuyerAccount = async () => {
+    if (!authClient.getToken()) {
+      setActiveBuyerAccount(null);
+      return;
+    }
+    try {
+      const res = await fetch('/api/buyer-accounts/active', { headers: authFetchHeaders() });
+      const json = await res.json();
+      // No fallback on failure: showing another organisation's account is the bug
+      // this replaced.
+      setActiveBuyerAccount(json.success && json.data ? json.data : null);
+    } catch {
+      setActiveBuyerAccount(null);
+    }
+  };
+
   useEffect(() => {
     refreshFromDB();
   }, []);
+
+  // Re-run whenever the session changes, so signing in loads that buyer's RFQs
+  // and signing out clears them rather than leaving the previous buyer's on screen.
+  useEffect(() => {
+    void refreshRFQs();
+    void refreshActiveBuyerAccount();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on identity,
+    // not on the callbacks, which are recreated every render.
+  }, [isLoggedIn, currentUserSession?.id]);
 
   // Integrated Buyer Accounts Management & Public Database Sync
   const addBuyerAccount = (account: Omit<BuyerAccount, 'id' | 'syncTimestamp' | 'createdDate'>): BuyerAccount => {
@@ -1899,10 +1851,86 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
     }
   };
 
-  const addNewRFQ = (
-    rfqData: Omit<RFQItem, 'id' | 'createdAt' | 'quotes' | 'quotesCount' | 'status' | 'chasingActive'>,
+  /**
+   * Adopt a server-created RFQ, replacing any existing entry with the same RFQ
+   * number so a refresh cannot leave two copies of one record.
+   */
+  const adoptCreatedRFQ = (rfq: RFQItem) => {
+    setRfqs((prev) => [rfq, ...prev.filter((r) => r.rfqNumber !== rfq.rfqNumber)]);
+    addAuditLog(`Created ${rfq.rfqNumber} (${rfq.title})`, rfq.rfqNumber);
+  };
+
+  /**
+   * Persist an edit, then adopt what the API stored.
+   *
+   * The response is the authority: it carries the new `updatedAt` and any value the
+   * server normalised. Patching the local copy from the request instead would let
+   * the two drift, which is the failure the RFQ create path already had.
+   */
+  const updateRFQ = async (identifier: string, changes: RFQUpdatePayload): Promise<RFQItem> => {
+    const result = await updateRFQRequest(identifier, changes);
+
+    if (!result.success) {
+      showToast(UI_STRINGS.rfqEdit.saveFailedTitle, result.error, 'warning');
+      // Thrown rather than swallowed so the dialog stays open on the buyer's edits.
+      throw new Error(result.error);
+    }
+
+    const saved = result.rfq;
+    setRfqs((prev) => prev.map((r) => (r.rfqNumber === saved.rfqNumber ? saved : r)));
+    setVendorOpportunities((prev) =>
+      prev.map((opp) => (opp.rfqNumber === saved.rfqNumber ? buildOpportunityFromRFQ(saved) : opp))
+    );
+    // Kept in step so a screen already holding this RFQ does not show the old terms.
+    setSelectedRFQForMatrix((prev) => (prev?.rfqNumber === saved.rfqNumber ? saved : prev));
+    setSelectedRFQForDeepDive((prev) => (prev?.rfqNumber === saved.rfqNumber ? saved : prev));
+
+    addAuditLog(
+      `Edited ${saved.rfqNumber}: ${Object.keys(changes).join(', ')}`,
+      saved.rfqNumber
+    );
+    showToast(
+      UI_STRINGS.rfqEdit.savedTitle,
+      formatString(UI_STRINGS.rfqEdit.savedMessage, { rfqNumber: saved.rfqNumber }),
+      'success'
+    );
+    return saved;
+  };
+
+  /**
+   * Delete an RFQ, then drop it from every list holding it.
+   *
+   * Removed only after the API confirms, so a failed delete leaves the row on
+   * screen instead of hiding a record the database still has.
+   */
+  const deleteRFQ = async (identifier: string): Promise<void> => {
+    const result = await deleteRFQRequest(identifier);
+
+    if (!result.success) {
+      showToast(UI_STRINGS.rfqEdit.deleteFailedTitle, result.error, 'warning');
+      throw new Error(result.error);
+    }
+
+    const { rfqNumber } = result;
+    setRfqs((prev) => prev.filter((r) => r.rfqNumber !== rfqNumber));
+    setVendorOpportunities((prev) => prev.filter((opp) => opp.rfqNumber !== rfqNumber));
+    // A selection pointing at a deleted RFQ would render a stale record, so it is
+    // cleared rather than left dangling.
+    setSelectedRFQForMatrix((prev) => (prev?.rfqNumber === rfqNumber ? null : prev));
+    setSelectedRFQForDeepDive((prev) => (prev?.rfqNumber === rfqNumber ? null : prev));
+
+    addAuditLog(`Deleted ${rfqNumber}`, rfqNumber);
+    showToast(
+      UI_STRINGS.rfqEdit.deletedTitle,
+      formatString(UI_STRINGS.rfqEdit.deletedMessage, { rfqNumber }),
+      'success'
+    );
+  };
+
+  const addNewRFQ = async (
+    rfqData: NewRFQInput,
     customMatchedVendors?: VendorEntry[]
-  ) => {
+  ): Promise<RFQItem> => {
     // Subscription Limits Validation
     if (activeSubscription === 'none') {
       showToast('Subscription Upgrade Required', 'Your organization domain has already claimed its free trial. You must subscribe to a sourcing mode to dispatch RFQs.', 'warning');
@@ -1932,72 +1960,6 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
       }
     }
 
-    // Dynamic Working Hours calculation
-    const addWorkingHours = (startDate: Date, hoursToAdd: number): Date => {
-      const START_HOUR = 8;
-      const END_HOUR = 19;
-      let currentDate = new Date(startDate.getTime());
-
-      if (currentDate.getDay() === 0) {
-        currentDate.setDate(currentDate.getDate() + 1);
-        currentDate.setHours(START_HOUR, 0, 0, 0);
-      }
-
-      const curHour = currentDate.getHours();
-      if (curHour >= END_HOUR) {
-        currentDate.setDate(currentDate.getDate() + 1);
-        if (currentDate.getDay() === 0) currentDate.setDate(currentDate.getDate() + 1);
-        currentDate.setHours(START_HOUR, 0, 0, 0);
-      } else if (curHour < START_HOUR) {
-        currentDate.setHours(START_HOUR, 0, 0, 0);
-      }
-
-      let remainingHours = hoursToAdd;
-      while (remainingHours > 0) {
-        const currentHour = currentDate.getHours();
-        const currentMinutes = currentDate.getMinutes();
-        const remainingWorkHoursInDay = (END_HOUR - currentHour) - (currentMinutes / 60);
-
-        if (remainingHours <= remainingWorkHoursInDay) {
-          const newTime = currentDate.getTime() + remainingHours * 60 * 60 * 1000;
-          currentDate = new Date(newTime);
-          remainingHours = 0;
-        } else {
-          remainingHours -= remainingWorkHoursInDay;
-          currentDate.setDate(currentDate.getDate() + 1);
-          if (currentDate.getDay() === 0) currentDate.setDate(currentDate.getDate() + 1);
-          currentDate.setHours(START_HOUR, 0, 0, 0);
-        }
-      }
-      return currentDate;
-    };
-
-    const formatDateIST = (date: Date) => {
-      const pad = (n: number) => n.toString().padStart(2, '0');
-      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-      const month = months[date.getMonth()];
-      const day = date.getDate();
-      let hours = date.getHours();
-      const ampm = hours >= 12 ? 'PM' : 'AM';
-      hours = hours % 12;
-      hours = hours ? hours : 12;
-      const minutes = pad(date.getMinutes());
-      return `${day}-${month} ${hours}:${minutes} ${ampm} IST`;
-    };
-
-    const createdAtTime = new Date();
-    const createdAtStr = createdAtTime.toISOString().replace('T', ' ').substring(0, 19);
-
-    const emailSentTime = createdAtTime;
-    const smsScheduledTime = new Date(createdAtTime.getTime() + 5 * 60 * 1000);
-    const callScheduledTime = addWorkingHours(smsScheduledTime, 6);
-    const whatsappScheduledTime = addWorkingHours(smsScheduledTime, 12);
-
-    const emailSentStr = formatDateIST(emailSentTime);
-    const smsScheduledStr = formatDateIST(smsScheduledTime);
-    const callScheduledStr = formatDateIST(callScheduledTime);
-    const whatsappScheduledStr = formatDateIST(whatsappScheduledTime);
-
     // An explicitly empty list means "attach no vendors" and must be honoured:
     // only an omitted argument falls back to automatic matching. Treating [] as
     // "no preference" would fire RFQ emails and chaser sequences at suppliers the
@@ -2016,64 +1978,59 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
       }
     }
 
-    const followUpVendorRecords = matchedVendors.map((v, idx) => ({
-      vendorId: v.id || `v-auto-${idx + 1}`,
-      vendorName: v.name,
-      phone: v.phone || '+91 98201 44820',
-      contactPerson: v.contactPerson || 'Sales Desk',
-      call: { status: 'scheduled' as const, lastAttempt: `Scheduled: ${callScheduledStr} (+6 Working Hours from SMS)` },
-      whatsapp: { status: 'pending' as const, lastAttempt: `Scheduled: ${whatsappScheduledStr} (+12 Working Hours from SMS)` },
-      sms: { status: 'pending' as const, lastAttempt: `Scheduled: ${smsScheduledStr} (5m post-dispatch)` },
-      overallStatus: 'Pending' as const,
-      lastInteraction: 'Just created',
-      attemptsCount: 0,
-      bidStatus: 'Pending' as const,
-    }));
-
-    const id = `rfq-${Date.now().toString().slice(-5)}`;
-    const newRFQ: RFQItem = {
-      ...rfqData,
-      id,
-      createdAt: createdAtStr,
-      // Mirrors what storeService.createRFQ independently stamps server-side
-      // from its own activeBuyerAccount — the app has one globally "active"
-      // buyer account rather than a per-request buyer identity.
-      buyerAccountId: activeBuyerAccount?.id || null,
-      buyerAccountName: activeBuyerAccount?.organizationName || null,
-      source: rfqData.source || 'web_portal',
-      autoCirculated: rfqData.autoCirculated ?? (rfqData.source === 'email_gateway'),
-      quotesCount: 0,
+    // The RFQ is persisted first and the server's record is what goes into state.
+    //
+    // This used to be the other way round: a locally built RFQ was pushed into
+    // `rfqs` immediately and the POST was fired without being awaited, its response
+    // discarded. Two things broke as a result. The client kept a `rfqNumber` it had
+    // minted itself with Math.random(), while the server allocated a different one
+    // under the Java scheme — so opening the details page fetched a number that did
+    // not exist and rendered neither line items nor the summary. And a failed save
+    // still left the RFQ on screen as though it had been dispatched.
+    const saved = await createRFQ({
+      title: rfqData.title,
+      category: rfqData.category,
+      sourcingMode: rfqData.sourcingMode,
       status: 'Quotes Pending',
-      // With no vendors attached there is nobody to chase, so the RFQ must not
-      // advertise active chasers on the pipeline and summary screens.
-      chasingActive: matchedVendors.length > 0,
-      chaserMethod: 'Multi-Channel',
+      source: rfqData.source || 'web_portal',
+      sourceFileName: rfqData.sourceFileName,
+      budget: Number(rfqData.budget) || 0,
+      targetDeliveryDate: rfqData.targetDeliveryDate,
+      deliveryLocation: rfqData.deliveryLocation || '',
+      deliveryPincode: rfqData.deliveryPincode || '',
+      extractedEntities: rfqData.extractedEntities,
+      attachments: rfqData.attachments || [],
+    });
+
+    if (!saved.success) {
+      // Thrown rather than swallowed: the caller shows the reason, and no phantom
+      // RFQ is added to a list the database knows nothing about.
+      throw new Error(saved.error);
+    }
+
+    const newRFQ: RFQItem = {
+      ...saved.rfq,
+      // Local-only presentation state the API does not model. Everything the
+      // server owns — id, rfqNumber, createdAt, extractedEntities, aiSummary — is
+      // taken from its response above and never overwritten here.
+      autoCirculated: rfqData.autoCirculated ?? (rfqData.source === 'email_gateway'),
+      aiScore: rfqData.aiScore,
+      // No outreach telemetry. Nothing dispatches chasers yet, so a followUpData
+      // block here could only report zeros against a schedule that no job runs —
+      // and those zeros were being read as real by the portfolio KPIs.
+      chasingActive: false,
       quotes: [],
-      followUpData: {
-        rfqNumber: rfqData.rfqNumber,
-        totalInvited: matchedVendors.length,
-        respondedCount: 0,
-        callStats: { total: 0, connected: 0, avgDuration: '0m 00s' },
-        whatsappStats: { total: 0, delivered: 0, read: 0, replied: 0 },
-        smsStats: { total: 0, delivered: 0, clicked: 0 },
-        nextScheduledChaser: `Standard RFQ Email: Sent (${emailSentStr}) • SMS: Scheduled 5m later at ${smsScheduledStr}`,
-        autoChasingEnabled: true,
-        vendors: followUpVendorRecords,
-      },
     };
 
-    setRfqs((prev) => [newRFQ, ...prev]);
+    // Replaces any entry with the same number so a concurrent refresh cannot leave
+    // two copies of one RFQ.
+    setRfqs((prev) => [newRFQ, ...prev.filter((r) => r.rfqNumber !== newRFQ.rfqNumber)]);
 
-    // Persist new RFQ to PostgreSQL
-    fetch('/api/rfqs', {
-      method: 'POST',
-      headers: authFetchHeaders(),
-      body: JSON.stringify(newRFQ),
-    }).catch((e) => console.error('Failed to save RFQ to DB:', e));
-    
-    // Create opportunity in vendor portal
-    const newOpp = buildOpportunityFromRFQ(newRFQ);
-    setVendorOpportunities((prev) => [newOpp, ...prev]);
+    // Derived from the saved RFQ by the same mapper the list uses, so the vendor
+    // portal shows the real buyer, delivery location and value rather than the
+    // hardcoded "Larsen & Toubro" and "Enterprise Logistics Hub" placeholders that
+    // used to be attached to every new RFQ.
+    setVendorOpportunities((prev) => [buildOpportunityFromRFQ(newRFQ), ...prev]);
 
     // Dispatch Standard RFQ Email Package to each suitable vendor
     matchedVendors.forEach((v) => {
@@ -2090,10 +2047,9 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
 
     addFeedItem(
       `RFQ Dispatched: ${newRFQ.rfqNumber}`,
-      `Dispatched to ${matchedVendors.length} suitable vendors matching Minor Categories under ${SOURCING_MODES.find(m => m.id === newRFQ.sourcingMode)?.shortLabel}. Multi-channel automated chasing active across Call, WhatsApp & SMS.`,
-      'whatsapp',
-      newRFQ.rfqNumber,
-      'Target Vendor Pool'
+      `Dispatched to ${matchedVendors.length} suitable vendors matching Minor Categories under ${SOURCING_MODES.find(m => m.id === newRFQ.sourcingMode)?.shortLabel}.`,
+      'email',
+      newRFQ.rfqNumber
     );
 
     addAuditLog(
@@ -2103,223 +2059,9 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
 
     showToast(
       'Standard RFQ Email Dispatched!',
-      `${newRFQ.rfqNumber} dispatched to ${matchedVendors.length} suitable vendors with automated AI Call, WhatsApp & SMS chasing enabled.`,
+      `${newRFQ.rfqNumber} dispatched to ${matchedVendors.length} suitable vendors.`,
       'success'
     );
-
-    if (rfqData.sourcingMode === 'mode_1') {
-      // Step 0: Immediate Email Dispatched
-      addFeedItem(
-        'Standard RFQ Specification Email Dispatched',
-        `AI Sourcing System sent the formal Standard RFQ email package with categorized BOQ items to Rajesh Nair (rajesh@apexsupplies.in) at ${emailSentStr}.`,
-        'system',
-        newRFQ.rfqNumber,
-        'Apex Supplies Ltd.'
-      );
-
-      // Sequence: SMS -> Call -> WhatsApp -> Email Ingestion
-      setTimeout(() => {
-        triggerChannelChaser(newRFQ.rfqNumber, 'sms', 'Apex Supplies Ltd.', `Asking for quote. (Production Target: ${smsScheduledStr})`);
-        setRfqs((prev) =>
-          prev.map((r) => {
-            if (r.rfqNumber === newRFQ.rfqNumber && r.followUpData) {
-              return {
-                ...r,
-                followUpData: {
-                  ...r.followUpData,
-                  nextScheduledChaser: `SMS: Sent (${smsScheduledStr}) • Call: Scheduled at ${callScheduledStr} (+6 Working Hrs)`,
-                  vendors: r.followUpData.vendors.map((v) =>
-                    v.vendorName === 'Apex Supplies Ltd.'
-                      ? { ...v, sms: { status: 'delivered', lastAttempt: 'Sent: ' + smsScheduledStr } }
-                      : v
-                  ),
-                },
-              };
-            }
-            return r;
-          })
-        );
-      }, 4000);
-
-      setTimeout(() => {
-        triggerChannelChaser(newRFQ.rfqNumber, 'call', 'Apex Supplies Ltd.', `AI agent quote follow-up call. (Production Target: ${callScheduledStr})`);
-        setRfqs((prev) =>
-          prev.map((r) => {
-            if (r.rfqNumber === newRFQ.rfqNumber && r.followUpData) {
-              return {
-                ...r,
-                followUpData: {
-                  ...r.followUpData,
-                  nextScheduledChaser: `Call: Placed (${callScheduledStr}) • WA: Scheduled at ${whatsappScheduledStr} (+12 Working Hrs)`,
-                  vendors: r.followUpData.vendors.map((v) =>
-                    v.vendorName === 'Apex Supplies Ltd.'
-                      ? { ...v, call: { status: 'completed', lastAttempt: 'Placed: ' + callScheduledStr, duration: '1m 30s', summary: 'AI Voice Call connected with sales coordinator.' } }
-                      : v
-                  ),
-                },
-              };
-            }
-            return r;
-          })
-        );
-      }, 9500);
-
-      setTimeout(() => {
-        triggerChannelChaser(newRFQ.rfqNumber, 'whatsapp', 'Apex Supplies Ltd.', `Official procurement channel dispatch. (Production Target: ${whatsappScheduledStr})`);
-        setRfqs((prev) =>
-          prev.map((r) => {
-            if (r.rfqNumber === newRFQ.rfqNumber && r.followUpData) {
-              return {
-                ...r,
-                followUpData: {
-                  ...r.followUpData,
-                  nextScheduledChaser: `WA: Sent (${whatsappScheduledStr}) • Awaiting Email Response`,
-                  vendors: r.followUpData.vendors.map((v) =>
-                    v.vendorName === 'Apex Supplies Ltd.'
-                      ? { ...v, whatsapp: { status: 'read', lastAttempt: 'Delivered: ' + whatsappScheduledStr, messagePreview: 'RFQ bid link delivered.', linkClicked: true } }
-                      : v
-                  ),
-                },
-              };
-            }
-            return r;
-          })
-        );
-      }, 15000);
-
-      setTimeout(() => {
-        const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        
-        addFeedItem(
-          'Email Ingestion Gateway: Quote Received',
-          `AI parser scanned quote attachment (Centrifugal_Pump_Quote_Apex.pdf) from Rajesh Nair (rajesh@apexsupplies.in). Successfully parsed pricing & lead times. Completed at ${timeNow}.`,
-          'system',
-          newRFQ.rfqNumber,
-          'Apex Supplies Ltd.'
-        );
-
-        addAuditLog(
-          `AI Ingested email quotation from Apex Supplies Ltd. for ${newRFQ.rfqNumber}. Automated follow-up halted.`,
-          newRFQ.rfqNumber,
-          'ai-gateway@procucev.com'
-        );
-
-        setRfqs((prev) =>
-          prev.map((r) => {
-            if (r.rfqNumber === newRFQ.rfqNumber) {
-              const newQuote: QuoteComparison = {
-                vendorId: 'v-auto-1',
-                vendorName: 'Apex Supplies Ltd.',
-                vendorCategory: 'Procucev - AI Rec',
-                unitPrice: 5200,
-                totalPrice: 5200 * 12,
-                leadTimeDays: 12,
-                aiMatchScore: 94,
-                isBestPrice: true,
-                isPreferred: true,
-                warrantyYears: 2,
-                complianceStatus: 'Fully Compliant',
-                paymentTerms: 'Net 60 Days (Email Response)',
-                remarks: 'Ingested via email attachment Centrifugal_Pump_Quote.pdf. Fixed price for 12 months.'
-              };
-
-              const updatedVendors = r.followUpData ? r.followUpData.vendors.map((v) => {
-                if (v.vendorName === 'Apex Supplies Ltd.' || v.vendorName.includes('Apex')) {
-                  return {
-                    ...v,
-                    bidStatus: 'Submitted' as const,
-                    overallStatus: 'Responded' as const,
-                    lastInteraction: timeNow,
-                  };
-                }
-                return v;
-              }) : [];
-
-              return {
-                ...r,
-                status: 'In Evaluation' as const,
-                quotesCount: r.quotesCount + 1,
-                chasingActive: false,
-                quotes: [...r.quotes, newQuote],
-                followUpData: r.followUpData ? {
-                  ...r.followUpData,
-                  respondedCount: r.followUpData.respondedCount + 1,
-                  nextScheduledChaser: 'Halted (Quote Received)',
-                  vendors: updatedVendors,
-                } : undefined,
-              };
-            }
-            return r;
-          })
-        );
-
-        setSelectedRFQForDeepDive((cur) => {
-          if (cur && cur.rfqNumber === newRFQ.rfqNumber) {
-            const newQuote: QuoteComparison = {
-              vendorId: 'v-auto-1',
-              vendorName: 'Apex Supplies Ltd.',
-              vendorCategory: 'Procucev - AI Rec',
-              unitPrice: 5200,
-              totalPrice: 5200 * 12,
-              leadTimeDays: 12,
-              aiMatchScore: 94,
-              isBestPrice: true,
-              isPreferred: true,
-              warrantyYears: 2,
-              complianceStatus: 'Fully Compliant',
-              paymentTerms: 'Net 60 Days (Email Response)',
-              remarks: 'Ingested via email attachment Centrifugal_Pump_Quote.pdf. Fixed price for 12 months.'
-            };
-            return {
-              ...cur,
-              status: 'In Evaluation',
-              quotesCount: cur.quotesCount + 1,
-              chasingActive: false,
-              quotes: [...cur.quotes, newQuote],
-            };
-          }
-          return cur;
-        });
-
-        showToast(
-          'Email Quote Ingested!',
-          'Apex Supplies Ltd. quote updated. AI Chasing follow-up halted.',
-          'success'
-        );
-      }, 19000);
-    }
-
-    if (rfqData.sourcingMode === 'mode_3') {
-      addFeedItem(
-        'Standard RFQ Dispatched to Private Roster',
-        `AI Sourcing System dispatched Standard RFQ package via Email to Approved Private Roster (Apex Supplies, Global Industrial) at ${emailSentStr}.`,
-        'system',
-        newRFQ.rfqNumber,
-        'Private Roster Pool'
-      );
-
-      addFeedItem(
-        'Procucev Database Match: 10 Recommended Vendors Found',
-        `AI matching engine scanned the Procucev vendor pool and recommended 10 verified suppliers (Delta Valve Systems, Dynamic Flow Controls, ElectroMech Pumps, etc.) matching the '${newRFQ.extractedEntities[0]?.minorCategory || 'Mechanical'}' minor category.`,
-        'system',
-        newRFQ.rfqNumber,
-        'AI Sourcing Desk'
-      );
-
-      addFeedItem(
-        'Double-Blind Sourcing Initiated: 10 Evaluation Invites Dispatched',
-        `Anonymous Standard RFQ email and SMS messages dispatched with 360° qualification survey link and BOQ specifications to the 10 recommended database partners. Buyer identity is withheld until qualified.`,
-        'system',
-        newRFQ.rfqNumber,
-        'Procucev Partner Pool'
-      );
-
-      addAuditLog(
-        `Dispatched anonymous double-blind vendor qualification requests to 10 recommended database partners for ${newRFQ.rfqNumber}. Buyer identity withheld.`,
-        newRFQ.rfqNumber,
-        'ai-sourcing@procucev.com'
-      );
-    }
 
     return newRFQ;
   };
@@ -2361,6 +2103,9 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
         dbConnected,
         refreshFromDB,
         addNewRFQ,
+        adoptCreatedRFQ,
+        updateRFQ,
+        deleteRFQ,
         triggerWhatsAppChaser,
         triggerChannelChaser,
         triggerBatchChannelChaser,

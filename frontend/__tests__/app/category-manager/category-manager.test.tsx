@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import KanbanBoard from '@/app/category-manager/kanban-board';
 import SpendDashboard from '@/app/category-manager/spend-dashboard';
 import BuyerConsole from '@/app/category-manager/buyer-console';
@@ -21,7 +21,6 @@ function CategoryManagerBranchWrapper({ onMatrix, onEval, onSpend }: any) {
         onClick={() => {
           try {
             addNewRFQ({
-              rfqNumber: 'RFQ-2026-PARSE',
               title: 'Parsing RFQ Test',
               category: 'Civil Works',
               sourcingMode: 'mode_1',
@@ -45,7 +44,6 @@ function CategoryManagerBranchWrapper({ onMatrix, onEval, onSpend }: any) {
               autoCirculated: false,
             });
             addNewRFQ({
-              rfqNumber: 'RFQ-2026-EVAL',
               title: 'In Evaluation RFQ Test',
               category: 'Engineering Spares - Electrical',
               sourcingMode: 'mode_3',
@@ -159,13 +157,13 @@ describe('Category Manager Screens Suite', () => {
           ok: true,
           status: 200,
           json: async () => {
-            if (typeof url === 'string' && url.includes('/api/bootstrap')) {
+            // RFQs come from GET /api/rfqs, not the (anonymous) bootstrap
+            // payload — see the file's own default (jest.setup.ts) for the
+            // same pattern.
+            if (typeof url === 'string' && /\/api\/rfqs(\?|$)/.test(url)) {
               return {
                 success: true,
-                data: {
-                  buyerAccounts: [],
-                  vendors: [],
-                  rfqs: [
+                data: [
                     {
                       id: 'rfq-parse-1',
                       rfqNumber: 'RFQ-2026-00901',
@@ -278,11 +276,6 @@ describe('Category Manager Screens Suite', () => {
                       quotes: [{ vendorId: 'v-x', vendorName: 'Test Vendor', vendorCategory: 'General', unitPrice: 1, totalPrice: 1, leadTimeDays: 1, aiMatchScore: 1, isBestPrice: false, isPreferred: false, warrantyYears: 1, complianceStatus: 'Compliant', paymentTerms: 'Net 30', remarks: '' }],
                     },
                   ],
-                  evaluations: [],
-                  auditLogs: [],
-                  aiFeed: [],
-                  systemConfig: {},
-                },
               };
             }
             return { success: true, data: {} };
@@ -397,6 +390,70 @@ describe('Category Manager Screens Suite', () => {
       const onMatrix = jest.fn();
       const onEval = jest.fn();
 
+      // jest.setup.ts's default RFQ fixture carries no buyerAccountId, so
+      // compiledBuyers' rfqsList is empty for every buyer and the RFQ-row
+      // drill-down below never actually renders. Layer a buyerAccountId onto
+      // the same default fixture (via GET /api/rfqs) locally rather than
+      // changing the shared global default.
+      const baseImpl = (global.fetch as jest.Mock).getMockImplementation()!;
+      (global.fetch as jest.Mock).mockImplementation((url: string, init?: { method?: string }) => {
+        if (typeof url === 'string' && /\/api\/rfqs(\?|$)/.test(url) && (init?.method || 'GET') === 'GET') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: [
+                {
+                  id: 'rfq-00421',
+                  rfqNumber: 'RFQ-2026-00421',
+                  title: 'Centrifugal Water Pumps & Spares',
+                  category: 'Heavy Industrial Fluid Dynamics & Valves',
+                  sourcingMode: 'mode_3',
+                  status: 'AI Recommended',
+                  createdAt: '2026-08-20',
+                  targetDeliveryDate: '2026-09-15',
+                  quotesCount: 3,
+                  budget: 150000,
+                  aiScore: 94,
+                  buyerAccountId: 'buyer-acc-001',
+                  extractedEntities: [
+                    {
+                      id: 'item-1',
+                      itemName: 'Centrifugal Pump 50HP',
+                      quantity: 4,
+                      unit: 'Units',
+                      targetDate: '2026-09-15',
+                      technicalSpecs: '50HP 3-Phase 415V Cast Iron',
+                      confidence: 96,
+                      category: 'Heavy Industrial Fluid Dynamics & Valves',
+                    },
+                  ],
+                  quotes: [
+                    {
+                      vendorId: 'vendor-1',
+                      vendorName: 'Apex Supplies Ltd.',
+                      vendorCategory: 'Procucev - AI Rec',
+                      unitPrice: 24500,
+                      totalPrice: 98000,
+                      leadTimeDays: 14,
+                      aiMatchScore: 95,
+                      isBestPrice: true,
+                      isPreferred: true,
+                      warrantyYears: 2,
+                      complianceStatus: 'Fully Compliant',
+                      paymentTerms: '30 Days Net',
+                      remarks: 'Top rated supplier',
+                    },
+                  ],
+                },
+              ],
+            }),
+          });
+        }
+        return (baseImpl as (url: string, init?: unknown) => unknown)(url, init);
+      });
+
       renderWithProvider(<BuyerConsole onNavigateToMatrix={onMatrix} onNavigateToEvaluation={onEval} />);
 
       // Buyer cards now come from the real buyer directory (loaded via
@@ -425,18 +482,15 @@ describe('Category Manager Screens Suite', () => {
         fireEvent.change(selects[0], { target: { value: 'all' } });
       }
 
-      // Test buyer with no active RFQs (Reliance — bootstrap mock's only RFQ
-      // belongs to buyer-acc-001, so buyer-acc-002 genuinely has none)
+      // Test buyer with no active RFQs (Reliance — the local RFQ fixture
+      // above belongs to buyer-acc-001, so buyer-acc-002 genuinely has none)
       fireEvent.change(searchInput, { target: { value: 'Deshmukh' } });
       const noRfqBuyer = screen.getByText(/Anjali Deshmukh/i);
       fireEvent.click(noRfqBuyer);
-      const reviewBtnsForNoRfq = screen.queryAllByRole('button', { name: /Review RFQ Details/i });
-      if (reviewBtnsForNoRfq.length > 0) {
-        fireEvent.click(reviewBtnsForNoRfq[0]);
-        expect(screen.getByText(/No active RFQ records found for this buyer profile/i)).toBeInTheDocument();
-        const hideBtn = screen.getByRole('button', { name: /Hide Details/i });
-        fireEvent.click(hideBtn);
-      }
+      const reviewBtnsForNoRfq = screen.getAllByRole('button', { name: /Review RFQ Details/i });
+      fireEvent.click(reviewBtnsForNoRfq[0]);
+      expect(screen.getByText(/No active RFQ records found for this buyer profile/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Hide Details/i }));
 
       // Test buyer selection and toggle collapse
       fireEvent.change(searchInput, { target: { value: '' } });
@@ -444,38 +498,30 @@ describe('Category Manager Screens Suite', () => {
       fireEvent.click(buyerCard);
 
       // Test review RFQ details
-      const reviewBtns = screen.queryAllByRole('button', { name: /Review RFQ Details/i });
-      if (reviewBtns.length > 0) {
-        fireEvent.click(reviewBtns[0]);
-        expect(screen.getByText(/Sourcing Details for Larsen & Toubro/i)).toBeInTheDocument();
+      const reviewBtns = screen.getAllByRole('button', { name: /Review RFQ Details/i });
+      fireEvent.click(reviewBtns[0]);
+      expect(screen.getByText(/Sourcing Details for Larsen & Toubro/i)).toBeInTheDocument();
 
-        // Expand RFQ row
-        const rfqRows = screen.queryAllByText(/Centrifugal Water Pumps & Spares|RFQ-2026/i);
-        if (rfqRows.length > 0) {
-          fireEvent.click(rfqRows[0]);
+      // Expand RFQ row
+      const rfqRows = screen.getAllByText(/Centrifugal Water Pumps & Spares|RFQ-2026/i);
+      fireEvent.click(rfqRows[0]);
 
-          // Go to Quote Matrix
-          const matrixBtn = screen.queryByRole('button', { name: /Go to Quote Matrix/i });
-          if (matrixBtn) {
-            fireEvent.click(matrixBtn);
-            expect(onMatrix).toHaveBeenCalled();
-          }
+      // Go to Quote Matrix (the local fixture RFQ has quotesCount 3, so this renders)
+      fireEvent.click(screen.getByRole('button', { name: /Go to Quote Matrix/i }));
+      expect(onMatrix).toHaveBeenCalled();
 
-          // Review Survey Evaluation if available
-          const evalBtn = screen.queryByRole('button', { name: /Review Survey Evaluation/i });
-          if (evalBtn) {
-            fireEvent.click(evalBtn);
-            expect(onEval).toHaveBeenCalled();
-          }
+      // The local fixture is mode_3, so the survey-evaluation review action also renders
+      fireEvent.click(screen.getByRole('button', { name: /Review Survey Evaluation/i }));
+      expect(onEval).toHaveBeenCalled();
 
-          // Collapse RFQ row
-          fireEvent.click(rfqRows[0]);
-        }
+      // Collapse RFQ row
+      fireEvent.click(rfqRows[0]);
 
-        // Toggle Hide Details
-        const hideBtn = screen.getByRole('button', { name: /Hide Details/i });
-        fireEvent.click(hideBtn);
-      }
+      // Toggle Hide Details
+      fireEvent.click(screen.getByRole('button', { name: /Hide Details/i }));
+
+      // This test's local /api/rfqs override must not leak into later tests.
+      (global.fetch as jest.Mock).mockImplementation(baseImpl);
     });
   });
 
@@ -707,7 +753,6 @@ describe('Category Manager Screens Suite', () => {
             onClick={() => {
               try {
                 addNewRFQ({
-                  rfqNumber: 'RFQ-2026-LIVE',
                   title: 'Live-Added Pipeline RFQ',
                   category: 'Heavy Industrial Fluid Dynamics & Valves',
                   sourcingMode: 'mode_3',
@@ -725,7 +770,7 @@ describe('Category Manager Screens Suite', () => {
           <KanbanBoard onNavigateToMatrix={onMatrix} onNavigateToSpend={jest.fn()} />
         </>
       );
-    }
+    };
 
     test('a newly created RFQ appears as a real Quotes Pending card without a page refresh', async () => {
       const onMatrix = jest.fn();
@@ -735,17 +780,19 @@ describe('Category Manager Screens Suite', () => {
         expect(screen.getByTestId('test-add-pending-rfq')).toBeInTheDocument();
       });
 
-      // Before creation the pipeline still only holds the one bootstrap-seeded (scored) RFQ
+      // Before creation the pipeline still only holds the one GET /api/rfqs-seeded (scored) RFQ
       expect(screen.getByText(/No RFQs currently awaiting vendor quotes/i)).toBeInTheDocument();
 
-      fireEvent.click(screen.getByTestId('test-add-pending-rfq'));
-
-      // addNewRFQ always lands a fresh RFQ in 'Quotes Pending' — the real store's
-      // own transition, not something the Kanban board invents.
-      await waitFor(() => {
-        expect(screen.getByText('RFQ-2026-LIVE')).toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('test-add-pending-rfq'));
       });
-      expect(screen.getByText('Live-Added Pipeline RFQ')).toBeInTheDocument();
+
+      // addNewRFQ now really persists via POST /api/rfqs, so the server (jest.setup.ts's
+      // mock) allocates the real RFQ number rather than keeping the client-supplied one
+      // — the title is the one field the mock passes through unchanged.
+      await waitFor(() => {
+        expect(screen.getByText('Live-Added Pipeline RFQ')).toBeInTheDocument();
+      });
       expect(screen.queryByText(/No RFQs currently awaiting vendor quotes/i)).not.toBeInTheDocument();
     });
   });

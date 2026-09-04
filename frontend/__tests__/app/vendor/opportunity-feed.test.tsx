@@ -1,31 +1,241 @@
 import React from 'react';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import OpportunityFeed from '@/app/vendor/opportunity-feed';
 import { AppProvider, useApp } from '@/lib/store';
+import { UI_STRINGS } from '@/lib/uiStrings';
+import type { QuoteComparison, RFQItem, VendorOpportunity, VendorSubscriptionPlan } from '@/lib/types';
 
-function renderWithProvider(ui: React.ReactElement) {
-  return render(<AppProvider>{ui}</AppProvider>);
+/**
+ * The feed is derived from `GET /api/rfqs`, so every test supplies the RFQs whose
+ * projection it wants to assert on. Nothing is seeded any more: an empty API means
+ * an empty feed, which is exactly why these fixtures are explicit.
+ *
+ * `RFQ-2026-00421` and `RFQ-2026-00423` are on this vendor's own-buyer roster and
+ * so are never locked; the `009xx` numbers are not, and lock below the top tier.
+ */
+type RFQFixture = Partial<RFQItem> & { rfqNumber: string };
+
+type CatalogueFixture = {
+  id: string;
+  name: string;
+  category: string;
+  sku: string;
+  specs: string;
+  unitPrice: number;
+  leadTimeDays: number;
+  moq: number;
+};
+
+/** A quote only has to exist for an RFQ to count as answered. */
+const A_QUOTE = { vendorName: 'Apex Supplies Ltd.' } as unknown as QuoteComparison;
+
+const OWN_ROSTER_BUYER = 'Larsen & Toubro Ltd. (L&T)';
+
+const DIRECT_OWN: RFQFixture = {
+  id: 'rfq-1',
+  rfqNumber: 'RFQ-2026-00421',
+  title: 'Centrifugal Water Pumps & Valves 500 GPM',
+  sourcingMode: 'mode_1',
+  budget: 150000,
+  targetDeliveryDate: '2026-09-15',
+  deliveryLocation: 'Pune Plant / Maharashtra',
+  buyerAccountName: OWN_ROSTER_BUYER,
+  extractedEntities: [
+    {
+      id: 'ent-1',
+      itemName: 'SS316 impeller assembly',
+      quantity: 4,
+      unit: 'Units',
+      targetDate: '2026-09-15',
+      technicalSpecs: 'SS316',
+      confidence: 92,
+      category: 'Pumps & Accessories',
+      majorCategory: 'Engineering Spares - Mechanical',
+      minorCategory: 'Pumps & Accessories',
+    },
+  ],
+};
+
+const DIRECT_HVAC_QUOTED: RFQFixture = {
+  id: 'rfq-2',
+  rfqNumber: 'RFQ-2026-00901',
+  title: 'HVAC Control Retrofit',
+  sourcingMode: 'mode_1',
+  // No ceiling published, so the card must say "Not Disclosed" rather than ₹0.
+  budget: 0,
+  targetDeliveryDate: '2026-10-01',
+  deliveryLocation: 'Chennai',
+  buyerAccountName: 'Tata Motors Ltd.',
+  quotes: [A_QUOTE],
+};
+
+const DIRECT_STEEL: RFQFixture = {
+  id: 'rfq-3',
+  rfqNumber: 'RFQ-2026-00902',
+  title: 'Girder Fabrication Package',
+  sourcingMode: 'mode_1',
+  budget: 45000,
+  targetDeliveryDate: '2026-11-20',
+  deliveryLocation: 'Surat',
+  buyerAccountName: 'Tata Motors Ltd.',
+};
+
+const NETWORK_OWN: RFQFixture = {
+  id: 'rfq-4',
+  rfqNumber: 'RFQ-2026-00423',
+  title: 'High Pressure Gate Valve System',
+  sourcingMode: 'mode_3',
+  budget: 90000,
+  targetDeliveryDate: '2026-09-30',
+  deliveryLocation: 'Hazira Works',
+  buyerAccountName: OWN_ROSTER_BUYER,
+  extractedEntities: [
+    {
+      id: 'ent-2',
+      itemName: 'Flanged carbon steel connector',
+      quantity: 20,
+      unit: 'Nos',
+      targetDate: '2026-09-30',
+      technicalSpecs: 'CS flanged',
+      confidence: 88,
+      category: 'Hoses, Valves & Fittings',
+      majorCategory: 'Engineering Spares - Mechanical',
+      minorCategory: 'Hoses, Valves & Fittings',
+    },
+  ],
+};
+
+const NETWORK_HVAC_QUOTED: RFQFixture = {
+  id: 'rfq-5',
+  rfqNumber: 'RFQ-2026-00903',
+  title: 'HVAC control ducting',
+  sourcingMode: 'mode_3',
+  budget: 0,
+  targetDeliveryDate: '2026-10-15',
+  deliveryLocation: 'Mumbai',
+  buyerAccountName: 'Adani Enterprises Ltd.',
+  quotes: [A_QUOTE],
+};
+
+const NETWORK_STEEL: RFQFixture = {
+  id: 'rfq-6',
+  rfqNumber: 'RFQ-2026-00904',
+  title: 'Carbon Steel Plate Supply',
+  sourcingMode: 'mode_3',
+  budget: 20000,
+  targetDeliveryDate: '2026-12-05',
+  deliveryLocation: 'Kandla',
+  buyerAccountName: 'Adani Enterprises Ltd.',
+};
+
+const ALL_FIXTURES = [
+  DIRECT_OWN,
+  DIRECT_HVAC_QUOTED,
+  DIRECT_STEEL,
+  NETWORK_OWN,
+  NETWORK_HVAC_QUOTED,
+  NETWORK_STEEL,
+];
+
+// This vendor's own bootstrap record: `addedByBuyerCompany` is what
+// `isOwnBuyerRfq` in the component actually checks against `opp.buyer`
+// (the RFQ's `buyerAccountName`), replacing the old hardcoded-RFQ-number
+// list. Matches jest.setup.ts's global default session email.
+const SELF_VENDOR_RECORD = {
+  id: 'v-self',
+  email: 'buyer@procucev.com',
+  name: 'Test Vendor Co',
+  addedByBuyerCompany: OWN_ROSTER_BUYER,
+};
+
+function serveRFQs(fixtures: RFQFixture[]) {
+  (global.fetch as jest.Mock).mockImplementation((url: string) =>
+    Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () =>
+        /\/api\/rfqs(\?|$)/.test(String(url))
+          ? {
+              success: true,
+              data: fixtures.map((fixture) => ({
+                category: 'Engineering Spares - Mechanical',
+                status: 'Quotes Pending',
+                createdAt: '2026-09-04T10:00:00.000Z',
+                quotes: [],
+                extractedEntities: [],
+                ...fixture,
+              })),
+            }
+          : /\/api\/bootstrap/.test(String(url))
+            ? { success: true, data: { vendors: [SELF_VENDOR_RECORD] } }
+            : { success: true, data: {} },
+    })
+  );
 }
 
-function OpportunityFeedCustomWrapper({
-  onNavigateToBidForm = jest.fn(),
-  onNavigateToEvaluation = jest.fn(),
-  onNavigateToSubscription = jest.fn(),
-  customSubscription = 'connect',
-  customDownloadsUsed = 0,
-  customSelfEvaluationCompleted = false,
-  customSelfEvaluationScore = 85,
-  customCatalogue = [],
-}: {
-  onNavigateToBidForm?: (opp: any) => void;
+const CATALOGUE_ONE: CatalogueFixture[] = [
+  {
+    id: 'cat-1',
+    name: 'Centrifugal Industrial Water Pump 15HP',
+    category: 'Pumps & Fluid Dynamics',
+    sku: 'SKU-PUMP-15HP',
+    specs: '15 HP industrial pump',
+    unitPrice: 1200,
+    leadTimeDays: 7,
+    moq: 1,
+  },
+];
+
+const CATALOGUE_TWO: CatalogueFixture[] = [
+  ...CATALOGUE_ONE,
+  {
+    id: 'cat-2',
+    name: 'Standard Carbon Steel Flanged Connector',
+    category: 'Pipes & Fittings',
+    sku: 'SKU-PIPE-CS',
+    specs: 'Carbon steel connector fitting',
+    unitPrice: 250,
+    leadTimeDays: 10,
+    moq: 5,
+  },
+];
+
+interface HarnessProps {
+  onNavigateToBidForm?: (opp: VendorOpportunity) => void;
   onNavigateToEvaluation?: () => void;
   onNavigateToSubscription?: () => void;
-  customSubscription?: any;
-  customDownloadsUsed?: number;
-  customSelfEvaluationCompleted?: boolean;
-  customSelfEvaluationScore?: number;
-  customCatalogue?: any[];
-}) {
+  subscription?: VendorSubscriptionPlan;
+  downloadsUsed?: number;
+  selfEvaluationCompleted?: boolean;
+  selfEvaluationScore?: number;
+  catalogue?: CatalogueFixture[];
+}
+
+/**
+ * The provider exposes the toast in context but does not render it, so the probe
+ * below surfaces it for assertions the way the app shell does at runtime.
+ */
+function ToastProbe() {
+  const { toastMessage } = useApp();
+  if (!toastMessage) return null;
+  return (
+    <div data-testid="toast">
+      <span>{toastMessage.title}</span>
+      <span>{toastMessage.description}</span>
+    </div>
+  );
+}
+
+function Harness({
+  onNavigateToBidForm = jest.fn(),
+  onNavigateToEvaluation,
+  onNavigateToSubscription,
+  subscription = 'premium',
+  downloadsUsed = 0,
+  selfEvaluationCompleted = false,
+  selfEvaluationScore = 85,
+  catalogue = [],
+}: HarnessProps) {
   const {
     setVendorSubscription,
     setVendorRfqDownloadsUsed,
@@ -35,399 +245,614 @@ function OpportunityFeedCustomWrapper({
   } = useApp();
 
   React.useEffect(() => {
-    setVendorSubscription(customSubscription);
-    setVendorRfqDownloadsUsed(customDownloadsUsed);
-    setVendorSelfEvaluationCompleted(customSelfEvaluationCompleted);
-    setVendorSelfEvaluationScore(customSelfEvaluationScore);
-    setVendorCatalogue(customCatalogue);
+    setVendorSubscription(subscription);
+    setVendorRfqDownloadsUsed(downloadsUsed);
+    setVendorSelfEvaluationCompleted(selfEvaluationCompleted);
+    setVendorSelfEvaluationScore(selfEvaluationScore);
+    setVendorCatalogue(catalogue);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
-    <OpportunityFeed
-      onNavigateToBidForm={onNavigateToBidForm}
-      onNavigateToEvaluation={onNavigateToEvaluation}
-      onNavigateToSubscription={onNavigateToSubscription}
-    />
+    <>
+      <ToastProbe />
+      <OpportunityFeed
+        onNavigateToBidForm={onNavigateToBidForm}
+        onNavigateToEvaluation={onNavigateToEvaluation}
+        onNavigateToSubscription={onNavigateToSubscription}
+      />
+    </>
   );
 }
 
-describe('OpportunityFeed Comprehensive Suite', () => {
+/**
+ * Render and wait for the API-derived cards to arrive.
+ *
+ * refreshFromDB syncs vendorSubscription/vendorRfqDownloadsUsed from the
+ * bootstrap vendor record once it resolves, which would otherwise race the
+ * Harness's own prop-driven setters and clobber whichever test subscription
+ * was asked for back to SELF_VENDOR_RECORD's defaults. Mirroring the same
+ * values into the mocked vendor record keeps both writers in agreement
+ * regardless of which one lands last.
+ */
+async function renderFeed(props: HarnessProps = {}) {
+  const baseImpl = (global.fetch as jest.Mock).getMockImplementation()!;
+  (global.fetch as jest.Mock).mockImplementation((url: string, init?: unknown) => {
+    if (typeof url === 'string' && /\/api\/bootstrap/.test(url)) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          data: {
+            vendors: [
+              {
+                ...SELF_VENDOR_RECORD,
+                subscriptionPlan: props.subscription ?? 'premium',
+                rfqDownloadsUsed: props.downloadsUsed ?? 0,
+              },
+            ],
+          },
+        }),
+      });
+    }
+    return baseImpl(url, init);
+  });
+
+  const result = render(
+    <AppProvider>
+      <Harness {...props} />
+    </AppProvider>
+  );
+  await waitFor(() =>
+    expect(screen.getAllByTitle(/Download RFQ Technical BOQ/i).length).toBeGreaterThan(0)
+  );
+  return result;
+}
+
+/** Render a feed that is expected to stay empty. */
+async function renderEmptyFeed(props: HarnessProps = {}) {
+  const result = render(
+    <AppProvider>
+      <Harness {...props} />
+    </AppProvider>
+  );
+  await waitFor(() =>
+    expect(screen.getByText(/No matching targeted RFQ invitations found/i)).toBeInTheDocument()
+  );
+  return result;
+}
+
+const downloadButtons = () => screen.getAllByTitle(/Download RFQ Technical BOQ/i);
+
+/** The five filter selects, in DOM order. */
+function selects() {
+  const all = screen.getAllByRole('combobox') as HTMLSelectElement[];
+  return {
+    directBuyer: all[0],
+    directMajor: all[1],
+    directMinor: all[2],
+    netMajor: all[3],
+    netMinor: all[4],
+  };
+}
+
+const searchBoxes = () => screen.getAllByPlaceholderText(/Specs, location, keywords/i);
+const directCatalogueToggle = () =>
+  screen.getByTitle(/Click to filter only RFQs matching items in your vendor catalogue/i);
+const netCatalogueToggle = () =>
+  screen.getByTitle(/Click to filter only marketplace RFQs matching items in your vendor catalogue/i);
+
+describe('OpportunityFeed: rendering from the RFQ API', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    serveRFQs(ALL_FIXTURES);
+  });
+
+  test('splits the API result into direct invitations and open network cards', async () => {
+    await renderFeed();
+
+    expect(screen.getByText('3 Targeted RFQs')).toBeInTheDocument();
+    expect(screen.getByText(DIRECT_OWN.title as string)).toBeInTheDocument();
+    expect(screen.getByText(NETWORK_OWN.title as string)).toBeInTheDocument();
+    // Six RFQs in, six download buttons out.
+    expect(downloadButtons()).toHaveLength(6);
+  });
+
+  test('renders a published budget and marks an unpublished one as not disclosed', async () => {
+    await renderFeed();
+
+    expect(screen.getByText(/Not Disclosed/i)).toBeInTheDocument();
+    expect(screen.getByText(/1,50,000/)).toBeInTheDocument();
+  });
+
+  test('shows an empty feed for both sections when the buyer has no RFQs', async () => {
+    serveRFQs([]);
+    await renderEmptyFeed();
+
+    expect(screen.getByText(/No matching open network opportunities found/i)).toBeInTheDocument();
+    expect(screen.getByText('0 Targeted RFQs')).toBeInTheDocument();
+    // The reminder banner names a real RFQ, so with none it must not render at all.
+    expect(screen.queryByRole('button', { name: /Submit Quote Now/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('OpportunityFeed: pending-bid reminder', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  test('Self-Evaluation Header Banner and Navigation callbacks', () => {
+  test('names the first unquoted RFQ and opens it, pluralising the count', async () => {
+    serveRFQs(ALL_FIXTURES);
     const onNavigateToBidForm = jest.fn();
+    await renderFeed({ onNavigateToBidForm });
+
+    // Four of the six fixtures carry no quote.
+    expect(screen.getByText(/4 quotations awaiting your response/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Submit Quote Now/i }));
+    expect(onNavigateToBidForm).toHaveBeenCalledWith(
+      expect.objectContaining({ rfqNumber: DIRECT_OWN.rfqNumber })
+    );
+  });
+
+  test('uses the singular form for a single outstanding quotation', async () => {
+    serveRFQs([DIRECT_OWN]);
+    await renderFeed();
+
+    expect(screen.getByText(/1 quotation awaiting your response/i)).toBeInTheDocument();
+  });
+});
+
+describe('OpportunityFeed: self-evaluation banners', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    serveRFQs(ALL_FIXTURES);
+  });
+
+  test('offers to start the evaluation, priced at $5 without a subscription', async () => {
     const onNavigateToEvaluation = jest.fn();
-    const onNavigateToSubscription = jest.fn();
+    await renderFeed({ onNavigateToEvaluation, subscription: 'premium' });
 
-    // 1. Initial State: self-evaluation not completed
-    const { unmount } = renderWithProvider(
-      <OpportunityFeedCustomWrapper
-        onNavigateToBidForm={onNavigateToBidForm}
-        onNavigateToEvaluation={onNavigateToEvaluation}
-        onNavigateToSubscription={onNavigateToSubscription}
-        customSelfEvaluationCompleted={false}
-        customSubscription="standard"
-      />
-    );
+    fireEvent.click(screen.getByRole('button', { name: /Start Self-Evaluation \(\$5\)/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Start 360° AI Self-Evaluation \(\$5\)/i }));
+    fireEvent.click(screen.getByRole('button', { name: /360° Audit/i }));
+    expect(onNavigateToEvaluation).toHaveBeenCalledTimes(3);
+    expect(screen.getByText('1st Priority RFQ Status')).toBeInTheDocument();
+  });
 
-    const evalBtn = screen.getByRole('button', { name: /Start Self-Evaluation/i });
-    fireEvent.click(evalBtn);
-    expect(onNavigateToEvaluation).toHaveBeenCalled();
+  test('reports the score and offers a retake once the evaluation is done', async () => {
+    const onNavigateToEvaluation = jest.fn();
+    await renderFeed({
+      onNavigateToEvaluation,
+      selfEvaluationCompleted: true,
+      selfEvaluationScore: 92,
+    });
 
-    // Click Mid-page evaluation CTA
-    const midEvalBtn = screen.getByRole('button', { name: /Start 360° AI Self-Evaluation/i });
-    fireEvent.click(midEvalBtn);
+    fireEvent.click(screen.getByRole('button', { name: /View AI Rating \(92%\)/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Retake 360° AI Self-Evaluation/i }));
     expect(onNavigateToEvaluation).toHaveBeenCalledTimes(2);
-
-    // Click View Connect / Select ($0 Fee) with callback
-    const viewConnectBtn = screen.getByRole('button', { name: /View Connect \/ Select/i });
-    fireEvent.click(viewConnectBtn);
-    expect(onNavigateToSubscription).toHaveBeenCalled();
-    unmount();
-
-    // Render with undefined onNavigateToSubscription to test fallback openUpgradeModal
-    const { unmount: unmountFallback } = renderWithProvider(
-      <OpportunityFeedCustomWrapper
-        onNavigateToBidForm={onNavigateToBidForm}
-        onNavigateToEvaluation={onNavigateToEvaluation}
-        onNavigateToSubscription={undefined}
-        customSelfEvaluationCompleted={false}
-        customSubscription="standard"
-      />
-    );
-
-    // Click Submit Quote Now in reminder banner
-    const quoteNowBtn = screen.getByRole('button', { name: /Submit Quote Now/i });
-    fireEvent.click(quoteNowBtn);
-    expect(onNavigateToBidForm).toHaveBeenCalled();
-
-    const viewConnectBtnFallback = screen.getByRole('button', { name: /View Connect \/ Select/i });
-    fireEvent.click(viewConnectBtnFallback);
-    unmountFallback();
-
-    // 2. Self-evaluation completed state: View AI Rating & Retake
-    renderWithProvider(
-      <OpportunityFeedCustomWrapper
-        onNavigateToBidForm={onNavigateToBidForm}
-        onNavigateToEvaluation={onNavigateToEvaluation}
-        onNavigateToSubscription={onNavigateToSubscription}
-        customSelfEvaluationCompleted={true}
-        customSelfEvaluationScore={92}
-      />
-    );
-
-    const viewRatingBtn = screen.getByRole('button', { name: /View AI Rating \(92%\)/i });
-    fireEvent.click(viewRatingBtn);
-
-    const retakeBtn = screen.getByRole('button', { name: /Retake 360° AI Self-Evaluation/i });
-    fireEvent.click(retakeBtn);
+    expect(screen.getByText(/Self-Evaluation Certified \(Score: 92%\)/i)).toBeInTheDocument();
   });
 
-  test('Direct Invitations Filtering: Company, Buyer, Categories, Search, Clear, and Catalogue Matches', () => {
-    const mockCatalogue = [
-      {
-        id: 'cat-1',
-        name: 'Centrifugal Industrial Water Pump 15HP',
-        category: 'Pumps & Fluid Dynamics',
-        sku: 'SKU-PUMP-15HP',
-        specs: '15 HP industrial pump',
-        unitPrice: 1200,
-        leadTimeDays: 7,
-        moq: 1,
-      },
-    ];
+  test('waives the fee on a Connect plan and hides the subscription upsell', async () => {
+    await renderFeed({ subscription: 'connect' });
 
-    renderWithProvider(
-      <OpportunityFeedCustomWrapper customCatalogue={mockCatalogue} />
-    );
-
-    // Direct Invitations Search Input: title, line item, and clear
-    const searchInputs = screen.getAllByPlaceholderText(/Specs, location, keywords/i);
-    if (searchInputs.length > 0) {
-      fireEvent.change(searchInputs[0], { target: { value: 'Pump' } });
-      const clearSearchBtns = screen.queryAllByTitle(/Clear Search/i);
-      if (clearSearchBtns.length > 0) {
-        fireEvent.click(clearSearchBtns[0]);
-      }
-      // Line item description matching
-      fireEvent.change(searchInputs[0], { target: { value: 'SS316' } });
-      fireEvent.change(searchInputs[0], { target: { value: 'NonExistentRFQ' } });
-      fireEvent.change(searchInputs[0], { target: { value: '' } });
-    }
-
-    // Direct Invitations Filter dropdowns
-    const selects = screen.getAllByRole('combobox');
-    // Select Company: Larsen & Toubro
-    if (selects.length > 0) {
-      fireEvent.change(selects[0], { target: { value: 'Larsen & Toubro Ltd. (L&T)' } });
-      const updatedSelects1 = screen.getAllByRole('combobox');
-      if (updatedSelects1.length > 1) {
-        fireEvent.change(updatedSelects1[1], { target: { value: 'Rajesh Nair' } });
-      }
-      fireEvent.change(selects[0], { target: { value: 'Tata Projects Ltd.' } });
-      const updatedSelects2 = screen.getAllByRole('combobox');
-      if (updatedSelects2.length > 1) {
-        fireEvent.change(updatedSelects2[1], { target: { value: 'Amit Kumar Tata' } });
-      }
-      fireEvent.change(selects[0], { target: { value: 'all' } });
-    }
-
-    // Select Major & Minor Category: Mechanical & Fluid
-    if (selects.length > 2) {
-      fireEvent.change(selects[2], { target: { value: 'Mechanical & Fluid Equipment' } });
-      if (selects.length > 3) {
-        fireEvent.change(selects[3], { target: { value: 'Pumps & Valves' } });
-        fireEvent.change(selects[3], { target: { value: 'Structural Steel & Beams' } });
-      }
-
-      // Building & Infra
-      fireEvent.change(selects[2], { target: { value: 'Building & Infrastructure' } });
-      if (selects.length > 3) {
-        fireEvent.change(selects[3], { target: { value: 'Building Automation & HVAC' } });
-      }
-      fireEvent.change(selects[2], { target: { value: 'all' } });
-    }
-
-    // Catalogue matching filter button for Direct Invitations
-    const catalogueFilterBtns = screen.getAllByRole('button', { name: /Catalogue Match/i });
-    if (catalogueFilterBtns.length > 0) {
-      fireEvent.click(catalogueFilterBtns[0]);
-      fireEvent.click(catalogueFilterBtns[0]);
-    }
+    expect(screen.getByText(/FREE \(Waived\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/100% Free with your active Connect subscription/i)).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /View Connect \/ Select/i })
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /🔗 Connect Partner/i })).toBeInTheDocument();
   });
 
-  test('Open Network Marketplace Filtering: Categories, Search, and Catalogue Matches', () => {
-    const mockCatalogue = [
-      {
-        id: 'cat-2',
-        name: 'Standard Carbon Steel Flanged Connector',
-        category: 'Pipes & Fittings',
-        sku: 'SKU-PIPE-SS',
-        specs: 'Carbon steel connector fitting',
-        unitPrice: 250,
-        leadTimeDays: 10,
-        moq: 5,
-      },
-    ];
+  test('credits a Select plan for the waiver', async () => {
+    await renderFeed({ subscription: 'select' });
 
-    const { unmount } = renderWithProvider(
-      <OpportunityFeedCustomWrapper customCatalogue={mockCatalogue} />
-    );
-
-    // Open Network Search Input: title, line item, and clear
-    const searchInputs = screen.getAllByPlaceholderText(/Specs, location, keywords/i);
-    if (searchInputs.length > 1) {
-      fireEvent.change(searchInputs[1], { target: { value: 'Steel' } });
-      const clearSearchBtns = screen.queryAllByTitle(/Clear Search/i);
-      if (clearSearchBtns.length > 0) {
-        fireEvent.click(clearSearchBtns[0]);
-      }
-      // Line item description matching
-      fireEvent.change(searchInputs[1], { target: { value: 'flanged' } });
-      fireEvent.change(searchInputs[1], { target: { value: 'NonExistentNetRFQ' } });
-      fireEvent.change(searchInputs[1], { target: { value: '' } });
-    }
-
-    // Open Network Category Selects
-    const selects = screen.getAllByRole('combobox');
-    if (selects.length > 4) {
-      fireEvent.change(selects[4], { target: { value: 'Mechanical & Fluid Equipment' } });
-      if (selects.length > 5) {
-        fireEvent.change(selects[5], { target: { value: 'Structural Steel & Beams' } });
-      }
-      fireEvent.change(selects[4], { target: { value: 'Building & Infrastructure' } });
-      if (selects.length > 5) {
-        fireEvent.change(selects[5], { target: { value: 'Building Automation & HVAC' } });
-      }
-      fireEvent.change(selects[4], { target: { value: 'all' } });
-    }
-
-    // Catalogue matching filter button for Network
-    const catalogueFilterBtns = screen.getAllByRole('button', { name: /Catalogue Match/i });
-    if (catalogueFilterBtns.length > 1) {
-      fireEvent.click(catalogueFilterBtns[1]);
-      fireEvent.click(catalogueFilterBtns[1]);
-    }
-    unmount();
-
-    // Render with empty catalogue and toggle filter to execute length === 0 branches
-    const { unmount: unmountEmptyCat } = renderWithProvider(
-      <OpportunityFeedCustomWrapper customCatalogue={[]} />
-    );
-    const emptyCatFilterBtns = screen.getAllByRole('button', { name: /Catalogue Match/i });
-    if (emptyCatFilterBtns.length > 0) {
-      fireEvent.click(emptyCatFilterBtns[0]); // Direct with 0 matches
-    }
-    if (emptyCatFilterBtns.length > 1) {
-      fireEvent.click(emptyCatFilterBtns[1]); // Network with 0 matches
-    }
-    unmountEmptyCat();
+    expect(screen.getByText(/100% Free with your active Select subscription/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /👑 Select Partner/i })).toBeInTheDocument();
   });
 
-  test('Download RFQ, Locked Upgrade Modals, and Plan Switchers across Tiers and Quotas', () => {
-    const onNavigateToBidForm = jest.fn();
+  test('falls back to the free-tier badge on an unrecognised plan', async () => {
+    await renderFeed({ subscription: 'premium_network' });
+
+    expect(screen.getByRole('button', { name: /📋 Free Tier/i })).toBeInTheDocument();
+  });
+
+  test('hides the audit shortcut when no evaluation screen is wired up', async () => {
+    await renderFeed({ onNavigateToEvaluation: undefined });
+
+    expect(screen.queryByRole('button', { name: /360° Audit/i })).not.toBeInTheDocument();
+  });
+
+  test('routes the fee upsell to the subscription screen when one is provided', async () => {
     const onNavigateToSubscription = jest.fn();
+    await renderFeed({ onNavigateToSubscription, subscription: 'premium' });
 
-    // 1. Premium model: download direct RFQ and network RFQ (!isDirect)
-    const { unmount: unmount1 } = renderWithProvider(
-      <OpportunityFeedCustomWrapper
-        onNavigateToBidForm={onNavigateToBidForm}
-        onNavigateToSubscription={onNavigateToSubscription}
-        customSubscription="premium"
-        customDownloadsUsed={0}
-      />
-    );
+    fireEvent.click(screen.getByRole('button', { name: /View Connect \/ Select/i }));
+    expect(onNavigateToSubscription).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/Upgrade to Premium Sourcing Plan/i)).not.toBeInTheDocument();
+  });
 
-    const downloadBtns = screen.queryAllByTitle(/Download RFQ Technical BOQ/i);
-    downloadBtns.forEach((btn) => {
-      fireEvent.click(btn);
+  test('falls back to the upgrade modal when no subscription screen is provided', async () => {
+    await renderFeed({ onNavigateToSubscription: undefined, subscription: 'premium' });
+
+    fireEvent.click(screen.getByRole('button', { name: /View Connect \/ Select/i }));
+    expect(screen.getByText(/Upgrade to Premium Sourcing Plan/i)).toBeInTheDocument();
+  });
+});
+
+describe('OpportunityFeed: direct invitation filters', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    serveRFQs(ALL_FIXTURES);
+  });
+
+  test('offers only the buyers that actually raised a direct invitation', async () => {
+    await renderFeed();
+
+    const options = Array.from(selects().directBuyer.options).map((o) => o.value);
+    expect(options).toEqual([
+      'all',
+      DIRECT_OWN.buyerAccountName,
+      DIRECT_HVAC_QUOTED.buyerAccountName,
+    ]);
+    expect(screen.getByText(UI_STRINGS.vendorFeed.buyerFilterAll)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.vendorFeed.buyerFilterLabel)).toBeInTheDocument();
+  });
+
+  test('narrows the direct list to a single raising buyer', async () => {
+    await renderFeed();
+
+    fireEvent.change(selects().directBuyer, {
+      target: { value: DIRECT_HVAC_QUOTED.buyerAccountName },
     });
-    unmount1();
+    expect(screen.getByText('2 Targeted RFQs')).toBeInTheDocument();
+    expect(screen.queryByText(DIRECT_OWN.title as string)).not.toBeInTheDocument();
 
-    // 2. Connect model at quota limit (50 downloads used)
-    const { unmount: unmount2 } = renderWithProvider(
-      <OpportunityFeedCustomWrapper
-        onNavigateToBidForm={onNavigateToBidForm}
-        onNavigateToSubscription={onNavigateToSubscription}
-        customSubscription="connect"
-        customDownloadsUsed={50}
-      />
-    );
+    fireEvent.change(selects().directBuyer, { target: { value: 'all' } });
+    expect(screen.getByText('3 Targeted RFQs')).toBeInTheDocument();
+  });
 
-    const downloadBtnsAtLimit = screen.queryAllByTitle(/Download RFQ Technical BOQ/i);
-    if (downloadBtnsAtLimit.length > 2) {
-      fireEvent.click(downloadBtnsAtLimit[2]);
-    }
+  test('filters by major category and resets the minor when the major changes', async () => {
+    await renderFeed();
 
-    // Modal is open, switch plan to Select
-    const upgradeBtns = screen.queryAllByRole('button', { name: /Upgrade/i });
-    if (upgradeBtns.length > 0) {
-      fireEvent.click(upgradeBtns[0]);
-    }
-    unmount2();
+    fireEvent.change(selects().directMajor, { target: { value: 'Building & Infrastructure' } });
+    expect(screen.getByText('1 Targeted RFQs')).toBeInTheDocument();
 
-    // 3. Select model: normal download and at limit (100 downloads used)
-    const { unmount: unmount3 } = renderWithProvider(
-      <OpportunityFeedCustomWrapper
-        onNavigateToBidForm={onNavigateToBidForm}
-        onNavigateToSubscription={onNavigateToSubscription}
-        customSubscription="select"
-        customDownloadsUsed={10}
-      />
-    );
+    fireEvent.change(selects().directMinor, { target: { value: 'Building Automation & HVAC' } });
+    expect(screen.getByText('1 Targeted RFQs')).toBeInTheDocument();
 
-    const selectDownloadBtns = screen.queryAllByTitle(/Download RFQ Technical BOQ/i);
-    selectDownloadBtns.forEach((btn) => {
-      fireEvent.click(btn);
+    // Switching the major must clear the now-invalid minor rather than filter to nothing.
+    fireEvent.change(selects().directMajor, { target: { value: 'Mechanical & Fluid Equipment' } });
+    expect(selects().directMinor.value).toBe('all');
+    expect(screen.getByText('2 Targeted RFQs')).toBeInTheDocument();
+
+    fireEvent.change(selects().directMinor, { target: { value: 'Pumps & Valves' } });
+    expect(screen.getByText('1 Targeted RFQs')).toBeInTheDocument();
+
+    fireEvent.change(selects().directMinor, { target: { value: 'Structural Steel & Beams' } });
+    expect(screen.getByText(DIRECT_STEEL.title as string)).toBeInTheDocument();
+
+    fireEvent.change(selects().directMajor, { target: { value: 'all' } });
+    expect(screen.getByText('3 Targeted RFQs')).toBeInTheDocument();
+  });
+
+  test('searches titles, RFQ numbers, locations, categories and line items', async () => {
+    await renderFeed();
+    const box = searchBoxes()[0];
+
+    fireEvent.change(box, { target: { value: 'pumps' } });
+    expect(screen.getByText('1 Targeted RFQs')).toBeInTheDocument();
+
+    fireEvent.change(box, { target: { value: 'RFQ-2026-00902' } });
+    expect(screen.getByText(DIRECT_STEEL.title as string)).toBeInTheDocument();
+
+    fireEvent.change(box, { target: { value: 'chennai' } });
+    expect(screen.getByText(DIRECT_HVAC_QUOTED.title as string)).toBeInTheDocument();
+
+    fireEvent.change(box, { target: { value: 'building' } });
+    expect(screen.getByText('1 Targeted RFQs')).toBeInTheDocument();
+
+    // Matched on a line item rather than on anything printed on the card.
+    fireEvent.change(box, { target: { value: 'ss316' } });
+    expect(screen.getByText(DIRECT_OWN.title as string)).toBeInTheDocument();
+
+    fireEvent.change(box, { target: { value: 'nothing-matches-this' } });
+    expect(screen.getByText(/No matching targeted RFQ invitations found/i)).toBeInTheDocument();
+
+    // Whitespace is not a query.
+    fireEvent.change(box, { target: { value: '   ' } });
+    expect(screen.getByText('3 Targeted RFQs')).toBeInTheDocument();
+  });
+
+  test('counts catalogue matches and filters the list down to them', async () => {
+    await renderFeed({ catalogue: CATALOGUE_TWO });
+
+    const toggle = directCatalogueToggle();
+    expect(within(toggle).getByText(/3 Catalogue Matches/)).toBeInTheDocument();
+    expect(within(toggle).getByText(/Filter RFQs/)).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(within(toggle).getByText(/Filtered \(Click to show all\)/)).toBeInTheDocument();
+    expect(screen.getByText('3 Targeted RFQs')).toBeInTheDocument();
+    // Two catalogue items, so the per-card badge is plural.
+    expect(screen.getAllByText('2 Catalogue Matches').length).toBeGreaterThan(0);
+
+    fireEvent.click(toggle);
+    expect(within(toggle).getByText(/Filter RFQs/)).toBeInTheDocument();
+  });
+
+  test('uses the singular labels when one RFQ and one catalogue item match', async () => {
+    await renderFeed({ catalogue: CATALOGUE_ONE });
+
+    fireEvent.change(selects().directMajor, { target: { value: 'Building & Infrastructure' } });
+    expect(within(directCatalogueToggle()).getByText(/1 Catalogue Match$/)).toBeInTheDocument();
+    expect(screen.getAllByText('1 Catalogue Match').length).toBeGreaterThan(0);
+  });
+
+  test('empties the list when the catalogue filter is on and the catalogue is empty', async () => {
+    await renderFeed({ catalogue: [] });
+
+    const toggle = directCatalogueToggle();
+    expect(within(toggle).getByText(/0 Catalogue Matches/)).toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(screen.getByText(/No matching targeted RFQ invitations found/i)).toBeInTheDocument();
+  });
+});
+
+describe('OpportunityFeed: open network filters', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    serveRFQs(ALL_FIXTURES);
+  });
+
+  test('filters the marketplace by major and minor category', async () => {
+    await renderFeed();
+
+    fireEvent.change(selects().netMajor, { target: { value: 'Building & Infrastructure' } });
+    expect(screen.getByText(NETWORK_HVAC_QUOTED.title as string)).toBeInTheDocument();
+    expect(screen.queryByText(NETWORK_OWN.title as string)).not.toBeInTheDocument();
+
+    fireEvent.change(selects().netMinor, { target: { value: 'Building Automation & HVAC' } });
+    expect(screen.getByText(NETWORK_HVAC_QUOTED.title as string)).toBeInTheDocument();
+
+    fireEvent.change(selects().netMajor, { target: { value: 'Mechanical & Fluid Equipment' } });
+    expect(selects().netMinor.value).toBe('all');
+
+    fireEvent.change(selects().netMinor, { target: { value: 'Structural Steel & Beams' } });
+    expect(screen.getByText(NETWORK_STEEL.title as string)).toBeInTheDocument();
+
+    fireEvent.change(selects().netMinor, { target: { value: 'Pumps & Valves' } });
+    expect(screen.getByText(NETWORK_OWN.title as string)).toBeInTheDocument();
+
+    fireEvent.change(selects().netMajor, { target: { value: 'all' } });
+    expect(screen.getByText(NETWORK_STEEL.title as string)).toBeInTheDocument();
+  });
+
+  test('searches the marketplace across every indexed field', async () => {
+    await renderFeed();
+    const box = searchBoxes()[1];
+
+    fireEvent.change(box, { target: { value: 'gate valve' } });
+    expect(screen.getByText(NETWORK_OWN.title as string)).toBeInTheDocument();
+
+    fireEvent.change(box, { target: { value: 'RFQ-2026-00904' } });
+    expect(screen.getByText(NETWORK_STEEL.title as string)).toBeInTheDocument();
+
+    fireEvent.change(box, { target: { value: 'mumbai' } });
+    expect(screen.getByText(NETWORK_HVAC_QUOTED.title as string)).toBeInTheDocument();
+
+    fireEvent.change(box, { target: { value: 'mechanical' } });
+    expect(screen.getByText(NETWORK_OWN.title as string)).toBeInTheDocument();
+
+    fireEvent.change(box, { target: { value: 'flanged' } });
+    expect(screen.getByText(NETWORK_OWN.title as string)).toBeInTheDocument();
+
+    fireEvent.change(box, { target: { value: 'nothing-matches-this' } });
+    expect(screen.getByText(/No matching open network opportunities found/i)).toBeInTheDocument();
+
+    fireEvent.change(box, { target: { value: '' } });
+    expect(screen.getByText(NETWORK_OWN.title as string)).toBeInTheDocument();
+  });
+
+  test('counts and filters marketplace catalogue matches', async () => {
+    await renderFeed({ catalogue: CATALOGUE_TWO });
+
+    const toggle = netCatalogueToggle();
+    expect(within(toggle).getByText(/3 Catalogue Matches/)).toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(within(toggle).getByText(/Filtered \(Click to show all\)/)).toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(within(toggle).getByText(/Filter RFQs/)).toBeInTheDocument();
+  });
+
+  test('empties the marketplace when filtering on an empty catalogue', async () => {
+    await renderFeed({ catalogue: [] });
+
+    fireEvent.click(netCatalogueToggle());
+    expect(screen.getByText(/No matching open network opportunities found/i)).toBeInTheDocument();
+  });
+});
+
+describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    serveRFQs(ALL_FIXTURES);
+  });
+
+  test('downloads an own-roster RFQ without prompting for an upgrade', async () => {
+    // isOwnBuyerRfq needs a real vendor record (matched by session email) whose
+    // addedByBuyerCompany equals the RFQ's buyerAccountName — serveRFQs's
+    // SELF_VENDOR_RECORD supplies exactly that for DIRECT_OWN/NETWORK_OWN.
+    await renderFeed({ subscription: 'premium' });
+
+    await act(async () => {
+      fireEvent.click(downloadButtons()[0]);
     });
-    unmount3();
+    await waitFor(() => expect(screen.getByText('Spreadsheet Sent to Registered Email')).toBeInTheDocument());
+    expect(screen.queryByText(/Upgrade to Premium Sourcing Plan/i)).not.toBeInTheDocument();
+  });
 
-    // Select model at limit (100) -> Open modal and select Premium plan
-    const { unmount: unmount3b } = renderWithProvider(
-      <OpportunityFeedCustomWrapper
-        onNavigateToBidForm={onNavigateToBidForm}
-        onNavigateToSubscription={onNavigateToSubscription}
-        customSubscription="select"
-        customDownloadsUsed={100}
-      />
-    );
+  test('blocks a marketplace download on the client-uploaded Premium plan', async () => {
+    await renderFeed({ subscription: 'premium' });
 
-    const selectLimitBtns = screen.queryAllByTitle(/Download RFQ Technical BOQ/i);
-    if (selectLimitBtns.length > 2) {
-      fireEvent.click(selectLimitBtns[2]);
-    }
+    // The second card is RFQ-2026-00901, outside this vendor's own-buyer roster.
+    fireEvent.click(downloadButtons()[1]);
+    expect(screen.getByText(/Upgrade to Premium Sourcing Plan/i)).toBeInTheDocument();
+    expect(screen.getByText(/Marketplace RFQs outside client roster/i)).toBeInTheDocument();
+    // Premium is the active plan, so only the other two rows offer an action.
+    expect(screen.getByText('Active')).toBeInTheDocument();
+  });
 
-    const modalSelectBtns = screen.queryAllByRole('button', { name: /Select/i });
-    if (modalSelectBtns.length > 0) {
-      fireEvent.click(modalSelectBtns[0]); // Selects Premium Plan
-    }
-    unmount3b();
+  test('blocks a marketplace download once the Connect quota is spent', async () => {
+    await renderFeed({ subscription: 'connect', downloadsUsed: 50 });
 
-    // 4. Standard / Free plan with locked opportunities -> Open modal and test all plan upgrade options
-    const { unmount: unmount4 } = renderWithProvider(
-      <OpportunityFeedCustomWrapper
-        onNavigateToBidForm={onNavigateToBidForm}
-        onNavigateToSubscription={onNavigateToSubscription}
-        customSubscription="standard"
-        customDownloadsUsed={0}
-      />
-    );
+    fireEvent.click(downloadButtons()[1]);
+    expect(screen.getByText('Quarterly Quota Reached')).toBeInTheDocument();
+    expect(screen.getByText(/50 RFQ download limit reached/i)).toBeInTheDocument();
+  });
 
-    const lockedBtns = screen.queryAllByRole('button', { name: /🔒 Upgrade/i });
-    if (lockedBtns.length > 0) {
-      // Click direct upgrade trigger
-      fireEvent.click(lockedBtns[0]);
+  test('allows a marketplace download while the Connect quota remains', async () => {
+    await renderFeed({ subscription: 'connect', downloadsUsed: 10 });
 
-      // Select Premium option
-      const selectPremBtns = screen.queryAllByRole('button', { name: /Select/i });
-      if (selectPremBtns.length > 0) {
-        fireEvent.click(selectPremBtns[0]);
-      }
+    await act(async () => {
+      fireEvent.click(downloadButtons()[1]);
+    });
+    expect(screen.getByText('Spreadsheet Sent to Registered Email')).toBeInTheDocument();
+  });
 
-      // Click second upgrade trigger (e.g. network card)
-      const lockedBtns2 = screen.queryAllByRole('button', { name: /🔒 Upgrade/i });
-      if (lockedBtns2.length > 1) {
-        fireEvent.click(lockedBtns2[1]);
-      } else if (lockedBtns2.length > 0) {
-        fireEvent.click(lockedBtns2[0]);
-      }
+  test('blocks a marketplace download once the Select quota is spent', async () => {
+    await renderFeed({ subscription: 'select', downloadsUsed: 100 });
 
-      const modalUpgradeBtns = screen.queryAllByRole('button', { name: /Upgrade/i });
-      if (modalUpgradeBtns.length > 0) {
-        fireEvent.click(modalUpgradeBtns[0]); // Connect
-      }
+    fireEvent.click(downloadButtons()[1]);
+    expect(screen.getByText(/100 RFQ download limit reached/i)).toBeInTheDocument();
+  });
 
-      // Reopen and Upgrade to Select option
-      const lockedBtns3 = screen.queryAllByRole('button', { name: /🔒 Upgrade/i });
-      if (lockedBtns3.length > 0) {
-        fireEvent.click(lockedBtns3[0]);
-      }
-      const modalUpgradeBtns2 = screen.queryAllByRole('button', { name: /Upgrade/i });
-      if (modalUpgradeBtns2.length > 1) {
-        fireEvent.click(modalUpgradeBtns2[1]); // Select
-      } else if (modalUpgradeBtns2.length > 0) {
-        fireEvent.click(modalUpgradeBtns2[0]);
-      }
+  test('allows a marketplace download while the Select quota remains', async () => {
+    await renderFeed({ subscription: 'select', downloadsUsed: 10 });
 
-      // Reopen and Close via button
-      const lockedBtns4 = screen.queryAllByRole('button', { name: /🔒 Upgrade/i });
-      if (lockedBtns4.length > 0) {
-        fireEvent.click(lockedBtns4[0]);
-      }
-      const closeBtn = screen.getByRole('button', { name: /Close/i });
-      fireEvent.click(closeBtn);
+    await act(async () => {
+      fireEvent.click(downloadButtons()[1]);
+    });
+    expect(screen.getByText('Spreadsheet Sent to Registered Email')).toBeInTheDocument();
+  });
 
-      // Reopen and X close
-      const lockedBtns5 = screen.queryAllByRole('button', { name: /🔒 Upgrade/i });
-      if (lockedBtns5.length > 0) {
-        fireEvent.click(lockedBtns5[0]);
-      }
-      const closeX = screen.queryByText('✕');
-      if (closeX) {
-        fireEvent.click(closeX);
-      }
-    }
-    unmount4();
+  test('locks off-roster RFQs below the top tier', async () => {
+    await renderFeed({ subscription: 'premium' });
+
+    // Two off-roster direct cards plus two off-roster marketplace cards.
+    expect(screen.getAllByRole('button', { name: /🔒 Upgrade/i })).toHaveLength(4);
+    expect(screen.getAllByText('🔒 Premium Locked')).toHaveLength(4);
+  });
+
+  test('unlocks every RFQ on the Select tier', async () => {
+    // 'premium_network' exists in the VendorSubscriptionPlan union but nothing
+    // in the app ever assigns it (see vendorController.js's
+    // VALID_VENDOR_SUBSCRIPTION_PLANS) — 'select' is the real top tier that
+    // actually unlocks the whole marketplace.
+    await renderFeed({ subscription: 'select' });
+
+    expect(screen.queryByRole('button', { name: /🔒 Upgrade/i })).not.toBeInTheDocument();
+    expect(screen.getAllByText('Client Exclusive')).toHaveLength(3);
+    expect(screen.getAllByText('Open Network')).toHaveLength(3);
+  });
+
+  test('switches to each plan from the upgrade modal', async () => {
+    // Connect/Select are paid plans and route through the dummy payment
+    // gateway (real gate — see handleUpgradeClick); only Premium is free and
+    // switches instantly. Each plan is exercised from its own fresh render:
+    // once subscribed to Connect or Select nothing in the card list is
+    // locked any more (isLocked only checks connect/select), so there is no
+    // in-UI way to chain straight on to the next plan within one render.
+    // Fake timers are only switched on around each payment step — renderFeed's
+    // own waitFor polls on real timers and hangs if fake ones are active.
+    const r1 = await renderFeed({ subscription: 'premium' });
+    fireEvent.click(screen.getAllByRole('button', { name: /🔒 Upgrade/i })[0]);
+    // Connect is the first actionable row while Premium is active.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Upgrade' })[0]);
+    jest.useFakeTimers();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Pay \$149/i }));
+      jest.advanceTimersByTime(1300);
+      await Promise.resolve();
+    });
+    jest.useRealTimers();
+    expect(screen.getByText('CONNECT Plan Activated!')).toBeInTheDocument();
+    expect(screen.queryByText(/Upgrade to Premium Sourcing Plan/i)).not.toBeInTheDocument();
+    r1.unmount();
+
+    const r2 = await renderFeed({ subscription: 'premium' });
+    fireEvent.click(screen.getAllByRole('button', { name: /🔒 Upgrade/i })[0]);
+    // Connect then Select are the two actionable "Upgrade" rows while Premium is active.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Upgrade' })[1]);
+    jest.useFakeTimers();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Pay \$349/i }));
+      jest.advanceTimersByTime(1300);
+      await Promise.resolve();
+    });
+    jest.useRealTimers();
+    expect(screen.getByText('SELECT Plan Activated!')).toBeInTheDocument();
+    r2.unmount();
+
+    await renderFeed({ subscription: 'connect', downloadsUsed: 50 });
+    fireEvent.click(downloadButtons()[1]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
+    });
+    expect(screen.getByText('PREMIUM Plan Activated!')).toBeInTheDocument();
+  });
+
+  test('marks Connect as active and closes the modal both ways', async () => {
+    // Connect already unlocks every card (isLocked checks connect/select), so
+    // there is no per-card "🔒 Upgrade" button to open the modal with at this
+    // tier — the quota-exceeded path on a marketplace download opens it
+    // instead, same as the "blocks a marketplace download once the Connect
+    // quota is spent" test above.
+    await renderFeed({ subscription: 'connect', downloadsUsed: 50 });
+
+    fireEvent.click(downloadButtons()[1]);
+    expect(screen.getByText('Active')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.queryByText(/Upgrade to Premium Sourcing Plan/i)).not.toBeInTheDocument();
+
+    fireEvent.click(downloadButtons()[1]);
+    fireEvent.click(screen.getByText('✕'));
+    expect(screen.queryByText(/Upgrade to Premium Sourcing Plan/i)).not.toBeInTheDocument();
+  });
+
+  test('marks Select as active when it is the current plan', async () => {
+    // Nothing is ever locked at the top "select" tier, so there is no
+    // per-card "🔒 Upgrade" button to open the modal with — the quota-
+    // exceeded path on a marketplace download opens it instead (same
+    // mechanism the "blocks a marketplace download once the Select quota
+    // is spent" test above exercises).
+    await renderFeed({ subscription: 'select', downloadsUsed: 100 });
+
+    fireEvent.click(downloadButtons()[1]);
+    const selectRow = screen.getByText(/Select Model/).closest('div')?.parentElement as HTMLElement;
+    expect(within(selectRow).getByText('Active')).toBeInTheDocument();
   });
 
   test('shows a failure toast when the RFQ download request fails', async () => {
-    global.fetch = jest.fn(() => Promise.resolve({ ok: false, json: async () => ({ success: false, error: 'RFQ not found' }) })) as any;
+    await renderFeed({ subscription: 'premium' });
 
-    renderWithProvider(<OpportunityFeedCustomWrapper customSubscription="select" />);
-    const downloadBtns = screen.queryAllByTitle(/Download RFQ Technical BOQ/i);
-    expect(downloadBtns.length).toBeGreaterThan(0);
+    // renderFeed's own initial fetch already resolved; override afterwards
+    // so only the download action itself fails.
+    global.fetch = jest.fn(() =>
+      Promise.resolve({ ok: false, json: async () => ({ success: false, error: 'RFQ not found' }) })
+    ) as any;
+
     await act(async () => {
-      fireEvent.click(downloadBtns[0]);
+      fireEvent.click(downloadButtons()[0]);
     });
+    expect(screen.getByTestId('toast')).toHaveTextContent('Download Failed');
   });
 
-  test('completes a full Connect-plan upgrade through the dummy payment gateway', () => {
+  test('completes a full Connect-plan upgrade through the dummy payment gateway', async () => {
     jest.useFakeTimers();
-
-    renderWithProvider(<OpportunityFeedCustomWrapper customSubscription="standard" />);
+    await renderFeed({ subscription: 'premium' });
 
     // Reliable trigger: the locked-RFQ card's own "🔒 Upgrade" button always
     // opens the upgrade modal, regardless of which card/section it's on.
@@ -441,9 +866,10 @@ describe('OpportunityFeed Comprehensive Suite', () => {
     expect(screen.getByText(/Dummy Payment Gateway/i)).toBeInTheDocument();
 
     const payBtn = screen.getByRole('button', { name: /Pay \$149/i });
-    act(() => {
+    await act(async () => {
       fireEvent.click(payBtn);
       jest.advanceTimersByTime(1300);
+      await Promise.resolve();
     });
     // onPaymentSuccess fired handleUpgradePlan('connect') — modal closes
     expect(screen.queryByText(/Dummy Payment Gateway/i)).not.toBeInTheDocument();
@@ -451,32 +877,28 @@ describe('OpportunityFeed Comprehensive Suite', () => {
     jest.useRealTimers();
   });
 
-  test('switches directly to Premium (free) from the locked-RFQ upgrade modal', () => {
-    renderWithProvider(<OpportunityFeedCustomWrapper customSubscription="standard" />);
+  test('switches directly to Premium (free) from the locked-RFQ upgrade modal', async () => {
+    // Connect already unlocks every card, so there is no per-card "🔒
+    // Upgrade" button here either — open the modal via the quota-exceeded
+    // path instead, same as the "marks Connect as active" test above.
+    await renderFeed({ subscription: 'connect', downloadsUsed: 50 });
 
-    const lockedBtns = screen.queryAllByRole('button', { name: /🔒 Upgrade/i });
-    expect(lockedBtns.length).toBeGreaterThan(0);
-    fireEvent.click(lockedBtns[0]);
+    await act(async () => {
+      fireEvent.click(downloadButtons()[1]);
+    });
 
     const selectPremiumBtn = screen.getByRole('button', { name: /^Select$/i });
-    fireEvent.click(selectPremiumBtn);
+    await act(async () => {
+      fireEvent.click(selectPremiumBtn);
+    });
 
     // Premium is free — switches instantly, no payment gateway involved
     expect(screen.queryByText(/Dummy Payment Gateway/i)).not.toBeInTheDocument();
   });
 
-  test('opens the subscription-fee "View Connect / Select" fallback modal when no onNavigateToSubscription is provided', () => {
-    function NoSubscriptionCallbackWrapper() {
-      const { setVendorSubscription } = useApp();
-      React.useEffect(() => {
-        setVendorSubscription('standard' as any);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-      }, []);
-      // onNavigateToSubscription genuinely omitted (not just undefined-through-a-default)
-      return <OpportunityFeed onNavigateToBidForm={jest.fn()} onNavigateToEvaluation={jest.fn()} onNavigateToSubscription={undefined as any} />;
-    }
-
-    renderWithProvider(<NoSubscriptionCallbackWrapper />);
+  test('opens the subscription-fee "View Connect / Select" fallback modal when no onNavigateToSubscription is provided', async () => {
+    // onNavigateToSubscription genuinely omitted (not just undefined-through-a-default)
+    await renderFeed({ subscription: 'premium', onNavigateToSubscription: undefined });
 
     const feeBtn = screen.queryByRole('button', { name: /View Connect \/ Select \(\$0 Fee\)/i });
     if (feeBtn) {

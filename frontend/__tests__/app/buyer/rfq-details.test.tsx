@@ -4,7 +4,7 @@ import RFQDetails, { daysUntil, lineItemsToCsv } from '@/app/buyer/rfq-details';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { SOURCING_MODES, formatCurrency } from '@/lib/constants';
+import { SOURCING_MODES, formatCurrency, formatIndianDate, formatIndianDateTime } from '@/lib/constants';
 import type { ExtractedEntity, QuoteComparison, RFQAttachment, RFQItem } from '@/lib/types';
 
 jest.mock('@/lib/store', () => ({ useApp: jest.fn() }));
@@ -84,6 +84,20 @@ function buildRFQ(overrides: Partial<RFQItem> = {}): RFQItem {
 
 const onBack = jest.fn();
 const renderDetails = (rfq: RFQItem | null) => render(<RFQDetails rfq={rfq} onBack={onBack} />);
+
+/**
+ * The line-item table.
+ *
+ * The panel renders a table for wide viewports and a card list for narrow ones,
+ * and jsdom has no viewport so both are in the document. Queries are scoped to one
+ * of them or they match twice.
+ */
+const lineItemTable = () => screen.getAllByRole('table')[0];
+/** The vendor-quotation table, which is the second one on the page. */
+const quotesTable = () => {
+  const tables = screen.getAllByRole('table');
+  return tables[tables.length - 1];
+};
 
 /** The section wrapping a heading, so an assertion is not matched page-wide. */
 const sectionFor = (heading: HTMLElement) => heading.closest('section') as HTMLElement;
@@ -195,12 +209,36 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       expect(badge.getAttribute('style')).toBeNull();
     });
 
-    it('shows the audit marker and when the RFQ was raised', () => {
+    it('states when the RFQ was raised', () => {
       renderDetails(buildRFQ());
 
-      expect(screen.getByText(DETAILS.auditImmutable)).toBeInTheDocument();
       expect(
-        screen.getByText(formatString(DETAILS.raisedOnStrip, { timestamp: '2026-09-02 11:07:16' }))
+        screen.getByText(
+          formatString(DETAILS.raisedOnStrip, {
+            timestamp: formatIndianDateTime('2026-09-02 11:07:16'),
+          })
+        )
+      ).toBeInTheDocument();
+      // Not the raw UTC string it is stored as.
+      expect(screen.queryByText(/2026-09-02 11:07:16/)).not.toBeInTheDocument();
+    });
+
+    // An unedited RFQ showing an "edited" timestamp reads as a change nobody made.
+    it('reports an edit only once the record has actually changed', () => {
+      const { unmount } = renderDetails(
+        buildRFQ({ createdAt: '2026-09-02 11:07:16', updatedAt: '2026-09-02 11:07:16' })
+      );
+
+      expect(screen.queryByText(/^Edited /)).not.toBeInTheDocument();
+      unmount();
+
+      renderDetails(buildRFQ({ updatedAt: '2026-09-06 09:15:00' }));
+      expect(
+        screen.getByText(
+          formatString(DETAILS.updatedOnStrip, {
+            timestamp: formatIndianDateTime('2026-09-06 09:15:00'),
+          })
+        )
       ).toBeInTheDocument();
     });
 
@@ -231,20 +269,18 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       expect(screen.getByText(label)).toBeInTheDocument();
     });
 
-    it('shows the source document, email and record id', () => {
-      renderDetails(buildRFQ({ sourceFileName: 'requisition.pdf', sourceEmail: 'plant@lt.com' }));
+    it('shows the record id', () => {
+      renderDetails(buildRFQ({ id: 'rfq-1' }));
 
       const card = sectionFor(screen.getByText(DETAILS.submittedHeading));
-      expect(within(card).getByText('requisition.pdf')).toBeInTheDocument();
-      expect(within(card).getByText('plant@lt.com')).toBeInTheDocument();
       expect(within(card).getByText('rfq-1')).toBeInTheDocument();
     });
 
-    it('marks a blank source document or intake source as unset', () => {
-      renderDetails(buildRFQ({ sourceFileName: '   ', sourceEmail: undefined, source: undefined }));
+    it('marks a blank intake source as unset', () => {
+      renderDetails(buildRFQ({ source: undefined }));
 
       const card = sectionFor(screen.getByText(DETAILS.submittedHeading));
-      expect(within(card).getAllByText(DETAILS.unsetValue).length).toBeGreaterThanOrEqual(3);
+      expect(within(card).getByText(DETAILS.unsetValue)).toBeInTheDocument();
     });
   });
 
@@ -305,36 +341,30 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
     });
   });
 
-  describe('follow-up card', () => {
-    const withFollowUps = () =>
-      buildRFQ({
-        followUpData: {
-          rfqNumber: 'RFQ-2026-00462',
-          totalInvited: 5,
-          respondedCount: 3,
-          callStats: { total: 5, connected: 4, avgDuration: '2m 10s' },
-          whatsappStats: { total: 5, delivered: 5, read: 3, replied: 3 },
-          smsStats: { total: 5, delivered: 2, clicked: 2 },
-          autoChasingEnabled: true,
-          vendors: [],
-        },
-      });
+  // The outreach card has been removed. The persisted record carries no
+  // follow-up telemetry at all — mapRowToRFQ never returns followUpData — so the
+  // card could only ever render its own "awaiting initial trigger" placeholder,
+  // which claimed a pipeline state nothing had reported.
+  describe('outreach telemetry', () => {
+    it('shows no outreach card, even for an RFQ that carries follow-up data', () => {
+      renderDetails(
+        buildRFQ({
+          followUpData: {
+            rfqNumber: 'RFQ-2026-00462',
+            totalInvited: 5,
+            respondedCount: 3,
+            callStats: { total: 5, connected: 4, avgDuration: '2m 10s' },
+            whatsappStats: { total: 5, delivered: 5, read: 3, replied: 3 },
+            smsStats: { total: 5, delivered: 2, clicked: 2 },
+            autoChasingEnabled: true,
+            vendors: [],
+          },
+        })
+      );
 
-    it('renders the invited and responded tiles and each channel counter', () => {
-      renderDetails(withFollowUps());
-
-      const card = sectionFor(screen.getByText(DETAILS.followUpsHeading));
-      expect(within(card).getByText('5')).toBeInTheDocument();
-      expect(within(card).getByText('3')).toBeInTheDocument();
-      expect(within(card).getByText('4 / 5')).toBeInTheDocument();
-      expect(within(card).getByText('3 / 5')).toBeInTheDocument();
-      expect(within(card).getByText('2 / 5')).toBeInTheDocument();
-    });
-
-    // Vendor matching is still Coming Soon, so a freshly saved RFQ has none.
-    it('explains that there is nothing to chase yet', () => {
-      renderDetails(buildRFQ({ followUpData: undefined }));
-      expect(screen.getByText(DETAILS.noFollowUps)).toBeInTheDocument();
+      expect(screen.queryByText('4 / 5')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Awaiting initial trigger/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Outreach Analytics/i)).not.toBeInTheDocument();
     });
   });
 
@@ -367,7 +397,36 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
 
     it('flags a low-confidence row as needing review', () => {
       renderDetails(buildRFQ({ extractedEntities: [entity({ confidence: 50 })] }));
-      expect(screen.getByText(formatString(DETAILS.confidenceReview, { confidence: 50 }))).toBeInTheDocument();
+      expect(
+        within(lineItemTable()).getByText(formatString(DETAILS.confidenceReview, { confidence: 50 }))
+      ).toBeInTheDocument();
+    });
+
+    it('numbers the rows', () => {
+      renderDetails(twoItems());
+
+      const table = screen.getByRole('table');
+      expect(within(table).getByText('1')).toBeInTheDocument();
+      expect(within(table).getByText('2')).toBeInTheDocument();
+    });
+
+    // Scoped to the footer: the same number also appears as a row quantity.
+    const totalQuantity = () =>
+      within(screen.getByText(DETAILS.totalQuantityLabel)).getByText(/^\d+$/).textContent;
+
+    it('totals the quantity of the rows on screen', () => {
+      renderDetails(twoItems());
+
+      // 12 + 12 from the two fixture rows.
+      expect(totalQuantity()).toBe('24');
+    });
+
+    it('retotals as the buyer filters', () => {
+      renderDetails(twoItems());
+
+      fireEvent.change(screen.getByLabelText(DETAILS.lineItemSearchAria), { target: { value: 'gate valve' } });
+
+      expect(totalQuantity()).toBe('12');
     });
 
     // A keyed row has no AI confidence, so reporting 0% would misrepresent it.
@@ -379,11 +438,21 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       expect(within(table).queryByText(/0% /)).not.toBeInTheDocument();
     });
 
-    it('marks a line item with no specification as unset', () => {
+    // The specification is a sub-line under the item it describes, so a blank one
+    // is simply left off rather than filling the row with "Not provided".
+    it('omits the specification line when the item has none', () => {
       renderDetails(buildRFQ({ extractedEntities: [entity({ technicalSpecs: '  ' })] }));
 
       const table = screen.getByRole('table');
-      expect(within(table).getByText(DETAILS.unsetValue)).toBeInTheDocument();
+      expect(within(table).getByText('Centrifugal Water Pump 500 GPM')).toBeInTheDocument();
+      expect(within(table).queryByText(new RegExp(`^${DETAILS.specsInlineLabel}:`))).not.toBeInTheDocument();
+    });
+
+    it('prints the specification under the item it describes', () => {
+      renderDetails(buildRFQ({ extractedEntities: [entity()] }));
+
+      const table = screen.getByRole('table');
+      expect(within(table).getByText(/SS316 impeller, ANSI flanged/)).toBeInTheDocument();
     });
 
     it('narrows the table as the buyer searches', () => {
@@ -391,7 +460,7 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
 
       fireEvent.change(screen.getByLabelText(DETAILS.lineItemSearchAria), { target: { value: 'gate valve' } });
 
-      expect(screen.getByText('Flanged Gate Valve')).toBeInTheDocument();
+      expect(within(lineItemTable()).getByText('Flanged Gate Valve')).toBeInTheDocument();
       expect(screen.queryByText('Centrifugal Water Pump 500 GPM')).not.toBeInTheDocument();
       expect(
         screen.getByText(formatString(DETAILS.displayingCount, { shown: 1, total: 2 }))
@@ -402,10 +471,10 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       renderDetails(twoItems());
 
       fireEvent.change(screen.getByLabelText(DETAILS.lineItemSearchAria), { target: { value: 'ASTM' } });
-      expect(screen.getByText('Flanged Gate Valve')).toBeInTheDocument();
+      expect(within(lineItemTable()).getByText('Flanged Gate Valve')).toBeInTheDocument();
 
       fireEvent.change(screen.getByLabelText(DETAILS.lineItemSearchAria), { target: { value: 'sets' } });
-      expect(screen.getByText('Flanged Gate Valve')).toBeInTheDocument();
+      expect(within(lineItemTable()).getByText('Flanged Gate Valve')).toBeInTheDocument();
     });
 
     it('filters by minor category and offers only the categories present', () => {
@@ -416,7 +485,7 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       expect(options).toEqual(['all', 'Hoses, Valves & Fittings', 'Pumps & Accessories']);
 
       fireEvent.change(filter, { target: { value: 'Pumps & Accessories' } });
-      expect(screen.getByText('Centrifugal Water Pump 500 GPM')).toBeInTheDocument();
+      expect(within(lineItemTable()).getByText('Centrifugal Water Pump 500 GPM')).toBeInTheDocument();
       expect(screen.queryByText('Flanged Gate Valve')).not.toBeInTheDocument();
     });
 
@@ -425,8 +494,183 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
 
       fireEvent.change(screen.getByLabelText(DETAILS.lineItemSearchAria), { target: { value: 'nothing matches' } });
 
-      expect(screen.getByText(DETAILS.noLineItemMatches)).toBeInTheDocument();
+      // Reported in both the table's empty row and the card list's empty state.
+      expect(screen.getAllByText(DETAILS.noLineItemMatches).length).toBeGreaterThan(0);
       expect(screen.getByText(formatString(DETAILS.displayingCount, { shown: 0, total: 2 }))).toBeInTheDocument();
+    });
+
+    // ── Clearing the filters ─────────────────────────────────────────────────
+    // The control appears only once something is filtering, so an untouched table
+    // does not carry a button that would do nothing.
+    it('offers no clear action until a filter is applied', () => {
+      renderDetails(twoItems());
+
+      expect(
+        screen.queryByRole('button', { name: DETAILS.clearFiltersAction })
+      ).not.toBeInTheDocument();
+    });
+
+    it('clears the search and the category filter together', () => {
+      renderDetails(twoItems());
+
+      fireEvent.change(screen.getByLabelText(DETAILS.lineItemSearchAria), { target: { value: 'gate' } });
+      fireEvent.change(screen.getByLabelText(DETAILS.minorFilterAria), {
+        target: { value: 'Hoses, Valves & Fittings' },
+      });
+
+      fireEvent.click(screen.getAllByRole('button', { name: DETAILS.clearFiltersAction })[0]);
+
+      expect(screen.getByLabelText(DETAILS.lineItemSearchAria)).toHaveValue('');
+      expect(screen.getByLabelText(DETAILS.minorFilterAria)).toHaveValue('all');
+      expect(screen.getByText(formatString(DETAILS.displayingCount, { shown: 2, total: 2 }))).toBeInTheDocument();
+    });
+
+    it('offers the clear action from the empty result row as well', () => {
+      renderDetails(twoItems());
+
+      fireEvent.change(screen.getByLabelText(DETAILS.lineItemSearchAria), { target: { value: 'nothing matches' } });
+      // One in the toolbar, plus one in each empty state (table row and card list).
+      const clearButtons = screen.getAllByRole('button', { name: DETAILS.clearFiltersAction });
+      expect(clearButtons.length).toBeGreaterThan(1);
+
+      fireEvent.click(clearButtons[clearButtons.length - 1]);
+      expect(within(lineItemTable()).getByText('Flanged Gate Valve')).toBeInTheDocument();
+    });
+
+    // ── Sorting ──────────────────────────────────────────────────────────────
+    // Unsorted by default, because a BOQ's own row order carries meaning the buyer
+    // put there.
+    describe('sorting', () => {
+      const itemNames = () =>
+        screen
+          .getAllByRole('row')
+          .slice(1)
+          .map((row) => row.querySelectorAll('td')[1]?.textContent || '');
+
+      const sortBy = (column: string, direction: 'asc' | 'desc' = 'asc') =>
+        fireEvent.click(
+          screen.getByRole('button', {
+            name: formatString(
+              direction === 'asc' ? DETAILS.sortAscAria : DETAILS.sortDescAria,
+              { column }
+            ),
+          })
+        );
+
+      it('keeps the document order until a column is chosen', () => {
+        renderDetails(twoItems());
+
+        expect(itemNames()[0]).toContain('Centrifugal Water Pump 500 GPM');
+        expect(screen.getByRole('columnheader', { name: /Item Description/ })).toHaveAttribute(
+          'aria-sort',
+          'none'
+        );
+      });
+
+      it('orders by item description and flips on a second click', () => {
+        renderDetails(twoItems());
+
+        sortBy(DETAILS.colItem);
+        expect(itemNames()[0]).toContain('Centrifugal Water Pump 500 GPM');
+        expect(screen.getByRole('columnheader', { name: /Item Description/ })).toHaveAttribute(
+          'aria-sort',
+          'ascending'
+        );
+
+        sortBy(DETAILS.colItem, 'desc');
+        expect(itemNames()[0]).toContain('Flanged Gate Valve');
+        expect(screen.getByRole('columnheader', { name: /Item Description/ })).toHaveAttribute(
+          'aria-sort',
+          'descending'
+        );
+      });
+
+      it('orders by quantity', () => {
+        renderDetails(
+          buildRFQ({
+            extractedEntities: [
+              entity({ id: 'a', itemName: 'Bigger order', quantity: 90 }),
+              entity({ id: 'b', itemName: 'Smaller order', quantity: 4 }),
+            ],
+          })
+        );
+
+        sortBy(DETAILS.colQty);
+        expect(itemNames()[0]).toContain('Smaller order');
+
+        sortBy(DETAILS.colQty, 'desc');
+        expect(itemNames()[0]).toContain('Bigger order');
+      });
+
+      it('orders by category', () => {
+        renderDetails(twoItems());
+
+        sortBy(DETAILS.colCategory);
+        // Both share a major, so the minor decides: Hoses before Pumps.
+        expect(itemNames()[0]).toContain('Flanged Gate Valve');
+      });
+
+      it('orders by required-by date', () => {
+        renderDetails(
+          buildRFQ({
+            extractedEntities: [
+              entity({ id: 'a', itemName: 'Later', targetDate: '2026-12-01' }),
+              entity({ id: 'b', itemName: 'Sooner', targetDate: '2026-09-05' }),
+            ],
+          })
+        );
+
+        sortBy(DETAILS.colTargetDate);
+        expect(itemNames()[0]).toContain('Sooner');
+
+        sortBy(DETAILS.colTargetDate, 'desc');
+        expect(itemNames()[0]).toContain('Later');
+      });
+
+      // An unanswered date must not displace a real deadline from the top.
+      it('sorts rows with no date last in either direction', () => {
+        renderDetails(
+          buildRFQ({
+            extractedEntities: [
+              entity({ id: 'a', itemName: 'Undated', targetDate: '' }),
+              entity({ id: 'b', itemName: 'Dated', targetDate: '2026-09-05' }),
+            ],
+          })
+        );
+
+        sortBy(DETAILS.colTargetDate);
+        expect(itemNames()[0]).toContain('Dated');
+
+        sortBy(DETAILS.colTargetDate, 'desc');
+        expect(itemNames()[0]).toContain('Dated');
+      });
+
+      it('switching column resets to ascending', () => {
+        renderDetails(twoItems());
+
+        sortBy(DETAILS.colItem);
+        sortBy(DETAILS.colItem, 'desc');
+        sortBy(DETAILS.colQty);
+
+        expect(screen.getByRole('columnheader', { name: /Qty/ })).toHaveAttribute(
+          'aria-sort',
+          'ascending'
+        );
+        expect(screen.getByRole('columnheader', { name: /Item Description/ })).toHaveAttribute(
+          'aria-sort',
+          'none'
+        );
+      });
+
+      it('sorts the filtered rows, not the whole list', () => {
+        renderDetails(twoItems());
+
+        fireEvent.change(screen.getByLabelText(DETAILS.lineItemSearchAria), { target: { value: 'gate' } });
+        sortBy(DETAILS.colItem);
+
+        expect(itemNames()).toHaveLength(1);
+        expect(itemNames()[0]).toContain('Flanged Gate Valve');
+      });
     });
 
     it('reports how much was classified automatically', () => {
@@ -469,7 +713,12 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       const panel = sectionFor(screen.getByText(DETAILS.attachmentsHeading));
       expect(within(panel).getByText('annexure.pdf')).toBeInTheDocument();
       expect(within(panel).getByText(/2\.0 KB/)).toBeInTheDocument();
-      expect(within(panel).getByText(/2026-09-02/)).toBeInTheDocument();
+      // The upload date reads in the Indian style, not as the stored ISO string.
+      expect(
+        within(panel).getByText(
+          new RegExp(formatIndianDate('2026-09-02T11:07:16.000Z').replace(/ /g, '\\s'))
+        )
+      ).toBeInTheDocument();
     });
 
     // GET /api/rfqs/attachments/:id requires auth, and the session token lives
@@ -546,43 +795,33 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
     it('renders each quotation with its pricing, compliance and match score', () => {
       renderDetails(buildRFQ({ quotes: [quote()] }));
 
-      expect(screen.getByText('Apex Industrial Dynamics Pvt Ltd')).toBeInTheDocument();
-      expect(screen.getByText(formatCurrency(4250))).toBeInTheDocument();
-      expect(screen.getByText(formatCurrency(425000))).toBeInTheDocument();
-      expect(screen.getByText(formatString(DETAILS.leadTimeDays, { days: 14 }))).toBeInTheDocument();
-      expect(screen.getByText('Fully Compliant')).toBeInTheDocument();
-      expect(screen.getByText('96%')).toBeInTheDocument();
+      // Scoped to the table: the panel also renders a card list of the same quotes
+      // for narrow viewports, and jsdom has no viewport so both are present.
+      const table = within(quotesTable());
+      expect(table.getByText('Apex Industrial Dynamics Pvt Ltd')).toBeInTheDocument();
+      expect(table.getByText(formatCurrency(4250))).toBeInTheDocument();
+      expect(table.getByText(formatCurrency(425000))).toBeInTheDocument();
+      expect(table.getByText(formatString(DETAILS.leadTimeDays, { days: 14 }))).toBeInTheDocument();
+      expect(table.getByText('Fully Compliant')).toBeInTheDocument();
+      expect(table.getByText('96%')).toBeInTheDocument();
     });
 
-    it('counts the quotations on the All tab', () => {
+    it('counts the quotations it received', () => {
       renderDetails(buildRFQ({ quotes: [quote(), quote({ vendorId: 'v-002' })] }));
 
-      expect(
-        screen.getByRole('button', { name: formatString(DETAILS.quotesTabAll, { count: 2 }) })
-      ).toBeInTheDocument();
+      const panel = sectionFor(screen.getByText(DETAILS.quotesHeading));
+      expect(within(panel).getByText('2')).toBeInTheDocument();
     });
 
-    // Quotation states are not modelled yet, so the other tabs are honestly empty
-    // rather than filtering on a field that does not exist.
-    it.each([
-      [DETAILS.quotesTabUnderReview],
-      [DETAILS.quotesTabShortlisted],
-    ])('shows an empty state on the %s tab', (tabTemplate) => {
+
+
+    // "Under Review" and "Shortlisted" tabs used to sit here with a hardcoded
+    // count of zero, because quotation states are not modelled. They are gone.
+    it('offers no quotation-state tabs', () => {
       renderDetails(buildRFQ({ quotes: [quote()] }));
 
-      fireEvent.click(screen.getByRole('button', { name: formatString(tabTemplate, { count: 0 }) }));
-
-      expect(screen.getByText(DETAILS.noQuotesTabMessage)).toBeInTheDocument();
-      expect(screen.queryByText('Apex Industrial Dynamics Pvt Ltd')).not.toBeInTheDocument();
-    });
-
-    it('returns to the full list from another tab', () => {
-      renderDetails(buildRFQ({ quotes: [quote()] }));
-
-      fireEvent.click(screen.getByRole('button', { name: formatString(DETAILS.quotesTabShortlisted, { count: 0 }) }));
-      fireEvent.click(screen.getByRole('button', { name: formatString(DETAILS.quotesTabAll, { count: 1 }) }));
-
-      expect(screen.getByText('Apex Industrial Dynamics Pvt Ltd')).toBeInTheDocument();
+      expect(screen.queryByText(/Under Review/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Shortlisted/i)).not.toBeInTheDocument();
     });
 
     it('explains why no quotations have arrived yet', () => {

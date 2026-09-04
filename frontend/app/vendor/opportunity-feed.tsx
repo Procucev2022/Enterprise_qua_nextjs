@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { useApp } from '@/lib/store';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import { authClient } from '@/lib/authClient';
 import { VendorSubscriptionPaymentModal } from '@/app/components/Modals';
 import { VendorOpportunity } from '@/lib/types';
@@ -46,7 +47,6 @@ export default function OpportunityFeed({
     vendorSelfEvaluationCompleted,
     vendorSelfEvaluationScore,
     isVendorEvaluationFeeWaived,
-    buyerAccounts,
     buyerVendors,
     currentUserSession,
     refreshFromDB,
@@ -58,18 +58,13 @@ export default function OpportunityFeed({
   const closeUpgradeModal = () => setShowUpgradeModal(false);
 
   // 1. Direct Invitations Filter States
-  const [selectedBuyerCompanyDirect, setSelectedBuyerCompanyDirect] = React.useState('all');
-  const [selectedBuyerNameDirect, setSelectedBuyerNameDirect] = React.useState('all');
+  const [selectedBuyerDirect, setSelectedBuyerDirect] = React.useState('all');
   const [selectedMajorCategoryDirect, setSelectedMajorCategoryDirect] = React.useState('all');
   const [selectedMinorCategoryDirect, setSelectedMinorCategoryDirect] = React.useState('all');
   const [rfqSearchTermDirect, setRfqSearchTermDirect] = React.useState('');
   const [filterCatalogueMatchesDirect, setFilterCatalogueMatchesDirect] = React.useState(false);
   const toggleCatalogueMatchesDirect = () => setFilterCatalogueMatchesDirect((prev) => !prev);
-  const handleCompanyChangeDirect = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    setSelectedBuyerCompanyDirect(e.target.value);
-    setSelectedBuyerNameDirect('all');
-  };
-  const handleBuyerNameDirect = (e: React.ChangeEvent<HTMLSelectElement>) => setSelectedBuyerNameDirect(e.target.value);
+  const handleBuyerChangeDirect = (e: React.ChangeEvent<HTMLSelectElement>) => setSelectedBuyerDirect(e.target.value);
   const handleMajorCategoryDirect = (e: React.ChangeEvent<HTMLSelectElement>) => {
     setSelectedMajorCategoryDirect(e.target.value);
     setSelectedMinorCategoryDirect('all');
@@ -77,18 +72,20 @@ export default function OpportunityFeed({
   const handleMinorCategoryDirect = (e: React.ChangeEvent<HTMLSelectElement>) => setSelectedMinorCategoryDirect(e.target.value);
   const handleSearchDirect = (e: React.ChangeEvent<HTMLInputElement>) => setRfqSearchTermDirect(e.target.value);
 
-  const renderBuyerAccountOption = (acc: any) => (
-    <option key={acc.id} value={acc.organizationName}>
-      🏢 {acc.organizationName.split(' ')[0]}
+  const renderBuyerOption = (buyer: string) => (
+    <option key={buyer} value={buyer}>
+      🏢 {buyer}
     </option>
   );
 
-  // Was always navigating to vendorOpportunities[0] regardless of which RFQ
-  // the reminder banner actually names below — fixed to target that RFQ.
-  const REMINDER_RFQ_NUMBER = 'RFQ-2026-00421';
+  // The RFQs this vendor has not quoted on yet, which is what the reminder banner
+  // is about. `pending_bid` is set by the store when an RFQ carries no quotes.
+  const pendingBidOpportunities = vendorOpportunities.filter((opp) => opp.status === 'pending_bid');
+  const pendingBidCount = pendingBidOpportunities.length;
+  const pendingBidOpportunity = pendingBidOpportunities[0];
+
   const handleDirectReminderBid = () => {
-    const target = vendorOpportunities.find((opp) => opp.rfqNumber === REMINDER_RFQ_NUMBER) || vendorOpportunities[0];
-    onNavigateToBidForm(target);
+    onNavigateToBidForm(pendingBidOpportunity);
   };
 
   // 2. Open Network Marketplace Filter States (Buyers list removed as they are not applicable here)
@@ -177,18 +174,6 @@ export default function OpportunityFeed({
     }
   };
 
-  const handleDownloadClick = (e: React.MouseEvent<HTMLButtonElement>) => {
-    const rfqNum = e.currentTarget.getAttribute('data-rfq');
-    let opp = vendorOpportunities[0];
-    for (let i = 0; i < vendorOpportunities.length; i++) {
-      if (vendorOpportunities[i].rfqNumber === rfqNum) {
-        opp = vendorOpportunities[i];
-        break;
-      }
-    }
-    handleDownloadRfq(opp);
-  };
-
   const handleSubscriptionFeeClick = () => {
     if (onNavigateToSubscription) {
       onNavigateToSubscription();
@@ -197,15 +182,25 @@ export default function OpportunityFeed({
     }
   };
 
+  // Buyers offered by the direct-invitation filter. Derived from the feed itself,
+  // not from the buyer-account directory: an RFQ records the buyer who raised it,
+  // and matching that against a directory of organisation names never matched, so
+  // picking any company silently emptied the list.
+  const directInvitationBuyers = Array.from(
+    new Set(
+      vendorOpportunities
+        .filter((opp) => opp.type === 'direct_invitation' && opp.buyer)
+        .map((opp) => opp.buyer)
+    )
+  );
+
   // FILTER DIRECT INVITATIONS
   const eligibleDirectOpportunities = vendorOpportunities.filter((opp) => {
     if (opp.type !== 'direct_invitation') return false;
     const cats = getOpportunityCategories(opp);
 
-    // Filter by buyer context (Direct)
-    const matchCompany = selectedBuyerCompanyDirect === 'all' || opp.buyer === selectedBuyerCompanyDirect;
-    const matchBuyer = selectedBuyerNameDirect === 'all' || opp.buyer === selectedBuyerNameDirect;
-    if (!matchCompany || !matchBuyer) return false;
+    // Filter by the buyer who raised the RFQ (Direct)
+    if (selectedBuyerDirect !== 'all' && opp.buyer !== selectedBuyerDirect) return false;
 
     // Filter by categories (Direct)
     const matchMajor = selectedMajorCategoryDirect === 'all' || cats.major === selectedMajorCategoryDirect;
@@ -416,22 +411,27 @@ export default function OpportunityFeed({
         </div>
       </div>
 
-      {/* Automated System Urgent Reminder Banner */}
-      <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-955/45 border border-amber-300 dark:border-amber-500/50 flex items-center justify-between gap-3 text-xs text-amber-900 dark:text-amber-200 shadow-sm">
-        <div className="flex items-center gap-2.5">
-          <AlertTriangle size={18} className="text-amber-600 dark:text-amber-400 shrink-0" />
-          <div>
-            <span className="font-bold text-slate-900 dark:text-white">AUTOMATED SYSTEM REMINDER:</span>{' '}
-            <span>1 quotation requires action within 24 hours (<span className="mono font-bold text-slate-900 dark:text-white">{REMINDER_RFQ_NUMBER}</span>). High win probability based on your stock readiness.</span>
+      {/* Automated System Urgent Reminder Banner. Rendered only when there is an
+          opportunity to act on, and it names that opportunity: the banner used to
+          quote a fixed RFQ number while its button opened whichever RFQ happened
+          to be first, which was `undefined` once the feed came from the API. */}
+      {pendingBidOpportunity && (
+        <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-955/45 border border-amber-300 dark:border-amber-500/50 flex items-center justify-between gap-3 text-xs text-amber-900 dark:text-amber-200 shadow-sm">
+          <div className="flex items-center gap-2.5">
+            <AlertTriangle size={18} className="text-amber-600 dark:text-amber-400 shrink-0" />
+            <div>
+              <span className="font-bold text-slate-900 dark:text-white">AUTOMATED SYSTEM REMINDER:</span>{' '}
+              <span>{pendingBidCount} quotation{pendingBidCount === 1 ? '' : 's'} awaiting your response, starting with <span className="mono font-bold text-slate-900 dark:text-white">{pendingBidOpportunity.rfqNumber}</span>.</span>
+            </div>
           </div>
+          <button
+            onClick={handleDirectReminderBid}
+            className="btn btn-amber btn-sm font-bold shrink-0"
+          >
+            Submit Quote Now
+          </button>
         </div>
-        <button
-          onClick={handleDirectReminderBid}
-          className="btn btn-amber btn-sm font-bold shrink-0"
-        >
-          Submit Quote Now
-        </button>
-      </div>
+      )}
 
       {/* Sourcing Sections: Direct Invitations vs Open Network */}
       <div className="space-y-8">
@@ -478,41 +478,19 @@ export default function OpportunityFeed({
               </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-[11px]">
-              {/* Buyer Company Dropdown */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-[11px]">
+              {/* Raising Buyer Dropdown */}
               <div className="flex flex-col gap-1">
-                <span className="text-[9px] uppercase font-bold text-slate-400">Buyer Company</span>
+                <span className="text-[9px] uppercase font-bold text-slate-400">
+                  {UI_STRINGS.vendorFeed.buyerFilterLabel}
+                </span>
                 <select
-                  value={selectedBuyerCompanyDirect}
-                  onChange={handleCompanyChangeDirect}
+                  value={selectedBuyerDirect}
+                  onChange={handleBuyerChangeDirect}
                   className="select py-1 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-gray-200"
                 >
-                  <option value="all">🌐 All Eligible Companies</option>
-                  {(buyerAccounts || []).map(renderBuyerAccountOption)}
-                </select>
-              </div>
-
-              {/* Dependent Buyer Name Dropdown */}
-              <div className="flex flex-col gap-1">
-                <span className="text-[9px] uppercase font-bold text-slate-400">Buyer Name</span>
-                <select
-                  value={selectedBuyerNameDirect}
-                  onChange={handleBuyerNameDirect}
-                  className="select py-1 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-gray-200"
-                  disabled={selectedBuyerCompanyDirect === 'all'}
-                >
-                  {selectedBuyerCompanyDirect === 'all' ? (
-                    <option value="all">Select Company First</option>
-                  ) : (
-                    <>
-                      <option value="all">All Buyers in Company</option>
-                      {selectedBuyerCompanyDirect === 'Larsen & Toubro Ltd. (L&T)' ? (
-                        <option value="Rajesh Nair">👤 Rajesh Nair</option>
-                      ) : (
-                        <option value="Amit Kumar Tata">👤 Amit Kumar Tata</option>
-                      )}
-                    </>
-                  )}
+                  <option value="all">{UI_STRINGS.vendorFeed.buyerFilterAll}</option>
+                  {directInvitationBuyers.map(renderBuyerOption)}
                 </select>
               </div>
 
@@ -671,8 +649,7 @@ export default function OpportunityFeed({
                       <div className="flex gap-2">
                         {/* Download RFQ on Email */}
                         <button
-                          data-rfq={opp.rfqNumber}
-                          onClick={handleDownloadClick}
+                          onClick={() => handleDownloadRfq(opp)}
                           className="btn btn-secondary btn-xs p-1.5 flex items-center justify-center gap-1 border border-slate-200 text-slate-700 dark:text-gray-355 hover:border-slate-300"
                           title="Download RFQ Technical BOQ Spreadsheet on Email"
                         >
@@ -1006,8 +983,7 @@ export default function OpportunityFeed({
                       <div className="flex gap-2">
                         {/* Download RFQ on Email */}
                         <button
-                          data-rfq={opp.rfqNumber}
-                          onClick={handleDownloadClick}
+                          onClick={() => handleDownloadRfq(opp)}
                           className="btn btn-secondary btn-xs p-1.5 flex items-center justify-center gap-1 border border-slate-200 text-slate-700 dark:text-gray-355 hover:border-slate-300"
                           title="Download RFQ Technical BOQ Spreadsheet on Email"
                         >

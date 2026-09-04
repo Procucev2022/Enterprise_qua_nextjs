@@ -38,7 +38,8 @@ describe('Store Service — remaining branch coverage', () => {
       ]);
       expect(res.success).toBe(true);
 
-      const po = freshStore.approvePurchaseOrder('rfq-001', 'v-001', 'Some Vendor', 1000, 'notes');
+      const rfq = freshStore.createRFQ({ title: 'No active buyer PO fixture', category: 'Mechanical' });
+      const po = freshStore.approvePurchaseOrder(rfq.id, 'v-001', 'Some Vendor', 1000, 'notes');
       expect(po.success).toBe(true);
     });
 

@@ -2,6 +2,10 @@ const authService = require('../services/authService');
 const { AUTH_MESSAGES } = require('../config/constants');
 
 function extractToken(req) {
+  // GraphQL resolvers call this with `context && context.req`, and a resolver
+  // invoked without a context passes undefined. Reporting "no token" is the
+  // correct answer there; dereferencing it crashed the worker instead.
+  if (!req) return null;
   const authHeader = req.headers && req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     return authHeader.substring(7);

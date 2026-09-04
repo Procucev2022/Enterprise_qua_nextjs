@@ -224,10 +224,16 @@ describe('QuoteMatrix Component Tests', () => {
   });
 
   describe('scopeToOwnBuyerAccount (the buyer route only — category manager leaves this off)', () => {
-    test('restricts the RFQ switcher and default selection to the logged-in buyer\'s own RFQs', () => {
+    // GET /api/rfqs is scoped server-side by the caller's role now (see
+    // command-center.tsx), so on the buyer's own route `rfqs` from context
+    // already contains only this buyer's own RFQs — there is no client-side
+    // re-filtering left to exercise. What's still real and worth testing:
+    // selectedRFQForMatrix is app-wide store state, so a stale selection left
+    // over from a different role's navigation must not be trusted just
+    // because scopeToOwnBuyerAccount is on.
+    test('renders the buyer\'s own (already-scoped) RFQ list and default selection', () => {
       (useApp as jest.Mock).mockReturnValue({
-        rfqs: mockRFQs,
-        activeBuyerAccount: { id: 'buyer-own', organizationName: 'Own Co' },
+        rfqs: [mockRFQs[0]],
         selectedRFQForMatrix: null,
         setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
         showToast: mockShowToast,
@@ -239,11 +245,9 @@ describe('QuoteMatrix Component Tests', () => {
 
       render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} scopeToOwnBuyerAccount />);
 
-      // Only rfq-1 (buyerAccountId: 'buyer-own') is in scope, so it's the default selection
       expect(screen.getByText('RFQ-2026-00421')).toBeInTheDocument();
       expect(screen.getByText(/Apex Supplies Ltd./i)).toBeInTheDocument();
 
-      // The switcher must not offer rfq-2, which belongs to a different buyer account
       const select = screen.getByRole('combobox') as HTMLSelectElement;
       const optionValues = Array.from(select.options).map((o) => o.value);
       expect(optionValues).toEqual(['rfq-1']);
@@ -251,8 +255,9 @@ describe('QuoteMatrix Component Tests', () => {
 
     test('ignores a selectedRFQForMatrix left over from another role and falls back to this buyer\'s own list', () => {
       (useApp as jest.Mock).mockReturnValue({
-        rfqs: mockRFQs,
-        activeBuyerAccount: { id: 'buyer-own', organizationName: 'Own Co' },
+        // The server only ever sends this buyer's own RFQ — rfq-2 belongs to
+        // a different buyer account and was never in this list to begin with.
+        rfqs: [mockRFQs[0]],
         // A category manager's navigation left this pointed at a foreign RFQ.
         selectedRFQForMatrix: mockRFQs[1],
         setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
@@ -270,10 +275,9 @@ describe('QuoteMatrix Component Tests', () => {
       expect(screen.queryByText('LV Switchgear Modular Panels')).not.toBeInTheDocument();
     });
 
-    test('without the prop (category manager route), the full cross-buyer list is still shown', () => {
+    test('without the prop (category manager route), the full cross-buyer list is shown', () => {
       (useApp as jest.Mock).mockReturnValue({
         rfqs: mockRFQs,
-        activeBuyerAccount: { id: 'buyer-own', organizationName: 'Own Co' },
         selectedRFQForMatrix: null,
         setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
         showToast: mockShowToast,

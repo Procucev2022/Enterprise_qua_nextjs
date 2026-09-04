@@ -301,6 +301,40 @@ const IDENTITY_PHONE_CONFIG = {
 };
 
 // ==============================================================================
+// RFQ SUMMARY
+// ==============================================================================
+// Bounds on the generated per-RFQ summary. The item cap keeps a 300-line BOQ
+// from producing a prompt large enough to blow the model's context or the
+// request timeout; the head of the list is representative enough to summarise.
+const RFQ_SUMMARY_CONFIG = {
+  MAX_PROMPT_ITEMS: 40,
+  MAX_HEADLINE_CHARS: 140,
+  MAX_RISK_NOTES: 5,
+};
+
+// ==============================================================================
+// ACTIVE BUYER ACCOUNT
+// ==============================================================================
+// The signed-in buyer's account comes from the shared identity schema. There is
+// no seeded fallback: a fabricated account is how the dashboard used to attribute
+// one buyer's work to another company entirely.
+const BUYER_ACCOUNT_RESOLUTION = {
+  SOURCE_IDENTITY_DB: 'identity_database',
+  STATUS_ACTIVE: 'ACTIVE_VERIFIED',
+  MESSAGES: {
+    NO_SESSION: 'Sign in to load your organisation profile.',
+    IDENTITY_UNAVAILABLE:
+      'The account directory is unavailable, so your organisation profile cannot be loaded. Try again shortly.',
+    LOOKUP_FAILED:
+      'Your organisation profile could not be read. Try again, and if it persists contact your administrator.',
+    USER_NOT_FOUND:
+      'No account was found for this session. Sign in again, and if it persists contact your administrator.',
+    ORG_NOT_LINKED:
+      'Your account is not linked to a buyer organisation yet. Ask your administrator to link it, then sign in again.',
+  },
+};
+
+// ==============================================================================
 // RFQ LINE-ITEM CATEGORY CLASSIFICATION
 // ==============================================================================
 // Ported from CategoryClassificationService in the Java p2pservices app, which
@@ -379,6 +413,17 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     tmt: { major: 'Civil Works', minor: 'TMT BARS' },
     steel: { major: 'Raw Material', minor: 'Steels' },
     tool: { major: 'Engineering Spares - Mechanical', minor: 'Tools & Tackles' },
+    // Personal protective equipment. The model tends to label these with an
+    // umbrella term ('PPE', 'Hand Protection') that is not a taxonomy minor, so
+    // the item text is what routes them.
+    'fire extinguisher': { major: 'Occuptional Health and Safety', minor: 'Fire Extinguishers' },
+    'safety jacket': { major: 'Occuptional Health and Safety', minor: 'Safety jackets' },
+    'safety shoe': { major: 'Occuptional Health and Safety', minor: 'Safety Shoes' },
+    'storage rack': { major: 'New Category-Product', minor: 'Storage Racks' },
+    helmet: { major: 'Occuptional Health and Safety', minor: 'Hemlets' },
+    harness: { major: 'Occuptional Health and Safety', minor: 'Harness' },
+    glove: { major: 'Occuptional Health and Safety', minor: 'Gloves' },
+    filter: { major: 'Engineering Spares - Mechanical', minor: 'Filters' },
   },
 };
 
@@ -622,6 +667,8 @@ const {
 } = require('./validationSchemas');
 
 module.exports = {
+  RFQ_SUMMARY_CONFIG,
+  BUYER_ACCOUNT_RESOLUTION,
   SOURCING_MODES,
   BUYER_SUBSCRIPTION_PLANS,
   VENDOR_SUBSCRIPTION_PLANS,

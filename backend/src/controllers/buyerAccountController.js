@@ -1,4 +1,5 @@
 const storeService = require('../services/storeService');
+const buyerAccountResolver = require('../services/buyerAccountResolver');
 const { logger } = require('../services/loggerService');
 
 /**
@@ -40,14 +41,26 @@ function getBuyerAccounts(req, res, next) {
   }
 }
 
-function getActiveAccount(req, res, next) {
+/**
+ * The signed-in buyer's own account, read from the shared identity schema.
+ *
+ * Previously returned `buyerAccounts[0]` from a seeded array on an anonymous
+ * route, so every session was told it belonged to the same fabricated company.
+ * There is no fallback now: if the directory cannot answer, that is reported
+ * rather than papered over with invented data.
+ */
+async function getActiveAccount(req, res, next) {
   try {
-    logger.info('Fetching active buyer account profile', {}, 'BUYER_ACCOUNT_CONTROLLER');
-    const active = storeService.getActiveBuyerAccount();
-    res.json({ success: true, data: active });
+    logger.info('Resolving active buyer account from the identity schema', {}, 'BUYER_ACCOUNT_CONTROLLER');
+    const resolved = await buyerAccountResolver.resolveActiveBuyerAccount(req.user);
+
+    if (!resolved.ok) {
+      return res.status(resolved.status).json({ success: false, error: resolved.error });
+    }
+    return res.json({ success: true, source: 'identity_database', data: resolved.account });
   } catch (err) {
-    logger.error('Error fetching active buyer account', err, 'BUYER_ACCOUNT_CONTROLLER');
-    next(err);
+    logger.error('Error resolving active buyer account', err, 'BUYER_ACCOUNT_CONTROLLER');
+    return next(err);
   }
 }
 

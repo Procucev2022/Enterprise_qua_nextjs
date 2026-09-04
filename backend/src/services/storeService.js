@@ -1,10 +1,6 @@
 const {
-  SEED_BUYER_ACCOUNTS,
   SEED_VENDORS,
-  SEED_RFQS,
   SEED_EVALUATIONS,
-  SEED_AUDIT_LOGS,
-  SEED_AI_FEED,
 } = require('../db/seed');
 const { INITIAL_SYSTEM_CONFIG, INITIAL_AZURE_HEALTH } = require('../config/constants');
 const domainPool = require('../db/pool');
@@ -14,44 +10,29 @@ const { evaluateQuotes, calculate360Evaluation, calculateRevisedRating } = requi
 const { simulateChaserOutreach } = require('./aiChaserService');
 const { logger } = require('./loggerService');
 
-/**
- * Whether to preload the demo RFQs, AI feed and audit trail.
- *
- * These ship with the repo so a fresh checkout has something to show, but they
- * are written into the same store a buyer's real RFQs land in, and the portfolio
- * summary derives every KPI from that store. The result was a screen reporting
- * demo spend, quote counts and vendor engagement next to genuine work, with no
- * way to tell them apart.
- *
- * The test suite uses them as fixtures, so seeding stays on under NODE_ENV=test.
- * Set SEED_DEMO_RFQS=true to get them back in a running app, or false to switch
- * them off during a test run.
- *
- * Vendors, buyer accounts and evaluations are deliberately not gated: the active
- * buyer account and the vendor directory are load-bearing for sign-in and vendor
- * selection rather than illustrative.
- */
-function shouldSeedDemoRFQs() {
-  if (process.env.SEED_DEMO_RFQS !== undefined) {
-    return process.env.SEED_DEMO_RFQS === 'true';
-  }
-  return process.env.NODE_ENV === 'test';
-}
-
 class StoreService {
   constructor() {
-    this.buyerAccounts = JSON.parse(JSON.stringify(SEED_BUYER_ACCOUNTS));
-    this.activeBuyerAccount = this.buyerAccounts[0] || null;
+    // Buyer accounts are no longer seeded — the seed shipped four fabricated
+    // companies with invented spend, and `activeBuyerAccount` was just
+    // `buyerAccounts[0]`, so whoever signed in, the dashboard attributed their
+    // work to Tata Motors. This array holds accounts created at runtime
+    // through POST /api/buyer-accounts (RFQ attribution resolves a buyer's
+    // own account from it via getBuyerAccountByEmail); the single-record
+    // "my own account" read (GET /api/buyer-accounts/active) resolves from
+    // the shared identity schema instead, via buyerAccountResolver, which
+    // doesn't depend on this array's email matching being reliable.
+    this.buyerAccounts = [];
+    this.activeBuyerAccount = null;
     this.vendors = JSON.parse(JSON.stringify(SEED_VENDORS));
-    // Demo RFQs and the feed/audit narrative around them are opt-in. Once
-    // hydrated they are indistinguishable from a buyer's own work, so the RFQ
-    // portfolio summary reported fabricated spend, quote counts and vendor
-    // engagement alongside real RFQs. See shouldSeedDemoRFQs.
-    const seedDemo = shouldSeedDemoRFQs();
-    this.rfqs = seedDemo ? JSON.parse(JSON.stringify(SEED_RFQS)) : [];
+    // RFQs start empty on every restart by design — SEED_DEMO_RFQS defaults to
+    // false. The demo seed used to be written into the same collection a
+    // buyer's real RFQs landed in, and the portfolio summary reduced over all
+    // of it, so the dashboard reported fabricated spend and quote counts
+    // beside genuine work with no way to tell them apart.
+    this.rfqs = [];
     this.evaluations = JSON.parse(JSON.stringify(SEED_EVALUATIONS));
-    this.auditLogs = seedDemo ? JSON.parse(JSON.stringify(SEED_AUDIT_LOGS)) : [];
-    this.aiFeed = seedDemo ? JSON.parse(JSON.stringify(SEED_AI_FEED)) : [];
+    this.auditLogs = [];
+    this.aiFeed = [];
     this.systemConfig = JSON.parse(JSON.stringify(INITIAL_SYSTEM_CONFIG));
     this.azureHealth = JSON.parse(JSON.stringify(INITIAL_AZURE_HEALTH));
     this.isHydratedFromDB = false;
@@ -490,6 +471,11 @@ class StoreService {
       // (approvePurchaseOrder, which reads rfq.extractedEntities) produced
       // an empty line-item PO for any RFQ created this way.
       extractedEntities: rfqData.extractedEntities || rfqData.lineItems || [],
+      // AI-generated headline/scope/risk-notes built from the line items above,
+      // before the RFQ is constructed here (see rfqController.createRFQ) — a
+      // deterministic fallback when there's nothing to summarise or the model
+      // call fails, never fabricated content.
+      aiSummary: rfqData.aiSummary || null,
       assignedVendors: rfqData.assignedVendors || [],
       followUpData: rfqData.followUpData || {
         rfqNumber,
@@ -562,62 +548,10 @@ class StoreService {
     return removed;
   }
 
-  /**
-   * Aggregate the buyer RFQ portfolio for the RFQ Summary screen.
-   *
-   * Mirrors the roll-ups the Java BuyerDashboardServiceImpl computed by walking
-   * the pipeline list: portfolio counts, spend, and breakdowns by status, sourcing
-   * mode and intake source, plus the multi-channel follow-up totals. Everything is
-   * derived from the RFQ list so the summary can never disagree with the table
-   * rendered beside it.
-   */
-  getRFQSummary() {
-    const rfqs = this.getRFQs();
-
-    const countBy = (keyFor) =>
-      rfqs.reduce((acc, rfq) => {
-        const key = keyFor(rfq);
-        if (!key) return acc;
-        acc[key] = (acc[key] || 0) + 1;
-        return acc;
-      }, {});
-
-    const sumChannel = (channel, field) =>
-      rfqs.reduce((total, rfq) => {
-        const stats = rfq.followUpData && rfq.followUpData[channel];
-        return total + ((stats && Number(stats[field])) || 0);
-      }, 0);
-
-    const totalQuotes = rfqs.reduce((total, rfq) => total + (Number(rfq.quotesCount) || 0), 0);
-
-    return {
-      totalRFQs: rfqs.length,
-      // An RFQ still chasing vendors is the buyer's actionable workload.
-      activeRFQs: rfqs.filter((r) => r.chasingActive).length,
-      awaitingQuotes: rfqs.filter((r) => (Number(r.quotesCount) || 0) === 0).length,
-      totalQuotesReceived: totalQuotes,
-      totalBudget: rfqs.reduce((total, rfq) => total + (Number(rfq.budget) || 0), 0),
-      averageQuotesPerRFQ: rfqs.length === 0 ? 0 : Math.round((totalQuotes / rfqs.length) * 10) / 10,
-      byStatus: countBy((r) => r.status),
-      bySourcingMode: countBy((r) => r.sourcingMode),
-      bySource: countBy((r) => r.source || r.intakeSource),
-      followUps: {
-        vendorsInvited: rfqs.reduce(
-          (total, rfq) => total + ((rfq.followUpData && Number(rfq.followUpData.totalInvited)) || 0),
-          0
-        ),
-        vendorsResponded: rfqs.reduce(
-          (total, rfq) => total + ((rfq.followUpData && Number(rfq.followUpData.respondedCount)) || 0),
-          0
-        ),
-        calls: sumChannel('callStats', 'total'),
-        callsConnected: sumChannel('callStats', 'connected'),
-        whatsapp: sumChannel('whatsappStats', 'total'),
-        whatsappRead: sumChannel('whatsappStats', 'read'),
-        sms: sumChannel('smsStats', 'total'),
-      },
-    };
-  }
+  // getRFQSummary was removed with the RFQ seeds. The portfolio roll-up now
+  // lives in rfqSummaryService.buildPortfolioSummary, which is handed one
+  // organisation's rows rather than reducing over a single global array, and
+  // which no longer invents follow-up channel statistics.
 
   // ==========================================
   // 4. EVALUATIONS
@@ -995,12 +929,20 @@ class StoreService {
   // ==========================================
   // 14. UNIFIED BOOTSTRAP DATA
   // ==========================================
+  /**
+   * Reference data the app needs to start up.
+   *
+   * RFQs are deliberately NOT here. This endpoint is anonymous, and returning the
+   * global RFQ array from it is what put one buyer's RFQs on another buyer's
+   * dashboard — scoping /api/rfqs alone would have changed nothing on screen
+   * while this remained the endpoint the store actually hydrated from. RFQs are
+   * now fetched from GET /api/rfqs, which is authenticated and org-scoped.
+   */
   getBootstrapData() {
     return {
       buyerAccounts: this.buyerAccounts,
       activeBuyerAccount: this.activeBuyerAccount,
       vendors: this.vendors,
-      rfqs: this.rfqs,
       evaluations: this.evaluations,
       auditLogs: this.auditLogs,
       aiFeed: this.aiFeed,
@@ -1013,9 +955,5 @@ class StoreService {
 
 // Global Singleton Instance for Node.js process
 const storeService = new StoreService();
-
-// Every caller shares the singleton, so the seeding predicate is hung off it
-// rather than exported separately, keeping `require('./storeService')` unchanged.
-storeService.shouldSeedDemoRFQs = shouldSeedDemoRFQs;
 
 module.exports = storeService;

@@ -76,3 +76,8 @@ Thumbs.db
 *.swo
 *.sublime-project
 *.sublime-workspace
+
+# Personal local MySQL identity-DB replica (schema/seed for safe testing
+# without touching the shared Azure identity DB) — never meant to be shared.
+backend/scripts/local_identity_schema.sql
+backend/scripts/local_identity_seed.sql

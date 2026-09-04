@@ -1,11 +1,32 @@
 const request = require('supertest');
 const app = require('../src/app');
+const storeService = require('../src/services/storeService');
 const { authHeader } = require('./testHelpers');
 
 describe('Batch Chaser & Purchase Order API', () => {
+  // The RFQs these flows act on are created explicitly rather than relying on
+  // a fixed, seeded id/number — storeService starts with no RFQs at all.
+  let chaserRfqId;
+  let poRfqNumber;
+
+  beforeAll(() => {
+    chaserRfqId = storeService.createRFQ({
+      title: 'RFQ under multi-channel outreach',
+      category: 'Engineering Spares - Mechanical',
+      // Vendors must be attached explicitly. triggerBatchChaser falls back to
+      // the vendor directory only when assignedVendors is absent, and createRFQ
+      // defaults it to an empty array, which is truthy and yields no outreach.
+      assignedVendors: storeService.getVendors().slice(0, 2),
+    }).id;
+    poRfqNumber = storeService.createRFQ({
+      title: 'RFQ pending purchase order approval',
+      category: 'Engineering Spares - Mechanical',
+    }).rfqNumber;
+  });
+
   test('POST /api/rfqs/:id/batch-chaser triggers multi-channel chasers', async () => {
     const res = await request(app)
-      .post('/api/rfqs/rfq-001/batch-chaser')
+      .post(`/api/rfqs/${chaserRfqId}/batch-chaser`)
       .set(authHeader('buyer'))
       .send({ channels: ['call', 'whatsapp', 'sms'] });
 
@@ -23,13 +44,13 @@ describe('Batch Chaser & Purchase Order API', () => {
   });
 
   test('POST /api/rfqs/:id/batch-chaser requires authentication', async () => {
-    const res = await request(app).post('/api/rfqs/rfq-001/batch-chaser').send({});
+    const res = await request(app).post(`/api/rfqs/${chaserRfqId}/batch-chaser`).send({});
     expect(res.statusCode).toBe(401);
   });
 
   test('POST /api/rfqs/:id/approve-po approves and seals PO with SHA-256', async () => {
     const res = await request(app)
-      .post('/api/rfqs/RFQ-2026-0891/approve-po')
+      .post(`/api/rfqs/${poRfqNumber}/approve-po`)
       .set(authHeader('buyer'))
       .send({
         vendorName: 'Apex Industrial Dynamics Pvt Ltd',
@@ -45,14 +66,14 @@ describe('Batch Chaser & Purchase Order API', () => {
 
   test('POST /api/rfqs/:id/approve-po returns 400 for missing fields', async () => {
     const res = await request(app)
-      .post('/api/rfqs/RFQ-2026-0891/approve-po')
+      .post(`/api/rfqs/${poRfqNumber}/approve-po`)
       .set(authHeader('buyer'))
       .send({});
     expect(res.statusCode).toBe(400);
   });
 
   test('POST /api/rfqs/:id/approve-po requires authentication', async () => {
-    const res = await request(app).post('/api/rfqs/RFQ-2026-0891/approve-po').send({});
+    const res = await request(app).post(`/api/rfqs/${poRfqNumber}/approve-po`).send({});
     expect(res.statusCode).toBe(401);
   });
 

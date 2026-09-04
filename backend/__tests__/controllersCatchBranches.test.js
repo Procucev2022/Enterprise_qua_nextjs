@@ -12,12 +12,25 @@ const vendorController = require('../src/controllers/vendorController');
 const storeService = require('../src/services/storeService');
 const identityPool = require('../src/db/identityPool');
 const optimizationMetrics = require('../src/db/optimizationMetrics');
+const buyerAccountResolver = require('../src/services/buyerAccountResolver');
 
 function mockRes() {
   const res = {};
   res.status = jest.fn().mockReturnValue(res);
   res.json = jest.fn().mockReturnValue(res);
   return res;
+}
+
+// RFQ handlers resolve ownership from verified session claims, so a request with
+// no `user` is rejected before reaching the code path under test.
+function buyerReq(overrides = {}) {
+  return {
+    user: { sub: 'usr-buyer-001', orgId: 'org-buyer-01', email: 'buyer@procucev.com', role: 'buyer' },
+    params: {},
+    query: {},
+    body: {},
+    ...overrides,
+  };
 }
 
 describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
@@ -69,11 +82,31 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     // have to carry a buyer session to reach the code under test.
     const buyerUser = { role: 'buyer', email: 'buyer@procucev.com' };
 
-    jest.spyOn(storeService, 'getActiveBuyerAccount').mockImplementationOnce(() => {
-      throw new Error('Active Acc Error');
-    });
-    await buyerAccountController.getActiveAccount({}, res, next);
+    // The active account now comes from the identity schema rather than the
+    // in-memory store, so the failure being injected is a resolver throw.
+    jest
+      .spyOn(buyerAccountResolver, 'resolveActiveBuyerAccount')
+      .mockRejectedValueOnce(new Error('Active Acc Error'));
+    await buyerAccountController.getActiveAccount({ user: { sub: 'usr-1' } }, res, next);
     expect(next).toHaveBeenCalled();
+
+    // A resolution failure is answered with its own status rather than thrown.
+    const unresolvedRes = mockRes();
+    jest
+      .spyOn(buyerAccountResolver, 'resolveActiveBuyerAccount')
+      .mockResolvedValueOnce({ ok: false, status: 409, error: 'not linked' });
+    await buyerAccountController.getActiveAccount({ user: { sub: 'usr-1' } }, unresolvedRes, next);
+    expect(unresolvedRes.status).toHaveBeenCalledWith(409);
+
+    // The happy path returns the resolved account and says where it came from.
+    const okRes = mockRes();
+    jest
+      .spyOn(buyerAccountResolver, 'resolveActiveBuyerAccount')
+      .mockResolvedValueOnce({ ok: true, account: { id: 'org-1', organizationName: 'Real Co' } });
+    await buyerAccountController.getActiveAccount({ user: { sub: 'usr-1' } }, okRes, next);
+    expect(okRes.json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true, source: 'identity_database' })
+    );
 
     jest.spyOn(storeService, 'addBuyerAccount').mockImplementationOnce(() => {
       throw new Error('Create Acc Error');
@@ -219,13 +252,13 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     jest.spyOn(storeService, 'getRFQs').mockImplementationOnce(() => {
       throw new Error('RFQ error');
     });
-    await rfqController.getRFQs({}, res, next);
+    await rfqController.getRFQs(buyerReq(), res, next);
     expect(next).toHaveBeenCalled();
 
     jest.spyOn(storeService, 'getRFQById').mockImplementationOnce(() => {
       throw new Error('RFQ by ID error');
     });
-    await rfqController.getRFQById({ params: { id: 'rfq-1' } }, res, next);
+    await rfqController.getRFQById(buyerReq({ params: { id: 'RFQ260409000900' } }), res, next);
     expect(next).toHaveBeenCalled();
 
     jest.spyOn(storeService, 'createRFQ').mockImplementationOnce(() => {
@@ -234,17 +267,27 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     // The payload must satisfy VALIDATION_SCHEMAS.createRFQ, otherwise the
     // handler returns 400 and never reaches the store call under test.
     await rfqController.createRFQ(
-      { body: { title: 'RFQ Title', category: 'Mechanical', budget: 1000, targetDeliveryDate: '2026-10-01' } },
+      buyerReq({
+        body: {
+          title: 'RFQ Title',
+          category: 'Mechanical',
+          budget: 1000,
+          targetDeliveryDate: '2026-10-01',
+          deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+          deliveryPincode: '400701',
+        },
+      }),
       res,
       next
     );
     expect(next).toHaveBeenCalled();
 
     // ── Ingestion & summary error branches ──
-    jest.spyOn(storeService, 'getRFQSummary').mockImplementationOnce(() => {
+    const rfqSummaryService = require('../src/services/rfqSummaryService');
+    jest.spyOn(rfqSummaryService, 'buildPortfolioSummary').mockImplementationOnce(() => {
       throw new Error('Summary error');
     });
-    await rfqController.getRFQSummary({}, res, next);
+    await rfqController.getRFQSummary(buyerReq(), res, next);
     expect(next).toHaveBeenCalled();
 
     const ingestionService = require('../src/services/rfqIngestionService');
@@ -254,24 +297,39 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     await rfqController.ingestRFQ({ body: { lineItems: [{ itemName: 'Pump' }] } }, res, next);
     expect(next).toHaveBeenCalled();
 
-    // A body-less request must fall back to {} rather than throwing on property access.
+    // A body-less request must fall back to {} rather than throwing on property
+    // access — validation then rejects it for missing required fields.
     const noBodyRes = mockRes();
-    await rfqController.createRFQ({}, noBodyRes, next);
+    await rfqController.createRFQ(buyerReq({ body: undefined }), noBodyRes, next);
     expect(noBodyRes.status).toHaveBeenCalledWith(400);
 
     const noBodyIngest = mockRes();
     await rfqController.ingestRFQ({}, noBodyIngest, next);
     expect(noBodyIngest.status).toHaveBeenCalledWith(400);
 
+    // updateRFQ/deleteRFQ delegate auth entirely to the route's `authenticate`
+    // middleware rather than self-enforcing it — called directly with no
+    // session, canAccessRfq is unrestricted, so an id that matches nothing is
+    // simply a 404, same as any other role.
     const notFoundUpdate = mockRes();
-    jest.spyOn(storeService, 'updateRFQ').mockReturnValueOnce(null);
     await rfqController.updateRFQ({ params: { id: 'rfq-99' }, body: {} }, notFoundUpdate, next);
     expect(notFoundUpdate.status).toHaveBeenCalledWith(404);
 
+    const existingRfq = storeService.createRFQ({ title: 'Error-branch fixture RFQ', category: 'Mechanical' });
     jest.spyOn(storeService, 'updateRFQ').mockImplementationOnce(() => {
       throw new Error('Update RFQ error');
     });
-    await rfqController.updateRFQ({ params: { id: 'rfq-1' }, body: {} }, res, next);
+    await rfqController.updateRFQ({ params: { id: existingRfq.id }, body: {} }, res, next);
+    expect(next).toHaveBeenCalled();
+
+    const notFoundDelete = mockRes();
+    await rfqController.deleteRFQ({ params: { id: 'rfq-99' } }, notFoundDelete, next);
+    expect(notFoundDelete.status).toHaveBeenCalledWith(404);
+
+    jest.spyOn(storeService, 'deleteRFQ').mockImplementationOnce(() => {
+      throw new Error('Delete RFQ error');
+    });
+    await rfqController.deleteRFQ({ params: { id: existingRfq.id } }, res, next);
     expect(next).toHaveBeenCalled();
 
     // A quote's vendor identity is resolved server-side from the caller's own
@@ -298,15 +356,19 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     );
     expect(next).toHaveBeenCalled();
 
+    // generateEmailPreview delegates auth to route middleware the same way.
     const notFoundEmail = mockRes();
-    jest.spyOn(storeService, 'getRFQById').mockReturnValueOnce(null);
-    await rfqController.generateEmailPreview({ params: { id: 'rfq-99' }, query: {} }, notFoundEmail, next);
+    await rfqController.generateEmailPreview(
+      buyerReq({ params: { id: 'rfq-99' }, query: {} }),
+      notFoundEmail,
+      next
+    );
     expect(notFoundEmail.status).toHaveBeenCalledWith(404);
 
     jest.spyOn(storeService, 'getRFQById').mockImplementationOnce(() => {
       throw new Error('Email preview error');
     });
-    await rfqController.generateEmailPreview({ params: { id: 'rfq-1' }, query: {} }, res, next);
+    await rfqController.generateEmailPreview(buyerReq({ params: { id: existingRfq.id }, query: {} }), res, next);
     expect(next).toHaveBeenCalled();
 
     const notFoundChaser = mockRes();

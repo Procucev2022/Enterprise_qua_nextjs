@@ -193,6 +193,14 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     // vendor-record fetch resolves — deciding "locked" before that would
     // wrongly treat a real direct-buyer RFQ as marketplace-locked.
     if (!myVendorRecordLoaded) return;
+    // vendorOpportunities is hydrated by its own independent fetch
+    // (refreshRFQs, in store.tsx) that races the vendor-record fetch above —
+    // isOwnBuyerRfq looks the RFQ up in that list, so deciding before it has
+    // loaded would wrongly treat a real direct-buyer RFQ as locked forever
+    // (autoOpenedRef below only ever fires once). The deep-linked RFQ is
+    // always one that's actually in the feed, so waiting for the list to be
+    // non-empty is a reliable "has loaded" signal here.
+    if (vendorOpportunities.length === 0) return;
     autoOpenedRef.current = true;
     const alreadyQuoted = submittedQuotes.some((q) => q.rfqNumber === opportunity.rfqNumber);
     const locked = !isOwnBuyerRfq(opportunity.rfqNumber) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
@@ -202,9 +210,9 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     // Intentionally not reacting to subsequent submittedQuotes/vendorSubscription
     // changes (which would otherwise re-open the modal right after a successful
     // submit) — autoOpenedRef ensures this only ever runs once, on the first
-    // render after the vendor record has loaded.
+    // render after both the vendor record and the RFQ list have loaded.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [myVendorRecordLoaded]);
+  }, [myVendorRecordLoaded, vendorOpportunities.length]);
 
   const handleSubmitQuote = async () => {
     if (!biddingOn) return;

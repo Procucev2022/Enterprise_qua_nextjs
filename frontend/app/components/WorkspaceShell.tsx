@@ -69,12 +69,12 @@ export default function WorkspaceShell({ role, children }: WorkspaceShellProps) 
   }
 
   return (
-    <div className="flex flex-col lg:flex-row items-stretch">
+    <div className="flex flex-col lg:flex-row items-stretch min-h-[calc(100vh-4rem)]">
       <RoleNavigation onLogout={handleLogout} />
 
-      <div className="flex-1 min-w-0">
+      <main className="flex-1 min-w-0 overflow-y-auto">
         <div className="max-w-[1600px] mx-auto px-4 lg:px-6 py-5">{children}</div>
-      </div>
+      </main>
 
       {role === 'buyer' && <InitialSetupModal />}
       <SupportChatWidget />

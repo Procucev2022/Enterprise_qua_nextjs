@@ -77,17 +77,62 @@ const VALIDATION_SCHEMAS = {
     // Optional. A document that prices nothing yields no budget, and requiring
     // one forced the buyer to invent a ceiling vendors would then quote against.
     budget: { type: 'number', required: false, min: 0 },
-    deliveryLocation: { type: 'string', required: false, maxLength: 200 },
+    // Required, unlike budget. Vendors rate freight on the destination and its
+    // pincode, so a quote raised without them cannot be compared against one
+    // that has them. Enforced here as well as in the wizard so an RFQ posted
+    // straight to the API cannot skip the destination.
+    deliveryLocation: {
+      type: 'string',
+      required: true,
+      minLength: 3,
+      maxLength: 200,
+      message: 'Delivery location is required and must be 3 to 200 characters.',
+    },
+    deliveryPincode: {
+      type: 'string',
+      required: true,
+      pattern: PINCODE_REGEX,
+      message: 'Pincode is required and must be 3 to 10 letters, digits, spaces or hyphens.',
+    },
+    // Metadata for documents already stored by POST /api/rfqs/attachments.
+    attachments: { type: 'array', required: false },
+    targetDeliveryDate: { type: 'string', required: true },
+    lineItems: { type: 'array', required: false },
+  },
+
+  // Edit of an existing RFQ (PUT /api/rfqs/:id).
+  //
+  // Every field is optional because an edit is a partial update: the buyer may be
+  // correcting only the delivery pincode, and demanding the whole record back
+  // would make a small correction able to blank whatever the form did not resend.
+  // The format rules are identical to createRFQ, so a value that could not have
+  // been created cannot be introduced by an edit either.
+  //
+  // Ownership fields are absent on purpose. rfqNumber, rfqId, buyer identity and
+  // createdAt are not editable, and the query layer whitelists columns as well, so
+  // sending them here changes nothing.
+  updateRFQ: {
+    title: { type: 'string', required: false, minLength: 3, maxLength: 200 },
+    category: { type: 'string', required: false, minLength: 2 },
+    status: { type: 'string', required: false, minLength: 2, maxLength: 40 },
+    sourcingMode: { type: 'string', required: false, minLength: 2, maxLength: 20 },
+    budget: { type: 'number', required: false, min: 0 },
+    deliveryLocation: {
+      type: 'string',
+      required: false,
+      minLength: 3,
+      maxLength: 200,
+      message: 'Delivery location must be 3 to 200 characters.',
+    },
     deliveryPincode: {
       type: 'string',
       required: false,
       pattern: PINCODE_REGEX,
       message: 'Pincode must be 3 to 10 letters, digits, spaces or hyphens.',
     },
-    // Metadata for documents already stored by POST /api/rfqs/attachments.
+    targetDeliveryDate: { type: 'string', required: false },
+    extractedEntities: { type: 'array', required: false },
     attachments: { type: 'array', required: false },
-    targetDeliveryDate: { type: 'string', required: true },
-    lineItems: { type: 'array', required: false },
   },
 
   // Document handed to POST /api/rfqs/extract for Gemini line-item extraction.

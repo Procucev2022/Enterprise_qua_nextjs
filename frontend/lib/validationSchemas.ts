@@ -78,9 +78,17 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
     // against. Zero is accepted and rendered as "not set" rather than as ₹0.
     budget: { required: false, type: 'number', min: 0, message: 'Estimated budget cannot be negative' },
     targetDeliveryDate: { required: true, message: 'Target delivery date is required' },
-    deliveryLocation: { required: false, maxLength: 200, message: 'Delivery location must be 200 characters or fewer' },
+    // Both delivery fields are mandatory. Vendors rate freight on the destination
+    // and its pincode, so quotes raised without them are not comparable against
+    // quotes that have them, and the buyer cannot resolve the difference later.
+    deliveryLocation: {
+      required: true,
+      minLength: 3,
+      maxLength: 200,
+      message: UI_STRINGS.rfqExtraction.deliveryLocationSchemaMessage,
+    },
     deliveryPincode: {
-      required: false,
+      required: true,
       pattern: PINCODE_PATTERN,
       message: UI_STRINGS.rfqExtraction.deliveryPincodeInvalidMessage,
     },

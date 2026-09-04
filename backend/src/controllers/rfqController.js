@@ -5,6 +5,7 @@ const { generateStandardRFQEmail } = require('../services/emailService');
 const rfqIngestionService = require('../services/rfqIngestionService');
 const geminiService = require('../services/geminiService');
 const rfqAttachmentService = require('../services/rfqAttachmentService');
+const rfqSummaryService = require('../services/rfqSummaryService');
 const { logger } = require('../services/loggerService');
 const {
   VALIDATION_SCHEMAS,
@@ -12,6 +13,9 @@ const {
   EXTRACTION_REASON_MESSAGES,
   RFQ_ATTACHMENT_CONFIG,
 } = require('../config/constants');
+
+// A newly created RFQ is awaiting vendor quotations.
+const RFQ_DEFAULT_STATUS = 'Quotes Pending';
 
 /** Buyer-facing reason for each attachment rejection. */
 const ATTACHMENT_ERRORS = {
@@ -24,10 +28,83 @@ const ATTACHMENT_ERRORS = {
   WRITE_FAILED: 'The document could not be stored. Try again, and if it persists the storage volume may be full.',
 };
 
+/**
+ * Which RFQs a caller may see.
+ *
+ * Buyers are scoped to their own buyerAccountId, resolved server-side from
+ * the authenticated session — never trusted from the client, the same
+ * pattern createRFQ already uses. Category managers and admins see the full
+ * cross-buyer list (quote-matrix.tsx's own CM route already depends on
+ * this). Vendors also see the full list at the listing level: the
+ * marketplace opportunity feed is deliberately cross-buyer, and visibility
+ * is gated downstream instead, by isOwnBuyerRfq and the subscription quota
+ * in generateEmailPreview — locking the listing itself to one buyer would
+ * break the vendor opportunity feed outright.
+ */
+function resolveRfqReadScope(req) {
+  if (req.user && req.user.role === 'buyer') {
+    const account = storeService.getBuyerAccountByEmail(req.user.email);
+    return { restricted: true, buyerAccountId: account ? account.id : null };
+  }
+  return { restricted: false, buyerAccountId: null };
+}
+
+/**
+ * Whether a buyer caller may read or write this specific RFQ.
+ *
+ * Non-buyer roles are never restricted here (see resolveRfqReadScope). A
+ * buyer requesting an RFQ outside their own account gets the same 404 as an
+ * id that doesn't exist — "not found" covers both, so a caller can't
+ * enumerate other buyers' RFQ ids.
+ */
+function canAccessRfq(req, rfq) {
+  const scope = resolveRfqReadScope(req);
+  if (!scope.restricted) return true;
+  return !!scope.buyerAccountId && rfq.buyerAccountId === scope.buyerAccountId;
+}
+
+// Fields a buyer's own edit may touch. Deliberately a whitelist: id,
+// rfqNumber, buyerAccountId, buyerAccountName, quotes and createdAt
+// establish ownership/identity and must never be writable through a plain
+// edit, or a malicious body could hand an RFQ to another buyer or fabricate
+// quotes — storeService.updateRFQ merges whatever object it's given, with
+// no column whitelist of its own.
+const RFQ_UPDATABLE_FIELDS = [
+  'title',
+  'category',
+  'sourcingMode',
+  'status',
+  'budget',
+  'targetDeliveryDate',
+  'deliveryLocation',
+  'deliveryPincode',
+  'extractedEntities',
+  'attachments',
+];
+
+function pickUpdatableRfqFields(body) {
+  const updates = {};
+  for (const field of RFQ_UPDATABLE_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(body, field)) {
+      updates[field] = body[field];
+    }
+  }
+  return updates;
+}
+
+/**
+ * List RFQs visible to the caller.
+ *
+ * This used to be `storeService.getRFQs()` — the entire global array, on an
+ * unauthenticated route. That is what put one buyer's RFQs on another
+ * buyer's dashboard.
+ */
 function getRFQs(req, res, next) {
   try {
-    logger.info('Fetching all RFQs list', { query: req.query }, 'RFQ_CONTROLLER');
-    const rfqs = storeService.getRFQs();
+    const scope = resolveRfqReadScope(req);
+    const all = storeService.getRFQs();
+    const rfqs = scope.restricted ? all.filter((rfq) => rfq.buyerAccountId === scope.buyerAccountId) : all;
+    logger.info('Fetching RFQs list', { restricted: scope.restricted, count: rfqs.length }, 'RFQ_CONTROLLER');
     res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: rfqs });
   } catch (err) {
     logger.error('Error fetching RFQs list', err, 'RFQ_CONTROLLER');
@@ -35,12 +112,19 @@ function getRFQs(req, res, next) {
   }
 }
 
+/**
+ * One RFQ, by RFQ number or row id.
+ *
+ * A hit on another buyer's RFQ returns the same 404 as an id that does not
+ * exist, so the response cannot be used to probe what other buyers have
+ * raised.
+ */
 function getRFQById(req, res, next) {
   try {
     const { id } = req.params;
     logger.info(`Fetching RFQ by ID: ${id}`, { id }, 'RFQ_CONTROLLER');
     const rfq = storeService.getRFQById(id);
-    if (!rfq) {
+    if (!rfq || !canAccessRfq(req, rfq)) {
       logger.warn(`RFQ not found for ID: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
@@ -51,24 +135,40 @@ function getRFQById(req, res, next) {
   }
 }
 
-function createRFQ(req, res, next) {
+/**
+ * Create an RFQ owned by the signed-in buyer's account.
+ */
+async function createRFQ(req, res, next) {
   try {
     const body = req.body || {};
 
     // Validated against the centralized schema at the entry boundary so a
-    // malformed RFQ never reaches the store. Previously only `title` was checked.
+    // malformed RFQ never reaches the store. deliveryLocation/deliveryPincode
+    // are required here: vendors price freight against the destination, and a
+    // quote raised without it can't be compared against one that has it.
     const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.createRFQ, body);
     if (!isValid) {
       logger.warn('Failed to create RFQ: payload validation failed', { errors }, 'RFQ_CONTROLLER');
       return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
     }
 
+    const lineItems = Array.isArray(body.extractedEntities) ? body.extractedEntities : body.lineItems || [];
+
+    // Generated from the line items the buyer confirmed, so the summary
+    // always describes what was actually dispatched. A model or network
+    // failure here must not block RFQ creation — buildRFQSummary already
+    // falls back to a deterministic summary rather than throwing.
+    const aiSummary = await rfqSummaryService.buildRFQSummary(
+      { ...body, extractedEntities: lineItems },
+      { orgName: (req.user && req.user.orgName) || '' }
+    );
+
     logger.info(`Creating new RFQ: ${body.title}`, { title: body.title, category: body.category, budget: body.budget }, 'RFQ_CONTROLLER');
     // Resolved server-side from the authenticated session, never trusted from
     // the request body, so the RFQ is attributed to whoever is actually
     // logged in rather than a client-supplied or globally-shared value.
     const requestingBuyerAccount = req.user ? storeService.getBuyerAccountByEmail(req.user.email) : null;
-    const created = storeService.createRFQ(body, requestingBuyerAccount);
+    const created = storeService.createRFQ({ ...body, extractedEntities: lineItems, aiSummary }, requestingBuyerAccount);
     res.status(201).json({ success: true, data: created });
   } catch (err) {
     logger.error('Error creating RFQ', err, 'RFQ_CONTROLLER');
@@ -190,12 +290,21 @@ async function extractRFQFromDocument(req, res, next) {
   }
 }
 
-/** Portfolio roll-up backing the buyer RFQ Summary screen. */
+/**
+ * Portfolio roll-up backing the buyer RFQ Summary screen.
+ *
+ * Derived from only the RFQs visible to the caller (see
+ * resolveRfqReadScope) — previously reduced over the global array, so every
+ * buyer saw the same portfolio totals, including spend figures belonging to
+ * other companies.
+ */
 function getRFQSummary(req, res, next) {
   try {
-    logger.info('Fetching buyer RFQ portfolio summary', {}, 'RFQ_CONTROLLER');
-    const summary = storeService.getRFQSummary();
-    res.json({ success: true, data: summary });
+    const scope = resolveRfqReadScope(req);
+    const all = storeService.getRFQs();
+    const rfqs = scope.restricted ? all.filter((rfq) => rfq.buyerAccountId === scope.buyerAccountId) : all;
+    logger.info('Building RFQ portfolio summary', { restricted: scope.restricted, count: rfqs.length }, 'RFQ_CONTROLLER');
+    res.json({ success: true, data: rfqSummaryService.buildPortfolioSummary(rfqs) });
   } catch (err) {
     logger.error('Error building RFQ summary', err, 'RFQ_CONTROLLER');
     next(err);
@@ -277,11 +386,31 @@ async function downloadRFQAttachment(req, res, next) {
   }
 }
 
+/**
+ * Apply a buyer's edit to one of their own RFQs.
+ *
+ * A hit on another buyer's RFQ, or on an id that doesn't exist, reports the
+ * same 404 either way (see canAccessRfq). Only RFQ_UPDATABLE_FIELDS are ever
+ * written — ownership/identity fields are not part of a plain edit.
+ */
 function updateRFQ(req, res, next) {
+  const { id } = req.params;
   try {
-    const { id } = req.params;
-    const updates = req.body;
-    logger.info(`Updating RFQ ${id}`, { id, updates }, 'RFQ_CONTROLLER');
+    const existing = storeService.getRFQById(id);
+    if (!existing || !canAccessRfq(req, existing)) {
+      logger.warn(`RFQ not found for update: ${id}`, { id }, 'RFQ_CONTROLLER');
+      return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+    }
+
+    const body = req.body || {};
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.updateRFQ, body);
+    if (!isValid) {
+      logger.warn('RFQ edit rejected: payload validation failed', { id, errors }, 'RFQ_CONTROLLER');
+      return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
+    }
+
+    const updates = pickUpdatableRfqFields(body);
+    logger.info(`Updating RFQ ${id}`, { id, fields: Object.keys(updates) }, 'RFQ_CONTROLLER');
     const updated = storeService.updateRFQ(id, updates);
     if (!updated) {
       logger.warn(`RFQ not found for update: ${id}`, { id }, 'RFQ_CONTROLLER');
@@ -290,6 +419,37 @@ function updateRFQ(req, res, next) {
     res.json({ success: true, data: updated });
   } catch (err) {
     logger.error(`Error updating RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
+/**
+ * Withdraw one of the buyer's own RFQs.
+ *
+ * A hard delete. Reports the same 404 for another buyer's RFQ as for an id
+ * that doesn't exist, so the response cannot be used to discover which ids
+ * exist elsewhere.
+ */
+function deleteRFQ(req, res, next) {
+  const { id } = req.params;
+  try {
+    const existing = storeService.getRFQById(id);
+    if (!existing || !canAccessRfq(req, existing)) {
+      logger.warn(`RFQ not found for deletion: ${id}`, { id }, 'RFQ_CONTROLLER');
+      return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+    }
+
+    const removed = storeService.deleteRFQ(id);
+    if (!removed) {
+      return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+    }
+
+    logger.info('Deleted RFQ', { id, rfqNumber: existing.rfqNumber }, 'RFQ_CONTROLLER');
+    // The deleted number is echoed so the client can drop that row without
+    // guessing which of the two identifiers it had sent.
+    return res.json({ success: true, data: { rfqNumber: existing.rfqNumber, rfqId: existing.id } });
+  } catch (err) {
+    logger.error(`Error deleting RFQ ${id}`, err, 'RFQ_CONTROLLER');
     next(err);
   }
 }
@@ -345,7 +505,7 @@ function generateEmailPreview(req, res, next) {
     const { vendorId } = req.query;
     logger.info(`Generating email preview for RFQ ${id}`, { id, vendorId }, 'RFQ_CONTROLLER');
     const rfq = storeService.getRFQById(id);
-    if (!rfq) {
+    if (!rfq || !canAccessRfq(req, rfq)) {
       logger.warn(`RFQ not found for email preview: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
@@ -454,6 +614,7 @@ module.exports = {
   uploadRFQAttachment,
   downloadRFQAttachment,
   updateRFQ,
+  deleteRFQ,
   addQuote,
   generateEmailPreview,
   triggerBatchChaser,

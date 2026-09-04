@@ -27,6 +27,34 @@ function mockFetchImpl(url: string, options: any = {}) {
   if (/\/api\/vendors\/[^/]+$/.test(url)) {
     return Promise.resolve({ ok: false, status: 404, json: async () => ({ success: false, error: 'Not found' }) });
   }
+  // A single RFQ whose title overlaps enough tokens with the catalogue
+  // product added in "Product Add, Edit, Delete..." below to exercise
+  // getMatchingRfqsForProduct's positive-match branch, not just the
+  // zero-match one the dedicated filter test covers.
+  if (/\/api\/rfqs(\?|$)/.test(url) && method === 'GET') {
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({
+        success: true,
+        data: [
+          {
+            id: 'rfq-catalogue-match',
+            rfqNumber: 'RFQ-2026-00930',
+            title: 'Centrifugal Water Pumps & Spares',
+            buyerAccountName: 'Larsen & Toubro Ltd. (L&T)',
+            category: 'Pumps & Fluid Dynamics',
+            sourcingMode: 'mode_1',
+            status: 'Quotes Pending',
+            createdAt: '2026-09-01',
+            targetDeliveryDate: '2026-09-15',
+            budget: 50000,
+            extractedEntities: [],
+            quotes: [],
+          },
+        ],
+      }),
+    });
+  }
   return Promise.resolve({ ok: true, json: async () => ({ success: true, data: [] }) });
 }
 
@@ -122,6 +150,10 @@ describe('ItemCatalogue Comprehensive Suite', () => {
   });
 
   test('Product Add, Edit, Delete, Reset Form, and Search Filter flow', async () => {
+    // vendorOpportunities (read by getMatchingRfqsForProduct below) only
+    // loads once refreshRFQs sees a token — the previous test's afterEach
+    // clears authClient's session, so this needs its own.
+    authClient.setSession(null, 'test-token-item-catalogue');
     renderWithProvider(<ItemCatalogue />);
 
     const form = document.querySelector('form')!;

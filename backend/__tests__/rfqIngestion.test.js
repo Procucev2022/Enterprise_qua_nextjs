@@ -1,11 +1,20 @@
 const request = require('supertest');
+
 const app = require('../src/app');
 const ingestion = require('../src/services/rfqIngestionService');
 const storeService = require('../src/services/storeService');
+const rfqSummaryService = require('../src/services/rfqSummaryService');
 const { RFQ_CATEGORY_CLASSIFICATION, RFQ_INGESTION_CONFIG } = require('../src/config/constants');
+const taxonomy = require('../src/config/categories.json');
 const { authHeader } = require('./testHelpers');
 
-const { STATUS, CONFIDENCE, DEFAULT_MAJOR_CATEGORY, DEFAULT_MINOR_CATEGORY } = RFQ_CATEGORY_CLASSIFICATION;
+const {
+  STATUS,
+  CONFIDENCE,
+  DEFAULT_MAJOR_CATEGORY,
+  DEFAULT_MINOR_CATEGORY,
+  DOMAIN_KEYWORD_MAP,
+} = RFQ_CATEGORY_CLASSIFICATION;
 
 describe('RFQ ingestion service (AI line-item classification)', () => {
   // ── Generic category detection ─────────────────────────────────────────────
@@ -103,6 +112,112 @@ describe('RFQ ingestion service (AI line-item classification)', () => {
       );
       expect(result.majorCategory).toBe('Civil Works');
       expect(result.minorCategory).toBe('Roofing Sheets');
+    });
+  });
+
+  // ── Every emitted pair must exist in the shared taxonomy ───────────────────
+  // The review grid builds its two dropdowns from categories.json: the major
+  // select lists the majors and the minor select lists only the minors under the
+  // chosen major. A pair outside that file has no matching option, so the select
+  // renders blank — which is how extracted items reached the buyer with both
+  // category fields apparently empty.
+  describe('classification resolves against the shared taxonomy', () => {
+    const majors = new Set(taxonomy.map((group) => group.majorCategory));
+    const pairs = new Set(
+      taxonomy.flatMap((group) =>
+        group.minorCategories.map((minor) => `${group.majorCategory}||${minor}`)
+      )
+    );
+    const isRenderable = (result) =>
+      pairs.has(`${result.majorCategory}||${result.minorCategory}`);
+
+    test('every domain keyword maps to a pair that exists in the taxonomy', () => {
+      const broken = Object.entries(DOMAIN_KEYWORD_MAP)
+        .filter(([, pair]) => !pairs.has(`${pair.major}||${pair.minor}`))
+        .map(([keyword]) => keyword);
+      expect(broken).toEqual([]);
+    });
+
+    // The model names a minor and almost never a major, which used to leave the
+    // major stamped with a placeholder that is not in the taxonomy at all.
+    test('derives the major from the taxonomy when only a minor was extracted', () => {
+      const result = ingestion.classifyLineItem({
+        itemName: 'Industrial Electric Motor, 15 HP',
+        category: 'Motors',
+      });
+      expect(result).toMatchObject({
+        majorCategory: 'Engineering Spares - Electrical',
+        minorCategory: 'Motors',
+        classificationStatus: STATUS.EXPLICIT,
+      });
+      expect(majors.has(result.majorCategory)).toBe(true);
+    });
+
+    test('matches a minor case-insensitively and returns the taxonomy spelling', () => {
+      const result = ingestion.classifyLineItem({ itemName: 'Rack', category: 'storage  racks' });
+      expect(result).toMatchObject({
+        majorCategory: 'New Category-Product',
+        minorCategory: 'Storage Racks',
+      });
+    });
+
+    // 'Panels' exists under both Engineering Spares - Electrical and CAPEX, so a
+    // major the model did supply has to win.
+    test('lets a real stated major disambiguate a minor shared by several', () => {
+      const result = ingestion.classifyLineItem({
+        itemName: 'Control panel',
+        majorCategory: 'CAPEX - Equipment & Machinery',
+        minorCategory: 'Panels',
+      });
+      expect(result.majorCategory).toBe('CAPEX - Equipment & Machinery');
+      expect(isRenderable(result)).toBe(true);
+    });
+
+    test('ignores a stated major that is not in the taxonomy', () => {
+      const result = ingestion.classifyLineItem({
+        itemName: 'Cable drum',
+        majorCategory: 'Sundries',
+        minorCategory: 'Cables',
+      });
+      expect(result.majorCategory).toBe('Engineering Spares - Electrical');
+      expect(isRenderable(result)).toBe(true);
+    });
+
+    // 'Valves', 'PPE' and 'Hand Protection' are umbrella words the model likes but
+    // the taxonomy does not have. The item text has to route them instead of the
+    // model's word being kept and rendered as an empty dropdown.
+    test.each([
+      ['Industrial Ball Valve, 2 inch', 'Valves', 'Engineering Spares - Mechanical', 'Hoses, Valves & Fittings'],
+      ['Safety Helmet', 'PPE', 'Occuptional Health and Safety', 'Hemlets'],
+      ['Nitrile Industrial Gloves, size L', 'Hand Protection', 'Occuptional Health and Safety', 'Gloves'],
+    ])('routes %s past the umbrella label "%s"', (itemName, stated, major, minor) => {
+      const result = ingestion.classifyLineItem({ itemName, category: stated });
+      expect(result).toMatchObject({
+        majorCategory: major,
+        minorCategory: minor,
+        classificationStatus: STATUS.KEYWORD,
+      });
+    });
+
+    test('classifies a whole extracted document into renderable pairs', () => {
+      const extracted = [
+        { itemName: 'Industrial Electric Motor, 15 HP', quantity: 5, unit: 'Nos', category: 'Motors' },
+        { itemName: 'Mild Steel Storage Rack, heavy duty', quantity: 20, unit: 'Nos', category: 'Storage Racks' },
+        { itemName: 'Stainless Steel Fasteners, M10 x 50 mm', quantity: 500, unit: 'Nos', category: 'Fasteners' },
+        { itemName: 'Industrial Ball Valve, 2 inch', quantity: 15, unit: 'Nos', category: 'Valves' },
+        { itemName: 'PVC Electrical Cable, 4 sq.mm', quantity: 1000, unit: 'Mtr', category: 'Cables' },
+        { itemName: 'Safety Helmet', quantity: 100, unit: 'Nos', category: 'PPE' },
+        { itemName: 'Nitrile Industrial Gloves, size L', quantity: 250, unit: 'Pairs', category: 'Hand Protection' },
+        { itemName: 'Industrial Air Filter', quantity: 30, unit: 'Nos', category: 'Filters' },
+      ];
+
+      const { entities } = ingestion.normalizeLineItems(extracted, {});
+
+      expect(entities).toHaveLength(8);
+      const unrenderable = entities
+        .filter((entity) => !isRenderable(entity))
+        .map((entity) => `${entity.itemName}: ${entity.majorCategory} / ${entity.minorCategory}`);
+      expect(unrenderable).toEqual([]);
     });
   });
 
@@ -439,131 +554,128 @@ describe('RFQ ingestion & summary HTTP routes', () => {
     });
 
     test('surfaces an unexpected failure through the error handler', async () => {
-      const spy = jest
-        .spyOn(storeService, 'getRFQSummary')
-        .mockImplementation(() => {
-          throw new Error('boom');
-        });
-      const res = await request(app).get('/api/rfqs/summary');
-      expect(res.statusCode).toBeGreaterThanOrEqual(500);
-      spy.mockRestore();
+      const spy = jest.spyOn(rfqSummaryService, 'buildPortfolioSummary').mockImplementation(() => {
+        throw new Error('boom');
+      });
+      try {
+        const res = await request(app).get('/api/rfqs/summary').set(authHeader('buyer'));
+        expect(res.statusCode).toBeGreaterThanOrEqual(500);
+      } finally {
+        // Restored in a finally block: when this assertion failed, the spy used
+        // to leak into every later test in the file and throw 'boom' there.
+        spy.mockRestore();
+      }
     });
   });
 
   describe('GET /api/rfqs/summary', () => {
     test('aggregates the buyer RFQ portfolio', async () => {
-      const res = await request(app).get('/api/rfqs/summary');
+      const res = await request(app).get('/api/rfqs/summary').set(authHeader('buyer'));
 
       expect(res.statusCode).toBe(200);
       expect(res.body.success).toBe(true);
 
       const s = res.body.data;
       expect(typeof s.totalRFQs).toBe('number');
-      expect(typeof s.activeRFQs).toBe('number');
       expect(typeof s.awaitingQuotes).toBe('number');
       expect(typeof s.totalBudget).toBe('number');
       expect(typeof s.averageQuotesPerRFQ).toBe('number');
       expect(s.byStatus).toBeDefined();
       expect(s.bySourcingMode).toBeDefined();
-      expect(s.followUps).toBeDefined();
-      expect(typeof s.followUps.vendorsInvited).toBe('number');
+      // followUps is gone. Every figure in it was fabricated by createRFQ for
+      // RFQs that had no vendors at all, so the dashboard reported outreach
+      // that had never happened.
+      expect(s.followUps).toBeUndefined();
+    });
+
+    test('requires a session', async () => {
+      const res = await request(app).get('/api/rfqs/summary');
+      expect(res.statusCode).toBe(401);
     });
 
     // 'summary' must not be captured by the '/:id' route below it.
     test('is not shadowed by the RFQ-by-id route', async () => {
-      const res = await request(app).get('/api/rfqs/summary');
+      const res = await request(app).get('/api/rfqs/summary').set(authHeader('buyer'));
       expect(res.body.data.byStatus).toBeDefined();
       expect(res.body.error).toBeUndefined();
     });
   });
 
-  describe('storeService.getRFQSummary', () => {
+  // The roll-up moved off storeService, which reduced over a single global array,
+  // and onto rfqSummaryService, which is handed one organisation's rows.
+  describe('rfqSummaryService.buildPortfolioSummary', () => {
     test('counts an empty portfolio without dividing by zero', () => {
-      const original = storeService.rfqs;
-      storeService.rfqs = [];
-      try {
-        const summary = storeService.getRFQSummary();
-        expect(summary).toMatchObject({
-          totalRFQs: 0,
-          activeRFQs: 0,
-          awaitingQuotes: 0,
-          totalQuotesReceived: 0,
-          totalBudget: 0,
-          averageQuotesPerRFQ: 0,
-        });
-        expect(summary.byStatus).toEqual({});
-      } finally {
-        storeService.rfqs = original;
-      }
+      const summary = rfqSummaryService.buildPortfolioSummary([]);
+      expect(summary).toMatchObject({
+        totalRFQs: 0,
+        awaitingQuotes: 0,
+        totalQuotesReceived: 0,
+        totalBudget: 0,
+        totalLineItems: 0,
+        averageQuotesPerRFQ: 0,
+      });
+      expect(summary.byStatus).toEqual({});
     });
 
-    test('rolls up statuses, modes, sources, budget and follow-up channels', () => {
-      const original = storeService.rfqs;
-      storeService.rfqs = [
+    test.each([[undefined], [null], ['not-an-array']])(
+      'treats %p as an empty portfolio rather than throwing',
+      (input) => {
+        expect(rfqSummaryService.buildPortfolioSummary(input).totalRFQs).toBe(0);
+      }
+    );
+
+    test('rolls up statuses, modes, sources, budget and line items', () => {
+      const s = rfqSummaryService.buildPortfolioSummary([
         {
-          id: 'a',
-          rfqNumber: 'RFQ-A',
+          rfqId: 'RFQ260409000001',
           status: 'Quotes Pending',
           sourcingMode: 'mode_1',
           source: 'web_portal',
           budget: 1000,
           quotesCount: 2,
-          chasingActive: true,
-          followUpData: {
-            totalInvited: 4,
-            respondedCount: 2,
-            callStats: { total: 4, connected: 3 },
-            whatsappStats: { total: 4, read: 1 },
-            smsStats: { total: 4 },
-          },
+          extractedEntities: [{ itemName: 'Pump' }, { itemName: 'Valve' }],
         },
         {
-          id: 'b',
-          rfqNumber: 'RFQ-B',
+          rfqId: 'RFQ260409000002',
           status: 'Quotes Pending',
           sourcingMode: 'mode_3',
           source: 'email_gateway',
           budget: 500,
           quotesCount: 0,
-          chasingActive: false,
+          extractedEntities: [],
         },
-      ];
-      try {
-        const s = storeService.getRFQSummary();
-        expect(s.totalRFQs).toBe(2);
-        expect(s.activeRFQs).toBe(1);
-        expect(s.awaitingQuotes).toBe(1);
-        expect(s.totalQuotesReceived).toBe(2);
-        expect(s.totalBudget).toBe(1500);
-        expect(s.averageQuotesPerRFQ).toBe(1);
-        expect(s.byStatus).toEqual({ 'Quotes Pending': 2 });
-        expect(s.bySourcingMode).toEqual({ mode_1: 1, mode_3: 1 });
-        expect(s.bySource).toEqual({ web_portal: 1, email_gateway: 1 });
-        expect(s.followUps).toMatchObject({
-          vendorsInvited: 4,
-          vendorsResponded: 2,
-          calls: 4,
-          callsConnected: 3,
-          whatsapp: 4,
-          whatsappRead: 1,
-          sms: 4,
-        });
-      } finally {
-        storeService.rfqs = original;
-      }
+      ]);
+
+      expect(s.totalRFQs).toBe(2);
+      expect(s.awaitingQuotes).toBe(1);
+      expect(s.totalQuotesReceived).toBe(2);
+      expect(s.totalBudget).toBe(1500);
+      expect(s.totalLineItems).toBe(2);
+      expect(s.averageQuotesPerRFQ).toBe(1);
+      expect(s.byStatus).toEqual({ 'Quotes Pending': 2 });
+      expect(s.bySourcingMode).toEqual({ mode_1: 1, mode_3: 1 });
+      expect(s.bySource).toEqual({ web_portal: 1, email_gateway: 1 });
     });
 
-    test('falls back to intakeSource and ignores RFQs with neither source field', () => {
-      const original = storeService.rfqs;
-      storeService.rfqs = [
-        { id: 'a', intakeSource: 'manual_entry', status: 'Parsing' },
-        { id: 'b', status: 'Parsing' },
-      ];
-      try {
-        expect(storeService.getRFQSummary().bySource).toEqual({ manual_entry: 1 });
-      } finally {
-        storeService.rfqs = original;
-      }
+    // Missing fields are bucketed explicitly rather than dropped, so the counts
+    // in each breakdown always add up to totalRFQs.
+    test('buckets missing status, mode and source explicitly', () => {
+      const s = rfqSummaryService.buildPortfolioSummary([{ rfqId: 'RFQ260409000003', budget: 0 }]);
+      expect(s.byStatus).toEqual({ Unknown: 1 });
+      expect(s.bySourcingMode).toEqual({ unspecified: 1 });
+      expect(s.bySource).toEqual({ unspecified: 1 });
+      expect(s.totalRFQs).toBe(1);
+    });
+
+    test('averages quotes to two decimal places', () => {
+      const s = rfqSummaryService.buildPortfolioSummary([
+        { quotesCount: 1 },
+        { quotesCount: 2 },
+        { quotesCount: 0 },
+      ]);
+      expect(s.averageQuotesPerRFQ).toBe(1);
+      expect(rfqSummaryService.buildPortfolioSummary([{ quotesCount: 1 }, { quotesCount: 0 }])
+        .averageQuotesPerRFQ).toBe(0.5);
     });
   });
 });

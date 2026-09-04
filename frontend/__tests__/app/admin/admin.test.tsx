@@ -12,6 +12,32 @@ function renderWithProvider(ui: React.ReactElement) {
   return render(<AppProvider>{ui}</AppProvider>);
 }
 
+/**
+ * A URL-aware fetch double for the infrastructure actions.
+ *
+ * These tests used ordered mockResolvedValueOnce chains, which the provider's own
+ * mount-time calls (/api/db/status, /api/bootstrap, /api/rfqs) silently consumed —
+ * so the response meant for the button click went to a different request. Routing
+ * by URL asserts the behaviour under test rather than the call order.
+ */
+function routeInfraFetch(overrides: Record<string, unknown> = {}) {
+  (global.fetch as jest.Mock).mockImplementation((url: string) => {
+    const key = Object.keys(overrides).find((k) => String(url).includes(k));
+    if (key) return Promise.resolve(overrides[key]);
+    // The default reports a connected database: the action buttons are gated on
+    // it, so an unconnected default leaves them disabled and nothing to assert.
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: { isConnected: true },
+        health: { isConnected: true, latencyMs: 15, providerLabel: 'Postgres' },
+      }),
+    });
+  });
+}
+
 describe('Admin Components (AuditLog & InfraControl)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -228,25 +254,23 @@ describe('Admin Components (AuditLog & InfraControl)', () => {
     });
 
     test('executes run migrations and sync data actions (success & error branches)', async () => {
-      // 1. Success responses
-      (global.fetch as jest.Mock)
-        .mockResolvedValueOnce({
+      routeInfraFetch({
+        '/api/db/init': {
           json: async () => ({
             success: true,
-            data: { isConnected: true },
             health: { isConnected: true, latencyMs: 15, providerLabel: 'Postgres' },
             tablesCreated: ['rfqs', 'vendors'],
             message: 'Schema Initialized',
           }),
-        })
-        .mockResolvedValueOnce({
+        },
+        '/api/db/sync': {
           json: async () => ({
             success: true,
-            data: { isConnected: true },
             health: { isConnected: true, latencyMs: 15, providerLabel: 'Postgres' },
             message: 'Data Synchronized',
           }),
-        });
+        },
+      });
 
       renderWithProvider(<InfraControl onNavigateToAuditLog={jest.fn()} />);
 
@@ -254,14 +278,20 @@ describe('Admin Components (AuditLog & InfraControl)', () => {
       fireEvent.click(migrateBtn);
 
       await waitFor(() => {
-        expect(global.fetch).toHaveBeenCalledWith('/api/db/init', { method: 'POST' });
+        expect(global.fetch).toHaveBeenCalledWith(
+          '/api/db/init',
+          expect.objectContaining({ method: 'POST' })
+        );
       });
 
       const syncBtn = screen.getByRole('button', { name: /Sync Data to Postgres/i });
       fireEvent.click(syncBtn);
 
       await waitFor(() => {
-        expect(global.fetch).toHaveBeenCalledWith('/api/db/sync', { method: 'POST' });
+        expect(global.fetch).toHaveBeenCalledWith(
+          '/api/db/sync',
+          expect.objectContaining({ method: 'POST' })
+        );
       });
 
       // 2. Failure responses (data.success === false)

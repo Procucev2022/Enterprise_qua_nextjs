@@ -33,16 +33,16 @@ interface QuoteMatrixProps {
 }
 
 export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount = false }: QuoteMatrixProps) {
-  const { rfqs: allRfqs, activeBuyerAccount, selectedRFQForMatrix, setSelectedRFQForMatrix, showToast, openRFQDeepDive, deepDiveModalOpen, setDeepDiveModalOpen, selectedRFQForDeepDive } = useApp();
+  const { rfqs: allRfqs, selectedRFQForMatrix, setSelectedRFQForMatrix, showToast, openRFQDeepDive, deepDiveModalOpen, setDeepDiveModalOpen, selectedRFQForDeepDive } = useApp();
 
-  // Scoped to the logged-in buyer's own company when this is the buyer's own
-  // route — see command-center.tsx for why the full global list can't just
-  // render here. `selectedRFQForMatrix` is app-wide store state, so a stale
-  // selection left over from a different role's navigation is deliberately
-  // ignored rather than trusted, instead falling back to this buyer's own list.
-  const rfqs = scopeToOwnBuyerAccount && activeBuyerAccount
-    ? allRfqs.filter((r) => r.buyerAccountId === activeBuyerAccount.id)
-    : allRfqs;
+  // GET /api/rfqs is itself scoped server-side by the caller's role now — see
+  // command-center.tsx's matching note — so allRfqs is already exactly right
+  // either way: a buyer's own list on this route, or the full cross-buyer
+  // list on the category manager's. `selectedRFQForMatrix` is app-wide store
+  // state though, so a stale selection left over from a different role's
+  // navigation is still deliberately checked against the current list below
+  // rather than trusted outright.
+  const rfqs = allRfqs;
   const selectionInScope = !scopeToOwnBuyerAccount || (!!selectedRFQForMatrix && rfqs.some((r) => r.id === selectedRFQForMatrix.id));
 
   const currentRFQ = (selectionInScope ? selectedRFQForMatrix : null) || (rfqs.length > 0 ? rfqs[0] : null);

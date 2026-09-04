@@ -1,9 +1,15 @@
-import React from 'react';
-import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
-import '@testing-library/jest-dom';
-import QuotationForm from '@/app/vendor/quotation-form';
-import { AppProvider, useApp } from '@/lib/store';
-import { authClient } from '@/lib/authClient';
+import React from "react";
+import {
+  render,
+  screen,
+  fireEvent,
+  act,
+  waitFor,
+} from "@testing-library/react";
+import "@testing-library/jest-dom";
+import QuotationForm from "@/app/vendor/quotation-form";
+import { AppProvider, useApp } from "@/lib/store";
+import { authClient } from "@/lib/authClient";
 
 // Mock clipboard
 Object.assign(navigator, {
@@ -21,27 +27,70 @@ Object.assign(navigator, {
 // (lib/store.tsx) — the real relationship isOwnBuyerRfq now checks, replacing
 // the old hardcoded 4-RFQ-number allow-list.
 const MOCK_MY_VENDOR = {
-  id: 'v-test-vendor',
-  name: 'Test Vendor Co',
-  email: 'vendor@test.com',
-  addedByBuyerCompany: 'Larsen & Toubro Ltd. (L&T)',
+  id: "v-test-vendor",
+  name: "Test Vendor Co",
+  email: "vendor@test.com",
+  addedByBuyerCompany: "Larsen & Toubro Ltd. (L&T)",
+};
+
+// The one RFQ every test gets unless it overrides global.fetch itself:
+// this vendor's own buyer uploaded it (buyerAccountName matches
+// MOCK_MY_VENDOR.addedByBuyerCompany), so isOwnBuyerRfq always unlocks it
+// regardless of subscription tier — the real relationship the component
+// checks now, replacing the old hardcoded RFQ-number allow-list.
+const DEFAULT_RFQ = {
+  id: "rfq-00421",
+  rfqNumber: "RFQ-2026-00421",
+  title: "Centrifugal Water Pump Package (15 HP)",
+  buyerAccountName: MOCK_MY_VENDOR.addedByBuyerCompany,
+  category: "Engineering Spares - Mechanical",
+  sourcingMode: "mode_1",
+  status: "Quotes Pending",
+  quotesCount: 0,
+  targetDeliveryDate: "2026-09-15",
+  budget: 150000,
+  createdAt: "2026-09-01",
+  chasingActive: false,
+  quotes: [],
+  extractedEntities: [],
 };
 
 function defaultMockFetchImpl(url: string, options: any = {}) {
-  const method = options.method || 'GET';
-  if (/\/api\/vendors\/[^/]+$/.test(url) && method === 'GET') {
-    return Promise.resolve({ ok: true, json: async () => ({ success: true, data: MOCK_MY_VENDOR }) });
+  const method = options.method || "GET";
+  if (/\/api\/vendors\/[^/]+$/.test(url) && method === "GET") {
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({ success: true, data: MOCK_MY_VENDOR }),
+    });
   }
-  if (/\/api\/rfqs\/[^/]+\/quotes$/.test(url) && method === 'POST') {
-    return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+  if (/\/api\/rfqs\/[^/]+\/quotes$/.test(url) && method === "POST") {
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({ success: true, data: {} }),
+    });
   }
   if (/\/api\/rfqs\/[^/]+\/email-preview/.test(url)) {
-    return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({ success: true, data: {} }),
+    });
   }
-  if (url === '/api/bootstrap') {
-    return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+  if (/\/api\/rfqs(\?|$)/.test(url) && method === "GET") {
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({ success: true, data: [DEFAULT_RFQ] }),
+    });
   }
-  return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+  if (url === "/api/bootstrap") {
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({ success: true, data: {} }),
+    });
+  }
+  return Promise.resolve({
+    ok: true,
+    json: async () => ({ success: true, data: {} }),
+  });
 }
 
 function QuotationFormCustomWrapper({
@@ -64,13 +113,34 @@ function QuotationFormCustomWrapper({
       setVendorSubscription(customSubscription);
     }
     if (withSession) {
+      // refreshRFQs() gates on authClient.getToken(), not on this context
+      // state — setting only setCurrentUserSession left RFQs permanently
+      // empty under the auth-gated GET /api/rfqs. Both need to be set, and
+      // this effect (child of AppProvider) fires before AppProvider's own
+      // mount effect, so the token is in place before refreshRFQs() checks
+      // it. Guarded: a test that already called authClient.setSession with
+      // its own token before rendering (to assert on that exact token later)
+      // must not have it silently overwritten here.
+      if (!authClient.getToken()) {
+        authClient.setSession(
+          {
+            id: "user-1",
+            email: "vendor@test.com",
+            name: "Test Vendor Co",
+            role: "vendor",
+            orgId: "org-1",
+            orgName: "Test Vendor Co",
+          },
+          "test-vendor-token",
+        );
+      }
       setCurrentUserSession({
-        id: 'user-1',
-        email: 'vendor@test.com',
-        name: 'Test Vendor Co',
-        role: 'vendor',
-        orgId: 'org-1',
-        orgName: 'Test Vendor Co',
+        id: "user-1",
+        email: "vendor@test.com",
+        name: "Test Vendor Co",
+        role: "vendor",
+        orgId: "org-1",
+        orgName: "Test Vendor Co",
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -89,7 +159,53 @@ const renderWithProvider = (ui: React.ReactElement) => {
   return render(<AppProvider>{ui}</AppProvider>);
 };
 
-describe('QuotationForm Comprehensive Suite', () => {
+/**
+ * Serve a specific RFQ list from GET /api/rfqs.
+ *
+ * Opportunities are derived from RFQs the API returns rather than from a seeded
+ * array, so a test that needs several pricing tiers has to supply the RFQs that
+ * produce them. `RFQ-2026-00421` is one this vendor's buyer uploaded (unlocked);
+ * the marketplace one is not (locked below premium_network).
+ */
+function serveVendorRFQs(rfqNumbers: string[]) {
+  (global.fetch as jest.Mock).mockImplementation((url: string) =>
+    Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () =>
+        /\/api\/rfqs(\?|$)/.test(String(url))
+          ? {
+              success: true,
+              data: rfqNumbers.map((rfqNumber, idx) => ({
+                id: `rfq-${idx}`,
+                rfqNumber,
+                title: `Opportunity ${rfqNumber}`,
+                category: "Engineering Spares - Mechanical",
+                sourcingMode: idx === 0 ? "mode_1" : "mode_3",
+                status: "Quotes Pending",
+                quotesCount: 0,
+                budget: 150000,
+                targetDeliveryDate: "2026-09-15",
+                createdAt: "2026-09-04T10:00:00.000Z",
+                deliveryLocation: "Pune Plant",
+                // Only the first RFQ matches MOCK_MY_VENDOR's addedByBuyerCompany,
+                // so isOwnBuyerRfq only unlocks that one — the rest stay locked
+                // below connect/select, matching this function's own doc comment.
+                buyerAccountName:
+                  idx === 0
+                    ? MOCK_MY_VENDOR.addedByBuyerCompany
+                    : "Some Other Buyer Ltd.",
+                extractedEntities: [],
+                quotes: [],
+                chasingActive: false,
+              })),
+            }
+          : { success: true, data: {} },
+    }),
+  );
+}
+
+describe("QuotationForm Comprehensive Suite", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
@@ -101,25 +217,38 @@ describe('QuotationForm Comprehensive Suite', () => {
     authClient.setSession(null, null);
   });
 
-  test('Renders summary counters, table items, and triggers onBack navigation', () => {
+  test("Renders summary counters, table items, and triggers onBack navigation", () => {
     const onBack = jest.fn();
     const { unmount } = renderWithProvider(
-      <QuotationFormCustomWrapper onBack={onBack} />
+      <QuotationFormCustomWrapper onBack={onBack} />,
     );
 
-    expect(screen.getByText(/Sourcing Enquiries & Quotation Tracking/i)).toBeInTheDocument();
-    expect(screen.getByText(/RFQs Received \(Active Enquiries\)/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Sourcing Enquiries & Quotation Tracking/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/RFQs Received \(Active Enquiries\)/i),
+    ).toBeInTheDocument();
     expect(screen.getByText(/Quotations Submitted/i)).toBeInTheDocument();
 
-    const backBtn = screen.getByRole('button', { name: /Back to Opportunity Feed/i });
+    const backBtn = screen.getByRole("button", {
+      name: /Back to Opportunity Feed/i,
+    });
     fireEvent.click(backBtn);
     expect(onBack).toHaveBeenCalledTimes(1);
 
     unmount();
   });
 
-  test('Downloads RFQs across locked and unlocked tiers', () => {
+  test("Downloads RFQs across locked and unlocked tiers", async () => {
+    serveVendorRFQs(["RFQ-2026-00421", "RFQ-2026-00501"]);
     const onBack = jest.fn();
+
+    // refreshRFQs() gates purely on authClient.getToken() (RFQs must still
+    // load), while "no session" here means no currentUserSession — so
+    // loadMyVendorRecord never resolves an identity and isOwnBuyerRfq stays
+    // false for every RFQ regardless of buyerAccountName.
+    authClient.setSession(null, "test-token-no-identity");
 
     // Standard subscription, no session: nothing matches a real direct-buyer
     // relationship, so every row is locked — clicking shows the upgrade
@@ -128,15 +257,23 @@ describe('QuotationForm Comprehensive Suite', () => {
       <QuotationFormCustomWrapper
         onBack={onBack}
         customSubscription="standard"
-      />
+      />,
     );
 
-    const downloadBtns = screen.getAllByRole('button', { name: /Download RFQ/i });
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("button", { name: /Download RFQ/i }).length,
+      ).toBe(2),
+    );
+    const downloadBtns = screen.getAllByRole("button", {
+      name: /Download RFQ/i,
+    });
     fireEvent.click(downloadBtns[0]);
-    if (downloadBtns.length > 2) {
-      fireEvent.click(downloadBtns[2]);
-    }
-    expect(global.fetch).not.toHaveBeenCalledWith(expect.stringContaining('/email-preview'), expect.anything());
+    fireEvent.click(downloadBtns[1]);
+    expect(global.fetch).not.toHaveBeenCalledWith(
+      expect.stringContaining("/email-preview"),
+      expect.anything(),
+    );
     unmountStandard();
 
     // 'connect' is a real marketplace-unlock tier: every RFQ downloads for
@@ -146,68 +283,80 @@ describe('QuotationForm Comprehensive Suite', () => {
       <QuotationFormCustomWrapper
         onBack={onBack}
         customSubscription="connect"
-      />
+      />,
     );
 
-    const unlockedDownloadBtns = screen.getAllByRole('button', { name: /Download RFQ/i });
-    if (unlockedDownloadBtns.length > 2) {
-      fireEvent.click(unlockedDownloadBtns[2]);
-    }
-    expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('/email-preview'), expect.anything());
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("button", { name: /Download RFQ/i }).length,
+      ).toBe(2),
+    );
+    const unlockedDownloadBtns = screen.getAllByRole("button", {
+      name: /Download RFQ/i,
+    });
+    await act(async () => {
+      fireEvent.click(unlockedDownloadBtns[1]);
+    });
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/email-preview"),
+      expect.anything(),
+    );
     unmountConnect();
   });
 
-  test('Buyer details modal interactions: open, copy company name with timer, and close', async () => {
+  test("Buyer details modal interactions: open, copy company name with timer, and close", async () => {
     const onBack = jest.fn();
     const onSubmitSuccess = jest.fn();
 
-    // Real hydrated RFQs replace the whole demo vendorOpportunities list, so
-    // both rows this test needs must come from the same bootstrap response.
-    // Both share this vendor's real addedByBuyerCompany relationship
-    // ('Larsen & Toubro Ltd. (L&T)', same as MOCK_MY_VENDOR) — RFQ-2026-00421
-    // has a BUYER_CONTACTS_MAP entry, RFQ-2026-00423 doesn't, so the second
-    // row exercises the fallback baseBuyerData branch while still being
-    // unlocked via the real direct-buyer relationship (not a submitted quote).
+    // Opportunities are derived from RFQs fetched from GET /api/rfqs, not from
+    // the bootstrap payload (that endpoint is anonymous and dropped RFQs from
+    // its response — serving the global list there is what leaked RFQs
+    // between buyers). Both rows this test needs share this vendor's real
+    // addedByBuyerCompany relationship ('Larsen & Toubro Ltd. (L&T)', same as
+    // MOCK_MY_VENDOR) — RFQ-2026-00421 has a BUYER_CONTACTS_MAP entry,
+    // RFQ-2026-00423 doesn't, so the second row exercises the fallback
+    // baseBuyerData branch while still being unlocked via the real
+    // direct-buyer relationship (not a submitted quote).
     global.fetch = jest.fn((url: string, options: any = {}) => {
-      if (url === '/api/bootstrap') {
+      if (/\/api\/rfqs(\?|$)/.test(url)) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             success: true,
-            data: {
-              rfqs: [
-                {
-                  id: 'rfq-00421',
-                  rfqNumber: 'RFQ-2026-00421',
-                  title: 'Centrifugal Water Pump Package (15 HP)',
-                  buyerAccountName: 'Larsen & Toubro Ltd. (L&T)',
-                  category: 'Mechanical',
-                  sourcingMode: 'mode_1',
-                  status: 'Quotes Pending',
-                  quotesCount: 0,
-                  targetDeliveryDate: '2026-09-15',
-                  budget: 150000,
-                  createdAt: '2026-09-01',
-                  chasingActive: false,
-                  quotes: [],
-                },
-                {
-                  id: 'rfq-00423',
-                  rfqNumber: 'RFQ-2026-00423',
-                  title: 'High Pressure Gate Valve System',
-                  buyerAccountName: 'Larsen & Toubro Ltd. (L&T)',
-                  category: 'Mechanical',
-                  sourcingMode: 'mode_1',
-                  status: 'Quotes Pending',
-                  quotesCount: 0,
-                  targetDeliveryDate: '2026-09-20',
-                  budget: 85000,
-                  createdAt: '2026-09-01',
-                  chasingActive: false,
-                  quotes: [],
-                },
-              ],
-            },
+            data: [
+              {
+                id: "rfq-00421",
+                rfqNumber: "RFQ-2026-00421",
+                title: "Centrifugal Water Pump Package (15 HP)",
+                buyerAccountName: "Larsen & Toubro Ltd. (L&T)",
+                category: "Mechanical",
+                sourcingMode: "mode_1",
+                status: "Quotes Pending",
+                quotesCount: 0,
+                targetDeliveryDate: "2026-09-15",
+                budget: 150000,
+                createdAt: "2026-09-01",
+                chasingActive: false,
+                quotes: [],
+                extractedEntities: [],
+              },
+              {
+                id: "rfq-00423",
+                rfqNumber: "RFQ-2026-00423",
+                title: "High Pressure Gate Valve System",
+                buyerAccountName: "Larsen & Toubro Ltd. (L&T)",
+                category: "Mechanical",
+                sourcingMode: "mode_1",
+                status: "Quotes Pending",
+                quotesCount: 0,
+                targetDeliveryDate: "2026-09-20",
+                budget: 85000,
+                createdAt: "2026-09-01",
+                chasingActive: false,
+                quotes: [],
+                extractedEntities: [],
+              },
+            ],
           }),
         });
       }
@@ -220,13 +369,17 @@ describe('QuotationForm Comprehensive Suite', () => {
         onSubmitSuccess={onSubmitSuccess}
         customSubscription="standard"
         withSession
-      />
+      />,
     );
 
-    // Open first buyer info modal (RFQ-2026-00421 - in BUYER_CONTACTS_MAP,
-    // unlocked via this vendor's real addedByBuyerCompany relationship)
+    // Opportunities are derived from RFQs fetched from the API, so the rows appear
+    // only once that request settles. The table element itself renders immediately
+    // with an empty body, so waiting on it would resolve before any row exists —
+    // wait for the per-row buttons instead. First button is RFQ-2026-00421 (in
+    // BUYER_CONTACTS_MAP, unlocked via this vendor's real addedByBuyerCompany
+    // relationship).
     const infoBtns = await waitFor(() => {
-      const btns = screen.getAllByRole('button', { name: /Buyer Details/i });
+      const btns = screen.getAllByRole("button", { name: /Buyer Details/i });
       expect(btns.length).toBeGreaterThan(1);
       return btns;
     });
@@ -248,7 +401,7 @@ describe('QuotationForm Comprehensive Suite', () => {
     expect(screen.queryByText(/Copied!/i)).not.toBeInTheDocument();
 
     // Close via Close button (triggers onSubmitSuccess)
-    const closeBtn = screen.getByRole('button', { name: /^Close$/i });
+    const closeBtn = screen.getByRole("button", { name: /^Close$/i });
     fireEvent.click(closeBtn);
     expect(onSubmitSuccess).toHaveBeenCalledTimes(1);
 
@@ -269,25 +422,33 @@ describe('QuotationForm Comprehensive Suite', () => {
         onBack={onBack}
         onSubmitSuccess={undefined}
         withSession
-      />
+      />,
     );
     const infoBtnsNoCallback = await waitFor(() => {
-      const btns = screen.getAllByRole('button', { name: /Buyer Details/i });
+      const btns = screen.getAllByRole("button", { name: /Buyer Details/i });
       expect(btns.length).toBeGreaterThan(0);
       return btns;
     });
     fireEvent.click(infoBtnsNoCallback[0]);
-    const closeBtnNoCallback = screen.getByRole('button', { name: /^Close$/i });
+    const closeBtnNoCallback = screen.getByRole("button", { name: /^Close$/i });
     fireEvent.click(closeBtnNoCallback);
     unmountNoCallback();
   });
 
-  test('loads the caller\'s own vendor record on mount', async () => {
+  test("loads the caller's own vendor record on mount", async () => {
     const onBack = jest.fn();
-    renderWithProvider(<QuotationFormCustomWrapper onBack={onBack} withSession customSubscription="select" />);
+    renderWithProvider(
+      <QuotationFormCustomWrapper
+        onBack={onBack}
+        withSession
+        customSubscription="select"
+      />,
+    );
 
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith('/api/vendors/vendor%40test.com');
+      expect(global.fetch).toHaveBeenCalledWith(
+        "/api/vendors/vendor%40test.com",
+      );
     });
     // Flush the rest of the async load chain (res.json() + state updates)
     // before the test ends and the component unmounts.
@@ -298,34 +459,47 @@ describe('QuotationForm Comprehensive Suite', () => {
     });
   });
 
-  test('treats a vendor record with no addedByBuyerCompany as having no direct buyer relationship', async () => {
+  test("treats a vendor record with no addedByBuyerCompany as having no direct buyer relationship", async () => {
     global.fetch = jest.fn((url: string, options: any = {}) => {
       if (/\/api\/vendors\/[^/]+$/.test(url)) {
         return Promise.resolve({
           ok: true,
-          json: async () => ({ success: true, data: { id: 'v-no-rel', name: 'No Relationship Vendor', email: 'vendor@test.com' } }),
+          json: async () => ({
+            success: true,
+            data: {
+              id: "v-no-rel",
+              name: "No Relationship Vendor",
+              email: "vendor@test.com",
+            },
+          }),
         });
       }
       return defaultMockFetchImpl(url, options);
     }) as any;
 
     const onBack = jest.fn();
-    renderWithProvider(<QuotationFormCustomWrapper onBack={onBack} withSession customSubscription="standard" />);
+    renderWithProvider(
+      <QuotationFormCustomWrapper
+        onBack={onBack}
+        withSession
+        customSubscription="standard"
+      />,
+    );
 
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith('/api/vendors/vendor%40test.com');
-    });
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
+      expect(global.fetch).toHaveBeenCalledWith(
+        "/api/vendors/vendor%40test.com",
+      );
     });
 
     // No addedByBuyerCompany means every RFQ falls back to marketplace-locked,
     // including RFQ-2026-00421 which would otherwise be this vendor's own.
-    expect(screen.getAllByText(/Premium Locked/i).length).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(screen.getAllByText(/Premium Locked/i).length).toBeGreaterThan(0),
+    );
   });
 
-  test('does not update state if the component unmounts before the vendor record fetch resolves', async () => {
+  test("does not update state if the component unmounts before the vendor record fetch resolves", async () => {
     let resolveFetch!: (value: any) => void;
     const pending = new Promise((resolve) => {
       resolveFetch = resolve;
@@ -337,7 +511,11 @@ describe('QuotationForm Comprehensive Suite', () => {
 
     const onBack = jest.fn();
     const { unmount } = renderWithProvider(
-      <QuotationFormCustomWrapper onBack={onBack} withSession customSubscription="select" />
+      <QuotationFormCustomWrapper
+        onBack={onBack}
+        withSession
+        customSubscription="select"
+      />,
     );
     unmount();
 
@@ -345,130 +523,223 @@ describe('QuotationForm Comprehensive Suite', () => {
     // quotation-form.tsx's loadMyVendorRecord — this must not throw or warn
     // about updating state on an unmounted component.
     await act(async () => {
-      resolveFetch({ ok: true, json: async () => ({ success: true, data: MOCK_MY_VENDOR }) });
+      resolveFetch({
+        ok: true,
+        json: async () => ({ success: true, data: MOCK_MY_VENDOR }),
+      });
       await Promise.resolve();
       await Promise.resolve();
     });
   });
 
-  test('handles a network failure while loading the vendor record gracefully', async () => {
-    (global.fetch as jest.Mock).mockImplementation((url: string, options: any = {}) => {
-      if (/\/api\/vendors\/[^/]+$/.test(url)) return Promise.reject(new Error('network down'));
-      return defaultMockFetchImpl(url, options);
-    });
+  test("handles a network failure while loading the vendor record gracefully", async () => {
+    (global.fetch as jest.Mock).mockImplementation(
+      (url: string, options: any = {}) => {
+        if (/\/api\/vendors\/[^/]+$/.test(url))
+          return Promise.reject(new Error("network down"));
+        return defaultMockFetchImpl(url, options);
+      },
+    );
     const onBack = jest.fn();
-    renderWithProvider(<QuotationFormCustomWrapper onBack={onBack} withSession customSubscription="select" />);
+    renderWithProvider(
+      <QuotationFormCustomWrapper
+        onBack={onBack}
+        withSession
+        customSubscription="select"
+      />,
+    );
 
     // Should render normally without throwing despite the failed lookup
-    await waitFor(() => expect(screen.getByText(/Sourcing Enquiries & Quotation Tracking/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Sourcing Enquiries & Quotation Tracking/i),
+      ).toBeInTheDocument(),
+    );
   });
 
-  test('opens the bid modal, validates unit price, and submits a quote successfully', async () => {
+  test("opens the bid modal, validates unit price, and submits a quote successfully", async () => {
     const onBack = jest.fn();
-    renderWithProvider(<QuotationFormCustomWrapper onBack={onBack} withSession customSubscription="select" />);
+    renderWithProvider(
+      <QuotationFormCustomWrapper
+        onBack={onBack}
+        withSession
+        customSubscription="select"
+      />,
+    );
 
-    // RFQ-2026-00421 is in the isOwnBuyerRfq allow-list — always unlocked
-    const submitBtns = screen.getAllByRole('button', { name: /Submit Quote$/i });
+    // RFQ-2026-00421 is DEFAULT_RFQ, this vendor's own buyer — always unlocked
+    const submitBtns = await waitFor(() => {
+      const btns = screen.getAllByRole("button", { name: /Submit Quote$/i });
+      expect(btns.length).toBeGreaterThan(0);
+      return btns;
+    });
     fireEvent.click(submitBtns[0]);
 
-    expect(screen.getByRole('heading', { name: /Submit Quotation/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: /Submit Quotation/i }),
+    ).toBeInTheDocument();
 
     // Validation: submit with no unit price
-    const submitQuotationBtn = screen.getByRole('button', { name: /Submit Quotation/i });
+    const submitQuotationBtn = screen.getByRole("button", {
+      name: /Submit Quotation/i,
+    });
     await act(async () => {
       fireEvent.click(submitQuotationBtn);
     });
-    expect(screen.getByRole('heading', { name: /Submit Quotation/i })).toBeInTheDocument(); // modal stays open
+    expect(
+      screen.getByRole("heading", { name: /Submit Quotation/i }),
+    ).toBeInTheDocument(); // modal stays open
 
     // Fill in the bid form
     const priceInputs = document.querySelectorAll('input[type="number"]');
-    fireEvent.change(priceInputs[0], { target: { value: '1500' } }); // unit price
-    fireEvent.change(priceInputs[1], { target: { value: '10' } }); // lead time
-    fireEvent.change(priceInputs[2], { target: { value: '2' } }); // warranty
-    fireEvent.change(screen.getByDisplayValue('45 Days Net'), { target: { value: '30 Days Net' } });
-    fireEvent.change(document.querySelector('textarea')!, { target: { value: 'Best price guaranteed' } });
+    fireEvent.change(priceInputs[0], { target: { value: "1500" } }); // unit price
+    fireEvent.change(priceInputs[1], { target: { value: "10" } }); // lead time
+    fireEvent.change(priceInputs[2], { target: { value: "2" } }); // warranty
+    fireEvent.change(screen.getByDisplayValue("45 Days Net"), {
+      target: { value: "30 Days Net" },
+    });
+    fireEvent.change(document.querySelector("textarea")!, {
+      target: { value: "Best price guaranteed" },
+    });
 
     await act(async () => {
       fireEvent.click(submitQuotationBtn);
     });
 
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/api/rfqs/'),
-      expect.objectContaining({ method: 'POST' })
+      expect.stringContaining("/api/rfqs/"),
+      expect.objectContaining({ method: "POST" }),
     );
     // Modal closes on success
-    expect(screen.queryByRole('heading', { name: /Submit Quotation/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: /Submit Quotation/i }),
+    ).not.toBeInTheDocument();
   });
 
-  test('shows an error toast and keeps the modal open when quote submission fails', async () => {
-    (global.fetch as jest.Mock).mockImplementation((url: string, options: any = {}) => {
-      if (/\/api\/rfqs\/[^/]+\/quotes$/.test(url)) {
-        return Promise.resolve({ ok: false, json: async () => ({ success: false, error: 'Create your vendor profile first.' }) });
-      }
-      return defaultMockFetchImpl(url, options);
-    });
+  test("shows an error toast and keeps the modal open when quote submission fails", async () => {
+    (global.fetch as jest.Mock).mockImplementation(
+      (url: string, options: any = {}) => {
+        if (/\/api\/rfqs\/[^/]+\/quotes$/.test(url)) {
+          return Promise.resolve({
+            ok: false,
+            json: async () => ({
+              success: false,
+              error: "Create your vendor profile first.",
+            }),
+          });
+        }
+        return defaultMockFetchImpl(url, options);
+      },
+    );
     const onBack = jest.fn();
-    renderWithProvider(<QuotationFormCustomWrapper onBack={onBack} withSession customSubscription="select" />);
+    renderWithProvider(
+      <QuotationFormCustomWrapper
+        onBack={onBack}
+        withSession
+        customSubscription="select"
+      />,
+    );
 
-    const submitBtns = screen.getAllByRole('button', { name: /Submit Quote$/i });
+    const submitBtns = await waitFor(() => {
+      const btns = screen.getAllByRole("button", { name: /Submit Quote$/i });
+      expect(btns.length).toBeGreaterThan(0);
+      return btns;
+    });
     fireEvent.click(submitBtns[0]);
 
     const priceInputs = document.querySelectorAll('input[type="number"]');
-    fireEvent.change(priceInputs[0], { target: { value: '1500' } });
+    fireEvent.change(priceInputs[0], { target: { value: "1500" } });
 
-    const submitQuotationBtn = screen.getByRole('button', { name: /Submit Quotation/i });
+    const submitQuotationBtn = screen.getByRole("button", {
+      name: /Submit Quotation/i,
+    });
     await act(async () => {
       fireEvent.click(submitQuotationBtn);
     });
 
     // Modal stays open on failure so the vendor can retry
-    expect(screen.getByRole('heading', { name: /Submit Quotation/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: /Submit Quotation/i }),
+    ).toBeInTheDocument();
 
     // Cancel closes it manually
-    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
-    expect(screen.queryByRole('heading', { name: /Submit Quotation/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^Cancel$/i }));
+    expect(
+      screen.queryByRole("heading", { name: /Submit Quotation/i }),
+    ).not.toBeInTheDocument();
   });
 
-  test('downloads an RFQ successfully and shows a failure toast when the download fails', async () => {
+  test("downloads an RFQ successfully and shows a failure toast when the download fails", async () => {
     const onBack = jest.fn();
-    renderWithProvider(<QuotationFormCustomWrapper onBack={onBack} withSession customSubscription="select" />);
+    renderWithProvider(
+      <QuotationFormCustomWrapper
+        onBack={onBack}
+        withSession
+        customSubscription="select"
+      />,
+    );
 
-    const downloadBtns = screen.getAllByRole('button', { name: /Download RFQ/i });
+    const downloadBtns = await waitFor(() => {
+      const btns = screen.getAllByRole("button", { name: /Download RFQ/i });
+      expect(btns.length).toBeGreaterThan(0);
+      return btns;
+    });
     await act(async () => {
       fireEvent.click(downloadBtns[0]);
     });
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/email-preview'),
-      expect.objectContaining({ headers: expect.objectContaining({ 'Content-Type': 'application/json' }) })
+      expect.stringContaining("/email-preview"),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+        }),
+      }),
     );
 
     // Now make the download endpoint fail
-    (global.fetch as jest.Mock).mockImplementation((url: string, options: any = {}) => {
-      if (/\/email-preview/.test(url)) {
-        return Promise.resolve({ ok: false, json: async () => ({ success: false, error: 'RFQ not found' }) });
-      }
-      return defaultMockFetchImpl(url, options);
-    });
+    (global.fetch as jest.Mock).mockImplementation(
+      (url: string, options: any = {}) => {
+        if (/\/email-preview/.test(url)) {
+          return Promise.resolve({
+            ok: false,
+            json: async () => ({ success: false, error: "RFQ not found" }),
+          });
+        }
+        return defaultMockFetchImpl(url, options);
+      },
+    );
     await act(async () => {
       fireEvent.click(downloadBtns[0]);
     });
     // No throw — handled gracefully via a warning toast
-    expect(screen.getByText(/Sourcing Enquiries & Quotation Tracking/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Sourcing Enquiries & Quotation Tracking/i),
+    ).toBeInTheDocument();
   });
 
-  test('auto-opens the bid modal for a deep-linked opportunity that is unlocked and not yet quoted', async () => {
+  test("auto-opens the bid modal for a deep-linked opportunity that is unlocked and not yet quoted", async () => {
     const onBack = jest.fn();
     const opportunity = {
-      id: 'opp-1',
-      rfqNumber: 'RFQ-2026-00421',
-      title: 'Centrifugal Water Pump Package',
-      buyer: 'L&T',
-      deadline: '2026-09-15',
+      id: "opp-1",
+      rfqNumber: "RFQ-2026-00421",
+      title: "Centrifugal Water Pump Package",
+      buyer: "L&T",
+      deadline: "2026-09-15",
       daysRemaining: 7,
-      type: 'direct_invitation',
-      deliveryLocation: 'Mumbai',
-      status: 'pending_bid',
-      lineItems: [{ id: 'li-1', description: 'Pump', quantity: 3, unitPrice: 0, leadTimeDays: 7, marketBandStatus: 'optimal', paymentTerms: 'Net 60' }],
+      type: "direct_invitation",
+      deliveryLocation: "Mumbai",
+      status: "pending_bid",
+      lineItems: [
+        {
+          id: "li-1",
+          description: "Pump",
+          quantity: 3,
+          unitPrice: 0,
+          leadTimeDays: 7,
+          marketBandStatus: "optimal",
+          paymentTerms: "Net 60",
+        },
+      ],
     };
 
     // Needs a session so the vendor record (with addedByBuyerCompany) loads —
@@ -478,108 +749,127 @@ describe('QuotationForm Comprehensive Suite', () => {
     // setCurrentUserSession, which would arrive a render late and race the
     // deep-link effect's own state.
     authClient.setSession(
-      { id: 'user-1', email: 'vendor@test.com', name: 'Test Vendor Co', role: 'vendor', orgId: 'org-1', orgName: 'Test Vendor Co' },
-      'fake-token-123'
+      {
+        id: "user-1",
+        email: "vendor@test.com",
+        name: "Test Vendor Co",
+        role: "vendor",
+        orgId: "org-1",
+        orgName: "Test Vendor Co",
+      },
+      "fake-token-123",
     );
-    renderWithProvider(<QuotationFormCustomWrapper onBack={onBack} opportunity={opportunity} withSession />);
+    renderWithProvider(
+      <QuotationFormCustomWrapper
+        onBack={onBack}
+        opportunity={opportunity}
+        withSession
+      />,
+    );
 
-    expect(await screen.findByRole('heading', { name: /Submit Quotation/i })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: /Submit Quotation/i }),
+    ).toBeInTheDocument();
     expect(screen.getAllByText(/RFQ-2026-00421/).length).toBeGreaterThan(0);
   });
 
-  test('does not auto-open the bid modal for a deep-linked opportunity that is locked', () => {
+  test("does not auto-open the bid modal for a deep-linked opportunity that is locked", () => {
     const onBack = jest.fn();
     const opportunity = {
-      id: 'opp-3',
-      rfqNumber: 'RFQ-2026-00501', // not in isOwnBuyerRfq allow-list
-      title: 'HVAC Unit',
-      buyer: 'NTPC',
-      deadline: '2026-09-25',
+      id: "opp-3",
+      rfqNumber: "RFQ-2026-00501", // not in isOwnBuyerRfq allow-list
+      title: "HVAC Unit",
+      buyer: "NTPC",
+      deadline: "2026-09-25",
       daysRemaining: 17,
-      type: 'network_marketplace',
-      deliveryLocation: 'Delhi',
-      status: 'pending_bid',
+      type: "network_marketplace",
+      deliveryLocation: "Delhi",
+      status: "pending_bid",
       lineItems: [],
     };
 
     // No subscription set — default 'premium' tier, so this RFQ stays locked
-    renderWithProvider(<QuotationFormCustomWrapper onBack={onBack} opportunity={opportunity} />);
+    renderWithProvider(
+      <QuotationFormCustomWrapper onBack={onBack} opportunity={opportunity} />,
+    );
 
-    expect(screen.queryByRole('heading', { name: /Submit Quotation/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: /Submit Quotation/i }),
+    ).not.toBeInTheDocument();
   });
 
-  test('shows this vendor\'s real submitted quotes derived from hydrated RFQ data', async () => {
+  test("shows this vendor's real submitted quotes derived from hydrated RFQ data", async () => {
     global.fetch = jest.fn((url: string, options: any = {}) => {
-      if (url === '/api/bootstrap') {
+      // RFQs come from GET /api/rfqs, not the (anonymous) bootstrap payload —
+      // see DEFAULT_RFQ's own comment above.
+      if (/\/api\/rfqs(\?|$)/.test(url)) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             success: true,
-            data: {
-              rfqs: [
-                {
-                  id: 'rfq-real-1',
-                  rfqNumber: 'RFQ-2026-00421',
-                  title: 'Centrifugal Water Pump Package (15 HP)',
-                  category: 'Mechanical',
-                  sourcingMode: 'mode_1',
-                  status: 'PO Generated',
-                  quotesCount: 1,
-                  targetDeliveryDate: '2026-09-20',
-                  budget: 150000,
-                  createdAt: '2026-09-01',
-                  chasingActive: false,
-                  quotes: [
-                    {
-                      vendorId: MOCK_MY_VENDOR.id,
-                      vendorName: MOCK_MY_VENDOR.name,
-                      vendorCategory: 'Client List',
-                      unitPrice: 1500,
-                      totalPrice: 15000,
-                      leadTimeDays: 10,
-                      aiMatchScore: 90,
-                      warrantyYears: 2,
-                      complianceStatus: 'Fully Compliant',
-                      paymentTerms: '30 Days Net',
-                      remarks: 'test',
-                      submittedAt: '2026-09-01T10:00:00.000Z',
-                    },
-                  ],
-                },
-                {
-                  // Not in the isOwnBuyerRfq allow-list, and no submittedAt on
-                  // the quote — exercises the "-" date fallback, the
-                  // non-"PO Generated" status branch, and the
-                  // "Buyer Details Unlocked (Quote Submitted)" title branch.
-                  id: 'rfq-real-2',
-                  rfqNumber: 'RFQ-2026-00501',
-                  title: 'HVAC Air Handling Unit & Smart Chiller Control',
-                  category: 'Mechanical',
-                  sourcingMode: 'mode_3',
-                  status: 'In Evaluation',
-                  quotesCount: 1,
-                  targetDeliveryDate: '2026-09-25',
-                  budget: 220000,
-                  createdAt: '2026-09-01',
-                  chasingActive: false,
-                  quotes: [
-                    {
-                      vendorId: MOCK_MY_VENDOR.id,
-                      vendorName: MOCK_MY_VENDOR.name,
-                      vendorCategory: 'Procucev Network',
-                      unitPrice: 2000,
-                      totalPrice: 10000,
-                      leadTimeDays: 21,
-                      aiMatchScore: 85,
-                      warrantyYears: 1,
-                      complianceStatus: 'Fully Compliant',
-                      paymentTerms: '45 Days Net',
-                      remarks: 'network bid',
-                    },
-                  ],
-                },
-              ],
-            },
+            data: [
+              {
+                id: "rfq-real-1",
+                rfqNumber: "RFQ-2026-00421",
+                title: "Centrifugal Water Pump Package (15 HP)",
+                category: "Mechanical",
+                sourcingMode: "mode_1",
+                status: "PO Generated",
+                quotesCount: 1,
+                targetDeliveryDate: "2026-09-20",
+                budget: 150000,
+                createdAt: "2026-09-01",
+                chasingActive: false,
+                quotes: [
+                  {
+                    vendorId: MOCK_MY_VENDOR.id,
+                    vendorName: MOCK_MY_VENDOR.name,
+                    vendorCategory: "Client List",
+                    unitPrice: 1500,
+                    totalPrice: 15000,
+                    leadTimeDays: 10,
+                    aiMatchScore: 90,
+                    warrantyYears: 2,
+                    complianceStatus: "Fully Compliant",
+                    paymentTerms: "30 Days Net",
+                    remarks: "test",
+                    submittedAt: "2026-09-01T10:00:00.000Z",
+                  },
+                ],
+              },
+              {
+                // Not in the isOwnBuyerRfq allow-list, and no submittedAt on
+                // the quote — exercises the "-" date fallback, the
+                // non-"PO Generated" status branch, and the
+                // "Buyer Details Unlocked (Quote Submitted)" title branch.
+                id: "rfq-real-2",
+                rfqNumber: "RFQ-2026-00501",
+                title: "HVAC Air Handling Unit & Smart Chiller Control",
+                category: "Mechanical",
+                sourcingMode: "mode_3",
+                status: "In Evaluation",
+                quotesCount: 1,
+                targetDeliveryDate: "2026-09-25",
+                budget: 220000,
+                createdAt: "2026-09-01",
+                chasingActive: false,
+                quotes: [
+                  {
+                    vendorId: MOCK_MY_VENDOR.id,
+                    vendorName: MOCK_MY_VENDOR.name,
+                    vendorCategory: "Procucev Network",
+                    unitPrice: 2000,
+                    totalPrice: 10000,
+                    leadTimeDays: 21,
+                    aiMatchScore: 85,
+                    warrantyYears: 1,
+                    complianceStatus: "Fully Compliant",
+                    paymentTerms: "45 Days Net",
+                    remarks: "network bid",
+                  },
+                ],
+              },
+            ],
           }),
         });
       }
@@ -588,55 +878,134 @@ describe('QuotationForm Comprehensive Suite', () => {
 
     const onBack = jest.fn();
     await act(async () => {
-      renderWithProvider(<QuotationFormCustomWrapper onBack={onBack} withSession customSubscription="select" />);
+      renderWithProvider(
+        <QuotationFormCustomWrapper
+          onBack={onBack}
+          withSession
+          customSubscription="select"
+        />,
+      );
     });
 
     // "Submit Quote" is replaced by the real PO Generated status for this RFQ
-    expect(await screen.findByText('PO Generated')).toBeInTheDocument();
-    expect(screen.getByText('Under Evaluation')).toBeInTheDocument();
-    expect(screen.getAllByText('Portal Submission').length).toBe(2);
+    expect(await screen.findByText("PO Generated")).toBeInTheDocument();
+    expect(screen.getByText("Under Evaluation")).toBeInTheDocument();
+    expect(screen.getAllByText("Portal Submission").length).toBe(2);
   });
 
-
-  test('sends a real auth token when one is present, and handles a non-ok vendor lookup response', async () => {
+  test("sends a real auth token when one is present, and handles a non-ok vendor lookup response", async () => {
     authClient.setSession(
-      { id: 'user-1', email: 'vendor@test.com', name: 'Test Vendor Co', role: 'vendor', orgId: 'org-1', orgName: 'Test Vendor Co' },
-      'fake-token-123'
+      {
+        id: "user-1",
+        email: "vendor@test.com",
+        name: "Test Vendor Co",
+        role: "vendor",
+        orgId: "org-1",
+        orgName: "Test Vendor Co",
+      },
+      "fake-token-123",
     );
     global.fetch = jest.fn((url: string) => {
       if (/\/api\/vendors\/[^/]+$/.test(url)) {
-        return Promise.resolve({ ok: false, status: 404, json: async () => ({ success: false }) });
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          json: async () => ({ success: false }),
+        });
       }
       return defaultMockFetchImpl(url, {});
     }) as any;
 
     const onBack = jest.fn();
-    renderWithProvider(<QuotationFormCustomWrapper onBack={onBack} withSession customSubscription="select" />);
+    renderWithProvider(
+      <QuotationFormCustomWrapper
+        onBack={onBack}
+        withSession
+        customSubscription="select"
+      />,
+    );
 
     // Bid using an opportunity with no line items — exercises the quantity
     // fallback (`?? 1`) — and confirm the request carries a real Bearer token.
-    fireEvent.click(screen.getAllByRole('button', { name: /Submit Quote$/i })[0]);
+    const submitBtns = await waitFor(() => {
+      const btns = screen.getAllByRole("button", { name: /Submit Quote$/i });
+      expect(btns.length).toBeGreaterThan(0);
+      return btns;
+    });
+    fireEvent.click(submitBtns[0]);
     const priceInput = document.querySelectorAll('input[type="number"]')[0];
-    fireEvent.change(priceInput, { target: { value: '999' } });
+    fireEvent.change(priceInput, { target: { value: "999" } });
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Submit Quotation/i }));
+      fireEvent.click(
+        screen.getByRole("button", { name: /Submit Quotation/i }),
+      );
     });
 
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/quotes'),
-      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer fake-token-123' }) })
+      expect.stringContaining("/quotes"),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer fake-token-123",
+        }),
+      }),
     );
   });
 
-  test('closes the bid modal via the header X button', () => {
+  test("omits the Authorization header entirely when there is no token", async () => {
+    // authHeaders()'s `token ? {...} : {}` branch is otherwise never taken —
+    // every other test either has withSession's own token or a real one set
+    // directly. A token is needed up front for the RFQ list itself to load
+    // (refreshRFQs's own separate gate), then cleared before submitting so
+    // authHeaders() sees none at the point that actually matters.
     const onBack = jest.fn();
-    renderWithProvider(<QuotationFormCustomWrapper onBack={onBack} withSession customSubscription="select" />);
+    renderWithProvider(<QuotationFormCustomWrapper onBack={onBack} withSession />);
 
-    fireEvent.click(screen.getAllByRole('button', { name: /Submit Quote$/i })[0]);
-    expect(screen.getByRole('heading', { name: /Submit Quotation/i })).toBeInTheDocument();
+    const submitBtns = await waitFor(() => {
+      const btns = screen.getAllByRole("button", { name: /Submit Quote$/i });
+      expect(btns.length).toBeGreaterThan(0);
+      return btns;
+    });
+    authClient.setSession(null, null);
+    fireEvent.click(submitBtns[0]);
+    fireEvent.change(document.querySelectorAll('input[type="number"]')[0], {
+      target: { value: "999" },
+    });
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: /Submit Quotation/i }),
+      );
+    });
 
-    fireEvent.click(screen.getByTitle('Close'));
-    expect(screen.queryByRole('heading', { name: /Submit Quotation/i })).not.toBeInTheDocument();
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/quotes"),
+      expect.objectContaining({ headers: { "Content-Type": "application/json" } }),
+    );
+  });
+
+  test("closes the bid modal via the header X button", async () => {
+    const onBack = jest.fn();
+    renderWithProvider(
+      <QuotationFormCustomWrapper
+        onBack={onBack}
+        withSession
+        customSubscription="select"
+      />,
+    );
+
+    const submitBtns = await waitFor(() => {
+      const btns = screen.getAllByRole("button", { name: /Submit Quote$/i });
+      expect(btns.length).toBeGreaterThan(0);
+      return btns;
+    });
+    fireEvent.click(submitBtns[0]);
+    expect(
+      screen.getByRole("heading", { name: /Submit Quotation/i }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle("Close"));
+    expect(
+      screen.queryByRole("heading", { name: /Submit Quotation/i }),
+    ).not.toBeInTheDocument();
   });
 });

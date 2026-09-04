@@ -362,3 +362,103 @@ describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
     });
   });
 });
+
+// ==============================================================================
+// SESSION RESTORATION ON CONSTRUCTION
+// ==============================================================================
+// The client is a singleton created when the module is first imported, so the
+// only way to exercise what it restores from storage is to reset the module
+// registry and import it again against a prepared storage state. This matters:
+// the store clears the RFQ list when there is no token, so a session that fails
+// to restore signs the buyer out on a page reload.
+// ==============================================================================
+
+describe('authClient session restoration', () => {
+  const SESSION = {
+    id: 'usr-buyer-001',
+    email: 'buyer@procucev.com',
+    name: 'Procucev Buyer Desk',
+    role: 'buyer' as const,
+    orgId: 'org-procucev-01',
+    orgName: 'Procucev Heavy Engineering',
+  };
+
+  /** Re-import the module so its constructor runs against current storage. */
+  function freshClient() {
+    let restored: typeof import('@/lib/authClient').authClient | undefined;
+    jest.isolateModules(() => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      restored = require('@/lib/authClient').authClient;
+    });
+    if (!restored) throw new Error('authClient did not load');
+    return restored;
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  afterEach(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  test('restores a session persisted in localStorage', () => {
+    localStorage.setItem('procucev_auth_token', 'local-token');
+    localStorage.setItem('procucev_user_session', JSON.stringify(SESSION));
+
+    const client = freshClient();
+
+    expect(client.getToken()).toBe('local-token');
+    expect(client.getSessionUser()).toEqual(SESSION);
+  });
+
+  // A tab-scoped sign-in lands in sessionStorage, and must survive a reload of
+  // that tab even though localStorage holds nothing.
+  test('falls back to sessionStorage when localStorage holds nothing', () => {
+    sessionStorage.setItem('procucev_auth_token', 'tab-token');
+    sessionStorage.setItem('procucev_user_session', JSON.stringify(SESSION));
+
+    const client = freshClient();
+
+    expect(client.getToken()).toBe('tab-token');
+    expect(client.getSessionUser()).toEqual(SESSION);
+  });
+
+  test('prefers the localStorage token over the sessionStorage one', () => {
+    localStorage.setItem('procucev_auth_token', 'local-token');
+    sessionStorage.setItem('procucev_auth_token', 'tab-token');
+
+    expect(freshClient().getToken()).toBe('local-token');
+  });
+
+  // Nothing stored is a signed-out browser, not an error.
+  test('starts signed out when neither store holds anything', () => {
+    const client = freshClient();
+
+    expect(client.getToken()).toBeNull();
+    expect(client.getSessionUser()).toBeNull();
+  });
+
+  test('holds a token without a session when only the token survived', () => {
+    localStorage.setItem('procucev_auth_token', 'orphan-token');
+
+    const client = freshClient();
+
+    expect(client.getToken()).toBe('orphan-token');
+    expect(client.getSessionUser()).toBeNull();
+  });
+
+  // A corrupt record is discarded rather than thrown: a bad entry in storage must
+  // not stop the application from loading.
+  test('discards an unreadable session record', () => {
+    localStorage.setItem('procucev_auth_token', 'local-token');
+    localStorage.setItem('procucev_user_session', '{not json');
+
+    const client = freshClient();
+
+    expect(client.getToken()).toBe('local-token');
+    expect(client.getSessionUser()).toBeNull();
+  });
+});

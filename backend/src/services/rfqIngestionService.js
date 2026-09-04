@@ -18,6 +18,7 @@
  */
 
 const { RFQ_CATEGORY_CLASSIFICATION, RFQ_INGESTION_CONFIG } = require('../config/constants');
+const categoryTaxonomy = require('../config/categories.json');
 const { logger } = require('./loggerService');
 
 const {
@@ -41,6 +42,74 @@ const {
 // Keywords are matched longest-first so a specific phrase wins over a substring
 // of it, e.g. 'circuit breaker' must beat the bare 'breaker'-style entries.
 const KEYWORDS_BY_LENGTH = Object.keys(DOMAIN_KEYWORD_MAP).sort((a, b) => b.length - a.length);
+
+// ==============================================================================
+// SHARED TAXONOMY INDEX
+// ==============================================================================
+// The review grid builds its two dropdowns from categories.json: the major select
+// lists the majors, and the minor select lists only the minors belonging to the
+// chosen major. A pair that is not in that file therefore cannot be displayed —
+// the select finds no matching option and renders blank, which is what made an
+// extracted item arrive with both category fields apparently empty.
+//
+// The model reliably names a *minor* ("Motors", "Fasteners") and rarely names a
+// major, so the major is looked up from the minor here instead of being replaced
+// with a placeholder. Both indexes are keyed on a normalised form and store the
+// file's own spelling, so classification always emits values the grid can render.
+
+/** Trim, collapse whitespace and casefold, so 'Storage  Racks' matches. */
+function taxonomyKey(value) {
+  return String(value || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+const MAJOR_BY_KEY = new Map();
+const TAXONOMY_BY_MINOR_KEY = new Map();
+
+for (const group of categoryTaxonomy) {
+  MAJOR_BY_KEY.set(taxonomyKey(group.majorCategory), group.majorCategory);
+  for (const minor of group.minorCategories) {
+    // First major wins for a minor that appears under several ('Refractories',
+    // 'Panels', 'Conveyors'), matching the order a buyer sees in the dropdown.
+    const key = taxonomyKey(minor);
+    if (!TAXONOMY_BY_MINOR_KEY.has(key)) {
+      TAXONOMY_BY_MINOR_KEY.set(key, { major: group.majorCategory, minor });
+    }
+  }
+}
+
+/** The taxonomy's own spelling of a major, or null when it is not one. */
+function canonicalMajor(value) {
+  return MAJOR_BY_KEY.get(taxonomyKey(value)) || null;
+}
+
+/** The taxonomy pair owning a minor category, or null when it is not one. */
+function taxonomyPairForMinor(value) {
+  return TAXONOMY_BY_MINOR_KEY.get(taxonomyKey(value)) || null;
+}
+
+/**
+ * Settle a stated category into a pair the review grid can render.
+ *
+ * Succeeds only when the stated minor is a real taxonomy minor. The major is then
+ * the stated one if that is itself a real major — which disambiguates a minor
+ * living under more than one, such as 'Panels' — and otherwise the major that
+ * owns the minor.
+ *
+ * Returns null when the stated minor is not in the taxonomy, so the caller falls
+ * through to keyword matching. That matters for the umbrella labels a model likes
+ * to produce: 'Valves', 'PPE' and 'Hand Protection' are not minors, but the item
+ * text routes them to 'Hoses, Valves & Fittings', 'Hemlets' and 'Gloves'. Keeping
+ * the model's word instead would put a value in the row that the minor dropdown
+ * has no option for, and the buyer would see an empty select.
+ */
+function resolveStatedCategory(statedMinor, statedMajor) {
+  const pair = taxonomyPairForMinor(statedMinor);
+  if (!pair) return null;
+  return { major: canonicalMajor(statedMajor) || pair.major, minor: pair.minor };
+}
 
 /**
  * A category string that reads like a placeholder carries no routing value, so
@@ -75,31 +144,42 @@ function matchByKeyword(text) {
  *   categoryConfidence: number, classificationStatus: string}}
  */
 function classifyLineItem(item, payloadCategory) {
+  // Resolved up front rather than inside step 3, because the stated-category
+  // steps use its major when the model named a minor but no major.
+  const keywordMatch = matchByKeyword(`${item.itemName || ''} ${item.technicalSpecs || ''}`);
+
   // 1. An explicit, meaningful category on the item itself wins outright.
   const explicitMinor = item.minorCategory || item.category;
   if (!isGenericCategory(explicitMinor)) {
-    return {
-      majorCategory: !isGenericCategory(item.majorCategory) ? item.majorCategory : DEFAULT_MAJOR_CATEGORY,
-      minorCategory: explicitMinor,
-      category: explicitMinor,
-      categoryConfidence: CONFIDENCE.EXPLICIT,
-      classificationStatus: STATUS.EXPLICIT,
-    };
+    const resolved = resolveStatedCategory(explicitMinor, item.majorCategory);
+    if (resolved) {
+      return {
+        majorCategory: resolved.major,
+        minorCategory: resolved.minor,
+        category: resolved.minor,
+        categoryConfidence: CONFIDENCE.EXPLICIT,
+        classificationStatus: STATUS.EXPLICIT,
+      };
+    }
+    // No major could be resolved for it, so the pair would arrive at the review
+    // grid unrenderable. Fall through instead of stamping a placeholder.
   }
 
   // 2. A category stated once for the whole payload applies to every item.
   if (!isGenericCategory(payloadCategory)) {
-    return {
-      majorCategory: !isGenericCategory(item.majorCategory) ? item.majorCategory : DEFAULT_MAJOR_CATEGORY,
-      minorCategory: payloadCategory,
-      category: payloadCategory,
-      categoryConfidence: CONFIDENCE.EXPLICIT,
-      classificationStatus: STATUS.EXPLICIT,
-    };
+    const resolved = resolveStatedCategory(payloadCategory, item.majorCategory);
+    if (resolved) {
+      return {
+        majorCategory: resolved.major,
+        minorCategory: resolved.minor,
+        category: resolved.minor,
+        categoryConfidence: CONFIDENCE.EXPLICIT,
+        classificationStatus: STATUS.EXPLICIT,
+      };
+    }
   }
 
   // 3. Keyword match across the description and the technical specification.
-  const keywordMatch = matchByKeyword(`${item.itemName || ''} ${item.technicalSpecs || ''}`);
   if (keywordMatch) {
     return {
       majorCategory: keywordMatch.major,

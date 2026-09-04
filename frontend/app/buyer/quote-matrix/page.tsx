@@ -6,5 +6,5 @@ import QuoteMatrix from '@/app/buyer/quote-matrix';
 
 export default function BuyerQuoteMatrixPage() {
   const router = useRouter();
-  return <QuoteMatrix onBackToDashboard={() => router.push('/buyer/command-center')} scopeToOwnBuyerAccount />;
+  return <QuoteMatrix onBackToDashboard={() => router.push('/buyer/dashboard')} scopeToOwnBuyerAccount />;
 }

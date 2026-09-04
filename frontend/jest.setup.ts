@@ -20,12 +20,121 @@ if (typeof global.Headers === 'undefined') {
   global.Headers = globalThis.Headers;
 }
 
+// A signed-in buyer session.
+//
+// RFQ reads are authenticated and organisation-scoped now, and the store clears
+// the list when there is no token rather than leaving a previous session's RFQs on
+// screen. Screen tests therefore need a session to have anything to render, which
+// also matches the only state these screens are reachable in.
+const TEST_SESSION_USER = {
+  id: 'usr-buyer-001',
+  email: 'buyer@procucev.com',
+  name: 'Test Buyer',
+  role: 'buyer',
+  orgId: 'org-buyer-01',
+  orgName: 'Test Buyer Org',
+};
+
+// Written at module scope, not in beforeEach: authClient is a singleton that reads
+// localStorage in its constructor when the module is first imported, which happens
+// before any beforeEach runs. Setting it later would leave that singleton holding a
+// null token.
+localStorage.setItem('procucev_auth_token', 'test-session-token');
+localStorage.setItem('procucev_user_session', JSON.stringify(TEST_SESSION_USER));
+
+beforeEach(() => {
+  localStorage.setItem('procucev_auth_token', 'test-session-token');
+  localStorage.setItem('procucev_user_session', JSON.stringify(TEST_SESSION_USER));
+});
+
 // Global fetch mock
-global.fetch = jest.fn().mockImplementation((url: string) => {
+// RFQs are no longer in the bootstrap payload: that endpoint is anonymous, and
+// serving the global RFQ array from it is what leaked RFQs between buyers. They
+// are fetched from the authenticated, org-scoped GET /api/rfqs instead, so the
+// fixture is shared by both branches of the mock below.
+const RFQ_FIXTURES = [
+  {
+    id: 'rfq-00421',
+    rfqNumber: 'RFQ-2026-00421',
+    title: 'Centrifugal Water Pumps & Spares',
+    category: 'Heavy Industrial Fluid Dynamics & Valves',
+    sourcingMode: 'mode_3',
+    status: 'AI Recommended',
+    createdAt: '2026-08-20',
+    targetDeliveryDate: '2026-09-15',
+    quotesCount: 3,
+    budget: 150000,
+    aiScore: 94,
+    extractedEntities: [
+      {
+        id: 'item-1',
+        itemName: 'Centrifugal Pump 50HP',
+        quantity: 4,
+        unit: 'Units',
+        targetDate: '2026-09-15',
+        technicalSpecs: '50HP 3-Phase 415V Cast Iron',
+        confidence: 96,
+        category: 'Heavy Industrial Fluid Dynamics & Valves',
+      },
+    ],
+    quotes: [
+      {
+        vendorId: 'vendor-1',
+        vendorName: 'Apex Supplies Ltd.',
+        vendorCategory: 'Procucev - AI Rec',
+        unitPrice: 24500,
+        totalPrice: 98000,
+        leadTimeDays: 14,
+        aiMatchScore: 95,
+        isBestPrice: true,
+        isPreferred: true,
+        warrantyYears: 2,
+        complianceStatus: 'Fully Compliant',
+        paymentTerms: '30 Days Net',
+        remarks: 'Top rated supplier',
+      },
+    ],
+  },
+];
+
+// Allocated by the mock so a created RFQ carries a number the caller did not
+// supply, exactly as the server does.
+let allocatedRfqCount = 0;
+
+global.fetch = jest.fn().mockImplementation((url: string, init?: { method?: string; body?: string }) => {
+  // POST /api/rfqs creates one record; GET /api/rfqs lists them. Returning the
+  // list for both made the store adopt an array as though it were one RFQ.
+  if (typeof url === 'string' && /\/api\/rfqs(\?|$)/.test(url) && init?.method === 'POST') {
+    allocatedRfqCount += 1;
+    const sent = JSON.parse(init.body || '{}');
+    const allocatedNumber = `RFQ2604090000${String(allocatedRfqCount).padStart(2, '0')}`;
+    return Promise.resolve({
+      ok: true,
+      status: 201,
+      json: async () => ({
+        success: true,
+        data: {
+          ...sent,
+          id: `rfq-created-${allocatedRfqCount}`,
+          rfqId: allocatedNumber,
+          rfqNumber: allocatedNumber,
+          createdAt: '2026-09-04T10:00:00.000Z',
+          quotes: [],
+          quotesCount: 0,
+          chasingActive: false,
+          aiSummary: null,
+        },
+      }),
+    });
+  }
+
   return Promise.resolve({
     ok: true,
     status: 200,
     json: async () => {
+      if (typeof url === 'string' && /\/api\/rfqs(\?|$)/.test(url)) {
+        return { success: true, data: RFQ_FIXTURES };
+      }
       if (typeof url === 'string' && url.includes('/api/bootstrap')) {
         return {
           success: true,
@@ -97,52 +206,6 @@ global.fetch = jest.fn().mockImplementation((url: string) => {
                 minorCategories: ['Ball Valves', 'Butterfly Valves'],
                 evaluated: false,
                 rating: 4.5,
-              },
-            ],
-            rfqs: [
-              {
-                id: 'rfq-00421',
-                rfqNumber: 'RFQ-2026-00421',
-                title: 'Centrifugal Water Pumps & Spares',
-                category: 'Heavy Industrial Fluid Dynamics & Valves',
-                sourcingMode: 'mode_3',
-                status: 'AI Recommended',
-                buyerAccountId: 'buyer-acc-001',
-                buyerAccountName: 'Larsen & Toubro Heavy Engineering',
-                createdAt: '2026-08-20',
-                targetDeliveryDate: '2026-09-15',
-                quotesCount: 3,
-                budget: 150000,
-                aiScore: 94,
-                extractedEntities: [
-                  {
-                    id: 'item-1',
-                    itemName: 'Centrifugal Pump 50HP',
-                    quantity: 4,
-                    unit: 'Units',
-                    targetDate: '2026-09-15',
-                    technicalSpecs: '50HP 3-Phase 415V Cast Iron',
-                    confidence: 96,
-                    category: 'Heavy Industrial Fluid Dynamics & Valves',
-                  },
-                ],
-                quotes: [
-                  {
-                    vendorId: 'vendor-1',
-                    vendorName: 'Apex Supplies Ltd.',
-                    vendorCategory: 'Procucev - AI Rec',
-                    unitPrice: 24500,
-                    totalPrice: 98000,
-                    leadTimeDays: 14,
-                    aiMatchScore: 95,
-                    isBestPrice: true,
-                    isPreferred: true,
-                    warrantyYears: 2,
-                    complianceStatus: 'Fully Compliant',
-                    paymentTerms: '30 Days Net',
-                    remarks: 'Top rated supplier',
-                  },
-                ],
               },
             ],
             evaluations: [

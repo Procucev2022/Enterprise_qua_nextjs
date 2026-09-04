@@ -2,6 +2,7 @@ import React from 'react';
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import VendorQualificationForm from '@/app/vendor/qualification-form';
 import { AppProvider, useApp } from '@/lib/store';
+import { authClient } from '@/lib/authClient';
 
 function QualificationFormWithSession() {
   const { setCurrentUserSession } = useApp();
@@ -58,6 +59,12 @@ function attachEvidenceToAllTabs() {
 }
 
 describe('VendorQualificationForm Comprehensive Suite', () => {
+  // Several tests here attach evidence across all 24 questions and advance
+  // real async timers — CPU-heavy in jsdom, and this file has grown enough
+  // of them that the global 20s budget (jest.setup.ts) gets tight under a
+  // full-suite run's resource contention, not just when run alone.
+  jest.setTimeout(30000);
+
   beforeEach(() => {
     jest.clearAllMocks();
   });
@@ -313,6 +320,26 @@ describe('VendorQualificationForm Comprehensive Suite', () => {
     jest.useRealTimers();
   });
 
+  test('blocks submission with missing evidence attachments', () => {
+    const onBack = jest.fn();
+    const onSuccess = jest.fn();
+
+    renderWithProvider(<QualificationFormCustomWrapper onBack={onBack} onSuccess={onSuccess} />);
+
+    // Deliberately skip attachEvidenceToAllTabs() — every question's
+    // attachmentName stays empty (see the fixtures' own `attachmentName: ''`).
+    const tab6 = screen.getAllByRole('button', { name: /Governance & ESG/i })[0];
+    fireEvent.click(tab6);
+
+    const submitBtn = screen.getByRole('button', { name: /Submit Final Qualification/i });
+    fireEvent.click(submitBtn);
+
+    // handleSubmit's missing-evidence guard returns before setSubmitting(true)
+    // or any submission fetch, so the button stays exactly as it was.
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Submit Final Qualification/i })).toBeInTheDocument();
+  });
+
   test('loads the caller\'s own vendor record on mount to attribute the evaluation correctly', async () => {
     global.fetch = jest.fn((url: string) => {
       if (/\/api\/vendors\/[^/]+$/.test(url)) {
@@ -332,14 +359,53 @@ describe('VendorQualificationForm Comprehensive Suite', () => {
     });
   });
 
-  test('handles a failed/network-error vendor record lookup gracefully', async () => {
-    global.fetch = jest.fn(() => Promise.reject(new Error('offline'))) as any;
+  test('handles a failed/network-error vendor record lookup gracefully, falling back to the session identity', async () => {
+    jest.useFakeTimers();
+    global.fetch = jest.fn((url: string) => {
+      if (/\/api\/vendors\/[^/]+$/.test(url)) return Promise.reject(new Error('offline'));
+      return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+    }) as any;
     render(
       <AppProvider>
         <QualificationFormWithSession />
       </AppProvider>
     );
     await waitFor(() => expect(screen.getByText(/360-Degree AI Self-Evaluation/i)).toBeInTheDocument());
+
+    // myVendorRecord stays null, so the header and the submitted record both
+    // fall back to currentUserSession's orgName/name instead.
+    expect(screen.getByText(/Test Vendor Co — Live AI Capability Rating/i)).toBeInTheDocument();
+
+    attachEvidenceToAllTabs();
+    fireEvent.click(screen.getAllByRole('button', { name: /Governance & ESG/i })[0]);
+    fireEvent.click(screen.getByRole('button', { name: /Submit Final Qualification/i }));
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(2000);
+    });
+    jest.useRealTimers();
+  });
+
+  test('falls all the way back to "Vendor" when there is no session at all', async () => {
+    jest.useFakeTimers();
+    // No currentUserSession means loadMyVendorRecord's `if (!email) return`
+    // guard fires first (myVendorRecord never even attempts to load), and
+    // the name/vendorName/email fallback chains all exhaust down to their
+    // final literal — the previous test only ever got as far as orgName.
+    authClient.setSession(null, null);
+    global.fetch = jest.fn(() => Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) })) as any;
+
+    renderWithProvider(<VendorQualificationForm onBack={jest.fn()} onSuccess={jest.fn()} />);
+    expect(screen.getByText(/Vendor — Live AI Capability Rating/i)).toBeInTheDocument();
+
+    attachEvidenceToAllTabs();
+    fireEvent.click(screen.getAllByRole('button', { name: /Governance & ESG/i })[0]);
+    fireEvent.click(screen.getByRole('button', { name: /Submit Final Qualification/i }));
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(2000);
+    });
+    jest.useRealTimers();
   });
 
   test('the Re-scan Document button is disabled until a file is attached, then clickable', () => {

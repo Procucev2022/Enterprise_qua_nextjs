@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState, useRef, useMemo } from 'react';
-import * as XLSX from 'xlsx';
 import { useApp } from '@/lib/store';
 import {
   SOURCING_MODES,
@@ -12,6 +11,8 @@ import {
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { extractLineItemsFromDocument, classifyLineItems, uploadRFQAttachment } from '@/lib/rfqClient';
+import ManualRFQModal from '@/app/buyer/ManualRFQModal';
+import { buildExtractionRequest } from '@/lib/documentExtraction';
 import type {
   SourcingMode,
   ExtractedEntity,
@@ -19,6 +20,7 @@ import type {
   RFQAttachment,
   RFQExtractionRequest,
   RFQExtractionResult,
+  RFQItem,
 } from '@/lib/types';
 import categoriesData from '@/lib/categories.json';
 import {
@@ -101,6 +103,7 @@ export interface RecommendedProcucevVendor {
 export default function IngestionWizard({ onComplete, onCancel, forceSubscription }: IngestionWizardProps) {
   const {
     addNewRFQ,
+    adoptCreatedRFQ,
     currentMode,
     setCurrentMode,
     showToast,
@@ -118,7 +121,8 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
   // Manual entry has no extraction to complete, so Step 1 needs its own signal
   // that the buyer has chosen to proceed. Without it the step strip would stay
   // locked and there would be no way to reach the line-item table.
-  const [manualEntryStarted, setManualEntryStarted] = useState(false);
+  /** Whether the manual RFQ entry dialog is showing. */
+  const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [uploadTab, setUploadTab] = useState<'boq' | 'email_file'>('boq');
   const [isDraggingDoc, setIsDraggingDoc] = useState(false);
 
@@ -155,11 +159,16 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
   const [deliveryLocation, setDeliveryLocation] = useState('');
   const [deliveryPincode, setDeliveryPincode] = useState('');
 
-  // Supporting documents on the manual path. Stored server-side and kept with the
-  // RFQ for reference; never sent for extraction.
-  const [attachments, setAttachments] = useState<RFQAttachment[]>([]);
-  const [isAttaching, setIsAttaching] = useState(false);
-  const attachInputRef = useRef<HTMLInputElement>(null);
+  /**
+   * Whether the buyer has tried to leave Step 2 yet.
+   *
+   * Both delivery fields start empty, so validating them on first render greeted
+   * the buyer with two red errors against fields they had not reached. The blank
+   * warnings are held back until Proceed is pressed, which is the first moment the
+   * omission actually matters.
+   */
+  const [sourcingAttempted, setSourcingAttempted] = useState(false);
+
 
   // Line item entities state
   // Populated only by AI extraction or by the buyer adding rows on Step 2.
@@ -175,64 +184,6 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
     setUploadedFileName(file.name);
     setExtractionError(null);
     setExtractionSummary(null);
-  };
-
-  /** Spreadsheet-like documents are flattened in the browser; Gemini cannot read xlsx binaries. */
-  const isSpreadsheet = (name: string) => /\.(xlsx|xls|csv|tsv)$/i.test(name);
-
-  /**
-   * Turn a workbook into the " | "-delimited text layout the extraction prompt
-   * describes, preserving row structure so quantities stay aligned with the item
-   * they belong to.
-   */
-  const flattenWorkbook = (data: ArrayBuffer): string => {
-    const workbook = XLSX.read(new Uint8Array(data), { type: 'array' });
-    return workbook.SheetNames.map((sheetName) => {
-      const rows: unknown[][] = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
-        header: 1,
-        blankrows: false,
-        defval: '',
-      });
-      const body = rows
-        .map((row) => row.map((cell) => String(cell ?? '').trim()).join(' | '))
-        .filter((line) => line.replace(/\|/g, '').trim() !== '')
-        .join('\n');
-      return `SHEET: ${sheetName}\n${body}`;
-    }).join('\n\n');
-  };
-
-  /** Read a file as the base64 body Gemini accepts for PDFs and images. */
-  const readAsBase64 = (file: File): Promise<string> =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onerror = () => reject(new Error('read failed'));
-      reader.onload = () => {
-        const result = String(reader.result || '');
-        // Strip the "data:<mime>;base64," prefix the API does not expect.
-        resolve(result.slice(result.indexOf(',') + 1));
-      };
-      reader.readAsDataURL(file);
-    });
-
-  const readAsArrayBuffer = (file: File): Promise<ArrayBuffer> =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onerror = () => reject(new Error('read failed'));
-      reader.onload = () => resolve(reader.result as ArrayBuffer);
-      reader.readAsArrayBuffer(file);
-    });
-
-  /** Build the extraction request for whichever document the buyer supplied. */
-  const buildExtractionRequest = async (file: File): Promise<RFQExtractionRequest> => {
-    if (isSpreadsheet(file.name)) {
-      return { fileName: file.name, documentText: flattenWorkbook(await readAsArrayBuffer(file)) };
-    }
-    return {
-      fileName: file.name,
-      inlineData: await readAsBase64(file),
-      // Browsers leave type empty for some uploads; PDF is the common default here.
-      mimeType: file.type || 'application/pdf',
-    };
   };
 
   /**
@@ -278,48 +229,7 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
     setActiveStep(2);
   };
 
-  /**
-   * Attach supporting documents on the manual path.
-   *
-   * No extraction is attempted and no Gemini quota is spent: on this path the
-   * buyer is keying the line items, and the document is evidence to keep with the
-   * RFQ. Each file is uploaded as it is chosen so a rejection is reported against
-   * the file that caused it rather than as one opaque failure at the end.
-   */
-  const handleAttachDocuments = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
 
-    const room = MAX_ATTACHMENTS - attachments.length;
-    if (room <= 0) {
-      showToast(
-        EXTRACTION.attachLimitTitle,
-        formatString(EXTRACTION.attachLimitMessage, { max: MAX_ATTACHMENTS }),
-        'warning'
-      );
-      return;
-    }
-
-    setIsAttaching(true);
-    try {
-      for (const file of Array.from(files).slice(0, room)) {
-        const result = await uploadRFQAttachment(file);
-        if (result.success && result.data) {
-          const stored = result.data;
-          setAttachments((prev) => [...prev, stored]);
-        } else {
-          showToast(EXTRACTION.attachFailedTitle, result.error || EXTRACTION.attachUnreachable, 'warning');
-        }
-      }
-    } finally {
-      setIsAttaching(false);
-      // Cleared so choosing the same file again still raises a change event.
-      if (attachInputRef.current) attachInputRef.current.value = '';
-    }
-  };
-
-  const handleRemoveAttachment = (id: string) => {
-    setAttachments((prev) => prev.filter((a) => a.id !== id));
-  };
 
   /**
    * Step 1 manual path: skip extraction entirely and open the review step with
@@ -330,16 +240,22 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
    * report. The rest of the wizard is unchanged: the same categorisation, the
    * same sourcing-mode gate and the same dispatch.
    */
-  const handleStartManualRFQ = () => {
-    setUploadedFile(null);
-    setUploadedFileName('');
-    setExtractionError(null);
-    setExtractionSummary(null);
-    setBudget(0);
-    setBudgetFromDocument(false);
-    setEntities([blankLineItem()]);
-    setManualEntryStarted(true);
-    setActiveStep(2);
+  /**
+   * The manual dialog has saved an RFQ.
+   *
+   * The record handed back is the server's, so it carries the allocated RFQ
+   * number, the row id and the generated summary. It is adopted into the store as
+   * given rather than reconstructed locally, and the wizard then closes.
+   */
+  const handleManualRFQCreated = (rfq: RFQItem) => {
+    adoptCreatedRFQ(rfq);
+    showToast(
+      EXTRACTION.manualCreatedTitle,
+      formatString(EXTRACTION.manualCreatedMessage, { rfqNumber: rfq.rfqNumber }),
+      'success'
+    );
+    setIsManualModalOpen(false);
+    onComplete();
   };
 
   /** Step 1 primary action: extract line items from the staged document. */
@@ -502,7 +418,7 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
    * items on Step 2, so keeping them on the upload screen would be a dead end.
    */
   const isExtractionAttempted =
-    extractionSummary !== null || extractionError !== null || manualEntryStarted;
+    extractionSummary !== null || extractionError !== null;
 
   /**
    * Step 2 is done once every row can actually be quoted against.
@@ -520,8 +436,31 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
 
   const hasCompleteLineItems = entities.length > 0 && entities.every(isLineItemComplete);
 
+  /**
+   * Delivery destination, mandatory before sourcing.
+   *
+   * Unlike the budget, this cannot be left blank: vendors rate freight on the
+   * location and its pincode, so a quote raised without them is not comparable
+   * against one that has them. Extraction never supplies these, so they are
+   * always keyed by the buyer on Step 2.
+   */
+  const trimmedDeliveryLocation = deliveryLocation.trim();
+  const trimmedDeliveryPincode = deliveryPincode.trim();
+  const isDeliveryLocationMissing = trimmedDeliveryLocation === '';
+  const isDeliveryPincodeMissing = trimmedDeliveryPincode === '';
+  const isDeliveryPincodeMalformed =
+    !isDeliveryPincodeMissing && !PINCODE_PATTERN.test(trimmedDeliveryPincode);
+  const hasDeliveryDestination =
+    !isDeliveryLocationMissing && !isDeliveryPincodeMissing && !isDeliveryPincodeMalformed;
+
+  // A blank field is only worth flagging once the buyer has tried to move on. A
+  // malformed pincode is flagged immediately: it can only exist because something
+  // was typed, so the buyer is already looking at the field.
+  const showDeliveryLocationRequired = sourcingAttempted && isDeliveryLocationMissing;
+  const showDeliveryPincodeRequired = sourcingAttempted && isDeliveryPincodeMissing;
+
   /** Highest step the buyer has earned access to. */
-  const unlockedStep = !isExtractionAttempted ? 1 : hasCompleteLineItems ? 3 : 2;
+  const unlockedStep = !isExtractionAttempted ? 1 : hasCompleteLineItems && hasDeliveryDestination ? 3 : 2;
 
   /**
    * Strip navigation. Going back is always allowed; jumping ahead explains which
@@ -542,11 +481,18 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
   /**
    * Gate Step 2 -> Step 3. Every line item needs a description, whether it came
    * from AI extraction or was keyed after a failed extraction, otherwise vendors
-   * would be asked to quote against a blank row.
+   * would be asked to quote against a blank row. The delivery destination is
+   * checked separately so the toast names the actual blocker rather than
+   * reporting a line-item problem for a missing pincode.
    */
   const handleProceedToSourcing = () => {
+    setSourcingAttempted(true);
     if (!hasCompleteLineItems) {
       showToast(EXTRACTION.incompleteItemsTitle, EXTRACTION.incompleteItemsMessage, 'warning');
+      return;
+    }
+    if (!hasDeliveryDestination) {
+      showToast(EXTRACTION.deliveryIncompleteTitle, EXTRACTION.deliveryIncompleteMessage, 'warning');
       return;
     }
     setActiveStep(3);
@@ -565,7 +511,7 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
    * automatic matching and firing chaser sequences at suppliers who have not been
    * selected yet.
    */
-  const handleDispatch = () => {
+  const handleDispatch = async () => {
     // Line-item completeness is not re-checked here: `unlockedStep` locks Step 3
     // the moment a row loses its description, so this screen cannot be reached
     // with an unquotable list.
@@ -574,23 +520,22 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
     // and requiring a figure only made buyers invent a ceiling that vendors would
     // then quote against.
     //
-    // The pincode is checked because a malformed one silently misdirects freight.
-    const pincode = deliveryPincode.trim();
-    if (pincode !== '' && !PINCODE_PATTERN.test(pincode)) {
-      showToast(EXTRACTION.deliveryPincodeInvalidTitle, EXTRACTION.deliveryPincodeInvalidMessage, 'warning');
-      setActiveStep(2);
-      return;
-    }
-
+    // The delivery destination is not re-checked here either, for the same reason:
+    // both fields only render on Step 2, so they cannot be cleared while this
+    // screen is showing, and `unlockedStep` drops back to 2 the moment one is
+    // emptied, which re-locks the strip before dispatch can be reached.
     setCurrentMode(selectedMode);
     // No fallback needed: `hasCompleteLineItems` requires a major category on
     // every row before Step 3 unlocks, so the leading item always carries one.
     const mainMajor = entities[0].majorCategory;
     const vendorsToDispatch: VendorEntry[] = [];
 
-    addNewRFQ(
+    // No rfqNumber is sent: the server allocates it under the same scheme the Java
+    // p2pservices app uses. This screen used to mint one with Math.random(), which
+    // could collide and, worse, did not match what was actually saved — so the
+    // details page fetched a number the database had never seen.
+    const saved = await addNewRFQ(
       {
-        rfqNumber,
         // Extraction supplies a document title, but manual entry has none and the
         // API requires one, so it falls back to the leading line item the way
         // rfqIngestionService.deriveTitle does on the server.
@@ -599,9 +544,12 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
         sourcingMode: selectedMode,
         targetDeliveryDate: entities[0].targetDate || defaultTargetDate(),
         budget,
-        deliveryLocation: deliveryLocation.trim(),
-        deliveryPincode: pincode,
-        attachments,
+        deliveryLocation: trimmedDeliveryLocation,
+        deliveryPincode: trimmedDeliveryPincode,
+        // The extraction path has no attachment picker: the document that was
+        // read is recorded as sourceFileName instead. Attachments belong to the
+        // manual dialog, which posts its own RFQ.
+        attachments: [],
         extractedEntities: entities,
         aiScore: selectedMode === 'mode_3' ? 95 : 88,
         source:
@@ -611,6 +559,12 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
         autoCirculated: false,
       },
       vendorsToDispatch
+    );
+
+    showToast(
+      EXTRACTION.manualCreatedTitle,
+      formatString(EXTRACTION.manualCreatedMessage, { rfqNumber: saved.rfqNumber }),
+      'success'
     );
     onComplete();
   };
@@ -719,7 +673,13 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
               </button>
               <button
                 data-testid="intake-manual"
-                onClick={() => setIngestionMethod('manual')}
+                onClick={() => {
+                  setIngestionMethod('manual');
+                  // Opens straight away: the manual path has nothing to configure
+                  // on this screen before keying, so a second click to get going
+                  // was a step with no purpose.
+                  setIsManualModalOpen(true);
+                }}
                 className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
                   ingestionMethod === 'manual'
                     ? 'bg-emerald-600 text-white shadow-sm'
@@ -733,73 +693,17 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
 
           {ingestionMethod === 'manual' ? (
             <div className="space-y-4">
-              {/* Supporting documents. Stored with the RFQ, never extracted. */}
-              <div className="p-4 rounded-xl border border-slate-200 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/40 space-y-3">
-                <div className="flex items-start justify-between flex-wrap gap-2">
-                  <div>
-                    <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                      <Paperclip size={13} className="text-slate-500 dark:text-gray-400" />
-                      {EXTRACTION.attachTitle}
-                    </h4>
-                    <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-1 max-w-xl">
-                      {EXTRACTION.attachMessage}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => attachInputRef.current?.click()}
-                    disabled={isAttaching}
-                    className="btn btn-secondary btn-sm font-bold flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <Paperclip size={13} />
-                    {isAttaching ? EXTRACTION.attachingLabel : EXTRACTION.attachAction}
-                  </button>
-                  <input
-                    ref={attachInputRef}
-                    type="file"
-                    multiple
-                    data-testid="attachment-input"
-                    className="hidden"
-                    onChange={(e) => handleAttachDocuments(e.target.files)}
-                  />
-                </div>
-
-                {attachments.length > 0 && (
-                  <ul className="space-y-1.5">
-                    <li className="text-[10px] uppercase font-bold tracking-wide text-slate-400 dark:text-gray-500">
-                      {formatString(EXTRACTION.attachedHeading, { count: attachments.length })}
-                    </li>
-                    {attachments.map((file) => (
-                      <li
-                        key={file.id}
-                        className="flex items-center justify-between gap-2 p-2 rounded-lg bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800"
-                      >
-                        <span className="flex items-center gap-2 min-w-0">
-                          <FileText size={13} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
-                          <span className="text-[11px] font-semibold text-slate-800 dark:text-gray-200 truncate">
-                            {file.fileName}
-                          </span>
-                          <span className="text-[10px] mono text-slate-400 dark:text-gray-500 shrink-0">
-                            {formatFileSize(file.size)}
-                          </span>
-                        </span>
-                        <button
-                          onClick={() => handleRemoveAttachment(file.id)}
-                          aria-label={formatString(EXTRACTION.attachRemoveAria, { fileName: file.fileName })}
-                          className="text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 p-1 rounded shrink-0"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-
-              <div className="flex items-center justify-between flex-wrap gap-2 pt-2 border-t border-slate-100 dark:border-gray-800">
-                <div className="text-[11px] text-slate-400">{EXTRACTION.manualHint}</div>
+              <div className="p-6 rounded-xl border border-dashed border-slate-300 dark:border-gray-700 text-center space-y-3">
+                <Pencil size={26} className="mx-auto text-slate-300 dark:text-gray-700" />
+                <h4 className="text-sm font-bold text-slate-800 dark:text-white">
+                  {EXTRACTION.manualPanelTitle}
+                </h4>
+                <p className="text-xs text-slate-500 dark:text-gray-400 max-w-md mx-auto">
+                  {EXTRACTION.manualPanelMessage}
+                </p>
                 <button
-                  onClick={handleStartManualRFQ}
-                  className="btn btn-primary font-bold flex items-center gap-2"
+                  onClick={() => setIsManualModalOpen(true)}
+                  className="btn btn-primary font-bold inline-flex items-center gap-2"
                 >
                   <Pencil size={14} /> <span>{EXTRACTION.manualStartAction}</span> <ArrowRight size={15} />
                 </button>
@@ -1054,17 +958,6 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
             </div>
           </div>
 
-          {/* Manual entry has no AI outcome to report, so it says so plainly
-              rather than leaving the buyer wondering where the banner went. */}
-          {manualEntryStarted && (
-            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 text-xs">
-              <p className="font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1.5">
-                <Pencil size={13} className="text-emerald-600 dark:text-emerald-400" />
-                {EXTRACTION.manualBannerTitle}
-              </p>
-              <p className="text-slate-500 dark:text-gray-400 mt-0.5">{EXTRACTION.manualBannerMessage}</p>
-            </div>
-          )}
 
           {/* AI extraction outcome: either what was read, or why it could not be. */}
           {extractionSummary && (
@@ -1156,16 +1049,27 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                 className="block text-slate-600 dark:text-gray-400 font-semibold mb-1 flex items-center gap-1"
               >
                 <MapPin size={11} /> {EXTRACTION.deliveryLocationLabel}
+                <span className="text-rose-600 dark:text-rose-400 font-bold" aria-hidden="true">
+                  {EXTRACTION.deliveryRequiredMarker}
+                </span>
               </label>
               <input
                 id="rfq-delivery-location"
                 type="text"
+                required
+                aria-required
+                aria-invalid={showDeliveryLocationRequired}
                 value={deliveryLocation}
                 onChange={(e) => setDeliveryLocation(e.target.value)}
                 placeholder={EXTRACTION.deliveryLocationPlaceholder}
                 maxLength={200}
                 className="font-medium"
               />
+              {showDeliveryLocationRequired && (
+                <p className="text-[10px] text-rose-700 dark:text-rose-400 mt-1">
+                  {EXTRACTION.deliveryLocationRequiredMessage}
+                </p>
+              )}
             </div>
 
             <div>
@@ -1174,19 +1078,32 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                 className="block text-slate-600 dark:text-gray-400 font-semibold mb-1"
               >
                 {EXTRACTION.deliveryPincodeLabel}
+                <span className="text-rose-600 dark:text-rose-400 font-bold" aria-hidden="true">
+                  {EXTRACTION.deliveryRequiredMarker}
+                </span>
               </label>
               <input
                 id="rfq-delivery-pincode"
                 type="text"
+                required
+                aria-required
+                aria-invalid={showDeliveryPincodeRequired || isDeliveryPincodeMalformed}
                 value={deliveryPincode}
                 onChange={(e) => setDeliveryPincode(e.target.value)}
                 placeholder={EXTRACTION.deliveryPincodePlaceholder}
                 maxLength={10}
                 className="mono font-semibold"
               />
-              {/* Flagged inline as well as on save, so a typo is caught while the
-                  buyer is still looking at the field. */}
-              {deliveryPincode.trim() !== '' && !PINCODE_PATTERN.test(deliveryPincode.trim()) && (
+              {/* Blank and malformed are reported separately: telling a buyer who
+                  has typed nothing that the format is wrong sends them looking for
+                  a typo that is not there. Both are flagged inline as well as on
+                  save, so the problem surfaces while the field is still in view. */}
+              {showDeliveryPincodeRequired && (
+                <p className="text-[10px] text-rose-700 dark:text-rose-400 mt-1">
+                  {EXTRACTION.deliveryPincodeRequiredMessage}
+                </p>
+              )}
+              {isDeliveryPincodeMalformed && (
                 <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-1">
                   {EXTRACTION.deliveryPincodeInvalidMessage}
                 </p>
@@ -1554,6 +1471,14 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
         </div>
       )}
 
+      {/* Manual entry runs entirely in this dialog. It posts to the API itself and
+          hands back the saved record, so it does not pass through the extraction
+          steps above — there is no document to read and nothing to review. */}
+      <ManualRFQModal
+        isOpen={isManualModalOpen}
+        onClose={() => setIsManualModalOpen(false)}
+        onCreated={handleManualRFQCreated}
+      />
     </div>
   );
 }

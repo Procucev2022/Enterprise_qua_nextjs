@@ -15,13 +15,11 @@ import {
   Bot,
   Layers,
   ChevronRight,
-  Download,
   Search,
   MessageSquare,
   Phone,
   Smartphone,
   Mail,
-  Database,
   FileSpreadsheet,
 } from 'lucide-react';
 
@@ -60,14 +58,16 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
 
   const [rfqSourceFilter, setRfqSourceFilter] = useState<'all' | 'email_gateway' | 'web_portal' | 'email_upload'>('all');
 
-  // Scoped to the logged-in buyer's own company. Without this every buyer saw
-  // every RFQ ever created by any company — a real cross-tenant data leak,
-  // not a display quirk. An RFQ predating buyerAccountId tracking, or created
-  // while no buyer account matched the session, has no owner to scope to and
-  // is excluded rather than shown to everyone by default.
-  const rfqs = activeBuyerAccount
-    ? allRfqs.filter((r) => r.buyerAccountId === activeBuyerAccount.id)
-    : [];
+  // GET /api/rfqs is itself scoped to the signed-in buyer's own account now
+  // (server-side, via the same buyer_accounts record RFQs are stamped with —
+  // see rfqController.js's resolveRfqReadScope), so allRfqs already contains
+  // only this buyer's own RFQs. Re-filtering here by activeBuyerAccount.id
+  // was comparing against the wrong identity system: activeBuyerAccount
+  // resolves from the shared MySQL identity schema's organizationId, a
+  // different id space than buyer_accounts' Neon-generated id that
+  // r.buyerAccountId actually holds — the two never matched, silently
+  // zeroing out a real, correctly-scoped list.
+  const rfqs = allRfqs;
 
   const totalActiveRFQs = rfqs.length;
   const totalPendingQuotes = rfqs.reduce((acc, r) => acc + (r.quotesCount || (r.quotes ? r.quotes.length : 0)), 0);
@@ -174,11 +174,11 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
       {/* ── Header ── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-extrabold tracking-tight text-slate-900 dark:text-white">
-            Buyer Command Center
+          <h1 className="text-xl font-extrabold tracking-tight text-slate-900 dark:text-white flex items-center gap-2 flex-wrap">
+            <span>Enterprise Sourcing Dashboard</span>
           </h1>
-          <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-            Intake sources summary · Multi-mode sourcing · Chaser follow-ups
+          <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
+            Active RFQ pipeline tracking · Autonomous multi-channel follow-ups (Voice, WhatsApp, SMS) · Parametric quote matrix
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -195,33 +195,8 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
             <span>{initialSetupCompleted ? '✓ PO History Ingested' : '⚡ 1-3 Yr Purchase Setup'}</span>
           </button>
 
-          {onNavigateToDirectory && (
-            <button
-              onClick={onNavigateToDirectory}
-              className="btn btn-secondary btn-sm flex items-center gap-1.5 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800/60 hover:bg-amber-50 dark:hover:bg-amber-950/40"
-              title="View Integrated Buyer Directory & Public System Database"
-            >
-              <Database size={13} />
-              <span>Public Buyer DB ({activeBuyerAccount?.organizationName || 'L&T'})</span>
-            </button>
-          )}
           <button onClick={onNavigateToWizard} className="btn btn-primary btn-sm font-bold shadow-md">
-            <Plus size={14} /> Create / Ingest RFQ
-          </button>
-          <button
-            onClick={() => {
-              onNavigateToWizard();
-              showToast('Upload BOQ Ready', 'Drag and drop your BOQ spreadsheet for automated entity extraction.', 'info');
-            }}
-            className="btn btn-secondary btn-sm"
-          >
-            <UploadCloud size={13} /> Upload BOQ
-          </button>
-          <button
-            onClick={() => showToast('Analytics Exported', 'Executive spend & procurement pipeline exported to Excel.', 'info')}
-            className="btn btn-secondary btn-sm"
-          >
-            <Download size={13} />
+            <Plus size={14} /> AI RFQ Generator
           </button>
         </div>
       </div>

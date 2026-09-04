@@ -186,7 +186,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.commandCenter.description,
       icon: 'Layers',
       group: NAV_GROUPS.buyerSourcing,
-      route: '/buyer/command-center',
+      route: '/buyer/dashboard',
     },
     {
       id: 'ingestion_wizard',
@@ -419,7 +419,7 @@ export const SIDEBAR_LAYOUT = {
 
 /** Route the sign-in flow redirects to, chosen by the role on the user record. */
 export const ROLE_LANDING_ROUTE: Record<UserRole, string> = {
-  buyer: '/buyer/command-center',
+  buyer: '/buyer/dashboard',
   category_manager: '/category-manager/kanban-board',
   vendor: '/vendor/opportunity-feed',
   admin: '/admin/infra-control',
@@ -498,6 +498,20 @@ export const CURRENCY = {
 } as const;
 
 /**
+ * Every state an RFQ can be in, in pipeline order.
+ *
+ * Listed here rather than inline in the edit dialog so the status dropdown and
+ * the `RFQItem['status']` union cannot drift apart.
+ */
+export const RFQ_STATUSES = [
+  'Parsing',
+  'Quotes Pending',
+  'In Evaluation',
+  'AI Recommended',
+  'PO Generated',
+] as const;
+
+/**
  * Format an amount for display, e.g. 145000 -> "₹1,45,000".
  *
  * Fractional paise are dropped because every amount the platform shows is a
@@ -506,6 +520,74 @@ export const CURRENCY = {
 export function formatCurrency(amount: number): string {
   const safe = Number.isFinite(amount) ? amount : 0;
   return `${CURRENCY.SYMBOL}${Math.round(safe).toLocaleString(CURRENCY.LOCALE)}`;
+}
+
+/**
+ * The timezone every RFQ timestamp is presented in.
+ *
+ * Records are stored in UTC, which is right for storage and wrong for display:
+ * buyers, vendors and the procurement desk are all in India, and a raised-at of
+ * "2026-09-04T09:25:21.000Z" reads as five and a half hours earlier than the
+ * moment the buyer actually pressed save.
+ */
+export const DISPLAY_TIMEZONE = 'Asia/Kolkata';
+
+/**
+ * An RFQ timestamp as an Indian date and time, e.g. "04 Sep 2026, 02:55 pm IST".
+ *
+ * Accepts what the API actually returns: an ISO-8601 instant, or the
+ * "YYYY-MM-DD HH:mm:ss" form MySQL hands back for a DATETIME column. The latter
+ * carries no zone, so it is read as UTC — that is what the column stores.
+ *
+ * An unparseable or absent value is returned unchanged rather than rendered as
+ * "Invalid Date", so a legacy record still shows whatever it holds.
+ */
+export function formatIndianDateTime(value?: string): string {
+  if (!value || value.trim() === '') return '';
+
+  // A bare MySQL DATETIME has no zone designator, so one is added before parsing;
+  // without it the browser would read it in the viewer's local zone instead.
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(value.trim())
+    ? `${value.trim().replace(' ', 'T')}Z`
+    : value;
+
+  const parsed = Date.parse(normalized);
+  if (Number.isNaN(parsed)) return value;
+
+  const formatted = new Intl.DateTimeFormat(CURRENCY.LOCALE, {
+    timeZone: DISPLAY_TIMEZONE,
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  }).format(new Date(parsed));
+
+  // The zone is named explicitly: the same RFQ is read by vendors elsewhere, and
+  // a bare time with no zone is ambiguous on a procurement deadline.
+  return `${formatted} IST`;
+}
+
+/**
+ * An RFQ date with no time, e.g. "30 Sep 2026".
+ *
+ * Used for target delivery dates, which are stored as a plain date. Parsed as UTC
+ * so a date-only value cannot slip to the previous day for a viewer behind UTC.
+ */
+export function formatIndianDate(value?: string): string {
+  if (!value || value.trim() === '') return '';
+
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
+  const parsed = Date.parse(dateOnly ? `${value.trim()}T00:00:00Z` : value);
+  if (Number.isNaN(parsed)) return value;
+
+  return new Intl.DateTimeFormat(CURRENCY.LOCALE, {
+    timeZone: DISPLAY_TIMEZONE,
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  }).format(new Date(parsed));
 }
 
 /**

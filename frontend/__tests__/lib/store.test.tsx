@@ -2,276 +2,312 @@ import React from 'react';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { AppProvider, useApp } from '@/lib/store';
 import { RFQItem, VendorEntry, BuyerAccount, VendorEvaluationRecord, ExtractedEntity } from '@/lib/types';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import { authClient } from '@/lib/authClient';
 
 // Mock global fetch for API calls triggered by store
 const mockFetch = jest.fn();
 global.fetch = mockFetch;
 
+// RFQs are served from the authenticated GET /api/rfqs, which returns a bare
+// array, while /api/bootstrap returns the reference-data object. The mock has to
+// distinguish them or the store reads the wrong shape and reports no RFQs.
+const STORE_RFQ_FIXTURES = [
+  {
+    id: 'rfq-1',
+    title: 'Centrifugal Slurry Pumps',
+    category: 'Mechanical',
+    createdAt: '2026-08-29',
+    targetDeliveryDate: '2026-09-20',
+    status: 'Quotes Pending',
+    sourcingMode: 'mode_1',
+    quotesCount: 2,
+    budget: 500000,
+    extractedEntities: [
+      {
+        id: 'ent-1',
+        itemName: 'Centrifugal Pump 50HP',
+        quantity: 4,
+        unit: 'units',
+        targetDate: '2026-09-20',
+        technicalSpecs: '50HP 1450RPM',
+        confidence: 95,
+        category: 'Centrifugal Pumps',
+      },
+    ],
+    quotes: [
+      {
+        id: 'q-1',
+        vendorId: 'v-001',
+        vendorName: 'Apex Industrial Dynamics Pvt Ltd',
+        unitPrice: 37500,
+        totalPrice: 150000,
+        leadTimeDays: 14,
+        complianceScore: 96,
+        status: 'Under Review',
+        submittedAt: '2026-08-29',
+        deviationNotes: 'Exact spec match',
+      },
+    ],
+    chasingActive: true,
+    followUpData: {
+      totalTargetVendors: 3,
+      respondedVendors: 1,
+      pendingVendors: 2,
+      nextScheduledChaser: 'Today 04:00 PM',
+      channelStats: { whatsappDelivered: 3, whatsappRead: 2, callsConnected: 2, smsSent: 3 },
+      callStats: { connected: 2, total: 3, avgDuration: '1m 30s' },
+      whatsappStats: { read: 2, total: 3, responseRate: '66%' },
+      smsStats: { delivered: 3, total: 3 },
+      emailStats: { opened: 2, total: 3 },
+      vendors: [
+        {
+          vendorId: 'v-001',
+          vendorName: 'Apex Supplies Ltd.',
+          phone: '+91 98201 44820',
+          contactPerson: 'Rajesh Nair',
+          call: { status: 'completed', lastAttempt: '2h ago' },
+          whatsapp: { status: 'read', lastAttempt: '1h ago' },
+          sms: { status: 'delivered', lastAttempt: '3h ago' },
+          email24h: { is24hReminderSent: true },
+          overallStatus: 'Pending',
+          lastInteraction: '1h ago',
+          attemptsCount: 3,
+          bidStatus: 'Pending',
+        },
+        {
+          vendorId: 'v-002',
+          vendorName: 'Global Valve Systems Ltd',
+          phone: '+91 98201 44777',
+          contactPerson: 'Karan Mehra',
+          call: { status: 'pending', lastAttempt: 'never' },
+          whatsapp: { status: 'pending', lastAttempt: 'never' },
+          sms: { status: 'pending', lastAttempt: 'never' },
+          email24h: { is24hReminderSent: false },
+          overallStatus: 'Pending',
+          lastInteraction: 'never',
+          attemptsCount: 0,
+          bidStatus: 'Pending',
+        },
+      ],
+    },
+  },
+];
+
 describe('lib/store.tsx - AppProvider and useApp', () => {
   beforeEach(() => {
     mockFetch.mockReset();
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        success: true,
-        data: {
-          buyerAccounts: [
-            {
-              id: 'buyer-acc-1',
-              organizationName: 'Larsen & Toubro Limited',
-              industry: 'Engineering & Construction',
-              corporateEmail: 'buyer@procucev.com',
-              contactPerson: 'Vikram Malhotra',
-              phone: '+91 98201 44820',
-              sourcingMode: 'mode_1',
-              subscriptionPlan: 'version_1',
-              remainingFreeRFQs: 5,
-              totalRFQsCreated: 2,
-              totalSpend: '$450,000',
-              accountSource: 'direct_enterprise_signup',
-              syncTimestamp: '2026-08-29 10:00 UTC',
-              createdDate: '2026-08-29',
-            },
-            {
-              id: 'buyer-acc-2',
-              organizationName: 'Siemens Energy Ltd',
-              industry: 'Power',
-              corporateEmail: 'siemens@procucev.com',
-              contactPerson: 'Ravi Verma',
-              phone: '+91 98201 55667',
-              sourcingMode: 'mode_2',
-              subscriptionPlan: 'version_2',
-              remainingFreeRFQs: 10,
-              accountSource: 'direct_enterprise_signup',
-            },
-          ],
-          vendors: [
-            {
-              id: 'v-001',
-              name: 'Apex Industrial Dynamics Pvt Ltd',
-              contactPerson: 'Rajesh Nair',
-              email: 'rajesh@apexindustrial.in',
-              phone: '+91 98201 44820',
-              majorCategory: 'Engineering Spares - Mechanical',
-              minorCategories: ['Centrifugal Pumps', 'Slurry Pumps'],
-              clientMappedCategories: ['Centrifugal Pumps'],
-              vendorSelectedCategories: ['Centrifugal Pumps'],
-              location: 'Pune, Maharashtra',
-              rating: 4.8,
-              source: 'buyer_manual',
-              status: 'PREFERRED ENTERPRISE SUPPLIER',
-              score: 94,
-              evaluated: true,
-              hasRecord: true,
-            },
-            {
-              id: 'v-002',
-              name: 'Global Valve Systems Ltd',
-              contactPerson: 'Karan Mehra',
-              email: 'karan@globalvalves.in',
-              phone: '+91 98201 44777',
-              majorCategory: 'Engineering Spares - Mechanical',
-              minorCategories: ['Slurry Valves'],
-              clientMappedCategories: ['Slurry Valves'],
-              vendorSelectedCategories: [],
-              location: 'Delhi',
-              rating: 4.3,
-              source: 'platform_database',
-              status: 'REGISTERED / NOT EVALUATED',
-              score: 76,
-              evaluated: false,
-              hasRecord: false,
-            },
-            {
-              id: 'v-003',
-              name: 'Mumbai Tech Dynamics',
-              contactPerson: 'Sanjay Deshmukh',
-              email: 'sanjay@mumbaitech.in',
-              phone: '+91 98201 44666',
-              majorCategory: 'Electrical',
-              minorCategories: ['Switchgears'],
-              location: 'Mumbai',
-              rating: 0,
-              source: 'buyer_manual',
-              status: 'REGISTERED / NOT EVALUATED',
-              evaluated: false,
-            },
-            {
-              id: 'v-004',
-              name: 'MH Spares Ltd',
-              contactPerson: 'Nitin Patel',
-              email: 'nitin@mhspares.in',
-              phone: '+91 98201 44555',
-              majorCategory: 'Engineering Spares - Mechanical',
-              minorCategories: ['Custom Spares'],
-              location: 'MH Hub',
-              rating: 4.2,
-              source: 'buyer_excel',
-              status: 'PREFERRED ENTERPRISE SUPPLIER',
-              evaluated: true,
-            },
-          ],
-          rfqs: [
-            {
-              id: 'rfq-1',
-              rfqNumber: 'RFQ-2026-001',
-              title: 'Centrifugal Slurry Pumps',
-              category: 'Mechanical',
-              createdAt: '2026-08-29',
-              targetDeliveryDate: '2026-09-20',
-              status: 'Quotes Pending',
-              sourcingMode: 'mode_1',
-              quotesCount: 2,
-              budget: 500000,
-              extractedEntities: [
-                {
-                  id: 'ent-1',
-                  itemName: 'Centrifugal Pump 50HP',
-                  quantity: 4,
-                  unit: 'units',
-                  targetDate: '2026-09-20',
-                  technicalSpecs: '50HP 1450RPM',
-                  confidence: 95,
-                  category: 'Centrifugal Pumps',
-                },
-              ],
-              quotes: [
-                {
-                  id: 'q-1',
-                  vendorId: 'v-001',
-                  vendorName: 'Apex Industrial Dynamics Pvt Ltd',
-                  unitPrice: 37500,
-                  totalPrice: 150000,
-                  leadTimeDays: 14,
-                  complianceScore: 96,
-                  status: 'Under Review',
-                  submittedAt: '2026-08-29',
-                  deviationNotes: 'Exact spec match',
-                },
-              ],
-              chasingActive: true,
-              followUpData: {
-                totalTargetVendors: 3,
-                respondedVendors: 1,
-                pendingVendors: 2,
-                nextScheduledChaser: 'Today 04:00 PM',
-                channelStats: { whatsappDelivered: 3, whatsappRead: 2, callsConnected: 2, smsSent: 3 },
-                callStats: { connected: 2, total: 3, avgDuration: '1m 30s' },
-                whatsappStats: { read: 2, total: 3, responseRate: '66%' },
-                smsStats: { delivered: 3, total: 3 },
-                emailStats: { opened: 2, total: 3 },
-                vendors: [
-                  {
-                    vendorId: 'v-001',
-                    vendorName: 'Apex Supplies Ltd.',
-                    phone: '+91 98201 44820',
-                    contactPerson: 'Rajesh Nair',
-                    call: { status: 'completed', lastAttempt: '2h ago' },
-                    whatsapp: { status: 'read', lastAttempt: '1h ago' },
-                    sms: { status: 'delivered', lastAttempt: '3h ago' },
-                    email24h: { is24hReminderSent: true },
-                    overallStatus: 'Pending',
-                    lastInteraction: '1h ago',
-                    attemptsCount: 3,
-                    bidStatus: 'Pending',
-                  },
-                  {
-                    vendorId: 'v-002',
-                    vendorName: 'Global Valve Systems Ltd',
-                    phone: '+91 98201 44777',
-                    contactPerson: 'Karan Mehra',
-                    call: { status: 'pending', lastAttempt: 'never' },
-                    whatsapp: { status: 'pending', lastAttempt: 'never' },
-                    sms: { status: 'pending', lastAttempt: 'never' },
-                    email24h: { is24hReminderSent: false },
-                    overallStatus: 'Pending',
-                    lastInteraction: 'never',
-                    attemptsCount: 0,
-                    bidStatus: 'Pending',
-                  },
-                ],
-              },
-            },
-          ],
-          evaluations: [
-            {
-              id: 'eval-1',
-              vendorId: 'v-001',
-              vendorName: 'Apex Industrial Dynamics Pvt Ltd',
-              contactPerson: 'Rajesh Nair',
-              email: 'rajesh@apexindustrial.in',
-              phone: '+91 98201 44820',
-              category: 'Engineering Spares - Mechanical',
-              submissionDate: '2026-08-29',
-              status: 'PREFERRED ENTERPRISE SUPPLIER',
-              overallScore: 92.4,
-              systemAction: 'Auto-Promoted to Preferred Tier',
-              moduleScores: {
-                commercial: { score: 92, weightedScore: 23.0, maxScore: 25, weight: 25, remarks: 'Fair price' },
-                technical: { score: 90, weightedScore: 13.5, maxScore: 15, weight: 15, remarks: 'High tech' },
-                quality: { score: 94, weightedScore: 18.8, maxScore: 20, weight: 20, remarks: 'High quality' },
-                delivery: { score: 93, weightedScore: 18.6, maxScore: 20, weight: 20, remarks: 'Fast delivery' },
-                financial: { score: 80, weightedScore: 8.0, maxScore: 10, weight: 10, remarks: 'Solid finances' },
-                governance: { score: 94, weightedScore: 9.4, maxScore: 10, weight: 10, remarks: 'Compliant' },
-              },
-              documents: [
-                { id: 'doc-1', name: 'ISO 9001.pdf', type: 'Quality', uploadDate: '2026-08-29', verified: true, status: 'Verified' },
-              ],
-            },
-            {
-              id: 'eval-2',
-              vendorId: 'v-002',
-              vendorName: 'Global Valve Systems Ltd',
-              contactPerson: 'Karan Mehra',
-              email: 'karan@globalvalves.in',
-              phone: '+91 98201 44777',
-              category: 'Engineering Spares - Mechanical',
-              submissionDate: '2026-08-29',
-              status: 'CONDITIONAL / UNDER REVIEW',
-              overallScore: 76.0,
-              systemAction: 'Pending Review',
-              moduleScores: {
-                commercial: { score: 75, weightedScore: 18.75, maxScore: 25, weight: 25, remarks: 'Standard price' },
-                technical: { score: 80, weightedScore: 12.0, maxScore: 15, weight: 15, remarks: 'Acceptable tech' },
-                quality: { score: 75, weightedScore: 15.0, maxScore: 20, weight: 20, remarks: 'Standard quality' },
-                delivery: { score: 75, weightedScore: 15.0, maxScore: 20, weight: 20, remarks: 'Standard delivery' },
-                financial: { score: 70, weightedScore: 7.0, maxScore: 10, weight: 10, remarks: 'Stable' },
-                governance: { score: 80, weightedScore: 8.0, maxScore: 10, weight: 10, remarks: 'Compliant' },
-              },
-              documents: [],
-            },
-          ],
-          auditLogs: [
-            {
-              id: 'log-1',
-              timestamp: '2026-08-29 10:00:00',
-              action: 'Initial system bootstrap',
-              user: 'System Bot',
-              rfqNumber: 'SYSTEM',
-              hash: 'abc123sha256',
-            },
-          ],
-          aiFeed: [
-            {
-              id: 'feed-1',
-              timestamp: '10:00 AM',
-              title: 'Bootstrap Completed',
-              message: 'System loaded successfully',
-              type: 'system',
-            },
-          ],
-          systemConfig: {
-            ollamaModel: 'Llama 3 (8B Instruct)',
-            ollamaActive: true,
-            ocrExtractionThreshold: 85,
-            whatsappAutoChaser: true,
-            voiceCallAutoChaser: true,
-            smsAutoChaser: true,
-            escalationIntervalHours: 24,
-          },
+    // RFQs come from GET /api/rfqs as a bare array; /api/bootstrap returns the
+    // reference-data object. Distinguished here or the store reads the wrong shape.
+    const bootstrapPayload = {
+  success: true,
+  data: {
+    buyerAccounts: [
+      {
+        id: 'buyer-acc-1',
+        organizationName: 'Larsen & Toubro Limited',
+        industry: 'Engineering & Construction',
+        corporateEmail: 'buyer@procucev.com',
+        contactPerson: 'Vikram Malhotra',
+        phone: '+91 98201 44820',
+        sourcingMode: 'mode_1',
+        subscriptionPlan: 'version_1',
+        remainingFreeRFQs: 5,
+        totalRFQsCreated: 2,
+        totalSpend: '$450,000',
+        accountSource: 'direct_enterprise_signup',
+        syncTimestamp: '2026-08-29 10:00 UTC',
+        createdDate: '2026-08-29',
+      },
+      {
+        id: 'buyer-acc-2',
+        organizationName: 'Siemens Energy Ltd',
+        industry: 'Power',
+        corporateEmail: 'siemens@procucev.com',
+        contactPerson: 'Ravi Verma',
+        phone: '+91 98201 55667',
+        sourcingMode: 'mode_2',
+        subscriptionPlan: 'version_2',
+        remainingFreeRFQs: 10,
+        accountSource: 'direct_enterprise_signup',
+      },
+    ],
+    vendors: [
+      {
+        id: 'v-001',
+        name: 'Apex Industrial Dynamics Pvt Ltd',
+        contactPerson: 'Rajesh Nair',
+        email: 'rajesh@apexindustrial.in',
+        phone: '+91 98201 44820',
+        majorCategory: 'Engineering Spares - Mechanical',
+        minorCategories: ['Centrifugal Pumps', 'Slurry Pumps'],
+        clientMappedCategories: ['Centrifugal Pumps'],
+        vendorSelectedCategories: ['Centrifugal Pumps'],
+        location: 'Pune, Maharashtra',
+        rating: 4.8,
+        source: 'buyer_manual',
+        status: 'PREFERRED ENTERPRISE SUPPLIER',
+        score: 94,
+        evaluated: true,
+        hasRecord: true,
+      },
+      {
+        id: 'v-002',
+        name: 'Global Valve Systems Ltd',
+        contactPerson: 'Karan Mehra',
+        email: 'karan@globalvalves.in',
+        phone: '+91 98201 44777',
+        majorCategory: 'Engineering Spares - Mechanical',
+        minorCategories: ['Slurry Valves'],
+        clientMappedCategories: ['Slurry Valves'],
+        vendorSelectedCategories: [],
+        location: 'Delhi',
+        rating: 4.3,
+        source: 'platform_database',
+        status: 'REGISTERED / NOT EVALUATED',
+        score: 76,
+        evaluated: false,
+        hasRecord: false,
+      },
+      {
+        id: 'v-003',
+        name: 'Mumbai Tech Dynamics',
+        contactPerson: 'Sanjay Deshmukh',
+        email: 'sanjay@mumbaitech.in',
+        phone: '+91 98201 44666',
+        majorCategory: 'Electrical',
+        minorCategories: ['Switchgears'],
+        location: 'Mumbai',
+        rating: 0,
+        source: 'buyer_manual',
+        status: 'REGISTERED / NOT EVALUATED',
+        evaluated: false,
+      },
+      {
+        id: 'v-004',
+        name: 'MH Spares Ltd',
+        contactPerson: 'Nitin Patel',
+        email: 'nitin@mhspares.in',
+        phone: '+91 98201 44555',
+        majorCategory: 'Engineering Spares - Mechanical',
+        minorCategories: ['Custom Spares'],
+        location: 'MH Hub',
+        rating: 4.2,
+        source: 'buyer_excel',
+        status: 'PREFERRED ENTERPRISE SUPPLIER',
+        evaluated: true,
+      },
+    ],
+    evaluations: [
+      {
+        id: 'eval-1',
+        vendorId: 'v-001',
+        vendorName: 'Apex Industrial Dynamics Pvt Ltd',
+        contactPerson: 'Rajesh Nair',
+        email: 'rajesh@apexindustrial.in',
+        phone: '+91 98201 44820',
+        category: 'Engineering Spares - Mechanical',
+        submissionDate: '2026-08-29',
+        status: 'PREFERRED ENTERPRISE SUPPLIER',
+        overallScore: 92.4,
+        systemAction: 'Auto-Promoted to Preferred Tier',
+        moduleScores: {
+          commercial: { score: 92, weightedScore: 23.0, maxScore: 25, weight: 25, remarks: 'Fair price' },
+          technical: { score: 90, weightedScore: 13.5, maxScore: 15, weight: 15, remarks: 'High tech' },
+          quality: { score: 94, weightedScore: 18.8, maxScore: 20, weight: 20, remarks: 'High quality' },
+          delivery: { score: 93, weightedScore: 18.6, maxScore: 20, weight: 20, remarks: 'Fast delivery' },
+          financial: { score: 80, weightedScore: 8.0, maxScore: 10, weight: 10, remarks: 'Solid finances' },
+          governance: { score: 94, weightedScore: 9.4, maxScore: 10, weight: 10, remarks: 'Compliant' },
         },
-      }),
+        documents: [
+          { id: 'doc-1', name: 'ISO 9001.pdf', type: 'Quality', uploadDate: '2026-08-29', verified: true, status: 'Verified' },
+        ],
+      },
+      {
+        id: 'eval-2',
+        vendorId: 'v-002',
+        vendorName: 'Global Valve Systems Ltd',
+        contactPerson: 'Karan Mehra',
+        email: 'karan@globalvalves.in',
+        phone: '+91 98201 44777',
+        category: 'Engineering Spares - Mechanical',
+        submissionDate: '2026-08-29',
+        status: 'CONDITIONAL / UNDER REVIEW',
+        overallScore: 76.0,
+        systemAction: 'Pending Review',
+        moduleScores: {
+          commercial: { score: 75, weightedScore: 18.75, maxScore: 25, weight: 25, remarks: 'Standard price' },
+          technical: { score: 80, weightedScore: 12.0, maxScore: 15, weight: 15, remarks: 'Acceptable tech' },
+          quality: { score: 75, weightedScore: 15.0, maxScore: 20, weight: 20, remarks: 'Standard quality' },
+          delivery: { score: 75, weightedScore: 15.0, maxScore: 20, weight: 20, remarks: 'Standard delivery' },
+          financial: { score: 70, weightedScore: 7.0, maxScore: 10, weight: 10, remarks: 'Stable' },
+          governance: { score: 80, weightedScore: 8.0, maxScore: 10, weight: 10, remarks: 'Compliant' },
+        },
+        documents: [],
+      },
+    ],
+    auditLogs: [
+      {
+        id: 'log-1',
+        timestamp: '2026-08-29 10:00:00',
+        action: 'Initial system bootstrap',
+        user: 'System Bot',
+        hash: 'abc123sha256',
+      },
+    ],
+    aiFeed: [
+      {
+        id: 'feed-1',
+        timestamp: '10:00 AM',
+        title: 'Bootstrap Completed',
+        message: 'System loaded successfully',
+        type: 'system',
+      },
+    ],
+    systemConfig: {
+      ollamaModel: 'Llama 3 (8B Instruct)',
+      ollamaActive: true,
+      ocrExtractionThreshold: 85,
+      whatsappAutoChaser: true,
+      voiceCallAutoChaser: true,
+      smsAutoChaser: true,
+      escalationIntervalHours: 24,
+    },
+  },
+    };
+    // Method-aware: GET /api/rfqs lists (an array), POST /api/rfqs creates (one
+    // record). The server allocates the RFQ number, so the created record carries
+    // one the caller did not supply — which is exactly what the store must adopt.
+    let allocated = 0;
+    mockFetch.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
+      const isRfqEndpoint = typeof url === 'string' && /\/api\/rfqs(\?|$)/.test(url);
+      if (isRfqEndpoint && init?.method === 'POST') {
+        allocated += 1;
+        const sent = JSON.parse(init.body || '{}');
+        return Promise.resolve({
+          ok: true,
+          status: 201,
+          json: async () => ({
+            success: true,
+            data: {
+              ...sent,
+              id: `${allocated}`,
+              rfqId: `RFQ26040900000${allocated}`,
+              rfqNumber: `RFQ26040900000${allocated}`,
+              createdAt: '2026-09-04T10:00:00.000Z',
+              quotes: [],
+              quotesCount: 0,
+              chasingActive: false,
+              aiSummary: null,
+            },
+          }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => (isRfqEndpoint ? { success: true, data: STORE_RFQ_FIXTURES } : bootstrapPayload),
+      });
     });
   });
 
@@ -709,7 +745,7 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     // 4. Generate Standard RFQ Email (mode_1, mode_2, mode_3)
     const sampleRfq: RFQItem = {
       id: 'r-1',
-      rfqNumber: 'RFQ-SAMPLE',
+      rfqNumber: 'RFQ260409000001',
       title: 'Sample RFQ',
       category: 'Mechanical',
       createdAt: '2026-08-29',
@@ -837,68 +873,57 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     act(() => {
       contextValue.setActiveSubscription('none');
     });
-    expect(() => {
-      act(() => {
-        contextValue.addNewRFQ({
-          rfqNumber: 'RFQ-ERR-1',
-          title: 'Error RFQ',
-          category: 'Mechanical',
-          targetDeliveryDate: '2026-10-15',
-          sourcingMode: 'mode_1',
-          budget: 100000,
-          extractedEntities: [],
-        });
-      });
-    }).toThrow('Subscription required');
+    // Rejected rather than thrown: addNewRFQ persists before touching state.
+    await expect(
+      contextValue.addNewRFQ({
+        title: 'Error RFQ',
+        category: 'Mechanical',
+        targetDeliveryDate: '2026-10-15',
+        sourcingMode: 'mode_1',
+        budget: 100000,
+        extractedEntities: [],
+      })
+    ).rejects.toThrow('Subscription required');
 
     act(() => {
       contextValue.setActiveSubscription('free_trial');
       contextValue.setRemainingFreeRFQs(0);
     });
-    expect(() => {
-      act(() => {
-        contextValue.addNewRFQ({
-          rfqNumber: 'RFQ-ERR-2',
-          title: 'Error RFQ',
-          category: 'Mechanical',
-          targetDeliveryDate: '2026-10-15',
-          sourcingMode: 'mode_1',
-          budget: 100000,
-          extractedEntities: [],
-        });
-      });
-    }).toThrow('Free account quota exhausted');
+    await expect(
+      contextValue.addNewRFQ({
+        title: 'Error RFQ',
+        category: 'Mechanical',
+        targetDeliveryDate: '2026-10-15',
+        sourcingMode: 'mode_1',
+        budget: 100000,
+        extractedEntities: [],
+      })
+    ).rejects.toThrow('Free account quota exhausted');
 
     act(() => {
       contextValue.setActiveSubscription('version_1');
     });
-    expect(() => {
-      act(() => {
-        contextValue.addNewRFQ({
-          rfqNumber: 'RFQ-ERR-3',
+    await expect(
+      contextValue.addNewRFQ({
           title: 'Error RFQ',
           category: 'Mechanical',
           targetDeliveryDate: '2026-10-15',
           sourcingMode: 'mode_2',
           budget: 100000,
           extractedEntities: [],
-        });
-      });
-    }).toThrow('Subscription required');
+        })
+    ).rejects.toThrow('Subscription required');
 
-    expect(() => {
-      act(() => {
-        contextValue.addNewRFQ({
-          rfqNumber: 'RFQ-ERR-4',
+    await expect(
+      contextValue.addNewRFQ({
           title: 'Error RFQ',
           category: 'Mechanical',
           targetDeliveryDate: '2026-10-15',
           sourcingMode: 'mode_3',
           budget: 100000,
           extractedEntities: [],
-        });
-      });
-    }).toThrow('Subscription required');
+        })
+    ).rejects.toThrow('Subscription required');
 
     // 2. Add New RFQ with free_trial and mode_1
     act(() => {
@@ -911,9 +936,8 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     jest.setSystemTime(saturdayNight);
 
     let createdRfqMode1: RFQItem;
-    act(() => {
-      createdRfqMode1 = contextValue.addNewRFQ({
-        rfqNumber: 'RFQ-2026-999',
+    await act(async () => {
+      createdRfqMode1 = await contextValue.addNewRFQ({
         title: 'High Pressure Water Turbines',
         category: 'Mechanical',
         targetDeliveryDate: '2026-10-15',
@@ -977,14 +1001,14 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       });
       contextValue.setSelectedRFQForDeepDive(createdRfqMode1);
     });
-    expect(createdRfqMode1!.rfqNumber).toBe('RFQ-2026-999');
+    // Server-allocated: the client no longer chooses this.
+    expect(createdRfqMode1!.rfqNumber).toMatch(/^RFQ\d+$/);
 
     // Test Sunday start with budget = 0 and source email_gateway
     const sundayDate = new Date(2026, 7, 30, 10, 0, 0); // Sunday 10 AM local
     jest.setSystemTime(sundayDate);
-    act(() => {
-      contextValue.addNewRFQ({
-        rfqNumber: 'RFQ-2026-SUN',
+    await act(async () => {
+      await contextValue.addNewRFQ({
         title: 'Sunday RFQ',
         category: 'Mechanical',
         targetDeliveryDate: '2026-10-15',
@@ -996,9 +1020,8 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     });
 
     // Test free_trial with mode_3 (testing 'Version 3 (Autonomous AI)' branch in modeName)
-    act(() => {
-      contextValue.addNewRFQ({
-        rfqNumber: 'RFQ-2026-FT3',
+    await act(async () => {
+      await contextValue.addNewRFQ({
         title: 'Free Trial Mode 3 RFQ',
         category: 'Mechanical',
         targetDeliveryDate: '2026-10-15',
@@ -1011,9 +1034,8 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     // Test early morning before 8 AM
     const earlyDate = new Date(2026, 7, 31, 5, 0, 0); // Monday 5 AM local
     jest.setSystemTime(earlyDate);
-    act(() => {
-      contextValue.addNewRFQ({
-        rfqNumber: 'RFQ-2026-EARLY',
+    await act(async () => {
+      await contextValue.addNewRFQ({
         title: 'Early Morning RFQ',
         category: 'Mechanical',
         targetDeliveryDate: '2026-10-15',
@@ -1029,9 +1051,8 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     });
 
     // Create another mode 1 RFQ and advance timers with non-matching selectedRFQForDeepDive (executing line 1978)
-    act(() => {
-      contextValue.addNewRFQ({
-        rfqNumber: 'RFQ-2026-MODE1-B',
+    await act(async () => {
+      await contextValue.addNewRFQ({
         title: 'Turbine Spares B',
         category: 'Mechanical',
         targetDeliveryDate: '2026-10-15',
@@ -1067,9 +1088,8 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       contextValue.setActiveSubscription('version_3');
     });
 
-    act(() => {
-      contextValue.addNewRFQ({
-        rfqNumber: 'RFQ-2026-MODE3',
+    await act(async () => {
+      await contextValue.addNewRFQ({
         title: 'Autonomous Slurry Valves',
         category: 'Mechanical',
         targetDeliveryDate: '2026-11-20',
@@ -1160,8 +1180,8 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     });
 
     let created: RFQItem;
-    act(() => {
-      created = contextValue.addNewRFQ({
+    await act(async () => {
+      created = await contextValue.addNewRFQ({
         rfqNumber: 'RFQ-NO-DEADLINE',
         title: 'Undated Sourcing Request',
         category: 'Mechanical',
@@ -1172,7 +1192,8 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       });
     });
 
-    const opportunity = contextValue.vendorOpportunities.find((o: any) => o.rfqNumber === 'RFQ-NO-DEADLINE');
+    // The server allocates the real rfqNumber, ignoring whatever the client sent.
+    const opportunity = contextValue.vendorOpportunities.find((o: any) => o.rfqNumber === created.rfqNumber);
     expect(opportunity).toBeDefined();
     // No deadline was ever set — daysRemaining must not fall back to a
     // fabricated countdown, and estimatedValue must not fall back to a
@@ -1466,6 +1487,41 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     });
   });
 
+
+  // A failed RFQ save used to be swallowed by an unawaited POST, leaving the RFQ on
+  // screen as though it had been dispatched while the database held nothing. It now
+  // rejects and adds nothing.
+  it('rejects an RFQ save failure instead of showing an RFQ the database does not hold', async () => {
+    mockFetch.mockRejectedValue(new Error('Background write failed'));
+    let contextValue: any;
+    const Consumer = () => {
+      contextValue = useApp();
+      return <div data-testid="count">{contextValue.rfqs.length}</div>;
+    };
+
+    render(
+      <AppProvider>
+        <Consumer />
+      </AppProvider>
+    );
+    await waitFor(() => expect(contextValue.isLoadingDB).toBe(false));
+
+    const before = contextValue.rfqs.length;
+
+    await expect(
+      contextValue.addNewRFQ({
+        title: 'RFQ DB Fail',
+        category: 'Mechanical',
+        targetDeliveryDate: '2026-10-15',
+        sourcingMode: 'mode_1',
+        budget: 100000,
+        extractedEntities: [],
+      })
+    ).rejects.toThrow();
+
+    expect(contextValue.rfqs.length).toBe(before);
+  });
+
   it('handles background DB write rejections cleanly without unhandled exceptions', async () => {
     mockFetch.mockRejectedValue(new Error('Background write failed'));
     let contextValue: any;
@@ -1517,15 +1573,6 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
         },
       ]);
       contextValue.reviseVendorRating('v-1', 85, 85, 85, 'Revision DB failure');
-      contextValue.addNewRFQ({
-        rfqNumber: 'RFQ-DB-FAIL',
-        title: 'RFQ DB Fail',
-        category: 'Mechanical',
-        targetDeliveryDate: '2026-10-15',
-        sourcingMode: 'mode_1',
-        budget: 100000,
-        extractedEntities: [],
-      });
       contextValue.addAuditLog('Action with rejected DB');
       contextValue.addFeedItem('Feed with rejected DB', 'msg', 'system');
       contextValue.addVendorEvaluation({
@@ -1553,15 +1600,28 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     });
   });
 
-  it('falls back to matching activeBuyerAccount by the signed-in session email when the previous id is gone', async () => {
-    authClient.setSession({
-      id: 'u-1',
-      email: 'pub@procucev.com',
-      name: 'Test User',
-      role: 'buyer',
-      orgId: 'org-1',
-      orgName: 'Test Org',
+  it('resolves activeBuyerAccount from the real identity-schema endpoint on session change, with no fallback on failure', async () => {
+    // The signed-in buyer's account is resolved via GET /api/buyer-accounts/active
+    // (buyerAccountResolver on the backend) rather than matching session email
+    // against the bootstrap-hydrated buyerAccounts array — that match was never
+    // reliable since the shared identity schema has no unique index on email.
+    mockFetch.mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('/api/buyer-accounts/active')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: { id: 'buyer-acc-99', organizationName: 'Session Matched Org', corporateEmail: 'pub@procucev.com' },
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
     });
+
+    authClient.setSession(
+      { id: 'u-1', email: 'pub@procucev.com', name: 'Test User', role: 'buyer', orgId: 'org-1', orgName: 'Test Org' },
+      'test-token'
+    );
 
     let contextValue: any;
     const Consumer = () => {
@@ -1573,33 +1633,27 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
         <Consumer />
       </AppProvider>
     );
-    await waitFor(() => {
-      expect(contextValue.isLoadingDB).toBe(false);
-    });
 
-    // Prime activeBuyerAccount with an id that will NOT be present in the
-    // next refreshFromDB response, forcing the sessionEmail fallback lookup.
-    act(() => {
-      contextValue.alignActiveBuyerAccount('buyer-acc-1');
-    });
-    expect(contextValue.activeBuyerAccount?.id).toBe('buyer-acc-1');
+    await waitFor(() => expect(contextValue.activeBuyerAccount?.id).toBe('buyer-acc-99'));
 
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        success: true,
-        data: {
-          buyerAccounts: [
-            { id: 'buyer-acc-99', organizationName: 'Session Matched Org', corporateEmail: 'pub@procucev.com' },
-          ],
-        },
-      }),
+    // A failed lookup clears it rather than falling back to any previous or
+    // fabricated value — showing another organisation's account is the bug
+    // this design replaced.
+    mockFetch.mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('/api/buyer-accounts/active')) {
+        return Promise.resolve({ ok: true, json: async () => ({ success: false, error: 'not linked' }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
     });
+    authClient.setSession(
+      { id: 'u-2', email: 'other@procucev.com', name: 'Other User', role: 'buyer', orgId: 'org-2', orgName: 'Other Org' },
+      'other-token'
+    );
     await act(async () => {
-      await contextValue.refreshFromDB();
+      await contextValue.setCurrentUserSession({ id: 'u-2', email: 'other@procucev.com', name: 'Other User', role: 'buyer', orgId: 'org-2', orgName: 'Other Org' });
     });
 
-    expect(contextValue.activeBuyerAccount?.id).toBe('buyer-acc-99');
+    await waitFor(() => expect(contextValue.activeBuyerAccount).toBeNull());
     authClient.setSession(null);
   });
 
@@ -1624,5 +1678,588 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       expect(contextValue.isLoadingDB).toBe(false);
     });
     expect(contextValue.dbConnected).toBe(false);
+  });
+});
+
+// ==============================================================================
+// EDITING, ADOPTING AND DELETING AN RFQ
+// ==============================================================================
+// All three only touch local state once the API has confirmed. The alternative —
+// patching state from the request and hoping the two agree — is the failure the
+// RFQ create path already had: the browser and the database ended up holding
+// different records for the same RFQ.
+// ==============================================================================
+
+describe('lib/store.tsx - RFQ edit and delete', () => {
+  // Given an explicit rfqNumber. The shared fixture above has none, and every
+  // assertion here turns on matching that number — without one the store would be
+  // comparing undefined to undefined and the tests would pass regardless.
+  const STORED = {
+    ...(STORE_RFQ_FIXTURES[0] as unknown as RFQItem),
+    id: 'rfq-1',
+    rfqNumber: 'RFQ260409000512',
+  } as RFQItem;
+
+  /**
+   * Serve the RFQ list, then answer PUT and DELETE however the test asks.
+   * The list is served first so the store has a row to act on.
+   */
+  function serveRFQs(
+    handlers: {
+      put?: (body: unknown) => { status: number; body: unknown };
+      del?: () => { status: number; body: unknown };
+    } = {}
+  ) {
+    mockFetch.mockReset();
+    mockFetch.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
+      const isRfqEndpoint = typeof url === 'string' && /\/api\/rfqs/.test(url);
+
+      if (isRfqEndpoint && init?.method === 'PUT') {
+        const answer = handlers.put
+          ? handlers.put(JSON.parse(init.body || '{}'))
+          : { status: 200, body: { success: true, data: { ...STORED, title: 'Revised title' } } };
+        return Promise.resolve({
+          ok: answer.status >= 200 && answer.status < 300,
+          status: answer.status,
+          json: async () => answer.body,
+        });
+      }
+
+      if (isRfqEndpoint && init?.method === 'DELETE') {
+        const answer = handlers.del
+          ? handlers.del()
+          : { status: 200, body: { success: true, data: { rfqNumber: STORED.rfqNumber } } };
+        return Promise.resolve({
+          ok: answer.status >= 200 && answer.status < 300,
+          status: answer.status,
+          json: async () => answer.body,
+        });
+      }
+
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () =>
+          /\/api\/rfqs(\?|$)/.test(String(url))
+            ? { success: true, data: [STORED] }
+            : { success: true, data: {} },
+      });
+    });
+  }
+
+  /** Mount the provider and wait for the RFQ list to arrive. */
+  async function mountStore() {
+    // refreshRFQs clears the list (and never calls fetchRFQList) when there is
+    // no token, so a session must exist before mounting.
+    authClient.setSession(
+      { id: 'usr-buyer-001', email: 'buyer@procucev.com', name: 'Test Buyer', role: 'buyer', orgId: 'org-buyer-01', orgName: 'Test Buyer Org' },
+      'test-session-token'
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let ctx: any;
+    const Consumer = () => {
+      ctx = useApp();
+      return <div data-testid="rfq-count">{ctx.rfqs.length}</div>;
+    };
+    render(
+      <AppProvider>
+        <Consumer />
+      </AppProvider>
+    );
+    await waitFor(() => expect(screen.getByTestId('rfq-count')).toHaveTextContent('1'));
+    return () => ctx;
+  }
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  describe('updateRFQ', () => {
+    it('adopts the record the API stored, not the change that was sent', async () => {
+      serveRFQs({
+        put: () => ({
+          status: 200,
+          // Deliberately different from what the caller sent: the response wins.
+          body: { success: true, data: { ...STORED, title: 'What the database holds' } },
+        }),
+      });
+      const ctx = await mountStore();
+
+      await act(async () => {
+        await ctx().updateRFQ(STORED.rfqNumber, { title: 'What the caller sent' });
+      });
+
+      expect(ctx().rfqs[0].title).toBe('What the database holds');
+    });
+
+    it('sends only the fields it was given', async () => {
+      serveRFQs();
+      const ctx = await mountStore();
+
+      await act(async () => {
+        await ctx().updateRFQ(STORED.rfqNumber, { status: 'In Evaluation' });
+      });
+
+      const put = mockFetch.mock.calls.find((call) => call[1]?.method === 'PUT');
+      expect(JSON.parse(put?.[1].body)).toEqual({ status: 'In Evaluation' });
+    });
+
+    it('reports the edit on screen and in the audit log', async () => {
+      serveRFQs();
+      const ctx = await mountStore();
+
+      await act(async () => {
+        await ctx().updateRFQ(STORED.rfqNumber, { title: 'Revised title' });
+      });
+
+      expect(ctx().toastMessage?.title).toBe(UI_STRINGS.rfqEdit.savedTitle);
+      expect(ctx().auditLogs[0].action).toContain('Edited');
+    });
+
+    it('keeps the vendor opportunity for that RFQ in step', async () => {
+      serveRFQs({
+        put: () => ({
+          status: 200,
+          body: { success: true, data: { ...STORED, title: 'Renamed for vendors' } },
+        }),
+      });
+      const ctx = await mountStore();
+
+      await act(async () => {
+        await ctx().updateRFQ(STORED.rfqNumber, { title: 'Renamed for vendors' });
+      });
+
+      const opp = ctx().vendorOpportunities.find(
+        (o: { rfqNumber: string }) => o.rfqNumber === STORED.rfqNumber
+      );
+      expect(opp.title).toBe('Renamed for vendors');
+    });
+
+    // A screen already holding this RFQ would otherwise show the pre-edit terms.
+    it('refreshes a selection pointing at the edited RFQ', async () => {
+      serveRFQs({
+        put: () => ({
+          status: 200,
+          body: { success: true, data: { ...STORED, title: 'Refreshed selection' } },
+        }),
+      });
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().setSelectedRFQForMatrix(STORED);
+        ctx().openRFQDeepDive(STORED);
+      });
+      await act(async () => {
+        await ctx().updateRFQ(STORED.rfqNumber, { title: 'Refreshed selection' });
+      });
+
+      expect(ctx().selectedRFQForMatrix.title).toBe('Refreshed selection');
+      expect(ctx().selectedRFQForDeepDive.title).toBe('Refreshed selection');
+    });
+
+    it('leaves an unrelated selection alone', async () => {
+      serveRFQs();
+      const other = { ...STORED, id: 'other', rfqNumber: 'RFQ-OTHER' } as RFQItem;
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().setSelectedRFQForMatrix(other);
+      });
+      await act(async () => {
+        await ctx().updateRFQ(STORED.rfqNumber, { title: 'Revised title' });
+      });
+
+      expect(ctx().selectedRFQForMatrix.rfqNumber).toBe('RFQ-OTHER');
+    });
+
+    // A rejected edit must not leave the dashboard showing a change the database
+    // does not hold.
+    it('throws and changes nothing when the API rejects the edit', async () => {
+      serveRFQs({ put: () => ({ status: 500, body: { error: 'Database unavailable.' } }) });
+      const ctx = await mountStore();
+
+      await act(async () => {
+        await expect(ctx().updateRFQ(STORED.rfqNumber, { title: 'Revised title' })).rejects.toThrow(
+          'Database unavailable.'
+        );
+      });
+
+      expect(ctx().rfqs[0].title).toBe(STORED.title);
+      expect(ctx().toastMessage?.title).toBe(UI_STRINGS.rfqEdit.saveFailedTitle);
+    });
+
+    it('throws when the RFQ belongs to another organisation', async () => {
+      serveRFQs({ put: () => ({ status: 404, body: { error: 'Not found under your organisation.' } }) });
+      const ctx = await mountStore();
+
+      await act(async () => {
+        await expect(ctx().updateRFQ('RFQ-SOMEONE-ELSE', { title: 'Rewritten' })).rejects.toThrow(
+          'Not found under your organisation.'
+        );
+      });
+
+      expect(ctx().rfqs).toHaveLength(1);
+    });
+  });
+
+  describe('deleteRFQ', () => {
+    it('drops the RFQ from every list once the API confirms', async () => {
+      serveRFQs();
+      const ctx = await mountStore();
+
+      await act(async () => {
+        await ctx().deleteRFQ(STORED.rfqNumber);
+      });
+
+      expect(ctx().rfqs).toHaveLength(0);
+      expect(
+        ctx().vendorOpportunities.some((o: { rfqNumber: string }) => o.rfqNumber === STORED.rfqNumber)
+      ).toBe(false);
+    });
+
+    it('reports the deletion on screen and in the audit log', async () => {
+      serveRFQs();
+      const ctx = await mountStore();
+
+      await act(async () => {
+        await ctx().deleteRFQ(STORED.rfqNumber);
+      });
+
+      expect(ctx().toastMessage?.title).toBe(UI_STRINGS.rfqEdit.deletedTitle);
+      expect(ctx().auditLogs[0].action).toContain('Deleted');
+    });
+
+    // A selection pointing at a deleted record would render a stale RFQ.
+    it('clears a selection pointing at the deleted RFQ', async () => {
+      serveRFQs();
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().setSelectedRFQForMatrix(STORED);
+        ctx().openRFQDeepDive(STORED);
+      });
+      await act(async () => {
+        await ctx().deleteRFQ(STORED.rfqNumber);
+      });
+
+      expect(ctx().selectedRFQForMatrix).toBeNull();
+      expect(ctx().selectedRFQForDeepDive).toBeNull();
+    });
+
+    it('leaves an unrelated selection alone', async () => {
+      serveRFQs();
+      const other = { ...STORED, id: 'other', rfqNumber: 'RFQ-OTHER' } as RFQItem;
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().setSelectedRFQForMatrix(other);
+      });
+      await act(async () => {
+        await ctx().deleteRFQ(STORED.rfqNumber);
+      });
+
+      expect(ctx().selectedRFQForMatrix.rfqNumber).toBe('RFQ-OTHER');
+    });
+
+    // Removing the row anyway would hide a record the database still holds.
+    it('throws and keeps the row when the API refuses', async () => {
+      serveRFQs({ del: () => ({ status: 500, body: { error: 'Delete failed.' } }) });
+      const ctx = await mountStore();
+
+      await act(async () => {
+        await expect(ctx().deleteRFQ(STORED.rfqNumber)).rejects.toThrow('Delete failed.');
+      });
+
+      expect(ctx().rfqs).toHaveLength(1);
+      expect(ctx().toastMessage?.title).toBe(UI_STRINGS.rfqEdit.deleteFailedTitle);
+    });
+
+    // The API echoes the number it removed, which is what the store drops.
+    it('drops the row the API named rather than the identifier it was given', async () => {
+      serveRFQs({
+        del: () => ({ status: 200, body: { success: true, data: { rfqNumber: STORED.rfqNumber } } }),
+      });
+      const ctx = await mountStore();
+
+      // Addressed by row id; the response names the RFQ number.
+      await act(async () => {
+        await ctx().deleteRFQ('rfq-1');
+      });
+
+      expect(ctx().rfqs).toHaveLength(0);
+    });
+  });
+
+  describe('adoptCreatedRFQ', () => {
+    it('takes a server-created RFQ into state and logs it', async () => {
+      serveRFQs();
+      const ctx = await mountStore();
+      const created = { ...STORED, id: '99', rfqNumber: 'RFQ260409000099' } as RFQItem;
+
+      await act(async () => {
+        ctx().adoptCreatedRFQ(created);
+      });
+
+      expect(ctx().rfqs[0].rfqNumber).toBe('RFQ260409000099');
+      expect(ctx().auditLogs[0].action).toContain('Created');
+    });
+
+    // A concurrent refresh must not leave two copies of one RFQ.
+    it('replaces an existing entry with the same number', async () => {
+      serveRFQs();
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().adoptCreatedRFQ({ ...STORED, title: 'Adopted again' } as RFQItem);
+      });
+
+      expect(ctx().rfqs).toHaveLength(1);
+      expect(ctx().rfqs[0].title).toBe('Adopted again');
+    });
+  });
+});
+
+// ==============================================================================
+// MULTI-CHANNEL CHASER TELEMETRY
+// ==============================================================================
+// These branches only run for an RFQ that carries followUpData. The persisted
+// mapper does not return that field, so they are unreachable through the API path
+// today — but the chaser screens still read them, and an RFQ that does carry the
+// block has to be updated correctly rather than silently ignored.
+// ==============================================================================
+
+describe('lib/store.tsx - channel chasers and bids', () => {
+  const VENDOR = 'Apex Supplies Ltd.';
+  const OTHER_VENDOR = 'Global Valve Systems Ltd';
+
+  /** An RFQ with outreach telemetry, which is what these paths act on. */
+  const withTelemetry = () =>
+    ({
+      ...(STORE_RFQ_FIXTURES[0] as unknown as RFQItem),
+      id: 'rfq-chase',
+      rfqNumber: 'RFQ260409000900',
+    }) as RFQItem;
+
+  function serve(rfq: RFQItem) {
+    mockFetch.mockReset();
+    mockFetch.mockImplementation((url: string) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () =>
+          /\/api\/rfqs(\?|$)/.test(String(url))
+            ? { success: true, data: [rfq] }
+            : { success: true, data: {} },
+      })
+    );
+  }
+
+  async function mountStore(rfq: RFQItem = withTelemetry()) {
+    // refreshRFQs clears the list (and never calls fetchRFQList) when there is
+    // no token, so a session must exist before mounting for the fixture below
+    // to actually be fetched and hydrated.
+    authClient.setSession(
+      { id: 'usr-buyer-001', email: 'buyer@procucev.com', name: 'Test Buyer', role: 'buyer', orgId: 'org-buyer-01', orgName: 'Test Buyer Org' },
+      'test-session-token'
+    );
+    serve(rfq);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let ctx: any;
+    const Consumer = () => {
+      ctx = useApp();
+      return <div data-testid="rfq-count">{ctx.rfqs.length}</div>;
+    };
+    render(
+      <AppProvider>
+        <Consumer />
+      </AppProvider>
+    );
+    await waitFor(() => expect(screen.getByTestId('rfq-count')).toHaveTextContent('1'));
+    return () => ctx;
+  }
+
+  /** The telemetry record for one vendor on the first RFQ. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const vendorRecord = (ctx: () => any, name = VENDOR) =>
+    ctx().rfqs[0].followUpData.vendors.find(
+      (v: { vendorName: string }) => v.vendorName === name
+    );
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  describe('triggerChannelChaser', () => {
+    it.each([
+      ['call', 'call', 'completed'],
+      ['whatsapp', 'whatsapp', 'read'],
+      ['sms', 'sms', 'delivered'],
+    ])('records a %s attempt against the vendor', async (channel, field, status) => {
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().triggerChannelChaser('RFQ260409000900', channel, VENDOR);
+      });
+
+      const record = vendorRecord(ctx);
+      expect(record[field].status).toBe(status);
+      expect(record.overallStatus).toBe('Follow-up Active');
+      expect(record.attemptsCount).toBeGreaterThan(0);
+    });
+
+    it('records an email attempt', async () => {
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().triggerChannelChaser('RFQ260409000900', 'email', VENDOR);
+      });
+
+      expect(vendorRecord(ctx).email24h.is24hReminderSent).toBe(true);
+    });
+
+    // Only the vendor being chased is touched; the rest of the roster is left as it was.
+    it('leaves the other vendors untouched', async () => {
+      const ctx = await mountStore();
+      const before = vendorRecord(ctx, OTHER_VENDOR).attemptsCount;
+
+      await act(async () => {
+        ctx().triggerChannelChaser('RFQ260409000900', 'call', VENDOR);
+      });
+
+      expect(vendorRecord(ctx, OTHER_VENDOR).attemptsCount).toBe(before);
+    });
+
+    // Matched loosely in both directions, so 'Apex' finds 'Apex Supplies Ltd.'
+    it('matches a vendor named only in part', async () => {
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().triggerChannelChaser('RFQ260409000900', 'sms', 'Apex');
+      });
+
+      expect(vendorRecord(ctx).sms.status).toBe('delivered');
+    });
+
+    it('counts the attempt on the channel totals', async () => {
+      const ctx = await mountStore();
+      const before = ctx().rfqs[0].followUpData.callStats.total;
+
+      await act(async () => {
+        ctx().triggerChannelChaser('RFQ260409000900', 'call', VENDOR);
+      });
+
+      expect(ctx().rfqs[0].followUpData.callStats.total).toBe(before + 1);
+    });
+
+    it('records the chase in the audit log and on screen', async () => {
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().triggerChannelChaser('RFQ260409000900', 'whatsapp', VENDOR);
+      });
+
+      expect(ctx().auditLogs[0].action).toContain('WHATSAPP');
+      expect(ctx().toastMessage).not.toBeNull();
+    });
+
+    it('accepts a custom note on the attempt', async () => {
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().triggerChannelChaser('RFQ260409000900', 'call', VENDOR, 'Chasing the revised price');
+      });
+
+      expect(vendorRecord(ctx).attemptsCount).toBeGreaterThan(0);
+    });
+
+    // An RFQ without telemetry has nothing to update, and must not throw.
+    it('does nothing for an RFQ that carries no telemetry', async () => {
+      const bare = { ...withTelemetry(), followUpData: undefined } as unknown as RFQItem;
+      const ctx = await mountStore(bare);
+
+      await act(async () => {
+        ctx().triggerChannelChaser('RFQ260409000900', 'call', VENDOR);
+      });
+
+      expect(ctx().rfqs[0].followUpData).toBeUndefined();
+    });
+
+    it('does nothing for an RFQ number it does not hold', async () => {
+      const ctx = await mountStore();
+      const before = vendorRecord(ctx).attemptsCount;
+
+      await act(async () => {
+        ctx().triggerChannelChaser('RFQ-NOT-HERE', 'call', VENDOR);
+      });
+
+      expect(vendorRecord(ctx).attemptsCount).toBe(before);
+    });
+
+    it('refreshes a deep-dive selection pointing at the chased RFQ', async () => {
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().openRFQDeepDive(ctx().rfqs[0]);
+      });
+      await act(async () => {
+        ctx().triggerChannelChaser('RFQ260409000900', 'call', VENDOR);
+      });
+
+      const selected = ctx().selectedRFQForDeepDive.followUpData.vendors.find(
+        (v: { vendorName: string }) => v.vendorName === VENDOR
+      );
+      expect(selected.call.status).toBe('completed');
+    });
+  });
+
+  describe('triggerWhatsAppChaser', () => {
+    it('chases over WhatsApp', async () => {
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().triggerWhatsAppChaser('RFQ260409000900', VENDOR);
+      });
+
+      expect(vendorRecord(ctx).whatsapp.status).toBe('read');
+    });
+  });
+
+  describe('submitVendorBid', () => {
+    it('adds the quote and marks it the one to beat', async () => {
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().submitVendorBid('RFQ260409000900', 1000, 10, 'Best and final');
+      });
+
+      const rfq = ctx().rfqs[0];
+      expect(rfq.quotesCount).toBeGreaterThan(0);
+      expect(rfq.quotes[rfq.quotes.length - 1].isBestPrice).toBe(true);
+      expect(rfq.quotes[rfq.quotes.length - 1].remarks).toBe('Best and final');
+    });
+
+    it('does nothing for an RFQ number it does not hold', async () => {
+      const ctx = await mountStore();
+      const before = ctx().rfqs[0].quotes.length;
+
+      await act(async () => {
+        ctx().submitVendorBid('RFQ-NOT-HERE', 1000, 10, 'Ignored');
+      });
+
+      expect(ctx().rfqs[0].quotes).toHaveLength(before);
+    });
+  });
+
+  describe('approvePO', () => {
+    it('records the approval against the RFQ', async () => {
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().approvePO('RFQ260409000900', VENDOR, 250000);
+      });
+
+      expect(ctx().rfqs[0].status).toBe('PO Generated');
+      expect(ctx().auditLogs[0].action).toContain('PO');
+    });
   });
 });

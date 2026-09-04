@@ -89,10 +89,16 @@ describe('Frontend Client Logger Unit Tests', () => {
     testLogger.warn('Warning test');
     testLogger.error('Error test');
 
-    expect(mockFetch).toHaveBeenCalledWith('/api/logs', expect.objectContaining({
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    }));
+    // Headers are matched loosely: a signed-in session also attaches an
+    // Authorization header, and asserting the exact object made this test fail for
+    // a reason unrelated to logging.
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/logs',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
+      })
+    );
 
     (process.env as any).NODE_ENV = originalEnv;
     global.fetch = originalFetch;

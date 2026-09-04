@@ -18,6 +18,20 @@ function mockRes() {
   return res;
 }
 
+// The RFQ handlers read ownership from verified session claims, so a bare request
+// object is now rejected before it reaches any store. `sub` rather than `id` is
+// deliberate: that is the claim generateSessionToken actually writes.
+const TEST_ORG_ID = 'org-buyer-01';
+function buyerReq(overrides = {}) {
+  return {
+    user: { sub: 'usr-buyer-001', orgId: TEST_ORG_ID, email: 'buyer@procucev.com', role: 'buyer' },
+    params: {},
+    query: {},
+    body: {},
+    ...overrides,
+  };
+}
+
 describe('Controllers Error & Edge-Case Coverage', () => {
   afterEach(() => {
     jest.restoreAllMocks();
@@ -283,44 +297,114 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     const buyerUser = { role: 'buyer', email: 'buyer@procucev.com' };
     const vendorUser = { role: 'vendor', email: 'rajesh@apexindustrial.in' };
 
-    await rfqController.getRFQs({}, res, next);
+    const seededRfq = storeService.createRFQ({
+      title: 'Seeded RFQ',
+      category: 'Mechanical',
+      targetDeliveryDate: '2026-10-01',
+    });
+
+    await rfqController.getRFQs(buyerReq(), res, next);
     expect(res.json).toHaveBeenCalled();
 
-    await rfqController.getRFQById({ params: { id: 'rfq-1' } }, res, next);
+    await rfqController.getRFQById(buyerReq({ params: { id: seededRfq.id } }), res, next);
     expect(res.json).toHaveBeenCalled();
 
-    await rfqController.getRFQById({ params: { id: 'non-existent' } }, res, next);
+    await rfqController.getRFQById(buyerReq({ params: { id: 'non-existent' } }), res, next);
     expect(res.status).toHaveBeenCalledWith(404);
 
+    // getRFQs/getRFQById delegate auth entirely to the route's `authenticate`
+    // middleware (see routes/rfqs.js) rather than self-enforcing it inline —
+    // called directly with no session at all, they're unrestricted at the
+    // controller level, same as any non-buyer role (see resolveRfqReadScope).
+    const anonRes = mockRes();
+    await rfqController.getRFQs({}, anonRes, next);
+    expect(anonRes.json).toHaveBeenCalled();
+
     await rfqController.createRFQ(
-      {
+      buyerReq({
         body: {
           title: 'New RFQ',
           category: 'Mechanical',
           budget: 50000,
           targetDeliveryDate: '2026-10-01',
+          deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+          deliveryPincode: '400701',
         },
-      },
+      }),
       res,
       next
     );
     expect(res.status).toHaveBeenCalledWith(201);
 
-    await rfqController.createRFQ({ body: {} }, res, next);
+    await rfqController.createRFQ(buyerReq({ body: {} }), res, next);
     expect(res.status).toHaveBeenCalledWith(400);
 
     // A payload that clears the title check but violates another rule must still
     // be rejected, which the old bare `if (!body.title)` gate let through.
-    await rfqController.createRFQ({ body: { title: 'Only a title' } }, res, next);
+    await rfqController.createRFQ(buyerReq({ body: { title: 'Only a title' } }), res, next);
     expect(res.status).toHaveBeenCalledWith(400);
+
+    // Line items arrive as `extractedEntities` from the wizard, but the API also
+    // accepts `lineItems`, and an RFQ with neither must still save.
+    const validBody = {
+      title: 'Line item shapes',
+      category: 'Mechanical',
+      budget: 1,
+      targetDeliveryDate: '2026-10-01',
+      deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+      deliveryPincode: '400701',
+    };
+
+    const withLineItems = mockRes();
+    await rfqController.createRFQ(
+      buyerReq({ body: { ...validBody, lineItems: [{ itemName: 'Pump', quantity: 1 }] } }),
+      withLineItems,
+      next
+    );
+    expect(withLineItems.status).toHaveBeenCalledWith(201);
+    expect(withLineItems.json.mock.calls[0][0].data.extractedEntities).toHaveLength(1);
+
+    const withNoItems = mockRes();
+    await rfqController.createRFQ(buyerReq({ body: validBody }), withNoItems, next);
+    expect(withNoItems.status).toHaveBeenCalledWith(201);
+    expect(withNoItems.json.mock.calls[0][0].data.extractedEntities).toEqual([]);
+
+    // An explicit status wins over the default, and a session with no orgName
+    // still produces a summary.
+    const withStatus = mockRes();
+    await rfqController.createRFQ(
+      {
+        user: { sub: 'usr-buyer-001', orgId: TEST_ORG_ID, email: 'buyer@procucev.com', role: 'buyer' },
+        body: { ...validBody, status: 'In Evaluation' },
+      },
+      withStatus,
+      next
+    );
+    expect(withStatus.status).toHaveBeenCalledWith(201);
+    expect(withStatus.json.mock.calls[0][0].data.status).toBe('In Evaluation');
 
     // The RFQ must be attributed to the authenticated requester's own buyer
     // account (resolved server-side from req.user.email), not a client-
     // supplied or globally-shared value.
+    const buyerAccountRes = mockRes();
+    await buyerAccountController.createBuyerAccount(
+      {
+        body: { organizationName: 'Tata Motors Commercial Vehicles Ltd.', corporateEmail: 'sourcing.commercial@tatamotors.com' },
+        user: { role: 'buyer', email: 'sourcing.commercial@tatamotors.com' },
+      },
+      buyerAccountRes,
+      next
+    );
     const attributedRes = mockRes();
     await rfqController.createRFQ(
       {
-        body: { title: 'Attributed RFQ', category: 'Raw Material', targetDeliveryDate: '2026-10-01' },
+        body: {
+          title: 'Attributed RFQ',
+          category: 'Raw Material',
+          targetDeliveryDate: '2026-10-01',
+          deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+          deliveryPincode: '400701',
+        },
         user: { role: 'buyer', email: 'sourcing.commercial@tatamotors.com' },
       },
       attributedRes,
@@ -330,9 +414,7 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     const attributedRFQ = attributedRes.json.mock.calls[0][0].data;
     expect(attributedRFQ.buyerAccountName).toBe('Tata Motors Commercial Vehicles Ltd.');
 
-    // 'rfq-001' is a real seeded RFQ; 'rfq-1' never matches anything and was
-    // silently always hitting the not-found path.
-    await rfqController.updateRFQ({ params: { id: 'rfq-001' }, body: { title: 'Updated' } }, res, next);
+    await rfqController.updateRFQ({ params: { id: attributedRFQ.id }, body: { title: 'Updated' } }, res, next);
     expect(res.json).toHaveBeenCalled();
 
     await rfqController.addQuote({ params: { id: 'rfq-001' }, body: { unitPrice: 100 }, user: vendorUser }, res, next);
@@ -481,5 +563,126 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     const emailBlockedRes = mockRes();
     await vendorController.generateOnboardingEmailPreview({ params: { id: 'v-001' }, user: vendorOwnUser }, emailBlockedRes, next);
     expect(emailBlockedRes.status).toHaveBeenCalledWith(403);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RFQ controller: remaining scope and fallback branches
+// ══════════════════════════════════════════════════════════════════════════════
+describe('rfqController scope and fallback branches', () => {
+  function scopedReq(overrides = {}) {
+    return {
+      user: { email: 'buyer@procucev.com', role: 'buyer' },
+      params: {},
+      query: {},
+      body: {},
+      ...overrides,
+    };
+  }
+
+  let seededRfq;
+
+  beforeEach(async () => {
+    // A real buyer account for scopedReq's email, so getRFQSummary's
+    // resolveRfqReadScope filtering has something real to scope against.
+    const accountRes = mockRes();
+    await buyerAccountController.createBuyerAccount(
+      { body: { organizationName: 'Scope Test Org', corporateEmail: 'buyer@procucev.com' }, user: { role: 'buyer' } },
+      accountRes,
+      jest.fn()
+    );
+    seededRfq = storeService.createRFQ(
+      { title: 'Branch coverage RFQ', category: 'Mechanical' },
+      accountRes.json.mock.calls[0][0].data
+    );
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('getRFQSummary rolls up only this buyer\'s RFQs', async () => {
+    const res = mockRes();
+    await rfqController.getRFQSummary(scopedReq(), res, jest.fn());
+
+    const summary = res.json.mock.calls[0][0].data;
+    expect(summary.totalRFQs).toBe(1);
+    // Another buyer's RFQ must not appear in these totals.
+    storeService.createRFQ({ title: 'Someone else\'s RFQ', budget: 999 }, { id: 'other-buyer-acc', organizationName: 'Someone Else Ltd.' });
+
+    const res2 = mockRes();
+    await rfqController.getRFQSummary(scopedReq(), res2, jest.fn());
+    expect(res2.json.mock.calls[0][0].data.totalRFQs).toBe(1);
+  });
+
+  // The wizard sends extractedEntities; this pins that branch of the ternary.
+  test('createRFQ stores extractedEntities when the wizard supplies them', async () => {
+    const res = mockRes();
+    await rfqController.createRFQ(
+      scopedReq({
+        body: {
+          title: 'Extracted entities path',
+          category: 'Mechanical',
+          budget: 10,
+          targetDeliveryDate: '2026-10-01',
+          deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+          deliveryPincode: '400701',
+          extractedEntities: [
+            { itemName: 'Pump', quantity: 2, unit: 'Nos', minorCategory: 'Pumps' },
+            { itemName: 'Valve', quantity: 1, unit: 'Nos', minorCategory: 'Valves' },
+          ],
+        },
+      }),
+      res,
+      jest.fn()
+    );
+
+    expect(res.status).toHaveBeenCalledWith(201);
+    const created = res.json.mock.calls[0][0].data;
+    expect(created.extractedEntities).toHaveLength(2);
+    // A summary is always attached, derived when Gemini is unavailable.
+    expect(created.aiSummary.itemCount).toBe(2);
+    expect(created.aiSummary.generatedBy).toBe('derived');
+  });
+
+  // Both handlers tolerate a request that arrived with no body at all.
+  test.each([['createRFQ'], ['ingestRFQ']])('%s tolerates a missing body', async (handler) => {
+    const res = mockRes();
+    await rfqController[handler](scopedReq({ body: undefined }), res, jest.fn());
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  test('generateEmailPreview resolves a named vendor', async () => {
+    const res = mockRes();
+    const storeSvc = require('../src/services/storeService');
+    const vendor = storeSvc.getVendors()[0];
+
+    await rfqController.generateEmailPreview(
+      scopedReq({ params: { id: seededRfq.id }, query: { vendorId: vendor.id } }),
+      res,
+      jest.fn()
+    );
+
+    expect(res.json).toHaveBeenCalled();
+  });
+
+  // An attachment rejection this controller has no specific message for still has
+  // to say something useful rather than returning an empty error.
+  test('uploadRFQAttachment falls back to a generic storage message', async () => {
+    const attachmentService = require('../src/services/rfqAttachmentService');
+    jest.spyOn(attachmentService, 'saveAttachment').mockReturnValue({ status: 'SOME_NEW_STATUS' });
+
+    const res = mockRes();
+    await rfqController.uploadRFQAttachment(
+      scopedReq({
+        body: { fileName: 'annexure.pdf', mimeType: 'application/pdf', contentBase64: 'AAAA' },
+      }),
+      res,
+      jest.fn()
+    );
+
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.success).toBe(false);
+    expect(payload.error.length).toBeGreaterThan(0);
   });
 });

@@ -139,6 +139,211 @@ export interface RFQFollowUpBreakdown {
 
 export type RFQSource = 'email_gateway' | 'web_portal' | 'email_upload' | 'manual_entry';
 
+// ==============================================================================
+// MANUAL RFQ ENTRY
+// ==============================================================================
+// The buyer keys these fields directly, with no document and no AI extraction.
+// Modelled separately from ExtractedEntity for one reason: an extracted row always
+// arrives complete, because the server normalises the quantity and unit and
+// classifies both categories before the wizard ever renders it. A manually keyed
+// row starts genuinely blank and is filled in over time, so its in-progress
+// fields have to be able to hold "not answered yet" without that being confused
+// with a real answer.
+//
+// A quantity of `null` is the clearest case. ExtractedEntity types it `number`,
+// which forced blank rows to carry 0 — indistinguishable from a buyer who really
+// meant zero, and 0 is exactly the value that used to get dispatched to vendors
+// unnoticed.
+
+/** One line item on the manual entry form, before it is validated for dispatch. */
+export interface ManualRFQLineItem {
+  /** Client-side row key. The server never sees it. */
+  id: string;
+  itemName: string;
+  technicalSpecs: string;
+  /** `null` while unanswered, so a blank row is never mistaken for a real zero. */
+  quantity: number | null;
+  unit: string;
+  targetDate: string;
+  majorCategory: string;
+  minorCategory: string;
+}
+
+/** The whole manual RFQ entry form. */
+export interface ManualRFQForm {
+  title: string;
+  /** Header category, derived from the leading line item once one is classified. */
+  majorCategory: string;
+  /** `null` while unanswered. Optional for dispatch: a buyer need not publish a ceiling. */
+  estimatedBudget: number | null;
+  targetDeliveryDate: string;
+  deliveryLocation: string;
+  deliveryPincode: string;
+  lineItems: ManualRFQLineItem[];
+  /** Stored server-side and downloadable. Never sent for AI extraction. */
+  attachments: RFQAttachment[];
+  sourcingMode: SourcingMode;
+}
+
+/**
+ * Why one line item cannot be dispatched yet, keyed by field.
+ * An empty object means the row is ready.
+ */
+export type ManualRFQLineItemErrors = Partial<Record<keyof ManualRFQLineItem, string>>;
+
+/** Whether the form can be dispatched, and everything blocking it if not. */
+export interface ManualRFQValidation {
+  isValid: boolean;
+  /** Errors against the header fields, keyed by field name. */
+  formErrors: Partial<Record<keyof ManualRFQForm, string>>;
+  /** Errors against each line item, keyed by the row's client-side id. */
+  lineItemErrors: Record<string, ManualRFQLineItemErrors>;
+}
+
+/**
+ * The payload POST /api/rfqs accepts.
+ *
+ * Deliberately carries no rfqNumber: the server allocates it, following the same
+ * scheme the Java p2pservices application uses. The wizard used to mint one with
+ * Math.random(), which could collide and bore no relation to that scheme.
+ */
+/**
+ * What a caller supplies when raising an RFQ.
+ *
+ * Everything the server owns is omitted, so a caller cannot supply it and then be
+ * surprised that the saved record differs. `rfqNumber` in particular used to be
+ * minted on the client with Math.random(); the server allocates it under the same
+ * scheme the Java p2pservices application uses.
+ */
+export type NewRFQInput = Omit<
+  RFQItem,
+  | 'id'
+  | 'rfqId'
+  | 'rfqNumber'
+  | 'createdAt'
+  | 'updatedAt'
+  | 'quotes'
+  | 'quotesCount'
+  | 'status'
+  | 'chasingActive'
+  | 'aiSummary'
+  | 'raisedByEmail'
+>;
+
+/** Why an RFQ read or write did not succeed. */
+export type RFQTransportFailure =
+  | 'NETWORK'
+  | 'UNAUTHORIZED'
+  | 'NOT_FOUND'
+  | 'VALIDATION'
+  | 'SERVER';
+
+/** Outcome of creating an RFQ. On success the server's record is authoritative. */
+export type RFQMutationResult =
+  | { success: true; rfq: RFQItem }
+  | {
+      success: false;
+      reason: RFQTransportFailure;
+      error: string;
+      /** Per-field messages from the API's schema validation, when it supplied any. */
+      fieldErrors?: Record<string, string>;
+    };
+
+/** Outcome of reading one RFQ. */
+export type RFQFetchResult =
+  | { success: true; rfq: RFQItem }
+  | { success: false; reason: RFQTransportFailure; error: string };
+
+/** Outcome of listing this organisation's RFQs. An empty list is a success. */
+export type RFQListResult =
+  | { success: true; rfqs: RFQItem[] }
+  | { success: false; reason: RFQTransportFailure; error: string };
+
+/**
+ * The editable commercial and delivery terms of an RFQ, as the edit dialog holds
+ * them. `budget` is null when no ceiling is stated, which is a different answer
+ * from a ceiling of zero.
+ */
+export interface RFQEditFormState {
+  title: string;
+  category: string;
+  status: RFQItem['status'];
+  budget: number | null;
+  targetDeliveryDate: string;
+  deliveryLocation: string;
+  deliveryPincode: string;
+  lineItems: RFQEditLineItem[];
+  attachments: RFQAttachment[];
+}
+
+/**
+ * One line item as the edit dialog holds it.
+ *
+ * `quantity` is nullable so a blank field reads as unanswered rather than as a
+ * quantity of nothing, which is the value that otherwise reaches vendors unnoticed.
+ * `confidence` is carried through unchanged: it records how the row was produced,
+ * and correcting a description does not make the model more or less sure of what
+ * it originally read.
+ */
+export interface RFQEditLineItem {
+  id: string;
+  itemName: string;
+  technicalSpecs: string;
+  quantity: number | null;
+  unit: string;
+  targetDate: string;
+  majorCategory: string;
+  minorCategory: string;
+  confidence: number;
+}
+
+/** Validation messages for the edit dialog, keyed by the field that failed. */
+export type RFQEditFormErrors = Partial<Record<keyof RFQEditFormState, string>>;
+
+/** Outcome of deleting one RFQ. Carries the number so the caller can drop the row. */
+export type RFQDeleteResult =
+  | { success: true; rfqNumber: string }
+  | { success: false; reason: RFQTransportFailure; error: string };
+
+export interface RFQCreatePayload {
+  title: string;
+  category: string;
+  sourcingMode: SourcingMode;
+  status: string;
+  source: RFQSource;
+  sourceFileName?: string;
+  budget: number;
+  targetDeliveryDate: string;
+  deliveryLocation: string;
+  deliveryPincode: string;
+  extractedEntities: ExtractedEntity[];
+  attachments: RFQAttachment[];
+}
+
+/**
+ * Fields an edit may change, all optional.
+ *
+ * An edit is a partial update: correcting only the delivery pincode must not blank
+ * whatever the form did not resend. `source`, `sourceFileName`, the RFQ number and
+ * the buyer identity are absent because they record how the RFQ arrived and who
+ * owns it — the API whitelists writable columns and would ignore them anyway.
+ */
+export type RFQUpdatePayload = Partial<
+  Pick<
+    RFQCreatePayload,
+    | 'title'
+    | 'category'
+    | 'sourcingMode'
+    | 'status'
+    | 'budget'
+    | 'targetDeliveryDate'
+    | 'deliveryLocation'
+    | 'deliveryPincode'
+    | 'extractedEntities'
+    | 'attachments'
+  >
+>;
+
 /**
  * A supporting document attached to an RFQ.
  *
@@ -152,6 +357,27 @@ export interface RFQAttachment {
   /** Decoded size in bytes. */
   size: number;
   uploadedAt: string;
+}
+
+/**
+ * The narrative summary stored against an RFQ.
+ *
+ * `generatedBy` matters: when the model was unavailable the server stores a
+ * summary computed from the line items instead, and the screen has to say so
+ * rather than passing arithmetic off as analysis.
+ */
+export interface RFQAiSummary {
+  headline: string;
+  scope: string;
+  riskNotes: string[];
+  itemCount: number;
+  totalQuantity: number;
+  categories: string[];
+  generatedBy: 'ai' | 'derived';
+  /** Why the model was not used, when it was not. */
+  fallbackReason: string | null;
+  model: string | null;
+  generatedAt: string;
 }
 
 export interface RFQItem {
@@ -175,7 +401,21 @@ export interface RFQItem {
   deliveryPincode?: string;
   /** Supporting documents the buyer attached. Never sent for AI extraction. */
   attachments?: RFQAttachment[];
+  /**
+   * The summary generated when the RFQ was created. Absent on records raised
+   * before summaries existed.
+   */
+  aiSummary?: RFQAiSummary | null;
+  /** Login email of the buyer who raised it, for display only. */
+  raisedByEmail?: string;
+  /** Server-side RFQ id. Same value as `rfqNumber`. */
+  rfqId?: string;
   createdAt: string;
+  /**
+   * When the record last changed. Equal to `createdAt` until the RFQ is edited,
+   * which is how the details page decides whether to show an "edited" timestamp.
+   */
+  updatedAt?: string;
   extractedEntities: ExtractedEntity[];
   quotes: QuoteComparison[];
   chasingActive: boolean;

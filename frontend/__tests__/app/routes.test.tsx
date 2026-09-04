@@ -1,14 +1,23 @@
+// The details route fetches through rfqClient, so the transport is doubled here
+// and the screen itself is asserted separately in rfq-details.test.tsx.
+jest.mock('@/lib/rfqClient', () => ({ fetchRFQById: jest.fn(), uploadRFQAttachment: jest.fn() }));
+
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import * as storeModule from '@/lib/store';
+import { UI_STRINGS } from '@/lib/uiStrings';
+import { fetchRFQById } from '@/lib/rfqClient';
+
+const mockFetchRFQById = fetchRFQById as jest.MockedFunction<typeof fetchRFQById>;
 import type { RFQItem, VendorEvaluationRecord, VendorOpportunity } from '@/lib/types';
 
 jest.mock('@/lib/store');
 
 const mockPush = jest.fn();
+const mockReplace = jest.fn();
 const mockSearchParams = new URLSearchParams();
 jest.mock('next/navigation', () => ({
-  useRouter: () => ({ push: mockPush, replace: jest.fn() }),
+  useRouter: () => ({ push: mockPush, replace: mockReplace }),
   usePathname: () => '/',
   useSearchParams: () => mockSearchParams,
 }));
@@ -50,7 +59,50 @@ jest.mock('@/app/buyer/rfq-summary', () =>
     rfqNumber: 'RFQ-1',
   })
 );
-jest.mock('@/app/buyer/rfq-details', () => stub('rfq-details', ['onBack']));
+jest.mock('@/app/buyer/rfq-details', () => stub('rfq-details', ['onBack', 'onEdit', 'onDelete']));
+// The dialogs are exercised in RFQEditModal.test.tsx. Here they only need to show
+// whether they were opened, and to let the route's save and confirm run.
+jest.mock('@/app/buyer/RFQEditModal', () => ({
+  __esModule: true,
+  RFQEditModal: ({
+    rfq,
+    onSave,
+    onClose,
+  }: {
+    rfq: { rfqNumber: string } | null;
+    onSave: (id: string, changes: Record<string, unknown>) => Promise<unknown>;
+    onClose: () => void;
+  }) =>
+    rfq ? (
+      <div data-testid="edit-modal-open">
+        <button type="button" onClick={() => void onSave(rfq.rfqNumber, { title: 'Edited title' })}>
+          edit-modal:save
+        </button>
+        <button type="button" onClick={onClose}>
+          edit-modal:close
+        </button>
+      </div>
+    ) : null,
+  RFQDeleteDialog: ({
+    rfq,
+    onConfirm,
+    onClose,
+  }: {
+    rfq: { rfqNumber: string } | null;
+    onConfirm: (id: string) => Promise<void>;
+    onClose: () => void;
+  }) =>
+    rfq ? (
+      <div data-testid="delete-dialog-open">
+        <button type="button" onClick={() => void onConfirm(rfq.rfqNumber)}>
+          delete-dialog:confirm
+        </button>
+        <button type="button" onClick={onClose}>
+          delete-dialog:close
+        </button>
+      </div>
+    ) : null,
+}));
 jest.mock('@/app/buyer/quote-matrix', () => stub('quote-matrix', ['onBackToDashboard']));
 jest.mock('@/app/buyer/vendor-evaluation-summary', () => stub('evaluation-summary', ['onBack']));
 jest.mock('@/app/buyer/vendor-summary', () =>
@@ -86,7 +138,8 @@ jest.mock('@/app/admin/infra-control', () => stub('infra-control', ['onNavigateT
 jest.mock('@/app/admin/audit-log', () => stub('audit-log', ['onBackToInfra']));
 
 /* eslint-disable @typescript-eslint/no-var-requires */
-const BuyerCommandCenterPage = require('@/app/buyer/command-center/page').default;
+const BuyerDashboardPage = require('@/app/buyer/dashboard/page').default;
+const BuyerCommandCenterRedirectPage = require('@/app/buyer/command-center/page').default;
 const BuyerIngestionWizardPage = require('@/app/buyer/ingestion-wizard/page').default;
 const BuyerRFQSummaryPage = require('@/app/buyer/rfq-summary/page').default;
 const BuyerRFQDetailsPage = require('@/app/buyer/rfq-details/page').default;
@@ -124,6 +177,8 @@ describe('Role screen routes', () => {
   const setSelectedRFQForMatrix = jest.fn();
   const setSelectedVendorOpportunity = jest.fn();
   const setActiveEvaluationRecord = jest.fn();
+  const storeUpdateRFQ = jest.fn();
+  const storeDeleteRFQ = jest.fn();
 
   const mockStore = (overrides: Record<string, unknown> = {}) => {
     (storeModule.useApp as jest.Mock).mockReturnValue({
@@ -131,6 +186,8 @@ describe('Role screen routes', () => {
       setSelectedVendorOpportunity,
       setActiveEvaluationRecord,
       activeEvaluationRecord: EVALUATION,
+      updateRFQ: storeUpdateRFQ,
+      deleteRFQ: storeDeleteRFQ,
       selectedVendorOpportunity: OPPORTUNITY,
       vendorOpportunities: [OPPORTUNITY],
       ...overrides,
@@ -139,6 +196,8 @@ describe('Role screen routes', () => {
 
   beforeEach(() => {
     mockStore();
+    storeUpdateRFQ.mockResolvedValue({ ...RFQ, title: 'Edited title' });
+    storeDeleteRFQ.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -149,8 +208,8 @@ describe('Role screen routes', () => {
 
   // ── Buyer ──────────────────────────────────────────────────────────────────
   describe('buyer routes', () => {
-    it('command center links out to the wizard, matrix, subscriptions and directory', () => {
-      render(<BuyerCommandCenterPage />);
+    it('dashboard links out to the wizard, matrix, subscriptions and directory', () => {
+      render(<BuyerDashboardPage />);
       expect(screen.getByTestId('command-center')).toBeInTheDocument();
 
       clickCallback('command-center:onNavigateToWizard');
@@ -166,6 +225,20 @@ describe('Role screen routes', () => {
       expect(mockPush).toHaveBeenCalledWith('/buyer/buyer-directory');
     });
 
+    // The dashboard used to live at /buyer/command-center. That URL is kept as a
+    // redirect rather than deleted, so existing bookmarks and any link already
+    // sent out still land on the screen instead of a 404.
+    it('redirects the legacy command-center URL to the dashboard', () => {
+      const { container } = render(<BuyerCommandCenterRedirectPage />);
+
+      expect(mockReplace).toHaveBeenCalledWith('/buyer/dashboard');
+      // `replace` rather than `push`, so the dead URL is not left in history for
+      // the back button to return to.
+      expect(mockPush).not.toHaveBeenCalled();
+      // Renders nothing: there is no flash of an empty shell before the redirect.
+      expect(container).toBeEmptyDOMElement();
+    });
+
     it('records the selected RFQ before opening the matrix', () => {
       const CommandCenter = require('@/app/buyer/command-center').default;
       render(
@@ -176,23 +249,23 @@ describe('Role screen routes', () => {
         />
       );
       // Exercised directly through the page below; this guards the adapter contract.
-      render(<BuyerCommandCenterPage />);
+      render(<BuyerDashboardPage />);
       expect(screen.getAllByTestId('command-center').length).toBeGreaterThan(0);
     });
 
-    it('ingestion wizard returns to the command center on complete and cancel', () => {
+    it('ingestion wizard returns to the dashboard on complete and cancel', () => {
       render(<BuyerIngestionWizardPage />);
       clickCallback('ingestion-wizard:onComplete');
-      expect(mockPush).toHaveBeenCalledWith('/buyer/command-center');
+      expect(mockPush).toHaveBeenCalledWith('/buyer/dashboard');
 
       clickCallback('ingestion-wizard:onCancel');
-      expect(mockPush).toHaveBeenCalledWith('/buyer/command-center');
+      expect(mockPush).toHaveBeenCalledWith('/buyer/dashboard');
     });
 
-    it('quote matrix returns to the command center', () => {
+    it('quote matrix returns to the dashboard', () => {
       render(<BuyerQuoteMatrixPage />);
       clickCallback('quote-matrix:onBackToDashboard');
-      expect(mockPush).toHaveBeenCalledWith('/buyer/command-center');
+      expect(mockPush).toHaveBeenCalledWith('/buyer/dashboard');
     });
 
     it('rfq summary opens the quote matrix and the wizard', () => {
@@ -216,34 +289,125 @@ describe('Role screen routes', () => {
       expect(mockPush).toHaveBeenCalledWith('/buyer/rfq-details?rfq=RFQ-1');
     });
 
-    it('rfq details resolves the RFQ from the query string and returns to the portfolio', () => {
+    // The page reads the RFQ from the API now, not from store state. The record is
+    // only complete server-side, and the bootstrap payload no longer carries RFQs
+    // at all, so a store lookup reported "not found" for RFQs that exist.
+    it('rfq details fetches the RFQ named in the query string and returns to the portfolio', async () => {
       mockSearchParams.set('rfq', 'RFQ-1');
-      mockStore({ rfqs: [RFQ] });
+      mockFetchRFQById.mockResolvedValue({ success: true, rfq: RFQ });
 
       render(<BuyerRFQDetailsPage />);
-      expect(screen.getByTestId('rfq-details')).toBeInTheDocument();
+
+      await waitFor(() => expect(screen.getByTestId('rfq-details')).toBeInTheDocument());
+      expect(mockFetchRFQById).toHaveBeenCalledWith('RFQ-1');
 
       clickCallback('rfq-details:onBack');
       expect(mockPush).toHaveBeenCalledWith('/buyer/rfq-summary');
       mockSearchParams.delete('rfq');
     });
 
-    it('rfq details renders without an RFQ when the query string carries no number', () => {
-      mockStore({ rfqs: [RFQ] });
-
+    // Nothing to fetch, so it asks for nothing rather than requesting undefined.
+    it('rfq details asks for no RFQ when the query string carries no number', () => {
       render(<BuyerRFQDetailsPage />);
 
-      expect(screen.getByTestId('rfq-details')).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.rfqDetails.missingReferenceTitle)).toBeInTheDocument();
+      expect(mockFetchRFQById).not.toHaveBeenCalled();
     });
 
-    it('rfq details renders when the number in the URL matches no RFQ', () => {
+    it('rfq details reports a miss without offering a retry', async () => {
       mockSearchParams.set('rfq', 'RFQ-DOES-NOT-EXIST');
-      mockStore({ rfqs: [RFQ] });
+      mockFetchRFQById.mockResolvedValue({
+        success: false,
+        reason: 'NOT_FOUND',
+        error: 'not found under your organisation',
+      });
 
       render(<BuyerRFQDetailsPage />);
 
-      // The screen itself reports the miss; the route only has to resolve to null.
-      expect(screen.getByTestId('rfq-details')).toBeInTheDocument();
+      await waitFor(() =>
+        expect(screen.getByText(UI_STRINGS.rfqDetails.notFoundTitle)).toBeInTheDocument()
+      );
+      // A missing RFQ will not appear on a retry, so none is offered.
+      expect(
+        screen.queryByRole('button', { name: UI_STRINGS.rfqDetails.retryAction })
+      ).not.toBeInTheDocument();
+      mockSearchParams.delete('rfq');
+    });
+
+    // A transport failure might succeed on a second attempt, so a retry is offered.
+    it('rfq details offers a retry after a transport failure', async () => {
+      mockSearchParams.set('rfq', 'RFQ-1');
+      mockFetchRFQById
+        .mockResolvedValueOnce({ success: false, reason: 'NETWORK', error: 'unreachable' })
+        .mockResolvedValueOnce({ success: true, rfq: RFQ });
+
+      render(<BuyerRFQDetailsPage />);
+
+      await waitFor(() =>
+        expect(screen.getByText(UI_STRINGS.rfqDetails.loadFailedTitle)).toBeInTheDocument()
+      );
+      fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.rfqDetails.retryAction }));
+
+      await waitFor(() => expect(screen.getByTestId('rfq-details')).toBeInTheDocument());
+      mockSearchParams.delete('rfq');
+    });
+
+    // ── Editing and deleting from the details route ─────────────────────────
+    // The page fetched the RFQ itself rather than reading it from the store, so a
+    // store-only update would leave this screen showing the pre-edit terms.
+    it('rfq details opens the edit dialog and adopts what was saved', async () => {
+      mockSearchParams.set('rfq', 'RFQ-1');
+      mockFetchRFQById.mockResolvedValue({ success: true, rfq: RFQ });
+
+      render(<BuyerRFQDetailsPage />);
+      await waitFor(() => expect(screen.getByTestId('rfq-details')).toBeInTheDocument());
+
+      expect(screen.queryByTestId('edit-modal-open')).not.toBeInTheDocument();
+      clickCallback('rfq-details:onEdit');
+      expect(screen.getByTestId('edit-modal-open')).toBeInTheDocument();
+
+      clickCallback('edit-modal:save');
+      await waitFor(() =>
+        expect(storeUpdateRFQ).toHaveBeenCalledWith('RFQ-1', { title: 'Edited title' })
+      );
+      mockSearchParams.delete('rfq');
+    });
+
+    // Staying here would leave the buyer looking at a record that no longer exists.
+    it('rfq details deletes on confirmation and returns to the portfolio', async () => {
+      mockSearchParams.set('rfq', 'RFQ-1');
+      mockFetchRFQById.mockResolvedValue({ success: true, rfq: RFQ });
+
+      render(<BuyerRFQDetailsPage />);
+      await waitFor(() => expect(screen.getByTestId('rfq-details')).toBeInTheDocument());
+
+      expect(screen.queryByTestId('delete-dialog-open')).not.toBeInTheDocument();
+      clickCallback('rfq-details:onDelete');
+      expect(screen.getByTestId('delete-dialog-open')).toBeInTheDocument();
+
+      clickCallback('delete-dialog:confirm');
+      await waitFor(() => expect(storeDeleteRFQ).toHaveBeenCalledWith('RFQ-1'));
+      expect(mockPush).toHaveBeenCalledWith('/buyer/rfq-summary');
+      mockSearchParams.delete('rfq');
+    });
+
+    it('rfq details closes each dialog without changing anything', async () => {
+      mockSearchParams.set('rfq', 'RFQ-1');
+      mockFetchRFQById.mockResolvedValue({ success: true, rfq: RFQ });
+
+      render(<BuyerRFQDetailsPage />);
+      await waitFor(() => expect(screen.getByTestId('rfq-details')).toBeInTheDocument());
+
+      clickCallback('rfq-details:onEdit');
+      clickCallback('edit-modal:close');
+      expect(screen.queryByTestId('edit-modal-open')).not.toBeInTheDocument();
+
+      clickCallback('rfq-details:onDelete');
+      clickCallback('delete-dialog:close');
+      expect(screen.queryByTestId('delete-dialog-open')).not.toBeInTheDocument();
+
+      expect(storeUpdateRFQ).not.toHaveBeenCalled();
+      expect(storeDeleteRFQ).not.toHaveBeenCalled();
       mockSearchParams.delete('rfq');
     });
 
@@ -419,7 +583,7 @@ describe('Role screen routes', () => {
     });
 
     it.each<[string, () => React.ReactElement, string]>([
-      ['buyer command centre', () => BuyerCommandCenterPage({}) as React.ReactElement, '/buyer/quote-matrix'],
+      ['buyer dashboard', () => BuyerDashboardPage({}) as React.ReactElement, '/buyer/quote-matrix'],
       ['kanban board', () => CmKanbanPage({}) as React.ReactElement, '/category-manager/quote-matrix'],
       ['buyer console', () => CmBuyerConsolePage({}) as React.ReactElement, '/category-manager/quote-matrix'],
       ['vendor console', () => CmVendorConsolePage({}) as React.ReactElement, '/category-manager/quote-matrix'],
@@ -432,7 +596,7 @@ describe('Role screen routes', () => {
     });
 
     it('routes to the matrix without a selection when none is supplied', () => {
-      const page = BuyerCommandCenterPage({}) as React.ReactElement;
+      const page = BuyerDashboardPage({}) as React.ReactElement;
       page.props.onNavigateToMatrix(undefined);
 
       expect(setSelectedRFQForMatrix).not.toHaveBeenCalled();
