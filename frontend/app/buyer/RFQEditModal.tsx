@@ -18,7 +18,7 @@
 // nobody touched.
 // ==============================================================================
 
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { AlertCircle, Loader2, Paperclip, Plus, Save, Trash2, X } from 'lucide-react';
 import categoriesData from '@/lib/categories.json';
 import { CURRENCY, RFQ_STATUSES, formatFileSize, formatIndianDateTime } from '@/lib/constants';
@@ -44,6 +44,22 @@ function minorsFor(major: string): string[] {
   return categoriesData.find((group) => group.majorCategory === major)?.minorCategories ?? [];
 }
 
+/**
+ * Options for a category select that has to be able to display what is stored.
+ *
+ * A select whose value matches none of its options renders blank, so offering only
+ * taxonomy entries hid whatever the record actually held. RFQs classified into a
+ * bucket outside categories.json — 'General Procurement' is the one the ingestion
+ * default used to produce — arrived in this dialog with both category dropdowns
+ * empty, which read as "this RFQ has no category" on a record that has one.
+ *
+ * The stored value is prepended rather than appended so it is the visible choice,
+ * and the buyer can still pick a taxonomy value over it.
+ */
+function withStoredValue(options: string[], stored: string): string[] {
+  return stored !== '' && !options.includes(stored) ? [stored, ...options] : options;
+}
+
 /** Human label for each intake channel, matching the details page. */
 const SOURCE_LABELS: Record<string, string> = {
   web_portal: DETAILS.sourceWebPortal,
@@ -58,23 +74,32 @@ let addedRowCounter = 0;
 /**
  * A stored line item as an editable row.
  *
- * `quantity` becomes null when the record holds zero, because a blank field and a
- * quantity of nothing are different answers and zero is what silently reaches
+ * `quantity` becomes null when the record holds zero or empty, because a blank field
+ * and a quantity of nothing are different answers and zero is what silently reaches
  * vendors otherwise.
  */
-function toEditRow(entity: ExtractedEntity): RFQEditLineItem {
+function toEditRow(entity: ExtractedEntity | any): RFQEditLineItem {
+  const rawQty = entity.quantity ?? entity.qty ?? entity.Quantity;
+  const numQty =
+    rawQty !== null && rawQty !== undefined && rawQty !== '' && !isNaN(Number(rawQty))
+      ? Number(rawQty)
+      : null;
+  const rawUnit = entity.unit ?? entity.uom ?? entity.Unit ?? entity.UOM ?? '';
+  const rawName = entity.itemName ?? entity.name ?? entity.item ?? entity.description ?? '';
+  const rawSpecs = entity.technicalSpecs ?? entity.specs ?? entity.specifications ?? '';
+  const rawTargetDate = entity.targetDate ?? entity.target_date ?? entity.deliveryDate ?? '';
+  const rawMajor = entity.majorCategory ?? entity.major_category ?? '';
+  const rawMinor = entity.minorCategory ?? entity.minor_category ?? '';
+
   return {
     id: entity.id || `rfq-item-${Date.now()}-${(addedRowCounter += 1)}`,
-    itemName: entity.itemName || '',
-    technicalSpecs: entity.technicalSpecs || '',
-    quantity: Number(entity.quantity) > 0 ? Number(entity.quantity) : null,
-    unit: entity.unit || '',
-    targetDate: entity.targetDate || '',
-    majorCategory: entity.majorCategory || '',
-    minorCategory: entity.minorCategory || '',
-    // Preserved rather than recomputed: the confidence records how this row was
-    // produced, and editing a description does not make the model more or less
-    // sure of what it originally read.
+    itemName: String(rawName || ''),
+    technicalSpecs: String(rawSpecs || ''),
+    quantity: numQty !== null && numQty > 0 ? numQty : null,
+    unit: String(rawUnit || ''),
+    targetDate: String(rawTargetDate || ''),
+    majorCategory: String(rawMajor || ''),
+    minorCategory: String(rawMinor || ''),
     confidence: Number(entity.confidence) || 0,
   };
 }
@@ -112,19 +137,26 @@ function toExtractedEntity(row: RFQEditLineItem): ExtractedEntity {
   };
 }
 
-/** Seed the form from the record, so an untouched field submits nothing. */
-export function toFormState(rfq: RFQItem): RFQEditFormState {
+/** Seed the form from the record, so all existing details auto-fill into the edit dialog. */
+export function toFormState(rfq: RFQItem | any): RFQEditFormState {
+  const rawEntities =
+    rfq.extractedEntities ?? rfq.lineItems ?? rfq.items ?? rfq.entities ?? [];
+  const entitiesList = Array.isArray(rawEntities) ? rawEntities : [];
+  const rawBudget = rfq.budget ?? rfq.estimatedBudget ?? rfq.estimated_budget;
+  const numBudget =
+    rawBudget !== null && rawBudget !== undefined && rawBudget !== '' && !isNaN(Number(rawBudget))
+      ? Number(rawBudget)
+      : null;
+
   return {
     title: rfq.title || '',
     category: rfq.category || '',
-    status: rfq.status,
-    // Null rather than 0: a blank ceiling and a ceiling of nothing are different
-    // answers, and 0 is what used to reach vendors as though it were real.
-    budget: rfq.budget > 0 ? rfq.budget : null,
-    targetDeliveryDate: rfq.targetDeliveryDate || '',
-    deliveryLocation: rfq.deliveryLocation || '',
-    deliveryPincode: rfq.deliveryPincode || '',
-    lineItems: (rfq.extractedEntities || []).map(toEditRow),
+    status: rfq.status || 'Parsing',
+    budget: numBudget !== null && numBudget > 0 ? numBudget : null,
+    targetDeliveryDate: rfq.targetDeliveryDate || rfq.target_delivery_date || '',
+    deliveryLocation: rfq.deliveryLocation || rfq.delivery_location || '',
+    deliveryPincode: rfq.deliveryPincode || rfq.delivery_pincode || '',
+    lineItems: entitiesList.map(toEditRow),
     attachments: rfq.attachments || [],
   };
 }
@@ -264,21 +296,21 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
   const [attachError, setAttachError] = useState<string | null>(null);
   const attachInputRef = useRef<HTMLInputElement>(null);
 
-  // Reseeded whenever a different RFQ is opened, derived from the prop rather than
+  // Reseeded whenever an RFQ is opened or changed, derived from the prop rather than
   // an effect so the form and the record cannot be a render out of step.
   const [seededFor, setSeededFor] = useState<string | null>(null);
-  if (rfq && seededFor !== rfq.rfqNumber) {
-    setSeededFor(rfq.rfqNumber);
+  const rfqIdentifier = rfq ? (rfq.rfqNumber || rfq.id || 'current-rfq') : null;
+
+  if (rfq && seededFor !== rfqIdentifier) {
+    setSeededFor(rfqIdentifier);
     setForm(toFormState(rfq));
     setSubmitAttempted(false);
     setSaveError(null);
     setAttachError(null);
+  } else if (!rfq && seededFor !== null) {
+    setSeededFor(null);
+    setForm(null);
   }
-
-  const categoryInTaxonomy = useMemo(
-    () => (form ? TAXONOMY_MAJORS.includes(form.category) : false),
-    [form]
-  );
 
   if (!rfq || !form) return null;
 
@@ -436,15 +468,15 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                 </label>
                 <select
                   id="rfq-edit-category"
-                  value={categoryInTaxonomy ? form.category : ''}
+                  value={form.category}
                   onChange={(e) => patch('category', e.target.value)}
                   aria-invalid={!!errors.category}
                   className="font-semibold"
                 >
-                  {/* Present only while the stored value is outside the taxonomy, so
-                      the dropdown never silently drops what the record carries. */}
-                  {!categoryInTaxonomy && <option value="">{form.category || EDIT.categoryLabel}</option>}
-                  {TAXONOMY_MAJORS.map((major) => (
+                  {/* A blank choice only while the record genuinely has no category,
+                      so an RFQ that has one cannot be saved back without it. */}
+                  {form.category === '' && <option value="" />}
+                  {withStoredValue(TAXONOMY_MAJORS, form.category).map((major) => (
                     <option key={major} value={major}>
                       {major}
                     </option>
@@ -562,7 +594,10 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
               </p>
             ) : (
               <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-gray-800">
-                <table className="w-full text-left min-w-[900px]">
+                {/* Widened to match the columns inside it: the quantity and unit
+                    fields grew, and leaving the table at its old width squeezed
+                    them back to where a long value was clipped again. */}
+                <table className="w-full text-left min-w-[1060px]">
                   <thead className="bg-slate-50 dark:bg-gray-950/60 text-[10px] uppercase tracking-wide text-slate-500 dark:text-gray-400">
                     <tr>
                       <th scope="col" className="px-2 py-2 font-bold">{EDIT.colItem}</th>
@@ -609,7 +644,7 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                             className="min-w-[10rem] font-semibold"
                           >
                             <option value="" />
-                            {TAXONOMY_MAJORS.map((major) => (
+                            {withStoredValue(TAXONOMY_MAJORS, row.majorCategory).map((major) => (
                               <option key={major} value={major}>
                                 {major}
                               </option>
@@ -627,11 +662,13 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                             <option value="">
                               {row.majorCategory === '' ? EDIT.selectMajorFirst : ''}
                             </option>
-                            {minorsFor(row.majorCategory).map((minor) => (
-                              <option key={minor} value={minor}>
-                                {minor}
-                              </option>
-                            ))}
+                            {withStoredValue(minorsFor(row.majorCategory), row.minorCategory).map(
+                              (minor) => (
+                                <option key={minor} value={minor}>
+                                  {minor}
+                                </option>
+                              )
+                            )}
                           </select>
                         </td>
                         <td className="px-2 py-2 align-top">
@@ -645,7 +682,10 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                                 quantity: e.target.value === '' ? null : Number(e.target.value),
                               })
                             }
-                            className="mono font-semibold w-20"
+                            // Wide enough for a real BOQ quantity plus the number
+                            // spinners. At w-28 a six-figure quantity was clipped,
+                            // which read as though the field had not been filled in.
+                            className="mono font-semibold w-32 min-w-[7rem]"
                           />
                         </td>
                         <td className="px-2 py-2 align-top">
@@ -654,7 +694,7 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                             aria-label={EDIT.colUnit}
                             value={row.unit}
                             onChange={(e) => patchRow(row.id, { unit: e.target.value })}
-                            className="w-20"
+                            className="w-32 min-w-[6rem]"
                           />
                         </td>
                         <td className="px-2 py-2 align-top">

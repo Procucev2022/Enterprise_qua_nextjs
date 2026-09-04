@@ -2,6 +2,7 @@ import React from 'react';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { AppProvider, useApp } from '@/lib/store';
 import { RFQItem, VendorEntry, BuyerAccount, VendorEvaluationRecord, ExtractedEntity } from '@/lib/types';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 // Mock global fetch for API calls triggered by store
 const mockFetch = jest.fn();
@@ -1453,5 +1454,575 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       expect(contextValue.isLoadingDB).toBe(false);
     });
     expect(contextValue.dbConnected).toBe(false);
+  });
+});
+
+// ==============================================================================
+// EDITING, ADOPTING AND DELETING AN RFQ
+// ==============================================================================
+// All three only touch local state once the API has confirmed. The alternative —
+// patching state from the request and hoping the two agree — is the failure the
+// RFQ create path already had: the browser and the database ended up holding
+// different records for the same RFQ.
+// ==============================================================================
+
+describe('lib/store.tsx - RFQ edit and delete', () => {
+  // Given an explicit rfqNumber. The shared fixture above has none, and every
+  // assertion here turns on matching that number — without one the store would be
+  // comparing undefined to undefined and the tests would pass regardless.
+  const STORED = {
+    ...(STORE_RFQ_FIXTURES[0] as unknown as RFQItem),
+    id: 'rfq-1',
+    rfqNumber: 'RFQ260409000512',
+  } as RFQItem;
+
+  /**
+   * Serve the RFQ list, then answer PUT and DELETE however the test asks.
+   * The list is served first so the store has a row to act on.
+   */
+  function serveRFQs(
+    handlers: {
+      put?: (body: unknown) => { status: number; body: unknown };
+      del?: () => { status: number; body: unknown };
+    } = {}
+  ) {
+    mockFetch.mockReset();
+    mockFetch.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
+      const isRfqEndpoint = typeof url === 'string' && /\/api\/rfqs/.test(url);
+
+      if (isRfqEndpoint && init?.method === 'PUT') {
+        const answer = handlers.put
+          ? handlers.put(JSON.parse(init.body || '{}'))
+          : { status: 200, body: { success: true, data: { ...STORED, title: 'Revised title' } } };
+        return Promise.resolve({
+          ok: answer.status >= 200 && answer.status < 300,
+          status: answer.status,
+          json: async () => answer.body,
+        });
+      }
+
+      if (isRfqEndpoint && init?.method === 'DELETE') {
+        const answer = handlers.del
+          ? handlers.del()
+          : { status: 200, body: { success: true, data: { rfqNumber: STORED.rfqNumber } } };
+        return Promise.resolve({
+          ok: answer.status >= 200 && answer.status < 300,
+          status: answer.status,
+          json: async () => answer.body,
+        });
+      }
+
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () =>
+          /\/api\/rfqs(\?|$)/.test(String(url))
+            ? { success: true, data: [STORED] }
+            : { success: true, data: {} },
+      });
+    });
+  }
+
+  /** Mount the provider and wait for the RFQ list to arrive. */
+  async function mountStore() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let ctx: any;
+    const Consumer = () => {
+      ctx = useApp();
+      return <div data-testid="rfq-count">{ctx.rfqs.length}</div>;
+    };
+    render(
+      <AppProvider>
+        <Consumer />
+      </AppProvider>
+    );
+    await waitFor(() => expect(screen.getByTestId('rfq-count')).toHaveTextContent('1'));
+    return () => ctx;
+  }
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  describe('updateRFQ', () => {
+    it('adopts the record the API stored, not the change that was sent', async () => {
+      serveRFQs({
+        put: () => ({
+          status: 200,
+          // Deliberately different from what the caller sent: the response wins.
+          body: { success: true, data: { ...STORED, title: 'What the database holds' } },
+        }),
+      });
+      const ctx = await mountStore();
+
+      await act(async () => {
+        await ctx().updateRFQ(STORED.rfqNumber, { title: 'What the caller sent' });
+      });
+
+      expect(ctx().rfqs[0].title).toBe('What the database holds');
+    });
+
+    it('sends only the fields it was given', async () => {
+      serveRFQs();
+      const ctx = await mountStore();
+
+      await act(async () => {
+        await ctx().updateRFQ(STORED.rfqNumber, { status: 'In Evaluation' });
+      });
+
+      const put = mockFetch.mock.calls.find((call) => call[1]?.method === 'PUT');
+      expect(JSON.parse(put?.[1].body)).toEqual({ status: 'In Evaluation' });
+    });
+
+    it('reports the edit on screen and in the audit log', async () => {
+      serveRFQs();
+      const ctx = await mountStore();
+
+      await act(async () => {
+        await ctx().updateRFQ(STORED.rfqNumber, { title: 'Revised title' });
+      });
+
+      expect(ctx().toastMessage?.title).toBe(UI_STRINGS.rfqEdit.savedTitle);
+      expect(ctx().auditLogs[0].action).toContain('Edited');
+    });
+
+    it('keeps the vendor opportunity for that RFQ in step', async () => {
+      serveRFQs({
+        put: () => ({
+          status: 200,
+          body: { success: true, data: { ...STORED, title: 'Renamed for vendors' } },
+        }),
+      });
+      const ctx = await mountStore();
+
+      await act(async () => {
+        await ctx().updateRFQ(STORED.rfqNumber, { title: 'Renamed for vendors' });
+      });
+
+      const opp = ctx().vendorOpportunities.find(
+        (o: { rfqNumber: string }) => o.rfqNumber === STORED.rfqNumber
+      );
+      expect(opp.title).toBe('Renamed for vendors');
+    });
+
+    // A screen already holding this RFQ would otherwise show the pre-edit terms.
+    it('refreshes a selection pointing at the edited RFQ', async () => {
+      serveRFQs({
+        put: () => ({
+          status: 200,
+          body: { success: true, data: { ...STORED, title: 'Refreshed selection' } },
+        }),
+      });
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().setSelectedRFQForMatrix(STORED);
+        ctx().openRFQDeepDive(STORED);
+      });
+      await act(async () => {
+        await ctx().updateRFQ(STORED.rfqNumber, { title: 'Refreshed selection' });
+      });
+
+      expect(ctx().selectedRFQForMatrix.title).toBe('Refreshed selection');
+      expect(ctx().selectedRFQForDeepDive.title).toBe('Refreshed selection');
+    });
+
+    it('leaves an unrelated selection alone', async () => {
+      serveRFQs();
+      const other = { ...STORED, id: 'other', rfqNumber: 'RFQ-OTHER' } as RFQItem;
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().setSelectedRFQForMatrix(other);
+      });
+      await act(async () => {
+        await ctx().updateRFQ(STORED.rfqNumber, { title: 'Revised title' });
+      });
+
+      expect(ctx().selectedRFQForMatrix.rfqNumber).toBe('RFQ-OTHER');
+    });
+
+    // A rejected edit must not leave the dashboard showing a change the database
+    // does not hold.
+    it('throws and changes nothing when the API rejects the edit', async () => {
+      serveRFQs({ put: () => ({ status: 500, body: { error: 'Database unavailable.' } }) });
+      const ctx = await mountStore();
+
+      await act(async () => {
+        await expect(ctx().updateRFQ(STORED.rfqNumber, { title: 'Revised title' })).rejects.toThrow(
+          'Database unavailable.'
+        );
+      });
+
+      expect(ctx().rfqs[0].title).toBe(STORED.title);
+      expect(ctx().toastMessage?.title).toBe(UI_STRINGS.rfqEdit.saveFailedTitle);
+    });
+
+    it('throws when the RFQ belongs to another organisation', async () => {
+      serveRFQs({ put: () => ({ status: 404, body: { error: 'Not found under your organisation.' } }) });
+      const ctx = await mountStore();
+
+      await act(async () => {
+        await expect(ctx().updateRFQ('RFQ-SOMEONE-ELSE', { title: 'Rewritten' })).rejects.toThrow(
+          'Not found under your organisation.'
+        );
+      });
+
+      expect(ctx().rfqs).toHaveLength(1);
+    });
+  });
+
+  describe('deleteRFQ', () => {
+    it('drops the RFQ from every list once the API confirms', async () => {
+      serveRFQs();
+      const ctx = await mountStore();
+
+      await act(async () => {
+        await ctx().deleteRFQ(STORED.rfqNumber);
+      });
+
+      expect(ctx().rfqs).toHaveLength(0);
+      expect(
+        ctx().vendorOpportunities.some((o: { rfqNumber: string }) => o.rfqNumber === STORED.rfqNumber)
+      ).toBe(false);
+    });
+
+    it('reports the deletion on screen and in the audit log', async () => {
+      serveRFQs();
+      const ctx = await mountStore();
+
+      await act(async () => {
+        await ctx().deleteRFQ(STORED.rfqNumber);
+      });
+
+      expect(ctx().toastMessage?.title).toBe(UI_STRINGS.rfqEdit.deletedTitle);
+      expect(ctx().auditLogs[0].action).toContain('Deleted');
+    });
+
+    // A selection pointing at a deleted record would render a stale RFQ.
+    it('clears a selection pointing at the deleted RFQ', async () => {
+      serveRFQs();
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().setSelectedRFQForMatrix(STORED);
+        ctx().openRFQDeepDive(STORED);
+      });
+      await act(async () => {
+        await ctx().deleteRFQ(STORED.rfqNumber);
+      });
+
+      expect(ctx().selectedRFQForMatrix).toBeNull();
+      expect(ctx().selectedRFQForDeepDive).toBeNull();
+    });
+
+    it('leaves an unrelated selection alone', async () => {
+      serveRFQs();
+      const other = { ...STORED, id: 'other', rfqNumber: 'RFQ-OTHER' } as RFQItem;
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().setSelectedRFQForMatrix(other);
+      });
+      await act(async () => {
+        await ctx().deleteRFQ(STORED.rfqNumber);
+      });
+
+      expect(ctx().selectedRFQForMatrix.rfqNumber).toBe('RFQ-OTHER');
+    });
+
+    // Removing the row anyway would hide a record the database still holds.
+    it('throws and keeps the row when the API refuses', async () => {
+      serveRFQs({ del: () => ({ status: 500, body: { error: 'Delete failed.' } }) });
+      const ctx = await mountStore();
+
+      await act(async () => {
+        await expect(ctx().deleteRFQ(STORED.rfqNumber)).rejects.toThrow('Delete failed.');
+      });
+
+      expect(ctx().rfqs).toHaveLength(1);
+      expect(ctx().toastMessage?.title).toBe(UI_STRINGS.rfqEdit.deleteFailedTitle);
+    });
+
+    // The API echoes the number it removed, which is what the store drops.
+    it('drops the row the API named rather than the identifier it was given', async () => {
+      serveRFQs({
+        del: () => ({ status: 200, body: { success: true, data: { rfqNumber: STORED.rfqNumber } } }),
+      });
+      const ctx = await mountStore();
+
+      // Addressed by row id; the response names the RFQ number.
+      await act(async () => {
+        await ctx().deleteRFQ('rfq-1');
+      });
+
+      expect(ctx().rfqs).toHaveLength(0);
+    });
+  });
+
+  describe('adoptCreatedRFQ', () => {
+    it('takes a server-created RFQ into state and logs it', async () => {
+      serveRFQs();
+      const ctx = await mountStore();
+      const created = { ...STORED, id: '99', rfqNumber: 'RFQ260409000099' } as RFQItem;
+
+      await act(async () => {
+        ctx().adoptCreatedRFQ(created);
+      });
+
+      expect(ctx().rfqs[0].rfqNumber).toBe('RFQ260409000099');
+      expect(ctx().auditLogs[0].action).toContain('Created');
+    });
+
+    // A concurrent refresh must not leave two copies of one RFQ.
+    it('replaces an existing entry with the same number', async () => {
+      serveRFQs();
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().adoptCreatedRFQ({ ...STORED, title: 'Adopted again' } as RFQItem);
+      });
+
+      expect(ctx().rfqs).toHaveLength(1);
+      expect(ctx().rfqs[0].title).toBe('Adopted again');
+    });
+  });
+});
+
+// ==============================================================================
+// MULTI-CHANNEL CHASER TELEMETRY
+// ==============================================================================
+// These branches only run for an RFQ that carries followUpData. The persisted
+// mapper does not return that field, so they are unreachable through the API path
+// today — but the chaser screens still read them, and an RFQ that does carry the
+// block has to be updated correctly rather than silently ignored.
+// ==============================================================================
+
+describe('lib/store.tsx - channel chasers and bids', () => {
+  const VENDOR = 'Apex Supplies Ltd.';
+  const OTHER_VENDOR = 'Global Valve Systems Ltd';
+
+  /** An RFQ with outreach telemetry, which is what these paths act on. */
+  const withTelemetry = () =>
+    ({
+      ...(STORE_RFQ_FIXTURES[0] as unknown as RFQItem),
+      id: 'rfq-chase',
+      rfqNumber: 'RFQ260409000900',
+    }) as RFQItem;
+
+  function serve(rfq: RFQItem) {
+    mockFetch.mockReset();
+    mockFetch.mockImplementation((url: string) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () =>
+          /\/api\/rfqs(\?|$)/.test(String(url))
+            ? { success: true, data: [rfq] }
+            : { success: true, data: {} },
+      })
+    );
+  }
+
+  async function mountStore(rfq: RFQItem = withTelemetry()) {
+    serve(rfq);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let ctx: any;
+    const Consumer = () => {
+      ctx = useApp();
+      return <div data-testid="rfq-count">{ctx.rfqs.length}</div>;
+    };
+    render(
+      <AppProvider>
+        <Consumer />
+      </AppProvider>
+    );
+    await waitFor(() => expect(screen.getByTestId('rfq-count')).toHaveTextContent('1'));
+    return () => ctx;
+  }
+
+  /** The telemetry record for one vendor on the first RFQ. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const vendorRecord = (ctx: () => any, name = VENDOR) =>
+    ctx().rfqs[0].followUpData.vendors.find(
+      (v: { vendorName: string }) => v.vendorName === name
+    );
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  describe('triggerChannelChaser', () => {
+    it.each([
+      ['call', 'call', 'completed'],
+      ['whatsapp', 'whatsapp', 'read'],
+      ['sms', 'sms', 'delivered'],
+    ])('records a %s attempt against the vendor', async (channel, field, status) => {
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().triggerChannelChaser('RFQ260409000900', channel, VENDOR);
+      });
+
+      const record = vendorRecord(ctx);
+      expect(record[field].status).toBe(status);
+      expect(record.overallStatus).toBe('Follow-up Active');
+      expect(record.attemptsCount).toBeGreaterThan(0);
+    });
+
+    it('records an email attempt', async () => {
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().triggerChannelChaser('RFQ260409000900', 'email', VENDOR);
+      });
+
+      expect(vendorRecord(ctx).email24h.is24hReminderSent).toBe(true);
+    });
+
+    // Only the vendor being chased is touched; the rest of the roster is left as it was.
+    it('leaves the other vendors untouched', async () => {
+      const ctx = await mountStore();
+      const before = vendorRecord(ctx, OTHER_VENDOR).attemptsCount;
+
+      await act(async () => {
+        ctx().triggerChannelChaser('RFQ260409000900', 'call', VENDOR);
+      });
+
+      expect(vendorRecord(ctx, OTHER_VENDOR).attemptsCount).toBe(before);
+    });
+
+    // Matched loosely in both directions, so 'Apex' finds 'Apex Supplies Ltd.'
+    it('matches a vendor named only in part', async () => {
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().triggerChannelChaser('RFQ260409000900', 'sms', 'Apex');
+      });
+
+      expect(vendorRecord(ctx).sms.status).toBe('delivered');
+    });
+
+    it('counts the attempt on the channel totals', async () => {
+      const ctx = await mountStore();
+      const before = ctx().rfqs[0].followUpData.callStats.total;
+
+      await act(async () => {
+        ctx().triggerChannelChaser('RFQ260409000900', 'call', VENDOR);
+      });
+
+      expect(ctx().rfqs[0].followUpData.callStats.total).toBe(before + 1);
+    });
+
+    it('records the chase in the audit log and on screen', async () => {
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().triggerChannelChaser('RFQ260409000900', 'whatsapp', VENDOR);
+      });
+
+      expect(ctx().auditLogs[0].action).toContain('WHATSAPP');
+      expect(ctx().toastMessage).not.toBeNull();
+    });
+
+    it('accepts a custom note on the attempt', async () => {
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().triggerChannelChaser('RFQ260409000900', 'call', VENDOR, 'Chasing the revised price');
+      });
+
+      expect(vendorRecord(ctx).attemptsCount).toBeGreaterThan(0);
+    });
+
+    // An RFQ without telemetry has nothing to update, and must not throw.
+    it('does nothing for an RFQ that carries no telemetry', async () => {
+      const bare = { ...withTelemetry(), followUpData: undefined } as unknown as RFQItem;
+      const ctx = await mountStore(bare);
+
+      await act(async () => {
+        ctx().triggerChannelChaser('RFQ260409000900', 'call', VENDOR);
+      });
+
+      expect(ctx().rfqs[0].followUpData).toBeUndefined();
+    });
+
+    it('does nothing for an RFQ number it does not hold', async () => {
+      const ctx = await mountStore();
+      const before = vendorRecord(ctx).attemptsCount;
+
+      await act(async () => {
+        ctx().triggerChannelChaser('RFQ-NOT-HERE', 'call', VENDOR);
+      });
+
+      expect(vendorRecord(ctx).attemptsCount).toBe(before);
+    });
+
+    it('refreshes a deep-dive selection pointing at the chased RFQ', async () => {
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().openRFQDeepDive(ctx().rfqs[0]);
+      });
+      await act(async () => {
+        ctx().triggerChannelChaser('RFQ260409000900', 'call', VENDOR);
+      });
+
+      const selected = ctx().selectedRFQForDeepDive.followUpData.vendors.find(
+        (v: { vendorName: string }) => v.vendorName === VENDOR
+      );
+      expect(selected.call.status).toBe('completed');
+    });
+  });
+
+  describe('triggerWhatsAppChaser', () => {
+    it('chases over WhatsApp', async () => {
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().triggerWhatsAppChaser('RFQ260409000900', VENDOR);
+      });
+
+      expect(vendorRecord(ctx).whatsapp.status).toBe('read');
+    });
+  });
+
+  describe('submitVendorBid', () => {
+    it('adds the quote and marks it the one to beat', async () => {
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().submitVendorBid('RFQ260409000900', 1000, 10, 'Best and final');
+      });
+
+      const rfq = ctx().rfqs[0];
+      expect(rfq.quotesCount).toBeGreaterThan(0);
+      expect(rfq.quotes[rfq.quotes.length - 1].isBestPrice).toBe(true);
+      expect(rfq.quotes[rfq.quotes.length - 1].remarks).toBe('Best and final');
+    });
+
+    it('does nothing for an RFQ number it does not hold', async () => {
+      const ctx = await mountStore();
+      const before = ctx().rfqs[0].quotes.length;
+
+      await act(async () => {
+        ctx().submitVendorBid('RFQ-NOT-HERE', 1000, 10, 'Ignored');
+      });
+
+      expect(ctx().rfqs[0].quotes).toHaveLength(before);
+    });
+  });
+
+  describe('approvePO', () => {
+    it('records the approval against the RFQ', async () => {
+      const ctx = await mountStore();
+
+      await act(async () => {
+        ctx().approvePO('RFQ260409000900', VENDOR, 250000);
+      });
+
+      expect(ctx().rfqs[0].status).toBe('PO Generated');
+      expect(ctx().auditLogs[0].action).toContain('PO');
+    });
   });
 });

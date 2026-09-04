@@ -211,30 +211,39 @@ describe('app/buyer/command-center.tsx', () => {
     fireEvent.click(screen.getByText('⚡ 1-3 Yr Purchase Setup'));
     expect(mockSetInitialSetupModalOpen).toHaveBeenCalledWith(true);
 
-    // Directory button
-    fireEvent.click(screen.getByTitle('View Integrated Buyer Directory & Public System Database'));
-    expect(mockNavigateToDirectory).toHaveBeenCalled();
-
-    // Create / Ingest RFQ
-    fireEvent.click(screen.getByText('Create / Ingest RFQ'));
+    // The header was reduced to two actions: the Public Buyer DB, Upload BOQ and
+    // export-analytics buttons were removed from the component, so the assertions
+    // that drove them went with them.
+    //
+    // Found by its icon rather than its label. The copy for this button is a raw
+    // literal in the component rather than a UI_STRINGS entry, and it has been
+    // reworded three times; pinning the wording here only re-breaks the suite on
+    // each rewrite without telling us anything about the wiring.
+    const wizardButton = screen
+      .getAllByRole('button')
+      .find((button) => button.querySelector('svg.lucide-plus'));
+    expect(wizardButton).toBeDefined();
+    fireEvent.click(wizardButton as HTMLElement);
     expect(mockNavigateToWizard).toHaveBeenCalled();
-
-    // Upload BOQ
-    fireEvent.click(screen.getByText('Upload BOQ'));
-    expect(mockNavigateToWizard).toHaveBeenCalled();
-    expect(mockShowToast).toHaveBeenCalledWith('Upload BOQ Ready', expect.any(String), 'info');
-
-    // Download analytics button (find by SVG download icon parent button)
-    const downloadBtns = screen.getAllByRole('button');
-    const dlBtn = downloadBtns.find(b => b.querySelector('svg.lucide-download'));
-    if (dlBtn) {
-      fireEvent.click(dlBtn);
-      expect(mockShowToast).toHaveBeenCalledWith('Analytics Exported', expect.any(String), 'info');
-    }
 
     // Manage Subscription button
     fireEvent.click(screen.getByText(/Manage Subscription/i));
     expect(mockNavigateToSubscription).toHaveBeenCalled();
+  });
+
+  it('offers no directory, BOQ upload or analytics export in the header', () => {
+    render(
+      <CommandCenter
+        onNavigateToWizard={mockNavigateToWizard}
+        onNavigateToMatrix={mockNavigateToMatrix}
+        onNavigateToSubscription={mockNavigateToSubscription}
+        onNavigateToDirectory={mockNavigateToDirectory}
+      />
+    );
+
+    expect(screen.queryByText('Upload BOQ')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Public Buyer DB/)).not.toBeInTheDocument();
+    expect(mockNavigateToDirectory).not.toHaveBeenCalled();
   });
 
   it('handles source filter tab selection', () => {

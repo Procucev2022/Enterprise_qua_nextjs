@@ -157,6 +157,79 @@ describe('toFormState', () => {
     expect(form.deliveryPincode).toBe('');
   });
 
+  // The seeding reads a few alternative key spellings, because records written by
+  // earlier ingestion paths did not all use the current field names. Without these
+  // a legacy row opened with its quantity and unit apparently blank.
+  describe('alternative key spellings on a stored record', () => {
+    it('reads line items held under lineItems', () => {
+      const form = toFormState({
+        ...buildRFQ({ extractedEntities: undefined } as unknown as Partial<RFQItem>),
+        lineItems: [entity()],
+      } as unknown as RFQItem);
+
+      expect(form.lineItems).toHaveLength(1);
+      expect(form.lineItems[0].quantity).toBe(12);
+    });
+
+    it.each([
+      ['qty', { quantity: undefined, qty: 7 }],
+      ['Quantity', { quantity: undefined, Quantity: 7 }],
+    ])('reads a quantity held under %s', (_key, patch) => {
+      const form = toFormState(
+        buildRFQ({ extractedEntities: [{ ...entity(), ...patch }] } as unknown as Partial<RFQItem>)
+      );
+
+      expect(form.lineItems[0].quantity).toBe(7);
+    });
+
+    it.each([
+      ['uom', { unit: undefined, uom: 'Mtr' }],
+      ['UOM', { unit: undefined, UOM: 'Mtr' }],
+    ])('reads a unit held under %s', (_key, patch) => {
+      const form = toFormState(
+        buildRFQ({ extractedEntities: [{ ...entity(), ...patch }] } as unknown as Partial<RFQItem>)
+      );
+
+      expect(form.lineItems[0].unit).toBe('Mtr');
+    });
+
+    // A quantity that arrives as a string still has to become a number, or the
+    // number input renders nothing.
+    it('coerces a quantity that arrived as a string', () => {
+      const form = toFormState(
+        buildRFQ({ extractedEntities: [{ ...entity(), quantity: '42' }] } as unknown as Partial<RFQItem>)
+      );
+
+      expect(form.lineItems[0].quantity).toBe(42);
+    });
+
+    it('reports an unreadable quantity as unanswered', () => {
+      const form = toFormState(
+        buildRFQ({
+          extractedEntities: [{ ...entity(), quantity: 'not a number' }],
+        } as unknown as Partial<RFQItem>)
+      );
+
+      expect(form.lineItems[0].quantity).toBeNull();
+    });
+
+    it.each([
+      ['snake_case delivery fields', { deliveryLocation: undefined, delivery_location: 'Pune' }, 'deliveryLocation', 'Pune'],
+      ['snake_case pincode', { deliveryPincode: undefined, delivery_pincode: '411001' }, 'deliveryPincode', '411001'],
+      ['estimatedBudget', { budget: undefined, estimatedBudget: 900 }, 'budget', 900],
+    ])('reads %s', (_case, patch, field, expected) => {
+      const form = toFormState(buildRFQ(patch as unknown as Partial<RFQItem>));
+
+      expect(form[field as 'deliveryLocation']).toBe(expected);
+    });
+
+    it('defaults a missing status to the first pipeline state', () => {
+      const form = toFormState(buildRFQ({ status: undefined } as unknown as Partial<RFQItem>));
+
+      expect(form.status).toBe('Parsing');
+    });
+  });
+
   it('carries a missing specification through as empty', () => {
     const form = toFormState(
       buildRFQ({ extractedEntities: [entity({ technicalSpecs: undefined, unit: undefined, targetDate: undefined, majorCategory: undefined, minorCategory: undefined, confidence: undefined })] } as unknown as Partial<RFQItem>)
@@ -395,6 +468,19 @@ describe('RFQEditModal: visibility and provenance', () => {
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 
+  // Closing must discard the form, or reopening the same RFQ would show whatever
+  // was half-typed the previous time instead of what is stored.
+  it('discards the form when the dialog is closed', () => {
+    const { rerender } = renderEdit();
+
+    fireEvent.change(screen.getByLabelText(EDIT.titleLabel), { target: { value: 'Half-typed' } });
+    rerender(<RFQEditModal rfq={null} onClose={onClose} onSave={onSave} />);
+    expect(screen.queryByTestId('rfq-edit-modal')).not.toBeInTheDocument();
+
+    rerender(<RFQEditModal rfq={buildRFQ()} onClose={onClose} onSave={onSave} />);
+    expect(screen.getByLabelText(EDIT.titleLabel)).toHaveValue('Mechanical Spares Procurement');
+  });
+
   // Opening a different row must not leave the previous RFQ's values on the form.
   it('reseeds when a different RFQ is opened', () => {
     const { rerender } = renderEdit();
@@ -421,11 +507,36 @@ describe('RFQEditModal: commercial and delivery', () => {
     );
   });
 
-  // A stored category outside the taxonomy must not be silently dropped.
-  it('keeps an off-taxonomy category visible as an option', () => {
+  // A select whose value matches none of its options renders blank, which read as
+  // "this RFQ has no category" on a record that has one — and saving would then
+  // have been rejected for a missing required field.
+  it('selects an off-taxonomy category rather than rendering blank', () => {
     renderEdit(buildRFQ({ category: 'General Procurement' }));
 
+    expect(screen.getByLabelText(EDIT.categoryLabel)).toHaveValue('General Procurement');
     expect(screen.getByRole('option', { name: 'General Procurement' })).toBeInTheDocument();
+  });
+
+  it('offers the taxonomy alongside an off-taxonomy category', () => {
+    renderEdit(buildRFQ({ category: 'General Procurement' }));
+
+    const select = screen.getByLabelText(EDIT.categoryLabel) as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.value)).toEqual([
+      'General Procurement',
+      ...categoriesData.map((group) => group.majorCategory),
+    ]);
+  });
+
+  // Only when there genuinely is none, so an RFQ that has a category cannot be
+  // saved back without one.
+  it('offers a blank category choice only when the record has none', () => {
+    const { unmount } = renderEdit(buildRFQ({ category: '' }));
+    expect(screen.getByLabelText(EDIT.categoryLabel)).toHaveValue('');
+    unmount();
+
+    renderEdit(buildRFQ({ category: 'General Procurement' }));
+    const select = screen.getByLabelText(EDIT.categoryLabel) as HTMLSelectElement;
+    expect(Array.from(select.options).some((o) => o.value === '')).toBe(false);
   });
 
   it('offers every RFQ status', () => {
@@ -546,6 +657,90 @@ describe('RFQEditModal: line items', () => {
     const minor = within(firstRow()).getByLabelText(EDIT.colMinor) as HTMLSelectElement;
     const offered = Array.from(minor.options).map((o) => o.value).filter(Boolean);
     expect(offered).toEqual(categoriesData[0].minorCategories);
+  });
+
+  // ── Off-taxonomy categories on a stored row ────────────────────────────────
+  // The ingestion default used to stamp 'General Procurement', which is not a
+  // major in categories.json. Offering only taxonomy entries left both dropdowns
+  // with no matching option, so the row opened with its categories apparently
+  // blank even though the record held them.
+  describe('a row whose categories are outside the taxonomy', () => {
+    const offTaxonomy = () =>
+      buildRFQ({
+        category: 'General Procurement',
+        extractedEntities: [
+          entity({ majorCategory: 'General Procurement', minorCategory: 'Motors', category: 'Motors' }),
+        ],
+      });
+
+    it('shows the stored major instead of an empty select', () => {
+      renderEdit(offTaxonomy());
+
+      expect(within(firstRow()).getByLabelText(EDIT.colMajor)).toHaveValue('General Procurement');
+    });
+
+    it('shows the stored minor instead of an empty select', () => {
+      renderEdit(offTaxonomy());
+
+      expect(within(firstRow()).getByLabelText(EDIT.colMinor)).toHaveValue('Motors');
+    });
+
+    it('leaves the minor selectable rather than disabled', () => {
+      renderEdit(offTaxonomy());
+
+      expect(within(firstRow()).getByLabelText(EDIT.colMinor)).toBeEnabled();
+    });
+
+    // Nothing is sent until the buyer actually changes something: an RFQ opened and
+    // closed must not be rewritten just because its category is unusual.
+    it('reports no change when the dialog is only opened', async () => {
+      renderEdit(offTaxonomy());
+
+      clickSave();
+
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(EDIT.noChanges));
+      expect(onSave).not.toHaveBeenCalled();
+    });
+
+    // The buyer can still move the row onto the real taxonomy.
+    it('lets the buyer reclassify the row onto a taxonomy pair', async () => {
+      renderEdit(offTaxonomy());
+
+      fireEvent.change(within(firstRow()).getByLabelText(EDIT.colMajor), { target: { value: MAJOR } });
+      fireEvent.change(within(firstRow()).getByLabelText(EDIT.colMinor), { target: { value: MINOR } });
+      clickSave();
+
+      await waitFor(() => expect(onSave).toHaveBeenCalled());
+      const item = onSave.mock.calls[0][1].extractedEntities[0];
+      expect(item.majorCategory).toBe(MAJOR);
+      expect(item.minorCategory).toBe(MINOR);
+    });
+
+    // Everything else on the row always filled correctly; these pin that down so a
+    // future change to the category handling cannot quietly break them.
+    it('still fills the quantity, unit, description, specification and date', () => {
+      renderEdit(offTaxonomy());
+
+      expect(within(firstRow()).getByLabelText(EDIT.colQty)).toHaveValue(12);
+      expect(within(firstRow()).getByLabelText(EDIT.colUnit)).toHaveValue('Nos');
+      expect(within(firstRow()).getByLabelText(EDIT.colItem)).toHaveValue('Centrifugal Water Pump 500 GPM');
+      expect(within(firstRow()).getByLabelText(EDIT.colSpecs)).toHaveValue('SS316 impeller');
+      expect(within(firstRow()).getByLabelText(EDIT.colTargetDate)).toHaveValue('2026-09-15');
+    });
+
+    // A six-figure BOQ quantity was being clipped by a 112px input, which read as
+    // an empty field rather than a full one.
+    it('fills a large quantity in full', () => {
+      renderEdit(buildRFQ({ extractedEntities: [entity({ quantity: 242621 })] }));
+
+      expect(within(firstRow()).getByLabelText(EDIT.colQty)).toHaveValue(242621);
+    });
+
+    it('still lists the attached documents', () => {
+      renderEdit(offTaxonomy());
+
+      expect(screen.getByText('annexure.pdf')).toBeInTheDocument();
+    });
   });
 
   it('sends the edited rows on save', async () => {
