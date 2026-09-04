@@ -6,6 +6,7 @@ import type {
   SidebarNavItem,
   RoleWorkspaceMeta,
   UserRole,
+  OrganizationType,
 } from './types';
 import { UI_STRINGS } from './uiStrings';
 
@@ -277,7 +278,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.buyerProfile.description,
       icon: 'Building2',
       group: NAV_GROUPS.buyerAccount,
-      route: '/buyer/buyer-profile',
+      route: '/buyer/profile',
     },
     {
       id: 'buyer_directory',
@@ -466,6 +467,42 @@ export const LOGIN_ROUTE = '/login';
  */
 export const OTP_CODE_LENGTH = 6;
 export const OTP_EXPIRY_MINUTES = 15;
+
+/**
+ * Buyer organisation profile endpoints.
+ *
+ * These are the Next.js rewrite paths, which next.config.mjs forwards to the
+ * Express backend, so the browser only ever calls same-origin URLs.
+ */
+export const BUYER_PROFILE_ENDPOINTS = {
+  /** The signed-in buyer's own profile: GET to read, PUT to patch. */
+  ME: '/api/buyer-profile/me',
+  /** Shared major/minor procurement taxonomy the category tree renders. */
+  CATEGORIES: '/api/buyer-profile/categories',
+};
+
+/**
+ * Cardinality caps on a buyer's procurement scope, mirroring
+ * BUYER_PROFILE_CONFIG on the backend, which in turn preserves the limits the
+ * old Angular screen enforced for a ClientInitiator.
+ *
+ * Enforced in the browser so the buyer is stopped at the click that would exceed
+ * the cap rather than at submit, and re-enforced server-side because a client
+ * cannot be trusted to hold the line.
+ */
+export const BUYER_PROFILE_LIMITS = {
+  MAX_MAJOR_CATEGORIES: 5,
+  MAX_MINOR_CATEGORIES: 10,
+};
+
+/** Legal constitutions offered by the buyer profile form. */
+export const ORGANIZATION_TYPE_OPTIONS: OrganizationType[] = [
+  'Public Limited',
+  'Private Limited',
+  'LLP',
+  'Partnership',
+  'Sole Proprietorship',
+];
 
 /**
  * Fallback used when an RFQ reaches dispatch without a target delivery date.

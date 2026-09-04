@@ -27,6 +27,23 @@ export const INDIAN_MOBILE_PATTERN = /^(?:\+?91[-\s]?|0)?[6-9]\d{9}$/;
  */
 export const PINCODE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9\s-]{2,9}$/;
 
+/**
+ * Statutory identifiers on the buyer organisation profile. Each mirrors the
+ * corresponding regex in backend/src/config/validationSchemas.js, which is the
+ * gate that actually protects the `organization` row; these exist so the buyer is
+ * told about a malformed value while typing rather than after a round trip.
+ */
+export const PAN_PATTERN = /^[A-Z]{5}[0-9]{4}[A-Z]$/i;
+export const CIN_PATTERN = /^[LUu][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$/i;
+export const WEBSITE_PATTERN = /^https?:\/\/[^\s/$.?#][^\s]*$/i;
+
+/**
+ * Registered-office PIN code. Narrower than PINCODE_PATTERN above, which carries
+ * international delivery zipcodes: a buyer's registered address is an Indian
+ * statutory address, so it is exactly six digits and cannot begin with zero.
+ */
+export const INDIAN_PINCODE_PATTERN = /^[1-9][0-9]{5}$/;
+
 export interface FieldRule {
   required?: boolean;
   type?: 'string' | 'number' | 'array';
@@ -82,6 +99,24 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
     totalPrice: { required: true, type: 'number', min: 0.01, message: 'Total price must be greater than zero' },
     leadTimeDays: { required: true, type: 'number', min: 1, message: 'Lead time must be at least 1 day' },
     paymentTerms: { required: true, minLength: 2, message: 'Payment terms are required' },
+  },
+
+  /**
+   * Buyer organisation profile form.
+   *
+   * Only the legal entity name is required, matching the server: the endpoint
+   * patches whatever is supplied and leaves the rest of the stored record alone,
+   * so a buyer can fill the profile in over several visits. The optional fields
+   * are still format-checked whenever they carry a value, which the old Angular
+   * screen did for GSTIN alone.
+   */
+  buyerProfile: {
+    companyName: { required: true, minLength: 2, maxLength: 255, message: UI_STRINGS.buyerProfile.companyNameRequired },
+    panNumber: { required: false, pattern: PAN_PATTERN, message: UI_STRINGS.buyerProfile.panInvalid },
+    gstNumber: { required: false, pattern: GSTIN_PATTERN, message: UI_STRINGS.buyerProfile.gstInvalid },
+    cinNumber: { required: false, pattern: CIN_PATTERN, message: UI_STRINGS.buyerProfile.cinInvalid },
+    website: { required: false, pattern: WEBSITE_PATTERN, message: UI_STRINGS.buyerProfile.websiteInvalid },
+    pincode: { required: false, pattern: INDIAN_PINCODE_PATTERN, message: UI_STRINGS.buyerProfile.pincodeInvalid },
   },
 
   buyerAccount: {

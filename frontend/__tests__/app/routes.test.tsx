@@ -94,7 +94,7 @@ const BuyerQuoteMatrixPage = require('@/app/buyer/quote-matrix/page').default;
 const BuyerEvaluationSummaryPage = require('@/app/buyer/vendor-evaluation-summary/page').default;
 const BuyerVendorSummaryPage = require('@/app/buyer/vendor-summary/page').default;
 const BuyerSubscriptionCenterPage = require('@/app/buyer/subscription-center/page').default;
-const BuyerProfileRoute = require('@/app/buyer/buyer-profile/page').default;
+const BuyerProfileRoute = require('@/app/buyer/profile/page').default;
 const BuyerDirectoryPage = require('@/app/buyer/buyer-directory/page').default;
 
 const CmKanbanPage = require('@/app/category-manager/kanban-board/page').default;

@@ -545,6 +545,53 @@ export const UI_STRINGS = {
     registrationSuccessMessage:
       'Account created for {email}. You are signed in and can start configuring your workspace.',
   },
+
+  buyerProfile: {
+    // Toast titles
+    loadFailedTitle: 'Profile Could Not Be Loaded',
+    validationErrorTitle: 'Validation Error',
+    saveFailedTitle: 'Profile Not Saved',
+    savedTitle: 'Profile Saved Successfully',
+    limitReachedTitle: 'Category Limit Reached',
+
+    // Success
+    savedMessage: 'Organization details and {categoryCount} procurement categories updated.',
+
+    // Load / save failures. Each one says what state the record is in, so the
+    // buyer knows whether their edits survived.
+    loadUnreachable:
+      'Cannot reach the Procucev API, so your organization profile could not be loaded. Check that the backend is running and that you are online, then reload this page.',
+    loadRejected:
+      'Your organization profile could not be loaded: {reason} Nothing has been changed.',
+    saveUnreachable:
+      'Cannot reach the Procucev API, so your changes were not saved. Your edits are still on screen — check your connection and press Save again.',
+    saveRejected: 'Your changes were not saved: {reason}',
+    sessionExpired:
+      'Your session has expired, so the profile could not be saved. Sign in again and re-apply your changes.',
+    notPermitted:
+      'Your account role is not permitted to manage a buyer organization profile. Switch to a buyer account or contact your Procucev administrator.',
+    serverErrorFallback:
+      'The server rejected the request but did not explain why. Please retry, and contact support if it persists.',
+
+    // Field-level validation, surfaced through the existing toast so no new UI
+    // is introduced.
+    companyNameRequired: 'Legal Entity Name is required before the profile can be saved.',
+    panInvalid: 'PAN must be 10 characters in the format AAAAA9999A, for example AAACL1234F.',
+    gstInvalid: 'GSTIN must be 15 characters in the format 99AAAAA9999A9Z9, for example 27AAACL1234F1Z5.',
+    cinInvalid:
+      'CIN must be 21 characters in the format L99999AA9999AAA999999, for example L28920MH1946PLC004768.',
+    websiteInvalid:
+      'Corporate Website must be a full URL beginning http:// or https://, for example https://example.com.',
+    pincodeInvalid: 'PIN Code must be 6 digits and cannot start with 0, for example 400001.',
+    categoriesRequired:
+      'Select at least one minor procurement category so RFQs can be matched to vendors.',
+
+    // Cardinality caps
+    maxMajorReached:
+      'You can select at most {max} major procurement categories. Clear one before adding another.',
+    maxMinorReached:
+      'You have selected {count} of {max} minor procurement categories. Clear one before adding another.',
+  },
 };
 
 /**

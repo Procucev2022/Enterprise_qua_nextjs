@@ -26,6 +26,50 @@ const INDIAN_MOBILE_MESSAGE = 'Enter a valid 10-digit Indian mobile number, for 
 const OTP_CODE_REGEX = /^\d{6}$/;
 const OTP_CODE_MESSAGE = 'Enter the 6-digit verification code sent to your registered email address.';
 
+// ------------------------------------------------------------------------------
+// STATUTORY IDENTIFIERS (buyer organisation profile)
+// ------------------------------------------------------------------------------
+// The Java p2pservices app validates none of these — PAN, CIN and website were
+// free text and only GSTIN was checked, and then only in the Angular client. A
+// malformed GSTIN therefore reached the `organization` table and broke downstream
+// tax reporting. These are enforced here so an invalid identifier is rejected at
+// the API boundary regardless of which client submitted it.
+
+// Income-tax PAN: five letters, four digits, one letter.
+const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/i;
+const PAN_MESSAGE = 'PAN must be 10 characters in the format AAAAA9999A, for example AAACL1234F.';
+
+// MCA Corporate Identity Number: listing status, 5-digit industry code, 2-letter
+// state, 4-digit year, 3-letter ownership code, 6-digit registration number.
+const CIN_REGEX = /^[LUu][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$/i;
+const CIN_MESSAGE =
+  'CIN must be 21 characters in the format L99999AA9999AAA999999, for example L28920MH1946PLC004768.';
+
+const GSTIN_MESSAGE =
+  'GSTIN must be 15 characters in the format 99AAAAA9999A9Z9, for example 27AAACL1234F1Z5.';
+
+// Corporate website. Deliberately requires an http(s) scheme so the value can be
+// used directly as a link target without the caller having to guess a protocol.
+const WEBSITE_REGEX = /^https?:\/\/[^\s/$.?#][^\s]*$/i;
+const WEBSITE_MESSAGE = 'Website must be a full URL beginning http:// or https://, for example https://example.com.';
+
+// Registered-office PIN code. Narrower than the delivery PINCODE_REGEX above:
+// a buyer's registered address is an Indian statutory address, so it is exactly
+// six digits and cannot begin with zero.
+const INDIAN_PINCODE_REGEX = /^[1-9][0-9]{5}$/;
+const INDIAN_PINCODE_MESSAGE = 'PIN code must be 6 digits and cannot start with 0, for example 400001.';
+
+// Legal constitutions offered by the buyer profile screen. Anything else is a
+// client that has drifted from the shared taxonomy, so it is rejected rather
+// than written to `organization.type`.
+const ORGANIZATION_TYPES = [
+  'Public Limited',
+  'Private Limited',
+  'LLP',
+  'Partnership',
+  'Sole Proprietorship',
+];
+
 const VALIDATION_SCHEMAS = {
   createRFQ: {
     title: { type: 'string', required: true, minLength: 3, maxLength: 200 },
@@ -190,6 +234,43 @@ const VALIDATION_SCHEMAS = {
     role: { type: 'string', required: false },
     orgName: { type: 'string', required: false },
   },
+
+  // Buyer organisation profile submitted by PUT /api/buyer-profile/me.
+  //
+  // Ported from the fields ProcUserServiceImpl.updateBuyer patches onto the
+  // `organization` row. That method applies null-skip semantics — an omitted key
+  // leaves the stored value untouched — so almost everything here is optional and
+  // only the legal entity name, which identifies the organisation, is required.
+  //
+  // `email` and `organizationPhonenumber` are deliberately absent: they are owned
+  // by the `user` row established at sign-in and were read-only on the old screen
+  // too, so the service ignores them rather than letting a profile save
+  // reassign the account's login identity.
+  buyerProfile: {
+    companyName: { type: 'string', required: true, minLength: 2, maxLength: 255, message: 'Legal entity name is required.' },
+    brandName: { type: 'string', required: false, maxLength: 255 },
+    organizationType: {
+      type: 'string',
+      required: false,
+      enum: ORGANIZATION_TYPES,
+    },
+    panNumber: { type: 'string', required: false, pattern: PAN_REGEX, message: PAN_MESSAGE },
+    gstNumber: { type: 'string', required: false, pattern: GSTIN_REGEX, message: GSTIN_MESSAGE },
+    cinNumber: { type: 'string', required: false, pattern: CIN_REGEX, message: CIN_MESSAGE },
+    website: { type: 'string', required: false, pattern: WEBSITE_REGEX, message: WEBSITE_MESSAGE },
+    annualTurnover: { type: 'string', required: false, maxLength: 255 },
+    street: { type: 'string', required: false, maxLength: 255 },
+    city: { type: 'string', required: false, maxLength: 255 },
+    state: { type: 'string', required: false, maxLength: 255 },
+    pincode: { type: 'string', required: false, pattern: INDIAN_PINCODE_REGEX, message: INDIAN_PINCODE_MESSAGE },
+    country: { type: 'string', required: false, maxLength: 255 },
+    contactName: { type: 'string', required: false, maxLength: 255 },
+    contactDesignation: { type: 'string', required: false, maxLength: 255 },
+    // Flat [{ major, minor }] pairs, mirroring the org_division_category rows
+    // they become. Cardinality limits are enforced in the service, which can
+    // report which cap was exceeded.
+    categories: { type: 'array', required: false },
+  },
 };
 
 
@@ -273,11 +354,21 @@ module.exports = {
   EMAIL_REGEX,
   PINCODE_REGEX,
   GSTIN_REGEX,
+  GSTIN_MESSAGE,
   PHONE_REGEX,
   INDIAN_MOBILE_REGEX,
   INDIAN_MOBILE_MESSAGE,
   OTP_CODE_REGEX,
   OTP_CODE_MESSAGE,
+  PAN_REGEX,
+  PAN_MESSAGE,
+  CIN_REGEX,
+  CIN_MESSAGE,
+  WEBSITE_REGEX,
+  WEBSITE_MESSAGE,
+  INDIAN_PINCODE_REGEX,
+  INDIAN_PINCODE_MESSAGE,
+  ORGANIZATION_TYPES,
   VALIDATION_SCHEMAS,
   validatePayload,
 };
