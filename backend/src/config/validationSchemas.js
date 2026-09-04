@@ -100,6 +100,41 @@ const VALIDATION_SCHEMAS = {
     lineItems: { type: 'array', required: false },
   },
 
+  // Edit of an existing RFQ (PUT /api/rfqs/:id).
+  //
+  // Every field is optional because an edit is a partial update: the buyer may be
+  // correcting only the delivery pincode, and demanding the whole record back
+  // would make a small correction able to blank whatever the form did not resend.
+  // The format rules are identical to createRFQ, so a value that could not have
+  // been created cannot be introduced by an edit either.
+  //
+  // Ownership fields are absent on purpose. rfqNumber, rfqId, buyer identity and
+  // createdAt are not editable, and the query layer whitelists columns as well, so
+  // sending them here changes nothing.
+  updateRFQ: {
+    title: { type: 'string', required: false, minLength: 3, maxLength: 200 },
+    category: { type: 'string', required: false, minLength: 2 },
+    status: { type: 'string', required: false, minLength: 2, maxLength: 40 },
+    sourcingMode: { type: 'string', required: false, minLength: 2, maxLength: 20 },
+    budget: { type: 'number', required: false, min: 0 },
+    deliveryLocation: {
+      type: 'string',
+      required: false,
+      minLength: 3,
+      maxLength: 200,
+      message: 'Delivery location must be 3 to 200 characters.',
+    },
+    deliveryPincode: {
+      type: 'string',
+      required: false,
+      pattern: PINCODE_REGEX,
+      message: 'Pincode must be 3 to 10 letters, digits, spaces or hyphens.',
+    },
+    targetDeliveryDate: { type: 'string', required: false },
+    extractedEntities: { type: 'array', required: false },
+    attachments: { type: 'array', required: false },
+  },
+
   // Document handed to POST /api/rfqs/extract for Gemini line-item extraction.
   // Either documentText (client-flattened spreadsheet) or inlineData (PDF/image
   // base64) must be present; that either/or rule is enforced in the service,

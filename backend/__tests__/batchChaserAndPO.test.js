@@ -1,11 +1,28 @@
 const request = require('supertest');
 const app = require('../src/app');
+const storeService = require('../src/services/storeService');
 const { authHeader } = require('./testHelpers');
 
 describe('Batch Chaser & Purchase Order API', () => {
+  // The chaser and PO flows still read the in-memory store; quotations are not
+  // modelled in qua_enterprice_rfq yet. This used to rely on the seeded
+  // 'rfq-001', which is gone, so the fixture is created explicitly instead.
+  let chaserRfqId;
+
+  beforeAll(() => {
+    chaserRfqId = storeService.createRFQ({
+      title: 'RFQ under multi-channel outreach',
+      category: 'Engineering Spares - Mechanical',
+      // Vendors must be attached explicitly. triggerBatchChaser falls back to
+      // the vendor directory only when assignedVendors is absent, and createRFQ
+      // defaults it to an empty array, which is truthy and yields no outreach.
+      assignedVendors: storeService.getVendors().slice(0, 2),
+    }).id;
+  });
+
   test('POST /api/rfqs/:id/batch-chaser triggers multi-channel chasers', async () => {
     const res = await request(app)
-      .post('/api/rfqs/rfq-001/batch-chaser')
+      .post(`/api/rfqs/${chaserRfqId}/batch-chaser`)
       .set(authHeader('buyer'))
       .send({ channels: ['call', 'whatsapp', 'sms'] });
 
@@ -23,7 +40,7 @@ describe('Batch Chaser & Purchase Order API', () => {
   });
 
   test('POST /api/rfqs/:id/batch-chaser requires authentication', async () => {
-    const res = await request(app).post('/api/rfqs/rfq-001/batch-chaser').send({});
+    const res = await request(app).post(`/api/rfqs/${chaserRfqId}/batch-chaser`).send({});
     expect(res.statusCode).toBe(401);
   });
 

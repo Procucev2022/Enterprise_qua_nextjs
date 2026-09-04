@@ -1,8 +1,26 @@
 const request = require('supertest');
+// RFQ persistence is doubled so these HTTP tests exercise routing, auth and org
+// scoping without needing a MySQL connection, which CI does not have. The real
+// SQL is covered in rfqQueries.test.js and the id scheme in rfqIdService.test.js.
+jest.mock('../src/db/rfqQueries', () => require('./helpers/fakeRfqQueries'));
+jest.mock('../src/services/rfqIdService', () => {
+  let counter = 0;
+  return {
+    generateRfqId: jest.fn(async () => {
+      counter += 1;
+      return `RFQ260409${String(counter).padStart(6, '0')}`;
+    }),
+  };
+});
+
 const app = require('../src/app');
-const { authHeader } = require('./testHelpers');
+const { authHeader, TEST_USERS } = require('./testHelpers');
+const fakeRfqQueries = require('./helpers/fakeRfqQueries');
 
 describe('API Route Endpoints', () => {
+  beforeAll(() => {
+    fakeRfqQueries.__reset();
+  });
   // 1. Bootstrap
   describe('GET /api/bootstrap', () => {
     test('returns unified platform dataset', async () => {
@@ -11,7 +29,10 @@ describe('API Route Endpoints', () => {
       expect(res.body.success).toBe(true);
       expect(res.body.data).toHaveProperty('buyerAccounts');
       expect(res.body.data).toHaveProperty('vendors');
-      expect(res.body.data).toHaveProperty('rfqs');
+      // RFQs are deliberately absent. This route is anonymous, so shipping the
+      // global RFQ array from it is what leaked RFQs across buyer dashboards.
+      // They come from the authenticated, org-scoped GET /api/rfqs instead.
+      expect(res.body.data).not.toHaveProperty('rfqs');
       expect(res.body.data).toHaveProperty('evaluations');
       expect(res.body.data).toHaveProperty('auditLogs');
       expect(res.body.data).toHaveProperty('aiFeed');
@@ -23,12 +44,15 @@ describe('API Route Endpoints', () => {
   describe('Buyer Accounts API (/api/buyer-accounts)', () => {
     let testAccountId;
 
-    test('GET /api/buyer-accounts returns array of accounts', async () => {
+    // Starts empty. The four fabricated companies that used to be here are gone;
+    // the signed-in buyer's own account comes from the identity schema via
+    // GET /api/buyer-accounts/active, and this list only holds accounts created
+    // at runtime.
+    test('GET /api/buyer-accounts returns an array', async () => {
       const res = await request(app).get('/api/buyer-accounts');
       expect(res.statusCode).toBe(200);
       expect(res.body.success).toBe(true);
       expect(Array.isArray(res.body.data)).toBe(true);
-      expect(res.body.data.length).toBeGreaterThan(0);
     });
 
     test('POST /api/buyer-accounts creates new buyer account', async () => {
@@ -173,11 +197,16 @@ describe('API Route Endpoints', () => {
   describe('RFQs API (/api/rfqs)', () => {
     let testRfqId;
 
-    test('GET /api/rfqs returns list of RFQs', async () => {
-      const res = await request(app).get('/api/rfqs');
+    test('GET /api/rfqs returns this buyer organisation\'s RFQs', async () => {
+      const res = await request(app).get('/api/rfqs').set(authHeader('buyer'));
       expect(res.statusCode).toBe(200);
       expect(res.body.success).toBe(true);
       expect(Array.isArray(res.body.data)).toBe(true);
+    });
+
+    test('GET /api/rfqs requires a session', async () => {
+      const res = await request(app).get('/api/rfqs');
+      expect(res.statusCode).toBe(401);
     });
 
     test('POST /api/rfqs creates new RFQ and returns 201', async () => {
@@ -339,12 +368,35 @@ describe('API Route Endpoints', () => {
     });
 
     test('GET /api/rfqs/:id returns RFQ', async () => {
-      const res = await request(app).get(`/api/rfqs/${testRfqId}`);
+      const res = await request(app).get(`/api/rfqs/${testRfqId}`).set(authHeader('buyer'));
       expect(res.statusCode).toBe(200);
       expect(res.body.data.id).toBe(testRfqId);
     });
 
+    test('GET /api/rfqs/:id requires a session', async () => {
+      const res = await request(app).get(`/api/rfqs/${testRfqId}`);
+      expect(res.statusCode).toBe(401);
+    });
+
+    // The organisation is part of the query, so another buyer asking for this
+    // exact id gets the same 404 as an id that does not exist. That is what
+    // stops the endpoint being used to probe other organisations' RFQs.
+    test('GET /api/rfqs/:id hides an RFQ belonging to another organisation', async () => {
+      const res = await request(app).get(`/api/rfqs/${testRfqId}`).set(authHeader('category_manager'));
+      expect(res.statusCode).toBe(404);
+    });
+
+    // Quotations are not modelled in qua_enterprice_rfq yet, so this flow still
+    // runs against the in-memory store. The RFQ is therefore created through
+    // storeService directly rather than over HTTP, which now persists instead.
+    // Migrating quotes is the next step; until then the two do not share storage.
     test('POST /api/rfqs/:id/quotes adds quote and recalculates matrix', async () => {
+      const storeService = require('../src/services/storeService');
+      const inMemoryRfq = storeService.createRFQ({
+        title: 'In-memory RFQ for the quote flow',
+        category: 'Engineering Spares - Mechanical',
+      });
+
       const quote = {
         vendorName: 'Apex Industrial Dynamics Pvt Ltd',
         unitPrice: 5200,
@@ -352,15 +404,26 @@ describe('API Route Endpoints', () => {
         leadTimeDays: 10,
         remarks: 'Compliant OEM specification',
       };
-      const res = await request(app).post(`/api/rfqs/${testRfqId}/quotes`).set(authHeader('vendor')).send(quote);
+      const res = await request(app)
+        .post(`/api/rfqs/${inMemoryRfq.id}/quotes`)
+        .set(authHeader('vendor'))
+        .send(quote);
       expect(res.statusCode).toBe(200);
       expect(res.body.data.quotes.length).toBeGreaterThan(0);
     });
 
     test('GET /api/rfqs/:id/email-preview generates standard RFQ email', async () => {
-      const res = await request(app).get(`/api/rfqs/${testRfqId}/email-preview`);
+      const res = await request(app)
+        .get(`/api/rfqs/${testRfqId}/email-preview`)
+        .set(authHeader('buyer'));
       expect(res.statusCode).toBe(200);
       expect(res.body.data).toHaveProperty('htmlBody');
+    });
+
+    // The preview embeds quantities, pricing and delivery detail.
+    test('GET /api/rfqs/:id/email-preview requires a session', async () => {
+      const res = await request(app).get(`/api/rfqs/${testRfqId}/email-preview`);
+      expect(res.statusCode).toBe(401);
     });
   });
 
@@ -473,10 +536,69 @@ describe('API Route Endpoints', () => {
       );
     });
 
-    test('GET /api/buyer-accounts/active returns active account', async () => {
+    // Resolved from the shared identity schema for the caller's own session. It
+    // has no seeded fallback on purpose: returning a fabricated account is how the
+    // dashboard used to attribute one buyer's work to another company. Under test
+    // no identity database is configured, so it reports that rather than inventing
+    // an account.
+    test('GET /api/buyer-accounts/active requires a session', async () => {
       const res = await request(app).get('/api/buyer-accounts/active');
-      expect(res.statusCode).toBe(200);
-      expect(res.body.data).toBeDefined();
+      expect(res.statusCode).toBe(401);
+    });
+
+    // The pool is stubbed explicitly rather than relying on whether this machine
+    // happens to have MySQL credentials, so the result is the same in CI as it is
+    // locally.
+    test('GET /api/buyer-accounts/active reports an unavailable directory rather than inventing an account', async () => {
+      const identityPool = require('../src/db/identityPool');
+      const originalPool = identityPool.pool;
+      identityPool.pool = null;
+      try {
+        const res = await request(app).get('/api/buyer-accounts/active').set(authHeader('buyer'));
+        expect(res.statusCode).toBe(503);
+        expect(res.body.success).toBe(false);
+        expect(res.body.error).toMatch(/unavailable/i);
+        // Crucially, no account is invented to fill the gap.
+        expect(res.body.data).toBeUndefined();
+      } finally {
+        identityPool.pool = originalPool;
+      }
+    });
+
+    test('GET /api/buyer-accounts/active returns the caller\'s own organisation', async () => {
+      const identityPool = require('../src/db/identityPool');
+      const buyerProfileQueries = require('../src/db/buyerProfileQueries');
+      const originalPool = identityPool.pool;
+      identityPool.pool = { stub: true };
+      const spy = jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({
+        profile: {
+          organizationId: 'org-real-01',
+          userId: 'usr-buyer-001',
+          companyName: 'Real Buyer Pvt Ltd',
+          contactEmail: 'buyer@procucev.com',
+          contactName: 'A Buyer',
+          contactPhone: '+919876543210',
+          gstNumber: '27AAACT2727Q1ZW',
+          panNumber: 'AAACT2727Q',
+          city: 'Navi Mumbai',
+          state: 'Maharashtra',
+          categories: [],
+        },
+      });
+
+      try {
+        const res = await request(app).get('/api/buyer-accounts/active').set(authHeader('buyer'));
+        expect(res.statusCode).toBe(200);
+        expect(res.body.source).toBe('identity_database');
+        expect(res.body.data.organizationName).toBe('Real Buyer Pvt Ltd');
+        expect(res.body.data.id).toBe('org-real-01');
+        // Spend and RFQ counts are counted, never invented the way the seed did.
+        expect(res.body.data.totalSpend).toBe(0);
+        expect(res.body.data.totalRFQsCreated).toBe(0);
+      } finally {
+        spy.mockRestore();
+        identityPool.pool = originalPool;
+      }
     });
 
     test('POST /api/buyer-accounts/invalid-id/activate returns 404', async () => {
@@ -484,7 +606,7 @@ describe('API Route Endpoints', () => {
       expect(res.statusCode).toBe(404);
     });
 
-    test('PUT /api/rfqs/:id updates RFQ or returns 404 for invalid id', async () => {
+    test('PUT /api/rfqs/:id returns 404 for an id that does not exist', async () => {
       const res = await request(app).put('/api/rfqs/nonexistent-rfq').set(authHeader('buyer')).send({ status: 'Closed' });
       expect(res.statusCode).toBe(404);
     });
@@ -501,7 +623,9 @@ describe('API Route Endpoints', () => {
     });
 
     test('GET /api/rfqs/:id/email-preview returns 404 for invalid id', async () => {
-      const res = await request(app).get('/api/rfqs/nonexistent-rfq/email-preview');
+      const res = await request(app)
+        .get('/api/rfqs/nonexistent-rfq/email-preview')
+        .set(authHeader('buyer'));
       expect(res.statusCode).toBe(404);
     });
 
@@ -528,6 +652,236 @@ describe('API Route Endpoints', () => {
 
       const delRes = await request(app).delete('/api/vendors/invalid-id').set(authHeader('buyer'));
       expect(delRes.statusCode).toBe(404);
+    });
+  });
+});
+
+// ==============================================================================
+// RFQ EDIT AND DELETE
+// ==============================================================================
+// Both mutations are organisation-scoped in the same way as the reads. The cases
+// that matter are the cross-organisation ones: an edit or delete aimed at another
+// buyer's RFQ must report the same 404 as an id that does not exist, and must
+// leave that RFQ untouched. Anything weaker would let one buyer rewrite or destroy
+// another buyer's procurement record.
+// ==============================================================================
+describe('RFQ edit and delete (/api/rfqs/:id)', () => {
+  const BUYER_ORG = TEST_USERS.buyer.orgId;
+  const OTHER_ORG = 'org-someone-else';
+
+  /** One stored RFQ, owned by whichever organisation is named. */
+  function storedRFQ(overrides = {}) {
+    return {
+      rfqId: 'RFQ260409000512',
+      buyerOrgId: BUYER_ORG,
+      buyerUserId: TEST_USERS.buyer.id,
+      buyerEmail: TEST_USERS.buyer.email,
+      title: 'Mechanical Spares Procurement',
+      category: 'Engineering Spares - Mechanical',
+      sourcingMode: 'mode_2',
+      status: 'Quotes Pending',
+      source: 'manual_entry',
+      budget: 348000,
+      targetDeliveryDate: '2026-09-30',
+      deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+      deliveryPincode: '400701',
+      extractedEntities: [{ id: 'e1', itemName: 'Pump', quantity: 4 }],
+      attachments: [],
+      createdAt: '2026-09-04T10:00:00.000Z',
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    fakeRfqQueries.__reset();
+  });
+
+  describe('PUT /api/rfqs/:id', () => {
+    test('applies the edit and returns the stored record', async () => {
+      fakeRfqQueries.__seed([storedRFQ()]);
+
+      const res = await request(app)
+        .put('/api/rfqs/RFQ260409000512')
+        .set(authHeader('buyer'))
+        .send({ title: 'Revised Mechanical Spares', status: 'In Evaluation' });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.source).toBe('persisted');
+      expect(res.body.data.title).toBe('Revised Mechanical Spares');
+      expect(res.body.data.status).toBe('In Evaluation');
+      // Untouched fields survive a partial edit.
+      expect(res.body.data.deliveryPincode).toBe('400701');
+    });
+
+    test('accepts the row id as well as the RFQ number', async () => {
+      fakeRfqQueries.__seed([storedRFQ()]);
+      const [row] = fakeRfqQueries.__all();
+
+      const res = await request(app)
+        .put(`/api/rfqs/${row.id}`)
+        .set(authHeader('buyer'))
+        .send({ title: 'Addressed by row id' });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data.title).toBe('Addressed by row id');
+    });
+
+    test('requires a session', async () => {
+      fakeRfqQueries.__seed([storedRFQ()]);
+
+      const res = await request(app).put('/api/rfqs/RFQ260409000512').send({ title: 'Revised' });
+
+      expect(res.statusCode).toBe(401);
+    });
+
+    // The organisation is in the WHERE clause, so this is a miss rather than a
+    // refusal — the response cannot be used to discover what other orgs hold.
+    test('reports 404 for another organisation\'s RFQ and leaves it unchanged', async () => {
+      fakeRfqQueries.__seed([storedRFQ({ buyerOrgId: OTHER_ORG })]);
+
+      const res = await request(app)
+        .put('/api/rfqs/RFQ260409000512')
+        .set(authHeader('buyer'))
+        .send({ title: 'Rewritten by another buyer' });
+
+      expect(res.statusCode).toBe(404);
+      expect(fakeRfqQueries.__all()[0].title).toBe('Mechanical Spares Procurement');
+    });
+
+    test('rejects a malformed pincode with a field error', async () => {
+      fakeRfqQueries.__seed([storedRFQ()]);
+
+      const res = await request(app)
+        .put('/api/rfqs/RFQ260409000512')
+        .set(authHeader('buyer'))
+        .send({ deliveryPincode: '!!' });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.fieldErrors.deliveryPincode).toBeTruthy();
+      expect(fakeRfqQueries.__all()[0].deliveryPincode).toBe('400701');
+    });
+
+    test('rejects a negative budget', async () => {
+      fakeRfqQueries.__seed([storedRFQ()]);
+
+      const res = await request(app)
+        .put('/api/rfqs/RFQ260409000512')
+        .set(authHeader('buyer'))
+        .send({ budget: -1 });
+
+      expect(res.statusCode).toBe(400);
+    });
+
+    test('rejects a title shorter than the creation rule allows', async () => {
+      fakeRfqQueries.__seed([storedRFQ()]);
+
+      const res = await request(app)
+        .put('/api/rfqs/RFQ260409000512')
+        .set(authHeader('buyer'))
+        .send({ title: 'ab' });
+
+      expect(res.statusCode).toBe(400);
+    });
+
+    // Ownership is established at creation and must stay that way.
+    test('ignores an attempt to reassign the RFQ to another organisation', async () => {
+      fakeRfqQueries.__seed([storedRFQ()]);
+
+      const res = await request(app)
+        .put('/api/rfqs/RFQ260409000512')
+        .set(authHeader('buyer'))
+        .send({ buyerOrgId: OTHER_ORG, buyerEmail: 'attacker@example.com', rfqId: 'RFQ-HIJACKED' });
+
+      expect(res.statusCode).toBe(200);
+      const [row] = fakeRfqQueries.__all();
+      expect(row.buyerOrgId).toBe(BUYER_ORG);
+      expect(row.buyerEmail).toBe(TEST_USERS.buyer.email);
+      expect(row.rfqId).toBe('RFQ260409000512');
+    });
+
+    test('replaces the line items when the edit supplies them', async () => {
+      fakeRfqQueries.__seed([storedRFQ()]);
+
+      const res = await request(app)
+        .put('/api/rfqs/RFQ260409000512')
+        .set(authHeader('buyer'))
+        .send({ extractedEntities: [{ id: 'e9', itemName: 'Gate valve', quantity: 9 }] });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data.extractedEntities).toHaveLength(1);
+      expect(res.body.data.extractedEntities[0].itemName).toBe('Gate valve');
+    });
+
+    test('accepts an edit that changes nothing', async () => {
+      fakeRfqQueries.__seed([storedRFQ()]);
+
+      const res = await request(app).put('/api/rfqs/RFQ260409000512').set(authHeader('buyer')).send({});
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data.title).toBe('Mechanical Spares Procurement');
+    });
+  });
+
+  describe('DELETE /api/rfqs/:id', () => {
+    test('deletes the RFQ and echoes the number removed', async () => {
+      fakeRfqQueries.__seed([storedRFQ()]);
+
+      const res = await request(app).delete('/api/rfqs/RFQ260409000512').set(authHeader('buyer'));
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.rfqNumber).toBe('RFQ260409000512');
+      expect(fakeRfqQueries.__all()).toHaveLength(0);
+    });
+
+    test('accepts the row id as well as the RFQ number', async () => {
+      fakeRfqQueries.__seed([storedRFQ()]);
+      const [row] = fakeRfqQueries.__all();
+
+      const res = await request(app).delete(`/api/rfqs/${row.id}`).set(authHeader('buyer'));
+
+      expect(res.statusCode).toBe(200);
+      expect(fakeRfqQueries.__all()).toHaveLength(0);
+    });
+
+    test('requires a session', async () => {
+      fakeRfqQueries.__seed([storedRFQ()]);
+
+      const res = await request(app).delete('/api/rfqs/RFQ260409000512');
+
+      expect(res.statusCode).toBe(401);
+      expect(fakeRfqQueries.__all()).toHaveLength(1);
+    });
+
+    test('reports 404 for an id that does not exist', async () => {
+      const res = await request(app).delete('/api/rfqs/nonexistent-rfq').set(authHeader('buyer'));
+
+      expect(res.statusCode).toBe(404);
+    });
+
+    // The case that matters: one buyer must not be able to destroy another's record.
+    test('reports 404 for another organisation\'s RFQ and leaves it in place', async () => {
+      fakeRfqQueries.__seed([storedRFQ({ buyerOrgId: OTHER_ORG })]);
+
+      const res = await request(app).delete('/api/rfqs/RFQ260409000512').set(authHeader('buyer'));
+
+      expect(res.statusCode).toBe(404);
+      expect(fakeRfqQueries.__all()).toHaveLength(1);
+    });
+
+    test('deletes only the RFQ named, leaving the buyer\'s others alone', async () => {
+      fakeRfqQueries.__seed([
+        storedRFQ(),
+        storedRFQ({ rfqId: 'RFQ260409000513', title: 'Second RFQ' }),
+      ]);
+
+      const res = await request(app).delete('/api/rfqs/RFQ260409000512').set(authHeader('buyer'));
+
+      expect(res.statusCode).toBe(200);
+      const remaining = fakeRfqQueries.__all();
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0].rfqId).toBe('RFQ260409000513');
     });
   });
 });

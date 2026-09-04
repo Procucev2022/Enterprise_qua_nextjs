@@ -333,11 +333,73 @@ async function extractLineItems(input = {}) {
   };
 }
 
+/**
+ * Run an arbitrary JSON-returning prompt through the same model chain, deadline
+ * and timeout handling as extraction.
+ *
+ * Exists so callers that need a different prompt (the RFQ summary, for one) do
+ * not each re-implement the transport, the fallback chain and the shared budget.
+ * Like extractLineItems it never throws: the caller gets a status to act on.
+ *
+ * @param {object} input
+ * @param {string} input.prompt the full prompt text
+ * @param {string} [input.label] used in logs to say what was being generated
+ * @returns {Promise<{status: string, data: object|null, model: string|null, error: string|null}>}
+ */
+async function generateJson(input = {}) {
+  const { prompt, label = 'generation' } = input;
+
+  const base = { data: null, model: null, error: null };
+
+  if (!isConfigured()) {
+    logger.warn(`Gemini ${label} skipped: GEMINI_API_KEY is not set`, {}, 'GEMINI');
+    return { ...base, status: EXTRACTION_STATUS.NOT_CONFIGURED };
+  }
+  if (typeof prompt !== 'string' || prompt.trim() === '') {
+    return { ...base, status: EXTRACTION_STATUS.NO_CONTENT };
+  }
+
+  const requestBody = {
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: GEMINI_CONFIG.TEMPERATURE,
+      response_mime_type: 'application/json',
+    },
+  };
+
+  const failures = [];
+  const deadline = Date.now() + GEMINI_CONFIG.TOTAL_BUDGET_MS;
+
+  for (const model of resolveModelChain()) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs < GEMINI_CONFIG.MIN_ATTEMPT_MS) {
+      failures.push(`skipped ${model}: time budget exhausted`);
+      break;
+    }
+
+    try {
+      const parsed = await callModel(
+        model,
+        requestBody,
+        Math.min(GEMINI_CONFIG.REQUEST_TIMEOUT_MS, remainingMs)
+      );
+      logger.info(`Gemini ${model} completed ${label}`, { model }, 'GEMINI');
+      return { status: EXTRACTION_STATUS.SUCCESS, data: parsed, model, error: null };
+    } catch (err) {
+      failures.push(`${model}: ${err.message}`);
+      logger.warn(`Gemini ${label} attempt failed on ${model}`, { error: err.message }, 'GEMINI');
+    }
+  }
+
+  return { ...base, status: EXTRACTION_STATUS.AI_FAILED, error: failures.join(' | ') };
+}
+
 module.exports = {
   EXTRACTION_STATUS,
   EXTRACTION_PROMPT,
   isConfigured,
   resolveModelChain,
+  generateJson,
   extractResponseText,
   parseExtractionJson,
   toRawLineItems,

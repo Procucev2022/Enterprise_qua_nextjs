@@ -1,3 +1,18 @@
+// RFQ persistence is doubled here. Without it this suite's POST /api/rfqs calls
+// reached the real shared MySQL schema and left their fixture RFQs
+// ("Manually Keyed Spares Requirement", "Requirement With No Documents") in the
+// live qua_enterprice_rfq table alongside genuine buyer data.
+jest.mock('../src/db/rfqQueries', () => require('./helpers/fakeRfqQueries'));
+jest.mock('../src/services/rfqIdService', () => {
+  let counter = 0;
+  return {
+    generateRfqId: jest.fn(async () => {
+      counter += 1;
+      return `RFQ260409${String(700 + counter).padStart(6, '0')}`;
+    }),
+  };
+});
+
 const fs = require('fs');
 const path = require('path');
 const request = require('supertest');

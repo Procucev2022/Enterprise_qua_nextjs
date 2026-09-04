@@ -121,4 +121,36 @@ describe('SupportChatWidget', () => {
 
     expect(screen.getByText(/Procucev QUA AI streamlines multi-channel/)).toBeInTheDocument();
   });
+
+  it('toggles maximize and restore view', () => {
+    render(<SupportChatWidget />);
+    fireEvent.click(screen.getByLabelText('Open support chat'));
+
+    const maxBtn = screen.getByTitle('Maximize view');
+    expect(maxBtn).toBeInTheDocument();
+    fireEvent.click(maxBtn);
+
+    const restoreBtn = screen.getByTitle('Restore compact view');
+    expect(restoreBtn).toBeInTheDocument();
+    fireEvent.click(restoreBtn);
+
+    expect(screen.getByTitle('Maximize view')).toBeInTheDocument();
+  });
+
+  it('resets conversation when clicking restart button', () => {
+    render(<SupportChatWidget />);
+    fireEvent.click(screen.getByLabelText('Open support chat'));
+
+    const input = screen.getByPlaceholderText('Ask a question...');
+    fireEvent.change(input, { target: { value: 'test question' } });
+    fireEvent.submit(input.closest('form')!);
+
+    expect(screen.getByText('test question')).toBeInTheDocument();
+
+    const restartBtn = screen.getByTitle('Restart conversation');
+    fireEvent.click(restartBtn);
+
+    expect(screen.queryByText('test question')).not.toBeInTheDocument();
+    expect(screen.getByText(/Hello!/)).toBeInTheDocument();
+  });
 });

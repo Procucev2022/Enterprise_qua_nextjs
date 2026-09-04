@@ -3,7 +3,7 @@ import { render, screen, fireEvent, within } from '@testing-library/react';
 import RFQSummary from '@/app/buyer/rfq-summary';
 import { useApp } from '@/lib/store';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { SOURCING_MODES, formatCurrency } from '@/lib/constants';
+import { SOURCING_MODES, formatCurrency, formatIndianDate } from '@/lib/constants';
 import type { RFQItem, SourcingMode, RFQSource } from '@/lib/types';
 
 jest.mock('@/lib/store', () => ({ useApp: jest.fn() }));
@@ -307,8 +307,9 @@ describe('Buyer RFQ Summary (Screen 1.3)', () => {
       expect(within(row).getByText('Engineering Spares - Mechanical')).toBeInTheDocument();
       // Grouping is locale-dependent, so the expectation is derived the same way.
       expect(within(row).getByText(formatCurrency(145000))).toBeInTheDocument();
-      expect(within(row).getByText('2026-09-15')).toBeInTheDocument();
-      expect(within(row).getByText(formatString(RFQ.ofInvited, { invited: 5 }))).toBeInTheDocument();
+      // Delivery dates read in the Indian style, not as the stored ISO value.
+      expect(within(row).getByText(formatIndianDate('2026-09-15'))).toBeInTheDocument();
+      expect(within(row).queryByText('2026-09-15')).not.toBeInTheDocument();
     });
 
     it('flags RFQs whose chasers are still running', () => {
@@ -344,9 +345,10 @@ describe('Buyer RFQ Summary (Screen 1.3)', () => {
 
       renderScreen([persisted]);
 
-      // Column order: number, title, mode, status, items, quotes, budget, delivery.
+      // Column order: identity, status, items, budget, delivery, actions. The items
+      // cell also carries the quote count as a sub-line.
       const cells = dataRows()[0].querySelectorAll('td');
-      expect(cells[4].textContent).toBe('0');
+      expect(cells[2].textContent).toContain('0');
       expect(within(dataRows()[0]).getByText(RFQ.deliveryDateUnset)).toBeInTheDocument();
     });
 

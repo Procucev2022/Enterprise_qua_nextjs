@@ -8,7 +8,11 @@ import { SOURCING_MODES } from '@/lib/constants';
 import categoriesData from '@/lib/categories.json';
 import type { ExtractedEntity, RFQAttachment, RFQExtractionResult } from '@/lib/types';
 
+// Only the three functions the wizard drives are doubled. The rest of the module
+// is kept real because the store imports `createRFQ`/`fetchRFQList` from here and
+// those go through the global fetch mock like every other suite.
 jest.mock('@/lib/rfqClient', () => ({
+  ...jest.requireActual('@/lib/rfqClient'),
   extractLineItemsFromDocument: jest.fn(),
   classifyLineItems: jest.fn(),
   uploadRFQAttachment: jest.fn(),
@@ -1074,11 +1078,6 @@ describe('IngestionWizard: manual entry and delivery details', () => {
     mockExtract.mockResolvedValue(successResult([entity()], 348000));
   });
 
-  const startManual = () => {
-    renderWizard();
-    fireEvent.click(screen.getByTestId('intake-manual'));
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.manualStartAction, 'i') }));
-  };
 
   it('offers a manual path that skips extraction entirely', () => {
     renderWizard();
@@ -1090,106 +1089,6 @@ describe('IngestionWizard: manual entry and delivery details', () => {
     expect(
       screen.queryByRole('button', { name: new RegExp(EXTRACTION.extractAction, 'i') })
     ).not.toBeInTheDocument();
-  });
-
-  it('opens the review step with one empty row and never calls the extractor', () => {
-    startManual();
-
-    expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument();
-    expect(mockExtract).not.toHaveBeenCalled();
-    // Header row plus the single blank line item.
-    expect(screen.getAllByRole('row')).toHaveLength(2);
-  });
-
-  it('unlocks the review step for manual entry even though no extraction ran', () => {
-    startManual();
-    expect(screen.getByTestId('wizard-step-2').getAttribute('aria-disabled')).toBe('false');
-  });
-
-  // Manual rows carry no AI confidence, so the banner says so rather than
-  // leaving the buyer wondering why no extraction summary appeared.
-  it('explains that the rows were keyed by hand', () => {
-    startManual();
-    expect(screen.getByText(EXTRACTION.manualBannerMessage)).toBeInTheDocument();
-  });
-
-  it('records a manually keyed RFQ against the manual_entry source', async () => {
-    let captured: { source?: string; deliveryLocation?: string; deliveryPincode?: string } | undefined;
-
-    function Harness() {
-      const { rfqs } = useApp();
-      // Matched on the derived title so the seeded RFQs from jest.setup are not
-      // picked up instead.
-      const mine = rfqs.find((r) => r.title === 'Hydraulic Hose Assembly');
-      if (mine) {
-        captured = {
-          source: mine.source,
-          deliveryLocation: mine.deliveryLocation,
-          deliveryPincode: mine.deliveryPincode,
-        };
-      }
-      return <IngestionWizard onComplete={jest.fn()} onCancel={jest.fn()} forceSubscription="version_3" />;
-    }
-
-    render(
-      <AppProvider>
-        <Harness />
-      </AppProvider>
-    );
-
-    fireEvent.click(screen.getByTestId('intake-manual'));
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.manualStartAction, 'i') }));
-
-    const itemRow = screen.getAllByRole('row')[1];
-    fireEvent.change(within(itemRow).getAllByRole('textbox')[0], {
-      target: { value: 'Hydraulic Hose Assembly' },
-    });
-    // The row starts completely blank, so every quoted-against field is keyed.
-    fillBlankRow(itemRow);
-
-    // proceedToSourcing keys the destination asserted on below.
-    proceedToSourcing();
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') }));
-
-    await waitFor(() => expect(captured).toBeDefined());
-    expect(captured!.source).toBe('manual_entry');
-    expect(captured!.deliveryLocation).toBe('Navi Mumbai Plant, Gate 3');
-    expect(captured!.deliveryPincode).toBe('400701');
-  });
-
-
-  it('titles a manual RFQ from its leading line item when none was typed', async () => {
-    let capturedTitle: string | undefined;
-
-    function Harness() {
-      const { rfqs } = useApp();
-      const mine = rfqs.find((r) => r.title === 'Bearing Housing Assembly');
-      if (mine) capturedTitle = mine.title;
-      return <IngestionWizard onComplete={jest.fn()} onCancel={jest.fn()} forceSubscription="version_3" />;
-    }
-
-    render(
-      <AppProvider>
-        <Harness />
-      </AppProvider>
-    );
-
-    fireEvent.click(screen.getByTestId('intake-manual'));
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.manualStartAction, 'i') }));
-    expect(screen.getByLabelText(/Procurement Project Title/i)).toHaveValue('');
-
-    const row = screen.getAllByRole('row')[1];
-    fireEvent.change(within(row).getAllByRole('textbox')[0], {
-      target: { value: 'Bearing Housing Assembly' },
-    });
-    fillBlankRow(row);
-
-    proceedToSourcing();
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') }));
-
-    // The API requires a title of at least three characters, so an empty one
-    // would have been rejected on save.
-    await waitFor(() => expect(capturedTitle).toBe('Bearing Housing Assembly'));
   });
 
   // The budget is optional now: a document that prices nothing must still save.
@@ -1370,155 +1269,61 @@ describe('IngestionWizard: blank added row', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Supporting documents on the manual path
+// Manual entry opens a dialog
 //
-// Attached for reference and never extracted: on this path the buyer keys the
-// line items, so spending Gemini quota reading the file would be pointless.
+// The manual path no longer routes through the extraction steps. There is no
+// document to read and nothing to review, so it is keyed and saved in one dialog
+// which posts to the API itself.
 // ═══════════════════════════════════════════════════════════════════════════════
-describe('IngestionWizard: manual attachments', () => {
-  const stored = (overrides: Partial<RFQAttachment> = {}): RFQAttachment => ({
-    id: 'a1b2c3d4-0000-4000-8000-abcdefabcdef',
-    fileName: 'annexure.pdf',
-    mimeType: 'application/pdf',
-    size: 2048,
-    uploadedAt: '2026-09-02T11:07:16.000Z',
-    ...overrides,
-  });
-
+describe('IngestionWizard: manual entry dialog', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockExtract.mockResolvedValue(successResult([entity()], 145000));
-    mockAttach.mockResolvedValue({ success: true, data: stored() });
   });
 
-  const openManual = () => {
+  it('opens the dialog as soon as the Manual method is chosen', () => {
+    renderWizard();
+    expect(screen.queryByTestId('manual-rfq-modal')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('intake-manual'));
+
+    expect(screen.getByTestId('manual-rfq-modal')).toBeInTheDocument();
+  });
+
+  it('never calls the extractor on the manual path', () => {
     renderWizard();
     fireEvent.click(screen.getByTestId('intake-manual'));
-  };
-
-  const attach = (files: File[]) =>
-    fireEvent.change(screen.getByTestId('attachment-input'), { target: { files } });
-
-  const pdf = (name = 'annexure.pdf') => new File(['%PDF'], name, { type: 'application/pdf' });
-
-  it('offers document upload on the manual path', () => {
-    openManual();
-    expect(screen.getByText(EXTRACTION.attachTitle)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: new RegExp(EXTRACTION.attachAction, 'i') })).toBeInTheDocument();
-  });
-
-  it('stores the chosen document and lists it', async () => {
-    openManual();
-    attach([pdf()]);
-
-    await waitFor(() => expect(screen.getByText('annexure.pdf')).toBeInTheDocument());
-    expect(screen.getByText(formatString(EXTRACTION.attachedHeading, { count: 1 }))).toBeInTheDocument();
-    // 2048 bytes shown in the units a buyer reads.
-    expect(screen.getByText('2.0 KB')).toBeInTheDocument();
-  });
-
-  // The whole point of the manual path: nothing is sent for extraction.
-  it('never calls the extractor when a document is attached', async () => {
-    openManual();
-    attach([pdf()]);
-
-    await waitFor(() => expect(mockAttach).toHaveBeenCalled());
     expect(mockExtract).not.toHaveBeenCalled();
   });
 
-  it('uploads each of several files separately', async () => {
-    mockAttach
-      .mockResolvedValueOnce({ success: true, data: stored({ id: 'id-one', fileName: 'drawing.pdf' }) })
-      .mockResolvedValueOnce({ success: true, data: stored({ id: 'id-two', fileName: 'indent.pdf' }) });
-
-    openManual();
-    attach([pdf('drawing.pdf'), pdf('indent.pdf')]);
-
-    await waitFor(() => expect(screen.getByText('indent.pdf')).toBeInTheDocument());
-    expect(screen.getByText('drawing.pdf')).toBeInTheDocument();
-    expect(mockAttach).toHaveBeenCalledTimes(2);
-  });
-
-  it('reports a refused document against the file that caused it', async () => {
-    mockAttach.mockResolvedValue({ success: false, error: 'That file type cannot be attached.' });
-    openManual();
-
-    attach([pdf('payload.exe')]);
-
-    await waitFor(() => expect(mockAttach).toHaveBeenCalled());
-    // Nothing is listed, because nothing was stored.
-    expect(screen.queryByText('payload.exe')).not.toBeInTheDocument();
-  });
-
-  it('removes an attachment from the RFQ', async () => {
-    openManual();
-    attach([pdf()]);
-    await waitFor(() => expect(screen.getByText('annexure.pdf')).toBeInTheDocument());
-
-    fireEvent.click(
-      screen.getByRole('button', { name: formatString(EXTRACTION.attachRemoveAria, { fileName: 'annexure.pdf' }) })
-    );
-
-    expect(screen.queryByText('annexure.pdf')).not.toBeInTheDocument();
-  });
-
-  it('ignores a file input change that carries no files', () => {
-    openManual();
-    fireEvent.change(screen.getByTestId('attachment-input'), { target: { files: [] } });
-    expect(mockAttach).not.toHaveBeenCalled();
-  });
-
-  it('carries the attachments onto the saved RFQ', async () => {
-    let captured: RFQAttachment[] | undefined;
-
-    function Harness() {
-      const { rfqs } = useApp();
-      const mine = rfqs.find((r) => r.title === 'Gasket Set');
-      if (mine) captured = mine.attachments;
-      return <IngestionWizard onComplete={jest.fn()} onCancel={jest.fn()} forceSubscription="version_3" />;
-    }
-
-    render(
-      <AppProvider>
-        <Harness />
-      </AppProvider>
-    );
-
+  it('closes the dialog and leaves the wizard on step 1', () => {
+    renderWizard();
     fireEvent.click(screen.getByTestId('intake-manual'));
-    attach([pdf()]);
-    await waitFor(() => expect(screen.getByText('annexure.pdf')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.manualRfqModal.closeAria }));
+
+    expect(screen.queryByTestId('manual-rfq-modal')).not.toBeInTheDocument();
+    // Still on ingestion: the dialog saves directly rather than feeding step 2.
+    expect(screen.getByTestId('wizard-step-2').getAttribute('aria-disabled')).toBe('true');
+  });
+
+  it('reopens the dialog from the panel action', () => {
+    renderWizard();
+    fireEvent.click(screen.getByTestId('intake-manual'));
+    fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.manualRfqModal.closeAria }));
 
     fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.manualStartAction, 'i') }));
-    const row = screen.getAllByRole('row')[1];
-    fireEvent.change(within(row).getAllByRole('textbox')[0], { target: { value: 'Gasket Set' } });
-    fillBlankRow(row);
 
-    proceedToSourcing();
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') }));
-
-    await waitFor(() => expect(captured).toBeDefined());
-    expect(captured).toHaveLength(1);
-    expect(captured![0].fileName).toBe('annexure.pdf');
+    expect(screen.getByTestId('manual-rfq-modal')).toBeInTheDocument();
   });
 
-  it('refuses to attach beyond the per-RFQ limit', async () => {
-    openManual();
+  // No document is involved, so the AI extract action must not be offered.
+  it('offers no extract action on the manual panel', () => {
+    renderWizard();
+    fireEvent.click(screen.getByTestId('intake-manual'));
+    fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.manualRfqModal.closeAria }));
 
-    // Fill the allowance one file at a time.
-    for (let i = 0; i < 10; i += 1) {
-      mockAttach.mockResolvedValueOnce({
-        success: true,
-        data: stored({ id: `id-${i}`, fileName: `doc-${i}.pdf` }),
-      });
-      attach([pdf(`doc-${i}.pdf`)]);
-      await waitFor(() => expect(screen.getByText(`doc-${i}.pdf`)).toBeInTheDocument());
-    }
-    expect(mockAttach).toHaveBeenCalledTimes(10);
-
-    attach([pdf('one-too-many.pdf')]);
-
-    // The eleventh is refused before a request is made.
-    expect(mockAttach).toHaveBeenCalledTimes(10);
-    expect(screen.queryByText('one-too-many.pdf')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: new RegExp(EXTRACTION.extractAction, 'i') })
+    ).not.toBeInTheDocument();
   });
 });

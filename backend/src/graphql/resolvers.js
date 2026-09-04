@@ -8,6 +8,10 @@ const { performanceOptimizer } = require('../services/performanceOptimizer');
 const cryptoService = require('../services/cryptoService');
 const authService = require('../services/authService');
 const { extractToken } = require('../middleware/auth');
+const { resolveBuyerScope } = require('../services/buyerScopeService');
+const rfqQueries = require('../db/rfqQueries');
+const rfqIdService = require('../services/rfqIdService');
+const rfqSummaryService = require('../services/rfqSummaryService');
 const { AUTH_MESSAGES } = require('../config/constants');
 
 /**
@@ -37,13 +41,31 @@ function requireAdmin(context) {
 }
 
 /**
+ * Resolve the buyer organisation for an RFQ query or mutation.
+ *
+ * RFQ resolvers used to read `storeService.getRFQs()` — the whole global array,
+ * with no session required at all. That made GraphQL a second, wider route to
+ * the same leak the REST endpoints had, and it would have quietly bypassed the
+ * scoping added there.
+ */
+function requireBuyerOrg(context) {
+  const user = requireAuth(context);
+  const resolved = resolveBuyerScope({ user });
+  if (!resolved.ok) {
+    throw new Error(resolved.message);
+  }
+  return resolved.scope;
+}
+
+/**
  * GraphQL Root Resolvers
  */
 const rootResolvers = {
 
-  rfqs: (args = {}) => {
+  rfqs: async (args = {}, context) => {
+    const scope = requireBuyerOrg(context);
     const { category, sourcingMode, status, limit = 50, offset = 0 } = args;
-    let result = storeService.getRFQs();
+    let result = await rfqQueries.listRFQsByOrg(scope.orgId);
     if (category) {
       result = result.filter((r) => r.category && r.category.toLowerCase().includes(category.toLowerCase()));
     }
@@ -56,9 +78,10 @@ const rootResolvers = {
     return result.slice(offset, offset + limit);
   },
 
-  rfq: (args = {}) => {
+  rfq: async (args = {}, context) => {
+    const scope = requireBuyerOrg(context);
     const key = args.id || args.rfqNumber;
-    return key ? storeService.getRFQById(key) || null : null;
+    return key ? await rfqQueries.findRFQByAnyId(key, scope.orgId) : null;
   },
 
   vendors: (args = {}) => {
@@ -172,10 +195,23 @@ const rootResolvers = {
     return { plaintext };
   },
 
-  createRFQ: ({ input }, context) => {
-    requireAuth(context);
+  createRFQ: async ({ input }, context) => {
+    const scope = requireBuyerOrg(context);
     logger.info('GraphQL Mutation: createRFQ', { title: input.title }, 'GRAPHQL_MUTATION');
-    return storeService.createRFQ(input);
+
+    const rfqId = await rfqIdService.generateRfqId();
+    const lineItems = Array.isArray(input.extractedEntities) ? input.extractedEntities : [];
+    const aiSummary = await rfqSummaryService.buildRFQSummary({ ...input, rfqId, extractedEntities: lineItems });
+
+    return rfqQueries.insertRFQ({
+      ...input,
+      rfqId,
+      buyerOrgId: scope.orgId,
+      buyerUserId: scope.userId,
+      buyerEmail: scope.email,
+      extractedEntities: lineItems,
+      aiSummary,
+    });
   },
 
   updateRFQ: ({ id, input }, context) => {

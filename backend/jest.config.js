@@ -1,6 +1,10 @@
 module.exports = {
   testEnvironment: 'node',
   testMatch: ['**/__tests__/**/*.test.js'],
+  // Severs the real MySQL connection before every suite. A test that forgot to
+  // double the query layer previously wrote fixture RFQs into the live shared
+  // schema; now it fails loudly instead. See __tests__/setup/noRealDatabase.js.
+  setupFilesAfterEnv: ['<rootDir>/__tests__/setup/noRealDatabase.js'],
   testTimeout: 20000,
   collectCoverageFrom: [
     'src/**/*.js',

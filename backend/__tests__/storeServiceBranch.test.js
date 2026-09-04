@@ -2,10 +2,10 @@ const storeService = require('../src/services/storeService');
 
 describe('Store Service Deep Branch & Fallback Tests', () => {
   test('All store getter and setter edge cases', () => {
-    // 1. Buyer Accounts
-    expect(storeService.getBuyerAccounts().length).toBeGreaterThan(0);
-    const active = storeService.getActiveBuyerAccount();
-    expect(active).toBeDefined();
+    // 1. Buyer Accounts. Not seeded any more; the signed-in buyer's account comes
+    // from the identity schema, so this holds only runtime-created accounts.
+    expect(storeService.getBuyerAccounts()).toEqual([]);
+    expect(storeService.getActiveBuyerAccount()).toBeNull();
 
     storeService.alignActiveBuyerAccount('non-existent-id');
     expect(storeService.getActiveBuyerAccount()).toBeDefined();
@@ -67,8 +67,10 @@ describe('Store Service Deep Branch & Fallback Tests', () => {
     expect(deletedVendor).toBe(true);
     expect(storeService.deleteVendor('invalid-vendor')).toBe(false);
 
-    // 3. RFQs
-    expect(storeService.getRFQs().length).toBeGreaterThan(0);
+    // 3. RFQs. No longer seeded here: they live in qua_enterprice_rfq, scoped to
+    // a buyer organisation. This array only backs the quote and chaser flows that
+    // have not been migrated yet, so it starts empty.
+    expect(storeService.getRFQs()).toEqual([]);
     const rfq = storeService.getRFQById('invalid-rfq');
     expect(rfq).toBeUndefined();
 
@@ -104,10 +106,12 @@ describe('Store Service Deep Branch & Fallback Tests', () => {
     expect(auditEntry.shaSignature).toBeDefined();
     expect(storeService.verifyAuditIntegrity().valid).toBe(true);
 
-    // 6. AI Feed
-    expect(storeService.getAIFeed().length).toBeGreaterThan(0);
+    // 6. AI Feed. Starts empty now that the seeded narrative is gone; it fills
+    // only from real activity.
+    const feedBefore = storeService.getAIFeed().length;
     const feedItem = storeService.addAIFeedItem({ title: 'AI Item', message: 'Test Msg' });
     expect(feedItem.id).toBeDefined();
+    expect(storeService.getAIFeed().length).toBe(feedBefore + 1);
 
     // 7. System Config & Azure Health
     expect(storeService.getSystemConfig()).toBeDefined();
@@ -155,6 +159,8 @@ describe('Store Service Deep Branch & Fallback Tests', () => {
     const bootstrap = storeService.getBootstrapData();
     expect(bootstrap.buyerAccounts).toBeDefined();
     expect(bootstrap.vendors).toBeDefined();
-    expect(bootstrap.rfqs).toBeDefined();
+    // RFQs are not in this anonymous payload any more; they come from the
+    // authenticated, org-scoped GET /api/rfqs.
+    expect(bootstrap.rfqs).toBeUndefined();
   });
 });
