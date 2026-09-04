@@ -428,4 +428,37 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     await vendorController.updateCategories({ params: { id: 'v-001' }, body: {}, user: adminUser }, res, next);
     expect(next).toHaveBeenCalled();
   });
+
+  test('Vendor Subscription Update Error, 404 & Validation Branches', async () => {
+    const next = jest.fn();
+    const res = mockRes();
+    const adminUser = { role: 'admin', email: 'admin@procucev.com' };
+
+    const notFoundSub = mockRes();
+    jest.spyOn(storeService, 'getVendorById').mockReturnValueOnce(null);
+    await vendorController.updateSubscription(
+      { params: { id: 'v-99' }, body: { plan: 'connect' }, user: adminUser },
+      notFoundSub,
+      next
+    );
+    expect(notFoundSub.status).toHaveBeenCalledWith(404);
+
+    const invalidPlan = mockRes();
+    await vendorController.updateSubscription(
+      { params: { id: 'v-001' }, body: { plan: 'not-a-real-plan' }, user: adminUser },
+      invalidPlan,
+      next
+    );
+    expect(invalidPlan.status).toHaveBeenCalledWith(400);
+
+    jest.spyOn(storeService, 'updateVendor').mockImplementationOnce(() => {
+      throw new Error('Update subscription error');
+    });
+    await vendorController.updateSubscription(
+      { params: { id: 'v-001' }, body: { plan: 'select' }, user: adminUser },
+      res,
+      next
+    );
+    expect(next).toHaveBeenCalled();
+  });
 });

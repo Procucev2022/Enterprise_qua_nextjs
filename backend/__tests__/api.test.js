@@ -1,6 +1,7 @@
 const request = require('supertest');
 const app = require('../src/app');
 const authService = require('../src/services/authService');
+const storeService = require('../src/services/storeService');
 const { authHeader } = require('./testHelpers');
 
 function customAuthHeader(user) {
@@ -417,9 +418,54 @@ describe('API Route Endpoints', () => {
     });
 
     test('GET /api/rfqs/:id/email-preview generates standard RFQ email', async () => {
+      // This RFQ isn't a direct-roster invite for this vendor, so downloading
+      // it is a marketplace download gated by subscription — grant a plan
+      // with quota first (also exercises PUT /api/vendors/:id/subscription).
+      await request(app)
+        .put(`/api/vendors/${encodeURIComponent('vendor@apexsupplies.com')}/subscription`)
+        .set(authHeader('vendor'))
+        .send({ plan: 'connect' });
       const res = await request(app).get(`/api/rfqs/${testRfqId}/email-preview`).set(authHeader('vendor'));
       expect(res.statusCode).toBe(200);
       expect(res.body.data).toHaveProperty('htmlBody');
+    });
+
+    test('GET /api/rfqs/:id/email-preview rejects a free-tier vendor downloading a marketplace RFQ', async () => {
+      const header = customAuthHeader({
+        id: 'usr-free-tier-vendor',
+        email: 'free-tier@vendor.com',
+        name: 'Free Tier Vendor',
+        role: 'vendor',
+      });
+      await request(app).post('/api/vendors').set(header).send({
+        name: 'Free Tier Supplier Co',
+        majorCategory: 'Engineering Spares - Mechanical',
+      });
+      // Left on the default 'premium' (free, client-uploaded-only) plan —
+      // this RFQ was never raised by a buyer who added this vendor, so it's
+      // a marketplace download outside what that plan grants.
+      const res = await request(app).get(`/api/rfqs/${testRfqId}/email-preview`).set(header);
+      expect(res.statusCode).toBe(403);
+      expect(res.body.error).toMatch(/Connect or Select subscription/i);
+    });
+
+    test('GET /api/rfqs/:id/email-preview rejects a vendor who has exhausted their quota', async () => {
+      const header = customAuthHeader({
+        id: 'usr-exhausted-vendor',
+        email: 'exhausted@vendor.com',
+        name: 'Exhausted Quota Vendor',
+        role: 'vendor',
+      });
+      const created = await request(app).post('/api/vendors').set(header).send({
+        name: 'Exhausted Quota Supplier Co',
+        majorCategory: 'Engineering Spares - Mechanical',
+      });
+      await request(app).put(`/api/vendors/${created.body.data.id}/subscription`).set(header).send({ plan: 'connect' });
+      storeService.updateVendor(created.body.data.id, { rfqDownloadsUsed: 50 });
+
+      const res = await request(app).get(`/api/rfqs/${testRfqId}/email-preview`).set(header);
+      expect(res.statusCode).toBe(403);
+      expect(res.body.error).toMatch(/reached your 50-RFQ download quota/i);
     });
   });
 

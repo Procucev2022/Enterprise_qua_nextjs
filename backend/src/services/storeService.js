@@ -328,6 +328,11 @@ class StoreService {
       isExistingInDatabase: vendorData.isExistingInDatabase !== undefined ? vendorData.isExistingInDatabase : true,
       onboardingEmailStatus: vendorData.onboardingEmailStatus || 'sent',
       isCategoryAligned: vendorData.isCategoryAligned !== undefined ? vendorData.isCategoryAligned : true,
+      // Every vendor starts on the free client-uploaded tier with a clean
+      // download counter — these used to exist only as frontend useState
+      // (reset on every page refresh, never actually persisted or enforced).
+      subscriptionPlan: vendorData.subscriptionPlan || 'premium',
+      rfqDownloadsUsed: vendorData.rfqDownloadsUsed || 0,
     };
 
     this.vendors.unshift(newVendor);

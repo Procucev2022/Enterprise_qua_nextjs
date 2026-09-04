@@ -224,7 +224,12 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const handleDownloadRfq = async (opp: VendorOpportunity) => {
     try {
       const params = myVendorId ? `?vendorId=${encodeURIComponent(myVendorId)}` : '';
-      const res = await fetch(`/api/rfqs/${encodeURIComponent(opp.rfqNumber)}/email-preview${params}`);
+      // This route requires authentication (and, for a vendor, now enforces
+      // their real download quota server-side) — the request was previously
+      // sent with no Authorization header at all and would 401 for real.
+      const res = await fetch(`/api/rfqs/${encodeURIComponent(opp.rfqNumber)}/email-preview${params}`, {
+        headers: authHeaders(),
+      });
       const data = await res.json();
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Could not generate the RFQ specification.');

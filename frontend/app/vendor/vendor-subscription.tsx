@@ -8,7 +8,7 @@ import { Sparkles, ShieldCheck, Check, Zap, Layers, AlertCircle, RefreshCw, Down
 export default function VendorSubscriptionCenter() {
   const {
     vendorSubscription,
-    setVendorSubscription,
+    updateVendorSubscription,
     vendorRfqDownloadsUsed,
     setVendorRfqDownloadsUsed,
     showToast,
@@ -18,6 +18,7 @@ export default function VendorSubscriptionCenter() {
   } = useApp();
 
   const [pendingPayment, setPendingPayment] = useState<{ planId: 'connect' | 'select'; planName: string; price: string } | null>(null);
+  const [isUpdatingPlan, setIsUpdatingPlan] = useState(false);
 
   const planLabel = (plan: 'premium' | 'connect' | 'select') =>
     plan === 'premium'
@@ -26,10 +27,14 @@ export default function VendorSubscriptionCenter() {
       ? 'Connect Model (50 RFQs / 3 Months)'
       : 'Select Model (Catalogue & 100 RFQs / 3 Months)';
 
-  const handleSubscribe = (plan: 'premium' | 'connect' | 'select') => {
-    setVendorSubscription(plan);
-    const planName = planLabel(plan);
+  const handleSubscribe = async (plan: 'premium' | 'connect' | 'select') => {
+    if (isUpdatingPlan) return;
+    setIsUpdatingPlan(true);
+    const saved = await updateVendorSubscription(plan);
+    setIsUpdatingPlan(false);
+    if (!saved) return;
 
+    const planName = planLabel(plan);
     showToast(
       'Vendor Subscription Updated!',
       `Successfully switched to ${planName}.`,
@@ -304,7 +309,7 @@ export default function VendorSubscriptionCenter() {
               <div className="p-6 bg-slate-50 dark:bg-gray-950/40 border-t border-slate-150 dark:border-gray-800/60">
                 <button
                   onClick={() => handlePlanButtonClick(p.id, p.price)}
-                  disabled={isActive}
+                  disabled={isActive || isUpdatingPlan}
                   className={`btn w-full text-xs font-bold py-2.5 flex items-center justify-center gap-1.5 ${
                     isActive
                       ? 'btn-secondary border-emerald-300 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300 cursor-default opacity-85'

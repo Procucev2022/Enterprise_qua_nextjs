@@ -225,6 +225,7 @@ interface AppContextType {
   setActiveSubscription: React.Dispatch<React.SetStateAction<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none'>>;
   vendorSubscription: VendorSubscriptionPlan;
   setVendorSubscription: React.Dispatch<React.SetStateAction<VendorSubscriptionPlan>>;
+  updateVendorSubscription: (plan: 'premium' | 'connect' | 'select') => Promise<boolean>;
   vendorRfqDownloadsUsed: number;
   setVendorRfqDownloadsUsed: React.Dispatch<React.SetStateAction<number>>;
   vendorCatalogue: any[];
@@ -364,7 +365,50 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [remainingFreeRFQs, setRemainingFreeRFQs] = useState<number>(5);
   const [activeSubscription, setActiveSubscription] = useState<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none'>('free_trial');
   const [vendorSubscription, setVendorSubscription] = useState<VendorSubscriptionPlan>('premium');
-  const [vendorRfqDownloadsUsed, setVendorRfqDownloadsUsed] = useState<number>(3);
+  // Was a fabricated "already used 3" starting point — real usage is hydrated
+  // from the vendor's actual record in refreshFromDB once it loads.
+  const [vendorRfqDownloadsUsed, setVendorRfqDownloadsUsed] = useState<number>(0);
+
+  // Was pure local state (setVendorSubscription called directly) — reset on
+  // every page refresh and never persisted anywhere. Now calls the real
+  // PUT /api/vendors/:id/subscription and only updates local state once the
+  // backend confirms it, mirroring the vendor rating-revision fix.
+  const updateVendorSubscription = async (plan: 'premium' | 'connect' | 'select'): Promise<boolean> => {
+    const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
+    const myVendor = buyerVendors.find((v) => v.email?.toLowerCase() === sessionEmail);
+    if (!myVendor) {
+      showToast('Subscription Update Failed', 'Could not find your vendor profile.', 'warning');
+      return false;
+    }
+
+    let res: Response;
+    try {
+      res = await fetch(`/api/vendors/${encodeURIComponent(myVendor.id)}/subscription`, {
+        method: 'PUT',
+        headers: authFetchHeaders(),
+        body: JSON.stringify({ plan }),
+      });
+    } catch (e) {
+      console.error('Failed to update vendor subscription:', e);
+      showToast('Subscription Update Failed', 'Could not reach the server. Please try again.', 'warning');
+      return false;
+    }
+
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.success) {
+      showToast(
+        'Subscription Update Failed',
+        data?.error || 'Could not update your subscription. Please try again.',
+        'warning'
+      );
+      return false;
+    }
+
+    setVendorSubscription(plan);
+    setVendorRfqDownloadsUsed(data.data.rfqDownloadsUsed || 0);
+    setBuyerVendors((prev) => prev.map((v) => (v.id === myVendor.id ? { ...v, ...data.data } : v)));
+    return true;
+  };
 
   const toggleTheme = () => {
     setTheme((prev) => {
@@ -504,6 +548,18 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
         }
         if (d.vendors && d.vendors.length > 0) {
           setBuyerVendors(d.vendors);
+          // Subscription plan and download quota used to live only as local
+          // useState (defaulted to 'premium' / 3, reset on every refresh,
+          // never actually persisted). Sync them from the real vendor
+          // record now that the backend tracks both.
+          const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
+          if (sessionEmail) {
+            const myVendor = d.vendors.find((v: VendorEntry) => v.email?.toLowerCase() === sessionEmail);
+            if (myVendor) {
+              setVendorSubscription(myVendor.subscriptionPlan || 'premium');
+              setVendorRfqDownloadsUsed(myVendor.rfqDownloadsUsed || 0);
+            }
+          }
         }
         if (d.rfqs && d.rfqs.length > 0) {
           const hydratedRfqs: RFQItem[] = d.rfqs.map(normalizeHydratedRFQ);
@@ -2342,6 +2398,7 @@ const INITIAL_BUYER_ACCOUNTS: BuyerAccount[] = [
         setActiveSubscription,
         vendorSubscription,
         setVendorSubscription,
+        updateVendorSubscription,
         vendorRfqDownloadsUsed,
         setVendorRfqDownloadsUsed,
         vendorCatalogue,

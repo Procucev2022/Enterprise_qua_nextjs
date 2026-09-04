@@ -311,7 +311,10 @@ describe('QuotationForm Comprehensive Suite', () => {
     await act(async () => {
       fireEvent.click(downloadBtns[0]);
     });
-    expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('/email-preview'));
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/email-preview'),
+      expect.objectContaining({ headers: expect.objectContaining({ 'Content-Type': 'application/json' }) })
+    );
 
     // Now make the download endpoint fail
     (global.fetch as jest.Mock).mockImplementation((url: string, options: any = {}) => {

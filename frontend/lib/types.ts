@@ -494,6 +494,12 @@ export interface VendorEntry {
   // Buyer Performance Ratings & Revisions
   latestRatingRevision?: VendorRatingRevisionRecord;
   ratingRevisionHistory?: VendorRatingRevisionRecord[];
+
+  // Marketplace subscription & the download quota it grants — persisted
+  // server-side and enforced there (see PUT /api/vendors/:id/subscription
+  // and GET /api/rfqs/:id/email-preview's quota check), not just local state.
+  subscriptionPlan?: VendorSubscriptionPlan;
+  rfqDownloadsUsed?: number;
 }
 
 export interface VendorRatingRevisionRecord {

@@ -7,6 +7,7 @@ import QuotationForm from '@/app/vendor/quotation-form';
 import VendorProfilePage from '@/app/vendor/vendor-profile';
 import VendorSubscriptionCenter from '@/app/vendor/vendor-subscription';
 import { AppProvider, useApp } from '@/lib/store';
+import { authClient } from '@/lib/authClient';
 
 function renderWithProvider(ui: React.ReactElement) {
   return render(<AppProvider>{ui}</AppProvider>);
@@ -18,6 +19,32 @@ function renderWithProvider(ui: React.ReactElement) {
 // behavior without needing a running backend.
 function mockFetchImpl(url: string, options: any = {}) {
   const method = options.method || 'GET';
+  if (/\/api\/bootstrap/.test(url)) {
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({
+        success: true,
+        data: {
+          vendors: [
+            {
+              id: 'v-mock-apex',
+              name: 'Apex Supplies Ltd.',
+              email: 'sales@apexsupplies.com',
+              majorCategory: 'Heavy Industrial Fluid Dynamics & Valves',
+              rating: 4.8,
+            },
+          ],
+        },
+      }),
+    });
+  }
+  if (/\/api\/vendors\/v-mock-apex\/subscription$/.test(url) && method === 'PUT') {
+    const body = options.body ? JSON.parse(options.body) : {};
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({ success: true, data: { id: 'v-mock-apex', subscriptionPlan: body.plan, rfqDownloadsUsed: 0 } }),
+    });
+  }
   if (/\/api\/catalogue/.test(url) && method === 'GET') {
     return Promise.resolve({ ok: true, json: async () => ({ success: true, data: [] }) });
   }
@@ -305,14 +332,33 @@ describe('Vendor Screens Comprehensive Suite', () => {
   });
 
   describe('VendorSubscriptionCenter Screen', () => {
-    test('renders all subscription plans, allows switching between models (via dummy payment gateway) and resetting quota', () => {
-      jest.useFakeTimers();
+    test('renders all subscription plans, allows switching between models (via dummy payment gateway) and resetting quota', async () => {
+      // Plan switches now call the real PUT /api/vendors/:id/subscription and
+      // only take effect once the backend confirms — that lookup is by the
+      // signed-in vendor's own email, so a matching session + vendor record
+      // (from the shared bootstrap mock) is needed for the switch to resolve.
+      authClient.setSession({
+        id: 'u-vendor-1',
+        email: 'sales@apexsupplies.com',
+        name: 'Test Vendor',
+        role: 'vendor',
+        orgId: 'org-vendor-1',
+        orgName: 'Apex Supplies Ltd.',
+      });
+
       renderWithProvider(<VendorSubscriptionCenter />);
+      // Let the initial bootstrap fetch resolve (real timers) before
+      // switching to fake timers for the payment-modal interactions below.
+      await act(async () => {
+        await Promise.resolve();
+      });
 
       expect(screen.getByText(/Vendor Subscription Plans & Quotas/i)).toBeInTheDocument();
       expect(screen.getAllByText(/Premium Model/i)[0]).toBeInTheDocument();
       expect(screen.getAllByText(/Connect Model/i)[0]).toBeInTheDocument();
       expect(screen.getAllByText(/Select Model/i)[0]).toBeInTheDocument();
+
+      jest.useFakeTimers();
 
       // Connect/Select are paid tiers — clicking now opens the dummy payment
       // gateway modal rather than switching instantly (BUGS.md #44).
@@ -321,32 +367,37 @@ describe('Vendor Screens Comprehensive Suite', () => {
       expect(screen.getByText(/Dummy Payment Gateway/i)).toBeInTheDocument();
 
       const payBtn = screen.getByRole('button', { name: /Pay \$149/i });
-      act(() => {
-        fireEvent.click(payBtn);
-        jest.advanceTimersByTime(1300);
+      fireEvent.click(payBtn);
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(1300);
       });
       expect(screen.queryByText(/Dummy Payment Gateway/i)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Switch to Select Model/i })).toBeInTheDocument();
 
       // Now on Connect — Select is a further upgrade, still paid
       const selectBtn = screen.getByRole('button', { name: /Switch to Select Model/i });
       fireEvent.click(selectBtn);
       expect(screen.getByText(/Dummy Payment Gateway/i)).toBeInTheDocument();
       const payBtn2 = screen.getByRole('button', { name: /Pay \$349/i });
-      act(() => {
-        fireEvent.click(payBtn2);
-        jest.advanceTimersByTime(1300);
+      fireEvent.click(payBtn2);
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(1300);
       });
       expect(screen.queryByText(/Dummy Payment Gateway/i)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Switch to Premium Model/i })).toBeInTheDocument();
 
       // Switch back to Premium — free tier, switches instantly, no gateway
       const premBtn = screen.getByRole('button', { name: /Switch to Premium Model/i });
-      fireEvent.click(premBtn);
+      await act(async () => {
+        fireEvent.click(premBtn);
+      });
       expect(screen.queryByText(/Dummy Payment Gateway/i)).not.toBeInTheDocument();
 
       // Reset Quota Counter
       const resetBtn = screen.getByRole('button', { name: /Reset Quota Counter/i });
       fireEvent.click(resetBtn);
       jest.useRealTimers();
+      authClient.setSession(null);
     });
   });
 });

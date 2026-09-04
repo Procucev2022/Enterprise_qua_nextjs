@@ -194,6 +194,33 @@ function generateOnboardingEmailPreview(req, res, next) {
   }
 }
 
+// The frontend only ever offers these three; 'premium_network' exists in the
+// shared TS union type but nothing in the app assigns it.
+const VALID_VENDOR_SUBSCRIPTION_PLANS = ['premium', 'connect', 'select'];
+
+function updateSubscription(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { plan } = req.body;
+    const existing = storeService.getVendorById(id);
+    if (!existing) {
+      logger.warn(`Vendor not found for subscription update: ${id}`, { id }, 'VENDOR_CONTROLLER');
+      return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
+    }
+    if (!assertVendorOwnership(req, res, existing.email)) return;
+    if (!VALID_VENDOR_SUBSCRIPTION_PLANS.includes(plan)) {
+      logger.warn(`Failed to update subscription for vendor ${id}: invalid plan`, { id, plan }, 'VENDOR_CONTROLLER');
+      return res.status(400).json({ success: false, error: `plan must be one of: ${VALID_VENDOR_SUBSCRIPTION_PLANS.join(', ')}.` });
+    }
+    logger.info(`Updating subscription for vendor ${id} to ${plan}`, { id, plan }, 'VENDOR_CONTROLLER');
+    const updated = storeService.updateVendor(existing.id, { subscriptionPlan: plan });
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    logger.error(`Error updating subscription for vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
 function updateCategories(req, res, next) {
   try {
     const { id } = req.params;
@@ -222,4 +249,5 @@ module.exports = {
   reviseRating,
   generateOnboardingEmailPreview,
   updateCategories,
+  updateSubscription,
 };

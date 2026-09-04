@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { useApp } from '@/lib/store';
+import { authClient } from '@/lib/authClient';
 import { VendorSubscriptionPaymentModal } from '@/app/components/Modals';
 import { VendorOpportunity } from '@/lib/types';
 import {
@@ -34,20 +35,21 @@ export default function OpportunityFeed({
   onNavigateToEvaluation,
   onNavigateToSubscription,
 }: OpportunityFeedProps) {
-  const { 
-    vendorOpportunities, 
-    showToast, 
-    addAuditLog, 
-    vendorSubscription, 
-    setVendorSubscription,
+  const {
+    vendorOpportunities,
+    showToast,
+    addAuditLog,
+    vendorSubscription,
+    updateVendorSubscription,
     vendorRfqDownloadsUsed,
-    setVendorRfqDownloadsUsed,
     vendorCatalogue,
     vendorSelfEvaluationCompleted,
     vendorSelfEvaluationScore,
     isVendorEvaluationFeeWaived,
     buyerAccounts,
+    buyerVendors,
     currentUserSession,
+    refreshFromDB,
   } = useApp();
   const vendorLabel = currentUserSession?.orgName || currentUserSession?.name || 'Vendor';
 
@@ -114,15 +116,21 @@ export default function OpportunityFeed({
     return { major: 'Mechanical & Fluid Equipment', minor: 'Structural Steel & Beams' };
   };
 
-  // Rajesh Nair (L&T) uploaded Apex Supplies, so their RFQs are free to bid on.
-  // Other buyer RFQs require premium vendor subscription.
-  const isOwnBuyerRfq = (rfqNumber: string) => {
-    return ['RFQ-2026-00421', 'RFQ-2026-00423', 'RFQ-2026-00425', 'RFQ-2026-00427'].includes(rfqNumber);
+  // Was a hardcoded list of 4 specific RFQ numbers standing in for "this
+  // vendor's own buyer roster" — direct-vs-marketplace now reflects the real
+  // relationship: this vendor's real addedByBuyerCompany against the RFQ's
+  // real buyerAccountName (the same real fields the backend's own quota
+  // enforcement in GET /api/rfqs/:id/email-preview checks).
+  const myVendorRecord = buyerVendors.find((v) => v.email?.toLowerCase() === currentUserSession?.email?.toLowerCase());
+  const isOwnBuyerRfq = (opp: VendorOpportunity) => {
+    return !!myVendorRecord?.addedByBuyerCompany && myVendorRecord.addedByBuyerCompany === opp.buyer;
   };
 
   const handleDownloadRfq = async (opp: VendorOpportunity) => {
-    const isDirect = isOwnBuyerRfq(opp.rfqNumber);
+    const isDirect = isOwnBuyerRfq(opp);
 
+    // Instant client-side feedback for the obviously-blocked cases — the
+    // backend is the real authority below and enforces this regardless.
     if (vendorSubscription === 'premium' && !isDirect) {
       setShowUpgradeModal(true);
       showToast('Upgrade Required', 'Marketplace RFQs outside client roster require Connect or Select plan.', 'info');
@@ -141,19 +149,26 @@ export default function OpportunityFeed({
       return;
     }
 
-    // Was a no-op fake toast with no backend call at all — quota was checked
-    // above but never actually consumed either, so the limits just enforced
-    // could never be reached through normal use. Now calls the real
-    // email-preview endpoint (same one quotation-form.tsx's download uses)
-    // and only counts against quota / logs success once it actually works.
+    // Was a no-op fake toast with no backend call at all, and the fetch it
+    // did make had no Authorization header at all (this route requires
+    // authentication — it would 401 for real). Now calls the real,
+    // authenticated email-preview endpoint, which enforces the vendor's
+    // download quota server-side too — the checks above are just UX, not
+    // the actual gate. Refreshes from the DB afterward so the quota shown
+    // reflects what the server actually counted, not a local guess.
     try {
-      const res = await fetch(`/api/rfqs/${encodeURIComponent(opp.rfqNumber)}/email-preview`);
+      const res = await fetch(`/api/rfqs/${encodeURIComponent(opp.rfqNumber)}/email-preview`, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authClient.getToken() ? { Authorization: `Bearer ${authClient.getToken()}` } : {}),
+        },
+      });
       const data = await res.json();
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Could not generate the RFQ specification.');
       }
       if (!isDirect) {
-        setVendorRfqDownloadsUsed((prev) => prev + 1);
+        await refreshFromDB();
       }
       showToast('Spreadsheet Sent to Registered Email', `Downloaded BOQ Excel spreadsheet for ${opp.rfqNumber}.`, 'success');
       addAuditLog(`${vendorLabel} downloaded RFQ specifications for ${opp.rfqNumber}`, opp.rfqNumber, currentUserSession?.email);
@@ -268,8 +283,9 @@ export default function OpportunityFeed({
   const directInvites = eligibleDirectOpportunities;
   const networkOpps = eligibleNetworkOpportunities;
 
-  const handleUpgradePlan = (plan: any) => {
-    setVendorSubscription(plan);
+  const handleUpgradePlan = async (plan: 'premium' | 'connect' | 'select') => {
+    const saved = await updateVendorSubscription(plan);
+    if (!saved) return;
     setShowUpgradeModal(false);
     showToast(`${plan.toUpperCase()} Plan Activated!`, `Updated vendor subscription to ${plan}.`, 'success');
     addAuditLog(`${vendorLabel} upgraded to ${plan} plan`, undefined, currentUserSession?.email);
@@ -570,7 +586,7 @@ export default function OpportunityFeed({
                 // (was two contradictory definitions) — 'connect'/'select' are
                 // the real marketplace-unlock tiers, not the unreachable
                 // 'premium_network'.
-                const isLocked = !isOwnBuyerRfq(opp.rfqNumber) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
+                const isLocked = !isOwnBuyerRfq(opp) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
                 const categories = getOpportunityCategories(opp);
                 const isCategoryMatch = categories.minor === 'Pumps & Valves' || categories.major === 'Mechanical & Fluid Equipment';
                 const catalogueMatches = vendorCatalogue || [];
@@ -925,7 +941,7 @@ export default function OpportunityFeed({
               </div>
             ) : (
               networkOpps.map((opp) => {
-                const isLocked = !isOwnBuyerRfq(opp.rfqNumber) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
+                const isLocked = !isOwnBuyerRfq(opp) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
                 const categories = getOpportunityCategories(opp);
                 const isCategoryMatch = categories.minor === 'Pumps & Valves' || categories.major === 'Mechanical & Fluid Equipment';
                 const catalogueMatches = vendorCatalogue || [];
