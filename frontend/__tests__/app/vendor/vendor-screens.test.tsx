@@ -277,7 +277,18 @@ describe('Vendor Screens Comprehensive Suite', () => {
   describe('QuotationForm Screen', () => {
     test('renders submitted quotations, downloads RFQ, and interacts with buyer modal', () => {
       const onBack = jest.fn();
-      renderWithProvider(<QuotationForm onBack={onBack} />);
+      // 'connect' is a real marketplace-unlock tier — used here (rather than
+      // leaving this vendor session-less) so the buyer-details/download rows
+      // below actually unlock, matching this smoke test's original intent.
+      function QuotationFormConnectWrapper({ onBack }: { onBack: () => void }) {
+        const { setVendorSubscription } = useApp();
+        React.useEffect(() => {
+          setVendorSubscription('connect');
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, []);
+        return <QuotationForm onBack={onBack} />;
+      }
+      renderWithProvider(<QuotationFormConnectWrapper onBack={onBack} />);
 
       expect(screen.getByText(/Sourcing Enquiries & Quotation Tracking/i)).toBeInTheDocument();
       expect(screen.getAllByText(/RFQs Received/i)[0]).toBeInTheDocument();
@@ -288,8 +299,10 @@ describe('Vendor Screens Comprehensive Suite', () => {
         fireEvent.click(dlBtns[0]);
       }
 
-      // Open buyer contact details modal
-      const infoBtns = screen.queryAllByTitle(/Buyer Details/i);
+      // Open buyer contact details modal. Queried by role rather than title —
+      // the locked-row placeholder also carries a title containing "Buyer
+      // Details" text, but only the real button has role="button".
+      const infoBtns = screen.queryAllByRole('button', { name: /Buyer Details/i });
       if (infoBtns.length > 0) {
         fireEvent.click(infoBtns[0]);
         expect(screen.getByText(/Buyer Contact Details/i)).toBeInTheDocument();
