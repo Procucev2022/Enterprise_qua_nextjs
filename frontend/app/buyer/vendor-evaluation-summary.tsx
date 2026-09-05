@@ -39,9 +39,47 @@ export default function VendorEvaluationSummary({
   evaluationRecord,
   onBack,
 }: VendorEvaluationSummaryProps) {
-  const { vendorEvaluations, showToast, addAuditLog, addFeedItem } = useApp();
+  const { vendorEvaluations, buyerVendors, showToast, addAuditLog, addFeedItem } = useApp();
 
-  const record = evaluationRecord || vendorEvaluations[0];
+  // Unified available evaluation records from store and buyer roster
+  const availableRecords: VendorEvaluationRecord[] = React.useMemo(() => {
+    const list = [...(vendorEvaluations || [])];
+    (buyerVendors || []).forEach((bv) => {
+      if (!list.some((r) => r.vendorId === bv.id || r.vendorName?.toLowerCase() === bv.name?.toLowerCase())) {
+        list.push({
+          id: `eval-${bv.id}`,
+          vendorId: bv.id,
+          vendorName: bv.name,
+          contactPerson: bv.contactPerson,
+          email: bv.email,
+          phone: bv.phone,
+          category: bv.majorCategory,
+          submissionDate: '2026-08-18 14:30 UTC',
+          status: (bv.status as any) || 'PREFERRED ENTERPRISE SUPPLIER',
+          overallScore: bv.score || (bv.rating ? Math.round(bv.rating * 20) : 88),
+          systemAction: 'Active Roster Direct RFQ dispatch confirmed.',
+          moduleScores: {
+            commercial: { score: 4.8, maxScore: 5, weight: 25, weightedScore: 24.0, remarks: 'Payment terms Net 60 fixed rate contract approved.' },
+            technical: { score: 4.5, maxScore: 5, weight: 15, weightedScore: 13.5, remarks: 'Technical parameter compliance datasheet verified.' },
+            quality: { score: 4.6, maxScore: 5, weight: 20, weightedScore: 18.4, remarks: 'ISO 9001:2015 certificate verified.' },
+            delivery: { score: 4.4, maxScore: 5, weight: 20, weightedScore: 17.6, remarks: 'Verified average OTIF 92.4%.' },
+            financial: { score: 4.0, maxScore: 5, weight: 10, weightedScore: 8.0, remarks: 'Credit score A+; clean audit history.' },
+            governance: { score: 4.7, maxScore: 5, weight: 10, weightedScore: 9.4, remarks: 'Statutory GSTIN/PAN and ESG guidelines verified.' },
+          },
+          documents: [],
+        });
+      }
+    });
+    return list;
+  }, [vendorEvaluations, buyerVendors]);
+
+  const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
+
+  const record =
+    (selectedRecordId ? availableRecords.find((r) => r.id === selectedRecordId || r.vendorId === selectedRecordId) : null) ||
+    evaluationRecord ||
+    availableRecords[0];
+
   const [overrideScore, setOverrideScore] = useState<number | null>(null);
   const [showOverrideModal, setShowOverrideModal] = useState(false);
   const [newScoreInput, setNewScoreInput] = useState(record?.overallScore || 95);
@@ -140,6 +178,25 @@ export default function VendorEvaluationSummary({
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Vendor Selector Dropdown */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-bold text-slate-500 dark:text-gray-400">Supplier:</span>
+            <select
+              value={record.id}
+              onChange={(e) => {
+                setSelectedRecordId(e.target.value);
+                setOverrideScore(null);
+              }}
+              className="text-xs font-bold py-1 px-2.5 rounded-lg border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-slate-800 dark:text-gray-200 shadow-xs"
+            >
+              {availableRecords.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.vendorName} ({r.overallScore}%)
+                </option>
+              ))}
+            </select>
+          </div>
+
           <button
             onClick={() => setShowOverrideModal(true)}
             className="btn btn-secondary btn-sm"

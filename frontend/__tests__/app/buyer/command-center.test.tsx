@@ -427,4 +427,61 @@ describe('app/buyer/command-center.tsx', () => {
     );
     expect(screen.getByText(/Version 3 \(AI Autonomous Sourcing Plan\)/i)).toBeInTheDocument();
   });
+
+  it('filters Vendor Follow Up Status feed to only show events belonging to the buyer RFQs', () => {
+    const buyerFeed: AIBotFeedItem[] = [
+      {
+        id: 'feed-buyer-1',
+        title: 'Voice Call Connected: Slurry Pumps',
+        message: 'Vendor Apex confirmed lead time 14 days.',
+        timestamp: '10:00 AM',
+        timeAgo: '10m ago',
+        type: 'call',
+        channel: 'call',
+        status: 'completed',
+        rfqNumber: 'RFQ-2026-001',
+        recipient: 'Apex Supplies',
+      },
+      {
+        id: 'feed-other-buyer',
+        title: 'Voice Call Connected: Other Buyer RFQ',
+        message: 'Other buyer vendor answered.',
+        timestamp: '10:05 AM',
+        timeAgo: '5m ago',
+        type: 'call',
+        channel: 'call',
+        status: 'completed',
+        rfqNumber: 'RFQ-2026-999', // Not in mockRfqs
+        recipient: 'Foreign Vendor',
+      },
+    ];
+
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: mockRfqs,
+      aiFeed: buyerFeed,
+      currentMode: 'mode_1',
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      selectedRFQForDeepDive: null,
+      setSelectedRFQForDeepDive: mockSetSelectedRFQForDeepDive,
+      deepDiveModalOpen: false,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      remainingFreeRFQs: 5,
+      activeSubscription: 'version_1',
+      activeBuyerAccount: { id: 'buyer-lnt', organizationName: 'L&T' },
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      initialSetupCompleted: true,
+    });
+
+    render(
+      <CommandCenter
+        onNavigateToWizard={mockNavigateToWizard}
+        onNavigateToMatrix={mockNavigateToMatrix}
+      />
+    );
+
+    expect(screen.getByText(/Voice Call Connected: Slurry Pumps/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Voice Call Connected: Other Buyer RFQ/i)).not.toBeInTheDocument();
+  });
 });

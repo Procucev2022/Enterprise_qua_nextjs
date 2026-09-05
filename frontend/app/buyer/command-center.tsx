@@ -149,7 +149,16 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
     }
   };
 
-  const filteredFeed = aiFeed.filter((item) => {
+  const buyerRfqNumbers = new Set(rfqs.map((r) => r.rfqNumber));
+
+  const buyerScopedFeed = aiFeed.filter((item) => {
+    if (item.rfqNumber && buyerRfqNumbers.size > 0 && !buyerRfqNumbers.has(item.rfqNumber)) {
+      return false;
+    }
+    return true;
+  });
+
+  const filteredFeed = buyerScopedFeed.filter((item) => {
     if (feedChannelFilter === 'all') return true;
     if (feedChannelFilter === 'call') return item.type === 'call' || item.channel === 'call';
     if (feedChannelFilter === 'whatsapp') return item.type === 'whatsapp' || item.channel === 'whatsapp';
@@ -160,7 +169,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   });
 
   const channelFilterTabs = [
-    { key: 'all' as const, label: 'All', count: aiFeed.length, activeClass: 'bg-slate-800 dark:bg-white text-white dark:text-slate-900' },
+    { key: 'all' as const, label: 'All', count: buyerScopedFeed.length, activeClass: 'bg-slate-800 dark:bg-white text-white dark:text-slate-900' },
     { key: 'call' as const, label: 'Calls', icon: <Phone size={11} />, activeClass: 'bg-purple-600 text-white' },
     { key: 'whatsapp' as const, label: 'WA', icon: <MessageSquare size={11} />, activeClass: 'bg-emerald-600 text-white' },
     { key: 'sms' as const, label: 'SMS', icon: <Smartphone size={11} />, activeClass: 'bg-sky-600 text-white' },

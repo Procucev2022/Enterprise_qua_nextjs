@@ -114,6 +114,7 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
   it('renders fallback when no evaluation record exists', () => {
     (useApp as jest.Mock).mockReturnValue({
       vendorEvaluations: [],
+      buyerVendors: [],
       showToast: mockShowToast,
       addAuditLog: mockAddAuditLog,
       addFeedItem: mockAddFeedItem,
@@ -249,5 +250,94 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
 
     rerender(<VendorEvaluationSummary evaluationRecord={disqualifiedRecord} />);
     expect(screen.getByText('DISQUALIFIED SUPPLIER')).toBeInTheDocument();
+  });
+
+  it('allows switching evaluated vendors using top dropdown selector', () => {
+    (useApp as jest.Mock).mockReturnValue({
+      vendorEvaluations: [
+        mockEvaluationRecord,
+        {
+          ...mockEvaluationRecord,
+          id: 'eval-2',
+          vendorId: 'v-2',
+          vendorName: 'Secondary Precision Ltd.',
+          overallScore: 88,
+        },
+      ],
+      buyerVendors: [],
+      showToast: mockShowToast,
+      addAuditLog: mockAddAuditLog,
+      addFeedItem: mockAddFeedItem,
+    });
+
+    render(<VendorEvaluationSummary />);
+
+    expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
+
+    const select = screen.getByRole('combobox');
+    fireEvent.change(select, { target: { value: 'eval-2' } });
+
+    expect(screen.getByText('Secondary Precision Ltd.')).toBeInTheDocument();
+  });
+
+  it('synthesizes evaluation records when buyerVendors are provided without vendorEvaluations and with fallbacks', () => {
+    (useApp as jest.Mock).mockReturnValue({
+      vendorEvaluations: [],
+      buyerVendors: [
+        {
+          id: 'v-synth-1',
+          name: 'Synthesized Pumps Ltd.',
+          contactPerson: 'Suresh Kumar',
+          email: 'suresh@synth.com',
+          phone: '+91 99999 88888',
+          majorCategory: 'Mechanical',
+          score: 82,
+          rating: 4.1,
+          status: 'PREFERRED ENTERPRISE SUPPLIER',
+        },
+        {
+          id: 'v-synth-2',
+          name: 'Minimal Synth Ltd.',
+          contactPerson: 'Test',
+          email: 'test@minimal.com',
+          phone: '',
+          majorCategory: 'Electrical',
+          // score and rating omitted to test fallback score 88 and default status
+        },
+      ],
+      showToast: mockShowToast,
+      addAuditLog: mockAddAuditLog,
+      addFeedItem: mockAddFeedItem,
+    });
+
+    render(<VendorEvaluationSummary />);
+    expect(screen.getByText('Synthesized Pumps Ltd.')).toBeInTheDocument();
+  });
+
+  it('triggers CAPA with empty initial capaNotes', () => {
+    const recordWithoutNotes: VendorEvaluationRecord = {
+      ...mockEvaluationRecord,
+      capaNotes: '',
+      documents: [
+        {
+          id: 'doc-single',
+          name: 'SingleDoc.pdf',
+          type: 'Audit',
+          uploadDate: '2026-03-01',
+          status: 'VERIFIED',
+          url: '/docs/single.pdf',
+        },
+      ],
+    };
+
+    render(<VendorEvaluationSummary evaluationRecord={recordWithoutNotes} />);
+    fireEvent.click(screen.getByText(/Trigger CAPA Action/i));
+    expect(mockAddFeedItem).toHaveBeenCalledWith(
+      expect.stringContaining('CAPA Triggered'),
+      expect.stringContaining('Document clarification & warranty update'),
+      'escalation',
+      'RFQ-2026-00421',
+      'Apex Supplies Ltd.'
+    );
   });
 });

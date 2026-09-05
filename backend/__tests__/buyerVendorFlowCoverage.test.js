@@ -678,6 +678,112 @@ describe('Buyer Vendor Ingestion & AI Categorization Full Flow Coverage', () => 
       expect(saveResult.savedCount).toBe(2);
       expect(storeService.vendors.some((v) => v.email === 'newsupplier@sync.com')).toBe(true);
     });
+
+    test('single buyer vendor CRUD operations via storeService and HTTP routes', async () => {
+      // 1. Create single vendor
+      const created = storeService.createSingleBuyerVendor({
+        vendor: {
+          vendorCode: 'VND-SINGLE-01',
+          companyName: 'Single Supplier Ltd',
+          email: 'single@supplier.com',
+          contactPerson: 'Lead Manager',
+          phone: '+91 99999 88888',
+          address: 'Mumbai, Maharashtra',
+          majorCategory: 'Engineering Spares - Electrical',
+          minorCategories: ['Switchgears', 'Cables'],
+          rating: 94,
+        },
+        buyerOrgId: 'org-single-test',
+        requestingBuyerAccount: { orgId: 'org-single-test', organizationName: 'Tata Motors', corporateEmail: 'buyer@tatamotors.com' },
+      });
+
+      expect(created.success).toBe(true);
+      expect(created.data.vendorCode).toBe('VND-SINGLE-01');
+      const vendorId = created.data.id;
+
+      // 2. Update single vendor
+      const updated = storeService.updateBuyerVendor(vendorId, {
+        companyName: 'Single Supplier Updated Ltd',
+        rating: 96,
+        minorCategories: ['Switchgears', 'Cables', 'Transformers'],
+      }, 'org-single-test');
+
+      expect(updated.companyName).toBe('Single Supplier Updated Ltd');
+      expect(updated.rating).toBe(96);
+
+      // 3. Delete single vendor
+      const deleted = storeService.deleteBuyerVendor(vendorId, 'org-single-test');
+      expect(deleted).toBe(true);
+
+      // 4. Delete non-existent vendor
+      const notFoundDeleted = storeService.deleteBuyerVendor('non-existent-id', 'org-single-test');
+      expect(notFoundDeleted).toBe(false);
+
+      // 5. Test controller handlers for single vendor CRUD
+      const res1 = mockRes();
+      const next1 = jest.fn();
+      await buyerAccountController.createSingleBuyerVendor(
+        {
+          body: { vendorCode: 'VND-HTTP-01', companyName: 'HTTP Created Vendor', email: 'http@vendor.com' },
+          user: { role: 'buyer', orgId: 'org-test', email: 'buyer@test.com' },
+        },
+        res1,
+        next1
+      );
+      expect(res1.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      // Update handler
+      const res2 = mockRes();
+      const next2 = jest.fn();
+      await buyerAccountController.updateBuyerVendorHandler(
+        {
+          params: { id: 'VND-HTTP-01' },
+          body: { companyName: 'HTTP Updated Vendor' },
+          user: { role: 'buyer', orgId: 'org-test' },
+        },
+        res2,
+        next2
+      );
+      expect(res2.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      // Delete handler
+      const res3 = mockRes();
+      const next3 = jest.fn();
+      await buyerAccountController.deleteBuyerVendorHandler(
+        {
+          params: { id: 'VND-HTTP-01' },
+          user: { role: 'buyer', orgId: 'org-test' },
+        },
+        res3,
+        next3
+      );
+      expect(res3.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      // Delete handler 404
+      const res4 = mockRes();
+      const next4 = jest.fn();
+      await buyerAccountController.deleteBuyerVendorHandler(
+        {
+          params: { id: 'missing-999' },
+          user: { role: 'buyer', orgId: 'org-test' },
+        },
+        res4,
+        next4
+      );
+      expect(res4.status).toHaveBeenCalledWith(404);
+
+      // Unauthorized & Error branches
+      const resErr = mockRes();
+      const nextErr = jest.fn();
+      await buyerAccountController.createSingleBuyerVendor({ user: { role: 'vendor' } }, resErr, nextErr);
+      expect(resErr.status).toHaveBeenCalledWith(403);
+
+      await buyerAccountController.updateBuyerVendorHandler({ user: { role: 'vendor' } }, resErr, nextErr);
+      expect(resErr.status).toHaveBeenCalledWith(403);
+
+      await buyerAccountController.deleteBuyerVendorHandler({ user: { role: 'vendor' } }, resErr, nextErr);
+      expect(resErr.status).toHaveBeenCalledWith(403);
+    });
   });
 });
 

@@ -1201,6 +1201,153 @@ Return a SINGLE JSON object with format:
   }
 
   /**
+   * Create a single buyer vendor record directly.
+   */
+  createSingleBuyerVendor({ vendor = {}, buyerOrgId = null, requestingBuyerAccount = null }) {
+    const targetOrgId = buyerOrgId || (requestingBuyerAccount && requestingBuyerAccount.orgId) || 'org-tata-motors-001';
+    const id = vendor.id || `bv-${Date.now()}`;
+    const record = {
+      ...vendor,
+      id,
+      buyerOrgId: targetOrgId,
+      vendorCode: vendor.vendorCode || `VND-${Math.floor(1000 + Math.random() * 9000)}`,
+      companyName: vendor.companyName || vendor.name || 'New Supplier',
+      contactPerson: vendor.contactPerson || 'Procurement Contact',
+      email: vendor.email || `supplier-${Date.now()}@domain.com`,
+      phone: vendor.phone || '+91 98000 00000',
+      address: vendor.address || vendor.location || 'India',
+      gstin: vendor.gstin || vendor.gstNumber || '27AAACA0000A1Z0',
+      rating: Number.isFinite(Number(vendor.rating ?? vendor.vendorRatingScore ?? vendor.score)) ? Number(vendor.rating ?? vendor.vendorRatingScore ?? vendor.score) : 90,
+      primaryMajorCategory: vendor.primaryMajorCategory || vendor.majorCategory || 'Engineering Spares - Mechanical',
+      minorCategories: Array.isArray(vendor.minorCategories) ? vendor.minorCategories : [],
+      productLines: Array.isArray(vendor.productLines) ? vendor.productLines : [],
+      mappingStatus: vendor.mappingStatus || 'AI_MAPPED',
+      emailDispatchStatus: 'PENDING',
+      updatedAt: new Date().toISOString(),
+    };
+
+    const existingIdx = this.buyerVendors.findIndex((bv) => bv.id === id || (bv.email && bv.email.toLowerCase() === record.email.toLowerCase()));
+    if (existingIdx >= 0) {
+      this.buyerVendors[existingIdx] = { ...this.buyerVendors[existingIdx], ...record };
+    } else {
+      this.buyerVendors.unshift(record);
+    }
+    this._persistBuyerVendor(record);
+
+    // Also synchronize to this.vendors
+    const vIdx = this.vendors.findIndex((v) => v.id === id || (v.email && v.email.toLowerCase() === record.email.toLowerCase()));
+    const globalEntry = {
+      id,
+      name: record.companyName,
+      contactPerson: record.contactPerson,
+      email: record.email,
+      phone: record.phone,
+      location: record.address,
+      majorCategory: record.primaryMajorCategory,
+      minorCategories: record.minorCategories,
+      rating: Number.isFinite(Number(record.rating)) ? Number((record.rating / 20).toFixed(1)) : 4.5,
+      score: record.rating || 90,
+      source: 'buyer_manual',
+      status: 'PREFERRED ENTERPRISE SUPPLIER',
+      evaluated: true,
+      hasRecord: true,
+      isExistingInDatabase: true,
+      addedByBuyerCompany: requestingBuyerAccount ? requestingBuyerAccount.organizationName : undefined,
+    };
+    if (vIdx >= 0) {
+      this.vendors[vIdx] = { ...this.vendors[vIdx], ...globalEntry };
+    } else {
+      this.vendors.unshift(globalEntry);
+    }
+    this._persistVendor(globalEntry);
+
+    const attributed = requestingBuyerAccount || this.activeBuyerAccount;
+    this.addAuditLog({
+      userEmail: attributed ? attributed.corporateEmail : SYSTEM_ACTOR_EMAIL,
+      action: `Created single vendor ${record.companyName} (${record.vendorCode}) for Organization ${targetOrgId}.`,
+    });
+
+    return { success: true, data: record };
+  }
+
+  /**
+   * Update an existing buyer-vendor record.
+   */
+  updateBuyerVendor(id, updates = {}, buyerOrgId = null) {
+    const idx = this.buyerVendors.findIndex((bv) => bv.id === id);
+    let target = idx >= 0 ? this.buyerVendors[idx] : null;
+
+    const merged = {
+      ...(target || {}),
+      ...updates,
+      id,
+      updatedAt: new Date().toISOString(),
+    };
+    if (buyerOrgId) merged.buyerOrgId = buyerOrgId;
+
+    if (idx >= 0) {
+      this.buyerVendors[idx] = merged;
+    } else {
+      this.buyerVendors.unshift(merged);
+    }
+    this._persistBuyerVendor(merged);
+
+    // Also sync updates in this.vendors if exists
+    const vIdx = this.vendors.findIndex((v) => v.id === id || (v.email && merged.email && v.email.toLowerCase() === merged.email.toLowerCase()));
+    if (vIdx >= 0) {
+      this.vendors[vIdx] = {
+        ...this.vendors[vIdx],
+        name: merged.companyName || this.vendors[vIdx].name,
+        contactPerson: merged.contactPerson || this.vendors[vIdx].contactPerson,
+        email: merged.email || this.vendors[vIdx].email,
+        phone: merged.phone || this.vendors[vIdx].phone,
+        location: merged.address || this.vendors[vIdx].location,
+        majorCategory: merged.primaryMajorCategory || merged.majorCategory || this.vendors[vIdx].majorCategory,
+        minorCategories: merged.minorCategories || this.vendors[vIdx].minorCategories,
+        score: merged.rating || this.vendors[vIdx].score,
+        rating: merged.rating ? Number((merged.rating / 20).toFixed(1)) : this.vendors[vIdx].rating,
+      };
+      this._persistVendor(this.vendors[vIdx]);
+    }
+
+    this.addAuditLog({
+      userEmail: this.activeBuyerAccount ? this.activeBuyerAccount.corporateEmail : SYSTEM_ACTOR_EMAIL,
+      action: `Updated buyer-vendor record ID ${id} (${merged.companyName || 'Vendor'}).`,
+    });
+
+    return merged;
+  }
+
+  /**
+   * Delete a buyer vendor record.
+   */
+  deleteBuyerVendor(id, buyerOrgId = null) {
+    const idx = this.buyerVendors.findIndex((bv) => bv.id === id && (!buyerOrgId || bv.buyerOrgId === buyerOrgId));
+    if (idx === -1) {
+      const altIdx = this.buyerVendors.findIndex((bv) => bv.id === id);
+      if (altIdx === -1) return false;
+      const removed = this.buyerVendors.splice(altIdx, 1)[0];
+      this._removeBuyerVendor(id);
+      this.vendors = this.vendors.filter((v) => v.id !== id);
+      this._removeVendor(id);
+      this.addAuditLog({
+        userEmail: this.activeBuyerAccount ? this.activeBuyerAccount.corporateEmail : SYSTEM_ACTOR_EMAIL,
+        action: `Deleted buyer-vendor record ID ${id} (${removed.companyName || ''}).`,
+      });
+      return true;
+    }
+    const removed = this.buyerVendors.splice(idx, 1)[0];
+    this._removeBuyerVendor(id);
+    this.vendors = this.vendors.filter((v) => v.id !== id);
+    this._removeVendor(id);
+    this.addAuditLog({
+      userEmail: this.activeBuyerAccount ? this.activeBuyerAccount.corporateEmail : SYSTEM_ACTOR_EMAIL,
+      action: `Deleted buyer-vendor record ID ${id} (${removed.companyName || ''}).`,
+    });
+    return true;
+  }
+
+  /**
    * Dispatch Onboarding & Category Notification Emails to Vendors
    */
   dispatchBuyerVendorEmails({ buyerVendors = [], buyerOrgId = null, requestingBuyerAccount = null }) {

@@ -217,6 +217,54 @@ function dispatchBuyerVendorEmails(req, res, next) {
   }
 }
 
+function createSingleBuyerVendor(req, res, next) {
+  try {
+    if (!assertBuyerAccountRole(req, res)) return;
+    const vendor = req.body;
+    const buyerOrgId = req.user?.orgId || req.body.buyerOrgId || null;
+    const requestingBuyerAccount = storeService.getBuyerAccountByEmail(req.user.email);
+    const result = storeService.createSingleBuyerVendor({
+      vendor,
+      buyerOrgId,
+      requestingBuyerAccount,
+    });
+    res.json(result);
+  } catch (err) {
+    logger.error('Error creating single buyer vendor', err, 'BUYER_ACCOUNT_CONTROLLER');
+    next(err);
+  }
+}
+
+function updateBuyerVendorHandler(req, res, next) {
+  try {
+    if (!assertBuyerAccountRole(req, res)) return;
+    const { id } = req.params;
+    const updates = req.body;
+    const buyerOrgId = req.user?.orgId || req.body.buyerOrgId || null;
+    const updated = storeService.updateBuyerVendor(id, updates, buyerOrgId);
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    logger.error('Error updating buyer vendor', err, 'BUYER_ACCOUNT_CONTROLLER');
+    next(err);
+  }
+}
+
+function deleteBuyerVendorHandler(req, res, next) {
+  try {
+    if (!assertBuyerAccountRole(req, res)) return;
+    const { id } = req.params;
+    const buyerOrgId = req.user?.orgId || null;
+    const deleted = storeService.deleteBuyerVendor(id, buyerOrgId);
+    if (!deleted) {
+      return res.status(404).json({ success: false, error: `Vendor ${id} not found.` });
+    }
+    res.json({ success: true, message: `Vendor ${id} deleted successfully.` });
+  } catch (err) {
+    logger.error('Error deleting buyer vendor', err, 'BUYER_ACCOUNT_CONTROLLER');
+    next(err);
+  }
+}
+
 module.exports = {
   getBuyerAccounts,
   getActiveAccount,
@@ -229,5 +277,8 @@ module.exports = {
   aiCategorizeVendors,
   saveBuyerVendors,
   dispatchBuyerVendorEmails,
+  createSingleBuyerVendor,
+  updateBuyerVendorHandler,
+  deleteBuyerVendorHandler,
 };
 

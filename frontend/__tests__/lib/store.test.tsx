@@ -845,6 +845,16 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       contextValue.setVendorSelectedCategories(['Cat B']);
     });
 
+    // 7.5 Update Buyer Vendor
+    act(() => {
+      contextValue.updateBuyerVendor(addedVendor!.id, {
+        name: 'Precision Hydro Pumps Updated',
+        contactPerson: 'Karan Shah (Director)',
+      });
+      contextValue.updateBuyerVendor('non-existent-vendor-id', { name: 'Ghost' });
+    });
+    expect(contextValue.buyerVendors.find((v: VendorEntry) => v.id === addedVendor!.id)?.name).toBe('Precision Hydro Pumps Updated');
+
     // 8. Delete Buyer Vendor
     act(() => {
       contextValue.deleteBuyerVendor(addedVendor!.id);

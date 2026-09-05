@@ -1,4 +1,5 @@
 const storeService = require('../src/services/storeService');
+const pool = require('../src/db/pool');
 
 describe('Store Service — remaining branch coverage', () => {
   // A fresh instance needs no arranging: every collection starts empty, so the
@@ -615,6 +616,89 @@ describe('Store Service — remaining branch coverage', () => {
 
       isConfiguredSpy.mockRestore();
       generateJsonSpy.mockRestore();
+    });
+
+    test('covers single buyer vendor CRUD branches in storeService', () => {
+      // Create without parameters to test defaults
+      const defRes = storeService.createSingleBuyerVendor({});
+      expect(defRes.success).toBe(true);
+      expect(defRes.data.companyName).toBe('New Supplier');
+
+      // Create existing vendor to hit existing index branch
+      const existingRes = storeService.createSingleBuyerVendor({
+        vendor: { id: defRes.data.id, companyName: 'Re-Created Supplier', rating: 95 },
+      });
+      expect(existingRes.success).toBe(true);
+      expect(existingRes.data.companyName).toBe('Re-Created Supplier');
+
+      // Update without buyerOrgId and with missing fields
+      const upd = storeService.updateBuyerVendor(defRes.data.id, { address: 'New Address' });
+      expect(upd.address).toBe('New Address');
+
+      // Update non-existing vendor to hit insert branch
+      const newUpd = storeService.updateBuyerVendor('brand-new-vendor-id', { companyName: 'Created via Update' }, 'org-custom');
+      expect(newUpd.companyName).toBe('Created via Update');
+
+      // Delete by id with matching buyerOrgId
+      const del1 = storeService.deleteBuyerVendor(defRes.data.id, 'org-tata-motors-001');
+      expect(del1).toBe(true);
+
+      // Delete by id alone without matching buyerOrgId
+      const del2 = storeService.deleteBuyerVendor('brand-new-vendor-id', 'wrong-org');
+      expect(del2).toBe(true);
+    });
+
+    test('refreshInfrastructureHealth covers all pool health states and array index replacement', async () => {
+      // 1. Configured & Connected
+      jest.spyOn(pool, 'checkDatabaseHealth').mockResolvedValueOnce({
+        isConfigured: true,
+        isConnected: true,
+        providerLabel: 'Neon PostgreSQL',
+        database: 'procucev_prod',
+        latencyMs: 42,
+        poolStatus: 'Pool Active',
+        userCount: 10,
+        vendorCount: 20,
+        rfqCount: 15,
+      });
+
+      const h1 = await storeService.refreshInfrastructureHealth();
+      expect(h1.isConnected).toBe(true);
+      expect(storeService.azureHealth[0].status).toBe('ONLINE');
+
+      // 2. Configured & Disconnected with index update
+      jest.spyOn(pool, 'checkDatabaseHealth').mockResolvedValueOnce({
+        isConfigured: true,
+        isConnected: false,
+        providerLabel: 'Neon PostgreSQL',
+        database: 'procucev_prod',
+        errorMessage: 'Connection timeout',
+      });
+
+      const h2 = await storeService.refreshInfrastructureHealth();
+      expect(h2.isConnected).toBe(false);
+      expect(storeService.azureHealth[0].status).toBe('UNREACHABLE');
+
+      // 3. Not Configured with new array entry
+      storeService.azureHealth = [];
+      jest.spyOn(pool, 'checkDatabaseHealth').mockResolvedValueOnce({
+        isConfigured: false,
+        isConnected: false,
+      });
+
+      const h3 = await storeService.refreshInfrastructureHealth();
+      expect(h3.isConfigured).toBe(false);
+      expect(storeService.azureHealth[0].status).toBe('NOT_CONFIGURED');
+    });
+
+    test('categorizeVendorsWithAI covers generic mechanical fallback branch', async () => {
+      const res = await storeService.categorizeVendorsWithAI({
+        vendorMaster: [{ vendorCode: 'GEN-MECH-01', companyName: 'Generic Spares Co' }],
+        poDump: [{ vendorIdentifier: 'GEN-MECH-01', itemName: 'Pressure System 100 psi', totalSpend: 25000 }],
+      });
+
+      expect(res.vendors[0].primaryMajorCategory).toBe('Engineering Spares - Mechanical');
+      expect(res.vendors[0].minorCategories).toEqual(['Pumps & Accessories', 'Hoses, Valves & Fittings']);
     });
   });
 });
