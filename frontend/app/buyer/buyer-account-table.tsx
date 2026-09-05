@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { BuyerAccount, SourcingMode } from '@/lib/types';
-import categoriesData from '@/lib/categories.json';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import { SOURCING_MODES, formatCurrency } from '@/lib/constants';
 import {
   Building2,
@@ -46,6 +46,12 @@ export default function BuyerAccountTable() {
     alignActiveBuyerAccount,
     importPublicBuyerDatabase,
     showToast,
+    // The category master, read from the database. Empty until it loads, and
+    // empty for good if the read failed — there is no bundled copy to fall back
+    // to, because a major category selected here becomes this buyer's procurement
+    // scope and is used to route RFQs.
+    categoryTaxonomy,
+    categoryTaxonomyError,
   } = useApp();
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -946,7 +952,12 @@ export default function BuyerAccountTable() {
                   Supported Procurement Major Categories:
                 </label>
                 <div className="flex flex-wrap gap-1.5 max-h-[140px] overflow-y-auto p-2 bg-slate-50 dark:bg-gray-800/40 rounded-xl border border-slate-200 dark:border-gray-800">
-                  {categoriesData.map((cat) => {
+                  {categoryTaxonomy.length === 0 && (
+                    <p className="text-[10px] font-semibold text-amber-700 dark:text-amber-400">
+                      {categoryTaxonomyError || UI_STRINGS.buyerProfile.taxonomyEmpty}
+                    </p>
+                  )}
+                  {categoryTaxonomy.map((cat) => {
                     const isSelected = selectedMajors.includes(cat.majorCategory);
                     return (
                       <button

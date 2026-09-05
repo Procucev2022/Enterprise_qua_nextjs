@@ -1,42 +1,48 @@
 // ==============================================================================
-// IDENTITY QUERIES (shared Procucev MySQL schema)
+// IDENTITY QUERIES (Neon PostgreSQL)
 // ==============================================================================
 // Read/write helpers for the `user`, `organization`, `role`, `org_types` and
-// `master_status` tables that the Java p2pservices application owns.
+// `master_status` tables in schema.sql.
 //
-// Schema facts this module depends on (verified against development_gmtbfs):
-//   - `user.uuid` is application-assigned (no AUTO_INCREMENT).
-//   - `user.username` holds the login email; `user.email` is a separate column.
-//   - Passwords are stored in PLAINTEXT (the Java app uses NoOpPasswordEncoder),
-//     so verification is a constant-time comparison, not a hash comparison.
-//   - `bit(1)` columns (is_active, is_approved, self_client, ...) read back as
-//     Buffers and must be written as 0/1.
-//   - There is NO unique index on `user.username`, so duplicate-email guarding
-//     has to happen in application code.
+// These tables previously lived in a shared MySQL schema owned by another
+// application, which constrained the storage format in ways this file no longer
+// has to honour. What changed with the move to Postgres:
+//   - `bit(1)` columns read back as Buffers and needed converting on every row.
+//     They are real BOOLEANs now, so the conversion helper is gone.
+//   - `now(6)` became `now()`, and DATETIME became TIMESTAMPTZ, so a stored
+//     instant carries its zone instead of being UTC by convention only.
+//   - `user` is a reserved word in Postgres and is quoted as "user".
+//
+// What deliberately did NOT change:
+//   - `user.uuid` is still application-assigned, because existing ids are
+//     referenced by issued session tokens and by every org_uuid/role_uuid link.
+//   - Passwords are still stored as submitted, so accounts migrated from the
+//     previous schema keep working. Verification is therefore a constant-time
+//     comparison, not a hash comparison. See verifyStoredPassword.
+//   - There is no unique index on `user.username` — the migrated data contains
+//     repeated login emails — so duplicate-email guarding stays in application
+//     code and every read resolves a single row explicitly.
 // ==============================================================================
 
 const crypto = require('crypto');
-const identityPoolModule = require('./identityPool');
+const pool = require('./pool');
 const {
   IDENTITY_ROLE_MAP,
   IDENTITY_MASTER_DATA,
   IDENTITY_PHONE_CONFIG,
 } = require('../config/constants');
 
-const { bitToBoolean } = identityPoolModule;
-
 /**
- * Normalise a phone number to the form the shared schema stores, so login
- * lookups match byte-for-byte.
- *
- * This is a direct port of ProcUserServiceImpl.normalizePhone in the Java
- * p2pservices app, which owns the `user.phone` column. Any divergence would
- * silently break sign-in for accounts that service created, so the branch order
- * and the fallback are deliberately identical:
+ * Normalise a phone number to the form the `user.phone` column stores, so login
+ * lookups match byte-for-byte:
  *   - keep digits only, then strip leading zeros
  *   - exactly 10 digits            -> +91XXXXXXXXXX (assumed Indian mobile)
  *   - 12 digits beginning with 91  -> +91 + the trailing 10
  *   - anything else                -> '+' + the digits, untouched
+ *
+ * The branch order and the fallback are load-bearing: the stored values were
+ * written by this exact algorithm, so any divergence silently stops matching
+ * existing accounts.
  */
 function normalizePhone(raw) {
   if (raw === null || raw === undefined) return '';
@@ -61,7 +67,7 @@ function normalizePhone(raw) {
 }
 
 /**
- * Translate a shared-schema role name into one of the four application roles.
+ * Translate a stored role name into one of the four application roles.
  * Returns null for roles the workspace has no screens for.
  */
 function mapRoleName(roleName) {
@@ -70,9 +76,10 @@ function mapRoleName(roleName) {
 }
 
 /**
- * Constant-time plaintext password comparison. The shared schema stores
- * passwords unhashed, so this compares the submitted value directly while
- * avoiding a length-leaking early return.
+ * Constant-time password comparison.
+ *
+ * The stored value is the password as submitted at registration, so this compares
+ * directly while avoiding a length-leaking early return.
  */
 function verifyStoredPassword(submitted, stored) {
   if (typeof submitted !== 'string' || typeof stored !== 'string') return false;
@@ -81,6 +88,11 @@ function verifyStoredPassword(submitted, stored) {
   const b = Buffer.from(stored, 'utf8');
   if (a.length !== b.length) return false;
   return crypto.timingSafeEqual(a, b);
+}
+
+/** Coerce a Postgres boolean to a plain boolean, tolerating null. */
+function flag(value) {
+  return value === true;
 }
 
 /**
@@ -98,10 +110,10 @@ function mapRowToUser(row) {
     orgName: row.organization_name || '',
     password: row.password,
     mobile: row.phone || '',
-    status: bitToBoolean(row.is_active) ? 'ACTIVE' : 'INACTIVE',
-    isActive: bitToBoolean(row.is_active),
-    isApproved: bitToBoolean(row.is_approved),
-    isSelfClient: bitToBoolean(row.self_client),
+    status: flag(row.is_active) ? 'ACTIVE' : 'INACTIVE',
+    isActive: flag(row.is_active),
+    isApproved: flag(row.is_approved),
+    isSelfClient: flag(row.self_client),
     verificationStatus: row.verification_status || null,
   };
 }
@@ -110,69 +122,92 @@ const USER_SELECT = `
   select u.uuid, u.username, u.email, u.password, u.full_name, u.first_name,
          u.phone, u.is_active, u.is_approved, u.self_client, u.verification_status,
          u.org_uuid, r.role_name, o.organization_name
-    from \`user\` u
+    from "user" u
     left join role r on r.uuid = u.role_uuid
     left join organization o on o.uuid = u.org_uuid
 `;
 
 /**
- * Look up a single active account by login email.
- * Prefers an active row, since the shared schema permits duplicate usernames.
+ * Look up a single account by login email.
+ *
+ * Prefers an active row, then the most recently created, because repeated login
+ * emails exist in the data and a bare `limit 1` would otherwise return an
+ * arbitrary one of them.
  */
 async function findUserByEmail(email) {
   if (!email) return null;
-  const rows = await identityPoolModule.identityQuery(
-    `${USER_SELECT} where lower(u.username) = ? order by u.is_active desc, u.created_ts desc limit 1`,
+  const result = await pool.rows(
+    `${USER_SELECT} where lower(u.username) = $1 order by u.is_active desc, u.created_ts desc limit 1`,
     [String(email).trim().toLowerCase()]
   );
-  return mapRowToUser(rows[0]);
+  return mapRowToUser(result[0]);
 }
 
 /**
- * Look up an account by email + phone, matching the Java `/authenticate` contract.
+ * Look up an account by email + phone together.
+ *
+ * Sign-in narrows to the pair because email alone can match more than one row,
+ * and because it lets a mistyped mobile number be reported as such instead of
+ * failing later as a bad password.
  */
 async function findUserByEmailAndPhone(email, phone) {
   if (!email || !phone) return null;
-  const rows = await identityPoolModule.identityQuery(
-    `${USER_SELECT} where lower(u.username) = ? and u.phone = ? order by u.is_active desc limit 1`,
+  const result = await pool.rows(
+    `${USER_SELECT} where lower(u.username) = $1 and u.phone = $2 order by u.is_active desc, u.created_ts desc limit 1`,
     [String(email).trim().toLowerCase(), normalizePhone(phone)]
   );
-  return mapRowToUser(rows[0]);
+  return mapRowToUser(result[0]);
 }
 
 /**
  * List accounts for the admin users screen.
  */
 async function listUsers(limit = 200) {
-  const rows = await identityPoolModule.identityQuery(
-    `${USER_SELECT} where u.is_active = 1 order by u.created_ts desc limit ?`,
+  const result = await pool.rows(
+    `${USER_SELECT} where u.is_active = true order by u.created_ts desc limit $1`,
     [Number(limit)]
   );
-  return rows.map(mapRowToUser).filter((u) => !!u.email);
+  return result.map(mapRowToUser).filter((u) => !!u.email);
 }
+
+// Master tables reachable by resolveMasterUuid, mapped to the column each one is
+// looked up by. An allow-list rather than free interpolation: the table and
+// column names cannot be parameterised, so restricting them to these three pairs
+// is what keeps the identifier out of caller control.
+const MASTER_TABLES = {
+  role: 'role_name',
+  org_types: 'type_name',
+  master_status: 'status',
+};
 
 /**
  * Resolve a master-data uuid by its natural key, e.g. the ClientInitiator role.
  */
 async function resolveMasterUuid(table, column, value, extraActiveFilter = false) {
-  const activeClause = extraActiveFilter ? ' and is_active = 1' : '';
-  const rows = await identityPoolModule.identityQuery(
-    `select uuid from \`${table}\` where ${column} = ?${activeClause} limit 1`,
+  if (!Object.prototype.hasOwnProperty.call(MASTER_TABLES, table)) {
+    throw new Error(`Unknown master-data table "${table}".`);
+  }
+  if (MASTER_TABLES[table] !== column) {
+    throw new Error(`Column "${column}" is not a lookup key for master-data table "${table}".`);
+  }
+  const activeClause = extraActiveFilter ? ' and is_active = true' : '';
+  const result = await pool.rows(
+    `select uuid from "${table}" where ${column} = $1${activeClause} limit 1`,
     [value]
   );
-  return rows[0] ? rows[0].uuid : null;
+  return result[0] ? result[0].uuid : null;
 }
 
 /**
- * Build the USR-prefixed unique_id format the shared schema uses.
+ * Build the USR-prefixed unique_id format the schema uses.
  */
 function buildUniqueId() {
   return `USR${Date.now()}${crypto.randomInt(1000000000, 9999999999)}`;
 }
 
 /**
- * Build the companyId format the Java app generates: first 3 letters of the
- * organisation name, uppercased, plus a yyMMddHHmmss stamp.
+ * Build the companyId format: first 3 letters of the organisation name,
+ * uppercased, plus a yyMMddHHmmss stamp.
  */
 function buildCompanyId(organizationName) {
   const prefix = String(organizationName || 'ORG')
@@ -189,15 +224,15 @@ function buildCompanyId(organizationName) {
 }
 
 /**
- * Create a buyer account (organization + user) in the shared schema.
+ * Create a buyer account (organization + user).
  *
- * Mirrors SelfRegistrationServiceImpl.setUserDetails in the Java service:
  * ClientInitiator role, CLIENT org type, CLIENT_NEW status. The account is
- * written as active and pre-approved so it can sign in immediately, since the
- * Java login path blocks self-registered accounts until an admin approves them.
+ * written active and pre-approved so it can sign in immediately.
  *
  * Runs in a single transaction and reuses an existing CLIENT organisation when
- * one already matches the requested name.
+ * one already matches the requested name, so two people registering under the
+ * same company land in the same organisation rather than creating a duplicate
+ * that would split their RFQ portfolio in two.
  */
 async function insertBuyerAccount({
   email,
@@ -207,8 +242,8 @@ async function insertBuyerAccount({
   organizationName,
   createdBy = 'enterprise-workspace',
 }) {
-  if (!identityPoolModule.pool) {
-    throw new Error('Identity database is not configured.');
+  if (!pool.pool) {
+    throw new Error(pool.NOT_CONFIGURED_MESSAGE);
   }
   if (!email || !password || !phone) {
     throw new Error('email, password and phone are required to create a buyer account.');
@@ -234,25 +269,24 @@ async function insertBuyerAccount({
   if (!orgTypeUuid) throw new Error(`Org type "${IDENTITY_MASTER_DATA.BUYER_ORG_TYPE}" not found.`);
   if (!statusUuid) throw new Error(`Status "${IDENTITY_MASTER_DATA.BUYER_STATUS}" not found.`);
 
-  const conn = await identityPoolModule.pool.getConnection();
-  try {
-    await conn.beginTransaction();
-
-    const [orgRows] = await conn.query(
-      'select uuid from organization where organization_name = ? and org_type_uuid = ? limit 1',
+  return pool.withTransaction(async (client) => {
+    const orgLookup = await client.query(
+      'select uuid from organization where organization_name = $1 and org_type_uuid = $2 limit 1',
       [orgName, orgTypeUuid]
     );
 
-    let orgUuid = orgRows[0] ? orgRows[0].uuid : null;
+    const organizationReused = orgLookup.rows.length > 0;
+    let orgUuid = organizationReused ? orgLookup.rows[0].uuid : null;
+
     if (!orgUuid) {
       orgUuid = crypto.randomUUID();
-      await conn.query(
+      await client.query(
         `insert into organization
            (uuid, organization_name, email, organization_phonenumber, contact_person,
             org_type_uuid, client_status_uuid, self_client, source_type, company_id,
             gmt_name, bfs_name, is_india, upgrade_days, rfq_credits, rfq_used_count,
             quote_submitted, created_by, created_ts, last_modified_by, last_modified_ts)
-         values (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, 1, 0, 0, 0, 0, ?, now(6), ?, now(6))`,
+         values ($1, $2, $3, $4, $5, $6, $7, true, $8, $9, $10, $11, true, 0, 0, 0, 0, $12, now(), $13, now())`,
         [
           orgUuid,
           orgName,
@@ -272,15 +306,17 @@ async function insertBuyerAccount({
     }
 
     const userUuid = crypto.randomUUID();
-    await conn.query(
-      `insert into \`user\`
+    await client.query(
+      `insert into "user"
          (uuid, username, email, password, full_name, first_name, phone,
           org_uuid, role_uuid, client_status_uuid, unique_id,
           is_active, self_client, is_approved, reset_password,
           is_web_app, is_whats_app, is_bot,
           source_type, verification_status, created_by, created_ts,
           last_modified_by, last_modified_ts)
-       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, 1, 0, 1, 0, 0, ?, ?, ?, now(6), ?, now(6))`,
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+               true, false, true, false, true, false, false,
+               $12, $13, $14, now(), $15, now())`,
       [
         userUuid,
         normalizedEmail,
@@ -300,8 +336,6 @@ async function insertBuyerAccount({
       ]
     );
 
-    await conn.commit();
-
     return {
       created: true,
       user: {
@@ -314,32 +348,27 @@ async function insertBuyerAccount({
         mobile: normalizedPhone,
         status: 'ACTIVE',
       },
-      organizationReused: !!orgRows[0],
+      organizationReused,
     };
-  } catch (err) {
-    await conn.rollback();
-    throw err;
-  } finally {
-    conn.release();
-  }
+  });
 }
 
 /**
- * Update an account password in the shared schema (stored plaintext, matching
- * the Java NoOpPasswordEncoder contract).
+ * Update an account password.
  */
 async function updateUserPassword(email, newPassword) {
-  const rows = await identityPoolModule.identityQuery(
-    'update `user` set password = ?, last_modified_ts = now(6) where lower(username) = ?',
+  const result = await pool.query(
+    'update "user" set password = $1, last_modified_ts = now() where lower(username) = $2',
     [newPassword, String(email).trim().toLowerCase()]
   );
-  return rows.affectedRows > 0;
+  return (result.rowCount || 0) > 0;
 }
 
 module.exports = {
   normalizePhone,
   mapRoleName,
   verifyStoredPassword,
+  flag,
   mapRowToUser,
   findUserByEmail,
   findUserByEmailAndPhone,
@@ -349,4 +378,6 @@ module.exports = {
   buildCompanyId,
   insertBuyerAccount,
   updateUserPassword,
+  MASTER_TABLES,
+  USER_SELECT,
 };

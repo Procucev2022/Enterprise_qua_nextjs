@@ -161,7 +161,8 @@ const schema = buildSchema(`
   }
 
   """
-  Health of the shared MySQL identity database that backs authentication.
+  Health of the PostgreSQL database, which backs authentication and every domain
+  record. Counts come from one round trip, so they are consistent with each other.
   """
   type DBHealthStatus {
     isConfigured: Boolean!
@@ -171,6 +172,8 @@ const schema = buildSchema(`
     poolStatus: String!
     database: String
     userCount: Int
+    vendorCount: Int
+    rfqCount: Int
     latencyMs: Int
     errorMessage: String
     timestamp: String

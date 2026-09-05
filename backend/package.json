@@ -10,9 +10,9 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage && node scripts/verify-coverage.js",
     "check:coverage": "node scripts/verify-coverage.js",
-    "seed": "node src/db/seed.js",
     "db:migrate": "node src/db/migrate.js",
-    "db:view": "node src/db/view.js"
+    "db:view": "node src/db/view.js",
+    "create-buyer": "node scripts/create-buyer.js"
   },
   "keywords": [
     "procurement",
@@ -32,7 +32,6 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "graphql": "^17.0.2",
-    "mysql2": "^3.24.2",
     "nodemailer": "^9.1.0",
     "pg": "^8.13.1"
   },

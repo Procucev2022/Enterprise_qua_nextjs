@@ -3,7 +3,8 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
-import categoriesData from '@/lib/categories.json';
+import { findMajorForMinor, getMinorCategories } from '@/lib/categoryTaxonomy';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import {
   Truck,
   ShieldCheck,
@@ -36,6 +37,9 @@ export default function VendorProfilePage() {
     vendorSelectedCategories,
     saveVendorProfileCategories,
     currentUserSession,
+    // The category master, read from the database rather than a bundled copy.
+    categoryTaxonomy,
+    categoryTaxonomyError,
   } = useApp();
 
   const MAX_CATEGORIES = 10;
@@ -85,13 +89,13 @@ export default function VendorProfilePage() {
     const majors: string[] = [];
     const minorMap: Record<string, string[]> = {};
     flat.forEach((minorName) => {
-      const cat = categoriesData.find((c) => c.minorCategories.includes(minorName));
-      if (!cat) return;
-      if (!minorMap[cat.majorCategory]) {
-        minorMap[cat.majorCategory] = [];
-        majors.push(cat.majorCategory);
+      const major = findMajorForMinor(minorName);
+      if (!major) return;
+      if (!minorMap[major]) {
+        minorMap[major] = [];
+        majors.push(major);
       }
-      minorMap[cat.majorCategory].push(minorName);
+      minorMap[major].push(minorName);
     });
     return { majors, minorMap };
   };
@@ -174,7 +178,7 @@ export default function VendorProfilePage() {
       });
     } else {
       setSelectedMajor((prev) => [...prev, majorName]);
-      const allMinor = categoriesData.find((c) => c.majorCategory === majorName)?.minorCategories || [];
+      const allMinor = getMinorCategories(majorName);
       const remainingSlots = MAX_CATEGORIES - totalSelectedMinorCount;
       if (remainingSlots <= 0) {
         showToast('Limit Reached', `Maximum ${MAX_CATEGORIES} categories allowed. Please uncheck some categories first.`, 'warning');
@@ -219,7 +223,7 @@ export default function VendorProfilePage() {
   };
 
   // Filtered Categories based on search
-  const filteredCategories = categoriesData.filter((cat) => {
+  const filteredCategories = categoryTaxonomy.filter((cat) => {
     if (!searchTerm.trim()) return true;
     const term = searchTerm.toLowerCase();
     const matchesMajor = cat.majorCategory.toLowerCase().includes(term);
@@ -795,6 +799,11 @@ export default function VendorProfilePage() {
 
           {/* Categories Selector Grid */}
           <div className="space-y-3 pt-1">
+            {categoryTaxonomy.length === 0 && (
+              <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">
+                {categoryTaxonomyError || UI_STRINGS.buyerProfile.taxonomyEmpty}
+              </p>
+            )}
             {filteredCategories.map((cat) => {
               const isMajorSelected = selectedMajor.includes(cat.majorCategory);
               const selectedMinorsInCat = selectedMinor[cat.majorCategory] || [];

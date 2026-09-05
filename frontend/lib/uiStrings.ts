@@ -801,6 +801,15 @@ export const UI_STRINGS = {
     serverErrorFallback:
       'The server rejected the request but did not explain why. Please retry, and contact support if it persists.',
 
+    // Shown wherever a category picker has no options. There is no bundled copy of
+    // the category master any more, so an unreadable master means no categories
+    // can be offered — stating that is safer than offering a list that may not
+    // match what RFQ routing and the saved scope are actually resolved against.
+    taxonomyUnavailable:
+      'The procurement category list could not be loaded, so no categories can be offered right now. Reload the page, and contact your Procucev administrator if it persists.',
+    taxonomyEmpty:
+      'No procurement categories are configured yet. Ask your Procucev administrator to load the category master before selecting categories.',
+
     // Field-level validation, surfaced through the existing toast so no new UI
     // is introduced.
     companyNameRequired: 'Legal Entity Name is required before the profile can be saved.',

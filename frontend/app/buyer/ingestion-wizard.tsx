@@ -22,7 +22,7 @@ import type {
   RFQExtractionResult,
   RFQItem,
 } from '@/lib/types';
-import categoriesData from '@/lib/categories.json';
+import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import {
   UploadCloud,
   FileSpreadsheet,
@@ -48,7 +48,11 @@ import {
 
 const EXTRACTION = UI_STRINGS.rfqExtraction;
 const WIZARD_STEPS = EXTRACTION.steps;
-const TAXONOMY_MAJORS = categoriesData.map((cat) => cat.majorCategory);
+// Read at render time from the taxonomy registry the store populates from the
+// database, rather than captured at module scope from a bundled JSON file.
+function taxonomyMajors(): string[] {
+  return getMajorCategories();
+}
 /** Mirrors RFQ_ATTACHMENT_CONFIG.MAX_PER_RFQ on the server. */
 const MAX_ATTACHMENTS = 10;
 
@@ -306,7 +310,7 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
           // The minor category belongs to the major, so changing one invalidates
           // the other. Falls back to '' rather than undefined so a row with no
           // major reads as unset and the Step 3 gate can see it.
-          const validMinors = categoriesData.find((c) => c.majorCategory === value)?.minorCategories ?? [];
+          const validMinors = getMinorCategories(value);
           updated.minorCategory = validMinors[0] ?? '';
           updated.category = value;
         }
@@ -1141,13 +1145,13 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                 {entities.map((item) => {
                   const currentMajor = item.majorCategory;
                   const taxonomyMinors =
-                    categoriesData.find((c) => c.majorCategory === currentMajor)?.minorCategories ?? [];
+                    getMinorCategories(currentMajor);
 
                   // The classifier's documented fallback pair sits outside the Excel
                   // taxonomy, so the value actually held in state is always offered as
                   // an option. Without it the select would render a different category
                   // from the one the RFQ carries, and the minor list would be empty.
-                  const majorOptions = withCurrentValue(TAXONOMY_MAJORS, currentMajor);
+                  const majorOptions = withCurrentValue(taxonomyMajors(), currentMajor);
                   const availableMinors = withCurrentValue(taxonomyMinors, item.minorCategory);
 
                   return (

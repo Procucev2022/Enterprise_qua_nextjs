@@ -1,6 +1,6 @@
-const domainPool = require('../src/db/pool');
+const dbPool = require('../src/db/pool');
 
-describe('Domain pool (Neon PostgreSQL — vendors + RFQs)', () => {
+describe('Database pool (Neon PostgreSQL)', () => {
   afterEach(() => {
     jest.restoreAllMocks();
   });
@@ -8,11 +8,11 @@ describe('Domain pool (Neon PostgreSQL — vendors + RFQs)', () => {
   // ── Configuration resolution ──────────────────────────────────────────────
   describe('resolveConfig', () => {
     test('returns null when DATABASE_URL is unset', () => {
-      expect(domainPool.resolveConfig({})).toBeNull();
+      expect(dbPool.resolveConfig({})).toBeNull();
     });
 
     test('builds a config with sensible defaults', () => {
-      const config = domainPool.resolveConfig({
+      const config = dbPool.resolveConfig({
         DATABASE_URL: 'postgres://user:pass@ep.neon.tech/db?sslmode=require',
       });
 
@@ -20,36 +20,39 @@ describe('Domain pool (Neon PostgreSQL — vendors + RFQs)', () => {
         connectionString: 'postgres://user:pass@ep.neon.tech/db?sslmode=require',
         max: 10,
         connectionTimeoutMillis: 5000,
+        idleTimeoutMillis: 10000,
       });
       expect(config.ssl).toEqual({ rejectUnauthorized: true });
     });
 
     test('honours explicit pool size and timeout overrides', () => {
-      const config = domainPool.resolveConfig({
+      const config = dbPool.resolveConfig({
         DATABASE_URL: 'postgres://x/y',
         DATABASE_POOL_MAX: '20',
         DATABASE_CONNECT_TIMEOUT_MS: '9000',
+        DATABASE_IDLE_TIMEOUT_MS: '2500',
       });
 
       expect(config.max).toBe(20);
       expect(config.connectionTimeoutMillis).toBe(9000);
+      expect(config.idleTimeoutMillis).toBe(2500);
     });
 
     test.each(['postgres://user:pass@localhost:5432/db', 'postgres://user:pass@127.0.0.1:5432/db'])(
       'disables SSL for a local connection string (%s)',
       (connectionString) => {
-        expect(domainPool.resolveConfig({ DATABASE_URL: connectionString }).ssl).toBe(false);
+        expect(dbPool.resolveConfig({ DATABASE_URL: connectionString }).ssl).toBe(false);
       }
     );
   });
 
   describe('createPool', () => {
     test('returns null when nothing is configured', () => {
-      expect(domainPool.createPool({})).toBeNull();
+      expect(dbPool.createPool({})).toBeNull();
     });
 
     test('returns a pool object when configuration is present', () => {
-      const pool = domainPool.createPool({ DATABASE_URL: 'postgres://user:pass@127.0.0.1:5432/db' });
+      const pool = dbPool.createPool({ DATABASE_URL: 'postgres://user:pass@127.0.0.1:5432/db' });
 
       expect(pool).toBeTruthy();
       expect(typeof pool.query).toBe('function');
@@ -58,98 +61,219 @@ describe('Domain pool (Neon PostgreSQL — vendors + RFQs)', () => {
     });
   });
 
+  describe('detectProvider', () => {
+    test('labels a neon.tech host as neon', () => {
+      expect(dbPool.detectProvider('postgres://u:p@ep.NEON.tech/db')).toMatchObject({ provider: 'neon' });
+    });
+
+    test('labels anything else as plain postgres', () => {
+      expect(dbPool.detectProvider('postgres://u:p@db.example.com/db')).toMatchObject({
+        provider: 'postgres',
+      });
+    });
+  });
+
+  describe('detectDatabaseName', () => {
+    test('extracts the database name', () => {
+      expect(dbPool.detectDatabaseName('postgres://u:p@host/neondb?sslmode=require')).toBe('neondb');
+      expect(dbPool.detectDatabaseName('postgres://u:p@host/neondb')).toBe('neondb');
+    });
+
+    test('returns an empty string when there is no path segment', () => {
+      expect(dbPool.detectDatabaseName('')).toBe('');
+      expect(dbPool.detectDatabaseName(undefined)).toBe('');
+    });
+  });
+
   // ── Query passthrough ─────────────────────────────────────────────────────
   describe('query', () => {
     let originalPool;
 
     beforeEach(() => {
-      originalPool = domainPool.pool;
+      originalPool = dbPool.pool;
     });
 
     afterEach(() => {
-      domainPool.pool = originalPool;
+      dbPool.pool = originalPool;
     });
 
     test('delegates to the underlying pool', async () => {
       const result = { rows: [{ id: 1 }], rowCount: 1 };
-      domainPool.pool = { query: jest.fn().mockResolvedValue(result) };
+      dbPool.pool = { query: jest.fn().mockResolvedValue(result) };
 
-      await expect(domainPool.query('select 1', [1])).resolves.toBe(result);
-      expect(domainPool.pool.query).toHaveBeenCalledWith('select 1', [1]);
+      await expect(dbPool.query('select 1', [1])).resolves.toBe(result);
+      expect(dbPool.pool.query).toHaveBeenCalledWith('select 1', [1]);
     });
 
     test('defaults the parameter list', async () => {
-      domainPool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
-      await domainPool.query('select 1');
-      expect(domainPool.pool.query).toHaveBeenCalledWith('select 1', []);
+      dbPool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      await dbPool.query('select 1');
+      expect(dbPool.pool.query).toHaveBeenCalledWith('select 1', []);
     });
 
     test('throws a clear error when the connection is not configured', async () => {
-      domainPool.pool = null;
-      await expect(domainPool.query('select 1')).rejects.toThrow('Domain database is not configured.');
+      dbPool.pool = null;
+      await expect(dbPool.query('select 1')).rejects.toThrow(dbPool.NOT_CONFIGURED_MESSAGE);
+      // The message names the setting the operator has to fix, rather than just
+      // reporting that something is missing.
+      expect(dbPool.NOT_CONFIGURED_MESSAGE).toContain('DATABASE_URL');
+    });
+  });
+
+  describe('rows', () => {
+    let originalPool;
+
+    beforeEach(() => {
+      originalPool = dbPool.pool;
+    });
+
+    afterEach(() => {
+      dbPool.pool = originalPool;
+    });
+
+    test('unwraps result.rows', async () => {
+      dbPool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ n: 1 }, { n: 2 }] }) };
+      await expect(dbPool.rows('select n')).resolves.toEqual([{ n: 1 }, { n: 2 }]);
+    });
+
+    test('yields an empty array when the driver returns no rows property', async () => {
+      // Guards the call sites from reading .rows off an undefined result.
+      dbPool.pool = { query: jest.fn().mockResolvedValue({}) };
+      await expect(dbPool.rows('select n')).resolves.toEqual([]);
+    });
+  });
+
+  // ── Transactions ──────────────────────────────────────────────────────────
+  describe('withTransaction', () => {
+    let originalPool;
+    let client;
+
+    beforeEach(() => {
+      originalPool = dbPool.pool;
+      client = { query: jest.fn().mockResolvedValue({ rows: [] }), release: jest.fn() };
+      dbPool.pool = { connect: jest.fn().mockResolvedValue(client) };
+    });
+
+    afterEach(() => {
+      dbPool.pool = originalPool;
+    });
+
+    test('wraps the callback in BEGIN/COMMIT and returns its value', async () => {
+      const result = await dbPool.withTransaction(async (c) => {
+        await c.query('insert into t values (1)');
+        return 'done';
+      });
+
+      expect(result).toBe('done');
+      const statements = client.query.mock.calls.map((call) => call[0]);
+      expect(statements[0]).toBe('BEGIN');
+      expect(statements[statements.length - 1]).toBe('COMMIT');
+      expect(client.release).toHaveBeenCalled();
+    });
+
+    test('rolls back and rethrows the original error', async () => {
+      const boom = new Error('constraint violation');
+      await expect(
+        dbPool.withTransaction(async () => {
+          throw boom;
+        })
+      ).rejects.toBe(boom);
+
+      expect(client.query.mock.calls.map((call) => call[0])).toContain('ROLLBACK');
+      expect(client.release).toHaveBeenCalled();
+    });
+
+    test('surfaces the original error even when the rollback itself fails', async () => {
+      // A dropped connection makes ROLLBACK fail too; the caller needs the cause,
+      // not the secondary failure.
+      const boom = new Error('original cause');
+      client.query.mockImplementation(async (sql) => {
+        if (sql === 'ROLLBACK') throw new Error('connection already closed');
+        if (sql === 'BEGIN') return { rows: [] };
+        throw boom;
+      });
+
+      await expect(dbPool.withTransaction(async (c) => c.query('select 1'))).rejects.toThrow(
+        'original cause'
+      );
+      expect(client.release).toHaveBeenCalled();
+    });
+
+    test('releases the client even when the callback succeeds', async () => {
+      await dbPool.withTransaction(async () => 1);
+      expect(client.release).toHaveBeenCalledTimes(1);
+    });
+
+    test('throws without connecting when the pool is not configured', async () => {
+      dbPool.pool = null;
+      await expect(dbPool.withTransaction(async () => 1)).rejects.toThrow(dbPool.NOT_CONFIGURED_MESSAGE);
     });
   });
 
   // ── Health reporting ──────────────────────────────────────────────────────
-  describe('checkDomainDBHealth', () => {
+  describe('checkDatabaseHealth', () => {
     let originalPool;
     let originalEnv;
 
     beforeEach(() => {
-      originalPool = domainPool.pool;
+      originalPool = dbPool.pool;
       originalEnv = { ...process.env };
     });
 
     afterEach(() => {
-      domainPool.pool = originalPool;
+      dbPool.pool = originalPool;
       process.env = originalEnv;
     });
 
     test('reports the not-configured state without touching the network', async () => {
-      domainPool.pool = null;
+      dbPool.pool = null;
       delete process.env.DATABASE_URL;
 
-      const health = await domainPool.checkDomainDBHealth();
+      const health = await dbPool.checkDatabaseHealth();
 
       expect(health).toMatchObject({
         isConfigured: false,
         isConnected: false,
         provider: 'not_configured',
         poolStatus: 'NOT_CONFIGURED',
+        userCount: 0,
         vendorCount: 0,
         rfqCount: 0,
       });
       expect(health.errorMessage).toContain('DATABASE_URL');
     });
 
-    test('labels a neon.tech host as neon and reports vendor/RFQ counts', async () => {
-      process.env.DATABASE_URL = 'postgres://user:pass@ep.neon.tech/db';
-      domainPool.pool = {
+    test('labels a neon.tech host as neon and reports account/vendor/RFQ counts', async () => {
+      process.env.DATABASE_URL = 'postgres://user:pass@ep.neon.tech/neondb';
+      // One round trip, not three — the counts come from a single query.
+      dbPool.pool = {
         query: jest
           .fn()
-          .mockResolvedValueOnce({ rows: [{ total: 5 }] })
-          .mockResolvedValueOnce({ rows: [{ total: 3 }] }),
+          .mockResolvedValue({ rows: [{ user_count: '7', vendor_count: '5', rfq_count: '3' }] }),
       };
 
-      const health = await domainPool.checkDomainDBHealth();
+      const health = await dbPool.checkDatabaseHealth();
 
       expect(health).toMatchObject({
         isConfigured: true,
         isConnected: true,
         provider: 'neon',
+        database: 'neondb',
+        userCount: 7,
         vendorCount: 5,
         rfqCount: 3,
       });
       expect(health.providerLabel).toContain('Neon');
       expect(health.poolStatus).toContain('ACTIVE');
       expect(typeof health.latencyMs).toBe('number');
+      expect(dbPool.pool.query).toHaveBeenCalledTimes(1);
     });
 
     test('labels a non-neon host as plain postgres', async () => {
       process.env.DATABASE_URL = 'postgres://user:pass@somehost.example.com/db';
-      domainPool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ total: 0 }] }) };
+      dbPool.pool = { query: jest.fn().mockResolvedValue({ rows: [{}] }) };
 
-      const health = await domainPool.checkDomainDBHealth();
+      const health = await dbPool.checkDatabaseHealth();
 
       expect(health.provider).toBe('postgres');
       expect(health.providerLabel).not.toContain('Neon');
@@ -157,22 +281,27 @@ describe('Domain pool (Neon PostgreSQL — vendors + RFQs)', () => {
 
     test('defaults counts to 0 when the count row is absent', async () => {
       process.env.DATABASE_URL = 'postgres://user:pass@ep.neon.tech/db';
-      domainPool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      dbPool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
 
-      await expect(domainPool.checkDomainDBHealth()).resolves.toMatchObject({ vendorCount: 0, rfqCount: 0 });
+      await expect(dbPool.checkDatabaseHealth()).resolves.toMatchObject({
+        userCount: 0,
+        vendorCount: 0,
+        rfqCount: 0,
+      });
     });
 
     test('reports an unreachable connection with the driver message', async () => {
       process.env.DATABASE_URL = 'postgres://user:pass@ep.neon.tech/db';
-      domainPool.pool = { query: jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) };
+      dbPool.pool = { query: jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) };
 
-      const health = await domainPool.checkDomainDBHealth();
+      const health = await dbPool.checkDatabaseHealth();
 
       expect(health).toMatchObject({
         isConfigured: true,
         isConnected: false,
         poolStatus: 'UNREACHABLE',
         errorMessage: 'ECONNREFUSED',
+        userCount: 0,
         vendorCount: 0,
         rfqCount: 0,
       });
@@ -180,10 +309,10 @@ describe('Domain pool (Neon PostgreSQL — vendors + RFQs)', () => {
 
     test('falls back to a generic message when the error carries none', async () => {
       process.env.DATABASE_URL = 'postgres://user:pass@ep.neon.tech/db';
-      domainPool.pool = { query: jest.fn().mockRejectedValue(new Error('')) };
+      dbPool.pool = { query: jest.fn().mockRejectedValue(new Error('')) };
 
-      await expect(domainPool.checkDomainDBHealth()).resolves.toMatchObject({
-        errorMessage: 'Domain database connection failed.',
+      await expect(dbPool.checkDatabaseHealth()).resolves.toMatchObject({
+        errorMessage: 'Database connection failed.',
       });
     });
   });
@@ -193,26 +322,26 @@ describe('Domain pool (Neon PostgreSQL — vendors + RFQs)', () => {
     let originalPool;
 
     beforeEach(() => {
-      originalPool = domainPool.pool;
+      originalPool = dbPool.pool;
     });
 
     afterEach(() => {
-      domainPool.pool = originalPool;
+      dbPool.pool = originalPool;
     });
 
     test('ends the pool and clears the reference', async () => {
       const end = jest.fn().mockResolvedValue(undefined);
-      domainPool.pool = { end };
+      dbPool.pool = { end };
 
-      await domainPool.closePool();
+      await dbPool.closePool();
 
       expect(end).toHaveBeenCalled();
-      expect(domainPool.pool).toBeNull();
+      expect(dbPool.pool).toBeNull();
     });
 
     test('is a no-op when there is no pool', async () => {
-      domainPool.pool = null;
-      await expect(domainPool.closePool()).resolves.toBeUndefined();
+      dbPool.pool = null;
+      await expect(dbPool.closePool()).resolves.toBeUndefined();
     });
   });
 });

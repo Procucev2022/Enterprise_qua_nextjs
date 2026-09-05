@@ -1,6 +1,6 @@
 const storeService = require('../services/storeService');
 const { queryCache } = require('../db/queryCache');
-const identityPoolModule = require('../db/identityPool');
+const pool = require('../db/pool');
 const { getOptimizationMetrics } = require('../db/optimizationMetrics');
 const { logger } = require('../services/loggerService');
 const { logErrorResolver } = require('../services/logErrorResolver');
@@ -17,20 +17,24 @@ const { AUTH_MESSAGES } = require('../config/constants');
  * here instead. graphql-js calls these as fn(args, context, info); context
  * carries { req, res } from graphqlController.
  */
-function requireAuth(context) {
+// Async because revocation is read from PostgreSQL now. Every caller awaits it,
+// so a logged-out token is rejected here too — while that check lived in a
+// per-process Set, GraphQL was a second route a revoked token could still pass
+// after a restart or on a different worker.
+async function requireAuth(context) {
   const token = extractToken(context && context.req);
   if (!token) {
     throw new Error(AUTH_MESSAGES.NO_SESSION_TOKEN);
   }
-  const verification = authService.verifySessionToken(token);
+  const verification = await authService.assertSessionActive(token);
   if (!verification.valid) {
     throw new Error(verification.error || AUTH_MESSAGES.INVALID_SESSION_FALLBACK);
   }
   return verification.user;
 }
 
-function requireAdmin(context) {
-  const user = requireAuth(context);
+async function requireAdmin(context) {
+  const user = await requireAuth(context);
   if (user.role !== 'admin') {
     throw new Error('You do not have permission to perform this action.');
   }
@@ -47,8 +51,8 @@ function requireAdmin(context) {
  * scoped to their own buyerAccountId; category managers, admins and
  * vendors see the full list (see rfqController.js for why).
  */
-function requireRfqReadScope(context) {
-  const user = requireAuth(context);
+async function requireRfqReadScope(context) {
+  const user = await requireAuth(context);
   if (user.role === 'buyer') {
     const account = storeService.getBuyerAccountByEmail(user.email);
     return { user, restricted: true, buyerAccountId: account ? account.id : null };
@@ -61,8 +65,8 @@ function requireRfqReadScope(context) {
  */
 const rootResolvers = {
 
-  rfqs: (args = {}, context) => {
-    const scope = requireRfqReadScope(context);
+  rfqs: async (args = {}, context) => {
+    const scope = await requireRfqReadScope(context);
     const { category, sourcingMode, status, limit = 50, offset = 0 } = args;
     let result = scope.restricted
       ? storeService.getRFQs().filter((rfq) => rfq.buyerAccountId === scope.buyerAccountId)
@@ -79,8 +83,8 @@ const rootResolvers = {
     return result.slice(offset, offset + limit);
   },
 
-  rfq: (args = {}, context) => {
-    const scope = requireRfqReadScope(context);
+  rfq: async (args = {}, context) => {
+    const scope = await requireRfqReadScope(context);
     const key = args.id || args.rfqNumber;
     if (!key) return null;
     const rfq = storeService.getRFQById(key);
@@ -165,7 +169,7 @@ const rootResolvers = {
   },
 
   dbHealth: async () => {
-    return await identityPoolModule.checkIdentityHealth();
+    return await pool.checkDatabaseHealth();
   },
 
   optimizationMetrics: () => {
@@ -201,7 +205,7 @@ const rootResolvers = {
   },
 
   createRFQ: async ({ input }, context) => {
-    const user = requireAuth(context);
+    const user = await requireAuth(context);
     logger.info('GraphQL Mutation: createRFQ', { title: input.title }, 'GRAPHQL_MUTATION');
     const lineItems = Array.isArray(input.extractedEntities) ? input.extractedEntities : input.lineItems || [];
     // A model or network failure here must not block RFQ creation —
@@ -215,8 +219,8 @@ const rootResolvers = {
     return storeService.createRFQ({ ...input, extractedEntities: lineItems, aiSummary }, requestingBuyerAccount);
   },
 
-  updateRFQ: ({ id, input }, context) => {
-    const scope = requireRfqReadScope(context);
+  updateRFQ: async ({ id, input }, context) => {
+    const scope = await requireRfqReadScope(context);
     const existing = storeService.getRFQById(id);
     if (!existing || (scope.restricted && existing.buyerAccountId !== scope.buyerAccountId)) {
       return null;
@@ -225,44 +229,44 @@ const rootResolvers = {
     return storeService.updateRFQ(id, input);
   },
 
-  createVendor: ({ input }, context) => {
-    requireAuth(context);
+  createVendor: async ({ input }, context) => {
+    const user = await requireAuth(context);
     logger.info('GraphQL Mutation: createVendor', { name: input.name }, 'GRAPHQL_MUTATION');
-    return storeService.addVendor(input);
+    return storeService.addVendor(input, user.email);
   },
 
-  updateVendor: ({ id, input }, context) => {
-    requireAuth(context);
+  updateVendor: async ({ id, input }, context) => {
+    await requireAuth(context);
     logger.info(`GraphQL Mutation: updateVendor ${id}`, { id, input }, 'GRAPHQL_MUTATION');
     return storeService.updateVendor(id, input);
   },
 
-  deleteVendor: ({ id }, context) => {
-    requireAuth(context);
+  deleteVendor: async ({ id }, context) => {
+    await requireAuth(context);
     logger.info(`GraphQL Mutation: deleteVendor ${id}`, { id }, 'GRAPHQL_MUTATION');
     return storeService.deleteVendor(id);
   },
 
-  createBuyerAccount: ({ input }, context) => {
-    requireAuth(context);
+  createBuyerAccount: async ({ input }, context) => {
+    await requireAuth(context);
     logger.info('GraphQL Mutation: createBuyerAccount', { org: input.organizationName }, 'GRAPHQL_MUTATION');
     return storeService.addBuyerAccount(input);
   },
 
-  clearQueryCache: (args, context) => {
-    requireAuth(context);
+  clearQueryCache: async (args, context) => {
+    await requireAuth(context);
     queryCache.clear();
     return true;
   },
 
-  purgeLogs: (args = {}, context) => {
-    requireAdmin(context);
+  purgeLogs: async (args = {}, context) => {
+    await requireAdmin(context);
     const maxAgeDays = args.maxAgeDays || 30;
     return logger.purgeExpiredLogs({ maxAgeDays });
   },
 
   autoResolveLogErrors: async (args = {}, context) => {
-    requireAdmin(context);
+    await requireAdmin(context);
     if (args.action) {
       const res = await logErrorResolver.executeRemediation(args.action);
       return {
@@ -274,14 +278,14 @@ const rootResolvers = {
     return await logErrorResolver.autoResolveAll();
   },
 
-  optimizePerformance: (args = {}, context) => {
-    requireAdmin(context);
+  optimizePerformance: async (args = {}, context) => {
+    await requireAdmin(context);
     const level = args.level || 'standard';
     return performanceOptimizer.optimizePerformance(level);
   },
 
-  encryptData: ({ input }, context) => {
-    requireAuth(context);
+  encryptData: async ({ input }, context) => {
+    await requireAuth(context);
     const res = cryptoService.encrypt(input.plaintext, {
       secretKey: input.secretKey,
       additionalData: input.additionalData,

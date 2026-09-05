@@ -1,10 +1,14 @@
 // ==============================================================================
-// DOMAIN QUERIES (vendors + RFQs, Neon PostgreSQL)
+// DOMAIN QUERIES (Neon PostgreSQL)
 // ==============================================================================
-// Thin read/write helpers over the `raw JSONB` schema in schema.sql. Every
-// function no-ops (returns [] / null / false) when the pool isn't configured,
-// so storeService.js can call these unconditionally without its own guards —
-// matching the per-function-guard convention the deleted queries.js used.
+// Thin read/write helpers over the `raw JSONB` tables in schema.sql: vendors,
+// RFQs, evaluations, vendor catalogue, buyer accounts, AI feed and audit logs.
+//
+// Every function no-ops (returns [] / null / false) when the pool isn't
+// configured, so storeService.js can call these unconditionally without its own
+// guards. Note that a no-op read is NOT a fallback to seed data — storeService
+// treats the empty result as an empty collection and reports the database as
+// unavailable; there is nothing else to serve.
 // ==============================================================================
 
 const pool = require('./pool');
@@ -110,8 +114,6 @@ async function upsertEvaluationInDB(evaluation) {
 }
 
 // ── Vendor catalogue ────────────────────────────────────────────────────────
-// The 3 seeded demo products have no vendorId and are deliberately never
-// written here — see schema.sql's comment on vendor_catalogue.vendor_id.
 
 async function getVendorCatalogueFromDB() {
   if (!pool.pool) return [];

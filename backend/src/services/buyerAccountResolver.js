@@ -1,15 +1,15 @@
 // ==============================================================================
 // ACTIVE BUYER ACCOUNT RESOLUTION
 // ==============================================================================
-// The signed-in buyer's account, derived from the shared MySQL identity schema.
+// The signed-in buyer's account, read from the `user` + `organization` tables.
 //
 // This replaces SEED_BUYER_ACCOUNTS. That seed shipped four fabricated companies
 // — Tata Motors, L&T, JSW, Mahindra — with invented spend figures, and
 // `activeBuyerAccount` was simply `buyerAccounts[0]`. Whoever signed in, the
 // dashboard attributed their work to Tata Motors and showed $4,280,000 of spend
 // that did not exist. The frontend tried to correct for it by matching the session
-// email against `corporateEmail`, but the shared schema has no unique index on the
-// login email, so that match was never reliable either.
+// email against `corporateEmail`, but there is no unique index on the login email,
+// so that match was never reliable either.
 //
 // The organisation is read from the database rather than trusted from the token's
 // `orgId` claim, matching buyerProfileService: a re-parented account must not keep
@@ -17,7 +17,7 @@
 // ==============================================================================
 
 const buyerProfileQueries = require('../db/buyerProfileQueries');
-const identityPoolModule = require('../db/identityPool');
+const pool = require('../db/pool');
 const { logger } = require('./loggerService');
 const { BUYER_ACCOUNT_RESOLUTION } = require('../config/constants');
 
@@ -47,10 +47,18 @@ function mapProfileToBuyerAccount(profile, extras = {}) {
     gstin: profile.gstNumber,
     panNumber: profile.panNumber,
     primaryPlantLocation: [profile.city, profile.state].filter(Boolean).join(', '),
+    // `profile.categories` is a flat list of `{ major, minor }` pairs — one per
+    // selected minor category — which is the shape org_division_category stores
+    // and the shape loadCategories returns. This previously read `.majorCategory`
+    // and `.minorCategories`, the field names used by the *taxonomy* endpoint's
+    // grouped shape, so both arrays came out empty on every account and the
+    // dashboard showed a buyer as having no procurement scope at all.
     supportedMajorCategories: (profile.categories || [])
-      .map((c) => c.majorCategory)
+      .map((c) => c.major)
       .filter((v, i, arr) => v && arr.indexOf(v) === i),
-    supportedMinorCategories: (profile.categories || []).flatMap((c) => c.minorCategories || []),
+    supportedMinorCategories: (profile.categories || [])
+      .map((c) => c.minor)
+      .filter((v, i, arr) => v && arr.indexOf(v) === i),
     accountSource: BUYER_ACCOUNT_RESOLUTION.SOURCE_IDENTITY_DB,
     status: BUYER_ACCOUNT_RESOLUTION.STATUS_ACTIVE,
     // Counted from real RFQ rows by the caller. Zero until something is raised.
@@ -73,7 +81,7 @@ async function resolveActiveBuyerAccount(sessionUser) {
     };
   }
 
-  if (!identityPoolModule.pool) {
+  if (!pool.pool) {
     // Fails closed. Returning a fabricated account here is exactly what made the
     // dashboard show another company's data.
     return {

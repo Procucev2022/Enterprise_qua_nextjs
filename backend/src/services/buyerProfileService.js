@@ -1,21 +1,19 @@
 // ==============================================================================
 // BUYER PROFILE SERVICE
 // ==============================================================================
-// Business logic for the buyer organisation profile, ported from
-// ProcUserServiceImpl.updateBuyer and GMTServiceImpl.getOrgByUserId in the Java
-// p2pservices app.
+// Business logic for the buyer organisation profile, backed entirely by
+// PostgreSQL (`user`, `organization`, `org_division_category`, `category_division`).
 //
-// One deliberate departure from the Java implementation: the organisation being
-// read or written is resolved from the caller's verified session claims, never
-// from the request body. The Java endpoints took `id` / `userId` from the payload
-// with no ownership check, so any authenticated user could read or overwrite any
-// organisation by passing its UUID. Here the buyer can only ever reach their own
-// profile, and a body that names a different organisation is ignored rather than
-// honoured.
+// The organisation being read or written is resolved from the caller's verified
+// session claims, never from the request body. The endpoint this replaced took
+// `id` / `userId` from the payload with no ownership check, so any authenticated
+// user could read or overwrite any organisation by passing its UUID. Here the
+// buyer can only ever reach their own profile, and a body that names a different
+// organisation is ignored rather than honoured.
 // ==============================================================================
 
 const buyerProfileQueries = require('../db/buyerProfileQueries');
-const identityPoolModule = require('../db/identityPool');
+const pool = require('../db/pool');
 const storeService = require('./storeService');
 const { logger } = require('./loggerService');
 const {
@@ -43,9 +41,9 @@ class BuyerProfileError extends Error {
   }
 }
 
-/** Reject before touching the database when the identity schema is absent. */
+/** Reject before issuing a query when no database is configured. */
 function assertIdentityConfigured() {
-  if (!identityPoolModule.pool) {
+  if (!pool.pool) {
     throw new BuyerProfileError(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED, 503);
   }
 }

@@ -1,27 +1,68 @@
 #!/usr/bin/env node
 // ==============================================================================
-// DOMAIN DATABASE MIGRATION (Neon PostgreSQL)
+// DATABASE MIGRATION (Neon PostgreSQL)
 // ==============================================================================
-// One-off CLI: creates the schema, then seeds all 7 domain collections
-// (vendors, RFQs, evaluations, buyer accounts, audit logs, AI feed — vendor
-// catalogue is deliberately not seeded, see the comment below) from the
-// matching SEED_* constants. Idempotent (every upsert is ON CONFLICT DO
-// UPDATE), so rerunning it is always safe. Unlike the app's own graceful
-// in-memory fallback, this script's whole purpose is to run once against a
-// real connection string, so a missing DATABASE_URL is a hard failure here.
+// Applies schema.sql. That is the whole job.
+//
+// It used to also seed six collections from SEED_* constants, which is why it was
+// broken: it destructured SEED_RFQS, SEED_BUYER_ACCOUNTS, SEED_AUDIT_LOGS and
+// SEED_AI_FEED from a module that had stopped exporting them, so every run threw
+// a TypeError immediately after applying the schema. The seed data is gone
+// entirely now — the whole point of this change is that the database contains
+// records that are real or contains none — so there is nothing left to seed and
+// nothing left to break.
+//
+// Every statement is idempotent (CREATE TABLE / CREATE INDEX ... IF NOT EXISTS),
+// so rerunning it is always safe and never destructive: it will not drop a table,
+// alter a column or delete a row.
+//
+// Unlike the application, which logs and degrades when DATABASE_URL is missing,
+// this script's whole purpose is to run against a real connection string, so an
+// absent one is a hard failure.
 // ==============================================================================
 
 const fs = require('fs');
 const path = require('path');
 
 // This script runs standalone (not through app.js), so .env isn't loaded
-// automatically — pool.js reads DATABASE_URL from process.env at require
-// time, so this must happen before that require below.
+// automatically — pool.js reads DATABASE_URL from process.env at require time, so
+// this must happen before that require below.
 require('dotenv').config();
 
 const pool = require('./pool');
-const domainQueries = require('./domainQueries');
-const { SEED_VENDORS, SEED_RFQS, SEED_EVALUATIONS, SEED_BUYER_ACCOUNTS, SEED_AUDIT_LOGS, SEED_AI_FEED } = require('./seed');
+
+// Reported after the migration so the operator can see what the schema is holding
+// rather than assuming an empty database means the migration failed.
+const REPORTED_TABLES = [
+  'role',
+  'org_types',
+  'master_status',
+  'organization',
+  'user',
+  'category_division',
+  'org_division_category',
+  'auth_otp_codes',
+  'auth_revoked_tokens',
+  'vendors',
+  'rfqs',
+  'evaluations',
+  'vendor_catalogue',
+  'buyer_accounts',
+  'ai_feed',
+  'audit_logs',
+];
+
+async function reportRowCounts() {
+  console.log('\n[migrate] Row counts:');
+  for (const table of REPORTED_TABLES) {
+    try {
+      const result = await pool.query(`select count(*) as total from "${table}"`);
+      console.log(`  ${table.padEnd(24)} ${result.rows[0].total}`);
+    } catch (err) {
+      console.log(`  ${table.padEnd(24)} unavailable (${err.message})`);
+    }
+  }
+}
 
 async function migrate() {
   if (!pool.pool) {
@@ -35,54 +76,10 @@ async function migrate() {
   await pool.query(schemaSql);
   console.log('[migrate] Schema applied.');
 
-  console.log(`[migrate] Seeding ${SEED_VENDORS.length} vendor(s)...`);
-  for (const vendor of SEED_VENDORS) {
-    await domainQueries.upsertVendorInDB(vendor);
-  }
+  await reportRowCounts();
 
-  console.log(`[migrate] Seeding ${SEED_RFQS.length} RFQ(s)...`);
-  for (const rfq of SEED_RFQS) {
-    await domainQueries.upsertRFQInDB(rfq);
-  }
-
-  console.log(`[migrate] Seeding ${SEED_EVALUATIONS.length} evaluation(s)...`);
-  for (const evaluation of SEED_EVALUATIONS) {
-    await domainQueries.upsertEvaluationInDB(evaluation);
-  }
-
-  // Note: the 3 seeded demo catalogue products (storeService.js's
-  // constructor) have no vendorId and are deliberately never written to
-  // Postgres — see schema.sql's comment on vendor_catalogue.vendor_id. Real
-  // products only ever arrive via addProductToCatalogue, which always
-  // supplies one.
-
-  console.log(`[migrate] Seeding ${SEED_BUYER_ACCOUNTS.length} buyer account(s)...`);
-  for (const account of SEED_BUYER_ACCOUNTS) {
-    await domainQueries.upsertBuyerAccountInDB(account);
-  }
-  if (SEED_BUYER_ACCOUNTS.length > 0) {
-    // Matches the in-memory constructor's default: activeBuyerAccount starts
-    // as buyerAccounts[0].
-    await domainQueries.setActiveBuyerAccountInDB(SEED_BUYER_ACCOUNTS[0].id);
-  }
-
-  // SEED_AUDIT_LOGS and SEED_AI_FEED are both authored with index 0 = the
-  // most recent entry (matching how the in-memory arrays are read: newest
-  // first). Both ai_feed/audit_logs tables use an auto-incrementing
-  // `sequence` column read back via `ORDER BY sequence DESC`, so inserting
-  // in *reverse* array order makes index 0 land on the highest sequence
-  // value — i.e. still "first" after hydration, matching the in-memory shape.
-  console.log(`[migrate] Seeding ${SEED_AUDIT_LOGS.length} audit log entry(s)...`);
-  for (const entry of [...SEED_AUDIT_LOGS].reverse()) {
-    await domainQueries.upsertAuditLogInDB(entry);
-  }
-
-  console.log(`[migrate] Seeding ${SEED_AI_FEED.length} AI feed item(s)...`);
-  for (const item of [...SEED_AI_FEED].reverse()) {
-    await domainQueries.upsertAIFeedItemInDB(item);
-  }
-
-  console.log('[migrate] Done.');
+  console.log('\n[migrate] Done. No seed data is written — records come from real use.');
+  console.log('[migrate] To create a first sign-in account: node scripts/create-buyer.js --help');
 }
 
 /** Runs migrate() and translates its outcome into a process exit code. */
@@ -104,4 +101,4 @@ if (require.main === module) {
   runCli();
 }
 
-module.exports = { migrate, runCli };
+module.exports = { migrate, runCli, reportRowCounts, REPORTED_TABLES };

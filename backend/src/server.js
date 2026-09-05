@@ -1,34 +1,37 @@
 const app = require('./app');
-const identityPoolModule = require('./db/identityPool');
+const pool = require('./db/pool');
 const storeService = require('./services/storeService');
 const { logger } = require('./services/loggerService');
 
 const PORT = process.env.PORT || 4000;
 
 /**
- * Report identity-database reachability at boot. Authentication depends on this
- * connection, so a failure is logged loudly here instead of surfacing later as
- * an unexplained login rejection.
+ * Report database reachability at boot.
+ *
+ * There is one connection and everything depends on it — authentication, the
+ * buyer profile, the category taxonomy and every domain record — so a failure is
+ * logged loudly here instead of surfacing later as an unexplained login
+ * rejection or an empty dashboard.
  */
-async function reportIdentityHealth() {
+async function reportDatabaseHealth() {
   try {
-    const health = await identityPoolModule.checkIdentityHealth();
+    const health = await pool.checkDatabaseHealth();
     if (health.isConnected) {
       logger.info(
-        `Identity database connected: ${health.providerLabel} (${health.database}) — ${health.userCount} active users, ${health.latencyMs}ms`,
+        `Database connected: ${health.providerLabel} (${health.database}) — ${health.userCount} active accounts, ${health.vendorCount} vendors, ${health.rfqCount} RFQs, ${health.latencyMs}ms`,
         {},
         'SERVER'
       );
     } else {
       logger.error(
-        `Identity database UNAVAILABLE (${health.providerLabel}): ${health.errorMessage}. Logins will be rejected until this is resolved.`,
+        `Database UNAVAILABLE (${health.providerLabel}): ${health.errorMessage}. Logins and all data-backed requests will be rejected until this is resolved.`,
         null,
         'SERVER'
       );
     }
     return health;
   } catch (err) {
-    logger.error('Identity database health check threw', err, 'SERVER');
+    logger.error('Database health check threw', err, 'SERVER');
     return null;
   }
 }
@@ -60,7 +63,7 @@ function installCrashHandlers(proc = process) {
 }
 
 async function bootstrapServer(port = PORT) {
-  await reportIdentityHealth();
+  await reportDatabaseHealth();
   await storeService.hydrateFromDB();
   const server = app.listen(port);
   return server;
@@ -82,4 +85,4 @@ if (process.env.NODE_ENV !== 'test' && (process.env.AUTO_START_SERVER === 'true'
   start();
 }
 
-module.exports = { app, bootstrapServer, start, reportIdentityHealth, installCrashHandlers };
+module.exports = { app, bootstrapServer, start, reportDatabaseHealth, installCrashHandlers };

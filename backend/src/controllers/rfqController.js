@@ -183,7 +183,7 @@ async function createRFQ(req, res, next) {
  * document, this endpoint normalises and categorises them, and the wizard renders
  * the returned draft for the buyer to confirm before dispatch.
  */
-function ingestRFQ(req, res, next) {
+async function ingestRFQ(req, res, next) {
   try {
     const body = req.body || {};
 
@@ -193,7 +193,7 @@ function ingestRFQ(req, res, next) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
     }
 
-    const { draft, classification } = rfqIngestionService.buildRFQDraft(body);
+    const { draft, classification } = await rfqIngestionService.buildRFQDraft(body);
 
     // An upload that yielded nothing usable is a failed ingestion, not an empty
     // success: returning 422 lets the wizard keep the buyer on the upload step.
@@ -255,7 +255,7 @@ async function extractRFQFromDocument(req, res, next) {
 
     // Reuse the shared normalisation + taxonomy classification so an AI-extracted
     // RFQ is shaped identically to one keyed by hand.
-    const { draft, classification } = rfqIngestionService.buildRFQDraft({
+    const { draft, classification } = await rfqIngestionService.buildRFQDraft({
       lineItems: extraction.lineItems,
       title: extraction.documentTitle,
       category: extraction.category,

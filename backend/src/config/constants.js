@@ -142,13 +142,34 @@ const INITIAL_SYSTEM_CONFIG = {
   rbacEnforced: true,
 };
 
+// Actor recorded on an audit entry when no signed-in user could be resolved for
+// the action. Previously each call site invented its own plausible-looking human
+// mailbox ('buyer@enterprise.com', 'procurement@enterprise.com',
+// 'auditor@procucev.ai'), which made an unattributed system action read as a
+// deliberate act by a named person.
+const SYSTEM_ACTOR_EMAIL = 'system@procucev.ai';
+// Time budget defaults for a newly raised RFQ. Real values, just not per-RFQ
+// choices — kept here rather than inline so the chaser cadence and the UI agree.
+const RFQ_DEFAULTS = {
+  ALLOCATED_TIME: '24 hrs',
+  ELAPSED_TIME: '0 hrs',
+};
+// Infrastructure rows the admin screen renders. The database row is replaced at
+// runtime with the live result of pool.checkDatabaseHealth() (see
+// storeService.refreshInfrastructureHealth), so the entry below is only the
+// placeholder shown before the first probe completes.
+//
+// The previous first entry described 'Azure Database for MySQL (Shared Identity
+// Schema)' as ONLINE with an 18ms latency and 99.99% uptime. That database is no
+// longer part of this application at all.
+const DATABASE_HEALTH_SERVICE_LABEL = 'PostgreSQL Database (Neon)';
 const INITIAL_AZURE_HEALTH = [
   {
-    service: 'Azure Database for MySQL (Shared Identity Schema)',
-    status: 'ONLINE',
-    latency: '18ms',
-    uptime: '99.99%',
-    details: 'Read/Write Active, TLS Required, Shared Procucev user directory',
+    service: DATABASE_HEALTH_SERVICE_LABEL,
+    status: 'CHECKING',
+    latency: '—',
+    uptime: '—',
+    details: 'Awaiting the first connection health probe.',
   },
   {
     service: 'Azure OpenAI (Doc Intelligence OCR)',
@@ -236,12 +257,21 @@ const AUTH_MESSAGES = {
   SESSION_EXPIRED: 'Session token has expired',
   TOKEN_DECODE_FAILED: 'Failed to decode token payload',
   LOGOUT_SUCCESS: 'Logged out successfully.',
+  LOGOUT_REVOCATION_FAILED:
+    'Your session could not be ended because the database is unreachable. Try again; if it persists, close the browser to discard the session locally.',
   IDENTITY_DB_UNAVAILABLE:
-    'The identity database is unreachable, so credentials cannot be verified right now. Check the MYSQL_* connection settings in backend/.env, confirm the Azure MySQL firewall allows this host, then retry.',
+    'The database is unreachable, so credentials cannot be verified right now. Confirm the DATABASE_URL in backend/.env is correct and that this host is allowed to reach the PostgreSQL instance, then retry.',
   IDENTITY_DB_NOT_CONFIGURED:
-    'No identity database is configured. Set MYSQL_HOST / MYSQL_DATABASE / MYSQL_USER / MYSQL_PASSWORD in backend/.env so logins can be verified against real user records.',
+    'No database is configured. Set DATABASE_URL in backend/.env so logins can be verified against real account records.',
+  // Revocation is checked against the database, so an unreachable database means
+  // the session cannot be confirmed as still valid. It fails closed and says so,
+  // rather than reporting the credentials as invalid.
+  SESSION_CHECK_UNAVAILABLE:
+    'Your session could not be confirmed because the database is unreachable. Try again in a moment; if it persists, sign in again.',
+  OTP_STORAGE_FAILED:
+    'The verification code could not be saved, so it has not been sent. Try requesting a new code in a moment.',
   ACCOUNT_INACTIVE:
-    'This account is marked inactive in the identity database. Ask an administrator to re-activate it before signing in.',
+    'This account is marked inactive. Ask an administrator to re-activate it before signing in.',
   ACCOUNT_PENDING_APPROVAL:
     'This self-registered account is still awaiting administrator approval, so sign-in is blocked. You will be able to log in once it is approved.',
   ACCOUNT_ALREADY_EXISTS:
@@ -337,17 +367,24 @@ const BUYER_ACCOUNT_RESOLUTION = {
 // ==============================================================================
 // RFQ LINE-ITEM CATEGORY CLASSIFICATION
 // ==============================================================================
-// Ported from CategoryClassificationService in the Java p2pservices app, which
-// resolves a major ("division") and minor ("category") for every ingested line
+// Resolves a major ("division") and minor ("category") for every ingested line
 // item in strict precedence: an explicit non-generic category wins, then a
-// domain keyword match, then a documented default. Confidence and status are
-// recorded so the buyer can see why an item landed where it did.
+// domain keyword match, then unclassified. Confidence and status are recorded so
+// the buyer can see why an item landed where it did.
 //
-// Every major/minor pair below must exist in frontend/lib/categories.json,
+// Every major/minor pair below must exist in the `category_division` table,
 // otherwise the review grid cannot render the value in its dropdowns.
+//
+// DEFAULT_MAJOR_CATEGORY / DEFAULT_MINOR_CATEGORY are deliberately gone. They
+// held 'General Procurement' / 'General Industrial Goods', neither of which is a
+// row in that table — so the "documented default" was a pair no dropdown could
+// display and no vendor was mapped to. An unmatched item is now left blank and
+// flagged for review instead.
 const RFQ_CATEGORY_CLASSIFICATION = {
-  DEFAULT_MINOR_CATEGORY: 'General Industrial Goods',
-  DEFAULT_MAJOR_CATEGORY: 'General Procurement',
+  // How long the ingestion service caches its taxonomy index. The master changes
+  // rarely and an ingest reads it once per request, so a shared cache keeps the
+  // flow from re-reading a few hundred rows on every upload.
+  TAXONOMY_CACHE_TTL_MS: 10 * 60 * 1000,
 
   CONFIDENCE: {
     EXPLICIT: 0.95,
@@ -674,6 +711,9 @@ module.exports = {
   VENDOR_SUBSCRIPTION_PLANS,
   INITIAL_SYSTEM_CONFIG,
   INITIAL_AZURE_HEALTH,
+  DATABASE_HEALTH_SERVICE_LABEL,
+  SYSTEM_ACTOR_EMAIL,
+  RFQ_DEFAULTS,
   QUALIFICATION_PILLARS,
   AES_CONFIG,
   AUTH_MESSAGES,

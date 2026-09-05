@@ -25,7 +25,7 @@ import {
   Sparkles,
   CheckCircle2,
 } from 'lucide-react';
-import categoriesData from '@/lib/categories.json';
+import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { CURRENCY, SOURCING_MODES } from '@/lib/constants';
 import { createRFQ, extractLineItemsFromDocument, uploadRFQAttachment } from '@/lib/rfqClient';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
@@ -50,10 +50,16 @@ import type {
 const MANUAL = UI_STRINGS.manualRfq;
 const MODAL = UI_STRINGS.manualRfqModal;
 
-const TAXONOMY_MAJORS = categoriesData.map((cat) => cat.majorCategory);
+// Read at render time from the taxonomy registry the store populates from the
+// database, not captured at module scope from a bundled JSON file. A bundled copy
+// could offer a category the master no longer contains, and the row is dispatched
+// to vendors under whatever is selected here.
+function taxonomyMajors(): string[] {
+  return getMajorCategories();
+}
 
 function minorsFor(major: string): string[] {
-  return categoriesData.find((c) => c.majorCategory === major)?.minorCategories ?? [];
+  return getMinorCategories(major);
 }
 
 interface ManualRFQModalProps {
@@ -522,7 +528,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                               className="w-44"
                             >
                               <option value="">{MODAL.selectPlaceholder}</option>
-                              {TAXONOMY_MAJORS.map((major) => (
+                              {taxonomyMajors().map((major) => (
                                 <option key={major} value={major}>
                                   {major}
                                 </option>

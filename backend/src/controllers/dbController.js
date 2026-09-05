@@ -1,44 +1,45 @@
 // ==============================================================================
 // DATABASE STATUS CONTROLLER
 // ==============================================================================
-// Reports on the shared MySQL identity database that backs authentication, plus
-// the Neon PostgreSQL connection that persists vendors + RFQs (when
-// DATABASE_URL is configured — otherwise those fall back to the in-memory
-// seed too). Every other domain record (evaluations, audit logs, buyer
-// accounts, catalogue) is served from the in-memory enterprise store.
+// Reports on the PostgreSQL connection, which is the only database this backend
+// has. It backs authentication (`user`, `role`, `organization`), the procurement
+// category taxonomy, and every domain record.
+//
+// This used to report two datastores side by side — a shared MySQL identity
+// schema plus Postgres for vendors and RFQs — and a `domainStore.mode` field that
+// said whether the app was serving persisted rows or in-memory seed data. Neither
+// distinction exists any more: there is one connection, and no seed to fall back
+// to.
 // ==============================================================================
 
-const identityPoolModule = require('../db/identityPool');
+const pool = require('../db/pool');
 // Referenced through the module object rather than destructured so the helper
 // stays observable to tests.
 const optimizationMetrics = require('../db/optimizationMetrics');
-const domainPool = require('../db/pool');
 const storeService = require('../services/storeService');
 const { logger } = require('../services/loggerService');
 
 /**
- * GET /api/db/status - identity database reachability + domain store mode.
+ * GET /api/db/status - database reachability plus loaded record counts.
  */
 async function getDBStatus(req, res, next) {
   try {
-    logger.info('Checking identity database connection status', {}, 'DB_CONTROLLER');
-    const [health, domainDatabase] = await Promise.all([
-      identityPoolModule.checkIdentityHealth(),
-      domainPool.checkDomainDBHealth(),
-    ]);
+    logger.info('Checking database connection status', {}, 'DB_CONTROLLER');
+    const health = await pool.checkDatabaseHealth();
     res.json({
       success: true,
       ...health,
-      domainDatabase,
-      domainStore: {
-        mode: storeService.isHydratedFromDB ? 'persisted' : 'in_memory_seed',
+      // What this process currently holds in memory, which is a cache of the
+      // rows above rather than an independent source.
+      loadedRecords: {
+        isLoadedFromDatabase: storeService.isHydratedFromDB,
         buyerAccounts: storeService.getBuyerAccounts().length,
         vendors: storeService.getVendors().length,
         rfqs: storeService.getRFQs().length,
       },
     });
   } catch (err) {
-    logger.error('Error checking identity database status', err, 'DB_CONTROLLER');
+    logger.error('Error checking database status', err, 'DB_CONTROLLER');
     next(err);
   }
 }

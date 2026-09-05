@@ -23,20 +23,24 @@ function extractToken(req) {
 /**
  * Requires a valid, non-revoked session token. Attaches the decoded claims
  * (sub, email, role, orgId, orgName) to req.user for downstream handlers.
+ *
+ * Async because revocation is now read from PostgreSQL rather than a per-process
+ * Set — a token revoked on one worker has to be rejected on all of them, and a
+ * process restart must not resurrect logged-out sessions.
  */
-function authenticate(req, res, next) {
+async function authenticate(req, res, next) {
   const token = extractToken(req);
   if (!token) {
     return res.status(401).json({ success: false, error: AUTH_MESSAGES.NO_SESSION_TOKEN });
   }
 
-  const verification = authService.verifySessionToken(token);
+  const verification = await authService.assertSessionActive(token);
   if (!verification.valid) {
     return res.status(401).json({ success: false, error: verification.error || AUTH_MESSAGES.INVALID_SESSION_FALLBACK });
   }
 
   req.user = verification.user;
-  next();
+  return next();
 }
 
 /**

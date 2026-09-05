@@ -92,7 +92,7 @@ async function register(req, res, next) {
   }
 }
 
-function getSession(req, res, next) {
+async function getSession(req, res, next) {
   try {
     const token = extractToken(req);
 
@@ -100,7 +100,7 @@ function getSession(req, res, next) {
       return res.status(401).json({ success: false, error: AUTH_MESSAGES.NO_SESSION_TOKEN });
     }
 
-    const verification = authService.verifySessionToken(token);
+    const verification = await authService.assertSessionActive(token);
     if (!verification.valid) {
       return res.status(401).json({ success: false, error: verification.error || AUTH_MESSAGES.INVALID_SESSION_FALLBACK });
     }
@@ -115,19 +115,29 @@ function getSession(req, res, next) {
   }
 }
 
-function logout(req, res, next) {
+async function logout(req, res, next) {
   try {
     const userEmail = (req.body && req.body.email) || 'authenticated-user';
     const ipAddress = getClientIp(req);
     const token = extractToken(req);
     if (token) {
-      authService.revokeSessionToken(token);
+      // Awaited: the revocation is a database write now, and answering "logged
+      // out" before it lands would let the very next request through.
+      const revoked = await authService.revokeSessionToken(token);
+      if (!revoked) {
+        logger.warn(
+          'Logout could not record the token revocation, so the session may remain valid until it expires',
+          { userEmail, ipAddress },
+          'AUTH_CONTROLLER'
+        );
+        return res.status(503).json({ success: false, error: AUTH_MESSAGES.LOGOUT_REVOCATION_FAILED });
+      }
     }
     logger.audit(`User logged out: ${userEmail}`, userEmail, { ipAddress });
-    res.json({ success: true, message: AUTH_MESSAGES.LOGOUT_SUCCESS });
+    return res.json({ success: true, message: AUTH_MESSAGES.LOGOUT_SUCCESS });
   } catch (err) {
     logger.error('Error logging out', err, 'AUTH_CONTROLLER');
-    next(err);
+    return next(err);
   }
 }
 

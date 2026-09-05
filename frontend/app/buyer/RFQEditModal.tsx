@@ -20,7 +20,7 @@
 
 import React, { useRef, useState } from 'react';
 import { AlertCircle, Loader2, Paperclip, Plus, Save, Trash2, X } from 'lucide-react';
-import categoriesData from '@/lib/categories.json';
+import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { CURRENCY, RFQ_STATUSES, formatFileSize, formatIndianDateTime } from '@/lib/constants';
 import { PINCODE_PATTERN } from '@/lib/validationSchemas';
 import { uploadRFQAttachment } from '@/lib/rfqClient';
@@ -38,10 +38,14 @@ import type {
 const EDIT = UI_STRINGS.rfqEdit;
 const DETAILS = UI_STRINGS.rfqDetails;
 
-const TAXONOMY_MAJORS = categoriesData.map((group) => group.majorCategory);
+// Read at render time from the taxonomy registry the store populates from the
+// database, rather than captured at module scope from a bundled JSON file.
+function taxonomyMajors(): string[] {
+  return getMajorCategories();
+}
 
 function minorsFor(major: string): string[] {
-  return categoriesData.find((group) => group.majorCategory === major)?.minorCategories ?? [];
+  return getMinorCategories(major);
 }
 
 /**
@@ -476,7 +480,7 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                   {/* A blank choice only while the record genuinely has no category,
                       so an RFQ that has one cannot be saved back without it. */}
                   {form.category === '' && <option value="" />}
-                  {withStoredValue(TAXONOMY_MAJORS, form.category).map((major) => (
+                  {withStoredValue(taxonomyMajors(), form.category).map((major) => (
                     <option key={major} value={major}>
                       {major}
                     </option>
@@ -644,7 +648,7 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                             className="min-w-[10rem] font-semibold"
                           >
                             <option value="" />
-                            {withStoredValue(TAXONOMY_MAJORS, row.majorCategory).map((major) => (
+                            {withStoredValue(taxonomyMajors(), row.majorCategory).map((major) => (
                               <option key={major} value={major}>
                                 {major}
                               </option>

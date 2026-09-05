@@ -84,7 +84,7 @@ function createVendor(req, res, next) {
       return res.status(400).json({ success: false, error: 'Vendor name and majorCategory are required.' });
     }
     logger.info(`Creating new vendor: ${body.name}`, { name: body.name, majorCategory: body.majorCategory }, 'VENDOR_CONTROLLER');
-    const created = storeService.addVendor(body);
+    const created = storeService.addVendor(body, req.user && req.user.email);
     res.status(201).json({ success: true, data: created });
   } catch (err) {
     logger.error('Error creating vendor', err, 'VENDOR_CONTROLLER');
@@ -123,7 +123,7 @@ function deleteVendor(req, res, next) {
     }
     if (!assertVendorOwnership(req, res, existing.email)) return;
     logger.info(`Deleting vendor ${id}`, { id }, 'VENDOR_CONTROLLER');
-    storeService.deleteVendor(existing.id);
+    storeService.deleteVendor(existing.id, req.user && req.user.email);
     res.json({ success: true, message: `Vendor ${id} deleted successfully.` });
   } catch (err) {
     logger.error(`Error deleting vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');

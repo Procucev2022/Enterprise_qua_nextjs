@@ -25,8 +25,11 @@ import {
   VendorRatingRevisionEmailPayload,
   UserSession,
   RFQUpdatePayload,
+  MajorMinorCategory,
 } from './types';
 import { authClient } from './authClient';
+import { fetchCategoryTaxonomy } from './buyerProfileClient';
+import { setCategoryTaxonomy, clearCategoryTaxonomy } from './categoryTaxonomy';
 import { UI_STRINGS, formatString } from './uiStrings';
 import {
   createRFQ,
@@ -117,7 +120,15 @@ interface AppContextType {
   isLoadingDB: boolean;
   dbConnected: boolean;
   refreshFromDB: () => Promise<void>;
-  
+
+  // Procurement category master, read from the database. Empty until loaded —
+  // there is no bundled copy to fall back to, so a screen shows "no categories
+  // available" plus `categoryTaxonomyError` rather than a possibly-stale list.
+  categoryTaxonomy: MajorMinorCategory[];
+  categoryTaxonomyError: string | null;
+  isLoadingCategoryTaxonomy: boolean;
+  refreshCategoryTaxonomy: () => Promise<void>;
+
   // Integrated Buyer Accounts & Public System Database
   buyerAccounts: BuyerAccount[];
   activeBuyerAccount: BuyerAccount | null;
@@ -417,6 +428,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
   const [azureHealth, setAzureHealth] = useState<AzureServiceHealth[]>(INITIAL_AZURE_HEALTH);
+  // Starts empty on purpose. The bundled categories.json this replaced meant a
+  // screen could always render a full category tree, including when the master had
+  // changed underneath it or the API was down.
+  const [categoryTaxonomy, setCategoryTaxonomyState] = useState<MajorMinorCategory[]>([]);
+  const [categoryTaxonomyError, setCategoryTaxonomyError] = useState<string | null>(null);
+  const [isLoadingCategoryTaxonomy, setIsLoadingCategoryTaxonomy] = useState<boolean>(false);
   const [systemConfig, setSystemConfig] = useState<SystemConfig>(INITIAL_SYSTEM_CONFIG);
   const [selectedRFQForMatrix, setSelectedRFQForMatrix] = useState<RFQItem | null>(null);
   const [selectedVendorOpportunity, setSelectedVendorOpportunity] = useState<VendorOpportunity | null>(null);
@@ -468,42 +485,41 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const json = await res.json();
       if (json.success && json.data) {
         const d = json.data;
-        if (d.buyerAccounts && d.buyerAccounts.length > 0) {
-          setBuyerAccounts(d.buyerAccounts);
-        }
-        if (d.vendors && d.vendors.length > 0) {
-          setBuyerVendors(d.vendors);
-          // Subscription plan and download quota used to live only as local
-          // useState (defaulted to 'premium' / 3, reset on every refresh,
-          // never actually persisted). Sync them from the real vendor
-          // record now that the backend tracks both.
-          const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
-          if (sessionEmail) {
-            const myVendor = d.vendors.find((v: VendorEntry) => v.email?.toLowerCase() === sessionEmail);
-            if (myVendor) {
-              setVendorSubscription(myVendor.subscriptionPlan || 'premium');
-              setVendorRfqDownloadsUsed(myVendor.rfqDownloadsUsed || 0);
-            }
+        // Assigned unconditionally. Each of these used to be guarded by
+        // `&& length > 0`, so an empty collection left whatever was already in
+        // state on screen — and because the backend seeded fabricated vendors and
+        // evaluations, "empty" was the normal response for a database that simply
+        // had no records yet. An empty list now renders as an empty list.
+        setBuyerAccounts(d.buyerAccounts || []);
+        setBuyerVendors(d.vendors || []);
+
+        // Subscription plan and download quota used to live only as local
+        // useState (defaulted to 'premium' / 3, reset on every refresh, never
+        // actually persisted). Sync them from the real vendor record.
+        const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
+        if (sessionEmail && Array.isArray(d.vendors)) {
+          const myVendor = d.vendors.find((v: VendorEntry) => v.email?.toLowerCase() === sessionEmail);
+          if (myVendor) {
+            setVendorSubscription(myVendor.subscriptionPlan || 'premium');
+            setVendorRfqDownloadsUsed(myVendor.rfqDownloadsUsed || 0);
           }
         }
-        if (d.evaluations && d.evaluations.length > 0) {
-          setVendorEvaluations(d.evaluations);
-          setSelectedVendorEvaluation((prev) => prev || d.evaluations[0]);
-        }
-        if (d.auditLogs && d.auditLogs.length > 0) {
-          setAuditLogs(d.auditLogs);
-        }
-        if (d.aiFeed && d.aiFeed.length > 0) {
-          setAiFeed(d.aiFeed);
-        }
+
+        setVendorEvaluations(d.evaluations || []);
+        setSelectedVendorEvaluation((prev) => prev || (d.evaluations || [])[0] || null);
+        setAuditLogs(d.auditLogs || []);
+        setAiFeed(d.aiFeed || []);
         if (d.systemConfig) {
           setSystemConfig(d.systemConfig);
+        }
+        // Infrastructure rows are measured server-side (the database row comes
+        // from a live connection probe), so they replace the placeholder here.
+        if (Array.isArray(d.azureHealth) && d.azureHealth.length > 0) {
+          setAzureHealth(d.azureHealth);
         }
         setDbConnected(true);
       }
     } catch (err) {
-      // The reference-data endpoint is unreachable, not "PostgreSQL" — there is
-      // no PostgreSQL in this stack.
       console.error('Failed to load reference data:', err);
       setDbConnected(false);
     } finally {
@@ -535,6 +551,46 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  /**
+   * Load the procurement category master from the database.
+   *
+   * The endpoint is session-gated, so this runs on sign-in rather than at mount.
+   * Signed out the registry is cleared: leaving the previous session's copy in a
+   * module-level registry would let a signed-out screen keep offering it.
+   *
+   * On failure the list is emptied and the reason kept. Every consumer of this
+   * taxonomy either writes the selection back as `org_division_category` rows or
+   * uses it to route an RFQ to a vendor pool, so offering a category that is not
+   * in the master produces a scope matching no vendor at all — worse than showing
+   * nothing and saying why.
+   */
+  const refreshCategoryTaxonomy = async () => {
+    if (!authClient.getToken()) {
+      clearCategoryTaxonomy();
+      setCategoryTaxonomyState([]);
+      setCategoryTaxonomyError(null);
+      return;
+    }
+
+    setIsLoadingCategoryTaxonomy(true);
+    try {
+      const result = await fetchCategoryTaxonomy();
+      if (!result.success) {
+        clearCategoryTaxonomy();
+        setCategoryTaxonomyState([]);
+        setCategoryTaxonomyError(result.error || UI_STRINGS.buyerProfile.taxonomyUnavailable);
+        return;
+      }
+      // The registry is kept in step with React state so the non-React validation
+      // helpers (manualRfqModel) see the same master the pickers render from.
+      setCategoryTaxonomy(result.data);
+      setCategoryTaxonomyState(result.data);
+      setCategoryTaxonomyError(null);
+    } finally {
+      setIsLoadingCategoryTaxonomy(false);
+    }
+  };
+
   useEffect(() => {
     refreshFromDB();
   }, []);
@@ -544,6 +600,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     void refreshRFQs();
     void refreshActiveBuyerAccount();
+    void refreshCategoryTaxonomy();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on identity,
     // not on the callbacks, which are recreated every render.
   }, [isLoggedIn, currentUserSession?.id]);
@@ -2102,6 +2159,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         isLoadingDB,
         dbConnected,
         refreshFromDB,
+        categoryTaxonomy,
+        categoryTaxonomyError,
+        isLoadingCategoryTaxonomy,
+        refreshCategoryTaxonomy,
         addNewRFQ,
         adoptCreatedRFQ,
         updateRFQ,

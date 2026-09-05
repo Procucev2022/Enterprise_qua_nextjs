@@ -21,7 +21,7 @@
 //   compared against one that has them.
 // ==============================================================================
 
-import categoriesData from './categories.json';
+import { hasMajorCategory, hasMinorCategory } from './categoryTaxonomy';
 import { PINCODE_PATTERN } from './validationSchemas';
 import { UI_STRINGS, formatString } from './uiStrings';
 import type {
@@ -41,24 +41,24 @@ export const MANUAL_ENTRY_CONFIDENCE = 0;
 
 // The row's two category selects are built from the shared taxonomy: the major
 // select lists the majors, and the minor select lists only the minors under the
-// chosen major. A value outside that file therefore has no matching option, so
+// chosen major. A value outside the master therefore has no matching option, so
 // the select renders blank and looks broken while still holding a value that
 // validation accepts. Off-taxonomy values are dropped on the way in instead, which
 // leaves the field genuinely empty and lets the existing required-field rules ask
 // the buyer for it.
-const TAXONOMY_MAJORS = new Set(categoriesData.map((group) => group.majorCategory));
-const TAXONOMY_MINORS_BY_MAJOR = new Map(
-  categoriesData.map((group) => [group.majorCategory, new Set<string>(group.minorCategories)])
-);
+//
+// Read from the taxonomy registry at call time rather than captured into module
+// constants at import time: the master is fetched from the database now, so it is
+// not available when this module is first evaluated.
 
 /** The major category if the taxonomy has it, else empty. */
 function taxonomyMajorOrBlank(major: string): string {
-  return TAXONOMY_MAJORS.has(major) ? major : '';
+  return hasMajorCategory(major) ? major : '';
 }
 
 /** The minor category if it belongs to the given major, else empty. */
 function taxonomyMinorOrBlank(major: string, minor: string): string {
-  return TAXONOMY_MINORS_BY_MAJOR.get(major)?.has(minor) ? minor : '';
+  return hasMinorCategory(major, minor) ? minor : '';
 }
 
 const DEFAULT_SOURCING_MODE: SourcingMode = 'mode_1';

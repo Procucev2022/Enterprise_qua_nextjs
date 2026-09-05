@@ -1,4 +1,4 @@
-describe('Domain database migration (Neon PostgreSQL)', () => {
+describe('Database migration (Neon PostgreSQL)', () => {
   afterEach(() => {
     jest.resetModules();
     jest.restoreAllMocks();
@@ -20,103 +20,69 @@ describe('Domain database migration (Neon PostgreSQL)', () => {
     process.exitCode = originalExitCode;
   });
 
-  test('applies the schema and seeds all 7 domain collections when configured', async () => {
-    const fakeVendors = [{ id: 'v-fixture-1' }, { id: 'v-fixture-2' }];
-    const fakeRfqs = [{ id: 'rfq-fixture-1' }];
-    const fakeEvaluations = [{ id: 'eval-fixture-1' }];
-    const fakeBuyerAccounts = [{ id: 'buyer-fixture-1' }, { id: 'buyer-fixture-2' }];
-    const fakeAuditLogs = [{ id: 'log-fixture-1' }, { id: 'log-fixture-2' }];
-    const fakeAIFeed = [{ id: 'feed-fixture-1' }, { id: 'feed-fixture-2' }];
-    const queryMock = jest.fn().mockResolvedValue({ rows: [] });
-    const upsertVendorMock = jest.fn().mockResolvedValue(null);
-    const upsertRfqMock = jest.fn().mockResolvedValue(null);
-    const upsertEvaluationMock = jest.fn().mockResolvedValue(null);
-    const upsertBuyerAccountMock = jest.fn().mockResolvedValue(null);
-    const setActiveBuyerAccountMock = jest.fn().mockResolvedValue(undefined);
-    const upsertAuditLogMock = jest.fn().mockResolvedValue(null);
-    const upsertAIFeedItemMock = jest.fn().mockResolvedValue(null);
+  test('applies the schema and writes no seed data', async () => {
+    // The whole point of this migration is that it creates structure and nothing
+    // else. It used to seed six collections from SEED_* constants and was broken
+    // because four of those exports had already been deleted.
+    const queryMock = jest.fn().mockResolvedValue({ rows: [{ total: '0' }] });
 
     let freshMigrate;
     jest.isolateModules(() => {
       jest.doMock('../src/db/pool', () => ({ pool: {}, query: queryMock }));
-      jest.doMock('../src/db/domainQueries', () => ({
-        upsertVendorInDB: upsertVendorMock,
-        upsertRFQInDB: upsertRfqMock,
-        upsertEvaluationInDB: upsertEvaluationMock,
-        upsertBuyerAccountInDB: upsertBuyerAccountMock,
-        setActiveBuyerAccountInDB: setActiveBuyerAccountMock,
-        upsertAuditLogInDB: upsertAuditLogMock,
-        upsertAIFeedItemInDB: upsertAIFeedItemMock,
-      }));
-      jest.doMock('../src/db/seed', () => ({
-        SEED_VENDORS: fakeVendors,
-        SEED_RFQS: fakeRfqs,
-        SEED_EVALUATIONS: fakeEvaluations,
-        SEED_BUYER_ACCOUNTS: fakeBuyerAccounts,
-        SEED_AUDIT_LOGS: fakeAuditLogs,
-        SEED_AI_FEED: fakeAIFeed,
-      }));
       freshMigrate = require('../src/db/migrate');
     });
     const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
 
     await freshMigrate.migrate();
 
-    expect(queryMock).toHaveBeenCalledWith(expect.stringContaining('CREATE TABLE IF NOT EXISTS vendors'));
-    expect(upsertVendorMock).toHaveBeenCalledTimes(2);
-    expect(upsertVendorMock).toHaveBeenCalledWith(fakeVendors[0]);
-    expect(upsertVendorMock).toHaveBeenCalledWith(fakeVendors[1]);
-    expect(upsertRfqMock).toHaveBeenCalledTimes(1);
-    expect(upsertRfqMock).toHaveBeenCalledWith(fakeRfqs[0]);
-    expect(upsertEvaluationMock).toHaveBeenCalledTimes(1);
-    expect(upsertEvaluationMock).toHaveBeenCalledWith(fakeEvaluations[0]);
+    const statements = queryMock.mock.calls.map((call) => call[0]);
+    // Identity, taxonomy, session and domain structures all come from schema.sql.
+    expect(statements[0]).toContain('CREATE TABLE IF NOT EXISTS vendors');
+    expect(statements[0]).toContain('CREATE TABLE IF NOT EXISTS "user"');
+    expect(statements[0]).toContain('CREATE TABLE IF NOT EXISTS category_division');
+    expect(statements[0]).toContain('CREATE TABLE IF NOT EXISTS auth_otp_codes');
+    expect(statements[0]).toContain('CREATE TABLE IF NOT EXISTS auth_revoked_tokens');
 
-    expect(upsertBuyerAccountMock).toHaveBeenCalledTimes(2);
-    expect(upsertBuyerAccountMock).toHaveBeenCalledWith(fakeBuyerAccounts[0]);
-    expect(upsertBuyerAccountMock).toHaveBeenCalledWith(fakeBuyerAccounts[1]);
-    // Matches the in-memory default: activeBuyerAccount starts as accounts[0].
-    expect(setActiveBuyerAccountMock).toHaveBeenCalledWith(fakeBuyerAccounts[0].id);
-
-    // Audit logs and AI feed are seeded in reverse array order — index 0 in
-    // the seed data is the most recent entry, and inserting it *last* gives
-    // it the highest `sequence` value, so it still reads back first.
-    expect(upsertAuditLogMock).toHaveBeenNthCalledWith(1, fakeAuditLogs[1]);
-    expect(upsertAuditLogMock).toHaveBeenNthCalledWith(2, fakeAuditLogs[0]);
-    expect(upsertAIFeedItemMock).toHaveBeenNthCalledWith(1, fakeAIFeed[1]);
-    expect(upsertAIFeedItemMock).toHaveBeenNthCalledWith(2, fakeAIFeed[0]);
+    // Nothing but the schema and the read-only row-count report.
+    expect(statements.slice(1).every((sql) => /^select count\(\*\)/i.test(sql.trim()))).toBe(true);
+    expect(statements.some((sql) => /insert|update|delete/i.test(sql))).toBe(false);
 
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Done'));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('No seed data is written'));
   });
 
-  test('skips setActiveBuyerAccountInDB when there are no buyer accounts to seed', async () => {
-    const setActiveBuyerAccountMock = jest.fn();
+  test('reports a row count for every table the schema defines', async () => {
+    const queryMock = jest.fn().mockResolvedValue({ rows: [{ total: '4' }] });
     let freshMigrate;
     jest.isolateModules(() => {
-      jest.doMock('../src/db/pool', () => ({ pool: {}, query: jest.fn().mockResolvedValue({ rows: [] }) }));
-      jest.doMock('../src/db/domainQueries', () => ({
-        upsertVendorInDB: jest.fn().mockResolvedValue(null),
-        upsertRFQInDB: jest.fn().mockResolvedValue(null),
-        upsertEvaluationInDB: jest.fn().mockResolvedValue(null),
-        upsertBuyerAccountInDB: jest.fn().mockResolvedValue(null),
-        setActiveBuyerAccountInDB: setActiveBuyerAccountMock,
-        upsertAuditLogInDB: jest.fn().mockResolvedValue(null),
-        upsertAIFeedItemInDB: jest.fn().mockResolvedValue(null),
-      }));
-      jest.doMock('../src/db/seed', () => ({
-        SEED_VENDORS: [],
-        SEED_RFQS: [],
-        SEED_EVALUATIONS: [],
-        SEED_BUYER_ACCOUNTS: [],
-        SEED_AUDIT_LOGS: [],
-        SEED_AI_FEED: [],
+      jest.doMock('../src/db/pool', () => ({ pool: {}, query: queryMock }));
+      freshMigrate = require('../src/db/migrate');
+    });
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    await freshMigrate.reportRowCounts();
+
+    freshMigrate.REPORTED_TABLES.forEach((table) => {
+      expect(queryMock).toHaveBeenCalledWith(`select count(*) as total from "${table}"`);
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining(table));
+    });
+  });
+
+  test('reports a table as unavailable rather than aborting the whole report', async () => {
+    // A table that does not exist yet must not stop the remaining counts: the
+    // operator needs the full picture, and one missing table is information too.
+    let freshMigrate;
+    jest.isolateModules(() => {
+      jest.doMock('../src/db/pool', () => ({
+        pool: {},
+        query: jest.fn().mockRejectedValue(new Error('relation does not exist')),
       }));
       freshMigrate = require('../src/db/migrate');
     });
-    jest.spyOn(console, 'log').mockImplementation(() => {});
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
 
-    await freshMigrate.migrate();
-
-    expect(setActiveBuyerAccountMock).not.toHaveBeenCalled();
+    await expect(freshMigrate.reportRowCounts()).resolves.toBeUndefined();
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('unavailable (relation does not exist)'));
   });
 
   test('propagates a schema-apply failure to the caller', async () => {
@@ -125,10 +91,6 @@ describe('Domain database migration (Neon PostgreSQL)', () => {
       jest.doMock('../src/db/pool', () => ({
         pool: {},
         query: jest.fn().mockRejectedValue(new Error('syntax error')),
-      }));
-      jest.doMock('../src/db/domainQueries', () => ({
-        upsertVendorInDB: jest.fn(),
-        upsertRFQInDB: jest.fn(),
       }));
       freshMigrate = require('../src/db/migrate');
     });
@@ -141,32 +103,17 @@ describe('Domain database migration (Neon PostgreSQL)', () => {
     test('exits 0 on success', async () => {
       let freshMigrate;
       jest.isolateModules(() => {
-        jest.doMock('../src/db/pool', () => ({ pool: {}, query: jest.fn().mockResolvedValue({ rows: [] }) }));
-        jest.doMock('../src/db/domainQueries', () => ({
-          upsertVendorInDB: jest.fn().mockResolvedValue(null),
-          upsertRFQInDB: jest.fn().mockResolvedValue(null),
-          upsertEvaluationInDB: jest.fn().mockResolvedValue(null),
-          upsertBuyerAccountInDB: jest.fn().mockResolvedValue(null),
-          setActiveBuyerAccountInDB: jest.fn().mockResolvedValue(undefined),
-          upsertAuditLogInDB: jest.fn().mockResolvedValue(null),
-          upsertAIFeedItemInDB: jest.fn().mockResolvedValue(null),
-        }));
-        jest.doMock('../src/db/seed', () => ({
-          SEED_VENDORS: [],
-          SEED_RFQS: [],
-          SEED_EVALUATIONS: [],
-          SEED_BUYER_ACCOUNTS: [],
-          SEED_AUDIT_LOGS: [],
-          SEED_AI_FEED: [],
+        jest.doMock('../src/db/pool', () => ({
+          pool: {},
+          query: jest.fn().mockResolvedValue({ rows: [{ total: '0' }] }),
         }));
         freshMigrate = require('../src/db/migrate');
       });
       jest.spyOn(console, 'log').mockImplementation(() => {});
       const exitSpy = jest.spyOn(process, 'exit').mockImplementation(() => {});
-      // runCli() reads the ambient process.exitCode, which is a true Node
-      // global (not test-isolated) — pin it to a known value so this
-      // assertion can't be polluted by whatever another test file in the
-      // same worker left behind.
+      // runCli() reads the ambient process.exitCode, which is a true Node global
+      // (not test-isolated) — pin it to a known value so this assertion cannot be
+      // polluted by whatever another test file in the same worker left behind.
       const originalExitCode = process.exitCode;
       process.exitCode = undefined;
 
@@ -183,7 +130,6 @@ describe('Domain database migration (Neon PostgreSQL)', () => {
           pool: {},
           query: jest.fn().mockRejectedValue(new Error('connection refused')),
         }));
-        jest.doMock('../src/db/domainQueries', () => ({ upsertVendorInDB: jest.fn(), upsertRFQInDB: jest.fn() }));
         freshMigrate = require('../src/db/migrate');
       });
       jest.spyOn(console, 'log').mockImplementation(() => {});

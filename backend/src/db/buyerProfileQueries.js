@@ -1,36 +1,31 @@
 // ==============================================================================
-// BUYER PROFILE QUERIES (shared Procucev MySQL schema)
+// BUYER PROFILE QUERIES (Neon PostgreSQL)
 // ==============================================================================
-// Read/write helpers for the buyer organisation profile, which in the shared
-// schema is the `organization` row whose org type is CLIENT, plus the linked
-// `user` row, plus N rows in `org_division_category`.
+// Read/write helpers for the buyer organisation profile: the `organization` row
+// whose org type is CLIENT, plus the linked `user` row, plus N rows in
+// `org_division_category`. Also serves the `category_division` taxonomy that
+// every category picker in the app renders.
 //
-// Ported from GMTServiceImpl.getOrgByUserId (read) and
-// ProcUserServiceImpl.updateBuyer (write) in the Java p2pservices app. Both
-// applications write the same rows, so the column choices below are a
-// compatibility contract, not a preference.
-//
-// Schema facts this module depends on (verified against development_gmtbfs):
+// Schema facts this module depends on (see schema.sql):
 //   - `organization.uuid` and `user.uuid` are application-assigned strings.
-//   - Four profile fields exist twice: a legacy column the Java entity persists
-//     (`refference`, `crn`, `others`, `sub_category`) and a dedicated column
-//     added later (`brand_name`, `cin`, `annual_turnover`, `contact_designation`).
-//     Reads prefer the dedicated column and fall back to the legacy one; writes
-//     set BOTH, so a profile saved here is readable by the Java app and vice
-//     versa. Dropping either side silently loses data for one of the two clients.
+//   - Four profile fields exist twice: a legacy column (`refference`, `crn`,
+//     `others`, `sub_category`) and a dedicated column added later
+//     (`brand_name`, `cin`, `annual_turnover`, `contact_designation`). Migrated
+//     rows populated whichever one the writing client used, so reads prefer the
+//     dedicated column and fall back to the legacy one, and writes set BOTH.
+//     Dropping either side makes some historical rows read as blank.
 //   - `org_division_category` carries both `organization_id` and a denormalised
-//     `user_id`; the Java read path scopes by `user_id`, so this one does too,
-//     with an organisation-scoped fallback for rows written before `user_id`
-//     was populated.
+//     `user_id`; the read path scopes by `user_id` with an organisation-scoped
+//     fallback for rows written before `user_id` was populated.
 //   - `category_division` is the major ("division") / minor ("category") master.
 // ==============================================================================
 
 const crypto = require('crypto');
-const identityPoolModule = require('./identityPool');
+const pool = require('./pool');
 const { BUYER_PROFILE_CONFIG } = require('../config/constants');
 
 /**
- * Trim a value read from MySQL, mapping NULL to an empty string.
+ * Trim a value read from the database, mapping NULL to an empty string.
  *
  * The profile form binds every field to a controlled input, so a null would
  * render as the literal "null" and then be saved back as that string.
@@ -42,10 +37,6 @@ function text(value) {
 
 /**
  * Pick the dedicated column when populated, else the legacy alias.
- *
- * Mirrors the alias getters on the Java `Organization` entity
- * (`getCin()` returns `cin != null ? cin : crn`, and so on), which is what makes
- * a row written by either application readable by both.
  */
 function preferred(dedicated, legacy) {
   const first = text(dedicated);
@@ -55,14 +46,14 @@ function preferred(dedicated, legacy) {
 /**
  * Rewrite the rupee sign to an ASCII currency code before storage.
  *
- * Ported from updateBuyer, which does `annualTurnover.replace("₹", "INR ")`.
- * `organization.annual_turnover` is a latin1 column, so storing the symbol itself
- * produces mojibake that both applications would then display.
+ * Retained after the move to Postgres for consistency with the values already
+ * stored: `annual_turnover` rows migrated from the previous schema hold
+ * "INR 180 Cr" rather than "₹180 Cr", and the field is displayed verbatim in a
+ * text input, so mixing the two forms would show the same figure two ways.
  *
- * Runs of whitespace are collapsed afterwards, which the Java version does not
- * do: because its replacement ends in a space, the common input "₹ 180 Cr"
- * became "INR  180 Cr" with a double space, and that value is shown verbatim in
- * a text input. Collapsing is safe — the column is free-form display text.
+ * Runs of whitespace are collapsed afterwards: because the replacement ends in a
+ * space, the common input "₹ 180 Cr" would otherwise become "INR  180 Cr" with a
+ * double space. Collapsing is safe — the column is free-form display text.
  */
 function normalizeTurnover(value) {
   const raw = text(value);
@@ -74,10 +65,9 @@ function normalizeTurnover(value) {
 /**
  * Shape a joined user + organization row into the profile the API returns.
  *
- * Two fields are taken from the `user` row rather than the organisation, exactly
- * as getOrgByUserId does: the account's own login email and mobile number are
- * the authoritative contact details, and the profile screen shows them
- * read-only.
+ * The account's own login email and mobile number are taken from the `user` row
+ * rather than the organisation: they are the authoritative contact details, and
+ * the profile screen shows them read-only.
  */
 function mapRowToProfile(row) {
   if (!row) return null;
@@ -133,35 +123,35 @@ const PROFILE_SELECT = `
          o.contact_designation, o.sub_category,
          o.email,
          o.organization_phonenumber
-    from \`user\` u
+    from "user" u
     left join organization o on o.uuid = u.org_uuid
 `;
 
 /**
  * Load the procurement categories selected against a buyer.
  *
- * Scoped by `user_id` first, matching OrgCategoryDivisionDao.findbyUser, which
- * is what the Java profile screen reads. Rows created before `user_id` was
- * populated only carry `organization_id`, so an organisation-scoped read is used
- * as a fallback rather than showing an established buyer an empty selection.
+ * Scoped by `user_id` first, which attributes the most recent edit. Rows created
+ * before `user_id` was populated only carry `organization_id`, so an
+ * organisation-scoped read is used as a fallback rather than showing an
+ * established buyer an empty selection.
  */
 async function loadCategories(organizationId, userId) {
   if (!organizationId && !userId) return [];
 
   let rows = [];
   if (userId) {
-    rows = await identityPoolModule.identityQuery(
+    rows = await pool.rows(
       `select division, category from org_division_category
-        where user_id = ? and category is not null and category <> ''
+        where user_id = $1 and category is not null and category <> ''
         order by division, category`,
       [userId]
     );
   }
 
   if (rows.length === 0 && organizationId) {
-    rows = await identityPoolModule.identityQuery(
+    rows = await pool.rows(
       `select division, category from org_division_category
-        where organization_id = ? and category is not null and category <> ''
+        where organization_id = $1 and category is not null and category <> ''
         order by division, category`,
       [organizationId]
     );
@@ -175,15 +165,12 @@ async function loadCategories(organizationId, userId) {
  *
  * Returns a discriminated result rather than throwing, so the service can map
  * "no such user" and "user has no organisation" onto different HTTP statuses and
- * different remediation advice. getOrgByUserId draws the same distinction.
+ * different remediation advice.
  */
 async function findProfileByUserId(userId) {
   if (!userId) return { found: false, reason: 'NO_USER_ID' };
 
-  const rows = await identityPoolModule.identityQuery(
-    `${PROFILE_SELECT} where u.uuid = ? limit 1`,
-    [userId]
-  );
+  const rows = await pool.rows(`${PROFILE_SELECT} where u.uuid = $1 limit 1`, [userId]);
 
   if (rows.length === 0) return { found: false, reason: 'USER_NOT_FOUND' };
   if (!rows[0].org_uuid) return { found: false, reason: 'ORG_NOT_LINKED' };
@@ -195,7 +182,7 @@ async function findProfileByUserId(userId) {
 
 // Columns written by a profile save, in the order the UPDATE below binds them.
 // Each entry maps one API field onto the column(s) that hold it. `aliasColumn`
-// is the legacy column the Java entity persists and must be kept in step.
+// is the legacy column that must be kept in step.
 const PROFILE_COLUMN_MAP = [
   { field: 'companyName', column: 'organization_name' },
   { field: 'brandName', column: 'brand_name', aliasColumn: 'refference' },
@@ -217,85 +204,88 @@ const PROFILE_COLUMN_MAP = [
 /**
  * Build the SET clause for a profile update from the fields actually supplied.
  *
- * Null-skip semantics, ported from updateBuyer: a field the caller omitted is
- * left untouched rather than overwritten with null. That matters because the
- * shared `organization` row carries vendor, subscription and status columns this
- * endpoint has no business clearing, and because a client that renders a subset
- * of the form must not wipe the fields it does not show.
+ * Null-skip semantics: a field the caller omitted is left untouched rather than
+ * overwritten with null. That matters because the `organization` row carries
+ * vendor, subscription and status columns this endpoint has no business clearing,
+ * and because a client that renders a subset of the form must not wipe the fields
+ * it does not show.
  *
  * An explicit empty string IS applied, so a buyer can clear a field they had
  * previously filled in.
+ *
+ * `startIndex` is where this clause's positional parameters begin, so the caller
+ * can append its own ($n for the actor, $n+1 for the uuid) without renumbering.
  */
-function buildProfileUpdate(patch) {
+function buildProfileUpdate(patch, startIndex = 1) {
   const assignments = [];
   const params = [];
+  let next = startIndex;
 
   PROFILE_COLUMN_MAP.forEach(({ field, column, aliasColumn, transform }) => {
     const incoming = patch[field];
     if (incoming === undefined || incoming === null) return;
 
     const value = transform ? transform(text(incoming)) : text(incoming);
-    assignments.push(`${column} = ?`);
+    assignments.push(`${column} = $${next}`);
     params.push(value);
+    next += 1;
 
     if (aliasColumn) {
-      assignments.push(`${aliasColumn} = ?`);
+      assignments.push(`${aliasColumn} = $${next}`);
       params.push(value);
+      next += 1;
     }
   });
 
-  return { assignments, params };
+  return { assignments, params, nextIndex: next };
 }
 
 /**
  * Replace the category selection for a buyer.
  *
- * Delete-then-insert rather than a merge, matching updateBuyer, where
- * `orphanRemoval = true` on the association produces exactly this effect.
+ * Delete-then-insert rather than a merge, so a de-selection actually takes
+ * effect. The delete is organisation-wide, not per-user: a procurement scope
+ * belongs to the organisation and the RFQ distribution engine reads it
+ * organisation-scoped, so replacing only the saving user's rows would leave a
+ * second user's stale rows steering RFQ fan-out after the scope had been
+ * narrowed. Rows are still stamped with `user_id` so the read path can attribute
+ * the most recent edit.
  *
- * The delete is organisation-wide, not per-user. That is deliberate and matches
- * the Java service: a procurement scope belongs to the organisation, and the RFQ
- * distribution engine reads it organisation-scoped
- * (OrgCategoryDivisionDao.findCategoryByOrg). Replacing only the saving user's
- * rows would leave a second user's stale rows to keep steering RFQ fan-out after
- * the scope had been narrowed. Rows are still stamped with `user_id` so the read
- * path can attribute the most recent edit.
- *
- * Deliberately different from the Java version in one respect: an empty array
- * clears the selection. updateBuyer ignores an empty collection, which made
- * de-selecting every category impossible — the buyer's last selection was
- * permanent, with no way to correct an over-broad scope.
+ * An empty array clears the selection, which is what makes an over-broad scope
+ * correctable.
  */
-async function replaceCategories(conn, organizationId, userId, categories) {
-  await conn.query('delete from org_division_category where organization_id = ?', [organizationId]);
+async function replaceCategories(client, organizationId, userId, categories) {
+  await client.query('delete from org_division_category where organization_id = $1', [organizationId]);
   if (userId) {
-    await conn.query('delete from org_division_category where user_id = ?', [userId]);
+    await client.query('delete from org_division_category where user_id = $1', [userId]);
   }
 
   if (!Array.isArray(categories) || categories.length === 0) return 0;
 
-  const now = new Date();
-  const rows = categories.map((entry) => [
-    crypto.randomUUID(),
-    text(entry.major),
-    text(entry.minor),
-    organizationId,
-    userId || null,
-    userId || organizationId,
-    now,
-    userId || organizationId,
-    now,
-  ]);
+  // One multi-row INSERT rather than one statement per category: a 10-category
+  // selection is 10 network round trips to Neon otherwise, inside a transaction
+  // that holds a connection open for all of them.
+  const params = [];
+  const tuples = categories.map((entry) => {
+    const base = params.length;
+    params.push(
+      crypto.randomUUID(),
+      text(entry.major),
+      text(entry.minor),
+      organizationId,
+      userId || null
+    );
+    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, true, now())`;
+  });
 
-  await conn.query(
+  await client.query(
     `insert into org_division_category
-       (uuid, division, category, organization_id, user_id,
-        created_by, created_ts, last_modified_by, last_modified_ts)
-     values ?`,
-    [rows]
+       (uuid, division, category, organization_id, user_id, is_active, created_ts)
+     values ${tuples.join(', ')}`,
+    params
   );
 
-  return rows.length;
+  return categories.length;
 }
 
 /**
@@ -304,37 +294,36 @@ async function replaceCategories(conn, organizationId, userId, categories) {
  * Runs as one transaction so a failure part-way cannot leave the organisation
  * updated but its categories half-replaced.
  *
- * Also writes `user.full_name` from the contact name, a side effect of
- * updateBuyer that other screens depend on: the account holder's display name is
- * read from that column, so omitting it would make the profile disagree with the
- * name shown in the header.
+ * Also writes `user.full_name` from the contact name, which other screens depend
+ * on: the account holder's display name is read from that column, so omitting it
+ * would make the profile disagree with the name shown in the header.
  */
 async function updateProfile({ organizationId, userId, patch, categories, actor }) {
-  if (!identityPoolModule.pool) {
-    throw new Error('Identity database is not configured.');
+  if (!pool.pool) {
+    throw new Error(pool.NOT_CONFIGURED_MESSAGE);
   }
   if (!organizationId) {
     throw new Error('organizationId is required to update a buyer profile.');
   }
 
-  const conn = await identityPoolModule.pool.getConnection();
-  try {
-    await conn.beginTransaction();
-
-    const [existing] = await conn.query('select uuid from organization where uuid = ? limit 1', [
+  return pool.withTransaction(async (client) => {
+    const existing = await client.query('select uuid from organization where uuid = $1 limit 1', [
       organizationId,
     ]);
-    if (existing.length === 0) {
-      await conn.rollback();
+    if (existing.rows.length === 0) {
+      // Returned rather than thrown so the caller can answer 404 instead of 500.
+      // withTransaction commits an empty transaction here, which is a no-op.
       return { updated: false, reason: 'ORG_NOT_FOUND' };
     }
 
-    const { assignments, params } = buildProfileUpdate(patch);
+    const { assignments, params, nextIndex } = buildProfileUpdate(patch);
     if (assignments.length > 0) {
-      assignments.push('last_modified_by = ?', 'last_modified_ts = now(6)');
+      const actorIndex = nextIndex;
+      const uuidIndex = nextIndex + 1;
+      assignments.push(`last_modified_by = $${actorIndex}`, 'last_modified_ts = now()');
       params.push(actor || 'enterprise-workspace', organizationId);
-      await conn.query(
-        `update organization set ${assignments.join(', ')} where uuid = ?`,
+      await client.query(
+        `update organization set ${assignments.join(', ')} where uuid = $${uuidIndex}`,
         params
       );
     }
@@ -343,8 +332,8 @@ async function updateProfile({ organizationId, userId, patch, categories, actor 
     if (userId && patch.contactName !== undefined && patch.contactName !== null) {
       const contactName = text(patch.contactName);
       if (contactName !== '') {
-        await conn.query(
-          'update `user` set full_name = ?, last_modified_by = ?, last_modified_ts = now(6) where uuid = ?',
+        await client.query(
+          'update "user" set full_name = $1, last_modified_by = $2, last_modified_ts = now() where uuid = $3',
           [contactName, actor || 'enterprise-workspace', userId]
         );
       }
@@ -352,39 +341,32 @@ async function updateProfile({ organizationId, userId, patch, categories, actor 
 
     let categoryCount = null;
     if (categories !== undefined) {
-      categoryCount = await replaceCategories(conn, organizationId, userId, categories);
+      categoryCount = await replaceCategories(client, organizationId, userId, categories);
     }
 
-    await conn.commit();
     return { updated: true, fieldsUpdated: assignments.length, categoryCount };
-  } catch (err) {
-    await conn.rollback();
-    throw err;
-  } finally {
-    conn.release();
-  }
+  });
 }
 
 /**
- * Load the major/minor procurement taxonomy from the shared master table.
+ * Load the major/minor procurement taxonomy from the master table.
  *
- * The old client fetched divisions and their categories over two endpoints and
- * one round trip per division, which meant 14 requests to render the picker. The
- * whole master is a few hundred short rows, so it is returned in one shape the
- * category tree can render directly.
+ * Returned in one shape the category tree can render directly. The whole master
+ * is a few hundred short rows, so fetching it per-division — which is what the
+ * old client did, one request per division — cost 14 round trips to render one
+ * picker.
  *
  * Ordering is taken from the data rather than imposed here:
  *   - divisions by the earliest `created_ts` in each, which is the order the
- *     master was loaded from Divisionlist.xlsx and the order buyers have always
- *     seen (Civil Works first, not the alphabetical "CAPEX" first)
- *   - categories alphabetically within a division, matching the ASC sort
- *     CategoryDivisionDao.getCategoryByDivision applies
+ *     master was loaded and the order buyers have always seen (Civil Works
+ *     first, not the alphabetical "CAPEX" first)
+ *   - categories alphabetically within a division
  *
  * Rows with a blank division exist in the master and are skipped: they have no
  * major category to group under, so they cannot be displayed or selected.
  */
 async function findCategoryTaxonomy() {
-  const rows = await identityPoolModule.identityQuery(
+  const rows = await pool.rows(
     `select cd.division, cd.category
        from category_division cd
        join (
@@ -430,4 +412,5 @@ module.exports = {
   updateProfile,
   findCategoryTaxonomy,
   PROFILE_COLUMN_MAP,
+  PROFILE_SELECT,
 };

@@ -1,23 +1,22 @@
 #!/usr/bin/env node
 // ==============================================================================
-// CREATE BUYER ACCOUNT IN THE SHARED IDENTITY DATABASE
+// CREATE A BUYER ACCOUNT
 // ==============================================================================
-// Creates a CLIENT organisation + ClientInitiator user in the shared Procucev
-// MySQL schema so the account can sign in to this workspace and to the Java
-// p2pservices portal.
+// Creates a CLIENT organisation + ClientInitiator user in PostgreSQL so the
+// account can sign in to this workspace.
 //
 // Usage:
 //   node scripts/create-buyer.js --email a@b.com --phone 9876543210 \
 //        --password 'Secret@123' [--name "Full Name"] [--org "Company Pvt Ltd"]
 //
-// Connection settings come from backend/.env (MYSQL_*). Nothing is hardcoded.
-// The script is idempotent: re-running it reports the existing account instead
-// of creating a duplicate.
+// Connection settings come from DATABASE_URL in backend/.env. Nothing is
+// hardcoded. The script is idempotent: re-running it reports the existing
+// account instead of creating a duplicate.
 // ==============================================================================
 
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 
-const identityPoolModule = require('../src/db/identityPool');
+const pool = require('../src/db/pool');
 const identityQueries = require('../src/db/identityQueries');
 
 function parseArgs(argv) {
@@ -51,16 +50,16 @@ async function main() {
     return;
   }
 
-  const health = await identityPoolModule.checkIdentityHealth();
+  const health = await pool.checkDatabaseHealth();
   if (!health.isConnected) {
-    console.error(`Identity database unavailable: ${health.errorMessage}`);
-    console.error('Check the MYSQL_* settings in backend/.env and the server firewall rules.');
+    console.error(`Database unavailable: ${health.errorMessage}`);
+    console.error('Check DATABASE_URL in backend/.env and that this host may reach the instance.');
     process.exitCode = 1;
     return;
   }
 
-  console.log(`Identity database: ${health.providerLabel}`);
-  console.log(`Schema: ${health.database} (${health.userCount} active users)\n`);
+  console.log(`Database: ${health.providerLabel}`);
+  console.log(`Schema: ${health.database} (${health.userCount} active accounts)\n`);
 
   const result = await identityQueries.insertBuyerAccount({
     email: args.email,
@@ -99,4 +98,4 @@ main()
     console.error('Failed to create buyer account:', err.message);
     process.exitCode = 1;
   })
-  .finally(() => identityPoolModule.closeIdentityPool().catch(() => {}));
+  .finally(() => pool.closePool().catch(() => {}));

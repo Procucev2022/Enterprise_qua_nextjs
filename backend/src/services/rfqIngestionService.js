@@ -18,16 +18,15 @@
  */
 
 const { RFQ_CATEGORY_CLASSIFICATION, RFQ_INGESTION_CONFIG } = require('../config/constants');
-const categoryTaxonomy = require('../config/categories.json');
+const buyerProfileQueries = require('../db/buyerProfileQueries');
 const { logger } = require('./loggerService');
 
 const {
-  DEFAULT_MINOR_CATEGORY,
-  DEFAULT_MAJOR_CATEGORY,
   CONFIDENCE,
   STATUS,
   GENERIC_CATEGORY_TOKENS,
   DOMAIN_KEYWORD_MAP,
+  TAXONOMY_CACHE_TTL_MS,
 } = RFQ_CATEGORY_CLASSIFICATION;
 
 const {
@@ -46,16 +45,25 @@ const KEYWORDS_BY_LENGTH = Object.keys(DOMAIN_KEYWORD_MAP).sort((a, b) => b.leng
 // ==============================================================================
 // SHARED TAXONOMY INDEX
 // ==============================================================================
-// The review grid builds its two dropdowns from categories.json: the major select
-// lists the majors, and the minor select lists only the minors belonging to the
-// chosen major. A pair that is not in that file therefore cannot be displayed —
-// the select finds no matching option and renders blank, which is what made an
-// extracted item arrive with both category fields apparently empty.
+// The review grid builds its two dropdowns from the same taxonomy this index is
+// built from: the major select lists the majors, and the minor select lists only
+// the minors belonging to the chosen major. A pair outside the taxonomy therefore
+// cannot be displayed — the select finds no matching option and renders blank,
+// which is what made an extracted item arrive with both category fields
+// apparently empty.
+//
+// The taxonomy is read from the `category_division` table rather than a bundled
+// categories.json. There used to be two copies of that file, one under
+// backend/src/config and one under frontend/lib, with nothing keeping them in
+// step with each other or with the database the buyer's saved selection is
+// actually written to. Classification is what routes an RFQ to a vendor pool, so
+// it has to agree with the master the pool is defined against.
 //
 // The model reliably names a *minor* ("Motors", "Fasteners") and rarely names a
 // major, so the major is looked up from the minor here instead of being replaced
 // with a placeholder. Both indexes are keyed on a normalised form and store the
-// file's own spelling, so classification always emits values the grid can render.
+// master's own spelling, so classification always emits values the grid can
+// render.
 
 /** Trim, collapse whitespace and casefold, so 'Storage  Racks' matches. */
 function taxonomyKey(value) {
@@ -65,29 +73,83 @@ function taxonomyKey(value) {
     .toLowerCase();
 }
 
-const MAJOR_BY_KEY = new Map();
-const TAXONOMY_BY_MINOR_KEY = new Map();
+// Cached rather than read per ingest: the master is a few hundred short rows that
+// change rarely, and an ingest classifies every line item against it. Starts
+// empty — an unloaded index is not a reason to invent categories, it just means
+// classification falls through to keyword matching.
+const taxonomyIndex = {
+  majorByKey: new Map(),
+  byMinorKey: new Map(),
+  loadedAt: 0,
+  groupCount: 0,
+};
 
-for (const group of categoryTaxonomy) {
-  MAJOR_BY_KEY.set(taxonomyKey(group.majorCategory), group.majorCategory);
-  for (const minor of group.minorCategories) {
-    // First major wins for a minor that appears under several ('Refractories',
-    // 'Panels', 'Conveyors'), matching the order a buyer sees in the dropdown.
-    const key = taxonomyKey(minor);
-    if (!TAXONOMY_BY_MINOR_KEY.has(key)) {
-      TAXONOMY_BY_MINOR_KEY.set(key, { major: group.majorCategory, minor });
-    }
+/** Build the two lookup maps from the grouped taxonomy shape. */
+function primeTaxonomyIndex(groups) {
+  taxonomyIndex.majorByKey = new Map();
+  taxonomyIndex.byMinorKey = new Map();
+  (Array.isArray(groups) ? groups : []).forEach((group) => {
+    if (!group || !group.majorCategory) return;
+    taxonomyIndex.majorByKey.set(taxonomyKey(group.majorCategory), group.majorCategory);
+    (group.minorCategories || []).forEach((minor) => {
+      // First major wins for a minor that appears under several ('Refractories',
+      // 'Panels', 'Conveyors'), matching the order a buyer sees in the dropdown.
+      const key = taxonomyKey(minor);
+      if (!taxonomyIndex.byMinorKey.has(key)) {
+        taxonomyIndex.byMinorKey.set(key, { major: group.majorCategory, minor });
+      }
+    });
+  });
+  taxonomyIndex.loadedAt = Date.now();
+  taxonomyIndex.groupCount = taxonomyIndex.majorByKey.size;
+  return taxonomyIndex;
+}
+
+/** Drop the cached index so the next ingest reloads it. */
+function resetTaxonomyIndex() {
+  taxonomyIndex.majorByKey = new Map();
+  taxonomyIndex.byMinorKey = new Map();
+  taxonomyIndex.loadedAt = 0;
+  taxonomyIndex.groupCount = 0;
+}
+
+/**
+ * Load the taxonomy index if it is empty or stale.
+ *
+ * A read failure is logged and swallowed: the previously cached index keeps
+ * serving, and if there is none, classification degrades to keyword matching and
+ * flags the rest for review. Refusing the whole ingest because the master could
+ * not be re-read would be a worse outcome than an item the buyer has to
+ * categorise by hand.
+ */
+async function ensureTaxonomyLoaded() {
+  const isFresh =
+    taxonomyIndex.loadedAt > 0 && Date.now() - taxonomyIndex.loadedAt < TAXONOMY_CACHE_TTL_MS;
+  if (isFresh) return taxonomyIndex;
+
+  try {
+    const groups = await buyerProfileQueries.findCategoryTaxonomy();
+    primeTaxonomyIndex(groups);
+    logger.info(
+      'Category taxonomy index loaded for RFQ classification',
+      { majorCount: taxonomyIndex.majorByKey.size, minorCount: taxonomyIndex.byMinorKey.size },
+      'RFQ_INGESTION'
+    );
+  } catch (err) {
+    logger.error('Could not load the category taxonomy for RFQ classification', err, 'RFQ_INGESTION');
   }
+
+  return taxonomyIndex;
 }
 
 /** The taxonomy's own spelling of a major, or null when it is not one. */
 function canonicalMajor(value) {
-  return MAJOR_BY_KEY.get(taxonomyKey(value)) || null;
+  return taxonomyIndex.majorByKey.get(taxonomyKey(value)) || null;
 }
 
 /** The taxonomy pair owning a minor category, or null when it is not one. */
 function taxonomyPairForMinor(value) {
-  return TAXONOMY_BY_MINOR_KEY.get(taxonomyKey(value)) || null;
+  return taxonomyIndex.byMinorKey.get(taxonomyKey(value)) || null;
 }
 
 /**
@@ -190,11 +252,19 @@ function classifyLineItem(item, payloadCategory) {
     };
   }
 
-  // 4. Documented fallback, flagged so the buyer knows to review it.
+  // 4. Nothing matched. Left unclassified and flagged, which is what STATUS.DEFAULT
+  // already feeds into the `needsReview` count the wizard shows.
+  //
+  // This used to stamp 'General Procurement' / 'General Industrial Goods'. Neither
+  // exists in the category master, so the pair could not be rendered by either
+  // dropdown: the row arrived looking blank anyway, but with a value underneath
+  // that validation accepted — so an unclassified item could be dispatched to
+  // vendors under a category that matches no vendor at all. Blank is honest, and
+  // the required-field rules then ask the buyer to choose.
   return {
-    majorCategory: DEFAULT_MAJOR_CATEGORY,
-    minorCategory: DEFAULT_MINOR_CATEGORY,
-    category: DEFAULT_MINOR_CATEGORY,
+    majorCategory: '',
+    minorCategory: '',
+    category: '',
     categoryConfidence: CONFIDENCE.DEFAULT,
     classificationStatus: STATUS.DEFAULT,
   };
@@ -372,7 +442,11 @@ function deriveTitle(entities) {
  * @param {string} [payload.sourceFileName]
  * @param {string} [payload.sourceEmail]
  */
-function buildRFQDraft(payload = {}) {
+async function buildRFQDraft(payload = {}) {
+  // Loaded once here rather than per line item, so classification below stays
+  // synchronous and one ingest costs at most one taxonomy read.
+  await ensureTaxonomyLoaded();
+
   const { entities, duplicatesRemoved, lineValues } = normalizeLineItems(payload.lineItems, {
     category: payload.category,
   });
@@ -382,12 +456,16 @@ function buildRFQDraft(payload = {}) {
 
   // The RFQ header category follows the majority of its line items rather than
   // just the first, so a mixed BOQ lands in the category it mostly belongs to.
+  // Unclassified items are excluded from the vote — otherwise a BOQ that mostly
+  // failed to classify would give the RFQ header a blank category even when some
+  // items did resolve. If nothing classified, the header category is blank and
+  // the buyer picks it in the review step.
   const majorCounts = entities.reduce((acc, e) => {
+    if (!e.majorCategory) return acc;
     acc[e.majorCategory] = (acc[e.majorCategory] || 0) + 1;
     return acc;
   }, {});
-  const dominantMajor =
-    Object.keys(majorCounts).sort((a, b) => majorCounts[b] - majorCounts[a])[0] || DEFAULT_MAJOR_CATEGORY;
+  const dominantMajor = Object.keys(majorCounts).sort((a, b) => majorCounts[b] - majorCounts[a])[0] || '';
 
   const estimatedBudget = deriveEstimatedBudget(payload.estimatedBudget, lineValues);
 
@@ -422,6 +500,12 @@ function buildRFQDraft(payload = {}) {
 }
 
 module.exports = {
+  taxonomyKey,
+  primeTaxonomyIndex,
+  resetTaxonomyIndex,
+  ensureTaxonomyLoaded,
+  canonicalMajor,
+  taxonomyPairForMinor,
   isGenericCategory,
   matchByKeyword,
   classifyLineItem,

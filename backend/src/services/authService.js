@@ -3,39 +3,57 @@ const { logger } = require('./loggerService');
 const storeService = require('./storeService');
 const mailerService = require('./mailerService');
 const { AUTH_MESSAGES, IDENTITY_OTP_CONFIG } = require('../config/constants');
-const identityPoolModule = require('../db/identityPool');
+const pool = require('../db/pool');
 const identityQueries = require('../db/identityQueries');
+const authSessionQueries = require('../db/authSessionQueries');
 
-const DEV_FALLBACK_AUTH_SECRET = 'procucev-enterprise-auth-secret-key-2026';
 const CONFIGURED_AUTH_SECRET = process.env.AUTH_SECRET || process.env.JWT_SECRET || '';
 
-if (!CONFIGURED_AUTH_SECRET) {
-  if (process.env.NODE_ENV === 'production') {
+/**
+ * Resolve the session-signing key.
+ *
+ * There is no hardcoded fallback. This module used to ship a literal default
+ * ('procucev-enterprise-auth-secret-key-2026') that dev and test ran on, which
+ * meant the signing key for any deployment that forgot to set AUTH_SECRET was
+ * sitting in the repository — anyone with the source could mint a valid session
+ * token for any account and role.
+ *
+ * Production refuses to start without one. Everywhere else a random key is
+ * generated per process: unset stays usable for local work, but the key is not
+ * knowable from the source, and tokens simply stop verifying after a restart
+ * rather than remaining forgeable forever.
+ */
+function resolveAuthSecret(env = process.env) {
+  const configured = env.AUTH_SECRET || env.JWT_SECRET || '';
+  if (configured) return configured;
+
+  if (env.NODE_ENV === 'production') {
     throw new Error(
-      'AUTH_SECRET (or JWT_SECRET) must be set in production. Refusing to start with an insecure default session-signing key.'
+      'AUTH_SECRET (or JWT_SECRET) must be set in production. Refusing to start without a session-signing key.'
     );
   }
+
+  const ephemeral = crypto.randomBytes(48).toString('hex');
   logger.warn(
-    'AUTH_SECRET/JWT_SECRET not set — using an insecure development-only fallback signing key. Set one before deploying.',
+    'AUTH_SECRET/JWT_SECRET is not set — generated a random key for this process only. Sessions will not survive a restart and will not be valid across workers. Set AUTH_SECRET in backend/.env.',
     {},
     'AUTH_SERVICE'
   );
+  return ephemeral;
 }
 
-const AUTH_SECRET = CONFIGURED_AUTH_SECRET || DEV_FALLBACK_AUTH_SECRET;
+const AUTH_SECRET = resolveAuthSecret();
 
-// OTP shape and lifetime are fixed by the Java p2pservices app, which writes the
-// same codes into the shared `otp_store` table: 6 digits, valid for 15 minutes.
+const SESSION_TTL_SECONDS = 24 * 60 * 60;
+
+// OTP shape and lifetime: 6 digits, valid for 15 minutes.
 const { OTP_LENGTH, OTP_EXPIRY_MS, OTP_KEY_SEPARATOR } = IDENTITY_OTP_CONFIG;
 
-// In-memory OTP storage: `<+91phone>_EMAIL_<email>` -> { code, expiresAt, attempts }
-const otpStore = new Map();
-
 /**
- * Build the OTP store key the Java service uses:
- * `normalisedPhone + "_EMAIL_" + lowercased email`. Keying on the pair rather
- * than the email alone means a code issued for one registered mobile number
- * cannot be replayed against a different one.
+ * Build the OTP storage key: `normalisedPhone + "_EMAIL_" + lowercased email`.
+ *
+ * Keying on the pair rather than the email alone means a code issued for one
+ * registered mobile number cannot be replayed against a different one.
  */
 function buildOtpKey(normalizedEmail, mobile) {
   return `${identityQueries.normalizePhone(mobile)}${OTP_KEY_SEPARATOR}${normalizedEmail}`;
@@ -50,18 +68,16 @@ function generateOtpCode() {
   return String(crypto.randomInt(0, ceiling)).padStart(OTP_LENGTH, '0');
 }
 
-// In-memory revoked-token set (holds each token's signature segment)
-const revokedTokens = new Set();
-
 /**
- * Generate a random per-user salt
+ * Generate a random per-user salt.
  */
 function generateSalt() {
   return crypto.randomBytes(16).toString('hex');
 }
 
 /**
- * Hash password using SHA-256 + salt. Generates a random salt when none is supplied.
+ * Hash a password using HMAC-SHA256 + salt. Generates a random salt when none is
+ * supplied.
  */
 function hashPassword(password, salt) {
   const effectiveSalt = salt || generateSalt();
@@ -70,7 +86,7 @@ function hashPassword(password, salt) {
 }
 
 /**
- * Verify password against a stored hash + the salt that hash was created with
+ * Verify a password against a stored hash + the salt that hash was created with.
  */
 function verifyPassword(plainPassword, storedHash, storedSalt) {
   if (!plainPassword || !storedHash || !storedSalt) return false;
@@ -79,20 +95,19 @@ function verifyPassword(plainPassword, storedHash, storedSalt) {
 }
 
 /**
- * Load an account from the shared identity database (MySQL `user` table).
+ * Load an account from the `user` table in PostgreSQL.
  *
  * This is the single source of truth for authentication: there is no in-memory
- * user registry and no seeded demo credentials. If the identity database is
- * unreachable, authentication fails closed with a descriptive error rather than
- * silently accepting anything.
+ * user registry, no seeded demo credentials, and no second database. If the
+ * connection is unavailable, authentication fails closed with a descriptive error
+ * rather than silently accepting anything.
  *
  * When a mobile number is supplied the lookup is narrowed to email + phone,
- * matching the Java `/authenticate` contract. That matters because the shared
- * schema has no unique index on `user.username`, so email alone can match more
- * than one row.
+ * because there is no unique index on `user.username` — email alone can match
+ * more than one row.
  */
 async function loadIdentityUser(normalizedEmail, mobile) {
-  if (!identityPoolModule.pool) {
+  if (!pool.pool) {
     throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
   }
   try {
@@ -100,7 +115,7 @@ async function loadIdentityUser(normalizedEmail, mobile) {
       ? await identityQueries.findUserByEmailAndPhone(normalizedEmail, mobile)
       : await identityQueries.findUserByEmail(normalizedEmail);
   } catch (err) {
-    logger.error('Identity database lookup failed', err, 'AUTH_SERVICE');
+    logger.error('Account lookup failed', err, 'AUTH_SERVICE');
     throw new Error(AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE);
   }
 }
@@ -114,8 +129,7 @@ function assertUserCanSignIn(user, normalizedEmail, ipAddress) {
     logger.warn(`Sign-in blocked, inactive account: ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
     throw new Error(AUTH_MESSAGES.ACCOUNT_INACTIVE);
   }
-  // Self-registered accounts in the shared schema require admin approval, the
-  // same gate the Java service enforces on its own login path.
+  // Self-registered accounts require administrator approval.
   if (user.isSelfClient && !user.isApproved) {
     logger.warn(`Sign-in blocked, pending approval: ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
     throw new Error(AUTH_MESSAGES.ACCOUNT_PENDING_APPROVAL);
@@ -131,31 +145,44 @@ function assertUserCanSignIn(user, normalizedEmail, ipAddress) {
 }
 
 /**
- * Confirm the identity database is reachable at boot.
+ * Confirm the database is reachable at boot and clear out expired session state.
  *
- * Issued OTP codes and revoked session tokens are deliberately kept in process
- * memory: both are short-lived session state, so a restart simply invalidates
- * them, which fails safe. Durable data (accounts) lives in the identity schema.
+ * Issued OTP codes and revoked tokens are persisted (see db/authSessionQueries),
+ * so unlike the previous in-memory versions they survive a restart. The trade-off
+ * is that they now need sweeping, which happens here.
  */
 async function hydrateFromDB() {
-  const health = await identityPoolModule.checkIdentityHealth();
+  const health = await pool.checkDatabaseHealth();
   if (!health.isConnected) {
     logger.error(
-      `Identity database unreachable at startup: ${health.errorMessage}. Sign-in will be rejected until it recovers.`,
+      `Database unreachable at startup: ${health.errorMessage}. Sign-in will be rejected until it recovers.`,
       null,
       'AUTH_SERVICE'
     );
+    return health;
   }
+
+  try {
+    const purged = await authSessionQueries.purgeExpiredAuthState();
+    if (purged.otpsPurged > 0 || purged.revokedTokensPurged > 0) {
+      logger.info('Swept expired auth session state', purged, 'AUTH_SERVICE');
+    }
+  } catch (err) {
+    // A failed sweep is not a reason to refuse to boot: expired rows are inert,
+    // they just accumulate.
+    logger.warn('Could not sweep expired auth session state', { error: err.message }, 'AUTH_SERVICE');
+  }
+
   return health;
 }
 
 /**
- * Generate a cryptographically secure session token (JWT structure)
+ * Generate a cryptographically signed session token (JWT structure).
  */
 function generateSessionToken(user) {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
   const issuedAt = Math.floor(Date.now() / 1000);
-  const expiresAt = issuedAt + 24 * 60 * 60; // 24 hours
+  const expiresAt = issuedAt + SESSION_TTL_SECONDS;
 
   const payload = Buffer.from(
     JSON.stringify({
@@ -179,7 +206,12 @@ function generateSessionToken(user) {
 }
 
 /**
- * Verify session token, extract user claims, and reject revoked/logged-out sessions
+ * Verify a token's structure, signature and expiry.
+ *
+ * Deliberately synchronous and deliberately does NOT check revocation — that
+ * requires a database read. Call `assertSessionActive` for the complete check;
+ * this exists for the callers that only need to decode claims they have already
+ * had validated.
  */
 function verifySessionToken(token) {
   if (!token || typeof token !== 'string') {
@@ -197,12 +229,12 @@ function verifySessionToken(token) {
     .update(`${header}.${payload}`)
     .digest('base64url');
 
-  if (signature !== expectedSignature) {
+  // Compared as fixed-length digests, so a byte-by-byte early return cannot be
+  // used to discover the expected signature.
+  const provided = Buffer.from(signature);
+  const expected = Buffer.from(expectedSignature);
+  if (provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) {
     return { valid: false, error: AUTH_MESSAGES.INVALID_TOKEN_SIGNATURE };
-  }
-
-  if (revokedTokens.has(signature)) {
-    return { valid: false, error: AUTH_MESSAGES.SESSION_LOGGED_OUT };
   }
 
   try {
@@ -213,33 +245,65 @@ function verifySessionToken(token) {
       return { valid: false, error: AUTH_MESSAGES.SESSION_EXPIRED };
     }
 
-    return { valid: true, user: claims };
-  } catch (err) {
+    return { valid: true, user: claims, signature };
+  } catch {
     return { valid: false, error: AUTH_MESSAGES.TOKEN_DECODE_FAILED };
   }
 }
 
 /**
- * Revoke a session token so it no longer verifies, even before its natural expiry (logout)
+ * The full session check: structure, signature, expiry, and revocation.
+ *
+ * Revocation lives in PostgreSQL rather than a per-process Set, so a token
+ * revoked by any worker is rejected by all of them. A failed revocation read
+ * fails closed — treating an unreachable database as "not revoked" would turn a
+ * database outage into a window where every logged-out token worked again.
  */
-function revokeSessionToken(token) {
+async function assertSessionActive(token) {
+  const verification = verifySessionToken(token);
+  if (!verification.valid) return verification;
+
+  try {
+    const revoked = await authSessionQueries.isTokenRevoked(verification.signature);
+    if (revoked) {
+      return { valid: false, error: AUTH_MESSAGES.SESSION_LOGGED_OUT };
+    }
+  } catch (err) {
+    logger.error('Could not check whether the session token was revoked', err, 'AUTH_SERVICE');
+    return { valid: false, error: AUTH_MESSAGES.SESSION_CHECK_UNAVAILABLE };
+  }
+
+  return { valid: true, user: verification.user };
+}
+
+/**
+ * Revoke a session token so it no longer verifies, even before its natural
+ * expiry (logout).
+ */
+async function revokeSessionToken(token) {
   if (!token || typeof token !== 'string') return false;
   const parts = token.split('.');
   if (parts.length !== 3) return false;
 
   const [, payload, signature] = parts;
-  revokedTokens.add(signature);
 
-  let expiresAt = Math.floor(Date.now() / 1000) + 24 * 60 * 60;
+  let expiresAtSeconds = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS;
   try {
     const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-    if (claims.exp) expiresAt = claims.exp;
+    if (claims.exp) expiresAtSeconds = claims.exp;
   } catch {
-    // keep default expiry
+    // Keep the default expiry: an undecodable payload still gets revoked, it just
+    // cannot tell us when the entry may be swept.
   }
 
-  logger.info(`Session token revoked, expiring at ${expiresAt}`, {}, 'AUTH_SERVICE');
+  try {
+    await authSessionQueries.revokeToken(signature, expiresAtSeconds * 1000);
+  } catch (err) {
+    logger.error('Failed to record session token revocation', err, 'AUTH_SERVICE');
+    return false;
+  }
 
+  logger.info(`Session token revoked, expiring at ${expiresAtSeconds}`, {}, 'AUTH_SERVICE');
   return true;
 }
 
@@ -257,8 +321,7 @@ function toPublicUser(user) {
 /**
  * Authenticate with Email + registered Mobile + Password.
  *
- * Staged to match POST /authenticate in the Java p2pservices app, which is the
- * contract every other Procucev client already speaks:
+ * Staged so the failure a visitor is shown names the thing that actually failed:
  *   1. the email + mobile pair must resolve to an account
  *   2. that account must be active and approved
  *   3. only then is the password compared
@@ -273,10 +336,9 @@ async function authenticateWithPassword(email, password, ipAddress, mobile) {
   const normalizedEmail = email.trim().toLowerCase();
   const submittedMobile = String(mobile).trim();
 
-  // Stage 1 — identity. The Java service calls validateUser(username, phone)
-  // before looking at any credential, and reports the pair as wrong rather than
-  // blaming the password, so a visitor who mistyped their mobile number is told
-  // exactly that instead of doubting a password that was correct.
+  // Stage 1 — identity. Reported as a wrong pair rather than blamed on the
+  // password, so a visitor who mistyped their mobile number is told exactly that
+  // instead of doubting a password that was correct.
   const user = await loadIdentityUser(normalizedEmail, submittedMobile);
   if (!user) {
     logger.warn(
@@ -287,8 +349,7 @@ async function authenticateWithPassword(email, password, ipAddress, mobile) {
     throw new Error(AUTH_MESSAGES.INVALID_USERNAME_OR_MOBILE);
   }
 
-  // Stage 2 — the active / approval gates, again ahead of the credential check,
-  // mirroring validateUserApproval on the Java path.
+  // Stage 2 — the active / approval gates, again ahead of the credential check.
   assertUserCanSignIn(user, normalizedEmail, ipAddress);
 
   // Stage 3 — the credential itself.
@@ -319,10 +380,9 @@ async function authenticateWithPassword(email, password, ipAddress, mobile) {
 /**
  * Generate and dispatch a 6-digit email OTP.
  *
- * Follows the Java `/authenticate` OTP branch: the email + mobile pair is
- * validated and the approval gates are applied first, and only then is a code
- * issued, stored against `<+91phone>_EMAIL_<email>` and emailed. Only for an
- * account that already exists — use `register` to create one first.
+ * The email + mobile pair is validated and the approval gates are applied first,
+ * and only then is a code issued, stored and emailed. Only for an account that
+ * already exists — use `register` to create one first.
  */
 async function requestOtp(email, mobile, roleHint, ipAddress) {
   if (!email) {
@@ -349,13 +409,21 @@ async function requestOtp(email, mobile, roleHint, ipAddress) {
 
   const code = generateOtpCode();
   const expiresAt = Date.now() + OTP_EXPIRY_MS;
-  otpStore.set(buildOtpKey(normalizedEmail, submittedMobile), { code, expiresAt, attempts: 0 });
+
+  try {
+    await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, submittedMobile), code, expiresAt);
+  } catch (err) {
+    // Emailing a code that was never stored would guarantee the visitor's correct
+    // entry is rejected, so the failure is reported instead.
+    logger.error('Failed to store the issued OTP', err, 'AUTH_SERVICE');
+    throw new Error(AUTH_MESSAGES.OTP_STORAGE_FAILED);
+  }
 
   mailerService.sendOtpEmail(normalizedEmail, code, OTP_EXPIRY_MS / 1000).catch((e) =>
     logger.error('OTP email dispatch error', e, 'AUTH_SERVICE')
   );
 
-  logger.info(`OTP generated for ${normalizedEmail}: ${code}`, { ipAddress }, 'AUTH_SERVICE');
+  logger.info(`OTP generated for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
   storeService.addAuditLog({
     userEmail: normalizedEmail,
     action: `Instant ${OTP_LENGTH}-digit OTP dispatched to corporate email (${normalizedEmail})`,
@@ -375,10 +443,11 @@ async function requestOtp(email, mobile, roleHint, ipAddress) {
 }
 
 /**
- * Verify a 6-digit email OTP and issue a session. No master/bypass codes — only
- * the code actually issued via requestOtp, for the same email + mobile pair,
- * verifies. An expired entry is deleted on inspection, matching the Java
- * validateEmailOtp behaviour.
+ * Verify a 6-digit email OTP and issue a session.
+ *
+ * No master or bypass codes — only the code actually issued via requestOtp, for
+ * the same email + mobile pair, verifies. An expired entry is deleted on
+ * inspection.
  */
 async function verifyOtp(email, code, ipAddress, mobile) {
   if (!email || !code) {
@@ -393,26 +462,30 @@ async function verifyOtp(email, code, ipAddress, mobile) {
   const otpKey = buildOtpKey(normalizedEmail, submittedMobile);
 
   const user = await loadIdentityUser(normalizedEmail, submittedMobile);
-  const storedOtp = otpStore.get(otpKey);
+  const storedOtp = await authSessionQueries.findOtp(otpKey);
 
   if (storedOtp && Date.now() > storedOtp.expiresAt) {
-    otpStore.delete(otpKey);
+    await authSessionQueries.deleteOtp(otpKey);
     logger.warn(`Expired OTP submitted for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
     throw new Error(AUTH_MESSAGES.INVALID_OTP);
   }
 
-  const isValidCode = !!user && !!storedOtp && storedOtp.code === code;
+  const isValidCode =
+    !!user &&
+    !!storedOtp &&
+    storedOtp.code.length === String(code).length &&
+    crypto.timingSafeEqual(Buffer.from(storedOtp.code), Buffer.from(String(code)));
 
   if (!isValidCode) {
-    if (storedOtp) storedOtp.attempts = (storedOtp.attempts || 0) + 1;
+    if (storedOtp) await authSessionQueries.incrementOtpAttempts(otpKey);
     logger.warn(`Invalid OTP submitted for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
     throw new Error(AUTH_MESSAGES.INVALID_OTP);
   }
 
   assertUserCanSignIn(user, normalizedEmail, ipAddress);
 
-  // Clear OTP on successful verification
-  otpStore.delete(otpKey);
+  // Single-use: consumed on successful verification.
+  await authSessionQueries.deleteOtp(otpKey);
 
   const token = generateSessionToken(user);
   logger.audit(`User logged in via Instant OTP: ${user.email} (${user.role})`, user.email, { role: user.role, ipAddress });
@@ -438,14 +511,12 @@ async function registerUser(payload, ipAddress) {
   if (!password) throw new Error(AUTH_MESSAGES.EMAIL_PASSWORD_REQUIRED);
   if (!mobile) throw new Error(AUTH_MESSAGES.MOBILE_REQUIRED);
 
-  if (!identityPoolModule.pool) {
+  if (!pool.pool) {
     throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
   }
 
   const normalizedEmail = email.trim().toLowerCase();
 
-  // Accounts are created in the shared identity database so they are usable by
-  // every Procucev application, not just this workspace.
   const result = await identityQueries.insertBuyerAccount({
     email: normalizedEmail,
     password,
@@ -476,10 +547,10 @@ async function registerUser(payload, ipAddress) {
 }
 
 /**
- * Get all registered users (for admin inspection)
+ * Get all registered users (for admin inspection).
  */
 async function getAllUsers() {
-  if (!identityPoolModule.pool) {
+  if (!pool.pool) {
     throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
   }
   const users = await identityQueries.listUsers();
@@ -496,12 +567,15 @@ async function getAllUsers() {
 }
 
 module.exports = {
+  resolveAuthSecret,
   hashPassword,
   verifyPassword,
   loadIdentityUser,
   assertUserCanSignIn,
+  buildOtpKey,
   generateSessionToken,
   verifySessionToken,
+  assertSessionActive,
   revokeSessionToken,
   authenticateWithPassword,
   requestOtp,
@@ -509,4 +583,5 @@ module.exports = {
   registerUser,
   getAllUsers,
   hydrateFromDB,
+  SESSION_TTL_SECONDS,
 };
