@@ -134,7 +134,7 @@ describe('Domain database viewer (Neon PostgreSQL)', () => {
       });
 
       const res = await freshView.fetchPostgresTable('vendors');
-      expect(res).toEqual({ rows: [], columns: [], count: 0 });
+      expect(res).toEqual({ rows: [], columns: [], count: 0, pkColumn: 'id' });
 
       const all = await freshView.getAllPostgresData();
       expect(all).toEqual({});
@@ -182,7 +182,7 @@ describe('Domain database viewer (Neon PostgreSQL)', () => {
       });
 
       const tableData = await freshView.fetchPostgresTable('vendors');
-      expect(tableData).toEqual({ rows: [], columns: [], count: 0 });
+      expect(tableData).toEqual({ rows: [], columns: [], count: 0, pkColumn: 'id' });
     });
 
     test('handles schema query failure gracefully and keeps known tables', async () => {
@@ -203,7 +203,7 @@ describe('Domain database viewer (Neon PostgreSQL)', () => {
       });
 
       const allData = await freshView.getAllPostgresData();
-      expect(allData.vendors).toEqual({ rows: [], columns: [], count: 0 });
+      expect(allData.vendors).toEqual({ rows: [], columns: [], count: 0, pkColumn: 'id' });
     });
 
     test('handles fetch errors gracefully and falls back to empty array', async () => {
@@ -216,7 +216,7 @@ describe('Domain database viewer (Neon PostgreSQL)', () => {
       });
 
       const tableData = await freshView.fetchPostgresTable('unknown_table');
-      expect(tableData).toEqual({ rows: [], columns: [], count: 0 });
+      expect(tableData).toEqual({ rows: [], columns: [], count: 0, pkColumn: 'id' });
     });
   });
 
@@ -289,6 +289,34 @@ describe('Domain database viewer (Neon PostgreSQL)', () => {
       expect(res.body.tables).toBeDefined();
     });
 
+    test('PUT /api/table/:tableName/:recordId updates a record successfully', async () => {
+      jest.spyOn(freshView, 'updateTableRecord').mockResolvedValueOnce({ id: 'v-1', status: 'VERIFIED' });
+      const res = await request(app)
+        .put('/api/table/vendors/v-1')
+        .send({ status: 'VERIFIED' });
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.record.status).toBe('VERIFIED');
+    });
+
+    test('POST /api/table/:tableName creates a new record successfully', async () => {
+      jest.spyOn(freshView, 'insertTableRecord').mockResolvedValueOnce({ id: 'v-2', status: 'ACTIVE' });
+      const res = await request(app)
+        .post('/api/table/vendors')
+        .send({ id: 'v-2', status: 'ACTIVE' });
+      expect(res.status).toBe(201);
+      expect(res.body.success).toBe(true);
+      expect(res.body.record.id).toBe('v-2');
+    });
+
+    test('DELETE /api/table/:tableName/:recordId deletes a record successfully', async () => {
+      jest.spyOn(freshView, 'deleteTableRecord').mockResolvedValueOnce({ id: 'v-1' });
+      const res = await request(app).delete('/api/table/vendors/v-1');
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.deletedRecord.id).toBe('v-1');
+    });
+
     test('handles API errors gracefully', async () => {
       jest.spyOn(freshView, 'getAllPostgresData').mockRejectedValueOnce(new Error('DB failure'));
       const res = await request(app).get('/api/overview');
@@ -303,9 +331,142 @@ describe('Domain database viewer (Neon PostgreSQL)', () => {
       const resTable = await request(app).get('/api/table/vendors');
       expect(resTable.status).toBe(500);
 
+      jest.spyOn(freshView, 'updateTableRecord').mockRejectedValueOnce(new Error('Update failure'));
+      const resPut = await request(app).put('/api/table/vendors/v-1').send({ status: 'ERR' });
+      expect(resPut.status).toBe(500);
+
+      jest.spyOn(freshView, 'insertTableRecord').mockRejectedValueOnce(new Error('Insert failure'));
+      const resPost = await request(app).post('/api/table/vendors').send({});
+      expect(resPost.status).toBe(500);
+
+      jest.spyOn(freshView, 'deleteTableRecord').mockRejectedValueOnce(new Error('Delete failure'));
+      const resDel = await request(app).delete('/api/table/vendors/v-1');
+      expect(resDel.status).toBe(500);
+
       jest.spyOn(freshView, 'getAllPostgresData').mockRejectedValueOnce(new Error('DB failure'));
       const resAll = await request(app).get('/api/all-data');
       expect(resAll.status).toBe(500);
+    });
+  });
+
+  describe('updateTableRecord, insertTableRecord, deleteTableRecord helpers', () => {
+    test('updateTableRecord throws on invalid inputs or unconfigured pool', async () => {
+      let freshView;
+      jest.isolateModules(() => {
+        jest.doMock('../src/db/pool', () => ({ pool: null, query: jest.fn() }));
+        freshView = require('../src/db/view');
+      });
+
+      await expect(freshView.updateTableRecord('vendors', 'v-1', { status: 'ACTIVE' })).rejects.toThrow('pool is not configured');
+
+      jest.isolateModules(() => {
+        jest.doMock('../src/db/pool', () => ({ pool: {}, query: jest.fn() }));
+        freshView = require('../src/db/view');
+      });
+
+      await expect(freshView.updateTableRecord('invalid;name', 'v-1', { a: 1 })).rejects.toThrow('Invalid table name');
+      await expect(freshView.updateTableRecord('vendors', null, { a: 1 })).rejects.toThrow('Record ID is required');
+      await expect(freshView.updateTableRecord('vendors', 'v-1', {})).rejects.toThrow('No fields provided');
+      await expect(freshView.updateTableRecord('vendors', 'v-1', { id: 'v-1' })).rejects.toThrow('No editable column fields');
+    });
+
+    test('updateTableRecord executes parameterized SQL update with JSON stringification', async () => {
+      const mockQuery = jest.fn().mockResolvedValueOnce({ rows: [{ id: 'v-1', status: 'UPDATED', raw: { name: 'New' } }] });
+      let freshView;
+      jest.isolateModules(() => {
+        jest.doMock('../src/db/pool', () => ({ pool: {}, query: mockQuery }));
+        freshView = require('../src/db/view');
+      });
+
+      const res = await freshView.updateTableRecord('vendors', 'v-1', { status: 'UPDATED', raw: { name: 'New' } });
+      expect(res.id).toBe('v-1');
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE "vendors" SET "status" = $1, "raw" = $2 WHERE "id" = $3'),
+        ['UPDATED', JSON.stringify({ name: 'New' }), 'v-1']
+      );
+    });
+
+    test('updateTableRecord throws when record not found', async () => {
+      const mockQuery = jest.fn().mockResolvedValueOnce({ rows: [] });
+      let freshView;
+      jest.isolateModules(() => {
+        jest.doMock('../src/db/pool', () => ({ pool: {}, query: mockQuery }));
+        freshView = require('../src/db/view');
+      });
+
+      await expect(freshView.updateTableRecord('vendors', 'v-999', { status: 'X' })).rejects.toThrow('not found');
+    });
+
+    test('insertTableRecord executes insert with values', async () => {
+      const mockQuery = jest.fn().mockResolvedValueOnce({ rows: [{ id: 'v-2', status: 'NEW' }] });
+      let freshView;
+      jest.isolateModules(() => {
+        jest.doMock('../src/db/pool', () => ({ pool: {}, query: mockQuery }));
+        freshView = require('../src/db/view');
+      });
+
+      const res = await freshView.insertTableRecord('vendors', { id: 'v-2', status: 'NEW', raw: { a: 1 } });
+      expect(res.id).toBe('v-2');
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO "vendors"'),
+        ['v-2', 'NEW', JSON.stringify({ a: 1 })]
+      );
+    });
+
+    test('insertTableRecord handles validation errors', async () => {
+      let freshView;
+      jest.isolateModules(() => {
+        jest.doMock('../src/db/pool', () => ({ pool: null, query: jest.fn() }));
+        freshView = require('../src/db/view');
+      });
+
+      await expect(freshView.insertTableRecord('vendors', { id: '1' })).rejects.toThrow('pool is not configured');
+
+      jest.isolateModules(() => {
+        jest.doMock('../src/db/pool', () => ({ pool: {}, query: jest.fn() }));
+        freshView = require('../src/db/view');
+      });
+
+      await expect(freshView.insertTableRecord('bad;table', { a: 1 })).rejects.toThrow('Invalid table name');
+      await expect(freshView.insertTableRecord('vendors', {})).rejects.toThrow('No record data');
+    });
+
+    test('deleteTableRecord executes delete and throws if not found', async () => {
+      const mockQuery = jest.fn()
+        .mockResolvedValueOnce({ rows: [{ id: 'v-1' }] })
+        .mockResolvedValueOnce({ rows: [] });
+      let freshView;
+      jest.isolateModules(() => {
+        jest.doMock('../src/db/pool', () => ({ pool: {}, query: mockQuery }));
+        freshView = require('../src/db/view');
+      });
+
+      const res = await freshView.deleteTableRecord('vendors', 'v-1');
+      expect(res.id).toBe('v-1');
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('DELETE FROM "vendors" WHERE "id" = $1'),
+        ['v-1']
+      );
+
+      await expect(freshView.deleteTableRecord('vendors', 'v-999')).rejects.toThrow('not found');
+    });
+
+    test('deleteTableRecord validates pool and inputs', async () => {
+      let freshView;
+      jest.isolateModules(() => {
+        jest.doMock('../src/db/pool', () => ({ pool: null, query: jest.fn() }));
+        freshView = require('../src/db/view');
+      });
+
+      await expect(freshView.deleteTableRecord('vendors', '1')).rejects.toThrow('pool is not configured');
+
+      jest.isolateModules(() => {
+        jest.doMock('../src/db/pool', () => ({ pool: {}, query: jest.fn() }));
+        freshView = require('../src/db/view');
+      });
+
+      await expect(freshView.deleteTableRecord('bad;table', '1')).rejects.toThrow('Invalid table name');
+      await expect(freshView.deleteTableRecord('vendors', null)).rejects.toThrow('Record ID is required');
     });
   });
 
@@ -421,7 +582,7 @@ describe('Domain database viewer (Neon PostgreSQL)', () => {
       try {
         await freshView.runCli({ once: false });
         expect(freshView.startViewerServer).toHaveBeenCalled();
-        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Neon PostgreSQL Database Viewer Web UI is live!'));
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Neon PostgreSQL Database Viewer'));
       } finally {
         process.env.NODE_ENV = oldEnv;
       }

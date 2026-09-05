@@ -218,6 +218,7 @@ poolModule.query = query;
 poolModule.rows = rows;
 poolModule.withTransaction = withTransaction;
 poolModule.checkDatabaseHealth = checkDatabaseHealth;
+poolModule.checkDomainDBHealth = checkDatabaseHealth;
 poolModule.closePool = closePool;
 
 module.exports = poolModule;
