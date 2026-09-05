@@ -51,6 +51,7 @@ const REPORTED_TABLES = [
   'buyer_accounts',
   'ai_feed',
   'audit_logs',
+  'buyer_vendor',
 ];
 
 async function reportRowCounts() {

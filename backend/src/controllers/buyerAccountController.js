@@ -151,6 +151,72 @@ function ingestHistoricalData(req, res, next) {
   }
 }
 
+function getBuyerVendors(req, res, next) {
+  try {
+    if (!assertBuyerAccountRole(req, res)) return;
+    const buyerOrgId = req.user?.orgId || req.query.buyerOrgId || null;
+    const vendors = storeService.getBuyerVendors(buyerOrgId);
+    res.json({ success: true, count: vendors.length, data: vendors });
+  } catch (err) {
+    logger.error('Error getting buyer vendors', err, 'BUYER_ACCOUNT_CONTROLLER');
+    next(err);
+  }
+}
+
+async function aiCategorizeVendors(req, res, next) {
+  try {
+    if (!assertBuyerAccountRole(req, res)) return;
+    const { vendorMaster, poDump, period } = req.body;
+    const buyerOrgId = req.user?.orgId || req.body.buyerOrgId || null;
+    const result = await storeService.categorizeVendorsWithAI({
+      vendorMaster: vendorMaster || [],
+      poDump: poDump || [],
+      period: period || '1_year',
+      buyerOrgId,
+    });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    logger.error('Error running AI vendor categorization', err, 'BUYER_ACCOUNT_CONTROLLER');
+    next(err);
+  }
+}
+
+function saveBuyerVendors(req, res, next) {
+  try {
+    if (!assertBuyerAccountRole(req, res)) return;
+    const { buyerVendors, buyerOrgId } = req.body;
+    const requestingBuyerAccount = storeService.getBuyerAccountByEmail(req.user.email);
+    const targetOrgId = buyerOrgId || req.user?.orgId || null;
+    const result = storeService.saveBuyerVendors({
+      buyerVendors: buyerVendors || [],
+      buyerOrgId: targetOrgId,
+      requestingBuyerAccount,
+    });
+    res.json(result);
+  } catch (err) {
+    logger.error('Error saving buyer vendors', err, 'BUYER_ACCOUNT_CONTROLLER');
+    next(err);
+  }
+}
+
+function dispatchBuyerVendorEmails(req, res, next) {
+  try {
+    if (!assertBuyerAccountRole(req, res)) return;
+    const { buyerVendors, buyerOrgId } = req.body;
+    const requestingBuyerAccount = storeService.getBuyerAccountByEmail(req.user.email);
+    const targetOrgId = buyerOrgId || req.user?.orgId || null;
+    const result = storeService.dispatchBuyerVendorEmails({
+      buyerVendors: buyerVendors || [],
+      buyerOrgId: targetOrgId,
+      requestingBuyerAccount,
+    });
+    res.json(result);
+  } catch (err) {
+    logger.error('Error dispatching buyer vendor emails', err, 'BUYER_ACCOUNT_CONTROLLER');
+    next(err);
+  }
+}
+
 module.exports = {
   getBuyerAccounts,
   getActiveAccount,
@@ -159,4 +225,9 @@ module.exports = {
   deleteBuyerAccount,
   setActiveAccount,
   ingestHistoricalData,
+  getBuyerVendors,
+  aiCategorizeVendors,
+  saveBuyerVendors,
+  dispatchBuyerVendorEmails,
 };
+

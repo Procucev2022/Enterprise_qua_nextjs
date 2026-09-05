@@ -885,6 +885,38 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           })),
         }),
       });
+
+      // Also persist to buyer_vendor table with buyer_org_id and AI metrics
+      fetch('/api/buyer-accounts/save-buyer-vendors', {
+        method: 'POST',
+        headers: authFetchHeaders(),
+        body: JSON.stringify({
+          period,
+          buyerVendors: vendors.map((v) => ({
+            id: v.id,
+            vendorCode: v.vendorCode,
+            companyName: v.companyName,
+            contactPerson: v.contactPerson,
+            email: v.email,
+            phone: v.phone,
+            address: v.address,
+            gstin: v.gstNumber,
+            rating: v.vendorRatingScore,
+            hasPoHistory: v.hasPoHistory,
+            poCount: v.poCount || (v.hasPoHistory ? 1 : 0),
+            totalSpend: v.totalSpend || 0,
+            timeHorizon: period,
+            primaryMajorCategory: v.categoriesMappedByBuyer ? v.firstSetMajorCategory : 'Not Available',
+            minorCategories: v.secondSetMinorCategories || [],
+            productLines: v.productLines || [],
+            aiConfidenceScore: v.aiConfidenceScore || (v.hasPoHistory ? 94 : 0),
+            aiReason: v.aiReason || '',
+            mappingStatus: v.mappingStatus || (v.hasPoHistory ? 'AI_MAPPED' : 'SELF_MAP_REQUIRED'),
+            emailDispatchStatus: 'SENT',
+            dispatchedAt: new Date().toISOString(),
+          })),
+        }),
+      }).catch((err) => console.warn('Non-blocking buyer-vendors persistence:', err));
     } catch (e) {
       console.error('Failed to ingest historical purchase data:', e);
       showToast('Import Failed', 'Could not reach the server. Please try again.', 'warning');

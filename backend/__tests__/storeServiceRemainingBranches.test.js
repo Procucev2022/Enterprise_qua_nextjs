@@ -173,6 +173,7 @@ describe('Store Service — remaining branch coverage', () => {
         getBuyerAccountsFromDB: jest.fn().mockResolvedValue({ accounts: [], activeId: null }),
         getAIFeedFromDB: jest.fn().mockResolvedValue([]),
         getAuditLogsFromDB: jest.fn().mockResolvedValue([]),
+        getBuyerVendorsFromDB: jest.fn().mockResolvedValue([]),
         ...overrides,
       };
     }
@@ -558,6 +559,62 @@ describe('Store Service — remaining branch coverage', () => {
       const po = storeService.approvePurchaseOrder(rfq.rfqNumber, 'v-001', 'Test Vendor', 5000, 'notes');
 
       expect(po.lineItems).toEqual([{ description: 'Bearing', quantity: 10, unit: 'pcs' }]);
+    });
+
+    test('triggerBatchChaser returns error when no vendors are assigned', () => {
+      const rfq = storeService.createRFQ({ title: 'Unassigned RFQ', assignedVendors: [] });
+      const res = storeService.triggerBatchChaser(rfq.id);
+      expect(res.success).toBe(false);
+      expect(res.error).toContain('No vendors are assigned');
+    });
+
+    test('addQuoteToRFQ supports quote without vendorId', () => {
+      const rfq = storeService.createRFQ({ title: 'Quote Without Vendor ID RFQ' });
+      const updated = storeService.addQuoteToRFQ(rfq.id, { unitPrice: 1200, quotedDeliveryDate: '2026-10-01' });
+      expect(updated.quotes.length).toBeGreaterThan(0);
+    });
+
+    test('categorizeVendorsWithAI covers partial Gemini AI response data fields', async () => {
+      const geminiService = require('../src/services/geminiService');
+      const isConfiguredSpy = jest.spyOn(geminiService, 'isConfigured').mockReturnValue(true);
+      const generateJsonSpy = jest.spyOn(geminiService, 'generateJson').mockResolvedValue({
+        status: 'SUCCESS',
+        model: 'gemini-1.5-flash',
+        data: {
+          categorizations: [
+            {
+              vendorCode: 'PARTIAL-01',
+              primaryMajorCategory: 'Custom Robotics',
+              minorCategories: null,
+              productLines: [],
+              aiConfidenceScore: 'invalid-number',
+              aiReason: null,
+            },
+            {
+              // missing vendorCode
+              primaryMajorCategory: 'Orphaned Cat',
+            },
+          ],
+        },
+      });
+
+      const res = await storeService.categorizeVendorsWithAI({
+        vendorMaster: [
+          { vendorCode: 'PARTIAL-01', companyName: 'Robotics Labs' },
+          { vendorCode: 'UNMATCHED-GEM', companyName: 'Unmatched Co' },
+        ],
+        poDump: [
+          { vendorIdentifier: 'PARTIAL-01', itemName: 'Servo Motor 24V', totalSpend: 30000 },
+          { vendorIdentifier: 'UNMATCHED-GEM', itemName: 'General Tools', totalSpend: 5000 },
+        ],
+      });
+
+      expect(res.aiModel).toContain('Google Gemini');
+      const r1 = res.vendors.find((v) => v.vendorCode === 'PARTIAL-01');
+      expect(r1.primaryMajorCategory).toBe('Custom Robotics');
+
+      isConfiguredSpy.mockRestore();
+      generateJsonSpy.mockRestore();
     });
   });
 });
