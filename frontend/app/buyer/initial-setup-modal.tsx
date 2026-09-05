@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { useApp } from '@/lib/store';
+import { authClient } from '@/lib/authClient';
 import { formatCurrency } from '@/lib/constants';
 import {
   VendorMasterUploadRecord,
@@ -27,7 +28,7 @@ import {
 } from 'lucide-react';
 
 function extractRowValue(row: any, possibleKeys: string[]): string {
-  if (!row || typeof row !== 'object') return '';
+  if (!row) return '';
   const keys = Object.keys(row);
   for (const pk of possibleKeys) {
     const cleanPk = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -70,9 +71,10 @@ function classifyPOItemsLocally(itemText: string, poCount: number) {
 }
 
 function mapBuyerVendorToRecord(v: any, i: number): VendorMasterUploadRecord {
-  const ratingScore = Number.isFinite(Number(v.vendorRatingScore ?? v.score))
-    ? Math.round(Number(v.vendorRatingScore ?? v.score))
-    : Number.isFinite(Number(v.rating))
+  const rawScore = v.vendorRatingScore ?? v.score;
+  const ratingScore = rawScore !== undefined && rawScore !== null
+    ? Math.round(Number(rawScore))
+    : v.rating
     ? Math.round(Number(v.rating) * 20)
     : undefined;
 
@@ -433,9 +435,14 @@ export default function InitialSetupModal() {
   const handleSimulatePOJoin = async () => {
     setIsProcessingPOJoin(true);
     try {
+      const token = authClient.getToken() || (typeof window !== 'undefined' ? localStorage.getItem('procucev_auth_token') : null);
       const response = await fetch('/api/buyer-accounts/ai-categorize', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        credentials: 'include',
         body: JSON.stringify({
           vendorMaster: storedVendors.map((v) => ({
             id: v.id,

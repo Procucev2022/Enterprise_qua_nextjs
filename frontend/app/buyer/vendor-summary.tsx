@@ -302,11 +302,20 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const filteredVendors = mergedVendors.filter((v) => {
     const vCategory = v.majorCategory || '';
     const vMinors = (v.minorCategories || []).join(' ');
+    const q = searchQuery.toLowerCase().trim();
     const matchesSearch =
-      v.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      v.contactPerson.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      vCategory.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      vMinors.toLowerCase().includes(searchQuery.toLowerCase());
+      !q ||
+      [
+        v.name,
+        v.contactPerson,
+        v.email,
+        v.phone,
+        v.location,
+        v.id,
+        (v as any).vendorCode,
+        vCategory,
+        vMinors,
+      ].some((field) => Boolean(field && field.toLowerCase().includes(q)));
 
     const matchesCategory = selectedCategory === 'ALL' || vCategory === selectedCategory;
     const matchesStatus =

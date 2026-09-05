@@ -872,4 +872,71 @@ describe('app/buyer/vendor-summary.tsx', () => {
     expect(screen.getByText(/delivered/i)).toBeInTheDocument();
     fireEvent.click(screen.getByText('Close'));
   });
+
+  it('covers vendor engagement in follow-up data and search by phone/vendorCode', () => {
+    const engagedVendor = [
+      {
+        id: 'vnd-engaged-1',
+        vendorCode: 'VND-ENG-99',
+        name: 'Precision Turbines India',
+        contactPerson: 'Karan Mehra',
+        email: 'karan@turbines.in',
+        phone: '+91 98765 43210',
+        location: 'Bengaluru, KA',
+        source: 'manual',
+        status: 'PREFERRED ENTERPRISE SUPPLIER',
+        evaluated: false,
+        majorCategory: 'Power Systems',
+        minorCategories: ['Turbines', 'Generators'],
+      },
+    ];
+
+    const rfqsWithFollowUp = [
+      {
+        id: 'rfq-followup-101',
+        title: 'Turbine Overhaul RFQ',
+        status: 'ACTIVE',
+        quotes: [],
+        followUpData: {
+          vendors: [
+            {
+              vendorId: 'vnd-engaged-1',
+              vendorName: 'Precision Turbines India',
+              responseStatus: 'responded',
+            },
+          ],
+        },
+      },
+    ];
+
+    (useApp as jest.Mock).mockReturnValue({
+      vendorEvaluations: [],
+      currentMode: 'mode_3',
+      rfqs: rfqsWithFollowUp,
+      showToast: mockShowToast,
+      buyerVendors: engagedVendor,
+      addBuyerVendor: jest.fn(),
+      updateBuyerVendor: jest.fn(),
+      deleteBuyerVendor: jest.fn(),
+      reviseVendorRating: mockReviseVendorRating,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+      activeBuyerAccount: { organizationName: 'Tata Power Corp' },
+    });
+
+    render(
+      <VendorSummary
+        onViewEvaluation={mockOnViewEvaluation}
+        onNavigateToWizard={mockOnNavigateToWizard}
+      />
+    );
+
+    // Search by vendorCode
+    const searchInput = screen.getByPlaceholderText(/Search vendors by name/i);
+    fireEvent.change(searchInput, { target: { value: 'VND-ENG-99' } });
+    expect(screen.getByText('Precision Turbines India')).toBeInTheDocument();
+
+    // Search by phone
+    fireEvent.change(searchInput, { target: { value: '98765 43210' } });
+    expect(screen.getByText('Precision Turbines India')).toBeInTheDocument();
+  });
 });

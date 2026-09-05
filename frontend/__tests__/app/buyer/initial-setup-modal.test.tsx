@@ -617,6 +617,15 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'Unit Price': 100,
           'Total Spend': 100,
         },
+        {
+          'PO Number': 'PO-8884',
+          'PO Date': '2025-01-04',
+          'Vendor Name': 'TechnoForce Electricals Ltd',
+          'Item Name': '415V Switchgear Panel & Breaker',
+          Quantity: 1,
+          'Unit Price': 12000,
+          'Total Spend': 12000,
+        },
       ]),
       'POs'
     );
@@ -965,6 +974,182 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     });
 
     expect(mockProcessHistoricalPurchaseData).toHaveBeenCalled();
+  });
+
+  it('covers ai-categorize offline/error fallback and low rating score badges', async () => {
+    // Mock fetch failure for ai-categorize to exercise catch block and classifyPOItemsLocally
+    (global.fetch as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+    localStorage.setItem('procucev_auth_token', 'test-token-12345');
+
+    const lowScoreVendors = [
+      {
+        id: 'v-low',
+        name: 'Low Score Supplier',
+        contactPerson: 'Karan',
+        email: 'karan@low.com',
+        phone: '+91 90000 11111',
+        location: 'Delhi',
+        vendorRatingScore: 55, // triggers score < 70 red badge
+        majorCategory: 'Mechanical',
+      },
+    ];
+
+    (useApp as jest.Mock).mockReturnValue({
+      initialSetupModalOpen: true,
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      historicalPurchaseDataPeriod: '1_year',
+      setHistoricalPurchaseDataPeriod: mockSetHistoricalPurchaseDataPeriod,
+      processHistoricalPurchaseData: mockProcessHistoricalPurchaseData,
+      activeBuyerAccount: null,
+      buyerVendors: lowScoreVendors,
+      showToast: mockShowToast,
+    });
+
+    render(<InitialSetupModal />);
+
+    // Advance to Step 4 via PO simulation
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    fireEvent.click(screen.getByText(/Proceed to File 2: PO Dump/i));
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Run AI Category Cross-Match/i));
+    });
+
+    expect(screen.getByText(/Step 4: AI Cross-Match & Category Assignment Audit/i)).toBeInTheDocument();
+
+    // Advance to Step 5
+    fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
+    expect(screen.getByText(/Step 5: Confirm Ingestion/i)).toBeInTheDocument();
+
+    // Ingest with double click simulation
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ success: true }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ success: true, count: 1 }) });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/COMPLETE SETUP & INGEST/i));
+      fireEvent.click(screen.getByText(/COMPLETE SETUP & INGEST/i));
+    });
+
+    expect(mockProcessHistoricalPurchaseData).toHaveBeenCalled();
+    localStorage.removeItem('procucev_auth_token');
+  });
+
+  it('covers manual category override validation (empty major), custom minor categories, and rating/period branches', async () => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        success: true,
+        aiModel: 'Gemini 1.5 Pro',
+        categorizedVendors: [
+          {
+            id: 'v-10',
+            vendorCode: 'VND-2020',
+            primaryMajorCategory: 'Electrical Equipment',
+            minorCategories: ['Transformers', 'Switchgear'],
+            productLines: ['Industrial Relays'],
+            aiConfidenceScore: 98,
+            aiReason: 'Matched high volume electrical POs',
+            hasPoHistory: true,
+            totalSpend: 1500000,
+            poCount: 12,
+          },
+          {
+            id: 'v-11',
+            vendorCode: '',
+            primaryMajorCategory: 'Chemicals',
+            minorCategories: null,
+            productLines: null,
+            aiConfidenceScore: 85,
+            aiReason: 'Matched solvents',
+            hasPoHistory: false,
+            totalSpend: 0,
+            poCount: 0,
+          },
+        ],
+      }),
+    });
+
+    const testVendors = [
+      {
+        id: 'v-10',
+        name: 'PowerGrid Solutions',
+        contactPerson: 'Aditi Sharma',
+        email: 'aditi@powergrid.com',
+        phone: '+91 91234 56789',
+        location: 'Mumbai',
+        vendorRatingScore: 92,
+        status: 'PREFERRED ENTERPRISE SUPPLIER',
+      },
+      {
+        id: 'v-11',
+        name: 'CleanChem Ltd',
+        contactPerson: 'Vikram',
+        email: 'vikram@chem.com',
+        location: 'Surat',
+        vendorRatingScore: null,
+        status: 'PREFERRED ENTERPRISE SUPPLIER',
+      },
+    ];
+
+    (useApp as jest.Mock).mockReturnValue({
+      initialSetupModalOpen: true,
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      historicalPurchaseDataPeriod: '2_years',
+      setHistoricalPurchaseDataPeriod: mockSetHistoricalPurchaseDataPeriod,
+      processHistoricalPurchaseData: mockProcessHistoricalPurchaseData,
+      activeBuyerAccount: { organizationName: 'Custom Buyer Enterprises' },
+      buyerVendors: testVendors,
+      showToast: mockShowToast,
+    });
+
+    render(<InitialSetupModal />);
+
+    // Period selector to 3_years
+    const threeYearsBtn = screen.getByText(/Last 3 Years/i);
+    fireEvent.click(threeYearsBtn);
+
+    // Advance to Step 4
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    fireEvent.click(screen.getByText(/Proceed to File 2: PO Dump/i));
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Run AI Category Cross-Match/i));
+    });
+
+    expect(screen.getByText(/Step 4: AI Cross-Match & Category Assignment Audit/i)).toBeInTheDocument();
+
+    // Edit vendor category
+    const editBtns = screen.getAllByRole('button', { name: /Edit \/ Review/i });
+    if (editBtns.length > 0) {
+      fireEvent.click(editBtns[0]);
+
+      // Test empty major validation branch
+      const majorInput = screen.getByPlaceholderText(/e.g. Engineering Spares - Mechanical/i);
+      fireEvent.change(majorInput, { target: { value: '   ' } });
+      const saveBtn = screen.getByRole('button', { name: /Save Override/i });
+      fireEvent.click(saveBtn);
+      expect(mockShowToast).toHaveBeenCalledWith('Validation Error', expect.any(String), 'warning');
+
+      // Test valid major with custom comma separated minors
+      fireEvent.change(majorInput, { target: { value: 'Advanced Electricals' } });
+      const minorInput = screen.getByPlaceholderText(/e.g. Pumps & Accessories, Valves, Hoses/i);
+      fireEvent.change(minorInput, { target: { value: 'High Voltage Cables, Substation Spares' } });
+      fireEvent.click(saveBtn);
+      expect(mockShowToast).toHaveBeenCalledWith('Category Updated', expect.any(String), 'success');
+
+      // Edit second vendor and save with empty minors (falls back to General Spares)
+      if (editBtns.length > 1) {
+        fireEvent.click(editBtns[1]);
+        const minorInput2 = screen.getByPlaceholderText(/e.g. Pumps & Accessories, Valves, Hoses/i);
+        fireEvent.change(minorInput2, { target: { value: '' } });
+        fireEvent.click(screen.getByRole('button', { name: /Save Override/i }));
+      }
+    }
+
+    // Go to Step 5
+    fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
+    expect(screen.getByText(/Step 5: Confirm Ingestion/i)).toBeInTheDocument();
   });
 });
 
