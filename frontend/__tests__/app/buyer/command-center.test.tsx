@@ -9,6 +9,21 @@ jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
 }));
 
+jest.mock('@/app/components/Modals', () => ({
+  RFQFollowUpDeepDiveModal: ({ isOpen, onClose }: any) =>
+    isOpen ? (
+      <div data-testid="deep-dive-modal">
+        <button onClick={onClose}>Close Deep Dive</button>
+      </div>
+    ) : null,
+  MultiChannelChaserModal: ({ isOpen, onClose }: any) =>
+    isOpen ? (
+      <div data-testid="chaser-modal">
+        <button onClick={onClose}>Close Chaser</button>
+      </div>
+    ) : null,
+}));
+
 describe('app/buyer/command-center.tsx', () => {
   const mockNavigateToWizard = jest.fn();
   const mockNavigateToMatrix = jest.fn();
@@ -483,5 +498,81 @@ describe('app/buyer/command-center.tsx', () => {
 
     expect(screen.getByText(/Voice Call Connected: Slurry Pumps/i)).toBeInTheDocument();
     expect(screen.queryByText(/Voice Call Connected: Other Buyer RFQ/i)).not.toBeInTheDocument();
+  });
+
+  it('filters out feed events from other organizations and handles optional directory navigation', () => {
+    const orgFeeds = [
+      {
+        id: 'feed-match-org',
+        title: 'Org Matched Feed',
+        message: 'AI Category Cross-Match completed and persisted for Organization buyer-org-123. Dual-file ERP ingestion sealed.',
+        type: 'ingestion',
+        timestamp: '10:00 AM',
+        organizationId: 'buyer-org-123',
+      },
+      {
+        id: 'feed-diff-org',
+        title: 'Other Org Feed',
+        message: 'AI Category Cross-Match completed and persisted for Organization diff-org-999. Dual-file ERP ingestion sealed.',
+        type: 'ingestion',
+        timestamp: '10:05 AM',
+        organizationId: 'diff-org-999',
+      },
+      {
+        id: 'feed-diff-buyer-org',
+        title: 'Other Buyer Org Feed',
+        message: 'Dispatched notification for other organization.',
+        type: 'ingestion',
+        timestamp: '10:10 AM',
+        buyerOrgId: 'diff-org-888',
+      },
+      {
+        id: 'feed-matched-buyer-org',
+        title: 'Matched Buyer Org Feed',
+        message: 'Dispatched notification for active buyer organization.',
+        type: 'ingestion',
+        timestamp: '10:15 AM',
+        buyerOrgId: 'buyer-org-123',
+      },
+    ];
+
+    const mockNavigateToSubscription = jest.fn();
+    const mockNavigateToDirectory = jest.fn();
+
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: [],
+      aiFeed: orgFeeds,
+      currentMode: 'mode_3',
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      selectedRFQForDeepDive: null,
+      setSelectedRFQForDeepDive: mockSetSelectedRFQForDeepDive,
+      deepDiveModalOpen: true,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      remainingFreeRFQs: 0,
+      activeSubscription: 'free',
+      activeBuyerAccount: { id: 'buyer-org-123', organizationName: 'Active Org Inc' },
+      buyerVendors: [],
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      initialSetupCompleted: false,
+    });
+
+    render(
+      <CommandCenter
+        onNavigateToWizard={mockNavigateToWizard}
+        onNavigateToMatrix={mockNavigateToMatrix}
+        onNavigateToSubscription={mockNavigateToSubscription}
+        onNavigateToDirectory={mockNavigateToDirectory}
+      />
+    );
+
+    expect(screen.getByText(/Org Matched Feed/i)).toBeInTheDocument();
+    expect(screen.getByText(/Matched Buyer Org Feed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Other Org Feed/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Other Buyer Org Feed/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Close Deep Dive'));
+    expect(mockSetDeepDiveModalOpen).toHaveBeenCalledWith(false);
   });
 });

@@ -277,9 +277,23 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setSelectedVendorForDelete(null);
   };
 
-  // Merge evaluations in store with buyerVendors from context
+  // Merge evaluations in store with buyerVendors from context scoped to active buyer
+  const buyerId = activeBuyerAccount?.id || null;
+  const buyerOrgName = (activeBuyerAccount?.organizationName || '').toLowerCase().trim();
+
+  const scopedBuyerVendors = (buyerVendors || []).filter((bv: any) => {
+    if (bv.buyerOrgId && buyerId && bv.buyerOrgId !== buyerId) {
+      return false;
+    }
+    if (bv.addedByBuyerCompany && buyerOrgName) {
+      const addedBy = bv.addedByBuyerCompany.toLowerCase().trim();
+      return addedBy === buyerOrgName || buyerOrgName.includes(addedBy) || addedBy.includes(buyerOrgName);
+    }
+    return true;
+  });
+
   const allEvaluations = [...vendorEvaluations];
-  const mergedVendors = buyerVendors.map((bv) => {
+  const mergedVendors = scopedBuyerVendors.map((bv) => {
     const storeEval = allEvaluations.find((e) => e.vendorName === bv.name || e.vendorId === bv.id);
     if (storeEval) {
       return {

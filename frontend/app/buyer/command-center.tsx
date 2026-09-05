@@ -45,6 +45,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
     remainingFreeRFQs,
     activeSubscription,
     activeBuyerAccount,
+    buyerVendors,
     setInitialSetupModalOpen,
     initialSetupCompleted,
   } = useApp();
@@ -150,11 +151,32 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   };
 
   const buyerRfqNumbers = new Set(rfqs.map((r) => r.rfqNumber));
+  const activeOrgId = activeBuyerAccount?.id || null;
+  const activeOrgName = (activeBuyerAccount?.organizationName || '').toLowerCase().trim();
+  const buyerVendorNames = new Set((buyerVendors || []).map((v) => (v.name || '').toLowerCase().trim()));
 
   const buyerScopedFeed = aiFeed.filter((item) => {
-    if (item.rfqNumber && buyerRfqNumbers.size > 0 && !buyerRfqNumbers.has(item.rfqNumber)) {
+    // 1. If feed item is linked to an RFQ, ensure it belongs to active buyer
+    if (item.rfqNumber) {
+      return buyerRfqNumbers.has(item.rfqNumber);
+    }
+
+    // 2. If feed item is explicitly tagged with an organization ID
+    if ((item as any).organizationId && activeOrgId && (item as any).organizationId !== activeOrgId) {
       return false;
     }
+    if ((item as any).buyerOrgId && activeOrgId && (item as any).buyerOrgId !== activeOrgId) {
+      return false;
+    }
+
+    // 3. If feed message references an organization ID, ensure it matches active buyer
+    if (activeOrgId && item.message && item.message.includes('for Organization ')) {
+      const match = item.message.match(/for Organization (\S+?)(?:\.|$|\s)/i);
+      if (match && match[1] && match[1] !== activeOrgId) {
+        return false;
+      }
+    }
+
     return true;
   });
 

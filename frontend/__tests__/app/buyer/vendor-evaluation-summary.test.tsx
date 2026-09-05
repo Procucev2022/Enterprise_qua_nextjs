@@ -314,7 +314,7 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
     expect(screen.getByText('Synthesized Pumps Ltd.')).toBeInTheDocument();
   });
 
-  it('triggers CAPA with empty initial capaNotes', () => {
+  it('triggers CAPA with empty initial capaNotes and handles onBack button', () => {
     const recordWithoutNotes: VendorEvaluationRecord = {
       ...mockEvaluationRecord,
       capaNotes: '',
@@ -330,7 +330,11 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
       ],
     };
 
-    render(<VendorEvaluationSummary evaluationRecord={recordWithoutNotes} />);
+    const mockOnBack = jest.fn();
+    render(<VendorEvaluationSummary evaluationRecord={recordWithoutNotes} onBack={mockOnBack} />);
+    fireEvent.click(screen.getByRole('button', { name: /Back/i }));
+    expect(mockOnBack).toHaveBeenCalled();
+
     fireEvent.click(screen.getByText(/Trigger CAPA Action/i));
     expect(mockAddFeedItem).toHaveBeenCalledWith(
       expect.stringContaining('CAPA Triggered'),
@@ -339,5 +343,49 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
       'RFQ-2026-00421',
       'Apex Supplies Ltd.'
     );
+  });
+
+  it('handles vendor with rating calculation and partial moduleScores', () => {
+    const ratedVendor = [
+      {
+        id: 'v-rated-1',
+        name: 'Rating Only Vendor',
+        contactPerson: 'Aditi',
+        email: 'aditi@rated.com',
+        phone: '+91 91234 56789',
+        majorCategory: 'Mechanical',
+        rating: 3.6,
+      },
+    ];
+
+    const partialModuleRecord: VendorEvaluationRecord = {
+      id: 'eval-partial',
+      vendorId: 'v-rated-1',
+      vendorName: 'Rating Only Vendor',
+      contactPerson: 'Aditi',
+      email: 'aditi@rated.com',
+      phone: '+91 91234 56789',
+      category: 'Mechanical',
+      submissionDate: '2026-08-20',
+      status: 'CONDITIONAL / UNDER REVIEW',
+      overallScore: 72,
+      systemAction: 'Audited',
+      moduleScores: {
+        commercial: { score: 3.5, maxScore: 5, weight: 25, weightedScore: 17.5, remarks: 'Custom remark' },
+      } as any,
+      documents: [],
+    };
+
+    (useApp as jest.Mock).mockReturnValue({
+      vendorEvaluations: [partialModuleRecord],
+      buyerVendors: ratedVendor,
+      showToast: mockShowToast,
+      addAuditLog: mockAddAuditLog,
+      addFeedItem: mockAddFeedItem,
+    });
+
+    render(<VendorEvaluationSummary evaluationRecord={partialModuleRecord} />);
+    expect(screen.getByText('Rating Only Vendor')).toBeInTheDocument();
+    expect(screen.getByText(/Custom remark/i)).toBeInTheDocument();
   });
 });

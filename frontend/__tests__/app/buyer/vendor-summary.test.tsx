@@ -939,4 +939,105 @@ describe('app/buyer/vendor-summary.tsx', () => {
     fireEvent.change(searchInput, { target: { value: '98765 43210' } });
     expect(screen.getByText('Precision Turbines India')).toBeInTheDocument();
   });
+
+  it('correctly filters vendors based on buyerOrgId and addedByBuyerCompany and handles null buyerVendors', () => {
+    const multiOrgVendors = [
+      {
+        id: 'v-match-orgid',
+        name: 'Matched OrgId Vendor',
+        buyerOrgId: 'buyer-org-123',
+        addedByBuyerCompany: 'Tata Power Corp',
+        majorCategory: 'Mechanical',
+        status: 'PREFERRED ENTERPRISE SUPPLIER',
+        evaluated: true,
+        score: 95,
+      },
+      {
+        id: 'v-mismatch-orgid',
+        name: 'Other Buyer OrgId Vendor',
+        buyerOrgId: 'different-buyer-999',
+        addedByBuyerCompany: 'Tata Power Corp',
+        majorCategory: 'Mechanical',
+        status: 'PREFERRED ENTERPRISE SUPPLIER',
+        evaluated: false,
+      },
+      {
+        id: 'v-match-company',
+        name: 'Matched Company Vendor',
+        addedByBuyerCompany: 'Tata Power Corp',
+        majorCategory: 'Electrical',
+        status: 'CONDITIONAL / UNDER REVIEW',
+        evaluated: true,
+        score: 82,
+      },
+      {
+        id: 'v-mismatch-company',
+        name: 'Other Company Vendor',
+        addedByBuyerCompany: 'Unrelated Corp Ltd',
+        majorCategory: 'Civil',
+        status: 'REGISTERED',
+        evaluated: false,
+      },
+      {
+        id: 'v-no-org-tag',
+        name: 'Generic Untagged Vendor',
+        majorCategory: 'Instrumentation',
+        status: 'REGISTERED',
+        evaluated: false,
+      },
+    ];
+
+    (useApp as jest.Mock).mockReturnValue({
+      vendorEvaluations: [],
+      currentMode: 'mode_3',
+      rfqs: [],
+      showToast: mockShowToast,
+      buyerVendors: multiOrgVendors,
+      addBuyerVendor: jest.fn(),
+      updateBuyerVendor: jest.fn(),
+      deleteBuyerVendor: jest.fn(),
+      reviseVendorRating: mockReviseVendorRating,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+      activeBuyerAccount: { id: 'buyer-org-123', organizationName: 'Tata Power Corp' },
+    });
+
+    const { rerender } = render(
+      <VendorSummary
+        onViewEvaluation={mockOnViewEvaluation}
+        // test without onNavigateToWizard to cover optional prop
+      />
+    );
+
+    expect(screen.getByText('Matched OrgId Vendor')).toBeInTheDocument();
+    expect(screen.getByText('Matched Company Vendor')).toBeInTheDocument();
+    expect(screen.getByText('Generic Untagged Vendor')).toBeInTheDocument();
+
+    // Mismatched vendors must NOT be present
+    expect(screen.queryByText('Other Buyer OrgId Vendor')).not.toBeInTheDocument();
+    expect(screen.queryByText('Other Company Vendor')).not.toBeInTheDocument();
+
+    // Test with null buyerVendors
+    (useApp as jest.Mock).mockReturnValue({
+      vendorEvaluations: [],
+      currentMode: 'mode_3',
+      rfqs: [],
+      showToast: mockShowToast,
+      buyerVendors: null,
+      addBuyerVendor: jest.fn(),
+      updateBuyerVendor: jest.fn(),
+      deleteBuyerVendor: jest.fn(),
+      reviseVendorRating: mockReviseVendorRating,
+      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+      activeBuyerAccount: null,
+    });
+
+    rerender(
+      <VendorSummary
+        onViewEvaluation={mockOnViewEvaluation}
+      />
+    );
+
+    expect(screen.getByText('No vendors found matching query filters.')).toBeInTheDocument();
+  });
 });
+
