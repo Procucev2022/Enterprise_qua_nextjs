@@ -14,8 +14,10 @@ import {
   IndianRupee,
   Layers,
   ChevronDown,
+  Upload,
 } from 'lucide-react';
 import CompanyHoverTooltip from '@/app/components/CompanyHoverTooltip';
+import VendorUploadModal from './VendorUploadModal';
 
 interface VendorConsoleProps {
   onNavigateToMatrix: (rfq: RFQItem) => void;
@@ -51,6 +53,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
   // Dropdown filter states
   const [selectedCompany, setSelectedCompany] = useState<string>('all');
   const [selectedContactFilterId, setSelectedContactFilterId] = useState<string>('all');
+  const [uploadModalOpen, setUploadModalOpen] = useState(false);
 
   // Was a hardcoded list of 6 fake vendor profiles with invented ratings,
   // SLAs and awarded-spend figures. Every metric below is now derived from
@@ -161,7 +164,15 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
             Category Manager Central Command: check vendor performance metrics, quote compliance, awarded spend share, and drill down into bid details.
           </p>
         </div>
+        <button
+          onClick={() => setUploadModalOpen(true)}
+          className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 shrink-0"
+        >
+          <Upload size={14} /> Bulk Upload Vendors
+        </button>
       </div>
+
+      <VendorUploadModal isOpen={uploadModalOpen} onClose={() => setUploadModalOpen(false)} />
 
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* DYNAMIC VENDOR SELECTOR BAR */}

@@ -1,4 +1,6 @@
 const storeService = require('../src/services/storeService');
+const domainPool = require('../src/db/pool');
+const domainQueries = require('../src/db/domainQueries');
 
 describe('Store Service & Business Operations', () => {
   test('initializes with no records at all', () => {
@@ -106,6 +108,108 @@ describe('Store Service & Business Operations', () => {
 
       const failDelete = storeService.deleteVendor('nonexistent');
       expect(failDelete).toBe(false);
+    });
+  });
+
+  describe('Bulk Vendor Import', () => {
+    function row(overrides = {}) {
+      return {
+        rowNumber: 1,
+        name: 'Hydrocare Fluid Power Systems',
+        contactPerson: 'Hydrocare',
+        email: 'hydrocare@example.com',
+        phone: '9243047807',
+        majorCategory: 'Hoses, Valves & Fittings',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        gstin: '29AAAPL5929R1ZX',
+        pincode: '560047',
+        products: 'Hydraulic Pumps, Valves',
+        ...overrides,
+      };
+    }
+
+    test('imports valid, distinct rows and reflects them in getVendors', async () => {
+      const before = storeService.getVendors().length;
+      const { results, importedCount, duplicateCount } = await storeService.bulkAddVendors([
+        row({ rowNumber: 1, email: 'bulk-a@example.com' }),
+        row({ rowNumber: 2, email: 'bulk-b@example.com', name: '3S Industries' }),
+      ]);
+
+      expect(importedCount).toBe(2);
+      expect(duplicateCount).toBe(0);
+      expect(results.every((r) => r.status === 'imported')).toBe(true);
+      expect(storeService.getVendors().length).toBe(before + 2);
+      expect(storeService.getVendors().some((v) => v.email === 'bulk-a@example.com')).toBe(true);
+    });
+
+    test('flags a row whose email already exists in the store as a duplicate, without re-importing it', async () => {
+      const existing = storeService.addVendor({ name: 'Existing Co', email: 'already-here@example.com', majorCategory: 'Mechanical' });
+
+      const { results, importedCount, duplicateCount } = await storeService.bulkAddVendors([
+        row({ rowNumber: 5, email: existing.email }),
+      ]);
+
+      expect(importedCount).toBe(0);
+      expect(duplicateCount).toBe(1);
+      expect(results[0]).toMatchObject({ rowNumber: 5, status: 'duplicate' });
+      // Not a second vendor row for the same email.
+      expect(storeService.getVendors().filter((v) => v.email === existing.email)).toHaveLength(1);
+    });
+
+    test('flags the second occurrence of the same email within one upload as a duplicate, keeping only the first', async () => {
+      const { results, importedCount, duplicateCount } = await storeService.bulkAddVendors([
+        row({ rowNumber: 1, email: 'repeat@example.com', name: 'First Occurrence' }),
+        row({ rowNumber: 2, email: 'repeat@example.com', name: 'Second Occurrence' }),
+      ]);
+
+      expect(importedCount).toBe(1);
+      expect(duplicateCount).toBe(1);
+      expect(results.find((r) => r.rowNumber === 1).status).toBe('imported');
+      expect(results.find((r) => r.rowNumber === 2)).toMatchObject({ status: 'duplicate', reason: expect.stringContaining('within the uploaded file') });
+    });
+
+    test('an empty batch imports nothing without touching the store', async () => {
+      const before = storeService.getVendors().length;
+      const { results, importedCount, duplicateCount } = await storeService.bulkAddVendors([]);
+      expect(results).toEqual([]);
+      expect(importedCount).toBe(0);
+      expect(duplicateCount).toBe(0);
+      expect(storeService.getVendors().length).toBe(before);
+    });
+
+    test('when a DB pool is configured, a row the bulk INSERT silently skipped (a race-condition duplicate) is reported as duplicate, not imported', async () => {
+      const originalPool = domainPool.pool;
+      const spy = jest.spyOn(domainQueries, 'bulkInsertVendorsInDB').mockResolvedValue([]);
+      domainPool.pool = { query: jest.fn() }; // truthy sentinel: "a pool is configured"
+
+      try {
+        const { results, importedCount, duplicateCount } = await storeService.bulkAddVendors([
+          row({ rowNumber: 9, email: 'raced-out@example.com' }),
+        ]);
+
+        expect(importedCount).toBe(0);
+        expect(duplicateCount).toBe(1);
+        expect(results[0]).toMatchObject({ rowNumber: 9, status: 'duplicate', email: 'raced-out@example.com' });
+        expect(storeService.getVendors().some((v) => v.email === 'raced-out@example.com')).toBe(false);
+      } finally {
+        domainPool.pool = originalPool;
+        spy.mockRestore();
+      }
+    });
+
+    test('imported vendors carry the source-tracking and default fields a bulk-Excel import implies', async () => {
+      await storeService.bulkAddVendors([row({ rowNumber: 1, email: 'tagged@example.com' })]);
+      const created = storeService.getVendors().find((v) => v.email === 'tagged@example.com');
+      expect(created).toMatchObject({
+        source: 'excel',
+        status: 'REGISTERED / NOT EVALUATED',
+        evaluated: false,
+        gstin: '29AAAPL5929R1ZX',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560047',
+      });
     });
   });
 

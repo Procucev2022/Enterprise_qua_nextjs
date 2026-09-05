@@ -1,6 +1,7 @@
 const storeService = require('../services/storeService');
 const { generateVendorOnboardingEmail } = require('../services/emailService');
 const { logger } = require('../services/loggerService');
+const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
 
 /**
  * A vendor profile may only be created/edited by the vendor it belongs to
@@ -19,6 +20,24 @@ function assertVendorOwnership(req, res, vendorEmail) {
     return true;
   }
   res.status(403).json({ success: false, error: 'You do not have permission to modify this vendor profile.' });
+  return false;
+}
+
+/**
+ * Bulk vendor upload is a category manager's tool for onboarding a whole
+ * vendor master list at once — a buyer or a vendor themselves has no
+ * business bulk-registering other companies' vendor records. Kept separate
+ * from assertVendorOwnership (single-record, vendor-self-or-admin) since the
+ * roles allowed and the reasoning are both different.
+ */
+function assertCategoryManagerRole(req, res) {
+  const user = req.user;
+  if (!user) {
+    res.status(401).json({ success: false, error: 'Authentication required.' });
+    return false;
+  }
+  if (user.role === 'category_manager' || user.role === 'admin') return true;
+  res.status(403).json({ success: false, error: 'Only a category manager may bulk-import vendors.' });
   return false;
 }
 
@@ -240,6 +259,72 @@ function updateCategories(req, res, next) {
   }
 }
 
+// Rows arrive already parsed client-side (the browser reads the .xlsx with
+// the same `xlsx` library the app already uses elsewhere — see
+// initial-setup-modal.tsx) and are sent up in chunks, not as a raw file: this
+// endpoint never holds a whole multi-thousand-row workbook in one request or
+// blocks on parsing it, and per-request size is bounded below regardless of
+// how many rows the source file actually has.
+const MAX_BULK_IMPORT_ROWS_PER_REQUEST = 1000;
+
+async function bulkImportVendors(req, res, next) {
+  try {
+    if (!assertCategoryManagerRole(req, res)) return;
+
+    const rows = Array.isArray(req.body.vendors) ? req.body.vendors : null;
+    if (!rows || rows.length === 0) {
+      return res.status(400).json({ success: false, error: 'vendors must be a non-empty array.' });
+    }
+    if (rows.length > MAX_BULK_IMPORT_ROWS_PER_REQUEST) {
+      return res.status(400).json({
+        success: false,
+        error: `A single bulk-import request is capped at ${MAX_BULK_IMPORT_ROWS_PER_REQUEST} rows — split the upload into more chunks.`,
+      });
+    }
+
+    // Re-validated here even though the client already validated: a client
+    // check is a UX convenience, never the actual authority — the same
+    // principle already applied to every other write path in this app.
+    const validRows = [];
+    const results = [];
+    rows.forEach((row, idx) => {
+      const rowNumber = row.rowNumber ?? idx + 1;
+      const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.vendorBulkImportRow, row);
+      if (!isValid) {
+        results.push({ rowNumber, status: 'failed', email: row.email, errors: Object.values(errors) });
+        return;
+      }
+      validRows.push({ ...row, rowNumber });
+    });
+
+    logger.info(
+      `Bulk vendor import: ${rows.length} row(s) received, ${validRows.length} passed server validation`,
+      { total: rows.length, valid: validRows.length },
+      'VENDOR_CONTROLLER'
+    );
+
+    const { results: importResults, importedCount, duplicateCount } =
+      validRows.length > 0 ? await storeService.bulkAddVendors(validRows) : { results: [], importedCount: 0, duplicateCount: 0 };
+
+    const allResults = [...results, ...importResults].sort((a, b) => a.rowNumber - b.rowNumber);
+    const failedCount = allResults.filter((r) => r.status === 'failed').length;
+
+    res.json({
+      success: true,
+      data: {
+        total: rows.length,
+        imported: importedCount,
+        duplicates: duplicateCount,
+        failed: failedCount,
+        results: allResults,
+      },
+    });
+  } catch (err) {
+    logger.error('Error bulk-importing vendors', err, 'VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
 module.exports = {
   getVendors,
   getVendorById,
@@ -250,4 +335,5 @@ module.exports = {
   generateOnboardingEmailPreview,
   updateCategories,
   updateSubscription,
+  bulkImportVendors,
 };

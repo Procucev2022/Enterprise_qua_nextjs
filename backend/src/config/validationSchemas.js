@@ -192,6 +192,26 @@ const VALIDATION_SCHEMAS = {
     contactPhone: { type: 'string', required: false, pattern: PHONE_REGEX, message: 'Valid phone number required' },
   },
 
+  // One row of a category manager's bulk vendor Excel upload (POST
+  // /api/vendors/bulk-import). Mirrors the real p2pservices Vendor Master
+  // sheet columns (Company Name, Person Name, Email Id, Mobile No, GSTIN, Pin
+  // Code, City, State, Cate-1..5, Products) rather than the richer single-add
+  // vendor form — the reference app's own bulk path only ever required
+  // company name, email and mobile, so that's what's required here too;
+  // everything else is format-checked only when the row actually supplies it.
+  vendorBulkImportRow: {
+    name: { type: 'string', required: true, minLength: 2, maxLength: 200, message: 'Company name is required.' },
+    email: { type: 'string', required: true, pattern: EMAIL_REGEX, message: 'A valid email address is required.' },
+    phone: { type: 'string', required: true, pattern: INDIAN_MOBILE_REGEX, message: INDIAN_MOBILE_MESSAGE },
+    gstin: { type: 'string', required: false, pattern: GSTIN_REGEX, message: GSTIN_MESSAGE },
+    pincode: { type: 'string', required: false, pattern: INDIAN_PINCODE_REGEX, message: INDIAN_PINCODE_MESSAGE },
+    contactPerson: { type: 'string', required: false, maxLength: 150 },
+    city: { type: 'string', required: false, maxLength: 100 },
+    state: { type: 'string', required: false, maxLength: 100 },
+    majorCategory: { type: 'string', required: false, maxLength: 150 },
+    products: { type: 'string', required: false, maxLength: 500 },
+  },
+
   submitQuote: {
     rfqId: { type: 'string', required: true },
     vendorId: { type: 'string', required: true },

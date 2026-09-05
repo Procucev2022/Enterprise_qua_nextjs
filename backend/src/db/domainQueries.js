@@ -46,6 +46,39 @@ async function deleteVendorInDB(id) {
   return result.rowCount > 0;
 }
 
+// One multi-row INSERT for a whole batch of newly bulk-uploaded vendors,
+// rather than one round trip per row (what the reference p2pservices app
+// does — confirmed not to scale). `ON CONFLICT (email) DO NOTHING` is a
+// defensive backstop against a duplicate slipping in between the caller's
+// own in-memory/pre-query dedup check and this insert (e.g. a concurrent
+// upload); RETURNING email tells the caller exactly which rows really
+// landed versus were silently skipped as a race-condition duplicate, so it
+// never has to guess or trust a fire-and-forget write.
+async function bulkInsertVendorsInDB(vendors) {
+  if (!pool.pool || vendors.length === 0) return [];
+  const values = [];
+  const placeholders = vendors.map((vendor, i) => {
+    const base = i * 6;
+    values.push(
+      vendor.id,
+      vendor.email || null,
+      vendor.majorCategory || null,
+      vendor.status || null,
+      vendor.source || null,
+      JSON.stringify(vendor)
+    );
+    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, now())`;
+  });
+  const result = await pool.query(
+    `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
+     VALUES ${placeholders.join(', ')}
+     ON CONFLICT (email) DO NOTHING
+     RETURNING email`,
+    values
+  );
+  return result.rows.map((row) => row.email);
+}
+
 // ── RFQs ─────────────────────────────────────────────────────────────────────
 
 async function getRFQsFromDB() {
@@ -244,6 +277,7 @@ module.exports = {
   getVendorsFromDB,
   upsertVendorInDB,
   deleteVendorInDB,
+  bulkInsertVendorsInDB,
   getRFQsFromDB,
   upsertRFQInDB,
   deleteRFQInDB,
