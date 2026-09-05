@@ -20,9 +20,23 @@ function v001AuthHeader() {
 }
 
 describe('Vendor Category Dual-Stream Reconciliation API', () => {
+  // The vendor is created by the test. It used to reference the seeded 'v-001'
+  // record by its fixed id; nothing is seeded now, so the id is whatever the
+  // server allocates.
+  let ownedVendorId;
+
+  beforeAll(async () => {
+    const created = await request(app).post('/api/vendors').set(v001AuthHeader()).send({
+      name: 'Apex Industrial Dynamics Pvt Ltd',
+      email: 'rajesh@apexindustrial.in',
+      majorCategory: 'Engineering Spares - Mechanical',
+    });
+    ownedVendorId = created.body.data.id;
+  });
+
   test('PUT /api/vendors/:id/categories reconciles categories', async () => {
     const res = await request(app)
-      .put('/api/vendors/v-001/categories')
+      .put(`/api/vendors/${ownedVendorId}/categories`)
       .set(v001AuthHeader())
       .send({
         clientMappedCategories: ['Pumps & Accessories'],

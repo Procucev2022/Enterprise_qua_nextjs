@@ -1,10 +1,10 @@
 const buyerProfileQueries = require('../src/db/buyerProfileQueries');
-const identityPool = require('../src/db/identityPool');
+const dbPool = require('../src/db/pool');
 
 // Every test drives the real query builders and row mappers against a stubbed
 // MySQL layer, so the SQL text and the shape handed to the service are asserted
 // without needing the shared database to be reachable from CI.
-describe('Buyer profile queries (shared Procucev MySQL schema)', () => {
+describe('Buyer profile queries (Neon PostgreSQL)', () => {
   afterEach(() => {
     jest.restoreAllMocks();
   });
@@ -178,20 +178,20 @@ describe('Buyer profile queries (shared Procucev MySQL schema)', () => {
   describe('loadCategories', () => {
     test('reads the user-scoped rows first, matching the Java read path', async () => {
       const spy = jest
-        .spyOn(identityPool, 'identityQuery')
+        .spyOn(dbPool, 'rows')
         .mockResolvedValue([{ division: 'IT', category: 'Laptop' }]);
 
       const result = await buyerProfileQueries.loadCategories('org-1', 'user-1');
 
       expect(result).toEqual([{ major: 'IT', minor: 'Laptop' }]);
       expect(spy).toHaveBeenCalledTimes(1);
-      expect(spy.mock.calls[0][0]).toContain('user_id = ?');
+      expect(spy.mock.calls[0][0]).toContain('user_id = $1');
       expect(spy.mock.calls[0][1]).toEqual(['user-1']);
     });
 
     test('falls back to organisation scope for rows written before user_id existed', async () => {
       const spy = jest
-        .spyOn(identityPool, 'identityQuery')
+        .spyOn(dbPool, 'rows')
         .mockResolvedValueOnce([])
         .mockResolvedValueOnce([{ division: 'Civil Works', category: 'Piling' }]);
 
@@ -199,19 +199,19 @@ describe('Buyer profile queries (shared Procucev MySQL schema)', () => {
 
       expect(result).toEqual([{ major: 'Civil Works', minor: 'Piling' }]);
       expect(spy).toHaveBeenCalledTimes(2);
-      expect(spy.mock.calls[1][0]).toContain('organization_id = ?');
+      expect(spy.mock.calls[1][0]).toContain('organization_id = $1');
       expect(spy.mock.calls[1][1]).toEqual(['org-1']);
     });
 
     test('queries organisation scope directly when there is no user id', async () => {
-      const spy = jest.spyOn(identityPool, 'identityQuery').mockResolvedValue([]);
+      const spy = jest.spyOn(dbPool, 'rows').mockResolvedValue([]);
       await buyerProfileQueries.loadCategories('org-1', null);
       expect(spy).toHaveBeenCalledTimes(1);
-      expect(spy.mock.calls[0][0]).toContain('organization_id = ?');
+      expect(spy.mock.calls[0][0]).toContain('organization_id = $1');
     });
 
     test('returns an empty list without querying when neither scope is known', async () => {
-      const spy = jest.spyOn(identityPool, 'identityQuery').mockResolvedValue([]);
+      const spy = jest.spyOn(dbPool, 'rows').mockResolvedValue([]);
       await expect(buyerProfileQueries.loadCategories(null, null)).resolves.toEqual([]);
       expect(spy).not.toHaveBeenCalled();
     });
@@ -220,7 +220,7 @@ describe('Buyer profile queries (shared Procucev MySQL schema)', () => {
   describe('findProfileByUserId', () => {
     test('returns the profile with its categories joined in', async () => {
       jest
-        .spyOn(identityPool, 'identityQuery')
+        .spyOn(dbPool, 'rows')
         .mockResolvedValueOnce([
           { user_uuid: 'user-1', org_uuid: 'org-1', organization_name: 'ACME', username: 'a@b.com' },
         ])
@@ -234,7 +234,7 @@ describe('Buyer profile queries (shared Procucev MySQL schema)', () => {
     });
 
     test('reports NO_USER_ID without querying when no id is supplied', async () => {
-      const spy = jest.spyOn(identityPool, 'identityQuery').mockResolvedValue([]);
+      const spy = jest.spyOn(dbPool, 'rows').mockResolvedValue([]);
       await expect(buyerProfileQueries.findProfileByUserId('')).resolves.toEqual({
         found: false,
         reason: 'NO_USER_ID',
@@ -243,7 +243,7 @@ describe('Buyer profile queries (shared Procucev MySQL schema)', () => {
     });
 
     test('reports USER_NOT_FOUND for an unknown account', async () => {
-      jest.spyOn(identityPool, 'identityQuery').mockResolvedValue([]);
+      jest.spyOn(dbPool, 'rows').mockResolvedValue([]);
       await expect(buyerProfileQueries.findProfileByUserId('nobody')).resolves.toEqual({
         found: false,
         reason: 'USER_NOT_FOUND',
@@ -252,7 +252,7 @@ describe('Buyer profile queries (shared Procucev MySQL schema)', () => {
 
     test('reports ORG_NOT_LINKED when the account has no organisation', async () => {
       jest
-        .spyOn(identityPool, 'identityQuery')
+        .spyOn(dbPool, 'rows')
         .mockResolvedValue([{ user_uuid: 'user-1', org_uuid: null }]);
       await expect(buyerProfileQueries.findProfileByUserId('user-1')).resolves.toEqual({
         found: false,
@@ -267,7 +267,7 @@ describe('Buyer profile queries (shared Procucev MySQL schema)', () => {
       const { assignments, params } = buyerProfileQueries.buildProfileUpdate({
         brandName: 'L&T Heavy',
       });
-      expect(assignments).toEqual(['brand_name = ?', 'refference = ?']);
+      expect(assignments).toEqual(['brand_name = $1', 'refference = $2']);
       expect(params).toEqual(['L&T Heavy', 'L&T Heavy']);
     });
 
@@ -277,7 +277,7 @@ describe('Buyer profile queries (shared Procucev MySQL schema)', () => {
         gstNumber: '27aaacl1234f1z5',
         cinNumber: 'l28920mh1946plc004768',
       });
-      expect(assignments).toContain('pan = ?');
+      expect(assignments).toContain('pan = $1');
       expect(params).toContain('AAACL1234F');
       expect(params).toContain('27AAACL1234F1Z5');
       expect(params).toContain('L28920MH1946PLC004768');
@@ -287,7 +287,7 @@ describe('Buyer profile queries (shared Procucev MySQL schema)', () => {
       const { assignments, params } = buyerProfileQueries.buildProfileUpdate({
         annualTurnover: '₹ 180 Cr',
       });
-      expect(assignments).toEqual(['annual_turnover = ?', 'others = ?']);
+      expect(assignments).toEqual(['annual_turnover = $1', 'others = $2']);
       expect(params).toEqual(['INR 180 Cr', 'INR 180 Cr']);
     });
 
@@ -299,17 +299,17 @@ describe('Buyer profile queries (shared Procucev MySQL schema)', () => {
         city: null,
         state: undefined,
       });
-      expect(assignments).toEqual(['organization_name = ?']);
+      expect(assignments).toEqual(['organization_name = $1']);
     });
 
     test('applies an explicit empty string so a buyer can clear a field', () => {
       const { assignments, params } = buyerProfileQueries.buildProfileUpdate({ website: '' });
-      expect(assignments).toEqual(['website = ?']);
+      expect(assignments).toEqual(['website = $1']);
       expect(params).toEqual(['']);
     });
 
     test('produces nothing for an empty patch', () => {
-      expect(buyerProfileQueries.buildProfileUpdate({})).toEqual({ assignments: [], params: [] });
+      expect(buyerProfileQueries.buildProfileUpdate({})).toEqual({ assignments: [], params: [], nextIndex: 1 });
     });
 
     test('maps every patchable field to a column', () => {
@@ -325,77 +325,87 @@ describe('Buyer profile queries (shared Procucev MySQL schema)', () => {
 
   // ── Category replacement ──────────────────────────────────────────────────
   describe('replaceCategories', () => {
-    function makeConn() {
-      return { query: jest.fn().mockResolvedValue([[]]) };
+    function makeClient() {
+      return { query: jest.fn().mockResolvedValue({ rows: [] }) };
     }
 
-    test('clears both scopes then bulk-inserts the new selection', async () => {
-      const conn = makeConn();
-      const count = await buyerProfileQueries.replaceCategories(conn, 'org-1', 'user-1', [
+    test('clears both scopes then inserts the new selection in one statement', async () => {
+      const client = makeClient();
+      const count = await buyerProfileQueries.replaceCategories(client, 'org-1', 'user-1', [
         { major: 'IT', minor: 'Laptop' },
         { major: 'IT', minor: 'Servers' },
       ]);
 
       expect(count).toBe(2);
-      expect(conn.query.mock.calls[0][0]).toContain('delete from org_division_category');
-      expect(conn.query.mock.calls[0][1]).toEqual(['org-1']);
-      expect(conn.query.mock.calls[1][1]).toEqual(['user-1']);
-      expect(conn.query.mock.calls[2][0]).toContain('insert into org_division_category');
+      expect(client.query.mock.calls[0][0]).toContain('delete from org_division_category');
+      expect(client.query.mock.calls[0][1]).toEqual(['org-1']);
+      expect(client.query.mock.calls[1][1]).toEqual(['user-1']);
 
-      const rows = conn.query.mock.calls[2][1][0];
-      expect(rows).toHaveLength(2);
-      // uuid, division, category, organization_id, user_id, then audit columns.
-      expect(rows[0][1]).toBe('IT');
-      expect(rows[0][2]).toBe('Laptop');
-      expect(rows[0][3]).toBe('org-1');
-      expect(rows[0][4]).toBe('user-1');
+      // One multi-row INSERT, not one statement per category: a 10-category
+      // selection would otherwise be 10 round trips inside an open transaction.
+      const [sql, params] = client.query.mock.calls[2];
+      expect(sql).toContain('insert into org_division_category');
+      expect(sql).toContain('($1, $2, $3, $4, $5, true, now())');
+      expect(sql).toContain('($6, $7, $8, $9, $10, true, now())');
+      expect(client.query).toHaveBeenCalledTimes(3);
+
+      // Five bound values per row: uuid, division, category, organization_id, user_id.
+      expect(params).toHaveLength(10);
+      expect(params[1]).toBe('IT');
+      expect(params[2]).toBe('Laptop');
+      expect(params[3]).toBe('org-1');
+      expect(params[4]).toBe('user-1');
+      expect(params[6]).toBe('IT');
+      expect(params[7]).toBe('Servers');
     });
 
     test('clears the selection when handed an empty array', async () => {
-      const conn = makeConn();
-      const count = await buyerProfileQueries.replaceCategories(conn, 'org-1', 'user-1', []);
+      const client = makeClient();
+      const count = await buyerProfileQueries.replaceCategories(client, 'org-1', 'user-1', []);
       expect(count).toBe(0);
       // Two deletes, no insert.
-      expect(conn.query).toHaveBeenCalledTimes(2);
+      expect(client.query).toHaveBeenCalledTimes(2);
     });
 
     test('treats a non-array selection as nothing to insert', async () => {
-      const conn = makeConn();
-      await expect(buyerProfileQueries.replaceCategories(conn, 'org-1', 'user-1', null)).resolves.toBe(0);
-      expect(conn.query).toHaveBeenCalledTimes(2);
+      const client = makeClient();
+      await expect(buyerProfileQueries.replaceCategories(client, 'org-1', 'user-1', null)).resolves.toBe(0);
+      expect(client.query).toHaveBeenCalledTimes(2);
     });
 
     test('skips the user-scoped delete when there is no user id', async () => {
-      const conn = makeConn();
-      await buyerProfileQueries.replaceCategories(conn, 'org-1', null, [{ major: 'IT', minor: 'Laptop' }]);
-      expect(conn.query.mock.calls[0][1]).toEqual(['org-1']);
-      expect(conn.query.mock.calls[1][0]).toContain('insert into');
+      const client = makeClient();
+      await buyerProfileQueries.replaceCategories(client, 'org-1', null, [{ major: 'IT', minor: 'Laptop' }]);
+      expect(client.query.mock.calls[0][1]).toEqual(['org-1']);
+      expect(client.query.mock.calls[1][0]).toContain('insert into');
       // user_id is left null rather than invented.
-      expect(conn.query.mock.calls[1][1][0][0][4]).toBeNull();
+      expect(client.query.mock.calls[1][1][4]).toBeNull();
     });
   });
 
   // ── Transactional update ──────────────────────────────────────────────────
   describe('updateProfile', () => {
+    let withTransactionSpy;
+
+    // pool.withTransaction owns BEGIN/COMMIT/ROLLBACK and the client release —
+    // that is covered in pool.test.js. Here it is doubled so these tests assert
+    // what updateProfile does *inside* the transaction.
     function stubPool(orgRows = [{ uuid: 'org-1' }]) {
-      const conn = {
-        beginTransaction: jest.fn().mockResolvedValue(undefined),
-        commit: jest.fn().mockResolvedValue(undefined),
-        rollback: jest.fn().mockResolvedValue(undefined),
-        release: jest.fn(),
-        query: jest.fn().mockResolvedValue([orgRows]),
-      };
-      identityPool.pool = { getConnection: jest.fn().mockResolvedValue(conn) };
-      return conn;
+      const client = { query: jest.fn().mockResolvedValue({ rows: orgRows }) };
+      dbPool.pool = { connect: jest.fn() };
+      withTransactionSpy = jest
+        .spyOn(dbPool, 'withTransaction')
+        .mockImplementation(async (fn) => fn(client));
+      return client;
     }
 
-    const originalPool = identityPool.pool;
+    const originalPool = dbPool.pool;
     afterEach(() => {
-      identityPool.pool = originalPool;
+      dbPool.pool = originalPool;
     });
 
     test('updates the organisation, the user display name and the categories in one transaction', async () => {
-      const conn = stubPool();
+      const client = stubPool();
 
       const result = await buyerProfileQueries.updateProfile({
         organizationId: 'org-1',
@@ -406,83 +416,104 @@ describe('Buyer profile queries (shared Procucev MySQL schema)', () => {
       });
 
       expect(result).toEqual({ updated: true, fieldsUpdated: 4, categoryCount: 1 });
-      expect(conn.beginTransaction).toHaveBeenCalled();
-      expect(conn.commit).toHaveBeenCalled();
-      expect(conn.release).toHaveBeenCalled();
+      // All three writes share one transaction, so a failure part-way cannot leave
+      // the organisation updated but its categories half-replaced.
+      expect(withTransactionSpy).toHaveBeenCalledTimes(1);
 
-      const sql = conn.query.mock.calls.map((c) => c[0]).join('\n');
+      const sql = client.query.mock.calls.map((c) => c[0]).join('\n');
       expect(sql).toContain('update organization set');
-      expect(sql).toContain('update `user` set full_name = ?');
+      expect(sql).toContain('update "user" set full_name = $1');
       expect(sql).toContain('insert into org_division_category');
     });
 
-    test('reports ORG_NOT_FOUND and rolls back when the organisation is gone', async () => {
-      const conn = stubPool([]);
+    test('reports ORG_NOT_FOUND rather than throwing when the organisation is gone', async () => {
+      // Returned, not thrown, so the caller can answer 404 instead of 500.
+      const client = stubPool([]);
       const result = await buyerProfileQueries.updateProfile({
         organizationId: 'missing',
         userId: 'user-1',
         patch: { companyName: 'ACME' },
       });
       expect(result).toEqual({ updated: false, reason: 'ORG_NOT_FOUND' });
-      expect(conn.rollback).toHaveBeenCalled();
-      expect(conn.commit).not.toHaveBeenCalled();
+      // Nothing was written beyond the existence check.
+      expect(client.query).toHaveBeenCalledTimes(1);
     });
 
     test('leaves categories untouched when the caller did not supply them', async () => {
-      const conn = stubPool();
+      const client = stubPool();
       const result = await buyerProfileQueries.updateProfile({
         organizationId: 'org-1',
         userId: 'user-1',
         patch: { city: 'Pune' },
       });
       expect(result.categoryCount).toBeNull();
-      expect(conn.query.mock.calls.map((c) => c[0]).join('\n')).not.toContain('org_division_category');
+      expect(client.query.mock.calls.map((c) => c[0]).join('\n')).not.toContain('org_division_category');
     });
 
     test('skips the organisation update when the patch is empty', async () => {
-      const conn = stubPool();
+      const client = stubPool();
       const result = await buyerProfileQueries.updateProfile({
         organizationId: 'org-1',
         userId: 'user-1',
         patch: {},
       });
       expect(result.fieldsUpdated).toBe(0);
-      expect(conn.query.mock.calls.map((c) => c[0]).join('\n')).not.toContain('update organization set');
+      expect(client.query.mock.calls.map((c) => c[0]).join('\n')).not.toContain('update organization set');
     });
 
     test('does not blank the user display name when the contact name is cleared', async () => {
-      const conn = stubPool();
+      const client = stubPool();
       await buyerProfileQueries.updateProfile({
         organizationId: 'org-1',
         userId: 'user-1',
         patch: { contactName: '' },
       });
-      expect(conn.query.mock.calls.map((c) => c[0]).join('\n')).not.toContain('update `user`');
+      expect(client.query.mock.calls.map((c) => c[0]).join('\n')).not.toContain('update "user"');
     });
 
     test('skips the user update when there is no user id', async () => {
-      const conn = stubPool();
+      const client = stubPool();
       await buyerProfileQueries.updateProfile({
         organizationId: 'org-1',
         userId: null,
         patch: { contactName: 'Someone' },
       });
-      expect(conn.query.mock.calls.map((c) => c[0]).join('\n')).not.toContain('update `user`');
+      expect(client.query.mock.calls.map((c) => c[0]).join('\n')).not.toContain('update "user"');
     });
 
     test('uses a documented actor when none is supplied', async () => {
-      const conn = stubPool();
+      const client = stubPool();
       await buyerProfileQueries.updateProfile({
         organizationId: 'org-1',
         userId: 'user-1',
         patch: { companyName: 'ACME' },
       });
-      expect(conn.query.mock.calls[1][1]).toContain('enterprise-workspace');
+      expect(client.query.mock.calls[1][1]).toContain('enterprise-workspace');
     });
 
-    test('rolls back and rethrows when a statement fails', async () => {
-      const conn = stubPool();
-      conn.query.mockResolvedValueOnce([[{ uuid: 'org-1' }]]).mockRejectedValueOnce(new Error('deadlock'));
+    test('numbers the actor and uuid placeholders after the patch columns', async () => {
+      // buildProfileUpdate reports the next free index so the caller can append
+      // its own bindings without renumbering the ones already emitted.
+      const client = stubPool();
+      await buyerProfileQueries.updateProfile({
+        organizationId: 'org-1',
+        userId: 'user-1',
+        patch: { brandName: 'L&T' },
+        actor: 'buyer@procucev.com',
+      });
+
+      const [sql, params] = client.query.mock.calls[1];
+      // brand_name = $1, refference = $2, last_modified_by = $3, where uuid = $4.
+      expect(sql).toContain('last_modified_by = $3');
+      expect(sql).toContain('where uuid = $4');
+      expect(params).toEqual(['L&T', 'L&T', 'buyer@procucev.com', 'org-1']);
+    });
+
+    test('propagates a statement failure so the transaction rolls back', async () => {
+      const client = stubPool();
+      client.query
+        .mockResolvedValueOnce({ rows: [{ uuid: 'org-1' }] })
+        .mockRejectedValueOnce(new Error('deadlock detected'));
 
       await expect(
         buyerProfileQueries.updateProfile({
@@ -490,10 +521,7 @@ describe('Buyer profile queries (shared Procucev MySQL schema)', () => {
           userId: 'user-1',
           patch: { companyName: 'ACME' },
         })
-      ).rejects.toThrow('deadlock');
-
-      expect(conn.rollback).toHaveBeenCalled();
-      expect(conn.release).toHaveBeenCalled();
+      ).rejects.toThrow('deadlock detected');
     });
 
     test('refuses to run without an organisation id', async () => {
@@ -504,17 +532,17 @@ describe('Buyer profile queries (shared Procucev MySQL schema)', () => {
     });
 
     test('refuses to run when the identity database is not configured', async () => {
-      identityPool.pool = null;
+      dbPool.pool = null;
       await expect(
         buyerProfileQueries.updateProfile({ organizationId: 'org-1', patch: {} })
-      ).rejects.toThrow('Identity database is not configured.');
+      ).rejects.toThrow(dbPool.NOT_CONFIGURED_MESSAGE);
     });
   });
 
   // ── Taxonomy ──────────────────────────────────────────────────────────────
   describe('findCategoryTaxonomy', () => {
     test('groups minors under their major, preserving the row order', async () => {
-      jest.spyOn(identityPool, 'identityQuery').mockResolvedValue([
+      jest.spyOn(dbPool, 'rows').mockResolvedValue([
         { division: 'Civil Works', category: 'Piling' },
         { division: 'Civil Works', category: 'Excavation' },
         { division: 'IT', category: 'Laptop' },
@@ -531,7 +559,7 @@ describe('Buyer profile queries (shared Procucev MySQL schema)', () => {
     // The master is loaded from a spreadsheet and contains near-duplicate rows;
     // rendering the same checkbox twice would make one copy look unselected.
     test('collapses minors that differ only by case or spacing', async () => {
-      jest.spyOn(identityPool, 'identityQuery').mockResolvedValue([
+      jest.spyOn(dbPool, 'rows').mockResolvedValue([
         { division: 'Packing Material', category: 'Pet Jars' },
         { division: 'Packing Material', category: ' pet jars ' },
       ]);
@@ -541,7 +569,7 @@ describe('Buyer profile queries (shared Procucev MySQL schema)', () => {
     });
 
     test('skips rows with no usable division or category', async () => {
-      jest.spyOn(identityPool, 'identityQuery').mockResolvedValue([
+      jest.spyOn(dbPool, 'rows').mockResolvedValue([
         { division: '   ', category: 'Orphan' },
         { division: 'IT', category: '   ' },
         { division: 'IT', category: 'Laptop' },
@@ -552,7 +580,7 @@ describe('Buyer profile queries (shared Procucev MySQL schema)', () => {
     });
 
     test('orders divisions by when they first entered the master, not alphabetically', async () => {
-      const spy = jest.spyOn(identityPool, 'identityQuery').mockResolvedValue([]);
+      const spy = jest.spyOn(dbPool, 'rows').mockResolvedValue([]);
       await buyerProfileQueries.findCategoryTaxonomy();
       expect(spy.mock.calls[0][0]).toContain('min(created_ts)');
       expect(spy.mock.calls[0][0]).toContain('order by ord.first_seen');

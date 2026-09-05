@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import '@testing-library/jest-dom';
 import VendorProfilePage from '@/app/vendor/vendor-profile';
 import { AppProvider, useApp } from '@/lib/store';
+import { CATEGORY_TAXONOMY_FIXTURE } from '../../../test-fixtures/categoryTaxonomy';
 
 // vendor-profile.tsx now loads the logged-in vendor's real record from the
 // backend on mount (starts blank otherwise — BUGS.md #22) and saves via real
@@ -42,6 +43,21 @@ const MOCK_VENDOR = {
 
 function mockFetchImpl(url: string, options: any = {}) {
   const method = options.method || 'GET';
+  // The category master is fetched from the database now rather than imported from
+  // a bundled categories.json, so this suite has to serve it: the selector renders
+  // straight from what the store loaded, and an unanswered request leaves it empty.
+  // Matched before the vendor-category route below, whose pattern also ends in
+  // '/categories'.
+  if (url.includes('/api/buyer-profile/categories')) {
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({
+        success: true,
+        count: CATEGORY_TAXONOMY_FIXTURE.length,
+        data: CATEGORY_TAXONOMY_FIXTURE,
+      }),
+    });
+  }
   if (/\/api\/vendors\/[^/]+\/categories$/.test(url)) {
     const body = options.body ? JSON.parse(options.body) : {};
     return Promise.resolve({ ok: true, json: async () => ({ success: true, data: { ...MOCK_VENDOR, ...body } }) });
@@ -300,7 +316,7 @@ describe('VendorProfilePage Comprehensive Suite', () => {
     fireEvent.click(topSaveBtn);
   });
 
-  test('blocks save when there is no active session', () => {
+  test('blocks save when there is no active session', async () => {
     // Deliberately render without VendorProfileWithSession — no session ever
     // gets set, so the profile stays blank (no GET fires) but required
     // fields can still be filled in manually to reach the session check.
@@ -319,6 +335,7 @@ describe('VendorProfilePage Comprehensive Suite', () => {
     if (gstInputs.length > 0) fireEvent.change(gstInputs[0], { target: { value: '27AAACA9876K1Z9' } });
 
     // Select a category so validation reaches the session check
+    await waitFor(() => expect(screen.getByText('Engineering Spares - Mechanical')).toBeInTheDocument());
     fireEvent.click(screen.getByText('Engineering Spares - Mechanical'));
 
     const saveBtn = screen.getByRole('button', { name: /Save Supplier Profile/i });
@@ -339,7 +356,7 @@ describe('VendorProfilePage Comprehensive Suite', () => {
       if (url === '/api/vendors' && method === 'POST') {
         return Promise.resolve({ ok: true, json: async () => ({ success: true, data: { id: 'v-new-1' } }) });
       }
-      return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+      return mockFetchImpl(url, options);
     }) as any;
 
     render(
@@ -350,6 +367,7 @@ describe('VendorProfilePage Comprehensive Suite', () => {
 
     // Blank form (no record found) — fill required fields and pick a category
     await waitFor(() => expect(screen.getByRole('button', { name: /Save Supplier Profile/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Engineering Spares - Mechanical')).toBeInTheDocument());
     const inputs = screen.getAllByRole('textbox');
     fireEvent.change(inputs[0], { target: { value: 'Brand New Vendor Co' } });
 
@@ -405,11 +423,11 @@ describe('VendorProfilePage Comprehensive Suite', () => {
 
   test('leaves the form blank when the profile GET 404s (new vendor) or the network fails', async () => {
     // 404 case
-    global.fetch = jest.fn((url: string) => {
+    global.fetch = jest.fn((url: string, options: any = {}) => {
       if (/\/api\/vendors\/[^/]+$/.test(url)) {
         return Promise.resolve({ ok: false, status: 404, json: async () => ({ success: false }) });
       }
-      return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+      return mockFetchImpl(url, options);
     }) as any;
     const { unmount } = render(
       <AppProvider>
@@ -420,7 +438,12 @@ describe('VendorProfilePage Comprehensive Suite', () => {
     unmount();
 
     // Network failure case
-    global.fetch = jest.fn(() => Promise.reject(new Error('offline'))) as any;
+    global.fetch = jest.fn((url: string) => {
+      if (url.includes('/api/buyer-profile/categories')) {
+        return mockFetchImpl(url);
+      }
+      return Promise.reject(new Error('offline'));
+    }) as any;
     render(
       <AppProvider>
         <VendorProfileWithSession />
@@ -438,7 +461,7 @@ describe('VendorProfilePage Comprehensive Suite', () => {
       if (url === '/api/vendors' && method === 'POST') {
         return Promise.resolve({ ok: false, json: async () => ({ success: false, error: 'Create rejected' }) });
       }
-      return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+      return mockFetchImpl(url, options);
     }) as any;
 
     render(
@@ -448,6 +471,7 @@ describe('VendorProfilePage Comprehensive Suite', () => {
     );
 
     await waitFor(() => expect(screen.getByRole('button', { name: /Save Supplier Profile/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Engineering Spares - Mechanical')).toBeInTheDocument());
     const inputs = screen.getAllByRole('textbox');
     fireEvent.change(inputs[0], { target: { value: 'New Vendor Co' } });
     const panInputs = inputs.filter((el) => (el as HTMLInputElement).maxLength === 10);

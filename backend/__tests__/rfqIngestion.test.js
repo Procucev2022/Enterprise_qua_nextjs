@@ -5,16 +5,21 @@ const ingestion = require('../src/services/rfqIngestionService');
 const storeService = require('../src/services/storeService');
 const rfqSummaryService = require('../src/services/rfqSummaryService');
 const { RFQ_CATEGORY_CLASSIFICATION, RFQ_INGESTION_CONFIG } = require('../src/config/constants');
-const taxonomy = require('../src/config/categories.json');
+const { CATEGORY_TAXONOMY_FIXTURE: taxonomy } = require('./fixtures/categoryTaxonomy');
 const { authHeader } = require('./testHelpers');
 
-const {
-  STATUS,
-  CONFIDENCE,
-  DEFAULT_MAJOR_CATEGORY,
-  DEFAULT_MINOR_CATEGORY,
-  DOMAIN_KEYWORD_MAP,
-} = RFQ_CATEGORY_CLASSIFICATION;
+const { STATUS, CONFIDENCE, DOMAIN_KEYWORD_MAP } = RFQ_CATEGORY_CLASSIFICATION;
+
+// classifyLineItem resolves against an index the service loads from
+// `category_division`. The suite must not reach a real database, so the index is
+// primed from the captured master before each test and cleared afterwards.
+beforeEach(() => {
+  ingestion.primeTaxonomyIndex(taxonomy);
+});
+
+afterEach(() => {
+  ingestion.resetTaxonomyIndex();
+});
 
 describe('RFQ ingestion service (AI line-item classification)', () => {
   // ── Generic category detection ─────────────────────────────────────────────
@@ -95,14 +100,29 @@ describe('RFQ ingestion service (AI line-item classification)', () => {
       expect(result.categoryConfidence).toBe(CONFIDENCE.KEYWORD);
     });
 
-    test('4. falls back to the documented default and flags it for review', () => {
+    // Left blank rather than stamped with a placeholder. The previous default,
+    // 'General Procurement' / 'General Industrial Goods', is not a row in
+    // category_division, so neither dropdown could render it: the row arrived
+    // looking empty but carried a value validation accepted, which let an
+    // unclassified item be dispatched under a category no vendor is mapped to.
+    test('4. leaves an unmatched item unclassified and flags it for review', () => {
       const result = ingestion.classifyLineItem({ itemName: 'Assorted unclassifiable widget' });
       expect(result).toMatchObject({
-        majorCategory: DEFAULT_MAJOR_CATEGORY,
-        minorCategory: DEFAULT_MINOR_CATEGORY,
+        majorCategory: '',
+        minorCategory: '',
+        category: '',
         classificationStatus: STATUS.DEFAULT,
         categoryConfidence: CONFIDENCE.DEFAULT,
       });
+    });
+
+    test('4b. leaves an item unclassified when the taxonomy index has not loaded', () => {
+      // A failed taxonomy read degrades to keyword matching and flags the rest;
+      // it never invents a category.
+      ingestion.resetTaxonomyIndex();
+      const result = ingestion.classifyLineItem({ itemName: 'Assorted unclassifiable widget' });
+      expect(result.majorCategory).toBe('');
+      expect(result.classificationStatus).toBe(STATUS.DEFAULT);
     });
 
     test('keeps an explicit major category alongside a payload-level minor', () => {
@@ -399,8 +419,8 @@ describe('RFQ ingestion service (AI line-item classification)', () => {
   });
 
   describe('buildRFQDraft', () => {
-    test('produces a review-ready draft with a classification breakdown', () => {
-      const { draft, classification } = ingestion.buildRFQDraft({
+    test('produces a review-ready draft with a classification breakdown', async () => {
+      const { draft, classification } = await ingestion.buildRFQDraft({
         lineItems: [
           { itemName: 'Centrifugal Pump 500 GPM', quantity: 12, unit: 'Units', targetDate: '2026-09-15' },
           { itemName: 'Flanged Gate Valve', quantity: 24, unit: 'Units', targetDate: '2026-09-18' },
@@ -422,8 +442,8 @@ describe('RFQ ingestion service (AI line-item classification)', () => {
       });
     });
 
-    test('sets the header category from the dominant major, not just the first item', () => {
-      const { draft } = ingestion.buildRFQDraft({
+    test('sets the header category from the dominant major, not just the first item', async () => {
+      const { draft } = await ingestion.buildRFQDraft({
         lineItems: [
           { itemName: 'Copper Cable' },
           { itemName: 'LV Panel' },
@@ -433,16 +453,16 @@ describe('RFQ ingestion service (AI line-item classification)', () => {
       expect(draft.category).toBe('Engineering Spares - Electrical');
     });
 
-    test('prefers an explicit title over the derived one', () => {
-      const { draft } = ingestion.buildRFQDraft({
+    test('prefers an explicit title over the derived one', async () => {
+      const { draft } = await ingestion.buildRFQDraft({
         title: 'Q3 Mechanical Spares',
         lineItems: [{ itemName: 'Centrifugal Pump' }],
       });
       expect(draft.title).toBe('Q3 Mechanical Spares');
     });
 
-    test('carries the source email through for the email gateway path', () => {
-      const { draft } = ingestion.buildRFQDraft({
+    test('carries the source email through for the email gateway path', async () => {
+      const { draft } = await ingestion.buildRFQDraft({
         lineItems: [{ itemName: 'Centrifugal Pump' }],
         source: 'email_gateway',
         sourceEmail: 'plant@lt-heavy.com',
@@ -451,19 +471,19 @@ describe('RFQ ingestion service (AI line-item classification)', () => {
       expect(draft.sourceEmail).toBe('plant@lt-heavy.com');
     });
 
-    test('reports an empty result rather than throwing', () => {
-      const { draft, classification } = ingestion.buildRFQDraft({ lineItems: [] });
+    test('reports an empty result rather than throwing', async () => {
+      const { draft, classification } = await ingestion.buildRFQDraft({ lineItems: [] });
       expect(draft.extractedEntities).toEqual([]);
-      expect(draft.category).toBe(DEFAULT_MAJOR_CATEGORY);
+      expect(draft.category).toBe('');
       expect(classification.accepted).toBe(0);
     });
 
-    test('defaults to an empty payload when called with no arguments', () => {
-      expect(ingestion.buildRFQDraft().classification.accepted).toBe(0);
+    test('defaults to an empty payload when called with no arguments', async () => {
+      expect((await ingestion.buildRFQDraft()).classification.accepted).toBe(0);
     });
 
-    test('derives the estimated budget by summing the priced lines', () => {
-      const { draft } = ingestion.buildRFQDraft({
+    test('derives the estimated budget by summing the priced lines', async () => {
+      const { draft } = await ingestion.buildRFQDraft({
         lineItems: [
           { itemName: 'Centrifugal Pump', quantity: 12, totalPrice: 240000 },
           { itemName: 'Flanged Gate Valve', quantity: 24, unitPrice: 4500 },
@@ -472,8 +492,8 @@ describe('RFQ ingestion service (AI line-item classification)', () => {
       expect(draft.estimatedBudget).toBe(348000);
     });
 
-    test('counts a collapsed duplicate once in the estimated budget', () => {
-      const { draft, classification } = ingestion.buildRFQDraft({
+    test('counts a collapsed duplicate once in the estimated budget', async () => {
+      const { draft, classification } = await ingestion.buildRFQDraft({
         lineItems: [
           { itemName: 'Centrifugal Pump', quantity: 12, unit: 'Units', targetDate: '2026-09-15', totalPrice: 240000 },
           { itemName: 'Centrifugal Pump', quantity: 12, unit: 'Units', targetDate: '2026-09-15', totalPrice: 240000 },
@@ -483,8 +503,8 @@ describe('RFQ ingestion service (AI line-item classification)', () => {
       expect(draft.estimatedBudget).toBe(240000);
     });
 
-    test('leaves the estimated budget null when the document had no pricing', () => {
-      const { draft } = ingestion.buildRFQDraft({ lineItems: [{ itemName: 'Centrifugal Pump' }] });
+    test('leaves the estimated budget null when the document had no pricing', async () => {
+      const { draft } = await ingestion.buildRFQDraft({ lineItems: [{ itemName: 'Centrifugal Pump' }] });
       expect(draft.estimatedBudget).toBeNull();
     });
   });

@@ -3,6 +3,7 @@ import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import BuyerAccountTable from '@/app/buyer/buyer-account-table';
 import { useApp } from '@/lib/store';
 import { BuyerAccount } from '@/lib/types';
+import { CATEGORY_TAXONOMY_FIXTURE } from '../../../test-fixtures/categoryTaxonomy';
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
@@ -99,6 +100,11 @@ describe('app/buyer/buyer-account-table.tsx', () => {
       alignActiveBuyerAccount: mockAlignActiveBuyerAccount,
       importPublicBuyerDatabase: mockImportPublicBuyerDatabase,
       showToast: mockShowToast,
+      // The category master lives in the store now, read from the database rather
+      // than imported from a bundled categories.json, so a mocked context has to
+      // supply it or the major-category picker reads `undefined`.
+      categoryTaxonomy: CATEGORY_TAXONOMY_FIXTURE,
+      categoryTaxonomyError: null,
     });
   });
 
@@ -401,6 +407,8 @@ describe('app/buyer/buyer-account-table.tsx', () => {
       alignActiveBuyerAccount: mockAlignActiveBuyerAccount,
       importPublicBuyerDatabase: mockImportPublicBuyerDatabase,
       showToast: mockShowToast,
+      categoryTaxonomy: CATEGORY_TAXONOMY_FIXTURE,
+      categoryTaxonomyError: null,
     });
 
     render(<BuyerAccountTable />);

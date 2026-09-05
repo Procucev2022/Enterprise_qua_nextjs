@@ -10,7 +10,7 @@ const rfqController = require('../src/controllers/rfqController');
 const supportChatController = require('../src/controllers/supportChatController');
 const vendorController = require('../src/controllers/vendorController');
 const storeService = require('../src/services/storeService');
-const identityPool = require('../src/db/identityPool');
+const dbPool = require('../src/db/pool');
 const optimizationMetrics = require('../src/db/optimizationMetrics');
 const buyerAccountResolver = require('../src/services/buyerAccountResolver');
 
@@ -215,7 +215,7 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     const res = mockRes();
     // The controller now depends on the MySQL identity connection rather than the
     // removed PostgreSQL pool and seed routines.
-    jest.spyOn(identityPool, 'checkIdentityHealth').mockImplementationOnce(() => {
+    jest.spyOn(dbPool, 'checkDatabaseHealth').mockImplementationOnce(() => {
       throw new Error('Health error');
     });
     await dbController.getDBStatus({}, res, next);
@@ -333,9 +333,14 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     expect(next).toHaveBeenCalled();
 
     // A quote's vendor identity is resolved server-side from the caller's own
-    // vendor record now, so req.user must be a vendor with a real profile
-    // (rajesh@apexindustrial.in / v-001) to reach the mocked store calls below.
+    // vendor record, so that record has to exist for the request to reach the
+    // mocked store calls below. It is created here because nothing is seeded.
     const vendorUser = { role: 'vendor', email: 'rajesh@apexindustrial.in' };
+    storeService.addVendor({
+      name: 'Apex Industrial Dynamics Pvt Ltd',
+      email: 'rajesh@apexindustrial.in',
+      majorCategory: 'Engineering Spares - Mechanical',
+    });
 
     const notFoundQuote = mockRes();
     jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValueOnce(null);
@@ -505,19 +510,28 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     );
     expect(notFoundSub.status).toHaveBeenCalledWith(404);
 
+    // Plan validation runs after the vendor lookup, so this needs a vendor that
+    // actually exists — 'v-001' was a seeded id and now resolves to nothing.
+    const subscriptionVendor = storeService.addVendor({
+      name: 'Subscription Branch Vendor',
+      email: 'subscription@branch-vendor.test',
+      majorCategory: 'Engineering Spares - Mechanical',
+    });
     const invalidPlan = mockRes();
     await vendorController.updateSubscription(
-      { params: { id: 'v-001' }, body: { plan: 'not-a-real-plan' }, user: adminUser },
+      { params: { id: subscriptionVendor.id }, body: { plan: 'not-a-real-plan' }, user: adminUser },
       invalidPlan,
       next
     );
     expect(invalidPlan.status).toHaveBeenCalledWith(400);
 
+    // Reaching the catch block requires the vendor lookup to succeed first, so
+    // this names the vendor created above rather than the old seeded 'v-001'.
     jest.spyOn(storeService, 'updateVendor').mockImplementationOnce(() => {
       throw new Error('Update subscription error');
     });
     await vendorController.updateSubscription(
-      { params: { id: 'v-001' }, body: { plan: 'select' }, user: adminUser },
+      { params: { id: subscriptionVendor.id }, body: { plan: 'select' }, user: adminUser },
       res,
       next
     );

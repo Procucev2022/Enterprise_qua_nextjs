@@ -27,6 +27,7 @@ const path = require('path');
 // This script runs standalone (not through app.js), so .env isn't loaded
 // automatically — pool.js reads DATABASE_URL from process.env at require time, so
 // this must happen before that require below.
+require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 require('dotenv').config();
 
 const pool = require('./pool');

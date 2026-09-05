@@ -12,7 +12,7 @@
 
 const buyerAccountResolver = require('../src/services/buyerAccountResolver');
 const buyerProfileQueries = require('../src/db/buyerProfileQueries');
-const identityPoolModule = require('../src/db/identityPool');
+const dbPool = require('../src/db/pool');
 const { BUYER_ACCOUNT_RESOLUTION } = require('../src/config/constants');
 
 const { MESSAGES } = BUYER_ACCOUNT_RESOLUTION;
@@ -83,19 +83,28 @@ describe('mapProfileToBuyerAccount', () => {
     );
   });
 
-  test('de-duplicates major categories and flattens minors', () => {
+  // `profile.categories` is a flat list of { major, minor } pairs — one per
+  // selected minor category — which is the shape org_division_category stores and
+  // the shape loadCategories returns. This used to be asserted against the
+  // taxonomy endpoint's grouped { majorCategory, minorCategories } shape, which
+  // the resolver also read; both arrays therefore came out empty on every real
+  // account and a buyer appeared to have no procurement scope at all.
+  test('de-duplicates majors and minors from the flat pair list', () => {
     const account = buyerAccountResolver.mapProfileToBuyerAccount(
       profile({
         categories: [
-          { majorCategory: 'Mechanical', minorCategories: ['Pumps', 'Valves'] },
-          { majorCategory: 'Mechanical', minorCategories: ['Bearings'] },
-          { majorCategory: 'Electrical', minorCategories: [] },
+          { major: 'Mechanical', minor: 'Pumps' },
+          { major: 'Mechanical', minor: 'Valves' },
+          { major: 'Mechanical', minor: 'Bearings' },
+          // A repeated pair is collapsed rather than counted twice.
+          { major: 'Mechanical', minor: 'Pumps' },
+          { major: 'Electrical', minor: 'Panels' },
         ],
       })
     );
 
     expect(account.supportedMajorCategories).toEqual(['Mechanical', 'Electrical']);
-    expect(account.supportedMinorCategories).toEqual(['Pumps', 'Valves', 'Bearings']);
+    expect(account.supportedMinorCategories).toEqual(['Pumps', 'Valves', 'Bearings', 'Panels']);
   });
 
   test.each([[undefined], [null], [[]]])('tolerates categories of %p', (categories) => {
@@ -104,24 +113,25 @@ describe('mapProfileToBuyerAccount', () => {
     expect(account.supportedMinorCategories).toEqual([]);
   });
 
-  test('tolerates a category entry with no minor list', () => {
+  test('skips a pair missing either half rather than emitting a blank entry', () => {
     const account = buyerAccountResolver.mapProfileToBuyerAccount(
-      profile({ categories: [{ majorCategory: 'Mechanical' }] })
+      profile({ categories: [{ major: 'Mechanical' }, { minor: 'Pumps' }, {}] })
     );
-    expect(account.supportedMinorCategories).toEqual([]);
+    expect(account.supportedMajorCategories).toEqual(['Mechanical']);
+    expect(account.supportedMinorCategories).toEqual(['Pumps']);
   });
 });
 
 describe('resolveActiveBuyerAccount', () => {
-  const originalPool = identityPoolModule.pool;
+  const originalPool = dbPool.pool;
 
   afterEach(() => {
-    identityPoolModule.pool = originalPool;
+    dbPool.pool = originalPool;
     jest.restoreAllMocks();
   });
 
   test('returns the caller\'s own organisation', async () => {
-    identityPoolModule.pool = { stub: true };
+    dbPool.pool = { stub: true };
     jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ profile: profile() });
 
     const resolved = await buyerAccountResolver.resolveActiveBuyerAccount(SESSION);
@@ -133,7 +143,7 @@ describe('resolveActiveBuyerAccount', () => {
   // Looked up by the session's own user id, so one session cannot resolve
   // another organisation's account.
   test('looks the account up by the session user id', async () => {
-    identityPoolModule.pool = { stub: true };
+    dbPool.pool = { stub: true };
     const spy = jest
       .spyOn(buyerProfileQueries, 'findProfileByUserId')
       .mockResolvedValue({ profile: profile() });
@@ -156,7 +166,7 @@ describe('resolveActiveBuyerAccount', () => {
   // Fails closed. Returning a fabricated account here is exactly what made the
   // dashboard show another company's data.
   test('reports 503 when the identity database is not configured', async () => {
-    identityPoolModule.pool = null;
+    dbPool.pool = null;
     const resolved = await buyerAccountResolver.resolveActiveBuyerAccount(SESSION);
 
     expect(resolved.ok).toBe(false);
@@ -166,7 +176,7 @@ describe('resolveActiveBuyerAccount', () => {
   });
 
   test('reports 503 when the lookup throws', async () => {
-    identityPoolModule.pool = { stub: true };
+    dbPool.pool = { stub: true };
     jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockRejectedValue(new Error('timeout'));
 
     const resolved = await buyerAccountResolver.resolveActiveBuyerAccount(SESSION);
@@ -176,7 +186,7 @@ describe('resolveActiveBuyerAccount', () => {
   });
 
   test('reports 404 when no account matches the session', async () => {
-    identityPoolModule.pool = { stub: true };
+    dbPool.pool = { stub: true };
     jest
       .spyOn(buyerProfileQueries, 'findProfileByUserId')
       .mockResolvedValue({ reason: 'USER_NOT_FOUND' });
@@ -189,7 +199,7 @@ describe('resolveActiveBuyerAccount', () => {
 
   // A real state in the shared schema: a user row can exist with no organisation.
   test('reports 409 when the account has no linked organisation', async () => {
-    identityPoolModule.pool = { stub: true };
+    dbPool.pool = { stub: true };
     jest
       .spyOn(buyerProfileQueries, 'findProfileByUserId')
       .mockResolvedValue({ reason: 'ORG_NOT_LINKED' });
@@ -203,7 +213,7 @@ describe('resolveActiveBuyerAccount', () => {
   test.each([[null], [{}], [{ profile: null }]])(
     'treats a lookup result of %p as not found',
     async (result) => {
-      identityPoolModule.pool = { stub: true };
+      dbPool.pool = { stub: true };
       jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue(result);
 
       const resolved = await buyerAccountResolver.resolveActiveBuyerAccount(SESSION);

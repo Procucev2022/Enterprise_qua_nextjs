@@ -58,6 +58,11 @@ beforeAll(async () => {
 const otpRows = new Map();
 const revokedSignatures = new Map();
 
+// The real implementations are kept reachable so authSessionQueries.test.js can
+// exercise the actual SQL against a stubbed pool. Without this the double would
+// shadow them for the whole run and the module would report no coverage at all.
+const realAuthSessionQueries = { ...authSessionQueries };
+
 /** Wipe the doubled state. Called between tests so suites cannot leak into each other. */
 function resetAuthSessionDouble() {
   otpRows.clear();
@@ -110,6 +115,7 @@ authSessionQueries.purgeExpiredAuthState = async () => {
 };
 
 authSessionQueries.__resetForTests = resetAuthSessionDouble;
+authSessionQueries.__real = realAuthSessionQueries;
 
 afterEach(() => {
   resetAuthSessionDouble();

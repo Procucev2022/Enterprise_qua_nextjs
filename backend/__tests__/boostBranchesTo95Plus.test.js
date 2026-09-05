@@ -3,7 +3,7 @@ const emailService = require('../src/services/emailService');
 const auditService = require('../src/services/auditService');
 const evaluationService = require('../src/services/evaluationService');
 const storeService = require('../src/services/storeService');
-const identityPool = require('../src/db/identityPool');
+const dbPool = require('../src/db/pool');
 const { bootstrapServer, start } = require('../src/server');
 const auditController = require('../src/controllers/auditController');
 const evaluationController = require('../src/controllers/evaluationController');
@@ -107,7 +107,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
 
 
   test('bootstrapServer and start runner execution', async () => {
-    jest.spyOn(identityPool, 'checkIdentityHealth').mockResolvedValueOnce({
+    jest.spyOn(dbPool, 'checkDatabaseHealth').mockResolvedValueOnce({
       isConnected: false,
       providerLabel: 'Identity DB Unreachable',
       errorMessage: 'offline',
@@ -118,7 +118,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     await new Promise((resolve) => server.close(resolve));
 
     // Test bootstrapServer with default port and hydrate
-    jest.spyOn(identityPool, 'checkIdentityHealth').mockResolvedValueOnce({
+    jest.spyOn(dbPool, 'checkDatabaseHealth').mockResolvedValueOnce({
       isConnected: true,
       providerLabel: 'Azure MySQL',
       database: 'test_db',
@@ -135,7 +135,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     const exitSpy = jest.spyOn(process, 'exit').mockImplementation((code) => {
       throw new Error(`process.exit: ${code}`);
     });
-    jest.spyOn(identityPool, 'checkIdentityHealth').mockImplementationOnce(() => {
+    jest.spyOn(dbPool, 'checkDatabaseHealth').mockImplementationOnce(() => {
       throw new Error('Fatal DB Crash');
     });
 

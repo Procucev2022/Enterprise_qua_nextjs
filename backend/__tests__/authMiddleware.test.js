@@ -20,29 +20,29 @@ describe('auth middleware', () => {
   });
 
   describe('authenticate', () => {
-    test('rejects a request with no token', () => {
+    test('rejects a request with no token', async () => {
       const res = mockRes();
       const next = jest.fn();
-      authenticate({ headers: {} }, res, next);
+      await authenticate({ headers: {} }, res, next);
       expect(res.status).toHaveBeenCalledWith(401);
       expect(next).not.toHaveBeenCalled();
     });
 
-    test('rejects a request with an invalid token', () => {
+    test('rejects a request with an invalid token', async () => {
       const res = mockRes();
       const next = jest.fn();
-      authenticate({ headers: { authorization: 'Bearer not-a-real-token' } }, res, next);
+      await authenticate({ headers: { authorization: 'Bearer not-a-real-token' } }, res, next);
       expect(res.status).toHaveBeenCalledWith(401);
       expect(next).not.toHaveBeenCalled();
     });
 
-    test('attaches req.user and calls next() for a valid token', () => {
+    test('attaches req.user and calls next() for a valid token', async () => {
       const token = getTestToken('vendor');
       const req = { headers: { authorization: `Bearer ${token}` } };
       const res = mockRes();
       const next = jest.fn();
 
-      authenticate(req, res, next);
+      await authenticate(req, res, next);
 
       expect(next).toHaveBeenCalled();
       expect(req.user).toBeDefined();

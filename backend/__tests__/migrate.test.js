@@ -43,9 +43,17 @@ describe('Database migration (Neon PostgreSQL)', () => {
     expect(statements[0]).toContain('CREATE TABLE IF NOT EXISTS auth_otp_codes');
     expect(statements[0]).toContain('CREATE TABLE IF NOT EXISTS auth_revoked_tokens');
 
-    // Nothing but the schema and the read-only row-count report.
+    // Nothing after the schema but the read-only row-count report. Asserted by
+    // shape rather than by scanning for insert/update/delete keywords, because
+    // schema.sql's own comments contain those words.
     expect(statements.slice(1).every((sql) => /^select count\(\*\)/i.test(sql.trim()))).toBe(true);
-    expect(statements.some((sql) => /insert|update|delete/i.test(sql))).toBe(false);
+
+    // The schema itself only ever creates; it must never drop or alter an
+    // existing table, because it is applied against a live database.
+    const schema = statements[0];
+    expect(schema).not.toMatch(/^\s*DROP\s/im);
+    expect(schema).not.toMatch(/^\s*ALTER\s/im);
+    expect(schema).not.toMatch(/^\s*(INSERT|UPDATE|DELETE|TRUNCATE)\s/im);
 
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Done'));
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('No seed data is written'));

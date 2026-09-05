@@ -607,5 +607,64 @@ describe('Domain database viewer (Neon PostgreSQL)', () => {
       expect(errorSpy).toHaveBeenCalledWith('[db:view] Failed:', 'ECONNREFUSED');
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
+
+    test('exercises getPrimaryKeyColumn branch variations', () => {
+      let freshView;
+      jest.isolateModules(() => {
+        freshView = require('../src/db/view');
+      });
+
+      expect(freshView.getPrimaryKeyColumn('role')).toBe('uuid');
+      expect(freshView.getPrimaryKeyColumn('auth_otp_codes')).toBe('otp_key');
+      expect(freshView.getPrimaryKeyColumn('auth_revoked_tokens')).toBe('signature');
+      expect(freshView.getPrimaryKeyColumn('custom_table')).toBe('id');
+
+      expect(freshView.getPrimaryKeyColumn('custom_table', { id: 1 })).toBe('id');
+      expect(freshView.getPrimaryKeyColumn('custom_table', { uuid: 'u1' })).toBe('uuid');
+      expect(freshView.getPrimaryKeyColumn('custom_table', { otp_key: 'k1' })).toBe('otp_key');
+      expect(freshView.getPrimaryKeyColumn('custom_table', { signature: 's1' })).toBe('signature');
+      expect(freshView.getPrimaryKeyColumn('custom_table', { other_col: 'val' })).toBe('id');
+    });
+
+    test('exercises insertTableRecord edge cases with invalid column keys and object serialization', async () => {
+      let freshView;
+      const queryMock = jest.fn().mockResolvedValue({ rows: [{ id: 1, payload: { a: 1 } }] });
+      jest.isolateModules(() => {
+        jest.doMock('../src/db/pool', () => ({ pool: {}, query: queryMock }));
+        freshView = require('../src/db/view');
+      });
+
+      await expect(freshView.insertTableRecord('vendors', { 'invalid-col-name!': 'test' })).rejects.toThrow(
+        'No valid columns provided'
+      );
+
+      const res = await freshView.insertTableRecord('vendors', { name: 'Acme', payload: { a: 1 }, extra_null: null });
+      expect(res).toEqual({ id: 1, payload: { a: 1 } });
+      expect(queryMock).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO "vendors"'),
+        ['Acme', '{"a":1}', null]
+      );
+    });
+
+    test('exercises view() fallback branches when checkDatabaseHealth is available or health fields are null', async () => {
+      const queryMock = jest.fn().mockResolvedValue({ rows: [] });
+      const checkDatabaseHealthMock = jest.fn().mockResolvedValue({ providerLabel: null, poolStatus: null });
+
+      let freshView;
+      jest.isolateModules(() => {
+        jest.doMock('../src/db/pool', () => ({
+          pool: {},
+          query: queryMock,
+          checkDatabaseHealth: checkDatabaseHealthMock,
+        }));
+        freshView = require('../src/db/view');
+      });
+
+      const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+      await freshView.view();
+
+      expect(checkDatabaseHealthMock).toHaveBeenCalled();
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Connected to Database (ACTIVE)'));
+    });
   });
 });

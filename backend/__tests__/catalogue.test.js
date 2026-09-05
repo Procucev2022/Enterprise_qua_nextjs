@@ -44,12 +44,14 @@ describe('Vendor Item SKU Catalogue API', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  test('GET /api/catalogue returns list of products', async () => {
+  // Starts empty and stays empty until something is added. The three demo SKUs
+  // that used to make this endpoint look populated on a fresh boot are gone.
+  test('GET /api/catalogue returns an empty list before anything is added', async () => {
     const res = await request(app).get('/api/catalogue');
     expect(res.statusCode).toBe(200);
     expect(res.body.success).toBe(true);
     expect(Array.isArray(res.body.data)).toBe(true);
-    expect(res.body.data.length).toBeGreaterThan(0);
+    expect(res.body.data).toEqual([]);
   });
 
   test('POST /api/catalogue creates new SKU product', async () => {

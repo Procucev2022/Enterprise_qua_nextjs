@@ -1,20 +1,19 @@
 const storeService = require('../src/services/storeService');
 
 describe('Store Service — remaining branch coverage', () => {
-  describe('a fresh instance seeded with no buyer accounts / no audit logs', () => {
+  // A fresh instance needs no arranging: every collection starts empty, so the
+  // "nothing here yet" branches are the default rather than something a doctored
+  // seed module had to produce.
+  describe('a fresh instance holding no records', () => {
     let freshStore;
 
     beforeAll(() => {
       jest.isolateModules(() => {
-        jest.doMock('../src/db/seed', () => {
-          const actual = jest.requireActual('../src/db/seed');
-          return { ...actual, SEED_BUYER_ACCOUNTS: [], SEED_AUDIT_LOGS: [] };
-        });
         freshStore = require('../src/services/storeService');
       });
     });
 
-    test('constructor falls back activeBuyerAccount to null when there are no seed buyer accounts', () => {
+    test('constructor leaves activeBuyerAccount null when there are no buyer accounts', () => {
       expect(freshStore.getActiveBuyerAccount()).toBeNull();
     });
 
@@ -102,15 +101,44 @@ describe('Store Service — remaining branch coverage', () => {
       expect(item.message).toBe('');
     });
 
-    test('processHistoricalPurchaseData falls back the name/email chains and honors the default vendorRecords parameter', () => {
+    // A record without both a company name and a contact email cannot identify a
+    // supplier, so it is rejected and reported rather than back-filled. These rows
+    // used to be imported with an invented name, address, phone, category, rating
+    // and score, and marked `evaluated: true` — producing a vendor master full of
+    // suppliers that could not be contacted but that RFQ routing would still pick.
+    test('rejects unidentifiable rows instead of inventing their details', () => {
       const emptyRes = storeService.processHistoricalPurchaseData('FY2026-empty');
       expect(emptyRes.importedCount).toBe(0);
+      expect(emptyRes.skippedCount).toBe(0);
 
       const res = storeService.processHistoricalPurchaseData('FY2026-fallbacks', [
         { name: 'Only-Name Supplier Co' },
         {},
       ]);
-      expect(res.importedCount).toBe(2);
+
+      expect(res.importedCount).toBe(0);
+      expect(res.skippedCount).toBe(2);
+      expect(res.skipped).toEqual([
+        { row: 1, reason: 'Missing contact email.' },
+        { row: 2, reason: 'Missing both company name and contact email.' },
+      ]);
+    });
+
+    test('imports a row carrying both a name and an email, without scoring it', () => {
+      const res = storeService.processHistoricalPurchaseData('FY2026-identified', [
+        { companyName: 'Identified Supplier Co', email: 'identified@supplier.test' },
+      ]);
+
+      expect(res.importedCount).toBe(1);
+      expect(res.skippedCount).toBe(0);
+
+      const imported = storeService.getVendors().find((v) => v.email === 'identified@supplier.test');
+      // Nothing has assessed this supplier yet, so it carries no rating or score
+      // and is not marked as evaluated.
+      expect(imported.rating).toBeNull();
+      expect(imported.score).toBeNull();
+      expect(imported.evaluated).toBe(false);
+      expect(imported.status).toBe('PENDING EVALUATION');
     });
 
     test('handleSupportChat falls back an empty prompt safely', () => {
@@ -149,12 +177,14 @@ describe('Store Service — remaining branch coverage', () => {
       };
     }
 
-    test('resolves as a no-op and reports the in-memory seed as the source when the domain DB is not configured', async () => {
-      // Nothing persists regardless of collection — only when DATABASE_URL is set.
+    test('reports not_configured and loads nothing when DATABASE_URL is unset', async () => {
       const beforeBuyers = storeService.getBuyerAccounts().length;
       const result = await storeService.hydrateFromDB();
 
-      expect(result).toEqual({ hydrated: false, source: 'in_memory_seed' });
+      // There is no second datastore to fall back to, so the caller is told why
+      // rather than being handed a silently-empty store.
+      expect(result).toMatchObject({ hydrated: false, source: 'not_configured' });
+      expect(result.error).toContain('DATABASE_URL');
       expect(storeService.isHydratedFromDB).toBe(false);
       expect(storeService.getBuyerAccounts().length).toBe(beforeBuyers);
     });
@@ -176,7 +206,7 @@ describe('Store Service — remaining branch coverage', () => {
 
       const result = await freshStore.hydrateFromDB();
 
-      expect(result).toEqual({ hydrated: true, source: 'persisted' });
+      expect(result).toEqual({ hydrated: true, source: 'postgres' });
       expect(freshStore.isHydratedFromDB).toBe(true);
       expect(freshStore.getVendors()).toEqual(dbVendors);
       expect(freshStore.getRFQs()).toEqual(dbRfqs);
@@ -203,7 +233,7 @@ describe('Store Service — remaining branch coverage', () => {
 
       const result = await freshStore.hydrateFromDB();
 
-      expect(result).toEqual({ hydrated: true, source: 'persisted' });
+      expect(result).toEqual({ hydrated: true, source: 'postgres' });
       expect(freshStore.getEvaluations()).toEqual(dbEvaluations);
       expect(freshStore.getVendorCatalogue()).toEqual(dbCatalogue);
       expect(freshStore.getAIFeed()).toEqual(dbAIFeed);
@@ -248,7 +278,11 @@ describe('Store Service — remaining branch coverage', () => {
       expect(freshStore.getActiveBuyerAccount()).toEqual(acc1);
     });
 
-    test('falls back to the in-memory seed when the domain DB tables are empty', async () => {
+    // An empty database is a successful load of nothing, NOT a fallback. The
+    // previous version applied each collection only `if (rows.length > 0)`, so an
+    // empty table left the seed in place and the API served invented records while
+    // reporting itself healthy.
+    test('treats empty tables as an empty store, still reporting a successful load', async () => {
       let freshStore;
       jest.isolateModules(() => {
         jest.doMock('../src/db/pool', () => ({ pool: {} }));
@@ -256,15 +290,16 @@ describe('Store Service — remaining branch coverage', () => {
         freshStore = require('../src/services/storeService');
       });
 
-      const beforeVendors = freshStore.getVendors().length;
       const result = await freshStore.hydrateFromDB();
 
-      expect(result).toEqual({ hydrated: false, source: 'in_memory_seed' });
-      expect(freshStore.isHydratedFromDB).toBe(false);
-      expect(freshStore.getVendors().length).toBe(beforeVendors);
+      expect(result).toEqual({ hydrated: true, source: 'postgres' });
+      expect(freshStore.isHydratedFromDB).toBe(true);
+      expect(freshStore.getVendors()).toEqual([]);
+      expect(freshStore.getRFQs()).toEqual([]);
+      expect(freshStore.getActiveBuyerAccount()).toBeNull();
     });
 
-    test('falls back to the in-memory seed when a domain DB query throws', async () => {
+    test('reports the read as unavailable when a query throws, without inventing records', async () => {
       let freshStore;
       jest.isolateModules(() => {
         jest.doMock('../src/db/pool', () => ({ pool: {} }));
@@ -278,8 +313,10 @@ describe('Store Service — remaining branch coverage', () => {
 
       const result = await freshStore.hydrateFromDB();
 
-      expect(result).toEqual({ hydrated: false, source: 'in_memory_seed' });
+      expect(result).toMatchObject({ hydrated: false, source: 'unavailable' });
+      expect(result.error).toBe('ECONNREFUSED');
       expect(freshStore.isHydratedFromDB).toBe(false);
+      expect(freshStore.getVendors()).toEqual([]);
     });
   });
 

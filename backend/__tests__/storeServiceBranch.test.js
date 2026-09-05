@@ -30,7 +30,14 @@ describe('Store Service Deep Branch & Fallback Tests', () => {
     expect(deletedBuyer).toBe(true);
     expect(storeService.deleteBuyerAccount('invalid-id')).toBe(false);
 
-    // 2. Vendors
+    // 2. Vendors. Not seeded either — the roster is whatever has actually been
+    // registered, so one is created here before the getters are exercised.
+    expect(storeService.getVendors()).toEqual([]);
+    storeService.addVendor({
+      name: 'Branch Coverage Supplier',
+      email: 'branch@coverage.test',
+      majorCategory: 'Engineering Spares - Mechanical',
+    });
     expect(storeService.getVendors().length).toBeGreaterThan(0);
     const vendor = storeService.getVendors()[0];
     expect(storeService.getVendorById(vendor.id)).toBeDefined();
@@ -95,10 +102,12 @@ describe('Store Service Deep Branch & Fallback Tests', () => {
     expect(deletedRFQ).toBe(true);
     expect(storeService.deleteRFQ('invalid-rfq')).toBe(false);
 
-    // 4. Evaluations
-    expect(storeService.getEvaluations().length).toBeGreaterThan(0);
+    // 4. Evaluations. The single fabricated 360° audit that used to be seeded is
+    // gone, so the collection is empty until an audit is actually run.
+    expect(storeService.getEvaluations()).toEqual([]);
     const createdEval = storeService.createEvaluation({ vendorName: 'Eval Partner' });
     expect(createdEval.overallScore).toBeDefined();
+    expect(storeService.getEvaluations().length).toBeGreaterThan(0);
 
     // 5. Audit Logs
     expect(storeService.getAuditLogs().length).toBeGreaterThan(0);
@@ -130,14 +139,16 @@ describe('Store Service Deep Branch & Fallback Tests', () => {
     expect(storeService.handleSupportChat('how to download rfq?').reply).toContain('Vendors can view');
     expect(storeService.handleSupportChat('generic question').reply).toBeDefined();
 
-    // 10. Vendor Catalogue
-    expect(storeService.getVendorCatalogue().length).toBeGreaterThan(0);
+    // 10. Vendor Catalogue. The three unowned demo SKUs are gone, so the
+    // catalogue is empty until a vendor publishes something.
+    expect(storeService.getVendorCatalogue()).toEqual([]);
     const cat = storeService.addProductToCatalogue({
       name: 'Prod',
       sku: 'SKU-STORE',
       unitPrice: 100,
     });
     expect(cat.sku).toBe('SKU-STORE');
+    expect(storeService.getVendorCatalogue().length).toBeGreaterThan(0);
     expect(storeService.updateCatalogueProduct(cat.id, { unitPrice: 120 }).unitPrice).toBe(120);
     expect(storeService.updateCatalogueProduct('invalid-prod', {})).toBeNull();
     expect(storeService.deleteCatalogueProduct(cat.id)).toBe(true);

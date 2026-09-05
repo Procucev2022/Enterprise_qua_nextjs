@@ -1,8 +1,8 @@
 const identityQueries = require('../src/db/identityQueries');
-const identityPool = require('../src/db/identityPool');
+const dbPool = require('../src/db/pool');
 const { IDENTITY_MASTER_DATA } = require('../src/config/constants');
 
-describe('Identity queries (shared Procucev MySQL schema)', () => {
+describe('Identity queries (Neon PostgreSQL)', () => {
   afterEach(() => {
     jest.restoreAllMocks();
   });
@@ -112,9 +112,9 @@ describe('Identity queries (shared Procucev MySQL schema)', () => {
         full_name: 'Full Name',
         first_name: 'First',
         phone: '+919157154504',
-        is_active: Buffer.from([1]),
-        is_approved: Buffer.from([1]),
-        self_client: Buffer.from([0]),
+        is_active: true,
+        is_approved: true,
+        self_client: false,
         verification_status: 'EMAIL_VERIFIED',
         org_uuid: 'org-1',
         role_name: 'ClientInitiator',
@@ -149,7 +149,7 @@ describe('Identity queries (shared Procucev MySQL schema)', () => {
     });
 
     test('reports an inactive row as INACTIVE', () => {
-      const mapped = identityQueries.mapRowToUser({ username: 'a@b.com', is_active: Buffer.from([0]) });
+      const mapped = identityQueries.mapRowToUser({ username: 'a@b.com', is_active: false });
       expect(mapped.status).toBe('INACTIVE');
       expect(mapped.isActive).toBe(false);
     });
@@ -170,22 +170,22 @@ describe('Identity queries (shared Procucev MySQL schema)', () => {
   describe('findUserByEmail', () => {
     test('queries with the normalised email and maps the first row', async () => {
       const spy = jest
-        .spyOn(identityPool, 'identityQuery')
+        .spyOn(dbPool, 'rows')
         .mockResolvedValue([{ uuid: 'u-1', username: 'a@b.com', role_name: 'Vendor' }]);
 
       const user = await identityQueries.findUserByEmail('  A@B.COM ');
 
-      expect(spy).toHaveBeenCalledWith(expect.stringContaining('lower(u.username) = ?'), ['a@b.com']);
+      expect(spy).toHaveBeenCalledWith(expect.stringContaining('lower(u.username) = $1'), ['a@b.com']);
       expect(user.role).toBe('vendor');
     });
 
     test('returns null when nothing matches', async () => {
-      jest.spyOn(identityPool, 'identityQuery').mockResolvedValue([]);
+      jest.spyOn(dbPool, 'rows').mockResolvedValue([]);
       await expect(identityQueries.findUserByEmail('a@b.com')).resolves.toBeNull();
     });
 
     test('short-circuits without querying for a missing email', async () => {
-      const spy = jest.spyOn(identityPool, 'identityQuery');
+      const spy = jest.spyOn(dbPool, 'rows');
       await expect(identityQueries.findUserByEmail('')).resolves.toBeNull();
       expect(spy).not.toHaveBeenCalled();
     });
@@ -194,7 +194,7 @@ describe('Identity queries (shared Procucev MySQL schema)', () => {
   describe('findUserByEmailAndPhone', () => {
     test('matches the Java contract by normalising the phone', async () => {
       const spy = jest
-        .spyOn(identityPool, 'identityQuery')
+        .spyOn(dbPool, 'rows')
         .mockResolvedValue([{ uuid: 'u-1', username: 'a@b.com', role_name: 'ClientInitiator' }]);
 
       const user = await identityQueries.findUserByEmailAndPhone('A@B.com', '9157154504');
@@ -204,14 +204,14 @@ describe('Identity queries (shared Procucev MySQL schema)', () => {
     });
 
     test('returns null when either argument is missing', async () => {
-      const spy = jest.spyOn(identityPool, 'identityQuery');
+      const spy = jest.spyOn(dbPool, 'rows');
       await expect(identityQueries.findUserByEmailAndPhone('', '9157154504')).resolves.toBeNull();
       await expect(identityQueries.findUserByEmailAndPhone('a@b.com', '')).resolves.toBeNull();
       expect(spy).not.toHaveBeenCalled();
     });
 
     test('returns null when no row matches', async () => {
-      jest.spyOn(identityPool, 'identityQuery').mockResolvedValue([]);
+      jest.spyOn(dbPool, 'rows').mockResolvedValue([]);
       await expect(
         identityQueries.findUserByEmailAndPhone('a@b.com', '9157154504')
       ).resolves.toBeNull();
@@ -220,7 +220,7 @@ describe('Identity queries (shared Procucev MySQL schema)', () => {
 
   describe('listUsers', () => {
     test('maps rows and drops any without an email', async () => {
-      jest.spyOn(identityPool, 'identityQuery').mockResolvedValue([
+      jest.spyOn(dbPool, 'rows').mockResolvedValue([
         { uuid: 'u-1', username: 'a@b.com', role_name: 'ClientInitiator' },
         { uuid: 'u-2', username: null, email: null, role_name: 'Vendor' },
       ]);
@@ -232,7 +232,7 @@ describe('Identity queries (shared Procucev MySQL schema)', () => {
     });
 
     test('honours an explicit limit', async () => {
-      const spy = jest.spyOn(identityPool, 'identityQuery').mockResolvedValue([]);
+      const spy = jest.spyOn(dbPool, 'rows').mockResolvedValue([]);
       await identityQueries.listUsers(25);
       expect(spy).toHaveBeenCalledWith(expect.any(String), [25]);
     });
@@ -240,20 +240,20 @@ describe('Identity queries (shared Procucev MySQL schema)', () => {
 
   describe('resolveMasterUuid', () => {
     test('returns the uuid for a natural key', async () => {
-      jest.spyOn(identityPool, 'identityQuery').mockResolvedValue([{ uuid: '5005' }]);
+      jest.spyOn(dbPool, 'rows').mockResolvedValue([{ uuid: '5005' }]);
       await expect(identityQueries.resolveMasterUuid('role', 'role_name', 'ClientInitiator')).resolves.toBe(
         '5005'
       );
     });
 
     test('adds the active filter when requested', async () => {
-      const spy = jest.spyOn(identityPool, 'identityQuery').mockResolvedValue([{ uuid: '5005' }]);
+      const spy = jest.spyOn(dbPool, 'rows').mockResolvedValue([{ uuid: '5005' }]);
       await identityQueries.resolveMasterUuid('role', 'role_name', 'ClientInitiator', true);
-      expect(spy.mock.calls[0][0]).toContain('is_active = 1');
+      expect(spy.mock.calls[0][0]).toContain('is_active = true');
     });
 
     test('returns null when the master row is absent', async () => {
-      jest.spyOn(identityPool, 'identityQuery').mockResolvedValue([]);
+      jest.spyOn(dbPool, 'rows').mockResolvedValue([]);
       await expect(identityQueries.resolveMasterUuid('role', 'role_name', 'Nope')).resolves.toBeNull();
     });
   });
@@ -278,11 +278,42 @@ describe('Identity queries (shared Procucev MySQL schema)', () => {
   });
 
   // ── Buyer creation ────────────────────────────────────────────────────────
+  // Only the three tables named here may be reached, and only by their own lookup
+  // column. The table and column cannot be parameterised, so this allow-list is
+  // what keeps the identifier out of caller control.
+  describe('resolveMasterUuid input guarding', () => {
+    test('refuses a table that is not a master-data table', async () => {
+      const spy = jest.spyOn(dbPool, 'rows');
+      await expect(identityQueries.resolveMasterUuid('user', 'username', 'x')).rejects.toThrow(
+        'Unknown master-data table "user".'
+      );
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    test('refuses a column that is not that table\'s lookup key', async () => {
+      const spy = jest.spyOn(dbPool, 'rows');
+      await expect(identityQueries.resolveMasterUuid('role', 'uuid', 'x')).rejects.toThrow(
+        'Column "uuid" is not a lookup key for master-data table "role".'
+      );
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    test('names every table it will accept', () => {
+      expect(identityQueries.MASTER_TABLES).toEqual({
+        role: 'role_name',
+        org_types: 'type_name',
+        master_status: 'status',
+      });
+    });
+  });
+
+  // ── Buyer creation ────────────────────────────────────────────────────────
   describe('insertBuyerAccount', () => {
-    let conn;
+    let client;
     let originalPool;
     let existingUserRows;
     let masterRows;
+    let withTransactionSpy;
 
     const payload = {
       email: 'New.Buyer@Example.com',
@@ -296,37 +327,34 @@ describe('Identity queries (shared Procucev MySQL schema)', () => {
       existingUserRows = [];
       masterRows = { role: [{ uuid: '5005' }], org_types: [{ uuid: '3001' }], master_status: [{ uuid: '104' }] };
 
-      conn = {
-        beginTransaction: jest.fn().mockResolvedValue(undefined),
-        query: jest.fn().mockResolvedValue([[]]),
-        commit: jest.fn().mockResolvedValue(undefined),
-        rollback: jest.fn().mockResolvedValue(undefined),
-        release: jest.fn(),
-      };
-      originalPool = identityPool.pool;
-      identityPool.pool = { getConnection: jest.fn().mockResolvedValue(conn) };
+      // pg returns { rows }, and the transaction is driven by pool.withTransaction
+      // rather than a checked-out connection with begin/commit/rollback of its own.
+      client = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      originalPool = dbPool.pool;
+      dbPool.pool = { connect: jest.fn() };
+      withTransactionSpy = jest
+        .spyOn(dbPool, 'withTransaction')
+        .mockImplementation(async (fn) => fn(client));
 
-      // insertBuyerAccount reaches the duplicate check and the master-data lookups
-      // through identityQuery, so routing on the SQL drives every branch.
-      jest.spyOn(identityPool, 'identityQuery').mockImplementation(async (sql) => {
-        if (sql.includes('from `user`')) return existingUserRows;
-        if (sql.includes('from `role`')) return masterRows.role;
-        if (sql.includes('from `org_types`')) return masterRows.org_types;
-        if (sql.includes('from `master_status`')) return masterRows.master_status;
+      // The duplicate check and the three master-data lookups all go through
+      // pool.rows, so routing on the SQL drives every branch.
+      jest.spyOn(dbPool, 'rows').mockImplementation(async (sql) => {
+        if (sql.includes('from "user"')) return existingUserRows;
+        if (sql.includes('from "role"')) return masterRows.role;
+        if (sql.includes('from "org_types"')) return masterRows.org_types;
+        if (sql.includes('from "master_status"')) return masterRows.master_status;
         return [];
       });
     });
 
     afterEach(() => {
-      identityPool.pool = originalPool;
+      dbPool.pool = originalPool;
     });
 
     test('creates the organisation and the user in one transaction', async () => {
       const result = await identityQueries.insertBuyerAccount(payload);
 
-      expect(conn.beginTransaction).toHaveBeenCalled();
-      expect(conn.commit).toHaveBeenCalled();
-      expect(conn.release).toHaveBeenCalled();
+      expect(withTransactionSpy).toHaveBeenCalledTimes(1);
       expect(result.created).toBe(true);
       expect(result.organizationReused).toBe(false);
       expect(result.user).toMatchObject({
@@ -336,23 +364,30 @@ describe('Identity queries (shared Procucev MySQL schema)', () => {
         mobile: '+919157154504',
         status: 'ACTIVE',
       });
+      // Both rows are written on the same client, so neither can land without the
+      // other.
+      const statements = client.query.mock.calls.map(([sql]) => sql);
+      expect(statements.some((sql) => sql.includes('insert into organization'))).toBe(true);
+      expect(statements.some((sql) => sql.includes('insert into "user"'))).toBe(true);
     });
 
-    test('writes the password verbatim, matching the schema\'s plaintext contract', async () => {
+    test('writes the password as submitted, so migrated accounts keep working', async () => {
       await identityQueries.insertBuyerAccount(payload);
 
-      const userInsert = conn.query.mock.calls.find(([sql]) => sql.includes('insert into `user`'));
+      const userInsert = client.query.mock.calls.find(([sql]) => sql.includes('insert into "user"'));
       expect(userInsert[1]).toContain('Pass@123');
     });
 
     test('reuses an existing CLIENT organisation with the same name', async () => {
-      conn.query.mockResolvedValueOnce([[{ uuid: 'existing-org' }]]).mockResolvedValue([[]]);
+      client.query.mockResolvedValueOnce({ rows: [{ uuid: 'existing-org' }] }).mockResolvedValue({ rows: [] });
 
       const result = await identityQueries.insertBuyerAccount(payload);
 
       expect(result.created).toBe(true);
       expect(result.organizationReused).toBe(true);
       expect(result.user.orgId).toBe('existing-org');
+      // The organisation is reused, not inserted a second time.
+      expect(client.query.mock.calls.some(([sql]) => sql.includes('insert into organization'))).toBe(false);
     });
 
     test('derives the organisation name and display name from the email when omitted', async () => {
@@ -366,21 +401,21 @@ describe('Identity queries (shared Procucev MySQL schema)', () => {
       expect(result.user.name).toBe('solo');
     });
 
-    test('reports an existing account without inserting anything', async () => {
+    test('reports an existing account without opening a transaction', async () => {
       existingUserRows = [{ uuid: 'u-1', username: 'new.buyer@example.com', role_name: 'ClientInitiator' }];
 
       const result = await identityQueries.insertBuyerAccount(payload);
 
       expect(result).toMatchObject({ created: false, reason: 'ALREADY_EXISTS' });
-      expect(identityPool.pool.getConnection).not.toHaveBeenCalled();
+      expect(withTransactionSpy).not.toHaveBeenCalled();
     });
 
-    test('rolls back and rethrows when the insert fails', async () => {
-      conn.query.mockRejectedValue(new Error('duplicate entry'));
+    test('propagates an insert failure so the transaction rolls back', async () => {
+      // withTransaction owns the rollback (covered in pool.test.js); what matters
+      // here is that the error is not swallowed on the way out.
+      client.query.mockRejectedValue(new Error('duplicate key value'));
 
-      await expect(identityQueries.insertBuyerAccount(payload)).rejects.toThrow('duplicate entry');
-      expect(conn.rollback).toHaveBeenCalled();
-      expect(conn.release).toHaveBeenCalled();
+      await expect(identityQueries.insertBuyerAccount(payload)).rejects.toThrow('duplicate key value');
     });
 
     test.each([
@@ -393,10 +428,10 @@ describe('Identity queries (shared Procucev MySQL schema)', () => {
       );
     });
 
-    test('refuses to run when the identity database is not configured', async () => {
-      identityPool.pool = null;
+    test('refuses to run when the database is not configured', async () => {
+      dbPool.pool = null;
       await expect(identityQueries.insertBuyerAccount(payload)).rejects.toThrow(
-        'Identity database is not configured.'
+        dbPool.NOT_CONFIGURED_MESSAGE
       );
     });
 
@@ -413,17 +448,22 @@ describe('Identity queries (shared Procucev MySQL schema)', () => {
   // ── Password updates ──────────────────────────────────────────────────────
   describe('updateUserPassword', () => {
     test('reports success when a row was updated', async () => {
-      jest.spyOn(identityPool, 'identityQuery').mockResolvedValue({ affectedRows: 1 });
+      jest.spyOn(dbPool, 'query').mockResolvedValue({ rowCount: 1 });
       await expect(identityQueries.updateUserPassword('A@B.com', 'New@1234')).resolves.toBe(true);
     });
 
     test('reports failure when no row matched', async () => {
-      jest.spyOn(identityPool, 'identityQuery').mockResolvedValue({ affectedRows: 0 });
+      jest.spyOn(dbPool, 'query').mockResolvedValue({ rowCount: 0 });
+      await expect(identityQueries.updateUserPassword('a@b.com', 'New@1234')).resolves.toBe(false);
+    });
+
+    test('treats an absent rowCount as no update rather than throwing', async () => {
+      jest.spyOn(dbPool, 'query').mockResolvedValue({});
       await expect(identityQueries.updateUserPassword('a@b.com', 'New@1234')).resolves.toBe(false);
     });
 
     test('normalises the email before updating', async () => {
-      const spy = jest.spyOn(identityPool, 'identityQuery').mockResolvedValue({ affectedRows: 1 });
+      const spy = jest.spyOn(dbPool, 'query').mockResolvedValue({ rowCount: 1 });
       await identityQueries.updateUserPassword('  A@B.COM ', 'New@1234');
       expect(spy).toHaveBeenCalledWith(expect.any(String), ['New@1234', 'a@b.com']);
     });

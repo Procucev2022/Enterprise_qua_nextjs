@@ -2,7 +2,7 @@ const request = require('supertest');
 const app = require('../src/app');
 const authService = require('../src/services/authService');
 const authController = require('../src/controllers/authController');
-const identityPool = require('../src/db/identityPool');
+const dbPool = require('../src/db/pool');
 const identityQueries = require('../src/db/identityQueries');
 const mailerService = require('../src/services/mailerService');
 const {
@@ -46,20 +46,20 @@ const PASSWORD = 'Pass@123';
 /** Mobile number as typed by the visitor on the sign-in form. */
 const MOBILE = '9157154504';
 
-describe('Authentication against the shared identity database (/api/auth)', () => {
+describe('Authentication against the account records (/api/auth)', () => {
   let originalPool;
 
   beforeEach(() => {
     // The identity pool is only constructed when MYSQL_* is configured, which it
     // is not under test. A truthy stub puts the service in its "configured" path
     // while every read is driven by the identityQueries mocks below.
-    originalPool = identityPool.pool;
-    identityPool.pool = { query: jest.fn() };
+    originalPool = dbPool.pool;
+    dbPool.pool = { query: jest.fn() };
     jest.spyOn(mailerService, 'sendOtpEmail').mockResolvedValue(undefined);
   });
 
   afterEach(() => {
-    identityPool.pool = originalPool;
+    dbPool.pool = originalPool;
     jest.restoreAllMocks();
   });
 
@@ -121,7 +121,7 @@ describe('Authentication against the shared identity database (/api/auth)', () =
       const crypto = require('crypto');
       const badPayload = '!!!not-base64-json!!!';
       const sig = crypto
-        .createHmac('sha256', 'procucev-enterprise-auth-secret-key-2026')
+        .createHmac('sha256', process.env.AUTH_SECRET)
         .update(`${header}.${badPayload}`)
         .digest('base64url');
       const result = authService.verifySessionToken(`${header}.${badPayload}.${sig}`);
@@ -138,7 +138,7 @@ describe('Authentication against the shared identity database (/api/auth)', () =
         JSON.stringify({ sub: 'usr-1', email: EMAIL, role: 'buyer', exp: 1 })
       ).toString('base64url');
       const sig = crypto
-        .createHmac('sha256', 'procucev-enterprise-auth-secret-key-2026')
+        .createHmac('sha256', process.env.AUTH_SECRET)
         .update(`${header}.${payload}`)
         .digest('base64url');
 
@@ -147,29 +147,60 @@ describe('Authentication against the shared identity database (/api/auth)', () =
       expect(result.error).toBe(AUTH_MESSAGES.SESSION_EXPIRED);
     });
 
-    test('a revoked token stops verifying, and revoking junk is a no-op', () => {
+    test('a revoked token stops passing the full session check, and revoking junk is a no-op', async () => {
       const token = authService.generateSessionToken(buyerRecord({ id: 'usr-revoke-1' }));
-      expect(authService.verifySessionToken(token).valid).toBe(true);
+      await expect(authService.assertSessionActive(token)).resolves.toMatchObject({ valid: true });
 
-      expect(authService.revokeSessionToken(token)).toBe(true);
-      const after = authService.verifySessionToken(token);
+      await expect(authService.revokeSessionToken(token)).resolves.toBe(true);
+
+      // The signature and expiry are still fine — only the revocation record makes
+      // it invalid, which is why that check cannot live in verifySessionToken.
+      expect(authService.verifySessionToken(token).valid).toBe(true);
+      const after = await authService.assertSessionActive(token);
       expect(after.valid).toBe(false);
       expect(after.error).toBe(AUTH_MESSAGES.SESSION_LOGGED_OUT);
 
-      expect(authService.revokeSessionToken(null)).toBe(false);
-      expect(authService.revokeSessionToken('a.b')).toBe(false);
+      await expect(authService.revokeSessionToken(null)).resolves.toBe(false);
+      await expect(authService.revokeSessionToken('a.b')).resolves.toBe(false);
     });
 
-    test('revoking a token with an undecodable payload still succeeds', () => {
+    test('fails closed when the revocation record cannot be read', async () => {
+      // Treating an unreachable database as "not revoked" would turn an outage into
+      // a window where every logged-out token worked again.
+      const authSessionQueries = require('../src/db/authSessionQueries');
+      const token = authService.generateSessionToken(buyerRecord({ id: 'usr-revoke-2' }));
+      jest
+        .spyOn(authSessionQueries, 'isTokenRevoked')
+        .mockRejectedValueOnce(new Error('ECONNREFUSED'));
+
+      const result = await authService.assertSessionActive(token);
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe(AUTH_MESSAGES.SESSION_CHECK_UNAVAILABLE);
+    });
+
+    test('revoking a token with an undecodable payload still succeeds', async () => {
+      // An undecodable payload still gets revoked; it just cannot tell the sweep
+      // when the entry may be dropped, so a default expiry is used.
       const crypto = require('crypto');
       const header = 'h';
       const payload = '!!!bad!!!';
       const sig = crypto
-        .createHmac('sha256', 'procucev-enterprise-auth-secret-key-2026')
+        .createHmac('sha256', process.env.AUTH_SECRET)
         .update(`${header}.${payload}`)
         .digest('base64url');
 
-      expect(authService.revokeSessionToken(`${header}.${payload}.${sig}`)).toBe(true);
+      await expect(
+        authService.revokeSessionToken(`${header}.${payload}.${sig}`)
+      ).resolves.toBe(true);
+    });
+
+    test('reports a failed revocation rather than claiming the session ended', async () => {
+      const authSessionQueries = require('../src/db/authSessionQueries');
+      const token = authService.generateSessionToken(buyerRecord({ id: 'usr-revoke-3' }));
+      jest.spyOn(authSessionQueries, 'revokeToken').mockRejectedValueOnce(new Error('write failed'));
+
+      await expect(authService.revokeSessionToken(token)).resolves.toBe(false);
     });
   });
 
@@ -202,7 +233,7 @@ describe('Authentication against the shared identity database (/api/auth)', () =
     });
 
     test('fails closed when the identity database is not configured', async () => {
-      identityPool.pool = null;
+      dbPool.pool = null;
       await expect(authService.loadIdentityUser(EMAIL)).rejects.toThrow(
         AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED
       );
@@ -560,7 +591,7 @@ describe('Authentication against the shared identity database (/api/auth)', () =
     });
 
     test('fails closed when the identity database is not configured', async () => {
-      identityPool.pool = null;
+      dbPool.pool = null;
       await expect(authService.registerUser(payload)).rejects.toThrow(
         AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED
       );
@@ -589,7 +620,7 @@ describe('Authentication against the shared identity database (/api/auth)', () =
     });
 
     test('fails closed when the identity database is not configured', async () => {
-      identityPool.pool = null;
+      dbPool.pool = null;
       await expect(authService.getAllUsers()).rejects.toThrow(
         AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED
       );
@@ -600,7 +631,7 @@ describe('Authentication against the shared identity database (/api/auth)', () =
   describe('hydrateFromDB', () => {
     test('returns the identity health report when reachable', async () => {
       jest
-        .spyOn(identityPool, 'checkIdentityHealth')
+        .spyOn(dbPool, 'checkDatabaseHealth')
         .mockResolvedValue({ isConnected: true, userCount: 5 });
 
       await expect(authService.hydrateFromDB()).resolves.toMatchObject({ isConnected: true });
@@ -608,7 +639,7 @@ describe('Authentication against the shared identity database (/api/auth)', () =
 
     test('logs loudly but resolves when the identity database is unreachable', async () => {
       jest
-        .spyOn(identityPool, 'checkIdentityHealth')
+        .spyOn(dbPool, 'checkDatabaseHealth')
         .mockResolvedValue({ isConnected: false, errorMessage: 'offline' });
 
       await expect(authService.hydrateFromDB()).resolves.toMatchObject({ isConnected: false });
@@ -855,9 +886,9 @@ describe('Authentication against the shared identity database (/api/auth)', () =
     test('getSession forwards unexpected failures to next()', async () => {
       const next = jest.fn();
       const res = mockRes();
-      jest.spyOn(authService, 'verifySessionToken').mockImplementation(() => {
-        throw new Error('boom');
-      });
+      // getSession resolves the session through assertSessionActive now, because
+      // the revocation check is a database read.
+      jest.spyOn(authService, 'assertSessionActive').mockRejectedValue(new Error('boom'));
 
       await authController.getSession(
         { headers: { authorization: 'Bearer x.y.z' } },
@@ -995,7 +1026,7 @@ describe('Authentication against the shared identity database (/api/auth)', () =
     });
 
     test('getSession falls back to a generic message when verification gives no reason', async () => {
-      jest.spyOn(authService, 'verifySessionToken').mockReturnValue({ valid: false });
+      jest.spyOn(authService, 'assertSessionActive').mockResolvedValue({ valid: false });
       const res = mockRes();
 
       await authController.getSession({ headers: { authorization: 'Bearer a.b.c' } }, res, jest.fn());

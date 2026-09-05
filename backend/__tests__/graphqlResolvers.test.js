@@ -6,6 +6,16 @@ function contextFor(role) {
   return { req: { headers: { authorization: `Bearer ${getTestToken(role)}` } } };
 }
 
+// Every session-gated resolver is async: revocation is read from the database, so
+// requireAuth/requireAdmin/requireRfqReadScope all await. A rejected promise is
+// NOT a synchronous throw — asserting one with `expect(() => ...).toThrow()`
+// leaves the rejection unhandled, which crashes the Jest worker outright rather
+// than failing the test. Every such assertion below therefore uses
+// `.rejects.toThrow()`.
+//
+// The unauthenticated read resolvers (vendors, vendor, buyerAccounts,
+// activeBuyerAccount, evaluations, auditLogs, catalogue, aiFeed, systemConfig)
+// are deliberately still synchronous and are called directly.
 describe('GraphQL Resolvers Direct Unit Tests', () => {
   let seededRfq;
 
@@ -28,11 +38,11 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
     );
   });
 
-  // RFQ resolvers require a session, so an anonymous call is rejected before
-  // it ever reads the store.
-  test('rfqs resolver refuses an anonymous call', () => {
-    expect(() => rootResolvers.rfqs({}, undefined)).toThrow();
-    expect(() => rootResolvers.rfqs({}, {})).toThrow();
+  // RFQ resolvers require a session, so an anonymous call is rejected before it
+  // ever reads the store.
+  test('rfqs resolver refuses an anonymous call', async () => {
+    await expect(rootResolvers.rfqs({}, undefined)).rejects.toThrow();
+    await expect(rootResolvers.rfqs({}, {})).rejects.toThrow();
   });
 
   test('rfqs resolver filters by category, sourcingMode, and status', async () => {
@@ -62,17 +72,16 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
     expect(await rootResolvers.rfq({}, context)).toBeNull();
   });
 
-  // Category managers/admins are deliberately unrestricted (they need the
-  // full cross-buyer list — see resolvers.js's requireRfqReadScope), so the
-  // buyer-only scoping case needs a second real buyer account instead.
+  // Category managers/admins are deliberately unrestricted (they need the full
+  // cross-buyer list — see resolvers.js's requireRfqReadScope), so the buyer-only
+  // scoping case needs a second real buyer identity.
   test('rfq resolvers scope a buyer to their own account', async () => {
     storeService.addBuyerAccount({
       organizationName: 'Other Buyer Org',
       corporateEmail: TEST_USERS.category_manager.email,
     });
-    const otherBuyerCtx = { req: { headers: { authorization: `Bearer ${getTestToken('category_manager')}` } } };
-    // category_manager sees everything (unrestricted), so use a fresh buyer
-    // identity with no account of its own to exercise the "no match" branch.
+    const otherBuyerCtx = contextFor('category_manager');
+    // A buyer with no account of its own exercises the "no match" branch.
     const unlinkedBuyerToken = require('../src/services/authService').generateSessionToken({
       id: 'usr-unlinked-buyer',
       email: 'unlinked-buyer@procucev.com',
@@ -90,28 +99,43 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
   });
 
   test('vendors resolver filters by majorCategory, source, search and pagination', () => {
+    // Registered here because nothing is seeded: the roster is empty until a
+    // vendor is actually created.
+    storeService.addVendor({
+      name: 'Resolver Filter Vendor',
+      email: 'filter@resolver-vendor.test',
+      majorCategory: 'Engineering Spares - Mechanical',
+      source: 'buyer_manual',
+    });
+
     const all = rootResolvers.vendors();
     expect(all.length).toBeGreaterThan(0);
 
     const byCat = rootResolvers.vendors({ majorCategory: 'Mechanical' });
-    expect(Array.isArray(byCat)).toBe(true);
+    expect(byCat.length).toBeGreaterThan(0);
 
     const bySource = rootResolvers.vendors({ source: 'buyer_manual' });
-    expect(Array.isArray(bySource)).toBe(true);
+    expect(bySource.length).toBeGreaterThan(0);
 
-    const bySearchName = rootResolvers.vendors({ search: 'Tata' });
-    expect(Array.isArray(bySearchName)).toBe(true);
+    const bySearchName = rootResolvers.vendors({ search: 'Resolver Filter' });
+    expect(bySearchName.length).toBeGreaterThan(0);
 
     const bySearchEmail = rootResolvers.vendors({ search: '@' });
-    expect(Array.isArray(bySearchEmail)).toBe(true);
+    expect(bySearchEmail.length).toBeGreaterThan(0);
+
+    // A search that matches nothing returns empty rather than the whole roster.
+    expect(rootResolvers.vendors({ search: 'no-such-vendor-anywhere' })).toEqual([]);
   });
 
   test('vendor resolver looks up by id and email or returns null', () => {
-    const vendors = storeService.getVendors();
-    const first = vendors[0];
+    const created = storeService.addVendor({
+      name: 'Resolver Lookup Vendor',
+      email: 'lookup@resolver-vendor.test',
+      majorCategory: 'Engineering Spares - Electrical',
+    });
 
-    expect(rootResolvers.vendor({ id: first.id })).toEqual(first);
-    expect(rootResolvers.vendor({ email: first.email })).toEqual(first);
+    expect(rootResolvers.vendor({ id: created.id })).toEqual(created);
+    expect(rootResolvers.vendor({ email: created.email })).toEqual(created);
     expect(rootResolvers.vendor({ id: 'non-existent-vendor' })).toBeNull();
     expect(rootResolvers.vendor({ email: 'unknown@email.com' })).toBeNull();
     expect(rootResolvers.vendor({})).toBeNull();
@@ -120,8 +144,6 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
   // The seeded companies are gone, so these start empty. An account created at
   // runtime is what they report now.
   test('buyerAccounts and activeBuyerAccount resolvers read the runtime store', () => {
-    expect(rootResolvers.activeBuyerAccount()).toBeNull();
-
     const beforeCount = rootResolvers.buyerAccounts().length;
     const created = storeService.addBuyerAccount({
       organizationName: 'Runtime Buyer Co',
@@ -137,11 +159,20 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
   });
 
   test('evaluations resolver filters by vendorName or returns all', () => {
+    // The single fabricated 360° audit that used to be seeded is gone, so a real
+    // evaluation is recorded before the filters are asserted.
+    storeService.createEvaluation({
+      vendorName: 'Resolver Evaluation Vendor',
+      category: 'Engineering Spares - Mechanical',
+    });
+
     const all = rootResolvers.evaluations();
     expect(all.length).toBeGreaterThan(0);
 
-    const filtered = rootResolvers.evaluations({ vendorName: 'Tata' });
-    expect(Array.isArray(filtered)).toBe(true);
+    const filtered = rootResolvers.evaluations({ vendorName: 'Resolver Evaluation' });
+    expect(filtered.length).toBeGreaterThan(0);
+
+    expect(rootResolvers.evaluations({ vendorName: 'no-such-vendor' })).toEqual([]);
   });
 
   test('auditLogs resolver filters by search action or userEmail', () => {
@@ -156,24 +187,37 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
     expect(all.length).toBeGreaterThan(0);
 
     const searchAction = rootResolvers.auditLogs({ search: 'Registered' });
-    expect(Array.isArray(searchAction)).toBe(true);
+    expect(searchAction.length).toBeGreaterThan(0);
 
     const searchEmail = rootResolvers.auditLogs({ search: '@' });
-    expect(Array.isArray(searchEmail)).toBe(true);
+    expect(searchEmail.length).toBeGreaterThan(0);
   });
 
   test('catalogue resolver filters by category and search (name/sku)', () => {
+    // The three unowned demo SKUs are gone, so the catalogue is empty until a
+    // vendor publishes something.
+    storeService.addProductToCatalogue(
+      {
+        name: 'Resolver Impeller',
+        sku: 'SKU-RESOLVER-1',
+        category: 'Valves & Actuators',
+        unitPrice: 100,
+      },
+      'v-resolver-1',
+      'vendor@resolver.test'
+    );
+
     const all = rootResolvers.catalogue();
     expect(all.length).toBeGreaterThan(0);
 
     const byCat = rootResolvers.catalogue({ category: 'Valves' });
-    expect(Array.isArray(byCat)).toBe(true);
+    expect(byCat.length).toBeGreaterThan(0);
 
     const bySearchName = rootResolvers.catalogue({ search: 'Impeller' });
-    expect(Array.isArray(bySearchName)).toBe(true);
+    expect(bySearchName.length).toBeGreaterThan(0);
 
     const bySearchSku = rootResolvers.catalogue({ search: 'SKU' });
-    expect(Array.isArray(bySearchSku)).toBe(true);
+    expect(bySearchSku.length).toBeGreaterThan(0);
   });
 
   test('aiFeed, systemConfig, dbHealth, optimizationMetrics, diagnoseLogErrors, auditPerformance resolvers execute', async () => {
@@ -185,6 +229,10 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
 
     const health = await rootResolvers.dbHealth();
     expect(health).toBeDefined();
+    // One connection, so one health answer covering accounts and domain records.
+    expect(health).toHaveProperty('userCount');
+    expect(health).toHaveProperty('vendorCount');
+    expect(health).toHaveProperty('rfqCount');
 
     const metrics = rootResolvers.optimizationMetrics();
     expect(metrics).toBeDefined();
@@ -201,68 +249,70 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
     const buyerCtx = contextFor('buyer');
     const adminCtx = contextFor('admin');
 
-    // createRFQ is async now: it generates an AI summary before persisting.
-    const createdRFQ = await rootResolvers.createRFQ({
-      input: { title: 'Direct Resolver RFQ', category: 'Raw Materials' },
-    }, buyerCtx);
+    const createdRFQ = await rootResolvers.createRFQ(
+      { input: { title: 'Direct Resolver RFQ', category: 'Raw Materials' } },
+      buyerCtx
+    );
     expect(createdRFQ.title).toBe('Direct Resolver RFQ');
-    // The id comes from the server, never the client. Attributed to the
-    // requesting buyer's own account (the beforeEach fixture, matched by
-    // session email), resolved server-side — not a client-supplied value.
+    // The id comes from the server, never the client. Attributed to the requesting
+    // buyer's own account (the beforeEach fixture, matched by session email),
+    // resolved server-side rather than taken from the payload.
     expect(createdRFQ.rfqNumber).toMatch(/^RFQ-/);
     expect(createdRFQ.buyerAccountId).toBe(seededRfq.buyerAccountId);
 
-    const updatedRFQ = rootResolvers.updateRFQ({
-      id: createdRFQ.id,
-      input: { status: 'awarded' },
-    }, buyerCtx);
+    const updatedRFQ = await rootResolvers.updateRFQ(
+      { id: createdRFQ.id, input: { status: 'awarded' } },
+      buyerCtx
+    );
     expect(updatedRFQ.status).toBe('awarded');
 
-    const createdVendor = rootResolvers.createVendor({
-      input: { name: 'Direct Resolver Vendor', email: 'resolver@vendor.com', majorCategory: 'Electrical' },
-    }, buyerCtx);
+    const createdVendor = await rootResolvers.createVendor(
+      { input: { name: 'Direct Resolver Vendor', email: 'resolver@vendor.com', majorCategory: 'Electrical' } },
+      buyerCtx
+    );
     expect(createdVendor.name).toBe('Direct Resolver Vendor');
 
-    const updatedVendor = rootResolvers.updateVendor({
-      id: createdVendor.id,
-      input: { rating: 4.9 },
-    }, buyerCtx);
+    const updatedVendor = await rootResolvers.updateVendor(
+      { id: createdVendor.id, input: { rating: 4.9 } },
+      buyerCtx
+    );
     expect(updatedVendor.rating).toBe(4.9);
 
-    const deleted = rootResolvers.deleteVendor({ id: createdVendor.id }, buyerCtx);
+    const deleted = await rootResolvers.deleteVendor({ id: createdVendor.id }, buyerCtx);
     expect(deleted).toBe(true);
 
-    const createdBuyer = rootResolvers.createBuyerAccount({
-      input: { organizationName: 'Resolver Org', corporateEmail: 'resolver@org.com', contactPerson: 'Buyer' },
-    }, buyerCtx);
+    const createdBuyer = await rootResolvers.createBuyerAccount(
+      { input: { organizationName: 'Resolver Org', corporateEmail: 'resolver@org.com', contactPerson: 'Buyer' } },
+      buyerCtx
+    );
     expect(createdBuyer.organizationName).toBe('Resolver Org');
 
-    expect(rootResolvers.clearQueryCache(undefined, buyerCtx)).toBe(true);
+    await expect(rootResolvers.clearQueryCache(undefined, buyerCtx)).resolves.toBe(true);
 
-    // purgeLogs/autoResolveLogErrors/optimizePerformance are admin-only
-    const purgeDefault = rootResolvers.purgeLogs(undefined, adminCtx);
+    // purgeLogs/autoResolveLogErrors/optimizePerformance are admin-only.
+    const purgeDefault = await rootResolvers.purgeLogs(undefined, adminCtx);
     expect(purgeDefault.success).toBe(true);
 
-    const purgeCustom = rootResolvers.purgeLogs({ maxAgeDays: 10 }, adminCtx);
+    const purgeCustom = await rootResolvers.purgeLogs({ maxAgeDays: 10 }, adminCtx);
     expect(purgeCustom.success).toBe(true);
 
-    // Auto resolve log errors mutations
     const autoResolveDefault = await rootResolvers.autoResolveLogErrors(undefined, adminCtx);
     expect(autoResolveDefault).toBeDefined();
 
-    const autoResolveAction = await rootResolvers.autoResolveLogErrors({ action: 'OPTIMIZE_QUERY_CACHE' }, adminCtx);
+    const autoResolveAction = await rootResolvers.autoResolveLogErrors(
+      { action: 'OPTIMIZE_QUERY_CACHE' },
+      adminCtx
+    );
     expect(autoResolveAction.remediationsApplied[0].actionType).toBe('OPTIMIZE_QUERY_CACHE');
 
-    // Optimize performance mutations
-    const optDefault = rootResolvers.optimizePerformance(undefined, adminCtx);
+    const optDefault = await rootResolvers.optimizePerformance(undefined, adminCtx);
     expect(optDefault.status).toBe('OPTIMIZED');
 
-    const optLevel = rootResolvers.optimizePerformance({ level: 'deep' }, adminCtx);
+    const optLevel = await rootResolvers.optimizePerformance({ level: 'deep' }, adminCtx);
     expect(optLevel.level).toBe('deep');
   });
 
   test('mutations reject a missing/invalid token, and admin-only mutations reject a non-admin role', async () => {
-    // Async now, so these reject rather than throwing synchronously.
     await expect(
       rootResolvers.createRFQ({ input: { title: 'X' } }, { req: { headers: {} } })
     ).rejects.toThrow();
@@ -272,6 +322,8 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
         { req: { headers: { authorization: 'Bearer not-a-real-token' } } }
       )
     ).rejects.toThrow();
-    expect(() => rootResolvers.purgeLogs({}, contextFor('buyer'))).toThrow();
+    await expect(rootResolvers.purgeLogs({}, contextFor('buyer'))).rejects.toThrow(
+      'You do not have permission to perform this action.'
+    );
   });
 });

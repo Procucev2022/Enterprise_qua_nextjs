@@ -1,44 +1,394 @@
 // ==============================================================================
 // CATEGORY TAXONOMY TEST FIXTURE
 // ==============================================================================
-// A small stand-in for the `category_division` master, in the grouped shape
+// The real `category_division` master, in the grouped shape
 // buyerProfileQueries.findCategoryTaxonomy() returns.
 //
-// This is test input, not application seed data: the taxonomy is read from the
-// database at runtime, and the suite must not reach the real one (see
-// setup/noRealDatabase.js). The entries below are chosen to exercise the
-// behaviours the classification code actually depends on:
+// This is test input, not application seed data. The service reads the taxonomy
+// from the database at runtime; the suite must not reach a real one (see
+// setup/noRealDatabase.js), so the master is captured here instead.
 //
-//   - a minor that lives under two majors ('Panels'), so the "first major wins"
-//     rule has something to resolve
-//   - a minor whose casing and spacing differ from the search term, so the
-//     normalised lookup is exercised
-//   - a group with a blank division, which the real master contains and which
-//     must be skipped
+// It is the COMPLETE master rather than a sample on purpose: rfqIngestion.test.js
+// asserts that every pair in DOMAIN_KEYWORD_MAP resolves to a category that
+// actually exists, and that invariant is only meaningful against the full set.
+// Regenerate with: node -e "require('./src/db/buyerProfileQueries').findCategoryTaxonomy().then(g => console.log(JSON.stringify(g, null, 2)))"
 // ==============================================================================
 
 const CATEGORY_TAXONOMY_FIXTURE = [
   {
-    majorCategory: 'Civil Works',
-    minorCategories: ['Bricks', 'Flooring Material', 'Painting', 'Roofing'],
+    "majorCategory": "Civil Works",
+    "minorCategories": [
+      "Back filing",
+      "Bricks",
+      "Drilling",
+      "Excavation",
+      "Flooring Material",
+      "Gypsum Board",
+      "Interior Finishes",
+      "Ladders & Scaffolding",
+      "PEB Structure",
+      "PUF Wall Partition",
+      "Painting",
+      "Paints",
+      "Piling",
+      "Plumbing",
+      "Rain Water Gutters",
+      "Roofing",
+      "Roofing Sheets",
+      "Sign boards",
+      "TMT BARS",
+      "Vinyl Sheet",
+      "Waterproofing"
+    ]
   },
   {
-    majorCategory: 'Engineering Spares - Mechanical',
-    minorCategories: ['Pumps & Accessories', 'Motors', 'Hoses, Valves & Fittings', 'Storage  Racks'],
+    "majorCategory": "Professional Services",
+    "minorCategories": [
+      "Consultant",
+      "Design consultancy",
+      "Erection and Commissioning",
+      "Events & Exhibitions",
+      "Fumigation Service",
+      "House Keeping Service",
+      "Installation Service",
+      "Manpower Service",
+      "Marketing Services",
+      "Painting Service",
+      "Pest Control Service",
+      "Security Service",
+      "Tax Consultant"
+    ]
   },
   {
-    majorCategory: 'Engineering Spares - Electrical',
-    // 'Panels' also appears under the mechanical group above in the real master;
-    // keeping it here too is what makes the ambiguity resolvable in tests.
-    minorCategories: ['Panels', 'Circuit Breakers', 'Transformers'],
+    "majorCategory": "Engineering Spares - Electrical",
+    "minorCategories": [
+      "Batteries",
+      "Brushes",
+      "Cables",
+      "Ceramic Insulators",
+      "Circuit Breakers",
+      "Connectors",
+      "Control & Instrument",
+      "Controllers",
+      "Converters",
+      "DG Parts",
+      "Earthing Items",
+      "Electrical Capacitors",
+      "Electrical Insulators",
+      "Electrical-Lv Switch Gears",
+      "Electronic Items",
+      "Lights",
+      "Load Cells",
+      "Motors",
+      "Other Electrical Items",
+      "Panels",
+      "Scanners",
+      "Semiconductors",
+      "Sensors",
+      "Switchs",
+      "Transformers",
+      "Transmissions",
+      "Transmitters",
+      "Wires"
+    ]
   },
   {
-    majorCategory: 'Packing Material',
-    minorCategories: ['Cartons', 'Stretch Film'],
+    "majorCategory": "Engineering Spares - Mechanical",
+    "minorCategories": [
+      "Abrasives",
+      "Adhesives & Sealants",
+      "Aerospace Components",
+      "Air curtains",
+      "Automotive Spares",
+      "Bearings & Accessories",
+      "Belts, Couplings, Pulley & Chains",
+      "Blades",
+      "Blowers",
+      "Boilers",
+      "Brakes",
+      "Burners",
+      "Cast Iron Parts",
+      "Ceramic Items",
+      "Clamps",
+      "Coils",
+      "Compressors & Accessories",
+      "Consumables",
+      "Conveyors",
+      "Customised Parts",
+      "Cylinders",
+      "Die Casting",
+      "Drives",
+      "Dust Collectors",
+      "Dyes & Pigments",
+      "Engine Parts",
+      "Excavator Attachments",
+      "Explosives",
+      "Fabrication",
+      "Fasteners",
+      "Filters",
+      "Foundry Moulds",
+      "Furnace",
+      "Gauges & Instruments",
+      "Gearboxes & Spares",
+      "Grinding Materials",
+      "Hardwares",
+      "Heat Exchangers",
+      "Hoses, Valves & Fittings",
+      "Industrial Fans",
+      "Injection Molding",
+      "Lifting Chains",
+      "Lifting Equipments",
+      "Machinery Parts",
+      "Material Handling Equipment Spares",
+      "Mining Equipment & Spares",
+      "Nozzles",
+      "O-Rings / Gasket / Seals",
+      "Pipes & Pipe Fittings",
+      "Pumps & Accessories",
+      "Refractories",
+      "Regulators",
+      "Repair Kits",
+      "Rollers",
+      "Rubber Goods",
+      "Screens",
+      "Shafts",
+      "Solder Paste",
+      "Solenoids",
+      "Springs",
+      "Storage Tanks",
+      "Tools & Tackles",
+      "Vacuum Equipment",
+      "Vessels",
+      "Welding Equipment & Cutting Machines",
+      "Welding Materials",
+      "Wheels"
+    ]
   },
+  {
+    "majorCategory": "Raw Material",
+    "minorCategories": [
+      "Aluminium",
+      "Ash",
+      "Brass Components",
+      "Chemicals",
+      "Coal",
+      "Copper",
+      "Cotton",
+      "Edible Oil",
+      "Ferrous Material & Metals",
+      "Gases",
+      "Lubricants",
+      "Minerals",
+      "Paper",
+      "Pigments",
+      "Polyster Materials",
+      "Refractories",
+      "Rubber",
+      "Steels",
+      "Wood",
+      "Yarn"
+    ]
+  },
+  {
+    "majorCategory": "IT",
+    "minorCategories": [
+      "Audio Visual Equipment",
+      "BARCODE SCANNERS",
+      "CCTV",
+      "Computer",
+      "Hardware",
+      "IT Consumables",
+      "Laptop",
+      "Networking Equipment",
+      "Printers",
+      "Servers",
+      "Software",
+      "Telecom & Security Products"
+    ]
+  },
+  {
+    "majorCategory": "Logistics",
+    "minorCategories": [
+      "Air Logistics",
+      "Courier & Parcel",
+      "Road transport",
+      "Sea Logistics"
+    ]
+  },
+  {
+    "majorCategory": "Packing Material",
+    "minorCategories": [
+      "Adhevise Printing",
+      "Bubble Rolls",
+      "Corrugated Boxes",
+      "Corrugated Rolls",
+      "Drums",
+      "Gifting",
+      "Hdpe Bottles",
+      "Labels & Tags",
+      "Laminated pouch",
+      "Leather Products",
+      "Pallets",
+      "Paper Boxes",
+      "Paper Printing",
+      "Paper rolls",
+      "Pet Jars",
+      "Pine wood",
+      "Plastic Packaging",
+      "Shrink Flims",
+      "Strapping Machines",
+      "Tapes",
+      "Thermocol Materials",
+      "woven Bags"
+    ]
+  },
+  {
+    "majorCategory": "Occuptional Health and Safety",
+    "minorCategories": [
+      "Fire Extinguishers",
+      "Gloves",
+      "Harness",
+      "Hemlets",
+      "Medicines",
+      "Public Announcement System (PAS)",
+      "Safety Shoes",
+      "Safety jackets",
+      "Seafty Equipments"
+    ]
+  },
+  {
+    "majorCategory": "CAPEX - Equipment & Machinery",
+    "minorCategories": [
+      "Agriculture Equipments",
+      "Air Conditioners",
+      "Ambulances",
+      "Briquetting machines",
+      "CNC Machines",
+      "Cement Bulkers",
+      "Construction Equipment",
+      "Containers",
+      "Conveyors",
+      "Cranes",
+      "Diesel Gensets",
+      "Dumpers",
+      "Earth Moving Equipment",
+      "Electric Vehicles",
+      "Elevators",
+      "Excavators",
+      "Food processing Machine",
+      "Fork Lifts",
+      "Gardening Equipment",
+      "Hydraulic Press",
+      "Industrial Refrigerators",
+      "Kitchen Equipments",
+      "Laboratory Equipment",
+      "Lathe Machines",
+      "Laundry Equipment",
+      "Loaders",
+      "Material Handling Equipments",
+      "Packaging Machinery",
+      "Paddle Dryer",
+      "Panels",
+      "Plastic Moulding Machine",
+      "Poultry Farming Equipment",
+      "Powder Coating Machines",
+      "Rock Breakers",
+      "Roller Mill",
+      "Sewing machines",
+      "Stabilizers",
+      "Surgical Instruments",
+      "Swimming Pool Equipment",
+      "Tipper",
+      "UPS",
+      "Vending Machines",
+      "Weighing Equipment",
+      "Wood Working Machines"
+    ]
+  },
+  {
+    "majorCategory": "Retail Repair & Maintenance",
+    "minorCategories": [
+      "Audio System Repair & Maintenance",
+      "CCTV Repair & Maintenance",
+      "Carpentary Repair & Maintenance",
+      "Civil works Repair & Maintenance",
+      "Electrical Repair & Maintenance",
+      "Equipment Repair & Maintenance",
+      "Fire Fighting Repair & Maintenance",
+      "Flooring Repair & Maintenance",
+      "HVAC Repair & Maintenance",
+      "Light Fixtures Repair & Maintenance",
+      "Mirror Repair & Maintenance",
+      "Painting Repair & Maintenance",
+      "Rolling Shutter Repair & Maintenance",
+      "Shopfixtures Repair & Maintenance",
+      "Signage Repair & Maintenance",
+      "Visual Merchandising(VM) Repair & Maintenance"
+    ]
+  },
+  {
+    "majorCategory": "New Category-Product",
+    "minorCategories": [
+      "Air Purifiers",
+      "Automation & Controls",
+      "Bakery & Kitchenware",
+      "Cermaic Items",
+      "Cleanroom Solutions",
+      "Cold Storage",
+      "Dairy Products",
+      "Dehumidifiers",
+      "Fencing",
+      "Fertilizers",
+      "Food & Beverages",
+      "Furniture",
+      "Gas Analizer & Monitors",
+      "Geotextiles",
+      "Glass",
+      "HVAC",
+      "Health Equipments",
+      "Home Appliances",
+      "House Keeping Materials",
+      "Louvers",
+      "Manhole covers",
+      "Measuring Equipment",
+      "Office & security Cabins",
+      "Optical Products",
+      "Personal Care & Cosmetics",
+      "Petroleum Products",
+      "Polymer Products",
+      "Power press Machines",
+      "Railway Products",
+      "Renewable Energy",
+      "Retail Fixtures",
+      "Rubber and Tyre Machinery",
+      "Scrap",
+      "Sports Equipment",
+      "Stationery",
+      "Storage Racks",
+      "Tarpaulin",
+      "Tent House",
+      "Textile and fabric",
+      "Trophies",
+      "Water Treatment Plants",
+      "Water purifier"
+    ]
+  },
+  {
+    "majorCategory": "New Category-Service",
+    "minorCategories": [
+      "Appliances Services",
+      "Calibration Services",
+      "Corrosion Protection",
+      "Drone Surveys",
+      "Electroplating Services",
+      "Pollution Control",
+      "Warehousing",
+      "Waste Management"
+    ]
+  }
 ];
 
-/** The first major/minor pair, which most tests just need *a* valid value for. */
+/** The leading major/minor pair, for assertions that just need a valid value. */
 const FIRST_MAJOR = CATEGORY_TAXONOMY_FIXTURE[0].majorCategory;
 const FIRST_MINOR = CATEGORY_TAXONOMY_FIXTURE[0].minorCategories[0];
 

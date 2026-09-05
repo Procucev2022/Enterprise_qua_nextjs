@@ -10,13 +10,28 @@ describe('Batch Chaser & Purchase Order API', () => {
   let poRfqNumber;
 
   beforeAll(() => {
+    // The vendors are created here too. storeService starts completely empty, so
+    // `getVendors().slice(0, 2)` used to return the seeded roster and now returns
+    // nothing — and triggerBatchChaser refuses an RFQ with nobody assigned rather
+    // than falling back to the first few vendors in the directory, which is what
+    // used to make it chase suppliers that were never invited.
+    const outreachVendors = [
+      storeService.addVendor({
+        name: 'Chaser Target One',
+        email: 'one@chaser-target.test',
+        majorCategory: 'Engineering Spares - Mechanical',
+      }),
+      storeService.addVendor({
+        name: 'Chaser Target Two',
+        email: 'two@chaser-target.test',
+        majorCategory: 'Engineering Spares - Mechanical',
+      }),
+    ];
+
     chaserRfqId = storeService.createRFQ({
       title: 'RFQ under multi-channel outreach',
       category: 'Engineering Spares - Mechanical',
-      // Vendors must be attached explicitly. triggerBatchChaser falls back to
-      // the vendor directory only when assignedVendors is absent, and createRFQ
-      // defaults it to an empty array, which is truthy and yields no outreach.
-      assignedVendors: storeService.getVendors().slice(0, 2),
+      assignedVendors: outreachVendors,
     }).id;
     poRfqNumber = storeService.createRFQ({
       title: 'RFQ pending purchase order approval',

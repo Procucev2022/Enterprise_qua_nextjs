@@ -8,6 +8,7 @@ import CategorySummaryDashboard, {
 } from '@/app/category-manager/category-summary-dashboard';
 import * as storeModule from '@/lib/store';
 import { RFQItem, VendorEntry, BuyerAccount } from '@/lib/types';
+import { CATEGORY_TAXONOMY_FIXTURE } from '../../../test-fixtures/categoryTaxonomy';
 
 jest.mock('@/lib/store');
 
@@ -188,6 +189,8 @@ describe('CategorySummaryDashboard', () => {
       buyerAccounts,
       addAuditLog: mockAddAuditLog,
       showToast: mockShowToast,
+      categoryTaxonomy: CATEGORY_TAXONOMY_FIXTURE,
+      categoryTaxonomyError: null,
     });
   }
 

@@ -106,6 +106,8 @@ export default function CategorySummaryDashboard() {
     categoryTaxonomyError,
   } = useApp();
 
+  const taxonomy = useMemo(() => categoryTaxonomy || [], [categoryTaxonomy]);
+
   const [timeframe, setTimeframe] = useState<TimeframeOption>('30d');
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedMajor, setExpandedMajor] = useState<Record<string, boolean>>({});
@@ -119,7 +121,7 @@ export default function CategorySummaryDashboard() {
   // replacement — nothing in this app tracks RFQ downloads — so it's
   // replaced with real "Quotes Received" instead.
   const categoryMetrics: CategoryMetric[] = useMemo(() => {
-    return categoryTaxonomy.map((cat) => {
+    return taxonomy.map((cat) => {
       const majorCategory = cat.majorCategory;
       const rfqsCount = {} as Record<TimeframeOption, number>;
       const quotesReceived = {} as Record<TimeframeOption, number>;
@@ -158,7 +160,7 @@ export default function CategorySummaryDashboard() {
         demandStatus: demandStatusFor(rfqsCount['30d']),
       };
     });
-  }, [rfqs, buyerVendors]);
+  }, [rfqs, buyerVendors, taxonomy]);
 
   // Real per-minor-category RFQ counts for the expanded drawer — how many
   // RFQs under this major category touched each minor category, derived
@@ -191,14 +193,14 @@ export default function CategorySummaryDashboard() {
       ? (buyerVendors.reduce((sum, v) => sum + (v.rating || 0), 0) / buyerVendors.length).toFixed(1)
       : '—';
 
-  const totalMinorCategories = categoryTaxonomy.reduce((sum, c) => sum + c.minorCategories.length, 0);
+  const totalMinorCategories = taxonomy.reduce((sum, c) => sum + c.minorCategories.length, 0);
 
   // Filter Categories
   const filteredMetrics = categoryMetrics.filter((c) => {
     if (!searchTerm.trim()) return true;
     const term = searchTerm.toLowerCase();
     const matchesMajor = c.majorCategory.toLowerCase().includes(term);
-    const catDetail = categoryTaxonomy.find((cd) => cd.majorCategory === c.majorCategory);
+    const catDetail = taxonomy.find((cd) => cd.majorCategory === c.majorCategory);
     const matchesMinor = catDetail?.minorCategories.some((m) => m.toLowerCase().includes(term));
     const matchesBuyer = c.activeBuyers.some((b) => b.toLowerCase().includes(term));
     const matchesVendor = c.featuredVendors.some((v) => v.toLowerCase().includes(term));
@@ -217,7 +219,7 @@ export default function CategorySummaryDashboard() {
             <span className="badge badge-purple font-mono">Screen 2.6</span>
           </div>
           <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
-            Real-time summary of buyer procurement demand, vendor supply density, and RFQ volume trends across all {categoryTaxonomy.length} Major &amp; {totalMinorCategories} Minor categories.
+            Real-time summary of buyer procurement demand, vendor supply density, and RFQ volume trends across all {taxonomy.length} Major &amp; {totalMinorCategories} Minor categories.
           </p>
         </div>
 
@@ -244,7 +246,7 @@ export default function CategorySummaryDashboard() {
         <div className="glass-panel p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs flex flex-col justify-between">
           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">Active Categories</span>
           <div className="flex items-baseline justify-between mt-1">
-            <span className="text-xl font-black text-slate-900 dark:text-white mono">{categoryTaxonomy.length} Major</span>
+            <span className="text-xl font-black text-slate-900 dark:text-white mono">{taxonomy.length} Major</span>
             <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-bold">{totalMinorCategories} Minor</span>
           </div>
         </div>
@@ -328,14 +330,14 @@ export default function CategorySummaryDashboard() {
               {filteredMetrics.length === 0 && (
                 <tr>
                   <td colSpan={7} className="p-6 text-center text-slate-400 dark:text-gray-500">
-                    {categoryTaxonomy.length === 0
+                    {taxonomy.length === 0
                       ? categoryTaxonomyError || UI_STRINGS.buyerProfile.taxonomyEmpty
                       : 'No categories match this search.'}
                   </td>
                 </tr>
               )}
               {filteredMetrics.map((item) => {
-                const catDetail = categoryTaxonomy.find((cd) => cd.majorCategory === item.majorCategory);
+                const catDetail = taxonomy.find((cd) => cd.majorCategory === item.majorCategory);
                 const isExpanded = expandedMajor[item.majorCategory] || false;
                 const rfqsInTf = item.rfqsCount[timeframe];
                 const quotesInTf = item.quotesReceived[timeframe];

@@ -1,6 +1,6 @@
 const buyerProfileService = require('../src/services/buyerProfileService');
 const buyerProfileQueries = require('../src/db/buyerProfileQueries');
-const identityPool = require('../src/db/identityPool');
+const dbPool = require('../src/db/pool');
 const storeService = require('../src/services/storeService');
 const { BUYER_PROFILE_MESSAGES, AUTH_MESSAGES, BUYER_PROFILE_CONFIG } = require('../src/config/constants');
 
@@ -30,17 +30,17 @@ const STORED_PROFILE = {
 };
 
 describe('Buyer profile service', () => {
-  const originalPool = identityPool.pool;
+  const originalPool = dbPool.pool;
 
   beforeEach(() => {
     // The service refuses to touch an unconfigured identity database, so tests
     // that exercise real behaviour need a pool present.
-    identityPool.pool = originalPool || {};
+    dbPool.pool = originalPool || {};
     jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
-    identityPool.pool = originalPool;
+    dbPool.pool = originalPool;
     jest.restoreAllMocks();
   });
 
@@ -72,7 +72,7 @@ describe('Buyer profile service', () => {
 
   describe('assertIdentityConfigured', () => {
     test('throws a 503 when the identity database is absent', () => {
-      identityPool.pool = null;
+      dbPool.pool = null;
       try {
         buyerProfileService.assertIdentityConfigured();
         throw new Error('should have thrown');
@@ -241,7 +241,7 @@ describe('Buyer profile service', () => {
     });
 
     test('refuses when the identity database is not configured', async () => {
-      identityPool.pool = null;
+      dbPool.pool = null;
       await expect(buyerProfileService.getProfile(SESSION)).rejects.toMatchObject({ status: 503 });
     });
   });
@@ -428,7 +428,7 @@ describe('Buyer profile service', () => {
     });
 
     test('refuses when the identity database is not configured', async () => {
-      identityPool.pool = null;
+      dbPool.pool = null;
       await expect(
         buyerProfileService.saveProfile(SESSION, { companyName: 'ACME Ltd' })
       ).rejects.toMatchObject({ status: 503 });
@@ -452,7 +452,7 @@ describe('Buyer profile service', () => {
     });
 
     test('refuses when the identity database is not configured', async () => {
-      identityPool.pool = null;
+      dbPool.pool = null;
       await expect(buyerProfileService.getCategoryTaxonomy()).rejects.toMatchObject({ status: 503 });
     });
   });

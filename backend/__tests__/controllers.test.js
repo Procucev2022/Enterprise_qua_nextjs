@@ -237,7 +237,10 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     await dbController.getDBMetrics({}, res, next);
     expect(res.json).toHaveBeenCalled();
   });
-  test('dbController reports the domain store as persisted once it is hydrated', async () => {
+  // One connection, one status. This used to report two datastores side by side
+  // and a `domainStore.mode` of 'persisted' vs 'in_memory_seed'; there is no
+  // second datastore and no seed, so it reports what is loaded instead.
+  test('dbController reports what is loaded once the store has hydrated', async () => {
     const next = jest.fn();
     const res = mockRes();
     const original = storeService.isHydratedFromDB;
@@ -246,9 +249,12 @@ describe('Controllers Error & Edge-Case Coverage', () => {
       await dbController.getDBStatus({}, res, next);
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
-          domainStore: expect.objectContaining({ mode: 'persisted' }),
+          loadedRecords: expect.objectContaining({ isLoadedFromDatabase: true }),
         })
       );
+      const payload = res.json.mock.calls[res.json.mock.calls.length - 1][0];
+      expect(payload).not.toHaveProperty('domainStore');
+      expect(payload).not.toHaveProperty('domainDatabase');
     } finally {
       storeService.isHydratedFromDB = original;
     }
@@ -529,22 +535,40 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     await vendorController.deleteVendor({ params: { id: 'non-existent' }, user: adminUser }, res, next);
     expect(res.status).toHaveBeenCalledWith(404);
 
-    // assertVendorOwnership branches, exercised against 'v-001' (a real seeded
-    // vendor) — only reachable via a direct controller call, since the real
-    // routes always attach req.user via the authenticate middleware first.
+    // assertVendorOwnership branches. The vendor is created here rather than
+    // referenced as the seeded 'v-001': nothing is seeded any more, so the id is
+    // whatever the store allocates, and the record needs the owning email for the
+    // ownership check to have something to compare against. Only reachable via a
+    // direct controller call, since the real routes always attach req.user through
+    // the authenticate middleware first.
+    const ownedRes = mockRes();
+    await vendorController.createVendor(
+      {
+        body: {
+          name: 'Apex Industrial Dynamics Pvt Ltd',
+          email: 'rajesh@apexindustrial.in',
+          majorCategory: 'Engineering Spares - Mechanical',
+        },
+        user: adminUser,
+      },
+      ownedRes,
+      next
+    );
+    const ownedVendorId = ownedRes.json.mock.calls[0][0].data.id;
+
     const unauthedRes = mockRes();
-    await vendorController.updateVendor({ params: { id: 'v-001' }, body: {} }, unauthedRes, next);
+    await vendorController.updateVendor({ params: { id: ownedVendorId }, body: {} }, unauthedRes, next);
     expect(unauthedRes.status).toHaveBeenCalledWith(401);
 
     const forbiddenRes = mockRes();
-    await vendorController.updateVendor({ params: { id: 'v-001' }, body: {}, user: buyerUser }, forbiddenRes, next);
+    await vendorController.updateVendor({ params: { id: ownedVendorId }, body: {}, user: buyerUser }, forbiddenRes, next);
     expect(forbiddenRes.status).toHaveBeenCalledWith(403);
 
     // reviseRating: a vendor may not rate any vendor, including itself.
     const vendorOwnUser = { role: 'vendor', email: 'rajesh@apexindustrial.in' };
     const ratingBlockedRes = mockRes();
     await vendorController.reviseRating(
-      { params: { id: 'v-001' }, body: { qualityScore: 90, costScore: 90, deliveryScore: 90 }, user: vendorOwnUser },
+      { params: { id: ownedVendorId }, body: { qualityScore: 90, costScore: 90, deliveryScore: 90 }, user: vendorOwnUser },
       ratingBlockedRes,
       next
     );
@@ -553,7 +577,7 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     // reviseRating: an out-of-range score is rejected, not silently clamped.
     const badScoreRes = mockRes();
     await vendorController.reviseRating(
-      { params: { id: 'v-001' }, body: { qualityScore: 150, costScore: 90, deliveryScore: 90 }, user: buyerUser },
+      { params: { id: ownedVendorId }, body: { qualityScore: 150, costScore: 90, deliveryScore: 90 }, user: buyerUser },
       badScoreRes,
       next
     );
@@ -561,7 +585,7 @@ describe('Controllers Error & Edge-Case Coverage', () => {
 
     // generateOnboardingEmailPreview: a vendor may not view onboarding credentials.
     const emailBlockedRes = mockRes();
-    await vendorController.generateOnboardingEmailPreview({ params: { id: 'v-001' }, user: vendorOwnUser }, emailBlockedRes, next);
+    await vendorController.generateOnboardingEmailPreview({ params: { id: ownedVendorId }, user: vendorOwnUser }, emailBlockedRes, next);
     expect(emailBlockedRes.status).toHaveBeenCalledWith(403);
   });
 });

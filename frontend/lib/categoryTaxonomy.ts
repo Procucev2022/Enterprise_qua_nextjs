@@ -42,12 +42,11 @@ let minorsByMajorKey = new Map<string, Map<string, string>>();
  * merged: a category removed from the master must stop being offered.
  */
 export function setCategoryTaxonomy(next: MajorMinorCategory[]): void {
-  groups = Array.isArray(next) ? next : [];
+  groups = (Array.isArray(next) ? next : []).filter((g) => Boolean(g && g.majorCategory));
   majorsByKey = new Map();
   minorsByMajorKey = new Map();
 
   groups.forEach((group) => {
-    if (!group?.majorCategory) return;
     const majorKey = taxonomyKey(group.majorCategory);
     majorsByKey.set(majorKey, group.majorCategory);
     const minors = new Map<string, string>();

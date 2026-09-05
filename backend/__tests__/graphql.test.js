@@ -73,9 +73,14 @@ describe('GraphQL API & Controller Integration Tests', () => {
   });
 
   test('POST /graphql supports filtered queries for RFQ and Vendor by id/rfqNumber/email', async () => {
-    const vendorList = storeService.getVendors();
     const testRFQ = seededRfq;
-    const testVendor = vendorList[0];
+    // Created here rather than taken from the vendor roster: nothing is seeded, so
+    // getVendors() is empty until something is actually registered.
+    const testVendor = storeService.addVendor({
+      name: 'GraphQL Filter Vendor',
+      email: 'filter@graphql-vendor.test',
+      majorCategory: 'Engineering Spares - Mechanical',
+    });
 
     const query = `
       query GetSingleEntities($rfqId: String, $rfqNum: String, $vId: String, $vEmail: String) {

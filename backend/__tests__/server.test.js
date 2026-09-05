@@ -1,7 +1,7 @@
 const request = require('supertest');
 const { EventEmitter } = require('events');
 const { app, bootstrapServer, installCrashHandlers } = require('../src/server');
-const identityPool = require('../src/db/identityPool');
+const dbPool = require('../src/db/pool');
 const { logger } = require('../src/services/loggerService');
 
 function restoreEnvVar(name, originalValue) {
@@ -32,10 +32,10 @@ describe('Server & Health Endpoints', () => {
     expect(res.body.success).toBe(false);
   });
 
-  test('bootstrapServer starts the server once identity health is reported', async () => {
-    jest.spyOn(identityPool, 'checkIdentityHealth').mockResolvedValueOnce({
+  test('bootstrapServer starts the server once database health is reported', async () => {
+    jest.spyOn(dbPool, 'checkDatabaseHealth').mockResolvedValueOnce({
       isConnected: true,
-      providerLabel: 'Test MySQL',
+      providerLabel: 'Test PostgreSQL',
       database: 'test_db',
       userCount: 3,
       latencyMs: 5,
@@ -45,17 +45,17 @@ describe('Server & Health Endpoints', () => {
     await new Promise((resolve) => server.close(resolve));
   });
 
-  test('bootstrapServer survives an identity health check that throws', async () => {
-    jest.spyOn(identityPool, 'checkIdentityHealth').mockRejectedValueOnce(new Error('Connection Failed'));
+  test('bootstrapServer survives a database health check that throws', async () => {
+    jest.spyOn(dbPool, 'checkDatabaseHealth').mockRejectedValueOnce(new Error('Connection Failed'));
     const server = await bootstrapServer(0);
     expect(server).toBeDefined();
     await new Promise((resolve) => server.close(resolve));
   });
 
   test('bootstrapServer falls back to its default port parameter when called with no arguments', async () => {
-    jest.spyOn(identityPool, 'checkIdentityHealth').mockResolvedValueOnce({
+    jest.spyOn(dbPool, 'checkDatabaseHealth').mockResolvedValueOnce({
       isConnected: false,
-      providerLabel: 'Test MySQL',
+      providerLabel: 'Test PostgreSQL',
       errorMessage: 'unreachable',
     });
     const listenSpy = jest.spyOn(app, 'listen').mockImplementation(() => ({ close: (cb) => cb && cb() }));

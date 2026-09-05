@@ -680,6 +680,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                     {/* Top row */}
                     <div className="flex items-start justify-between gap-3">
                       <div
+                        aria-hidden="true"
                         className={`
                 flex h-9 w-9 shrink-0 items-center justify-center
                 rounded-xl text-base
@@ -709,6 +710,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                         )}
 
                         <span
+                          aria-hidden="true"
                           className={`
                   flex h-4 w-4 items-center justify-center rounded-full border
                   ${isSelected
@@ -755,6 +757,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                     >
                       <div className="flex items-start gap-2">
                         <CheckCircle2
+                          aria-hidden="true"
                           size={13}
                           className={`
                   mt-0.5 shrink-0
