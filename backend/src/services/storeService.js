@@ -320,6 +320,104 @@ class StoreService {
     return newVendor;
   }
 
+  /**
+   * Bulk-import already-validated vendor rows from a category manager's
+   * Excel upload (one call per uploaded-file chunk from the client, not one
+   * call per row). Unlike addVendor's fire-and-forget persistence, this
+   * awaits the real Neon write so the caller's per-row result — imported,
+   * duplicate, or failed — reflects what was actually stored, not an
+   * optimistic guess. The reference p2pservices app reports every row as
+   * "Failed" regardless of outcome (it re-checks each row against the
+   * record it just inserted); the whole point of this method is to never
+   * repeat that.
+   *
+   * @param {object[]} rows - Rows that already passed field-format
+   *   validation (VALIDATION_SCHEMAS.vendorBulkImportRow) — this method's
+   *   only remaining job is duplicate detection and the actual bulk write.
+   * @returns {Promise<{results: object[], importedCount: number, duplicateCount: number}>}
+   */
+  async bulkAddVendors(rows) {
+    const existingEmails = new Set(this.vendors.map((v) => (v.email || '').toLowerCase()));
+    const seenInBatch = new Set();
+    const results = [];
+    const toInsert = [];
+
+    for (const row of rows) {
+      const email = (row.email || '').toLowerCase();
+      if (existingEmails.has(email)) {
+        results.push({ rowNumber: row.rowNumber, status: 'duplicate', email: row.email, reason: 'A vendor with this email already exists.' });
+        continue;
+      }
+      if (seenInBatch.has(email)) {
+        results.push({ rowNumber: row.rowNumber, status: 'duplicate', email: row.email, reason: 'Duplicate email within the uploaded file.' });
+        continue;
+      }
+      seenInBatch.add(email);
+
+      const newVendor = {
+        id: `v-bulk-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        name: row.name,
+        contactPerson: row.contactPerson || '',
+        phone: row.phone,
+        email: row.email,
+        majorCategory: row.majorCategory || 'Uncategorised',
+        minorCategories: row.minorCategories || [],
+        location: row.city || '',
+        city: row.city || '',
+        state: row.state || '',
+        pincode: row.pincode || '',
+        gstin: row.gstin || '',
+        products: row.products || '',
+        rating: 4.5,
+        score: 85.0,
+        source: 'excel',
+        status: 'REGISTERED / NOT EVALUATED',
+        evaluated: false,
+        hasRecord: false,
+        isExistingInDatabase: true,
+        onboardingEmailStatus: 'pending',
+        isCategoryAligned: true,
+        subscriptionPlan: 'premium',
+        rfqDownloadsUsed: 0,
+      };
+      toInsert.push({ rowNumber: row.rowNumber, vendor: newVendor });
+    }
+
+    let insertedEmails = [];
+    if (toInsert.length > 0) {
+      insertedEmails = await domainQueries.bulkInsertVendorsInDB(toInsert.map((r) => r.vendor));
+    }
+    const insertedEmailSet = new Set(insertedEmails.map((e) => (e || '').toLowerCase()));
+
+    // No DB pool configured means bulkInsertVendorsInDB no-op'd to [] rather
+    // than actually attempting anything — matches every other write path's
+    // in-memory fallback (this.vendors is the store) rather than reporting
+    // every row as a spurious failure.
+    const inMemoryMode = !pool.pool;
+
+    for (const { rowNumber, vendor } of toInsert) {
+      const persisted = inMemoryMode || insertedEmailSet.has(vendor.email.toLowerCase());
+      if (persisted) {
+        this.vendors.unshift(vendor);
+        results.push({ rowNumber, status: 'imported', email: vendor.email, vendor });
+      } else {
+        results.push({ rowNumber, status: 'duplicate', email: vendor.email, reason: 'A vendor with this email already exists.' });
+      }
+    }
+
+    const importedCount = results.filter((r) => r.status === 'imported').length;
+    const duplicateCount = results.filter((r) => r.status === 'duplicate').length;
+
+    if (importedCount > 0) {
+      this.addAuditLog({
+        userEmail: 'procurement@enterprise.com',
+        action: `Bulk-imported ${importedCount} vendor(s) via Excel upload (${duplicateCount} duplicate row(s) skipped)`,
+      });
+    }
+
+    return { results, importedCount, duplicateCount };
+  }
+
   updateVendor(id, updates) {
     const idx = this.vendors.findIndex((v) => v.id === id || v.email === id);
     if (idx === -1) return null;

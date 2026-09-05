@@ -747,6 +747,58 @@ export interface VendorEntry {
   // and GET /api/rfqs/:id/email-preview's quota check), not just local state.
   subscriptionPlan?: VendorSubscriptionPlan;
   rfqDownloadsUsed?: number;
+
+  // Statutory/location fields a category manager's bulk vendor upload
+  // collects (mirrors the real p2pservices Vendor Master sheet — see
+  // POST /api/vendors/bulk-import). Not part of the vendor's own
+  // self-service profile edit; optional everywhere else.
+  gstin?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  products?: string;
+}
+
+/** One row of a category manager's parsed vendor-upload Excel file, after
+ * client-side field-format validation but before it's sent to the backend.
+ * `vendor` carries only the fields the bulk-import endpoint accepts —
+ * see VALIDATION_SCHEMAS.vendorBulkImportRow on the backend for the
+ * matching server-side re-validation.
+ */
+export interface VendorUploadRow {
+  rowNumber: number;
+  vendor: {
+    name: string;
+    email: string;
+    phone: string;
+    contactPerson?: string;
+    gstin?: string;
+    city?: string;
+    state?: string;
+    pincode?: string;
+    majorCategory?: string;
+    products?: string;
+  };
+  isValid: boolean;
+  errors: string[];
+}
+
+/** One row's outcome as reported back by POST /api/vendors/bulk-import. */
+export interface VendorUploadRowResult {
+  rowNumber: number;
+  status: 'imported' | 'duplicate' | 'failed';
+  email?: string;
+  errors?: string[];
+  reason?: string;
+}
+
+/** Aggregate response from one bulk-import chunk request. */
+export interface VendorUploadImportResponse {
+  total: number;
+  imported: number;
+  duplicates: number;
+  failed: number;
+  results: VendorUploadRowResult[];
 }
 
 export interface VendorRatingRevisionRecord {

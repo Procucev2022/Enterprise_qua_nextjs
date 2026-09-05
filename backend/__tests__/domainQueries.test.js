@@ -30,6 +30,10 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       await expect(domainQueries.deleteVendorInDB('v-1')).resolves.toBe(false);
     });
 
+    test('bulkInsertVendorsInDB returns an empty array', async () => {
+      await expect(domainQueries.bulkInsertVendorsInDB([{ id: 'v-1', email: 'a@x.com' }])).resolves.toEqual([]);
+    });
+
     test('getRFQsFromDB returns an empty array', async () => {
       await expect(domainQueries.getRFQsFromDB()).resolves.toEqual([]);
     });
@@ -146,6 +150,31 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
 
       pool.pool = { query: jest.fn().mockResolvedValue({ rowCount: 0 }) };
       await expect(domainQueries.deleteVendorInDB('v-x')).resolves.toBe(false);
+    });
+
+    test('bulkInsertVendorsInDB returns [] without querying when the batch is empty', async () => {
+      pool.pool = { query: jest.fn() };
+      await expect(domainQueries.bulkInsertVendorsInDB([])).resolves.toEqual([]);
+      expect(pool.pool.query).not.toHaveBeenCalled();
+    });
+
+    test('bulkInsertVendorsInDB builds one multi-row INSERT with ON CONFLICT (email) DO NOTHING and returns the emails that landed', async () => {
+      const v1 = { id: 'v-1', email: 'a@x.com', majorCategory: 'Mechanical', status: 'REGISTERED / NOT EVALUATED', source: 'excel' };
+      const v2 = { id: 'v-2', email: 'b@x.com', name: 'Bare' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ email: 'a@x.com' }] }) };
+
+      const result = await domainQueries.bulkInsertVendorsInDB([v1, v2]);
+
+      expect(result).toEqual(['a@x.com']);
+      const [sql, params] = pool.pool.query.mock.calls[0];
+      expect(sql).toContain('INSERT INTO vendors');
+      expect(sql).toContain('ON CONFLICT (email) DO NOTHING');
+      expect(sql).toContain('($1, $2, $3, $4, $5, $6, now())');
+      expect(sql).toContain('($7, $8, $9, $10, $11, $12, now())');
+      expect(params).toEqual([
+        'v-1', 'a@x.com', 'Mechanical', 'REGISTERED / NOT EVALUATED', 'excel', JSON.stringify(v1),
+        'v-2', 'b@x.com', null, null, null, JSON.stringify(v2),
+      ]);
     });
   });
 

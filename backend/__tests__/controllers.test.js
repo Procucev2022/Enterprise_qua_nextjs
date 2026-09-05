@@ -588,6 +588,83 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     await vendorController.generateOnboardingEmailPreview({ params: { id: ownedVendorId }, user: vendorOwnUser }, emailBlockedRes, next);
     expect(emailBlockedRes.status).toHaveBeenCalledWith(403);
   });
+
+  test('vendorController.bulkImportVendors: role gating, payload shape, and mixed valid/invalid rows', async () => {
+    const next = jest.fn();
+    const categoryManagerUser = { role: 'category_manager', email: 'cm@procucev.com' };
+    const adminUser = { role: 'admin', email: 'admin@procucev.com' };
+    const buyerUser = { role: 'buyer', email: 'buyer@procucev.com' };
+    const vendorUser = { role: 'vendor', email: 'rajesh@apexindustrial.in' };
+
+    const validRow = (overrides = {}) => ({
+      rowNumber: 1,
+      name: 'Bulk Import Test Co',
+      email: 'bulk-import-test@example.com',
+      phone: '9876543210',
+      ...overrides,
+    });
+
+    // Unauthenticated is a 401, not a 403.
+    const unauthedRes = mockRes();
+    await vendorController.bulkImportVendors({ body: { vendors: [validRow()] } }, unauthedRes, next);
+    expect(unauthedRes.status).toHaveBeenCalledWith(401);
+
+    // Buyer and vendor roles are not category managers.
+    for (const user of [buyerUser, vendorUser]) {
+      const res = mockRes();
+      await vendorController.bulkImportVendors({ body: { vendors: [validRow()] }, user }, res, next);
+      expect(res.status).toHaveBeenCalledWith(403);
+    }
+
+    // Missing / empty vendors array.
+    const emptyRes = mockRes();
+    await vendorController.bulkImportVendors({ body: {}, user: categoryManagerUser }, emptyRes, next);
+    expect(emptyRes.status).toHaveBeenCalledWith(400);
+
+    const emptyArrayRes = mockRes();
+    await vendorController.bulkImportVendors({ body: { vendors: [] }, user: categoryManagerUser }, emptyArrayRes, next);
+    expect(emptyArrayRes.status).toHaveBeenCalledWith(400);
+
+    // Over the per-request row cap.
+    const tooManyRes = mockRes();
+    const tooMany = Array.from({ length: 1001 }, (_, i) => validRow({ rowNumber: i + 1, email: `row${i}@example.com` }));
+    await vendorController.bulkImportVendors({ body: { vendors: tooMany }, user: categoryManagerUser }, tooManyRes, next);
+    expect(tooManyRes.status).toHaveBeenCalledWith(400);
+
+    // A mix of one valid row and one row missing required fields — server-side
+    // re-validation must catch the bad row even though nothing client-side
+    // filtered it out first.
+    const mixedRes = mockRes();
+    await vendorController.bulkImportVendors(
+      {
+        body: {
+          vendors: [
+            validRow({ rowNumber: 1, email: 'mixed-good@example.com' }),
+            { rowNumber: 2, name: '', email: 'not-an-email', phone: '123' },
+          ],
+        },
+        user: categoryManagerUser,
+      },
+      mixedRes,
+      next
+    );
+    expect(mixedRes.json).toHaveBeenCalled();
+    const mixedPayload = mixedRes.json.mock.calls[0][0];
+    expect(mixedPayload.data.imported).toBe(1);
+    expect(mixedPayload.data.failed).toBe(1);
+    expect(mixedPayload.data.results.find((r) => r.rowNumber === 2).status).toBe('failed');
+    expect(mixedPayload.data.results.find((r) => r.rowNumber === 2).errors.length).toBeGreaterThan(0);
+
+    // Admin may also bulk-import, same as category_manager.
+    const adminRes = mockRes();
+    await vendorController.bulkImportVendors(
+      { body: { vendors: [validRow({ rowNumber: 1, email: 'admin-import@example.com' })] }, user: adminUser },
+      adminRes,
+      next
+    );
+    expect(adminRes.json).toHaveBeenCalled();
+    expect(adminRes.json.mock.calls[0][0].data.imported).toBe(1);
+  });
 });
 
 // ══════════════════════════════════════════════════════════════════════════════

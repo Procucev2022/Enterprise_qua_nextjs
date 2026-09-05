@@ -5,6 +5,7 @@ const { authenticate } = require('../middleware/auth');
 
 router.get('/', vendorController.getVendors);
 router.post('/', authenticate, vendorController.createVendor);
+router.post('/bulk-import', authenticate, vendorController.bulkImportVendors);
 router.get('/:id', vendorController.getVendorById);
 router.put('/:id', authenticate, vendorController.updateVendor);
 router.delete('/:id', authenticate, vendorController.deleteVendor);
