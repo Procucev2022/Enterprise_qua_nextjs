@@ -2,11 +2,51 @@ const storeService = require('../services/storeService');
 const { generateVendorOnboardingEmail } = require('../services/emailService');
 const { logger } = require('../services/loggerService');
 
+/**
+ * A vendor profile may only be created/edited by the vendor it belongs to
+ * (matched by session email) or an admin. Buyers/category managers browse
+ * and rate vendors elsewhere but have no business editing a vendor's own
+ * registration details.
+ */
+function assertVendorOwnership(req, res, vendorEmail) {
+  const user = req.user;
+  if (!user) {
+    res.status(401).json({ success: false, error: 'Authentication required.' });
+    return false;
+  }
+  if (user.role === 'admin') return true;
+  if (user.role === 'vendor' && vendorEmail && user.email && vendorEmail.toLowerCase() === user.email.toLowerCase()) {
+    return true;
+  }
+  res.status(403).json({ success: false, error: 'You do not have permission to modify this vendor profile.' });
+  return false;
+}
+
+// Fields a vendor may edit about their own profile via self-service PUT.
+// Deliberately excludes rating/score/status/tempPassword/onboarding flags and
+// the dual-stream category fields (those go through updateCategories) —
+// without this, a vendor could PUT their own rating/score straight to a max
+// value through the same endpoint that saves their profile form.
+const VENDOR_SELF_EDIT_FIELDS = [
+  'name', 'brandName', 'orgType', 'pan', 'gst', 'msme', 'website', 'annualTurnover',
+  'factoryAddress', 'city', 'state', 'pincode', 'country', 'location',
+  'contactPerson', 'contactDesignation', 'phone',
+  'majorCategory', 'minorCategories',
+];
+
+function pickVendorSelfEditFields(body) {
+  const picked = {};
+  VENDOR_SELF_EDIT_FIELDS.forEach((field) => {
+    if (Object.prototype.hasOwnProperty.call(body, field)) picked[field] = body[field];
+  });
+  return picked;
+}
+
 function getVendors(req, res, next) {
   try {
     logger.info('Fetching vendor master list', { query: req.query }, 'VENDOR_CONTROLLER');
     const vendors = storeService.getVendors();
-    res.json({ success: true, source: storeService.isHydratedFromDB ? 'postgresql' : 'in_memory', data: vendors });
+    res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: vendors });
   } catch (err) {
     logger.error('Error fetching vendors list', err, 'VENDOR_CONTROLLER');
     next(err);
@@ -32,12 +72,19 @@ function getVendorById(req, res, next) {
 function createVendor(req, res, next) {
   try {
     const body = req.body;
+    // A vendor can only ever register themselves; the identity-DB session
+    // email is authoritative, never whatever email the client body claims.
+    if (req.user.role === 'vendor') {
+      body.email = req.user.email;
+    } else if (req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'You do not have permission to create a vendor profile.' });
+    }
     if (!body.name || !body.majorCategory) {
       logger.warn('Failed to create vendor: Missing name or majorCategory', { body }, 'VENDOR_CONTROLLER');
       return res.status(400).json({ success: false, error: 'Vendor name and majorCategory are required.' });
     }
     logger.info(`Creating new vendor: ${body.name}`, { name: body.name, majorCategory: body.majorCategory }, 'VENDOR_CONTROLLER');
-    const created = storeService.addVendor(body);
+    const created = storeService.addVendor(body, req.user && req.user.email);
     res.status(201).json({ success: true, data: created });
   } catch (err) {
     logger.error('Error creating vendor', err, 'VENDOR_CONTROLLER');
@@ -48,13 +95,17 @@ function createVendor(req, res, next) {
 function updateVendor(req, res, next) {
   try {
     const { id } = req.params;
-    const updates = req.body;
-    logger.info(`Updating vendor ${id}`, { id, updates }, 'VENDOR_CONTROLLER');
-    const updated = storeService.updateVendor(id, updates);
-    if (!updated) {
+    const existing = storeService.getVendorById(id);
+    if (!existing) {
       logger.warn(`Vendor not found for update: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
+    if (!assertVendorOwnership(req, res, existing.email)) return;
+    // A vendor editing their own record only gets the self-service field set;
+    // an admin retains full field access (e.g. correcting status/onboarding data).
+    const updates = req.user.role === 'vendor' ? pickVendorSelfEditFields(req.body) : req.body;
+    logger.info(`Updating vendor ${id}`, { id, updates }, 'VENDOR_CONTROLLER');
+    const updated = storeService.updateVendor(existing.id, updates);
     res.json({ success: true, data: updated });
   } catch (err) {
     logger.error(`Error updating vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
@@ -65,12 +116,14 @@ function updateVendor(req, res, next) {
 function deleteVendor(req, res, next) {
   try {
     const { id } = req.params;
-    logger.info(`Deleting vendor ${id}`, { id }, 'VENDOR_CONTROLLER');
-    const deleted = storeService.deleteVendor(id);
-    if (!deleted) {
+    const existing = storeService.getVendorById(id);
+    if (!existing) {
       logger.warn(`Vendor not found for deletion: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
+    if (!assertVendorOwnership(req, res, existing.email)) return;
+    logger.info(`Deleting vendor ${id}`, { id }, 'VENDOR_CONTROLLER');
+    storeService.deleteVendor(existing.id, req.user && req.user.email);
     res.json({ success: true, message: `Vendor ${id} deleted successfully.` });
   } catch (err) {
     logger.error(`Error deleting vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
@@ -82,9 +135,27 @@ function reviseRating(req, res, next) {
   try {
     const { id } = req.params;
     const ratingData = req.body;
-    if (ratingData.qualityScore === undefined || ratingData.costScore === undefined || ratingData.deliveryScore === undefined) {
+    // Rating a vendor is a buyer-side action — a vendor must not be able to
+    // rate any vendor (least of all itself) through this endpoint.
+    if (req.user.role === 'vendor') {
+      return res.status(403).json({ success: false, error: 'Vendors cannot submit rating revisions.' });
+    }
+    const { qualityScore, costScore, deliveryScore } = ratingData;
+    if (qualityScore === undefined || costScore === undefined || deliveryScore === undefined) {
       logger.warn(`Failed to revise rating for vendor ${id}: Missing score components`, { id, ratingData }, 'VENDOR_CONTROLLER');
       return res.status(400).json({ success: false, error: 'qualityScore, costScore, and deliveryScore are required.' });
+    }
+    // Reject anything that isn't a finite number in [0, 100] rather than
+    // letting NaN/out-of-range values silently propagate into the vendor's
+    // stored rating/score (previously: Number() coercion with no validation
+    // could write null/absurd values — BUGS.md #15).
+    const scores = { qualityScore, costScore, deliveryScore };
+    for (const [key, value] of Object.entries(scores)) {
+      const num = Number(value);
+      if (!Number.isFinite(num) || num < 0 || num > 100) {
+        logger.warn(`Failed to revise rating for vendor ${id}: invalid ${key}`, { id, value }, 'VENDOR_CONTROLLER');
+        return res.status(400).json({ success: false, error: `${key} must be a number between 0 and 100.` });
+      }
     }
     logger.info(`Revising rating for vendor ${id}`, { id, ratingData }, 'VENDOR_CONTROLLER');
     const result = storeService.reviseVendorRating(id, ratingData);
@@ -102,6 +173,13 @@ function reviseRating(req, res, next) {
 function generateOnboardingEmailPreview(req, res, next) {
   try {
     const { id } = req.params;
+    // This preview includes the vendor's real tempPassword — was reachable by
+    // anyone who knew a vendor's email, no auth at all. Only the buyer-side
+    // roles that actually onboard vendors (or an admin) should see it; a
+    // vendor's own temp password isn't something they need via this route.
+    if (!['buyer', 'category_manager', 'admin'].includes(req.user.role)) {
+      return res.status(403).json({ success: false, error: 'You do not have permission to view vendor onboarding credentials.' });
+    }
     logger.info(`Generating onboarding email preview for vendor ${id}`, { id }, 'VENDOR_CONTROLLER');
     const vendor = storeService.getVendorById(id);
     if (!vendor) {
@@ -116,16 +194,45 @@ function generateOnboardingEmailPreview(req, res, next) {
   }
 }
 
+// The frontend only ever offers these three; 'premium_network' exists in the
+// shared TS union type but nothing in the app assigns it.
+const VALID_VENDOR_SUBSCRIPTION_PLANS = ['premium', 'connect', 'select'];
+
+function updateSubscription(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { plan } = req.body;
+    const existing = storeService.getVendorById(id);
+    if (!existing) {
+      logger.warn(`Vendor not found for subscription update: ${id}`, { id }, 'VENDOR_CONTROLLER');
+      return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
+    }
+    if (!assertVendorOwnership(req, res, existing.email)) return;
+    if (!VALID_VENDOR_SUBSCRIPTION_PLANS.includes(plan)) {
+      logger.warn(`Failed to update subscription for vendor ${id}: invalid plan`, { id, plan }, 'VENDOR_CONTROLLER');
+      return res.status(400).json({ success: false, error: `plan must be one of: ${VALID_VENDOR_SUBSCRIPTION_PLANS.join(', ')}.` });
+    }
+    logger.info(`Updating subscription for vendor ${id} to ${plan}`, { id, plan }, 'VENDOR_CONTROLLER');
+    const updated = storeService.updateVendor(existing.id, { subscriptionPlan: plan });
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    logger.error(`Error updating subscription for vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
 function updateCategories(req, res, next) {
   try {
     const { id } = req.params;
     const { clientMappedCategories, vendorSelectedCategories } = req.body;
-    logger.info(`Updating category taxonomy for vendor ${id}`, { id, clientMappedCategories, vendorSelectedCategories }, 'VENDOR_CONTROLLER');
-    const updated = storeService.updateVendorCategories(id, { clientMappedCategories, vendorSelectedCategories });
-    if (!updated) {
+    const existing = storeService.getVendorById(id);
+    if (!existing) {
       logger.warn(`Vendor not found for taxonomy update: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
+    if (!assertVendorOwnership(req, res, existing.email)) return;
+    logger.info(`Updating category taxonomy for vendor ${id}`, { id, clientMappedCategories, vendorSelectedCategories }, 'VENDOR_CONTROLLER');
+    const updated = storeService.updateVendorCategories(existing.id, { clientMappedCategories, vendorSelectedCategories });
     res.json({ success: true, data: updated });
   } catch (err) {
     logger.error(`Error updating categories for vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
@@ -142,4 +249,5 @@ module.exports = {
   reviseRating,
   generateOnboardingEmailPreview,
   updateCategories,
+  updateSubscription,
 };

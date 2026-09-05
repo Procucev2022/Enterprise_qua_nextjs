@@ -6,10 +6,27 @@ describe('Backend LoggerService Unit Tests', () => {
   const testLogsDir = path.resolve(__dirname, '../logs_test');
   let testLogger;
 
-  beforeEach(() => {
-    if (fs.existsSync(testLogsDir)) {
-      fs.rmSync(testLogsDir, { recursive: true, force: true });
+  /**
+   * Remove the scratch log directory, retrying briefly on ENOTEMPTY/EBUSY.
+   *
+   * The logger writes synchronously, but Windows (and OneDrive-synced paths in
+   * particular) can still hold a handle for a moment after the write returns, so
+   * a bare rmSync intermittently fails once suites run in parallel.
+   */
+  const removeTestLogsDir = () => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      if (!fs.existsSync(testLogsDir)) return;
+      try {
+        fs.rmSync(testLogsDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+        return;
+      } catch (err) {
+        if (attempt === 4) throw err;
+      }
     }
+  };
+
+  beforeEach(() => {
+    removeTestLogsDir();
     testLogger = new LoggerService({
       logsDir: testLogsDir,
       maxBufferSize: 10,
@@ -20,9 +37,7 @@ describe('Backend LoggerService Unit Tests', () => {
   });
 
   afterEach(() => {
-    if (fs.existsSync(testLogsDir)) {
-      fs.rmSync(testLogsDir, { recursive: true, force: true });
-    }
+    removeTestLogsDir();
     logger.clear();
   });
 

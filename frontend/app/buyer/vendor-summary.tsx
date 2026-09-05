@@ -52,6 +52,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [costScore, setCostScore] = useState<number>(85);
   const [deliveryScore, setDeliveryScore] = useState<number>(92);
   const [remarks, setRemarks] = useState<string>('');
+  const [isSubmittingRevision, setIsSubmittingRevision] = useState(false);
 
   // Check if vendor has been used by the buyer in any RFQ or was uploaded by the buyer
   const getVendorRfqEngagement = (vendor: any) => {
@@ -130,22 +131,26 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setRemarks(vendor.latestRatingRevision?.remarks || contextNote);
   };
 
-  const handleSaveRatingRevision = (e: React.FormEvent) => {
+  const handleSaveRatingRevision = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedVendorForRevision) return;
+    if (!selectedVendorForRevision || isSubmittingRevision) return;
 
     if (!remarks.trim()) {
       showToast('Remarks Required', 'Please provide performance remarks explaining the rating change.', 'warning');
       return;
     }
 
-    reviseVendorRating(
+    setIsSubmittingRevision(true);
+    const saved = await reviseVendorRating(
       selectedVendorForRevision.id,
       Number(qualityScore),
       Number(costScore),
       Number(deliveryScore),
       remarks
     );
+    setIsSubmittingRevision(false);
+
+    if (!saved) return;
 
     setSelectedVendorForRevision(null);
   };
@@ -254,7 +259,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             placeholder="Search vendors by name, contact, category..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9 text-xs"
+            className="has-leading-icon text-xs"
           />
         </div>
 
@@ -769,14 +774,16 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     type="button"
                     onClick={() => setSelectedVendorForRevision(null)}
                     className="btn btn-ghost btn-sm"
+                    disabled={isSubmittingRevision}
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
                     className="btn btn-amber btn-sm font-bold flex items-center gap-1.5 shadow-md"
+                    disabled={isSubmittingRevision}
                   >
-                    <Send size={13} /> Submit Revision &amp; Dispatch Email
+                    <Send size={13} /> {isSubmittingRevision ? 'Submitting...' : 'Submit Revision & Dispatch Email'}
                   </button>
                 </div>
               </form>

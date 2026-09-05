@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
+import { formatCurrency } from '@/lib/constants';
 import { RFQItem, QuoteComparison } from '@/lib/types';
 import { PurchaseOrderModal, RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
 import {
@@ -15,19 +16,36 @@ import {
   Award,
   ChevronDown,
   ArrowLeft,
-  DollarSign,
+  IndianRupee,
   AlertCircle,
   Search,
 } from 'lucide-react';
 
 interface QuoteMatrixProps {
   onBackToDashboard?: () => void;
+  /**
+   * True only for the buyer's own quote-matrix route: restricts the RFQ
+   * switcher and the fallback selection to the logged-in buyer's own
+   * company. Category managers reuse this same component and need the full
+   * cross-buyer list, so this defaults to false there.
+   */
+  scopeToOwnBuyerAccount?: boolean;
 }
 
-export default function QuoteMatrix({ onBackToDashboard }: QuoteMatrixProps) {
-  const { rfqs, selectedRFQForMatrix, setSelectedRFQForMatrix, showToast, openRFQDeepDive, deepDiveModalOpen, setDeepDiveModalOpen, selectedRFQForDeepDive } = useApp();
+export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount = false }: QuoteMatrixProps) {
+  const { rfqs: allRfqs, selectedRFQForMatrix, setSelectedRFQForMatrix, showToast, openRFQDeepDive, deepDiveModalOpen, setDeepDiveModalOpen, selectedRFQForDeepDive } = useApp();
 
-  const currentRFQ = selectedRFQForMatrix || (rfqs && rfqs.length > 0 ? rfqs[0] : null);
+  // GET /api/rfqs is itself scoped server-side by the caller's role now — see
+  // command-center.tsx's matching note — so allRfqs is already exactly right
+  // either way: a buyer's own list on this route, or the full cross-buyer
+  // list on the category manager's. `selectedRFQForMatrix` is app-wide store
+  // state though, so a stale selection left over from a different role's
+  // navigation is still deliberately checked against the current list below
+  // rather than trusted outright.
+  const rfqs = allRfqs;
+  const selectionInScope = !scopeToOwnBuyerAccount || (!!selectedRFQForMatrix && rfqs.some((r) => r.id === selectedRFQForMatrix.id));
+
+  const currentRFQ = (selectionInScope ? selectedRFQForMatrix : null) || (rfqs.length > 0 ? rfqs[0] : null);
 
   const [poModalOpen, setPoModalOpen] = useState(false);
   const [selectedVendorForPO, setSelectedVendorForPO] = useState<QuoteComparison | null>(null);
@@ -121,7 +139,9 @@ export default function QuoteMatrix({ onBackToDashboard }: QuoteMatrixProps) {
             </div>
             <div>
               <span className="text-[10px] text-slate-400 dark:text-gray-400 block uppercase">Estimated Budget</span>
-              <span className="font-bold text-emerald-600 dark:text-emerald-400 mono">${currentRFQ.budget.toLocaleString()}</span>
+              <span className="font-bold text-emerald-600 dark:text-emerald-400 mono">
+                {formatCurrency(currentRFQ.budget)}
+              </span>
             </div>
             <div>
               <span className="text-[10px] text-slate-400 dark:text-gray-400 block uppercase">Bids Evaluated</span>
@@ -213,7 +233,7 @@ export default function QuoteMatrix({ onBackToDashboard }: QuoteMatrixProps) {
                 {/* Unit Price */}
                 <tr className="hover:bg-slate-50/80 dark:hover:bg-gray-800/20">
                   <td className="p-4 font-bold text-slate-800 dark:text-gray-200 flex items-center gap-2">
-                    <DollarSign size={15} className="text-emerald-600 dark:text-emerald-400" /> Unit Price ($)
+                    <IndianRupee size={15} className="text-emerald-600 dark:text-emerald-400" /> Unit Price (₹)
                   </td>
                   {quotes.map((q) => (
                     <td
@@ -222,7 +242,7 @@ export default function QuoteMatrix({ onBackToDashboard }: QuoteMatrixProps) {
                     >
                       <div className="flex items-baseline gap-2">
                         <span className="text-lg font-black text-slate-900 dark:text-white mono">
-                          ${q.unitPrice.toLocaleString()}
+                          {formatCurrency(q.unitPrice)}
                         </span>
                         {q.isBestPrice && (
                           <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-0.5">
@@ -230,7 +250,7 @@ export default function QuoteMatrix({ onBackToDashboard }: QuoteMatrixProps) {
                           </span>
                         )}
                       </div>
-                      <span className="text-[10px] text-slate-400 dark:text-gray-500">Total: ${q.totalPrice.toLocaleString()}</span>
+                      <span className="text-[10px] text-slate-400 dark:text-gray-500">Total: {formatCurrency(q.totalPrice)}</span>
                     </td>
                   ))}
                 </tr>
@@ -369,11 +389,17 @@ export default function QuoteMatrix({ onBackToDashboard }: QuoteMatrixProps) {
           isOpen={poModalOpen}
           onClose={() => setPoModalOpen(false)}
           rfqNumber={currentRFQ.rfqNumber}
+          vendorId={selectedVendorForPO.vendorId}
           vendorName={selectedVendorForPO.vendorName}
           totalAmount={selectedVendorForPO.totalPrice}
           unitPrice={selectedVendorForPO.unitPrice}
           leadTime={selectedVendorForPO.leadTimeDays}
           deliveryDate={currentRFQ.targetDeliveryDate}
+          lineItems={(currentRFQ.extractedEntities || []).map((ent) => ({
+            description: ent.itemName,
+            quantity: ent.quantity,
+            unit: ent.unit,
+          }))}
         />
       )}
 

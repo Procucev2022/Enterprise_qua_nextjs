@@ -1,10 +1,11 @@
 const request = require('supertest');
 const app = require('../src/app');
 const storeService = require('../src/services/storeService');
+const { authHeader } = require('./testHelpers');
 
 describe('Support Chat & AI Assistant API', () => {
   test('POST /api/support-chat returns standard response for general query', async () => {
-    const res = await request(app).post('/api/support-chat').send({
+    const res = await request(app).post('/api/support-chat').set(authHeader('buyer')).send({
       prompt: 'Tell me about subscription plans',
       userRole: 'buyer',
     });
@@ -16,7 +17,7 @@ describe('Support Chat & AI Assistant API', () => {
   });
 
   test('POST /api/support-chat detects dissatisfaction and escalates to human agent', async () => {
-    const res = await request(app).post('/api/support-chat').send({
+    const res = await request(app).post('/api/support-chat').set(authHeader('buyer')).send({
       prompt: 'I am not satisfied with this response, connect with agent',
       userRole: 'buyer',
     });
@@ -29,8 +30,13 @@ describe('Support Chat & AI Assistant API', () => {
   });
 
   test('POST /api/support-chat returns 400 when prompt is missing', async () => {
-    const res = await request(app).post('/api/support-chat').send({});
+    const res = await request(app).post('/api/support-chat').set(authHeader('buyer')).send({});
     expect(res.statusCode).toBe(400);
     expect(res.body.success).toBe(false);
+  });
+
+  test('POST /api/support-chat requires authentication', async () => {
+    const res = await request(app).post('/api/support-chat').send({ prompt: 'hi' });
+    expect(res.statusCode).toBe(401);
   });
 });

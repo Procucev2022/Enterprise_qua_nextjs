@@ -157,19 +157,24 @@ const schema = buildSchema(`
     chaserIntervalSeconds: Int
     aiModel: String
     aiTemperature: Float
-    azurePostgresSyncInterval: Int
+    identityDbSyncInterval: Int
   }
 
+  """
+  Health of the PostgreSQL database, which backs authentication and every domain
+  record. Counts come from one round trip, so they are consistent with each other.
+  """
   type DBHealthStatus {
     isConfigured: Boolean!
     isConnected: Boolean!
     provider: String!
     providerLabel: String!
     poolStatus: String!
+    database: String
+    userCount: Int
+    vendorCount: Int
+    rfqCount: Int
     latencyMs: Int
-    activeConnections: Int
-    totalConnections: Int
-    idleConnections: Int
     errorMessage: String
     timestamp: String
   }

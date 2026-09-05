@@ -16,9 +16,13 @@ coverage/
 
 # Next.js Build Outputs
 .next/
+.next-qc/
 out/
 build/
 dist/
+
+# Crash dumps a dying shell leaves behind; one reached the repo by accident.
+*.stackdump
 
 # Environment Variables & Secrets
 .env
@@ -31,6 +35,9 @@ dist/
 *.pem
 *.key
 *.cert
+
+# Buyer-uploaded RFQ documents. Content only, never code.
+uploads/
 
 # Logs & Diagnostics
 *.log
@@ -69,3 +76,8 @@ Thumbs.db
 *.swo
 *.sublime-project
 *.sublime-workspace
+
+# Personal local MySQL identity-DB replica (schema/seed for safe testing
+# without touching the shared Azure identity DB) — never meant to be shared.
+backend/scripts/local_identity_schema.sql
+backend/scripts/local_identity_seed.sql

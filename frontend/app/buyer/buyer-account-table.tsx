@@ -3,8 +3,8 @@
 import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { BuyerAccount, SourcingMode } from '@/lib/types';
-import categoriesData from '@/lib/categories.json';
-import { SOURCING_MODES } from '@/lib/constants';
+import { UI_STRINGS } from '@/lib/uiStrings';
+import { SOURCING_MODES, formatCurrency } from '@/lib/constants';
 import {
   Building2,
   Users,
@@ -46,6 +46,12 @@ export default function BuyerAccountTable() {
     alignActiveBuyerAccount,
     importPublicBuyerDatabase,
     showToast,
+    // The category master, read from the database. Empty until it loads, and
+    // empty for good if the read failed — there is no bundled copy to fall back
+    // to, because a major category selected here becomes this buyer's procurement
+    // scope and is used to route RFQs.
+    categoryTaxonomy,
+    categoryTaxonomyError,
   } = useApp();
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -165,7 +171,7 @@ export default function BuyerAccountTable() {
       supportedMajorCategories: selectedMajors.length > 0 ? selectedMajors : ['Engineering Spares - Mechanical'],
       supportedMinorCategories: ['Pumps & Accessories', 'Hoses, Valves & Fittings', 'Panels'],
       totalRFQsCreated: 0,
-      totalSpend: '$0',
+      totalSpend: formatCurrency(0),
     });
 
     setAddModalOpen(false);
@@ -222,7 +228,7 @@ export default function BuyerAccountTable() {
           supportedMajorCategories: ['Engineering Spares - Electrical', 'CAPEX - Equipment & Machinery', 'Civil Works'],
           supportedMinorCategories: ['Transformers', 'Panels', 'Turbines', 'PEB Structure'],
           totalRFQsCreated: 31,
-          totalSpend: '$4.12M',
+          totalSpend: '₹4.12 Cr',
         },
         {
           organizationName: 'BHEL Heavy Electricals',
@@ -244,7 +250,7 @@ export default function BuyerAccountTable() {
           supportedMajorCategories: ['Engineering Spares - Electrical', 'Engineering Spares - Mechanical', 'Raw Materials'],
           supportedMinorCategories: ['Panels', 'Motors', 'Circuit Breakers', 'Die Casting'],
           totalRFQsCreated: 18,
-          totalSpend: '$2.80M',
+          totalSpend: '₹2.80 Cr',
         },
         {
           organizationName: 'Vedanta Resources & SCM',
@@ -266,7 +272,7 @@ export default function BuyerAccountTable() {
           supportedMajorCategories: ['Engineering Spares - Mechanical', 'Raw Materials', 'Lubricants, Greases & Oils'],
           supportedMinorCategories: ['Bearings & Accessories', 'Compressors & Accessories', 'Hydraulic Oils'],
           totalRFQsCreated: 8,
-          totalSpend: '$940k',
+          totalSpend: '₹94 L',
         },
       ];
 
@@ -498,7 +504,7 @@ export default function BuyerAccountTable() {
               placeholder="Search by Company Name, Contact Person, Corporate Email, GSTIN, Industry..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-9 text-xs w-full"
+              className="has-leading-icon text-xs w-full"
             />
             {searchTerm && (
               <button aria-label="Clear Search" onClick={() => setSearchTerm('')} className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600">
@@ -946,7 +952,12 @@ export default function BuyerAccountTable() {
                   Supported Procurement Major Categories:
                 </label>
                 <div className="flex flex-wrap gap-1.5 max-h-[140px] overflow-y-auto p-2 bg-slate-50 dark:bg-gray-800/40 rounded-xl border border-slate-200 dark:border-gray-800">
-                  {categoriesData.map((cat) => {
+                  {categoryTaxonomy.length === 0 && (
+                    <p className="text-[10px] font-semibold text-amber-700 dark:text-amber-400">
+                      {categoryTaxonomyError || UI_STRINGS.buyerProfile.taxonomyEmpty}
+                    </p>
+                  )}
+                  {categoryTaxonomy.map((cat) => {
                     const isSelected = selectedMajors.includes(cat.majorCategory);
                     return (
                       <button

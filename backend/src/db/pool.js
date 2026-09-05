@@ -1,239 +1,224 @@
+// ==============================================================================
+// DATABASE POOL (Neon PostgreSQL) — the only database connection
+// ==============================================================================
+// One pool, one database. This backend used to open a second pool against a
+// shared MySQL identity schema and keep authentication there while Postgres held
+// the domain records; that pool is gone, along with the `mysql2` driver and every
+// MYSQL_* setting. Identity, taxonomy and domain tables all live here now (see
+// schema.sql), so a request never has to reconcile two datastores.
+//
+// Every value is read from the environment — no credentials are hardcoded here.
+// ==============================================================================
+
 const { Pool } = require('pg');
-const fs = require('fs');
-const path = require('path');
-const { queryAuditor } = require('./queryAuditor');
-const { queryCache } = require('./queryCache');
 
-function sanitizeConnectionString(raw) {
-  if (!raw) return '';
-  if (raw.includes('sslmode=require') && !raw.includes('uselibpqcompat=')) {
-    const separator = raw.includes('?') ? '&' : '?';
-    return `${raw}${separator}uselibpqcompat=true`;
-  }
-  return raw;
-}
+const DEFAULT_POOL_MAX = 10;
+const DEFAULT_CONNECT_TIMEOUT_MS = 5000;
+// Neon bills for compute time while a connection is open, so idle clients are
+// released aggressively rather than held for the process lifetime.
+const DEFAULT_IDLE_TIMEOUT_MS = 10000;
 
-const connectionString = sanitizeConnectionString(
-  process.env.DATABASE_URL ||
-  process.env.POSTGRES_URL ||
-  process.env.POSTGRES_PRISMA_URL ||
-  process.env.POSTGRES_URL_NON_POOLING ||
-  ''
-);
+/**
+ * Resolve database settings from the environment.
+ *
+ * Returns `null` when DATABASE_URL is absent. Callers treat that as
+ * "the database is not configured" and fail closed with a descriptive error —
+ * it is no longer a signal to serve seed data from memory.
+ */
+function resolveConfig(env = process.env) {
+  const connectionString = env.DATABASE_URL || '';
+  if (!connectionString) return null;
 
-function detectDBProvider(connStr) {
-  if (!connStr) {
-    return { provider: 'in_memory_mock', label: 'In-Memory Enterprise Store (Offline / Fallback Mode)' };
-  }
-  const lower = connStr.toLowerCase();
-  if (lower.includes('neon.tech') || lower.includes('verceldb')) {
-    return { provider: 'neon', label: 'Neon / Vercel Serverless Postgres' };
-  }
-  if (lower.includes('supabase.co')) {
-    return { provider: 'supabase', label: 'Supabase Managed PostgreSQL' };
-  }
-  if (lower.includes('postgres.database.azure.com')) {
-    return { provider: 'azure_postgres', label: 'Azure Database for PostgreSQL Flexible Server' };
-  }
-  if (lower.includes('rds.amazonaws.com')) {
-    return { provider: 'aws_rds', label: 'AWS RDS PostgreSQL' };
-  }
-  return { provider: 'local_postgres', label: 'Dedicated / Local PostgreSQL Cluster' };
+  const isLocal = connectionString.includes('localhost') || connectionString.includes('127.0.0.1');
+
+  return {
+    connectionString,
+    max: env.DATABASE_POOL_MAX ? parseInt(env.DATABASE_POOL_MAX, 10) : DEFAULT_POOL_MAX,
+    connectionTimeoutMillis: env.DATABASE_CONNECT_TIMEOUT_MS
+      ? parseInt(env.DATABASE_CONNECT_TIMEOUT_MS, 10)
+      : DEFAULT_CONNECT_TIMEOUT_MS,
+    idleTimeoutMillis: env.DATABASE_IDLE_TIMEOUT_MS
+      ? parseInt(env.DATABASE_IDLE_TIMEOUT_MS, 10)
+      : DEFAULT_IDLE_TIMEOUT_MS,
+    // Neon's certificate chain is publicly trusted, so this verifies for real.
+    // A local Postgres is assumed to be plaintext on the loopback interface.
+    ssl: isLocal ? false : { rejectUnauthorized: true },
+  };
 }
 
 /**
- * Creates connection pool with tuned idle timeout to reduce active compute hours
+ * Create a PostgreSQL connection pool, or `null` when nothing is configured.
  */
-function createPool(connStr = connectionString) {
-  if (!connStr) return null;
-  const isLocal = connStr.includes('localhost') || connStr.includes('127.0.0.1');
-  return new Pool({
-    connectionString: connStr,
-    max: process.env.DB_POOL_MAX ? parseInt(process.env.DB_POOL_MAX, 10) : 10,
-    idleTimeoutMillis: process.env.DB_POOL_IDLE_TIMEOUT_MS ? parseInt(process.env.DB_POOL_IDLE_TIMEOUT_MS, 10) : 10000,
-    connectionTimeoutMillis: process.env.DB_CONNECTION_TIMEOUT_MS ? parseInt(process.env.DB_CONNECTION_TIMEOUT_MS, 10) : 5000,
-    ssl: isLocal ? false : { rejectUnauthorized: false },
-  });
+function createPool(env = process.env) {
+  const config = resolveConfig(env);
+  if (!config) return null;
+  return new Pool(config);
 }
 
-const initialPool = createPool();
+function detectProvider(connectionString) {
+  const lower = connectionString.toLowerCase();
+  if (lower.includes('neon.tech')) {
+    return { provider: 'neon', providerLabel: 'Neon PostgreSQL' };
+  }
+  return { provider: 'postgres', providerLabel: 'PostgreSQL' };
+}
 
+/** Extract the database name from a connection string for display only. */
+function detectDatabaseName(connectionString) {
+  const match = /\/([^/?]+)(\?|$)/.exec(connectionString || '');
+  return match ? match[1] : '';
+}
+
+// Mutable holder so tests can swap the pool without re-requiring the module.
 const poolModule = {
-  pool: initialPool,
+  pool: createPool(),
+  isConfigured: !!resolveConfig(),
 };
 
-async function query(text, params, retries = 2) {
-  const activePool = poolModule.pool;
-  if (!activePool) {
-    throw new Error('DATABASE_URL is not configured. Running in memory fallback mode.');
-  }
+/** The message every caller uses when the database is absent. */
+const NOT_CONFIGURED_MESSAGE = 'The database is not configured. Set DATABASE_URL so records can be read and written.';
 
-  const start = Date.now();
+/**
+ * Run a parameterised query and return the full pg result.
+ */
+async function query(text, params = []) {
+  if (!poolModule.pool) {
+    throw new Error(NOT_CONFIGURED_MESSAGE);
+  }
+  return poolModule.pool.query(text, params);
+}
+
+/**
+ * Run a parameterised query and return just the rows.
+ *
+ * Most call sites only ever want `result.rows`, and unwrapping here keeps them
+ * from repeating the same destructuring — and from silently reading `.rows` off
+ * an undefined result if a mock forgets to supply it.
+ */
+async function rows(text, params = []) {
+  const result = await query(text, params);
+  return result.rows || [];
+}
+
+/**
+ * Run `fn` inside a single transaction on one dedicated client.
+ *
+ * The client is always released and the transaction is always resolved, so a
+ * failure part-way cannot leave a connection checked out of the pool holding an
+ * open transaction — which on a serverless provider means paying for an idle
+ * compute instance until the statement timeout fires.
+ */
+async function withTransaction(fn) {
+  if (!poolModule.pool) {
+    throw new Error(NOT_CONFIGURED_MESSAGE);
+  }
+  const client = await poolModule.pool.connect();
   try {
-    const res = await activePool.query(text, params);
-    const duration = Date.now() - start;
-    queryAuditor.auditQuery(text, params, duration, false);
-    if (process.env.NODE_ENV === 'development' && duration > 500) {
-      console.warn(`[Slow Query ${duration}ms]: ${text.slice(0, 100)}...`);
-    }
-    return res;
-  } catch (error) {
-    if (retries > 0 && (error.message?.includes('timeout') || error.message?.includes('Connection terminated') || error.message?.includes('ECONNRESET'))) {
-      console.warn(`[PostgreSQL Retrying Query after ${error.message}]: ${text.slice(0, 80)}...`);
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      return query(text, params, retries - 1);
-    }
-    console.error('[PostgreSQL Query Error]:', error.message, '\nQuery:', text);
-    throw error;
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    // A rollback can itself fail if the connection has already dropped. The
+    // original error is what the caller needs to see, so this one is swallowed.
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
   }
 }
 
-async function checkDBHealth() {
-  const activePool = poolModule.pool;
-  const currentConn = connectionString || (activePool ? 'postgresql://mock:mock@localhost:5432/mock' : '');
-  const { provider, label } = detectDBProvider(currentConn);
-  const now = new Date().toISOString();
+/**
+ * Report database reachability for the admin infrastructure screen.
+ *
+ * Counts accounts as well as domain rows: authentication reads the same
+ * connection now, so a single reachability answer covers login and the
+ * dashboards together rather than reporting two independent datastores.
+ */
+async function checkDatabaseHealth() {
+  const config = resolveConfig();
+  const timestamp = new Date().toISOString();
 
-  if (!activePool) {
+  if (!poolModule.pool || !config) {
     return {
       isConfigured: false,
       isConnected: false,
-      provider: 'in_memory_mock',
-      providerLabel: label,
+      provider: 'not_configured',
+      providerLabel: 'Database not configured',
+      poolStatus: 'NOT_CONFIGURED',
+      database: '',
       latencyMs: 0,
-      tablesCount: 0,
-      totalRecords: {
-        buyerAccounts: 6,
-        vendors: 15,
-        rfqs: 12,
-        evaluations: 7,
-        auditLogs: 24,
-        aiFeed: 18,
-      },
-      errorMessage: 'DATABASE_URL environment variable is not defined.',
-      timestamp: now,
+      userCount: 0,
+      vendorCount: 0,
+      rfqCount: 0,
+      errorMessage: 'DATABASE_URL is not set.',
+      timestamp,
     };
   }
 
-  const startTime = Date.now();
+  const { provider, providerLabel } = detectProvider(config.connectionString);
+  const database = detectDatabaseName(config.connectionString);
+  const startedAt = Date.now();
   try {
-    await activePool.query('SELECT 1 AS ping');
-    const latency = Date.now() - startTime;
-
-    const tableRes = await activePool.query(
-      `SELECT count(*)::text as count FROM information_schema.tables WHERE table_schema = 'public'`
+    // One round trip rather than three: the health check runs on every admin
+    // page load and on boot, and three separate counts meant three billable
+    // queries for one answer.
+    const result = await query(
+      `select (select count(*) from "user" where is_active = true) as user_count,
+              (select count(*) from vendors) as vendor_count,
+              (select count(*) from rfqs) as rfq_count`
     );
-    const tablesCount = parseInt(tableRes.rows[0]?.count || '0', 10);
-
-    let counts = {
-      buyerAccounts: 0,
-      vendors: 0,
-      rfqs: 0,
-      evaluations: 0,
-      auditLogs: 0,
-      aiFeed: 0,
-    };
-
-    if (tablesCount > 0) {
-      try {
-        const countsRes = await activePool.query(`
-          SELECT
-            (SELECT count(*)::text FROM buyer_accounts) as buyers,
-            (SELECT count(*)::text FROM vendors) as vendors,
-            (SELECT count(*)::text FROM rfqs) as rfqs,
-            (SELECT count(*)::text FROM vendor_evaluations) as evals,
-            (SELECT count(*)::text FROM audit_logs) as audits,
-            (SELECT count(*)::text FROM ai_bot_feed) as feeds
-        `);
-        if (countsRes.rows[0]) {
-          counts = {
-            buyerAccounts: parseInt(countsRes.rows[0].buyers || '0', 10),
-            vendors: parseInt(countsRes.rows[0].vendors || '0', 10),
-            rfqs: parseInt(countsRes.rows[0].rfqs || '0', 10),
-            evaluations: parseInt(countsRes.rows[0].evals || '0', 10),
-            auditLogs: parseInt(countsRes.rows[0].audits || '0', 10),
-            aiFeed: parseInt(countsRes.rows[0].feeds || '0', 10),
-          };
-        }
-      } catch {
-        // Tables might not be initialized yet
-      }
-    }
-
+    const row = (result.rows && result.rows[0]) || {};
     return {
       isConfigured: true,
       isConnected: true,
       provider,
-      providerLabel: label,
-      latencyMs: latency,
-      tablesCount,
-      totalRecords: counts,
-      timestamp: now,
+      providerLabel,
+      poolStatus: `ACTIVE (max ${config.max} connections)`,
+      database,
+      latencyMs: Date.now() - startedAt,
+      userCount: Number(row.user_count || 0),
+      vendorCount: Number(row.vendor_count || 0),
+      rfqCount: Number(row.rfq_count || 0),
+      timestamp,
     };
   } catch (err) {
     return {
       isConfigured: true,
       isConnected: false,
       provider,
-      providerLabel: label,
-      latencyMs: Date.now() - startTime,
-      tablesCount: 0,
-      totalRecords: { buyerAccounts: 0, vendors: 0, rfqs: 0, evaluations: 0, auditLogs: 0, aiFeed: 0 },
-      errorMessage: err.message || 'Connection failed',
-      timestamp: now,
+      providerLabel,
+      poolStatus: 'UNREACHABLE',
+      database,
+      latencyMs: Date.now() - startedAt,
+      userCount: 0,
+      vendorCount: 0,
+      rfqCount: 0,
+      errorMessage: err.message || 'Database connection failed.',
+      timestamp,
     };
   }
 }
 
-async function initializeSchema() {
-  const activePool = poolModule.pool;
-  if (!activePool) {
-    throw new Error('Cannot initialize schema: DATABASE_URL is not set.');
-  }
-
-  try {
-    const schemaPath = path.join(__dirname, 'schema.sql');
-    if (!fs.existsSync(schemaPath)) {
-      throw new Error(`Schema file not found at ${schemaPath}`);
-    }
-    const sql = fs.readFileSync(schemaPath, 'utf8');
-    await activePool.query(sql);
-
-    const tablesRes = await activePool.query(
-      `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name`
-    );
-    const tableNames = tablesRes.rows.map((r) => r.table_name);
-
-    return {
-      success: true,
-      message: `Database schema successfully initialized. ${tableNames.length} tables active.`,
-      tablesCreated: tableNames,
-    };
-  } catch (err) {
-    console.error('Failed to initialize PostgreSQL schema:', err);
-    return {
-      success: false,
-      message: err.message || 'Failed to initialize schema.',
-    };
-  }
+/**
+ * Close the pool (used by tests and graceful shutdown).
+ */
+async function closePool() {
+  if (!poolModule.pool) return;
+  await poolModule.pool.end();
+  poolModule.pool = null;
 }
 
-function getOptimizationMetrics() {
-  const cacheMetrics = queryCache.getMetrics();
-  const auditReport = queryAuditor.getAuditReport();
-  return {
-    cache: cacheMetrics,
-    auditing: auditReport,
-    timestamp: new Date().toISOString(),
-  };
-}
-
+poolModule.NOT_CONFIGURED_MESSAGE = NOT_CONFIGURED_MESSAGE;
+poolModule.resolveConfig = resolveConfig;
 poolModule.createPool = createPool;
+poolModule.detectProvider = detectProvider;
+poolModule.detectDatabaseName = detectDatabaseName;
 poolModule.query = query;
-poolModule.detectDBProvider = detectDBProvider;
-poolModule.checkDBHealth = checkDBHealth;
-poolModule.initializeSchema = initializeSchema;
-poolModule.sanitizeConnectionString = sanitizeConnectionString;
-poolModule.getOptimizationMetrics = getOptimizationMetrics;
+poolModule.rows = rows;
+poolModule.withTransaction = withTransaction;
+poolModule.checkDatabaseHealth = checkDatabaseHealth;
+poolModule.checkDomainDBHealth = checkDatabaseHealth;
+poolModule.closePool = closePool;
 
 module.exports = poolModule;

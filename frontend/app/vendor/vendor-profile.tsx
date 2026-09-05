@@ -1,8 +1,10 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '@/lib/store';
-import categoriesData from '@/lib/categories.json';
+import { authClient } from '@/lib/authClient';
+import { findMajorForMinor, getMinorCategories } from '@/lib/categoryTaxonomy';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import {
   Truck,
   ShieldCheck,
@@ -34,49 +36,128 @@ export default function VendorProfilePage() {
     clientMappedCategories,
     vendorSelectedCategories,
     saveVendorProfileCategories,
+    currentUserSession,
+    // The category master, read from the database rather than a bundled copy.
+    categoryTaxonomy,
+    categoryTaxonomyError,
   } = useApp();
 
   const MAX_CATEGORIES = 10;
 
-  // Vendor Organization State
-  const [companyName, setCompanyName] = useState('Apex Supplies & Contracting Ltd.');
-  const [brandName, setBrandName] = useState('Apex Flow Controls & Engineering');
+  // Vendor Organization State — starts blank; populated from the authenticated
+  // vendor's own backend record once it loads (see the profile-load effect below).
+  const [companyName, setCompanyName] = useState('');
+  const [brandName, setBrandName] = useState('');
   const [orgType, setOrgType] = useState<'Private Limited' | 'Public Limited' | 'Partnership' | 'Sole Proprietorship' | 'LLP'>('Private Limited');
-  const [panNumber, setPanNumber] = useState('AAACA9876K');
-  const [gstNumber, setGstNumber] = useState('27AAACA9876K1Z9');
-  const [msmeNumber, setMsmeNumber] = useState('UDYAM-MH-03-0048291');
-  const [website, setWebsite] = useState('https://www.apexsupplies.com');
-  const [annualTurnover, setAnnualTurnover] = useState('₹ 85.4 Cr');
+  const [panNumber, setPanNumber] = useState('');
+  const [gstNumber, setGstNumber] = useState('');
+  const [msmeNumber, setMsmeNumber] = useState('');
+  const [website, setWebsite] = useState('');
+  const [annualTurnover, setAnnualTurnover] = useState('');
 
   // Address State
-  const [factoryAddress, setFactoryAddress] = useState('Plot 42, MIDC Industrial Area, Thane West');
-  const [city, setCity] = useState('Mumbai');
-  const [state, setState] = useState('Maharashtra');
-  const [pincode, setPincode] = useState('400604');
+  const [factoryAddress, setFactoryAddress] = useState('');
+  const [city, setCity] = useState('');
+  const [state, setState] = useState('');
+  const [pincode, setPincode] = useState('');
   const [country, setCountry] = useState('India');
 
-  // Contact Person State
-  const [contactName, setContactName] = useState('Vikram Malhotra');
-  const [contactDesignation, setContactDesignation] = useState('Head of Sales & Business Development');
-  const [contactEmail, setContactEmail] = useState('vendor@apex.com');
-  const [contactPhone, setContactPhone] = useState('+91 98920 11420');
+  // Contact Person State. Email is the vendor's own login identity (see the
+  // read-only field below) — it's what the backend uses to find this vendor's
+  // record and to authorize edits to it, so it can't be freely retyped here.
+  const [contactName, setContactName] = useState('');
+  const [contactDesignation, setContactDesignation] = useState('');
+  const [contactEmail, setContactEmail] = useState('');
+  const [contactPhone, setContactPhone] = useState('');
 
   // Category Selection State: Selected Major Categories and Minor Categories (Max 10)
-  const [selectedMajor, setSelectedMajor] = useState<string[]>([
-    'Engineering Spares - Mechanical',
-    'Engineering Spares - Electrical',
-  ]);
-
-  const [selectedMinor, setSelectedMinor] = useState<Record<string, string[]>>({
-    'Engineering Spares - Mechanical': ['Bearings & Accessories', 'Pumps & Accessories', 'Pipes & Pipe Fittings', 'Hoses, Valves & Fittings', 'Fasteners'],
-    'Engineering Spares - Electrical': ['Cables', 'Panels'],
-  });
+  const [selectedMajor, setSelectedMajor] = useState<string[]>([]);
+  const [selectedMinor, setSelectedMinor] = useState<Record<string, string[]>>({});
 
   const [searchTerm, setSearchTerm] = useState('');
-  const [expandedMajor, setExpandedMajor] = useState<Record<string, boolean>>({
-    'Engineering Spares - Mechanical': true,
-    'Engineering Spares - Electrical': true,
-  });
+  const [expandedMajor, setExpandedMajor] = useState<Record<string, boolean>>({});
+
+  // Backend load/save state
+  const [vendorRecordId, setVendorRecordId] = useState<string | null>(null);
+  const [loadedClientCats, setLoadedClientCats] = useState<string[]>([]);
+  const [isLoadingProfile, setIsLoadingProfile] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Groups a flat list of minor category names (as persisted by the backend)
+  // back into the major->minor shape this screen's selector state uses.
+  const groupMinorCategories = (flat: string[]) => {
+    const majors: string[] = [];
+    const minorMap: Record<string, string[]> = {};
+    flat.forEach((minorName) => {
+      const major = findMajorForMinor(minorName);
+      if (!major) return;
+      if (!minorMap[major]) {
+        minorMap[major] = [];
+        majors.push(major);
+      }
+      minorMap[major].push(minorName);
+    });
+    return { majors, minorMap };
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadVendorProfile() {
+      const email = currentUserSession?.email;
+      if (!email) {
+        setIsLoadingProfile(false);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/vendors/${encodeURIComponent(email)}`);
+        if (res.status === 404) {
+          // No backend record yet for this vendor — first-time profile, blank form.
+          if (!cancelled) setContactEmail(email);
+          return;
+        }
+        const data = await res.json();
+        if (cancelled || !res.ok || !data.success || !data.data) return;
+
+        const v = data.data;
+        setVendorRecordId(v.id);
+        setCompanyName(v.name || '');
+        setBrandName(v.brandName || '');
+        if (v.orgType) setOrgType(v.orgType);
+        setPanNumber(v.pan || '');
+        setGstNumber(v.gst || '');
+        setMsmeNumber(v.msme || '');
+        setWebsite(v.website || '');
+        setAnnualTurnover(v.annualTurnover || '');
+        setFactoryAddress(v.factoryAddress || '');
+        setCity(v.city || '');
+        setState(v.state || '');
+        setPincode(v.pincode || '');
+        setCountry(v.country || 'India');
+        setContactName(v.contactPerson || '');
+        setContactDesignation(v.contactDesignation || '');
+        setContactEmail(email);
+        setContactPhone(v.phone || '');
+        setLoadedClientCats(v.clientMappedCategories || []);
+
+        const { majors, minorMap } = groupMinorCategories(v.vendorSelectedCategories || []);
+        setSelectedMajor(majors);
+        setSelectedMinor(minorMap);
+        setExpandedMajor(Object.fromEntries(majors.map((m) => [m, true])));
+      } catch {
+        // Network failure loading the profile: leave the form blank rather
+        // than showing fabricated placeholder data for the wrong vendor.
+        if (!cancelled) setContactEmail(email);
+      } finally {
+        if (!cancelled) setIsLoadingProfile(false);
+      }
+    }
+
+    loadVendorProfile();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUserSession?.email]);
 
   // Calculate totals
   const totalSelectedMinorCount = Object.values(selectedMinor).reduce((acc, curr) => acc + curr.length, 0);
@@ -97,7 +178,7 @@ export default function VendorProfilePage() {
       });
     } else {
       setSelectedMajor((prev) => [...prev, majorName]);
-      const allMinor = categoriesData.find((c) => c.majorCategory === majorName)?.minorCategories || [];
+      const allMinor = getMinorCategories(majorName);
       const remainingSlots = MAX_CATEGORIES - totalSelectedMinorCount;
       if (remainingSlots <= 0) {
         showToast('Limit Reached', `Maximum ${MAX_CATEGORIES} categories allowed. Please uncheck some categories first.`, 'warning');
@@ -142,7 +223,7 @@ export default function VendorProfilePage() {
   };
 
   // Filtered Categories based on search
-  const filteredCategories = categoriesData.filter((cat) => {
+  const filteredCategories = categoryTaxonomy.filter((cat) => {
     if (!searchTerm.trim()) return true;
     const term = searchTerm.toLowerCase();
     const matchesMajor = cat.majorCategory.toLowerCase().includes(term);
@@ -150,9 +231,14 @@ export default function VendorProfilePage() {
     return matchesMajor || matchesMinor;
   });
 
-  // Reconciled Dual Stream Categories
+  // Reconciled Dual Stream Categories — prefer this vendor's own backend
+  // record over the shared client-side store fallback (which isn't scoped
+  // to a specific vendor and only reflects whichever profile was last saved
+  // in this browser session).
   const clientCats =
-    clientMappedCategories && clientMappedCategories.length > 0
+    loadedClientCats.length > 0
+      ? loadedClientCats
+      : clientMappedCategories && clientMappedCategories.length > 0
       ? clientMappedCategories
       : ['Bearings & Accessories', 'Pumps & Accessories'];
   const flatSelectedCategories = Object.values(selectedMinor).flat();
@@ -164,18 +250,110 @@ export default function VendorProfilePage() {
   const clientOnlyCategories = clientCats.filter((c: string) => !vendorLower.includes(c.toLowerCase().trim()));
   const isAligned = clientCats.length > 0 && commonCategories.length === clientCats.length && flatSelectedCategories.length === clientCats.length;
 
-  const handleSaveProfile = (e: React.FormEvent) => {
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!companyName.trim() || !panNumber.trim() || !gstNumber.trim()) {
       showToast('Validation Error', 'Company Name, PAN, and GSTIN are required.', 'warning');
       return;
     }
-
-    if (saveVendorProfileCategories) {
-      saveVendorProfileCategories(contactEmail, clientCats, flatSelectedCategories);
+    if (!isPanValid(panNumber)) {
+      showToast('Validation Error', 'PAN number format is invalid (expected e.g. AAACA9876K).', 'warning');
+      return;
     }
-    addAuditLog(`Updated Vendor Supplier Profile & Manufacturing Capabilities for ${companyName}`);
-    showToast('Profile Saved', 'Supplier details and manufacturing categories updated successfully.', 'success');
+    if (!isGstValid(gstNumber)) {
+      showToast('Validation Error', 'GSTIN format is invalid.', 'warning');
+      return;
+    }
+    if (flatSelectedCategories.length === 0) {
+      showToast('Validation Error', 'Select at least one manufacturing / supply category.', 'warning');
+      return;
+    }
+    if (!currentUserSession?.email) {
+      showToast('Not Signed In', 'Your session could not be verified. Please sign in again.', 'warning');
+      return;
+    }
+
+    const token = authClient.getToken();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
+
+    setIsSaving(true);
+    try {
+      const profilePayload = {
+        name: companyName,
+        brandName,
+        orgType,
+        pan: panNumber,
+        gst: gstNumber,
+        msme: msmeNumber,
+        website,
+        annualTurnover,
+        factoryAddress,
+        city,
+        state,
+        pincode,
+        country,
+        location: [factoryAddress, city, state && pincode ? `${state} ${pincode}` : state, country]
+          .filter((part) => part && part.trim())
+          .join(', '),
+        contactPerson: contactName,
+        contactDesignation,
+        phone: contactPhone,
+        majorCategory: selectedMajor[0] || '',
+        minorCategories: flatSelectedCategories,
+      };
+
+      let currentId = vendorRecordId;
+      if (currentId) {
+        const res = await fetch(`/api/vendors/${encodeURIComponent(currentId)}`, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify(profilePayload),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || 'Failed to save profile.');
+        }
+      } else {
+        const res = await fetch('/api/vendors', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(profilePayload),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || 'Failed to create vendor profile.');
+        }
+        currentId = data.data.id;
+        setVendorRecordId(currentId);
+      }
+
+      const catRes = await fetch(`/api/vendors/${encodeURIComponent(currentId as string)}/categories`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({
+          clientMappedCategories: clientCats,
+          vendorSelectedCategories: flatSelectedCategories,
+        }),
+      });
+      const catData = await catRes.json();
+      if (!catRes.ok || !catData.success) {
+        throw new Error(catData.error || 'Failed to save category taxonomy.');
+      }
+      setLoadedClientCats(catData.data.clientMappedCategories || clientCats);
+
+      if (saveVendorProfileCategories) {
+        saveVendorProfileCategories(contactEmail, clientCats, flatSelectedCategories);
+      }
+      addAuditLog(`Updated Vendor Supplier Profile & Manufacturing Capabilities for ${companyName}`);
+      showToast('Profile Saved', 'Supplier details and manufacturing categories updated successfully.', 'success');
+    } catch (err: any) {
+      showToast('Save Failed', err?.message || 'Could not save the supplier profile. Please try again.', 'warning');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -198,11 +376,16 @@ export default function VendorProfilePage() {
 
         <button
           onClick={handleSaveProfile}
-          className="btn btn-emerald btn-md shadow-lg shadow-emerald-600/20 font-bold flex items-center gap-2"
+          disabled={isLoadingProfile || isSaving}
+          className="btn btn-emerald btn-md shadow-lg shadow-emerald-600/20 font-bold flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
         >
-          <Save size={16} /> Save Supplier Profile
+          <Save size={16} /> {isSaving ? 'Saving...' : 'Save Supplier Profile'}
         </button>
       </div>
+
+      {isLoadingProfile && (
+        <p className="text-xs text-slate-500 dark:text-gray-400 -mt-2">Loading your supplier profile…</p>
+      )}
 
       <form onSubmit={handleSaveProfile} className="space-y-6">
         {/* Section 1: Legal Entity & Tax Compliance */}
@@ -440,8 +623,9 @@ export default function VendorProfilePage() {
                   <input
                     type="email"
                     value={contactEmail}
-                    onChange={(e) => setContactEmail(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
+                    disabled
+                    title="This is your account login email and can't be changed here."
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-100 dark:bg-gray-900 text-slate-500 dark:text-gray-400 mt-0.5 cursor-not-allowed"
                   />
                 </div>
                 <div>
@@ -615,6 +799,11 @@ export default function VendorProfilePage() {
 
           {/* Categories Selector Grid */}
           <div className="space-y-3 pt-1">
+            {categoryTaxonomy.length === 0 && (
+              <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">
+                {categoryTaxonomyError || UI_STRINGS.buyerProfile.taxonomyEmpty}
+              </p>
+            )}
             {filteredCategories.map((cat) => {
               const isMajorSelected = selectedMajor.includes(cat.majorCategory);
               const selectedMinorsInCat = selectedMinor[cat.majorCategory] || [];
@@ -717,9 +906,10 @@ export default function VendorProfilePage() {
         <div className="flex justify-end pt-2">
           <button
             type="submit"
-            className="btn btn-emerald btn-lg shadow-xl shadow-emerald-600/20 font-bold flex items-center gap-2 px-8"
+            disabled={isLoadingProfile || isSaving}
+            className="btn btn-emerald btn-lg shadow-xl shadow-emerald-600/20 font-bold flex items-center gap-2 px-8 disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            <Save size={18} /> Save &amp; Reconcile Vendor Profile
+            <Save size={18} /> {isSaving ? 'Saving...' : 'Save & Reconcile Vendor Profile'}
           </button>
         </div>
       </form>

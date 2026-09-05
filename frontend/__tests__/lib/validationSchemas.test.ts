@@ -4,16 +4,64 @@ import {
   EMAIL_PATTERN,
   GSTIN_PATTERN,
   PHONE_PATTERN,
+  INDIAN_MOBILE_PATTERN,
+  PINCODE_PATTERN,
   FormSchema,
 } from '../../lib/validationSchemas';
+import { UI_STRINGS } from '../../lib/uiStrings';
 
 describe('Frontend validationSchemas Unit Tests', () => {
+  describe('loginForm schema (email + mobile + password)', () => {
+    const validLogin = {
+      email: 'buyer@procucev.com',
+      mobile: '9157154504',
+      password: 'Pass@123',
+    };
+
+    test('accepts a complete, well-formed sign-in payload', () => {
+      const res = validateFormData(FORM_SCHEMAS.loginForm, validLogin);
+      expect(res.isValid).toBe(true);
+      expect(res.fieldErrors).toEqual({});
+    });
+
+    test.each(['9157154504', '09157154504', '919157154504', '+919157154504', '+91 9157154504'])(
+      'accepts the accepted Indian mobile form %s',
+      (mobile) => {
+        expect(INDIAN_MOBILE_PATTERN.test(mobile)).toBe(true);
+        expect(validateFormData(FORM_SCHEMAS.loginForm, { ...validLogin, mobile }).isValid).toBe(true);
+      }
+    );
+
+    test.each(['12345', '5157154504', '91571545040', '915715450', 'nine1five', ''])(
+      'rejects the malformed mobile number %s',
+      (mobile) => {
+        const res = validateFormData(FORM_SCHEMAS.loginForm, { ...validLogin, mobile });
+        expect(res.isValid).toBe(false);
+        expect(res.fieldErrors.mobile).toBe(UI_STRINGS.auth.mobileInvalid);
+      }
+    );
+
+    test('rejects a malformed email address', () => {
+      const res = validateFormData(FORM_SCHEMAS.loginForm, { ...validLogin, email: 'not-an-email' });
+      expect(res.isValid).toBe(false);
+      expect(res.fieldErrors.email).toBe(UI_STRINGS.auth.emailInvalid);
+    });
+
+    test('rejects a missing password', () => {
+      const res = validateFormData(FORM_SCHEMAS.loginForm, { ...validLogin, password: '' });
+      expect(res.isValid).toBe(false);
+      expect(res.fieldErrors.password).toBe(UI_STRINGS.auth.passwordRequired);
+    });
+  });
+
   test('validates rfqIngestion schema with valid data', () => {
     const validData = {
       title: 'Centrifugal Pump Equipment',
       category: 'Mechanical',
       budget: 15000,
       targetDeliveryDate: '2026-03-30',
+      deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+      deliveryPincode: '400701',
     };
     const res = validateFormData(FORM_SCHEMAS.rfqIngestion, validData);
     expect(res.isValid).toBe(true);
@@ -159,3 +207,92 @@ describe('Frontend validationSchemas Unit Tests', () => {
   });
 });
 
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Delivery pincode / zipcode
+//
+// Deliberately broader than an Indian six-digit PIN: the same field carries
+// international zipcodes for export orders.
+// ══════════════════════════════════════════════════════════════════════════════
+describe('PINCODE_PATTERN', () => {
+  test.each([
+    ['400701', 'Indian six-digit PIN'],
+    ['110 001', 'PIN written with a space'],
+    ['SW1A 1AA', 'UK postcode'],
+    ['12345-6789', 'US ZIP+4'],
+    ['751', 'short three-character code'],
+  ])('accepts %s (%s)', (value) => {
+    expect(PINCODE_PATTERN.test(value)).toBe(true);
+  });
+
+  test.each([
+    ['', 'empty string'],
+    ['40', 'shorter than three characters'],
+    ['-400701', 'leading separator'],
+    ['400!701', 'punctuation'],
+    ['12345678901', 'longer than ten characters'],
+  ])('rejects %s (%s)', (value) => {
+    expect(PINCODE_PATTERN.test(value)).toBe(false);
+  });
+});
+
+describe('rfqIngestion schema', () => {
+  // Optional so a document that prices nothing can still be saved.
+  // The budget stays optional even though the destination is now mandatory.
+  test('accepts a payload with no budget', () => {
+    const { isValid } = validateFormData(FORM_SCHEMAS.rfqIngestion, {
+      title: 'Procurement of Bearing Housings',
+      category: 'Engineering Spares - Mechanical',
+      targetDeliveryDate: '2026-10-05',
+      deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+      deliveryPincode: '400701',
+    });
+    expect(isValid).toBe(true);
+  });
+
+  // Freight is rated on the destination, so a quote raised without one cannot be
+  // compared against a quote that has one.
+  test('requires a delivery location', () => {
+    const { isValid, fieldErrors } = validateFormData(FORM_SCHEMAS.rfqIngestion, {
+      title: 'Procurement of Bearing Housings',
+      category: 'Engineering Spares - Mechanical',
+      targetDeliveryDate: '2026-10-05',
+      deliveryPincode: '400701',
+    });
+    expect(isValid).toBe(false);
+    expect(fieldErrors.deliveryLocation).toBe(UI_STRINGS.rfqExtraction.deliveryLocationSchemaMessage);
+  });
+
+  test('requires a delivery pincode', () => {
+    const { isValid, fieldErrors } = validateFormData(FORM_SCHEMAS.rfqIngestion, {
+      title: 'Procurement of Bearing Housings',
+      category: 'Engineering Spares - Mechanical',
+      targetDeliveryDate: '2026-10-05',
+      deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+    });
+    expect(isValid).toBe(false);
+    expect(fieldErrors.deliveryPincode).toBe(UI_STRINGS.rfqExtraction.deliveryPincodeInvalidMessage);
+  });
+
+  test('rejects a negative budget', () => {
+    const { isValid, fieldErrors } = validateFormData(FORM_SCHEMAS.rfqIngestion, {
+      title: 'Procurement of Bearing Housings',
+      category: 'Engineering Spares - Mechanical',
+      targetDeliveryDate: '2026-10-05',
+      budget: -1,
+    });
+    expect(isValid).toBe(false);
+    expect(fieldErrors.budget).toBeDefined();
+  });
+
+  test('rejects a malformed delivery pincode', () => {
+    const { isValid, fieldErrors } = validateFormData(FORM_SCHEMAS.rfqIngestion, {
+      title: 'Procurement of Bearing Housings',
+      category: 'Engineering Spares - Mechanical',
+      targetDeliveryDate: '2026-10-05',
+      deliveryPincode: '!!',
+    });
+    expect(isValid).toBe(false);
+    expect(fieldErrors.deliveryPincode).toBe(UI_STRINGS.rfqExtraction.deliveryPincodeInvalidMessage);
+  });
+});

@@ -1,7 +1,17 @@
 'use client';
 
-import React from 'react';
+import React, { useMemo, useState } from 'react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useApp } from '@/lib/store';
+import { ROLE_SIDEBAR_NAV, ROLE_WORKSPACE_META, SIDEBAR_LAYOUT } from '@/lib/constants';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import type {
+  RoleNavigationProps,
+  SidebarIconKey,
+  SidebarNavItem,
+  UserRole,
+} from '@/lib/types';
 import {
   Building2,
   SlidersHorizontal,
@@ -15,317 +25,218 @@ import {
   FileCheck,
   ShieldCheck,
   Server,
-  FileText,
   Award,
+  ClipboardList,
   Database,
+  Menu,
+  X,
+  LogOut,
+  type LucideIcon,
 } from 'lucide-react';
 
-interface RoleNavProps {
-  activeScreen: string;
-  setActiveScreen?: (screen: string) => void;
-  onScreenChange?: (screen: string) => void;
-  onLogout?: () => void;
-  onOpenInitialSetup?: () => void;
+/** Icon registry resolving pure-data icon keys from constants to components. */
+const SIDEBAR_ICONS: Record<SidebarIconKey, LucideIcon> = {
+  Building2,
+  SlidersHorizontal,
+  Truck,
+  Cpu,
+  Layers,
+  Sparkles,
+  Kanban,
+  TrendingUp,
+  FileSpreadsheet,
+  FileCheck,
+  ShieldCheck,
+  Server,
+  Award,
+  ClipboardList,
+  Database,
+};
+
+const NAV = UI_STRINGS.navigation;
+
+interface NavGroup {
+  group: string;
+  items: SidebarNavItem[];
 }
 
-export default function RoleNavigation({
-  activeScreen,
-  setActiveScreen,
-  onScreenChange,
-  onLogout,
-}: RoleNavProps) {
-  const { currentRole, isLoggedIn, activeBuyerAccount, vendorSubscription } = useApp();
+/**
+ * Role Workspace Sidebar Navigation
+ * Flush, full-height module rail listing every screen available to the active
+ * role. Pinned directly under the application header with no top, left, or
+ * bottom gutters, and collapses to an off-canvas drawer on small screens.
+ */
+export default function RoleNavigation({ onLogout }: RoleNavigationProps) {
+  const { currentRole, isLoggedIn } = useApp();
+  const pathname = usePathname();
+  const [mobileOpen, setMobileOpen] = useState(false);
 
-  const changeScreen = (screen: string) => {
-    if (setActiveScreen) setActiveScreen(screen);
-    if (onScreenChange) onScreenChange(screen);
-  };
+  const role: UserRole = currentRole ?? 'buyer';
+  const workspace = ROLE_WORKSPACE_META[role];
+  const navItems = ROLE_SIDEBAR_NAV[role];
+
+  const navGroups = useMemo<NavGroup[]>(
+    () =>
+      navItems.reduce<NavGroup[]>((groups, item) => {
+        const bucket = groups.find((entry) => entry.group === item.group);
+        if (bucket) {
+          bucket.items.push(item);
+          return groups;
+        }
+        return [...groups, { group: item.group, items: [item] }];
+      }, []),
+    [navItems]
+  );
 
   if (!isLoggedIn) {
     return null;
   }
 
   return (
-    <div className="w-full space-y-2 pb-1">
-      {/* Sub-Screen Navigation Bar for Active Role */}
-      <div className="flex items-center justify-between gap-3 p-1.5 rounded-2xl bg-white/90 dark:bg-gray-900/90 border border-slate-200 dark:border-gray-800/90 shadow-sm backdrop-blur-md overflow-x-auto">
-        <div className="flex items-center gap-1.5 overflow-x-auto py-0.5 px-1 text-xs">
-          {/* Active Workspace Label Badge */}
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700/60 font-bold text-[11px] text-slate-700 dark:text-gray-300 shrink-0 mr-1">
-            {currentRole === 'buyer' && (
-              <>
-                <Building2 size={13} className="text-indigo-600 dark:text-indigo-400" />
-                <span className="hidden sm:inline">Buyer Workspace:</span>
-                <span className="text-indigo-600 dark:text-indigo-400 font-extrabold">{activeBuyerAccount?.organizationName || 'L&T'}</span>
-              </>
-            )}
-            {currentRole === 'category_manager' && (
-              <>
-                <SlidersHorizontal size={13} className="text-sky-600 dark:text-sky-400" />
-                <span className="hidden sm:inline">Category Desk:</span>
-                <span className="text-sky-600 dark:text-sky-400 font-extrabold">Mechanical Ops</span>
-              </>
-            )}
-            {currentRole === 'vendor' && (
-              <>
-                <Truck size={13} className="text-emerald-600 dark:text-emerald-400" />
-                <span className="hidden sm:inline">Vendor Portal:</span>
-                <span className="text-emerald-600 dark:text-emerald-400 font-extrabold">Apex Supplies</span>
-              </>
-            )}
-            {currentRole === 'admin' && (
-              <>
-                <Cpu size={13} className="text-purple-600 dark:text-purple-400" />
-                <span className="hidden sm:inline">Admin Desk:</span>
-                <span className="text-purple-600 dark:text-purple-400 font-extrabold">Compliance & Infra</span>
-              </>
-            )}
-          </div>
+    <>
+      {/* ── Mobile Drawer Trigger (hidden on large screens) ── */}
+      <div className="lg:hidden w-full flex items-center gap-2 px-3 py-1.5 border-b border-slate-200 dark:border-gray-800/90 bg-white dark:bg-[#0b0f19]">
+        <button
+          type="button"
+          onClick={() => setMobileOpen(true)}
+          aria-label={NAV.openMenu}
+          aria-expanded={mobileOpen}
+          className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-[11px] font-bold text-slate-700 dark:text-gray-300 hover:bg-slate-100 dark:hover:bg-gray-800/60 transition-all"
+        >
+          <Menu size={15} className={workspace.accentText} />
+          {NAV.sidebarHeading}
+        </button>
+      </div>
 
-          {/* BUYER SCREENS */}
-          {currentRole === 'buyer' && (
-            <>
-              <button
-                onClick={() => changeScreen('command_center')}
-                className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
-                  activeScreen === 'command_center'
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/50'
-                }`}
-              >
-                <Layers size={13} /> Screen 1.1: Command Center
-              </button>
-              <button
-                onClick={() => changeScreen('ingestion_wizard')}
-                className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
-                  activeScreen === 'ingestion_wizard'
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/50'
-                }`}
-              >
-                <FileSpreadsheet size={13} /> Screen 1.2: AI Ingestion &amp; Mode Wizard
-              </button>
-              <button
-                onClick={() => changeScreen('vendor_evaluation_summary')}
-                className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
-                  activeScreen === 'vendor_evaluation_summary'
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/50'
-                }`}
-              >
-                <FileCheck size={13} /> Screen 1.3: Evaluation Summary
-              </button>
-              <button
-                onClick={() => changeScreen('vendor_summary')}
-                className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
-                  activeScreen === 'vendor_summary'
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/50'
-                }`}
-              >
-                <Building2 size={13} /> Screen 1.4: Vendor Directory
-              </button>
-              <button
-                onClick={() => changeScreen('subscription_center')}
-                className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
-                  activeScreen === 'subscription_center'
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/50'
-                }`}
-              >
-                <Sparkles size={13} className="text-amber-400" /> Screen 1.5: Sourcing Subscriptions
-              </button>
-              <button
-                onClick={() => changeScreen('buyer_profile')}
-                className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
-                  activeScreen === 'buyer_profile'
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/50'
-                }`}
-              >
-                <Building2 size={13} /> Screen 1.6: Buyer Profile
-              </button>
-              <button
-                onClick={() => changeScreen('buyer_directory')}
-                className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
-                  activeScreen === 'buyer_directory'
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/50'
-                }`}
-              >
-                <Database size={13} className="text-amber-500" /> Screen 1.7: Buyer DB Sync
-              </button>
-            </>
-          )}
+      {/* ── Off-canvas Backdrop (mobile only) ── */}
+      {mobileOpen && (
+        <button
+          type="button"
+          aria-label={NAV.dismissOverlay}
+          onClick={() => setMobileOpen(false)}
+          className="lg:hidden fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-sm animate-fade-in"
+        />
+      )}
 
-          {/* CATEGORY MANAGER SCREENS */}
-          {currentRole === 'category_manager' && (
-            <>
-              <button
-                onClick={() => changeScreen('kanban_board')}
-                className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
-                  activeScreen === 'kanban_board'
-                    ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/50'
-                }`}
-              >
-                <Kanban size={13} /> Screen 2.1: Operational Kanban
-              </button>
-              <button
-                onClick={() => changeScreen('spend_dashboard')}
-                className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
-                  activeScreen === 'spend_dashboard'
-                    ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/50'
-                }`}
-              >
-                <TrendingUp size={13} /> Screen 2.2: Spend Analytics
-              </button>
-              <button
-                onClick={() => changeScreen('buyer_console')}
-                className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
-                  activeScreen === 'buyer_console'
-                    ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/50'
-                }`}
-              >
-                <Building2 size={13} /> Screen 2.3: Buyer RFQ Console
-              </button>
-              <button
-                onClick={() => changeScreen('vendor_evaluation_summary')}
-                className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
-                  activeScreen === 'vendor_evaluation_summary'
-                    ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/50'
-                }`}
-              >
-                <FileCheck size={13} /> Screen 2.4: Mode 3 Evaluations
-              </button>
-              <button
-                onClick={() => changeScreen('vendor_console')}
-                className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
-                  activeScreen === 'vendor_console'
-                    ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/50'
-                }`}
-              >
-                <Building2 size={13} /> Screen 2.5: Vendor Performance
-              </button>
-              <button
-                onClick={() => changeScreen('category_summary')}
-                className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
-                  activeScreen === 'category_summary'
-                    ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/50'
-                }`}
-              >
-                <Layers size={13} className="text-sky-400" /> Screen 2.6: Categories &amp; Trends
-              </button>
-            </>
-          )}
+      {/* ── Flush Full-Height Module Rail ── */}
+      <aside
+        aria-label={NAV.navLandmarkLabel}
+        className={`fixed lg:sticky top-0 ${SIDEBAR_LAYOUT.STICKY_OFFSET_CLASS} left-0 z-50 h-full ${
+          SIDEBAR_LAYOUT.HEIGHT_CLASS
+        } w-[262px] ${
+          SIDEBAR_LAYOUT.WIDTH_CLASS
+        } shrink-0 flex flex-col overflow-y-auto border-r border-slate-200 dark:border-gray-800/90 bg-white dark:bg-[#0b0f19] transition-transform duration-300 ease-out ${
+          mobileOpen ? 'translate-x-0' : '-translate-x-full'
+        } lg:translate-x-0`}
+      >
+        {/* Drawer dismiss control (small screens only) */}
+        <div className="lg:hidden flex justify-end px-2 pt-2">
+          <button
+            type="button"
+            onClick={() => setMobileOpen(false)}
+            aria-label={NAV.closeMenu}
+            className="flex items-center justify-center w-7 h-7 rounded-lg text-slate-500 dark:text-gray-400 hover:bg-slate-100 dark:hover:bg-gray-800/80 transition-all"
+          >
+            <X size={15} />
+          </button>
+        </div>
 
-          {/* VENDOR SCREENS */}
-          {currentRole === 'vendor' && (
-            <>
-              <button
-                onClick={() => changeScreen('vendor_feed')}
-                className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
-                  activeScreen === 'vendor_feed'
-                    ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/50'
-                }`}
-              >
-                <Truck size={13} /> Screen 3.1: Opportunity Feed
-              </button>
-              <button
-                onClick={() => changeScreen('quotation_form')}
-                className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
-                  activeScreen === 'quotation_form'
-                    ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/50'
-                }`}
-              >
-                <FileCheck size={13} /> Screen 3.2: Bid Quotes
-              </button>
-              <button
-                onClick={() => changeScreen('qualification_form')}
-                className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
-                  activeScreen === 'qualification_form'
-                    ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/50'
-                }`}
-              >
-                <Award size={13} /> Screen 3.3: 360° AI Self-Evaluation
-              </button>
-              <button
-                onClick={() => changeScreen('item_catalogue')}
-                className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
-                  activeScreen === 'item_catalogue'
-                    ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/50'
-                }`}
-              >
-                <Layers size={13} /> Screen 3.4: Item Catalogue
-              </button>
-              <button
-                onClick={() => changeScreen('vendor_subscription')}
-                className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
-                  activeScreen === 'vendor_subscription'
-                    ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/50'
-                }`}
-              >
-                <Sparkles size={13} className="text-emerald-400" /> Screen 3.5: Subscription Plans
-              </button>
-              <button
-                onClick={() => changeScreen('vendor_profile')}
-                className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
-                  activeScreen === 'vendor_profile'
-                    ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/50'
-                }`}
-              >
-                <Truck size={13} className="text-emerald-400" /> Screen 3.6: Vendor Profile
-              </button>
-            </>
-          )}
+        {/* Module Groups */}
+        <nav className="flex-1 px-2 pb-2">
+          {navGroups.map((group) => (
+            <div key={group.group} className="space-y-0.5">
+              <p className="px-2 pt-3 pb-1 text-[9px] font-black uppercase tracking-[0.08em] text-slate-400 dark:text-gray-500">
+                {group.group}
+              </p>
 
-          {/* ADMIN SCREENS */}
-          {currentRole === 'admin' && (
-            <>
-              <button
-                onClick={() => changeScreen('infra_control')}
-                className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
-                  activeScreen === 'infra_control'
-                    ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/50'
-                }`}
-              >
-                <Server size={13} /> Screen 4.1: Azure Infrastructure &amp; AI
-              </button>
-              <button
-                onClick={() => changeScreen('audit_log')}
-                className={`px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 ${
-                  activeScreen === 'audit_log'
-                    ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/50'
-                }`}
-              >
-                <ShieldCheck size={13} /> Screen 4.2: Immutable Audit Log
-              </button>
-            </>
-          )}
+              {group.items.map((item) => {
+                const ItemIcon = SIDEBAR_ICONS[item.icon];
+                // The URL is the single source of truth for which module is
+                // active, so deep links and browser back/forward stay in sync.
+                const isActive = pathname === item.route;
+
+                return (
+                  <Link
+                    key={item.id}
+                    href={item.route}
+                    onClick={() => setMobileOpen(false)}
+                    aria-label={`${item.screenTag}: ${item.label}`}
+                    aria-current={isActive ? 'page' : undefined}
+                    title={item.description}
+                    className={`group w-full flex items-center gap-2.5 px-2 py-2 rounded-xl border transition-all text-left ${
+                      isActive
+                        ? `${workspace.accentActive} border-transparent`
+                        : `border-transparent text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/60 ${workspace.accentRing}`
+                    }`}
+                  >
+                    <span
+                      className={`flex items-center justify-center w-7 h-7 rounded-lg shrink-0 border transition-all ${
+                        isActive
+                          ? 'bg-white/20 border-white/30 text-white'
+                          : 'bg-slate-100 dark:bg-gray-800/70 border-slate-200 dark:border-gray-700/60'
+                      }`}
+                    >
+                      <ItemIcon size={14} />
+                    </span>
+
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1.5">
+                        <span className="truncate text-[11.5px] font-bold">{item.label}</span>
+                        <span
+                          className={`mono shrink-0 px-1 py-px rounded text-[8.5px] font-black ${
+                            isActive
+                              ? 'bg-white/20 text-white'
+                              : 'bg-slate-100 dark:bg-gray-800 text-slate-500 dark:text-gray-500'
+                          }`}
+                        >
+                          {item.shortTag}
+                        </span>
+                      </span>
+                      <span
+                        className={`block truncate text-[9.5px] leading-snug mt-0.5 ${
+                          isActive ? 'text-white/80' : 'text-slate-400 dark:text-gray-500'
+                        }`}
+                      >
+                        {item.description}
+                      </span>
+                    </span>
+
+                    {isActive && (
+                      <span
+                        aria-hidden="true"
+                        title={NAV.activeModuleIndicator}
+                        className="w-1.5 h-1.5 rounded-full bg-white shrink-0"
+                      />
+                    )}
+                  </Link>
+                );
+              })}
+            </div>
+          ))}
+        </nav>
+
+        {/* Rail Footer: Module Counter & Session Exit */}
+        <div className="mt-auto px-2 py-2 border-t border-slate-100 dark:border-gray-800/80 bg-white dark:bg-[#0b0f19] space-y-1.5">
+          <p className="px-2 text-[9px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">
+            {formatString(NAV.modulesCountTemplate, { count: navItems.length })}
+          </p>
+
           {onLogout && (
             <button
+              type="button"
               onClick={onLogout}
-              className="px-2.5 py-1.5 rounded-xl font-bold flex items-center gap-1.5 transition-all shrink-0 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 ml-auto border border-rose-200 dark:border-rose-900/40"
-              title="Sign Out of Session"
+              aria-label={NAV.signOut}
+              title={NAV.signOutHint}
+              className="w-full flex items-center gap-2.5 px-2 py-2 rounded-xl font-bold text-[11.5px] text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900/40 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-all"
             >
-              Sign Out
+              <span className="flex items-center justify-center w-7 h-7 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-100 dark:border-rose-900/40 shrink-0">
+                <LogOut size={14} />
+              </span>
+              {NAV.signOut}
             </button>
           )}
         </div>
-      </div>
-    </div>
+      </aside>
+    </>
   );
 }

@@ -2,10 +2,10 @@ const storeService = require('../src/services/storeService');
 
 describe('Store Service Deep Branch & Fallback Tests', () => {
   test('All store getter and setter edge cases', () => {
-    // 1. Buyer Accounts
-    expect(storeService.getBuyerAccounts().length).toBeGreaterThan(0);
-    const active = storeService.getActiveBuyerAccount();
-    expect(active).toBeDefined();
+    // 1. Buyer Accounts. Not seeded any more; the signed-in buyer's account comes
+    // from the identity schema, so this holds only runtime-created accounts.
+    expect(storeService.getBuyerAccounts()).toEqual([]);
+    expect(storeService.getActiveBuyerAccount()).toBeNull();
 
     storeService.alignActiveBuyerAccount('non-existent-id');
     expect(storeService.getActiveBuyerAccount()).toBeDefined();
@@ -30,7 +30,14 @@ describe('Store Service Deep Branch & Fallback Tests', () => {
     expect(deletedBuyer).toBe(true);
     expect(storeService.deleteBuyerAccount('invalid-id')).toBe(false);
 
-    // 2. Vendors
+    // 2. Vendors. Not seeded either — the roster is whatever has actually been
+    // registered, so one is created here before the getters are exercised.
+    expect(storeService.getVendors()).toEqual([]);
+    storeService.addVendor({
+      name: 'Branch Coverage Supplier',
+      email: 'branch@coverage.test',
+      majorCategory: 'Engineering Spares - Mechanical',
+    });
     expect(storeService.getVendors().length).toBeGreaterThan(0);
     const vendor = storeService.getVendors()[0];
     expect(storeService.getVendorById(vendor.id)).toBeDefined();
@@ -67,8 +74,10 @@ describe('Store Service Deep Branch & Fallback Tests', () => {
     expect(deletedVendor).toBe(true);
     expect(storeService.deleteVendor('invalid-vendor')).toBe(false);
 
-    // 3. RFQs
-    expect(storeService.getRFQs().length).toBeGreaterThan(0);
+    // 3. RFQs. No longer seeded here: they live in qua_enterprice_rfq, scoped to
+    // a buyer organisation. This array only backs the quote and chaser flows that
+    // have not been migrated yet, so it starts empty.
+    expect(storeService.getRFQs()).toEqual([]);
     const rfq = storeService.getRFQById('invalid-rfq');
     expect(rfq).toBeUndefined();
 
@@ -93,10 +102,12 @@ describe('Store Service Deep Branch & Fallback Tests', () => {
     expect(deletedRFQ).toBe(true);
     expect(storeService.deleteRFQ('invalid-rfq')).toBe(false);
 
-    // 4. Evaluations
-    expect(storeService.getEvaluations().length).toBeGreaterThan(0);
+    // 4. Evaluations. The single fabricated 360° audit that used to be seeded is
+    // gone, so the collection is empty until an audit is actually run.
+    expect(storeService.getEvaluations()).toEqual([]);
     const createdEval = storeService.createEvaluation({ vendorName: 'Eval Partner' });
     expect(createdEval.overallScore).toBeDefined();
+    expect(storeService.getEvaluations().length).toBeGreaterThan(0);
 
     // 5. Audit Logs
     expect(storeService.getAuditLogs().length).toBeGreaterThan(0);
@@ -104,10 +115,12 @@ describe('Store Service Deep Branch & Fallback Tests', () => {
     expect(auditEntry.shaSignature).toBeDefined();
     expect(storeService.verifyAuditIntegrity().valid).toBe(true);
 
-    // 6. AI Feed
-    expect(storeService.getAIFeed().length).toBeGreaterThan(0);
+    // 6. AI Feed. Starts empty now that the seeded narrative is gone; it fills
+    // only from real activity.
+    const feedBefore = storeService.getAIFeed().length;
     const feedItem = storeService.addAIFeedItem({ title: 'AI Item', message: 'Test Msg' });
     expect(feedItem.id).toBeDefined();
+    expect(storeService.getAIFeed().length).toBe(feedBefore + 1);
 
     // 7. System Config & Azure Health
     expect(storeService.getSystemConfig()).toBeDefined();
@@ -126,14 +139,16 @@ describe('Store Service Deep Branch & Fallback Tests', () => {
     expect(storeService.handleSupportChat('how to download rfq?').reply).toContain('Vendors can view');
     expect(storeService.handleSupportChat('generic question').reply).toBeDefined();
 
-    // 10. Vendor Catalogue
-    expect(storeService.getVendorCatalogue().length).toBeGreaterThan(0);
+    // 10. Vendor Catalogue. The three unowned demo SKUs are gone, so the
+    // catalogue is empty until a vendor publishes something.
+    expect(storeService.getVendorCatalogue()).toEqual([]);
     const cat = storeService.addProductToCatalogue({
       name: 'Prod',
       sku: 'SKU-STORE',
       unitPrice: 100,
     });
     expect(cat.sku).toBe('SKU-STORE');
+    expect(storeService.getVendorCatalogue().length).toBeGreaterThan(0);
     expect(storeService.updateCatalogueProduct(cat.id, { unitPrice: 120 }).unitPrice).toBe(120);
     expect(storeService.updateCatalogueProduct('invalid-prod', {})).toBeNull();
     expect(storeService.deleteCatalogueProduct(cat.id)).toBe(true);
@@ -145,7 +160,7 @@ describe('Store Service Deep Branch & Fallback Tests', () => {
       const chaserRes = storeService.triggerBatchChaser(allRFQs[0].id, ['call', 'whatsapp']);
       expect(chaserRes.success).toBe(true);
 
-      const poRes = storeService.approvePurchaseOrder(allRFQs[0].rfqNumber, 'Apex', 45000, 'Notes');
+      const poRes = storeService.approvePurchaseOrder(allRFQs[0].rfqNumber, 'v-001', 'Apex', 45000, 'Notes');
       expect(poRes.poNumber).toBeDefined();
       expect(poRes.success).toBe(true);
     }
@@ -155,6 +170,8 @@ describe('Store Service Deep Branch & Fallback Tests', () => {
     const bootstrap = storeService.getBootstrapData();
     expect(bootstrap.buyerAccounts).toBeDefined();
     expect(bootstrap.vendors).toBeDefined();
-    expect(bootstrap.rfqs).toBeDefined();
+    // RFQs are not in this anonymous payload any more; they come from the
+    // authenticated, org-scoped GET /api/rfqs.
+    expect(bootstrap.rfqs).toBeUndefined();
   });
 });

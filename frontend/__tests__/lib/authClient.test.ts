@@ -1,4 +1,5 @@
 import { authClient } from '@/lib/authClient';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
   beforeEach(() => {
@@ -29,11 +30,28 @@ describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
         }),
       });
 
-      const res = await authClient.loginWithPassword('buyer@procucev.com', 'password123');
+      const res = await authClient.loginWithPassword('buyer@procucev.com', 'password123', '9157154504');
       expect(res.success).toBe(true);
       expect(res.user?.email).toBe('buyer@procucev.com');
       expect(authClient.getToken()).toBe('test-jwt-token');
       expect(authClient.getSessionUser()?.email).toBe('buyer@procucev.com');
+    });
+
+    test('loginWithPassword sends the registered mobile number in the request body', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: false, error: 'checked separately' }),
+      });
+
+      await authClient.loginWithPassword('buyer@procucev.com', 'password123', '9157154504');
+
+      const [path, init] = (global.fetch as jest.Mock).mock.calls[0];
+      expect(path).toBe('/api/auth/login');
+      expect(JSON.parse(init.body)).toEqual({
+        email: 'buyer@procucev.com',
+        password: 'password123',
+        mobile: '9157154504',
+      });
     });
 
     test('requestOtp dispatches verification code', async () => {
@@ -47,7 +65,7 @@ describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
         }),
       });
 
-      const res = await authClient.requestOtp('buyer@procucev.com', 'buyer');
+      const res = await authClient.requestOtp('buyer@procucev.com', '9157154504', 'buyer');
       expect(res.success).toBe(true);
       expect(res.demoCode).toBe('1234');
     });
@@ -72,7 +90,7 @@ describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
         }),
       });
 
-      const res = await authClient.verifyOtp('buyer@procucev.com', '1234');
+      const res = await authClient.verifyOtp('buyer@procucev.com', '123456', '9157154504');
       expect(res.success).toBe(true);
       expect(res.user?.authMethod).toBe('EMAIL_OTP');
       expect(authClient.getToken()).toBe('test-otp-jwt-token');
@@ -173,63 +191,80 @@ describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
     });
   });
 
-  describe('Offline & Error Fallback Paths', () => {
-    test('loginWithPassword handles network error with role fallbacks', async () => {
+  describe('Unreachable Backend Fails Closed', () => {
+    // The client used to fabricate a valid session whenever fetch() rejected,
+    // which made an unreachable API indistinguishable from a real sign-in.
+    // Every transport failure must now surface as an explicit failure.
+    test('loginWithPassword reports a network failure instead of signing the user in', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Network error'));
 
-      // Vendor fallback
-      const vRes = await authClient.loginWithPassword('vendor@test.com', 'p');
-      expect(vRes.user?.role).toBe('vendor');
+      for (const email of ['vendor@test.com', 'admin@test.com', 'manager@test.com', 'buyer@test.com']) {
+        const res = await authClient.loginWithPassword(email, 'p', '9157154504');
+        expect(res.success).toBe(false);
+        expect(res.user).toBeUndefined();
+        expect(res.error).toBe(UI_STRINGS.auth.networkUnreachable);
+      }
 
-      // Admin fallback
-      const aRes = await authClient.loginWithPassword('admin@test.com', 'p');
-      expect(aRes.user?.role).toBe('admin');
-
-      // Manager fallback
-      const mRes = await authClient.loginWithPassword('manager@test.com', 'p');
-      expect(mRes.user?.role).toBe('category_manager');
-
-      // Buyer fallback
-      const bRes = await authClient.loginWithPassword('buyer@test.com', 'p');
-      expect(bRes.user?.role).toBe('buyer');
+      expect(authClient.getToken()).toBeNull();
+      expect(authClient.getSessionUser()).toBeNull();
     });
 
-    test('requestOtp handles network error fallback', async () => {
+    test('requestOtp reports a network failure and never invents a demo code', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Network error'));
-      const res = await authClient.requestOtp('buyer@test.com', 'buyer');
-      expect(res.success).toBe(true);
-      expect(res.demoCode).toBeDefined();
+
+      const res = await authClient.requestOtp('buyer@test.com', '9157154504', 'buyer');
+      expect(res.success).toBe(false);
+      expect(res.demoCode).toBeUndefined();
+      expect(res.error).toBe(UI_STRINGS.auth.networkUnreachable);
     });
 
-    test('verifyOtp handles network error with role fallbacks', async () => {
+    test('verifyOtp reports a network failure instead of signing the user in', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Network error'));
 
-      const vRes = await authClient.verifyOtp('vendor@test.com', '1234');
-      expect(vRes.user?.role).toBe('vendor');
-
-      const aRes = await authClient.verifyOtp('admin@test.com', '1234');
-      expect(aRes.user?.role).toBe('admin');
-
-      const mRes = await authClient.verifyOtp('manager@test.com', '1234');
-      expect(mRes.user?.role).toBe('category_manager');
-
-      const bRes = await authClient.verifyOtp('buyer@test.com', '1234');
-      expect(bRes.user?.role).toBe('buyer');
+      const res = await authClient.verifyOtp('vendor@test.com', '123456', '9157154504');
+      expect(res.success).toBe(false);
+      expect(res.user).toBeUndefined();
+      expect(res.error).toBe(UI_STRINGS.auth.networkUnreachable);
+      expect(authClient.getToken()).toBeNull();
     });
 
-    test('register handles network error fallback with default values', async () => {
+    test('register reports a network failure instead of creating a local account', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Network error'));
 
-      const res = await authClient.register({
-        name: '',
-        email: 'fallback.reg@enterprise.com',
+      const res = await authClient.register({ name: '', email: 'fallback.reg@enterprise.com' });
+      expect(res.success).toBe(false);
+      expect(res.user).toBeUndefined();
+      expect(res.error).toBe(UI_STRINGS.auth.networkUnreachable);
+      expect(authClient.getToken()).toBeNull();
+    });
+
+    test('a response body that is not JSON is reported as a server error', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: async () => {
+          throw new Error('not json');
+        },
       });
-      expect(res.success).toBe(true);
-      expect(res.user?.email).toBe('fallback.reg@enterprise.com');
-      expect(res.user?.role).toBe('buyer');
+
+      const res = await authClient.loginWithPassword('buyer@test.com', 'p', '9157154504');
+      expect(res.success).toBe(false);
+      expect(res.error).toBe(UI_STRINGS.auth.serverErrorFallback);
     });
 
-    test('getSession handles network error and non-ok gracefully', async () => {
+    test('an error status with no message from the server still fails with an explanation', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: async () => ({ success: false }),
+      });
+
+      const res = await authClient.loginWithPassword('buyer@test.com', 'p', '9157154504');
+      expect(res.success).toBe(false);
+      expect(res.error).toBe(UI_STRINGS.auth.serverErrorFallback);
+    });
+
+    test('getSession keeps the cached session offline but discards a rejected token', async () => {
       authClient.setSession(
         {
           id: 'usr-1',
@@ -242,21 +277,66 @@ describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
         'token-123'
       );
 
-      // fetch rejects
+      // Network failure: the cached session is retained rather than signing out.
       global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
-      const session1 = await authClient.getSession();
-      expect(session1?.email).toBe('cached@test.com');
+      const offlineSession = await authClient.getSession();
+      expect(offlineSession?.email).toBe('cached@test.com');
 
-      // fetch returns non-ok (e.g. 401)
+      // A 401 means the token is genuinely invalid, so local state is cleared.
       global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 401 });
-      const session2 = await authClient.getSession();
-      expect(session2?.email).toBe('cached@test.com');
+      const rejectedSession = await authClient.getSession();
+      expect(rejectedSession).toBeNull();
+      expect(authClient.getToken()).toBeNull();
+    });
+
+    test('getSession returns null without a token and makes no request', async () => {
+      authClient.setSession(null, null);
+      global.fetch = jest.fn();
+
+      await expect(authClient.getSession()).resolves.toBeNull();
+      expect(global.fetch).not.toHaveBeenCalled();
     });
 
     test('logout handles fetch error gracefully', async () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('Network error'));
       await expect(authClient.logout()).resolves.toBeUndefined();
       expect(authClient.getToken()).toBeNull();
+    });
+  });
+
+  describe('Resolved but Unsuccessful Responses', () => {
+    test('loginWithPassword returns the failure response without establishing a session', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({ success: false, error: 'Invalid email or password.' }),
+      });
+
+      const res = await authClient.loginWithPassword('buyer@procucev.com', 'wrongpassword', '9157154504');
+      expect(res.success).toBe(false);
+      expect(authClient.getToken()).toBeNull();
+      expect(authClient.getSessionUser()).toBeNull();
+    });
+
+    test('register returns the failure response without establishing a session', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({ success: false, error: 'Email is required for registration.' }),
+      });
+
+      const res = await authClient.register({ name: 'No Email', email: '' });
+      expect(res.success).toBe(false);
+      expect(authClient.getToken()).toBeNull();
+    });
+
+    test('getSession returns null when the server responds with success:false', async () => {
+      authClient.setSession(null, 'some-token');
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: false, error: 'Invalid session' }),
+      });
+
+      const session = await authClient.getSession();
+      expect(session).toBeNull();
     });
   });
 
@@ -280,5 +360,105 @@ describe('Frontend AuthClient Service - Comprehensive 100% Coverage', () => {
       expect(localStorage.getItem('procucev_user_session')).toBeNull();
       expect(localStorage.getItem('procucev_auth_token')).toBeNull();
     });
+  });
+});
+
+// ==============================================================================
+// SESSION RESTORATION ON CONSTRUCTION
+// ==============================================================================
+// The client is a singleton created when the module is first imported, so the
+// only way to exercise what it restores from storage is to reset the module
+// registry and import it again against a prepared storage state. This matters:
+// the store clears the RFQ list when there is no token, so a session that fails
+// to restore signs the buyer out on a page reload.
+// ==============================================================================
+
+describe('authClient session restoration', () => {
+  const SESSION = {
+    id: 'usr-buyer-001',
+    email: 'buyer@procucev.com',
+    name: 'Procucev Buyer Desk',
+    role: 'buyer' as const,
+    orgId: 'org-procucev-01',
+    orgName: 'Procucev Heavy Engineering',
+  };
+
+  /** Re-import the module so its constructor runs against current storage. */
+  function freshClient() {
+    let restored: typeof import('@/lib/authClient').authClient | undefined;
+    jest.isolateModules(() => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      restored = require('@/lib/authClient').authClient;
+    });
+    if (!restored) throw new Error('authClient did not load');
+    return restored;
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  afterEach(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  test('restores a session persisted in localStorage', () => {
+    localStorage.setItem('procucev_auth_token', 'local-token');
+    localStorage.setItem('procucev_user_session', JSON.stringify(SESSION));
+
+    const client = freshClient();
+
+    expect(client.getToken()).toBe('local-token');
+    expect(client.getSessionUser()).toEqual(SESSION);
+  });
+
+  // A tab-scoped sign-in lands in sessionStorage, and must survive a reload of
+  // that tab even though localStorage holds nothing.
+  test('falls back to sessionStorage when localStorage holds nothing', () => {
+    sessionStorage.setItem('procucev_auth_token', 'tab-token');
+    sessionStorage.setItem('procucev_user_session', JSON.stringify(SESSION));
+
+    const client = freshClient();
+
+    expect(client.getToken()).toBe('tab-token');
+    expect(client.getSessionUser()).toEqual(SESSION);
+  });
+
+  test('prefers the localStorage token over the sessionStorage one', () => {
+    localStorage.setItem('procucev_auth_token', 'local-token');
+    sessionStorage.setItem('procucev_auth_token', 'tab-token');
+
+    expect(freshClient().getToken()).toBe('local-token');
+  });
+
+  // Nothing stored is a signed-out browser, not an error.
+  test('starts signed out when neither store holds anything', () => {
+    const client = freshClient();
+
+    expect(client.getToken()).toBeNull();
+    expect(client.getSessionUser()).toBeNull();
+  });
+
+  test('holds a token without a session when only the token survived', () => {
+    localStorage.setItem('procucev_auth_token', 'orphan-token');
+
+    const client = freshClient();
+
+    expect(client.getToken()).toBe('orphan-token');
+    expect(client.getSessionUser()).toBeNull();
+  });
+
+  // A corrupt record is discarded rather than thrown: a bad entry in storage must
+  // not stop the application from loading.
+  test('discards an unreadable session record', () => {
+    localStorage.setItem('procucev_auth_token', 'local-token');
+    localStorage.setItem('procucev_user_session', '{not json');
+
+    const client = freshClient();
+
+    expect(client.getToken()).toBe('local-token');
+    expect(client.getSessionUser()).toBeNull();
   });
 });

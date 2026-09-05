@@ -1,127 +1,188 @@
 const crypto = require('crypto');
 const { logger } = require('./loggerService');
 const storeService = require('./storeService');
+const mailerService = require('./mailerService');
+const { AUTH_MESSAGES, IDENTITY_OTP_CONFIG } = require('../config/constants');
+const pool = require('../db/pool');
+const identityQueries = require('../db/identityQueries');
+const authSessionQueries = require('../db/authSessionQueries');
 
-const AUTH_SECRET = process.env.AUTH_SECRET || process.env.JWT_SECRET || 'procucev-enterprise-auth-secret-key-2026';
-const OTP_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
-
-// In-memory OTP storage: email -> { code, expiresAt, attempts }
-const otpStore = new Map();
-
-// Default seed users
-const DEFAULT_USERS = [
-  {
-    id: 'usr-buyer-001',
-    email: 'buyer@procucev.com',
-    name: 'Procucev Buyer Desk',
-    role: 'buyer',
-    orgId: 'org-procucev-01',
-    orgName: 'Procucev Heavy Engineering',
-    passwordHash: hashPassword('password123'),
-    mobile: '+91 98201 44820',
-    status: 'ACTIVE',
-  },
-  {
-    id: 'usr-client-001',
-    email: 'client@procucev.com',
-    name: 'L&T Infrastructure Buyer',
-    role: 'buyer',
-    orgId: 'org-lt-01',
-    orgName: 'Larsen & Toubro EPC Division',
-    passwordHash: hashPassword('password123'),
-    mobile: '+91 98201 44821',
-    status: 'ACTIVE',
-  },
-  {
-    id: 'usr-catman-001',
-    email: 'catmanager@procucev.com',
-    name: 'Sourcing Lead & Category Manager',
-    role: 'category_manager',
-    orgId: 'org-procucev-01',
-    orgName: 'Procucev Procurement Directorate',
-    passwordHash: hashPassword('password123'),
-    mobile: '+91 98201 44822',
-    status: 'ACTIVE',
-  },
-  {
-    id: 'usr-vendor-001',
-    email: 'vendor@apexsupplies.com',
-    name: 'Apex Industrial Supplies Desk',
-    role: 'vendor',
-    orgId: 'org-apex-01',
-    orgName: 'Apex Industrial Supplies Pvt Ltd',
-    passwordHash: hashPassword('password123'),
-    mobile: '+91 98450 67890',
-    status: 'ACTIVE',
-  },
-  {
-    id: 'usr-vendor-002',
-    email: 'amit@kiranvalves.com',
-    name: 'Kiran Valves & Actuators',
-    role: 'vendor',
-    orgId: 'org-kiran-02',
-    orgName: 'Kiran Precision Valves Mfg',
-    passwordHash: hashPassword('Kiran@Temp8821#'),
-    tempPassword: 'Kiran@Temp8821#',
-    mobile: '+91 98110 54321',
-    status: 'ACTIVE',
-  },
-  {
-    id: 'usr-admin-001',
-    email: 'admin@procucev.com',
-    name: 'Platform Administrator & Compliance Auditor',
-    role: 'admin',
-    orgId: 'org-platform-root',
-    orgName: 'Procucev Enterprise Governance',
-    passwordHash: hashPassword('adminpassword123'),
-    mobile: '+91 98000 00001',
-    status: 'ACTIVE',
-  },
-  {
-    id: 'usr-auditor-001',
-    email: 'auditor@procucev.com',
-    name: 'Lead Compliance Auditor',
-    role: 'admin',
-    orgId: 'org-platform-root',
-    orgName: 'Procucev Audit & Regulatory Commission',
-    passwordHash: hashPassword('adminpassword123'),
-    mobile: '+91 98000 00002',
-    status: 'ACTIVE',
-  },
-];
-
-// User repository: email -> User
-const userRegistry = new Map();
-
-// Initialize users
-DEFAULT_USERS.forEach((user) => {
-  userRegistry.set(user.email.toLowerCase(), { ...user });
-});
+const CONFIGURED_AUTH_SECRET = process.env.AUTH_SECRET || process.env.JWT_SECRET || '';
 
 /**
- * Hash password using SHA-256 + salt
+ * Resolve the session-signing key.
+ *
+ * There is no hardcoded fallback. This module used to ship a literal default
+ * ('procucev-enterprise-auth-secret-key-2026') that dev and test ran on, which
+ * meant the signing key for any deployment that forgot to set AUTH_SECRET was
+ * sitting in the repository — anyone with the source could mint a valid session
+ * token for any account and role.
+ *
+ * Production refuses to start without one. Everywhere else a random key is
+ * generated per process: unset stays usable for local work, but the key is not
+ * knowable from the source, and tokens simply stop verifying after a restart
+ * rather than remaining forgeable forever.
  */
-function hashPassword(password, salt) {
-  const effectiveSalt = salt || 'procucev-static-enterprise-salt-2026';
-  return crypto.createHmac('sha256', effectiveSalt).update(password).digest('hex');
+function resolveAuthSecret(env = process.env) {
+  const configured = env.AUTH_SECRET || env.JWT_SECRET || '';
+  if (configured) return configured;
+
+  if (env.NODE_ENV === 'production') {
+    throw new Error(
+      'AUTH_SECRET (or JWT_SECRET) must be set in production. Refusing to start without a session-signing key.'
+    );
+  }
+
+  const ephemeral = crypto.randomBytes(48).toString('hex');
+  logger.warn(
+    'AUTH_SECRET/JWT_SECRET is not set — generated a random key for this process only. Sessions will not survive a restart and will not be valid across workers. Set AUTH_SECRET in backend/.env.',
+    {},
+    'AUTH_SERVICE'
+  );
+  return ephemeral;
+}
+
+const AUTH_SECRET = resolveAuthSecret();
+
+const SESSION_TTL_SECONDS = 24 * 60 * 60;
+
+// OTP shape and lifetime: 6 digits, valid for 15 minutes.
+const { OTP_LENGTH, OTP_EXPIRY_MS, OTP_KEY_SEPARATOR } = IDENTITY_OTP_CONFIG;
+
+/**
+ * Build the OTP storage key: `normalisedPhone + "_EMAIL_" + lowercased email`.
+ *
+ * Keying on the pair rather than the email alone means a code issued for one
+ * registered mobile number cannot be replayed against a different one.
+ */
+function buildOtpKey(normalizedEmail, mobile) {
+  return `${identityQueries.normalizePhone(mobile)}${OTP_KEY_SEPARATOR}${normalizedEmail}`;
 }
 
 /**
- * Verify password against hash
+ * Generate a zero-padded numeric OTP of the configured length using a
+ * cryptographically secure source rather than Math.random.
  */
-function verifyPassword(plainPassword, storedHash) {
-  if (!plainPassword || !storedHash) return false;
-  const computedHash = hashPassword(plainPassword);
+function generateOtpCode() {
+  const ceiling = 10 ** OTP_LENGTH;
+  return String(crypto.randomInt(0, ceiling)).padStart(OTP_LENGTH, '0');
+}
+
+/**
+ * Generate a random per-user salt.
+ */
+function generateSalt() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
+/**
+ * Hash a password using HMAC-SHA256 + salt. Generates a random salt when none is
+ * supplied.
+ */
+function hashPassword(password, salt) {
+  const effectiveSalt = salt || generateSalt();
+  const hash = crypto.createHmac('sha256', effectiveSalt).update(password).digest('hex');
+  return { hash, salt: effectiveSalt };
+}
+
+/**
+ * Verify a password against a stored hash + the salt that hash was created with.
+ */
+function verifyPassword(plainPassword, storedHash, storedSalt) {
+  if (!plainPassword || !storedHash || !storedSalt) return false;
+  const { hash: computedHash } = hashPassword(plainPassword, storedSalt);
   return crypto.timingSafeEqual(Buffer.from(computedHash), Buffer.from(storedHash));
 }
 
 /**
- * Generate a cryptographically secure session token (JWT structure)
+ * Load an account from the `user` table in PostgreSQL.
+ *
+ * This is the single source of truth for authentication: there is no in-memory
+ * user registry, no seeded demo credentials, and no second database. If the
+ * connection is unavailable, authentication fails closed with a descriptive error
+ * rather than silently accepting anything.
+ *
+ * When a mobile number is supplied the lookup is narrowed to email + phone,
+ * because there is no unique index on `user.username` — email alone can match
+ * more than one row.
+ */
+async function loadIdentityUser(normalizedEmail, mobile) {
+  if (!pool.pool) {
+    throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
+  }
+  try {
+    return mobile
+      ? await identityQueries.findUserByEmailAndPhone(normalizedEmail, mobile)
+      : await identityQueries.findUserByEmail(normalizedEmail);
+  } catch (err) {
+    logger.error('Account lookup failed', err, 'AUTH_SERVICE');
+    throw new Error(AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE);
+  }
+}
+
+/**
+ * Reject accounts that exist but are not permitted to sign in, with a message
+ * that explains which gate failed and how to clear it.
+ */
+function assertUserCanSignIn(user, normalizedEmail, ipAddress) {
+  if (!user.isActive) {
+    logger.warn(`Sign-in blocked, inactive account: ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+    throw new Error(AUTH_MESSAGES.ACCOUNT_INACTIVE);
+  }
+  // Self-registered accounts require administrator approval.
+  if (user.isSelfClient && !user.isApproved) {
+    logger.warn(`Sign-in blocked, pending approval: ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+    throw new Error(AUTH_MESSAGES.ACCOUNT_PENDING_APPROVAL);
+  }
+  if (!user.role) {
+    logger.warn(
+      `Sign-in blocked, unmapped role "${user.rawRoleName}" for ${normalizedEmail}`,
+      { ipAddress },
+      'AUTH_SERVICE'
+    );
+    throw new Error(AUTH_MESSAGES.INVALID_CREDENTIALS);
+  }
+}
+
+/**
+ * Confirm the database is reachable at boot and clear out expired session state.
+ *
+ * Issued OTP codes and revoked tokens are persisted (see db/authSessionQueries),
+ * so unlike the previous in-memory versions they survive a restart. The trade-off
+ * is that they now need sweeping, which happens here.
+ */
+async function hydrateFromDB() {
+  const health = await pool.checkDatabaseHealth();
+  if (!health.isConnected) {
+    logger.error(
+      `Database unreachable at startup: ${health.errorMessage}. Sign-in will be rejected until it recovers.`,
+      null,
+      'AUTH_SERVICE'
+    );
+    return health;
+  }
+
+  try {
+    const purged = await authSessionQueries.purgeExpiredAuthState();
+    if (purged.otpsPurged > 0 || purged.revokedTokensPurged > 0) {
+      logger.info('Swept expired auth session state', purged, 'AUTH_SERVICE');
+    }
+  } catch (err) {
+    // A failed sweep is not a reason to refuse to boot: expired rows are inert,
+    // they just accumulate.
+    logger.warn('Could not sweep expired auth session state', { error: err.message }, 'AUTH_SERVICE');
+  }
+
+  return health;
+}
+
+/**
+ * Generate a cryptographically signed session token (JWT structure).
  */
 function generateSessionToken(user) {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
   const issuedAt = Math.floor(Date.now() / 1000);
-  const expiresAt = issuedAt + 24 * 60 * 60; // 24 hours
+  const expiresAt = issuedAt + SESSION_TTL_SECONDS;
 
   const payload = Buffer.from(
     JSON.stringify({
@@ -145,16 +206,21 @@ function generateSessionToken(user) {
 }
 
 /**
- * Verify session token and extract user claims
+ * Verify a token's structure, signature and expiry.
+ *
+ * Deliberately synchronous and deliberately does NOT check revocation — that
+ * requires a database read. Call `assertSessionActive` for the complete check;
+ * this exists for the callers that only need to decode claims they have already
+ * had validated.
  */
 function verifySessionToken(token) {
   if (!token || typeof token !== 'string') {
-    return { valid: false, error: 'Token missing or invalid' };
+    return { valid: false, error: AUTH_MESSAGES.SESSION_TOKEN_MISSING };
   }
 
   const parts = token.split('.');
   if (parts.length !== 3) {
-    return { valid: false, error: 'Malformed token structure' };
+    return { valid: false, error: AUTH_MESSAGES.MALFORMED_TOKEN };
   }
 
   const [header, payload, signature] = parts;
@@ -163,8 +229,12 @@ function verifySessionToken(token) {
     .update(`${header}.${payload}`)
     .digest('base64url');
 
-  if (signature !== expectedSignature) {
-    return { valid: false, error: 'Invalid token signature' };
+  // Compared as fixed-length digests, so a byte-by-byte early return cannot be
+  // used to discover the expected signature.
+  const provided = Buffer.from(signature);
+  const expected = Buffer.from(expectedSignature);
+  if (provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) {
+    return { valid: false, error: AUTH_MESSAGES.INVALID_TOKEN_SIGNATURE };
   }
 
   try {
@@ -172,115 +242,191 @@ function verifySessionToken(token) {
     const now = Math.floor(Date.now() / 1000);
 
     if (claims.exp && claims.exp < now) {
-      return { valid: false, error: 'Session token has expired' };
+      return { valid: false, error: AUTH_MESSAGES.SESSION_EXPIRED };
     }
 
-    return { valid: true, user: claims };
-  } catch (err) {
-    return { valid: false, error: 'Failed to decode token payload' };
+    return { valid: true, user: claims, signature };
+  } catch {
+    return { valid: false, error: AUTH_MESSAGES.TOKEN_DECODE_FAILED };
   }
 }
 
 /**
- * Authenticate with Email and Password
+ * The full session check: structure, signature, expiry, and revocation.
+ *
+ * Revocation lives in PostgreSQL rather than a per-process Set, so a token
+ * revoked by any worker is rejected by all of them. A failed revocation read
+ * fails closed — treating an unreachable database as "not revoked" would turn a
+ * database outage into a window where every logged-out token worked again.
  */
-function authenticateWithPassword(email, password, ipAddress) {
-  if (!email || !password) {
-    throw new Error('Email and password are required.');
+async function assertSessionActive(token) {
+  const verification = verifySessionToken(token);
+  if (!verification.valid) return verification;
+
+  try {
+    const revoked = await authSessionQueries.isTokenRevoked(verification.signature);
+    if (revoked) {
+      return { valid: false, error: AUTH_MESSAGES.SESSION_LOGGED_OUT };
+    }
+  } catch (err) {
+    logger.error('Could not check whether the session token was revoked', err, 'AUTH_SERVICE');
+    return { valid: false, error: AUTH_MESSAGES.SESSION_CHECK_UNAVAILABLE };
+  }
+
+  return { valid: true, user: verification.user };
+}
+
+/**
+ * Revoke a session token so it no longer verifies, even before its natural
+ * expiry (logout).
+ */
+async function revokeSessionToken(token) {
+  if (!token || typeof token !== 'string') return false;
+  const parts = token.split('.');
+  if (parts.length !== 3) return false;
+
+  const [, payload, signature] = parts;
+
+  let expiresAtSeconds = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS;
+  try {
+    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    if (claims.exp) expiresAtSeconds = claims.exp;
+  } catch {
+    // Keep the default expiry: an undecodable payload still gets revoked, it just
+    // cannot tell us when the entry may be swept.
+  }
+
+  try {
+    await authSessionQueries.revokeToken(signature, expiresAtSeconds * 1000);
+  } catch (err) {
+    logger.error('Failed to record session token revocation', err, 'AUTH_SERVICE');
+    return false;
+  }
+
+  logger.info(`Session token revoked, expiring at ${expiresAtSeconds}`, {}, 'AUTH_SERVICE');
+  return true;
+}
+
+function toPublicUser(user) {
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    orgId: user.orgId,
+    orgName: user.orgName,
+  };
+}
+
+/**
+ * Authenticate with Email + registered Mobile + Password.
+ *
+ * Staged so the failure a visitor is shown names the thing that actually failed:
+ *   1. the email + mobile pair must resolve to an account
+ *   2. that account must be active and approved
+ *   3. only then is the password compared
+ *
+ * Does not auto-create accounts.
+ */
+async function authenticateWithPassword(email, password, ipAddress, mobile) {
+  if (!email || !password || !mobile) {
+    throw new Error(AUTH_MESSAGES.EMAIL_MOBILE_PASSWORD_REQUIRED);
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-  let user = userRegistry.get(normalizedEmail);
+  const submittedMobile = String(mobile).trim();
 
-  // Auto-provision if user doesn't exist yet (for seamless demo/developer workflows)
+  // Stage 1 — identity. Reported as a wrong pair rather than blamed on the
+  // password, so a visitor who mistyped their mobile number is told exactly that
+  // instead of doubting a password that was correct.
+  const user = await loadIdentityUser(normalizedEmail, submittedMobile);
   if (!user) {
-    const autoRole = normalizedEmail.includes('vendor')
-      ? 'vendor'
-      : normalizedEmail.includes('admin')
-      ? 'admin'
-      : normalizedEmail.includes('manager')
-      ? 'category_manager'
-      : 'buyer';
+    logger.warn(
+      `Sign-in blocked, no account for this email + mobile pair: ${normalizedEmail}`,
+      { ipAddress },
+      'AUTH_SERVICE'
+    );
+    throw new Error(AUTH_MESSAGES.INVALID_USERNAME_OR_MOBILE);
+  }
 
-    user = {
-      id: `usr-${Date.now()}`,
-      email: normalizedEmail,
-      name: normalizedEmail.split('@')[0].replace('.', ' ').toUpperCase(),
-      role: autoRole,
-      orgId: `org-${normalizedEmail.split('@')[1] || 'generic'}`,
-      orgName: `${normalizedEmail.split('@')[1] || 'Enterprise'} Entity`,
-      passwordHash: hashPassword(password),
-      status: 'ACTIVE',
-    };
-    userRegistry.set(normalizedEmail, user);
-  } else {
-    const isValid = verifyPassword(password, user.passwordHash) || (user.tempPassword && password === user.tempPassword);
-    if (!isValid) {
-      logger.warn(`Failed password authentication for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
-      throw new Error('Invalid email or password.');
-    }
+  // Stage 2 — the active / approval gates, again ahead of the credential check.
+  assertUserCanSignIn(user, normalizedEmail, ipAddress);
+
+  // Stage 3 — the credential itself.
+  if (!identityQueries.verifyStoredPassword(password, user.password)) {
+    logger.warn(`Failed password authentication for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+    throw new Error(AUTH_MESSAGES.INVALID_LOGIN_CREDENTIALS);
   }
 
   const token = generateSessionToken(user);
-  logger.audit(`User logged in via Password: ${user.email} (${user.role})`, user.email, { role: user.role, ipAddress });
+  logger.audit(`User logged in via Password: ${user.email} (${user.role})`, user.email, {
+    role: user.role,
+    ipAddress,
+    mobileVerified: true,
+  });
   storeService.addAuditLog({
     userEmail: user.email,
-    action: `User authenticated via Email + Password [Role: ${user.role}]`,
+    action: `User authenticated via Email + Mobile + Password [Role: ${user.role}]`,
     ipAddress,
   });
 
   return {
     success: true,
     token,
-    user: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-      orgId: user.orgId,
-      orgName: user.orgName,
-    },
+    user: toPublicUser(user),
   };
 }
 
 /**
- * Generate and dispatch 4-digit OTP for Email
+ * Generate and dispatch a 6-digit email OTP.
+ *
+ * The email + mobile pair is validated and the approval gates are applied first,
+ * and only then is a code issued, stored and emailed. Only for an account that
+ * already exists — use `register` to create one first.
  */
-function requestOtp(email, roleHint, ipAddress) {
+async function requestOtp(email, mobile, roleHint, ipAddress) {
   if (!email) {
-    throw new Error('Email is required to dispatch OTP.');
+    throw new Error(AUTH_MESSAGES.OTP_EMAIL_REQUIRED);
+  }
+  if (!mobile) {
+    throw new Error(AUTH_MESSAGES.MOBILE_REQUIRED);
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-  let user = userRegistry.get(normalizedEmail);
+  const submittedMobile = String(mobile).trim();
 
+  const user = await loadIdentityUser(normalizedEmail, submittedMobile);
   if (!user) {
-    const role = roleHint || (normalizedEmail.includes('vendor') ? 'vendor' : 'buyer');
-    user = {
-      id: `usr-${Date.now()}`,
-      email: normalizedEmail,
-      name: normalizedEmail.split('@')[0].replace('.', ' ').toUpperCase(),
-      role,
-      orgId: `org-${normalizedEmail.split('@')[1] || 'generic'}`,
-      orgName: `${normalizedEmail.split('@')[1] || 'Enterprise'} Entity`,
-      passwordHash: hashPassword('password123'),
-      status: 'ACTIVE',
-    };
-    userRegistry.set(normalizedEmail, user);
+    logger.warn(
+      `OTP requested for an unrecognised email + mobile pair: ${normalizedEmail}`,
+      { ipAddress },
+      'AUTH_SERVICE'
+    );
+    throw new Error(AUTH_MESSAGES.INVALID_USERNAME_OR_MOBILE);
   }
 
-  // Generate 4-digit code
-  const code = Math.floor(1000 + Math.random() * 9000).toString();
-  otpStore.set(normalizedEmail, {
-    code,
-    expiresAt: Date.now() + OTP_EXPIRY_MS,
-    attempts: 0,
-  });
+  assertUserCanSignIn(user, normalizedEmail, ipAddress);
 
-  logger.info(`OTP generated for ${normalizedEmail}: ${code}`, { ipAddress }, 'AUTH_SERVICE');
+  const code = generateOtpCode();
+  const expiresAt = Date.now() + OTP_EXPIRY_MS;
+
+  try {
+    await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, submittedMobile), code, expiresAt);
+  } catch (err) {
+    // Emailing a code that was never stored would guarantee the visitor's correct
+    // entry is rejected, so the failure is reported instead.
+    logger.error('Failed to store the issued OTP', err, 'AUTH_SERVICE');
+    throw new Error(AUTH_MESSAGES.OTP_STORAGE_FAILED);
+  }
+
+  mailerService.sendOtpEmail(normalizedEmail, code, OTP_EXPIRY_MS / 1000).catch((e) =>
+    logger.error('OTP email dispatch error', e, 'AUTH_SERVICE')
+  );
+
+  logger.info(`OTP generated for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
   storeService.addAuditLog({
     userEmail: normalizedEmail,
-    action: `Instant 4-digit OTP dispatched to corporate email (${normalizedEmail})`,
+    action: `Instant ${OTP_LENGTH}-digit OTP dispatched to corporate email (${normalizedEmail})`,
     ipAddress,
   });
 
@@ -288,51 +434,58 @@ function requestOtp(email, roleHint, ipAddress) {
     success: true,
     message: `Verification OTP dispatched to ${normalizedEmail}`,
     email: normalizedEmail,
-    // Returned in response for testing/demo environments
-    demoCode: code,
-    expiresInSeconds: 600,
+    // Only echoed back in tests or when SMTP isn't configured, so local/dev/test
+    // runs without real email delivery can still complete the OTP flow; once
+    // SMTP is live, the real code is never exposed in the API response.
+    ...(process.env.NODE_ENV === 'test' || !mailerService.isConfigured() ? { demoCode: code } : {}),
+    expiresInSeconds: OTP_EXPIRY_MS / 1000,
   };
 }
 
 /**
- * Verify 4-digit OTP and issue session
+ * Verify a 6-digit email OTP and issue a session.
+ *
+ * No master or bypass codes — only the code actually issued via requestOtp, for
+ * the same email + mobile pair, verifies. An expired entry is deleted on
+ * inspection.
  */
-function verifyOtp(email, code, ipAddress) {
+async function verifyOtp(email, code, ipAddress, mobile) {
   if (!email || !code) {
-    throw new Error('Email and verification code are required.');
+    throw new Error(AUTH_MESSAGES.OTP_CODE_REQUIRED);
+  }
+  if (!mobile) {
+    throw new Error(AUTH_MESSAGES.MOBILE_REQUIRED);
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-  const storedOtp = otpStore.get(normalizedEmail);
+  const submittedMobile = String(mobile).trim();
+  const otpKey = buildOtpKey(normalizedEmail, submittedMobile);
+
+  const user = await loadIdentityUser(normalizedEmail, submittedMobile);
+  const storedOtp = await authSessionQueries.findOtp(otpKey);
+
+  if (storedOtp && Date.now() > storedOtp.expiresAt) {
+    await authSessionQueries.deleteOtp(otpKey);
+    logger.warn(`Expired OTP submitted for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+    throw new Error(AUTH_MESSAGES.INVALID_OTP);
+  }
 
   const isValidCode =
-    code === '1234' ||
-    code === '4321' ||
-    (storedOtp && storedOtp.code === code && Date.now() <= storedOtp.expiresAt);
+    !!user &&
+    !!storedOtp &&
+    storedOtp.code.length === String(code).length &&
+    crypto.timingSafeEqual(Buffer.from(storedOtp.code), Buffer.from(String(code)));
 
   if (!isValidCode) {
-    if (storedOtp) storedOtp.attempts = (storedOtp.attempts || 0) + 1;
-    logger.warn(`Invalid OTP submitted for ${normalizedEmail}`, { code, ipAddress }, 'AUTH_SERVICE');
-    throw new Error('Invalid or expired OTP code.');
+    if (storedOtp) await authSessionQueries.incrementOtpAttempts(otpKey);
+    logger.warn(`Invalid OTP submitted for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+    throw new Error(AUTH_MESSAGES.INVALID_OTP);
   }
 
-  // Clear OTP on successful verification
-  otpStore.delete(normalizedEmail);
+  assertUserCanSignIn(user, normalizedEmail, ipAddress);
 
-  let user = userRegistry.get(normalizedEmail);
-  if (!user) {
-    user = {
-      id: `usr-${Date.now()}`,
-      email: normalizedEmail,
-      name: normalizedEmail.split('@')[0].toUpperCase(),
-      role: 'buyer',
-      orgId: 'org-default',
-      orgName: 'Enterprise Buyer Organization',
-      passwordHash: hashPassword('password123'),
-      status: 'ACTIVE',
-    };
-    userRegistry.set(normalizedEmail, user);
-  }
+  // Single-use: consumed on successful verification.
+  await authSessionQueries.deleteOtp(otpKey);
 
   const token = generateSessionToken(user);
   logger.audit(`User logged in via Instant OTP: ${user.email} (${user.role})`, user.email, { role: user.role, ipAddress });
@@ -345,57 +498,38 @@ function verifyOtp(email, code, ipAddress) {
   return {
     success: true,
     token,
-    user: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-      orgId: user.orgId,
-      orgName: user.orgName,
-    },
+    user: toPublicUser(user),
   };
 }
 
 /**
- * Register a new user / enterprise entity
+ * Register a new user / enterprise entity. The only path that creates an account.
  */
-function registerUser(payload, ipAddress) {
-  const { name, email, password, mobile, role, orgName } = payload;
-  if (!email) throw new Error('Email is required for registration.');
+async function registerUser(payload, ipAddress) {
+  const { name, email, password, mobile, orgName } = payload;
+  if (!email) throw new Error(AUTH_MESSAGES.REGISTRATION_EMAIL_REQUIRED);
+  if (!password) throw new Error(AUTH_MESSAGES.EMAIL_PASSWORD_REQUIRED);
+  if (!mobile) throw new Error(AUTH_MESSAGES.MOBILE_REQUIRED);
 
-  const normalizedEmail = email.trim().toLowerCase();
-  if (userRegistry.has(normalizedEmail)) {
-    const existing = userRegistry.get(normalizedEmail);
-    const token = generateSessionToken(existing);
-    return {
-      success: true,
-      message: 'Account already exists. Logged in successfully.',
-      token,
-      user: {
-        id: existing.id,
-        email: existing.email,
-        name: existing.name,
-        role: existing.role,
-        orgId: existing.orgId,
-        orgName: existing.orgName,
-      },
-    };
+  if (!pool.pool) {
+    throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
   }
 
-  const newUser = {
-    id: `usr-${Date.now()}`,
+  const normalizedEmail = email.trim().toLowerCase();
+
+  const result = await identityQueries.insertBuyerAccount({
     email: normalizedEmail,
-    name: name || normalizedEmail.split('@')[0],
-    role: role || 'buyer',
-    orgId: `org-${Date.now()}`,
-    orgName: orgName || `${name || 'Enterprise'} Entity`,
-    passwordHash: hashPassword(password || 'password123'),
-    mobile: mobile || '+91 98201 44820',
-    status: 'ACTIVE',
-  };
+    password,
+    phone: mobile,
+    fullName: name,
+    organizationName: orgName,
+  });
 
-  userRegistry.set(normalizedEmail, newUser);
+  if (!result.created) {
+    throw new Error(AUTH_MESSAGES.ACCOUNT_ALREADY_EXISTS);
+  }
 
+  const newUser = result.user;
   const token = generateSessionToken(newUser);
   logger.audit(`New enterprise account registered: ${newUser.email} (${newUser.role})`, newUser.email, { ipAddress });
   storeService.addAuditLog({
@@ -406,24 +540,21 @@ function registerUser(payload, ipAddress) {
 
   return {
     success: true,
-    message: 'Registration successful.',
+    message: AUTH_MESSAGES.REGISTRATION_SUCCESS,
     token,
-    user: {
-      id: newUser.id,
-      email: newUser.email,
-      name: newUser.name,
-      role: newUser.role,
-      orgId: newUser.orgId,
-      orgName: newUser.orgName,
-    },
+    user: toPublicUser(newUser),
   };
 }
 
 /**
- * Get all registered users (for admin inspection)
+ * Get all registered users (for admin inspection).
  */
-function getAllUsers() {
-  return Array.from(userRegistry.values()).map((u) => ({
+async function getAllUsers() {
+  if (!pool.pool) {
+    throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
+  }
+  const users = await identityQueries.listUsers();
+  return users.map((u) => ({
     id: u.id,
     email: u.email,
     name: u.name,
@@ -436,13 +567,21 @@ function getAllUsers() {
 }
 
 module.exports = {
+  resolveAuthSecret,
   hashPassword,
   verifyPassword,
+  loadIdentityUser,
+  assertUserCanSignIn,
+  buildOtpKey,
   generateSessionToken,
   verifySessionToken,
+  assertSessionActive,
+  revokeSessionToken,
   authenticateWithPassword,
   requestOtp,
   verifyOtp,
   registerUser,
   getAllUsers,
+  hydrateFromDB,
+  SESSION_TTL_SECONDS,
 };

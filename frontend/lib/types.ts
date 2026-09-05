@@ -10,6 +10,13 @@ export interface SourcingModeDetail {
   name: string;
   shortLabel: string;
   description: string;
+  /**
+   * One-line summary of the vendor reach a mode buys, plus which plan tiers it
+   * includes. Shown alongside `description` on the mode cards: the description
+   * explains how a mode routes an RFQ, this says what the buyer gets and makes
+   * the cumulative nature of the tiers explicit.
+   */
+  featureSummary: string;
   badgeColor: string;
 }
 
@@ -22,8 +29,15 @@ export interface ExtractedEntity {
   technicalSpecs: string;
   confidence: number;
   category: string;
-  majorCategory?: string;
-  minorCategory?: string;
+  /**
+   * Required rather than optional: every producer sets both. Extraction gets them
+   * from the taxonomy classifier, and a row keyed by hand starts with empty
+   * strings that the Step 3 gate refuses to dispatch. Leaving them optional meant
+   * the RFQ header category had to carry an unreachable fallback to satisfy the
+   * type, which hid the fact that the gate already guarantees a value.
+   */
+  majorCategory: string;
+  minorCategory: string;
 }
 
 export interface LineItemBid {
@@ -132,6 +146,247 @@ export interface RFQFollowUpBreakdown {
 
 export type RFQSource = 'email_gateway' | 'web_portal' | 'email_upload' | 'manual_entry';
 
+// ==============================================================================
+// MANUAL RFQ ENTRY
+// ==============================================================================
+// The buyer keys these fields directly, with no document and no AI extraction.
+// Modelled separately from ExtractedEntity for one reason: an extracted row always
+// arrives complete, because the server normalises the quantity and unit and
+// classifies both categories before the wizard ever renders it. A manually keyed
+// row starts genuinely blank and is filled in over time, so its in-progress
+// fields have to be able to hold "not answered yet" without that being confused
+// with a real answer.
+//
+// A quantity of `null` is the clearest case. ExtractedEntity types it `number`,
+// which forced blank rows to carry 0 — indistinguishable from a buyer who really
+// meant zero, and 0 is exactly the value that used to get dispatched to vendors
+// unnoticed.
+
+/** One line item on the manual entry form, before it is validated for dispatch. */
+export interface ManualRFQLineItem {
+  /** Client-side row key. The server never sees it. */
+  id: string;
+  itemName: string;
+  technicalSpecs: string;
+  /** `null` while unanswered, so a blank row is never mistaken for a real zero. */
+  quantity: number | null;
+  unit: string;
+  targetDate: string;
+  majorCategory: string;
+  minorCategory: string;
+}
+
+/** The whole manual RFQ entry form. */
+export interface ManualRFQForm {
+  title: string;
+  /** Header category, derived from the leading line item once one is classified. */
+  majorCategory: string;
+  /** `null` while unanswered. Optional for dispatch: a buyer need not publish a ceiling. */
+  estimatedBudget: number | null;
+  targetDeliveryDate: string;
+  deliveryLocation: string;
+  deliveryPincode: string;
+  lineItems: ManualRFQLineItem[];
+  /** Stored server-side and downloadable. Never sent for AI extraction. */
+  attachments: RFQAttachment[];
+  sourcingMode: SourcingMode;
+}
+
+/**
+ * Why one line item cannot be dispatched yet, keyed by field.
+ * An empty object means the row is ready.
+ */
+export type ManualRFQLineItemErrors = Partial<Record<keyof ManualRFQLineItem, string>>;
+
+/** Whether the form can be dispatched, and everything blocking it if not. */
+export interface ManualRFQValidation {
+  isValid: boolean;
+  /** Errors against the header fields, keyed by field name. */
+  formErrors: Partial<Record<keyof ManualRFQForm, string>>;
+  /** Errors against each line item, keyed by the row's client-side id. */
+  lineItemErrors: Record<string, ManualRFQLineItemErrors>;
+}
+
+/**
+ * The payload POST /api/rfqs accepts.
+ *
+ * Deliberately carries no rfqNumber: the server allocates it, following the same
+ * scheme the Java p2pservices application uses. The wizard used to mint one with
+ * Math.random(), which could collide and bore no relation to that scheme.
+ */
+/**
+ * What a caller supplies when raising an RFQ.
+ *
+ * Everything the server owns is omitted, so a caller cannot supply it and then be
+ * surprised that the saved record differs. `rfqNumber` in particular used to be
+ * minted on the client with Math.random(); the server allocates it under the same
+ * scheme the Java p2pservices application uses.
+ */
+export type NewRFQInput = Omit<
+  RFQItem,
+  | 'id'
+  | 'rfqId'
+  | 'rfqNumber'
+  | 'createdAt'
+  | 'updatedAt'
+  | 'quotes'
+  | 'quotesCount'
+  | 'status'
+  | 'chasingActive'
+  | 'aiSummary'
+  | 'raisedByEmail'
+>;
+
+/** Why an RFQ read or write did not succeed. */
+export type RFQTransportFailure =
+  | 'NETWORK'
+  | 'UNAUTHORIZED'
+  | 'NOT_FOUND'
+  | 'VALIDATION'
+  | 'SERVER';
+
+/** Outcome of creating an RFQ. On success the server's record is authoritative. */
+export type RFQMutationResult =
+  | { success: true; rfq: RFQItem }
+  | {
+      success: false;
+      reason: RFQTransportFailure;
+      error: string;
+      /** Per-field messages from the API's schema validation, when it supplied any. */
+      fieldErrors?: Record<string, string>;
+    };
+
+/** Outcome of reading one RFQ. */
+export type RFQFetchResult =
+  | { success: true; rfq: RFQItem }
+  | { success: false; reason: RFQTransportFailure; error: string };
+
+/** Outcome of listing this organisation's RFQs. An empty list is a success. */
+export type RFQListResult =
+  | { success: true; rfqs: RFQItem[] }
+  | { success: false; reason: RFQTransportFailure; error: string };
+
+/**
+ * The editable commercial and delivery terms of an RFQ, as the edit dialog holds
+ * them. `budget` is null when no ceiling is stated, which is a different answer
+ * from a ceiling of zero.
+ */
+export interface RFQEditFormState {
+  title: string;
+  category: string;
+  status: RFQItem['status'];
+  budget: number | null;
+  targetDeliveryDate: string;
+  deliveryLocation: string;
+  deliveryPincode: string;
+  lineItems: RFQEditLineItem[];
+  attachments: RFQAttachment[];
+}
+
+/**
+ * One line item as the edit dialog holds it.
+ *
+ * `quantity` is nullable so a blank field reads as unanswered rather than as a
+ * quantity of nothing, which is the value that otherwise reaches vendors unnoticed.
+ * `confidence` is carried through unchanged: it records how the row was produced,
+ * and correcting a description does not make the model more or less sure of what
+ * it originally read.
+ */
+export interface RFQEditLineItem {
+  id: string;
+  itemName: string;
+  technicalSpecs: string;
+  quantity: number | null;
+  unit: string;
+  targetDate: string;
+  majorCategory: string;
+  minorCategory: string;
+  confidence: number;
+}
+
+/** Validation messages for the edit dialog, keyed by the field that failed. */
+export type RFQEditFormErrors = Partial<Record<keyof RFQEditFormState, string>>;
+
+/** Outcome of deleting one RFQ. Carries the number so the caller can drop the row. */
+export type RFQDeleteResult =
+  | { success: true; rfqNumber: string }
+  | { success: false; reason: RFQTransportFailure; error: string };
+
+export interface RFQCreatePayload {
+  title: string;
+  category: string;
+  sourcingMode: SourcingMode;
+  status: string;
+  source: RFQSource;
+  sourceFileName?: string;
+  budget: number;
+  targetDeliveryDate: string;
+  deliveryLocation: string;
+  deliveryPincode: string;
+  extractedEntities: ExtractedEntity[];
+  attachments: RFQAttachment[];
+}
+
+/**
+ * Fields an edit may change, all optional.
+ *
+ * An edit is a partial update: correcting only the delivery pincode must not blank
+ * whatever the form did not resend. `source`, `sourceFileName`, the RFQ number and
+ * the buyer identity are absent because they record how the RFQ arrived and who
+ * owns it — the API whitelists writable columns and would ignore them anyway.
+ */
+export type RFQUpdatePayload = Partial<
+  Pick<
+    RFQCreatePayload,
+    | 'title'
+    | 'category'
+    | 'sourcingMode'
+    | 'status'
+    | 'budget'
+    | 'targetDeliveryDate'
+    | 'deliveryLocation'
+    | 'deliveryPincode'
+    | 'extractedEntities'
+    | 'attachments'
+  >
+>;
+
+/**
+ * A supporting document attached to an RFQ.
+ *
+ * Metadata only. The bytes live on the server and are fetched by `id`, because a
+ * 10MB PDF is roughly 13MB of base64 and the bootstrap payload carries every RFQ.
+ */
+export interface RFQAttachment {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  /** Decoded size in bytes. */
+  size: number;
+  uploadedAt: string;
+}
+
+/**
+ * The narrative summary stored against an RFQ.
+ *
+ * `generatedBy` matters: when the model was unavailable the server stores a
+ * summary computed from the line items instead, and the screen has to say so
+ * rather than passing arithmetic off as analysis.
+ */
+export interface RFQAiSummary {
+  headline: string;
+  scope: string;
+  riskNotes: string[];
+  itemCount: number;
+  totalQuantity: number;
+  categories: string[];
+  generatedBy: 'ai' | 'derived';
+  /** Why the model was not used, when it was not. */
+  fallbackReason: string | null;
+  model: string | null;
+  generatedAt: string;
+}
+
 export interface RFQItem {
   id: string;
   rfqNumber: string;
@@ -141,8 +396,33 @@ export interface RFQItem {
   status: 'Parsing' | 'In Evaluation' | 'AI Recommended' | 'PO Generated' | 'Quotes Pending';
   quotesCount: number;
   targetDeliveryDate: string;
+  /**
+   * Budget ceiling, optional. Zero means the buyer did not state one: a document
+   * that prices nothing yields no figure, and forcing a number there would put a
+   * fabricated ceiling in front of vendors.
+   */
   budget: number;
+  /** Where the goods must be delivered, used by vendors to price freight. */
+  deliveryLocation?: string;
+  /** Postal code for the delivery location. Indian PIN or an international zip. */
+  deliveryPincode?: string;
+  /** Supporting documents the buyer attached. Never sent for AI extraction. */
+  attachments?: RFQAttachment[];
+  /**
+   * The summary generated when the RFQ was created. Absent on records raised
+   * before summaries existed.
+   */
+  aiSummary?: RFQAiSummary | null;
+  /** Login email of the buyer who raised it, for display only. */
+  raisedByEmail?: string;
+  /** Server-side RFQ id. Same value as `rfqNumber`. */
+  rfqId?: string;
   createdAt: string;
+  /**
+   * When the record last changed. Equal to `createdAt` until the RFQ is edited,
+   * which is how the details page decides whether to show an "edited" timestamp.
+   */
+  updatedAt?: string;
   extractedEntities: ExtractedEntity[];
   quotes: QuoteComparison[];
   chasingActive: boolean;
@@ -153,6 +433,12 @@ export interface RFQItem {
   sourceFileName?: string;
   autoCirculated?: boolean;
   followUpData?: RFQFollowUpBreakdown;
+  awardedVendorId?: string;
+  awardedVendor?: string;
+  awardedAmount?: number;
+  /** The buyer account this RFQ was created under (the app's single globally "active" buyer account at creation time, not a per-request identity). */
+  buyerAccountId?: string | null;
+  buyerAccountName?: string | null;
 }
 
 export interface AIBotFeedItem {
@@ -280,6 +566,108 @@ export interface MajorMinorCategory {
   minorCategories: string[];
 }
 
+/** Legal constitutions a buyer organisation can be registered under. */
+export type OrganizationType =
+  | 'Private Limited'
+  | 'Public Limited'
+  | 'Partnership'
+  | 'Sole Proprietorship'
+  | 'LLP';
+
+/**
+ * One selected procurement category, flattened to a major/minor pair.
+ *
+ * This is the wire format `/api/buyer-profile/me` speaks in both directions, and
+ * it is one row of `org_division_category` in the shared schema. The screen holds
+ * the same selection as a nested map because that is what the category tree
+ * renders from; the pairs are the transport shape.
+ */
+export interface BuyerProfileCategory {
+  major: string;
+  minor: string;
+}
+
+/**
+ * The signed-in buyer's organisation profile, as returned by
+ * GET /api/buyer-profile/me.
+ *
+ * `contactEmail` and `contactPhone` come from the account's own `user` row rather
+ * than the organisation, so they identify the signed-in buyer and are not
+ * editable through this endpoint.
+ */
+export interface BuyerProfile {
+  organizationId: string;
+  userId: string;
+  companyName: string;
+  brandName: string;
+  organizationType: OrganizationType | string;
+  panNumber: string;
+  gstNumber: string;
+  cinNumber: string;
+  website: string;
+  annualTurnover: string;
+  street: string;
+  city: string;
+  state: string;
+  pincode: string;
+  country: string;
+  contactName: string;
+  contactDesignation: string;
+  contactEmail: string;
+  contactPhone: string;
+  categories: BuyerProfileCategory[];
+}
+
+/**
+ * Fields a buyer may patch via PUT /api/buyer-profile/me.
+ *
+ * Every key is optional because the endpoint applies null-skip semantics: an
+ * omitted field keeps its stored value. `companyName` is required by the server
+ * whenever a save is attempted, and `categories` replaces the whole selection.
+ */
+export interface BuyerProfileUpdatePayload {
+  companyName: string;
+  brandName?: string;
+  organizationType?: OrganizationType | string;
+  panNumber?: string;
+  gstNumber?: string;
+  cinNumber?: string;
+  website?: string;
+  annualTurnover?: string;
+  street?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  country?: string;
+  contactName?: string;
+  contactDesignation?: string;
+  categories?: BuyerProfileCategory[];
+}
+
+/** Outcome of a buyer profile read. Never throws, so the screen can show why. */
+export interface BuyerProfileResult {
+  success: boolean;
+  data?: BuyerProfile;
+  error?: string;
+  /** Per-field validation messages keyed by payload field name. */
+  fieldErrors?: Record<string, string>;
+  /** HTTP status, so the caller can distinguish auth from availability faults. */
+  status?: number;
+}
+
+/** Outcome of a buyer profile save, carrying the re-read record on success. */
+export interface BuyerProfileSaveResult extends BuyerProfileResult {
+  message?: string;
+  categoryCount?: number | null;
+}
+
+/** Outcome of a procurement category taxonomy read. */
+export interface CategoryTaxonomyResult {
+  success: boolean;
+  data: MajorMinorCategory[];
+  error?: string;
+}
+
 export interface OrganizationProfile {
   companyName: string;
   brandName: string;
@@ -353,6 +741,12 @@ export interface VendorEntry {
   // Buyer Performance Ratings & Revisions
   latestRatingRevision?: VendorRatingRevisionRecord;
   ratingRevisionHistory?: VendorRatingRevisionRecord[];
+
+  // Marketplace subscription & the download quota it grants — persisted
+  // server-side and enforced there (see PUT /api/vendors/:id/subscription
+  // and GET /api/rfqs/:id/email-preview's quota check), not just local state.
+  subscriptionPlan?: VendorSubscriptionPlan;
+  rfqDownloadsUsed?: number;
 }
 
 export interface VendorRatingRevisionRecord {
@@ -630,6 +1024,114 @@ export interface UserSession {
   authMethod?: 'PASSWORD' | 'EMAIL_OTP' | 'TEMP_PASSWORD' | 'INSTANT_DEMO';
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// RFQ Ingestion & Portfolio Summary Types
+// ═══════════════════════════════════════════════════════════════════════
+
+/** Why an ingested line item landed in its category, surfaced in the review grid. */
+export type RFQClassificationStatus = 'AI_EXTRACTED' | 'DOMAIN_KEYWORD_MATCHED' | 'DEFAULT';
+
+/** Per-ingest breakdown returned by POST /api/rfqs/ingest. */
+export interface RFQIngestionClassification {
+  totalExtracted: number;
+  accepted: number;
+  duplicatesRemoved: number;
+  needsReview: number;
+  autoClassified: number;
+}
+
+/** Draft RFQ header + classified line items returned by POST /api/rfqs/ingest. */
+export interface RFQIngestionDraft {
+  title: string;
+  category: string;
+  targetDeliveryDate: string;
+  /**
+   * Overall value read off the document: a stated grand total, else the sum of
+   * the priced line items. Null when the document carried no pricing at all, in
+   * which case the buyer supplies the figure on the review step.
+   */
+  estimatedBudget: number | null;
+  extractedEntities: ExtractedEntity[];
+  source: RFQSource;
+  sourceFileName?: string;
+  sourceEmail?: string;
+}
+
+/** Why an AI extraction attempt did not yield line items. */
+export type RFQExtractionReason =
+  | 'NOT_CONFIGURED'
+  | 'NO_CONTENT'
+  | 'DOCUMENT_TOO_LARGE'
+  | 'UNSUPPORTED_TYPE'
+  | 'AI_FAILED'
+  | 'NO_ITEMS_FOUND'
+  | 'NETWORK';
+
+/**
+ * Document posted to POST /api/rfqs/extract. Spreadsheets are flattened to text
+ * in the browser; PDFs and images travel as base64 with their MIME type.
+ */
+export interface RFQExtractionRequest {
+  fileName: string;
+  documentText?: string;
+  inlineData?: string;
+  mimeType?: string;
+}
+
+/** Which model produced the extraction, for display in the review step. */
+export interface RFQExtractionMeta {
+  model: string;
+  deliveryDate?: string | null;
+}
+
+export interface RFQExtractionResult {
+  success: boolean;
+  data?: RFQIngestionDraft;
+  classification?: RFQIngestionClassification;
+  extraction?: RFQExtractionMeta;
+  reason?: RFQExtractionReason;
+  error?: string;
+}
+
+/** Outcome of storing one supporting document. */
+export interface RFQAttachmentResult {
+  success: boolean;
+  data?: RFQAttachment;
+  error?: string;
+}
+
+export interface RFQIngestionResponse {
+  success: boolean;
+  data?: RFQIngestionDraft;
+  classification?: RFQIngestionClassification;
+  error?: string;
+}
+
+/** Multi-channel follow-up roll-up across the whole RFQ portfolio. */
+export interface RFQPortfolioFollowUps {
+  vendorsInvited: number;
+  vendorsResponded: number;
+  calls: number;
+  callsConnected: number;
+  whatsapp: number;
+  whatsappRead: number;
+  sms: number;
+}
+
+/** Aggregated portfolio metrics backing the buyer RFQ Summary screen. */
+export interface RFQPortfolioSummary {
+  totalRFQs: number;
+  activeRFQs: number;
+  awaitingQuotes: number;
+  totalQuotesReceived: number;
+  totalBudget: number;
+  averageQuotesPerRFQ: number;
+  byStatus: Record<string, number>;
+  bySourcingMode: Record<string, number>;
+  bySource: Record<string, number>;
+  followUps: RFQPortfolioFollowUps;
+}
+
 export interface AuthResponse {
   success: boolean;
   message?: string;
@@ -642,6 +1144,8 @@ export interface AuthResponse {
 
 export interface LoginCredentials {
   email: string;
+  /** Registered mobile number, verified alongside the password at sign-in. */
+  mobile?: string;
   password?: string;
   code?: string;
   role?: UserRole;
@@ -649,12 +1153,16 @@ export interface LoginCredentials {
 
 export interface OtpRequestPayload {
   email: string;
+  /** Registered mobile number the code is issued against. */
+  mobile: string;
   roleHint?: UserRole;
 }
 
 export interface OtpVerifyPayload {
   email: string;
   code: string;
+  /** Must match the mobile number the code was requested with. */
+  mobile: string;
 }
 
 export interface RegisterPayload {
@@ -666,3 +1174,51 @@ export interface RegisterPayload {
   orgName?: string;
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════
+// Sidebar Dashboard Navigation Types (Role Workspace Shell)
+// ═══════════════════════════════════════════════════════════════════════
+
+export type SidebarIconKey =
+  | 'Building2'
+  | 'SlidersHorizontal'
+  | 'Truck'
+  | 'Cpu'
+  | 'Layers'
+  | 'Sparkles'
+  | 'Kanban'
+  | 'TrendingUp'
+  | 'FileSpreadsheet'
+  | 'FileCheck'
+  | 'ShieldCheck'
+  | 'Server'
+  | 'Award'
+  | 'ClipboardList'
+  | 'Database';
+
+export interface SidebarNavItem {
+  /** Active screen key consumed by the screen switchboard */
+  id: string;
+  /** Full screen reference used for accessible names (e.g. "Screen 1.1") */
+  screenTag: string;
+  /** Compact screen reference rendered as a sidebar badge (e.g. "1.1") */
+  shortTag: string;
+  label: string;
+  description: string;
+  icon: SidebarIconKey;
+  /** Section heading key the item is grouped under */
+  group: string;
+  /** Application URL this module is served at, e.g. "/buyer/command-center" */
+  route: string;
+}
+
+export interface RoleWorkspaceMeta {
+  accentText: string;
+  accentActive: string;
+  accentRing: string;
+}
+
+export interface RoleNavigationProps {
+  /** Optional sign-out handler rendered in the rail footer. */
+  onLogout?: () => void;
+}

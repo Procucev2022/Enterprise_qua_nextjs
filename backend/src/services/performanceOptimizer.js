@@ -1,7 +1,7 @@
 const os = require('os');
 const { queryCache } = require('../db/queryCache');
 const { queryAuditor } = require('../db/queryAuditor');
-const poolModule = require('../db/pool');
+const { getOptimizationMetrics } = require('../db/optimizationMetrics');
 const { logger } = require('./loggerService');
 
 /**
@@ -20,7 +20,7 @@ class PerformanceOptimizer {
     const cpus = os.cpus();
     const queryStats = queryAuditor.getAuditReport();
     const cacheStats = queryCache.getMetrics();
-    const poolStats = poolModule.getOptimizationMetrics();
+    const poolStats = getOptimizationMetrics();
 
     const heapUsedMB = Number((memory.heapUsed / (1024 * 1024)).toFixed(2));
     const heapTotalMB = Number((memory.heapTotal / (1024 * 1024)).toFixed(2));

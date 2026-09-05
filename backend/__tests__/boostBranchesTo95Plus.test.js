@@ -3,15 +3,13 @@ const emailService = require('../src/services/emailService');
 const auditService = require('../src/services/auditService');
 const evaluationService = require('../src/services/evaluationService');
 const storeService = require('../src/services/storeService');
-const poolModule = require('../src/db/pool');
-const seed = require('../src/db/seed');
+const dbPool = require('../src/db/pool');
 const { bootstrapServer, start } = require('../src/server');
 const auditController = require('../src/controllers/auditController');
 const evaluationController = require('../src/controllers/evaluationController');
 const buyerAccountController = require('../src/controllers/buyerAccountController');
 const rfqController = require('../src/controllers/rfqController');
 const vendorController = require('../src/controllers/vendorController');
-const queries = require('../src/db/queries');
 
 function mockRes() {
   const res = {};
@@ -32,19 +30,19 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     storeService.isHydratedFromDB = true;
 
     await auditController.getAuditLogs({}, res, next);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ source: 'postgresql' }));
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ source: 'persisted' }));
 
     await evaluationController.getEvaluations({}, res, next);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ source: 'postgresql' }));
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ source: 'persisted' }));
 
     await buyerAccountController.getBuyerAccounts({}, res, next);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ source: 'postgresql' }));
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ source: 'persisted' }));
 
     await rfqController.getRFQs({}, res, next);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ source: 'postgresql' }));
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ source: 'persisted' }));
 
     await vendorController.getVendors({}, res, next);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ source: 'postgresql' }));
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ source: 'persisted' }));
 
     storeService.isHydratedFromDB = false;
   });
@@ -106,40 +104,13 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     expect(revisedDefaults.newCompositeScore).toBeDefined();
   });
 
-  test('seed catch blocks in loops and runSeedCLI', async () => {
-    poolModule.pool = {
-      query: jest.fn().mockResolvedValue({ rows: [] }),
-    };
-    jest.spyOn(queries, 'upsertBuyerAccountInDB').mockRejectedValueOnce(new Error('Seed Buyer Fail'));
-    jest.spyOn(queries, 'upsertVendorInDB').mockRejectedValueOnce(new Error('Seed Vendor Fail'));
-    jest.spyOn(queries, 'upsertRFQInDB').mockRejectedValueOnce(new Error('Seed RFQ Fail'));
-    jest.spyOn(queries, 'upsertEvaluationInDB').mockRejectedValueOnce(new Error('Seed Eval Fail'));
-    jest.spyOn(queries, 'insertAuditLogInDB').mockRejectedValueOnce(new Error('Seed Audit Fail'));
-    jest.spyOn(queries, 'upsertSystemConfigInDB').mockRejectedValueOnce(new Error('Seed Cfg Fail'));
 
-    const res = await seed.seedInitialDataToPostgres();
-    expect(res.success).toBe(true);
-
-    const cliRes = await seed.runSeedCLI();
-    expect(cliRes.success).toBe(true);
-  });
-
-  test('seedInitialDataToPostgres without active pool and AUTO_RUN_SEED branch', async () => {
-    poolModule.pool = null;
-    const res = await seed.seedInitialDataToPostgres();
-    expect(res.success).toBe(false);
-
-    process.env.AUTO_RUN_SEED = 'true';
-    jest.isolateModules(() => {
-      require('../src/db/seed');
-    });
-    delete process.env.AUTO_RUN_SEED;
-  });
 
   test('bootstrapServer and start runner execution', async () => {
-    jest.spyOn(poolModule, 'checkDBHealth').mockResolvedValueOnce({
+    jest.spyOn(dbPool, 'checkDatabaseHealth').mockResolvedValueOnce({
       isConnected: false,
-      providerLabel: 'In-Memory Fallback',
+      providerLabel: 'Identity DB Unreachable',
+      errorMessage: 'offline',
     });
 
     const server = await start(0);
@@ -147,11 +118,13 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     await new Promise((resolve) => server.close(resolve));
 
     // Test bootstrapServer with default port and hydrate
-    jest.spyOn(poolModule, 'checkDBHealth').mockResolvedValueOnce({
+    jest.spyOn(dbPool, 'checkDatabaseHealth').mockResolvedValueOnce({
       isConnected: true,
-      providerLabel: 'PostgreSQL',
+      providerLabel: 'Azure MySQL',
+      database: 'test_db',
+      userCount: 2,
+      latencyMs: 4,
     });
-    jest.spyOn(storeService, 'hydrateFromDB').mockResolvedValueOnce();
 
     const server2 = await bootstrapServer(0);
     expect(server2).toBeDefined();
@@ -162,7 +135,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     const exitSpy = jest.spyOn(process, 'exit').mockImplementation((code) => {
       throw new Error(`process.exit: ${code}`);
     });
-    jest.spyOn(poolModule, 'checkDBHealth').mockImplementationOnce(() => {
+    jest.spyOn(dbPool, 'checkDatabaseHealth').mockImplementationOnce(() => {
       throw new Error('Fatal DB Crash');
     });
 
@@ -179,40 +152,8 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     delete process.env.PORT;
   });
 
-  test('storeService DB error catch callbacks', async () => {
-    poolModule.pool = {};
-    jest.spyOn(queries, 'upsertBuyerAccountInDB').mockRejectedValue(new Error('DB Buyer err'));
-    jest.spyOn(queries, 'deleteBuyerAccountInDB').mockRejectedValue(new Error('DB Buyer Del err'));
-    jest.spyOn(queries, 'upsertVendorInDB').mockRejectedValue(new Error('DB Vendor err'));
-    jest.spyOn(queries, 'deleteVendorInDB').mockRejectedValue(new Error('DB Vendor Del err'));
-    jest.spyOn(queries, 'upsertRFQInDB').mockRejectedValue(new Error('DB RFQ err'));
-    jest.spyOn(queries, 'upsertEvaluationInDB').mockRejectedValue(new Error('DB Eval err'));
-    jest.spyOn(queries, 'insertAuditLogInDB').mockRejectedValue(new Error('DB Audit err'));
-    jest.spyOn(queries, 'upsertSystemConfigInDB').mockRejectedValue(new Error('DB Cfg err'));
-
-    const b = storeService.addBuyerAccount({ organizationName: 'Catch B' });
-    storeService.updateBuyerAccount(b.id, { organizationName: 'Catch B Up' });
-    storeService.deleteBuyerAccount(b.id);
-
-    const v = storeService.addVendor({ name: 'Catch V' });
-    storeService.updateVendor(v.id, { name: 'Catch V Up' });
-    storeService.deleteVendor(v.id);
-
-    const r = storeService.createRFQ({ title: 'Catch R' });
-    storeService.updateRFQ(r.id, { title: 'Catch R Up' });
-
-    storeService.createEvaluation({ vendorName: 'Catch E' });
-    storeService.addAuditLog({ action: 'Catch A' });
-    storeService.updateSystemConfig({ activeMode: 'mode_1' });
-
-    // Allow promise rejections to flush through catch handlers
-    await new Promise((r) => setTimeout(r, 50));
-  });
 
   test('storeService branches and ai feed overflow', async () => {
-    poolModule.pool = {
-      query: jest.fn().mockResolvedValue({ rows: [] }),
-    };
 
     // Fill AI Feed over 100 items to test pop()
     for (let i = 0; i < 105; i++) {
@@ -271,51 +212,5 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     expect(misaligned.isCategoryAligned).toBe(false);
   });
 
-  test('pool query retry, slow query warnings, and fatal errors', async () => {
-    let attempts = 0;
-    poolModule.pool = {
-      query: jest.fn().mockImplementation(async () => {
-        attempts++;
-        if (attempts === 1) {
-          throw new Error('Connection terminated unexpectedly');
-        }
-        return { rows: [{ result: 'ok' }] };
-      }),
-    };
 
-    const res = await poolModule.query('SELECT 1', [], 1);
-    expect(res.rows[0].result).toBe('ok');
-    expect(attempts).toBe(2);
-
-    // Test slow query warning in development
-    const origEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = 'development';
-    poolModule.pool = {
-      query: jest.fn().mockImplementation(async () => {
-        await new Promise((r) => setTimeout(r, 520));
-        return { rows: [{ id: 1 }] };
-      }),
-    };
-    await poolModule.query('SELECT 1');
-    process.env.NODE_ENV = origEnv;
-
-    // Test query error with 0 retries
-    poolModule.pool = {
-      query: jest.fn().mockRejectedValue(new Error('Syntax Error in SQL')),
-    };
-    await expect(poolModule.query('INVALID SQL', [], 0)).rejects.toThrow('Syntax Error in SQL');
-  });
-
-  test('pool createPool with custom pool environment variables', () => {
-    process.env.DB_POOL_MAX = '30';
-    process.env.DB_POOL_IDLE_TIMEOUT_MS = '45000';
-    process.env.DB_CONNECTION_TIMEOUT_MS = '15000';
-
-    const customPool = poolModule.createPool('postgresql://user:pass@remotehost:5432/db');
-    expect(customPool).toBeDefined();
-
-    delete process.env.DB_POOL_MAX;
-    delete process.env.DB_POOL_IDLE_TIMEOUT_MS;
-    delete process.env.DB_CONNECTION_TIMEOUT_MS;
-  });
 });

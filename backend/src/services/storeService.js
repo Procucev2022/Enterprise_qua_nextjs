@@ -1,106 +1,188 @@
 const {
-  SEED_BUYER_ACCOUNTS,
-  SEED_VENDORS,
-  SEED_RFQS,
-  SEED_EVALUATIONS,
-  SEED_AUDIT_LOGS,
-  SEED_AI_FEED,
-} = require('../db/seed');
-const { INITIAL_SYSTEM_CONFIG, INITIAL_AZURE_HEALTH } = require('../config/constants');
+  INITIAL_SYSTEM_CONFIG,
+  INITIAL_AZURE_HEALTH,
+  DATABASE_HEALTH_SERVICE_LABEL,
+  SYSTEM_ACTOR_EMAIL,
+  RFQ_DEFAULTS,
+} = require('../config/constants');
+const pool = require('../db/pool');
+const domainQueries = require('../db/domainQueries');
 const { createAuditEntry, verifyAuditTrail } = require('./auditService');
 const { evaluateQuotes, calculate360Evaluation, calculateRevisedRating } = require('./evaluationService');
 const { simulateChaserOutreach } = require('./aiChaserService');
-const {
-  getBuyerAccountsFromDB,
-  upsertBuyerAccountInDB,
-  deleteBuyerAccountInDB,
-  getVendorsFromDB,
-  upsertVendorInDB,
-  deleteVendorInDB,
-  getRFQsFromDB,
-  upsertRFQInDB,
-  getEvaluationsFromDB,
-  upsertEvaluationInDB,
-  getAuditLogsFromDB,
-  insertAuditLogInDB,
-  getSystemConfigFromDB,
-  upsertSystemConfigInDB,
-} = require('../db/queries');
-const poolModule = require('../db/pool');
 const { logger } = require('./loggerService');
 
 class StoreService {
   constructor() {
-    this.buyerAccounts = JSON.parse(JSON.stringify(SEED_BUYER_ACCOUNTS));
-    this.activeBuyerAccount = this.buyerAccounts[0] || null;
-    this.vendors = JSON.parse(JSON.stringify(SEED_VENDORS));
-    this.rfqs = JSON.parse(JSON.stringify(SEED_RFQS));
-    this.evaluations = JSON.parse(JSON.stringify(SEED_EVALUATIONS));
-    this.auditLogs = JSON.parse(JSON.stringify(SEED_AUDIT_LOGS));
-    this.aiFeed = JSON.parse(JSON.stringify(SEED_AI_FEED));
+    // Every collection starts empty and is filled from Neon by hydrateFromDB().
+    //
+    // Nothing here is seeded. The vendor, evaluation and catalogue seeds this
+    // constructor used to inflate — five invented supplier companies with
+    // contact names, phone numbers and ratings, one fabricated 360° audit, and
+    // three demo SKUs — were indistinguishable from real records once loaded:
+    // they appeared in the vendor master, in category dashboards and in RFQ
+    // vendor selection, and the buyer had no way to tell which suppliers
+    // actually existed. Buyer accounts were worse: the seed shipped four real
+    // company names with invented spend and `activeBuyerAccount` was simply
+    // `buyerAccounts[0]`, so whoever signed in, the dashboard attributed their
+    // work to the first seeded company.
+    //
+    // An empty collection now means exactly that — no rows — and is reported as
+    // such rather than back-filled.
+    this.buyerAccounts = [];
+    this.activeBuyerAccount = null;
+    this.vendors = [];
+    this.rfqs = [];
+    this.evaluations = [];
+    this.auditLogs = [];
+    this.aiFeed = [];
+    this.vendorCatalogue = [];
     this.systemConfig = JSON.parse(JSON.stringify(INITIAL_SYSTEM_CONFIG));
     this.azureHealth = JSON.parse(JSON.stringify(INITIAL_AZURE_HEALTH));
     this.isHydratedFromDB = false;
-    this.vendorCatalogue = [
-      {
-        id: 'prod-1',
-        name: 'SS316 High-Pressure Impeller',
-        category: 'Pumps & Fluid Dynamics',
-        sku: 'SKU-PUMP-316',
-        specs: '5-Axis CNC machined, ANSI standard, NBR double mechanical seals',
-        unitPrice: 4250,
-        leadTimeDays: 12,
-        moq: 10,
-      },
-      {
-        id: 'prod-2',
-        name: 'Double Mechanical Cartridge Seal',
-        category: 'Mechanical Spares',
-        sku: 'SKU-SEAL-890',
-        specs: 'Silicon Carbide faces, Hastelloy-C springs, 40 bar rating',
-        unitPrice: 890,
-        leadTimeDays: 7,
-        moq: 25,
-      },
-      {
-        id: 'prod-3',
-        name: 'High-Temperature Industrial Gate Valve (DN150)',
-        category: 'Valves & Actuators',
-        sku: 'SKU-VALVE-150',
-        specs: 'Class 600, Cast Steel WCB body, Stellite hard-faced trim',
-        unitPrice: 12400,
-        leadTimeDays: 14,
-        moq: 5,
-      },
-    ];
   }
 
+  /**
+   * Load every domain collection from Neon.
+   *
+   * Assignment is unconditional: an empty table overwrites the in-memory copy
+   * with an empty array. That is the whole point of the change — the previous
+   * version applied each collection only `if (rows.length > 0)`, which meant an
+   * empty table silently left the seed in place and the API then served invented
+   * records while reporting itself healthy.
+   *
+   * `isHydratedFromDB` now reports whether the read *succeeded*, not whether it
+   * happened to return rows, so a legitimately empty database is still "loaded
+   * from the database" rather than being mislabelled as an in-memory fallback.
+   *
+   * A missing DATABASE_URL or a failed read is surfaced to the caller instead of
+   * being swallowed: there is no second datastore to fall back to.
+   */
   async hydrateFromDB() {
-    if (!poolModule.pool) return;
+    if (!pool.pool) {
+      this.isHydratedFromDB = false;
+      logger.error(
+        'DATABASE_URL is not set — no records can be loaded and every data-backed request will fail.',
+        null,
+        'STORE_SERVICE'
+      );
+      return { hydrated: false, source: 'not_configured', error: pool.NOT_CONFIGURED_MESSAGE };
+    }
+
     try {
-      const [dbBuyers, dbVendors, dbRfqs, dbEvals, dbAudits, dbConfig] = await Promise.all([
-        getBuyerAccountsFromDB(),
-        getVendorsFromDB(),
-        getRFQsFromDB(),
-        getEvaluationsFromDB(),
-        getAuditLogsFromDB(),
-        getSystemConfigFromDB(),
+      const [vendors, rfqs, evaluations, vendorCatalogue, buyerAccountsResult, aiFeed, auditLogs] = await Promise.all([
+        domainQueries.getVendorsFromDB(),
+        domainQueries.getRFQsFromDB(),
+        domainQueries.getEvaluationsFromDB(),
+        domainQueries.getVendorCatalogueFromDB(),
+        domainQueries.getBuyerAccountsFromDB(),
+        domainQueries.getAIFeedFromDB(),
+        domainQueries.getAuditLogsFromDB(),
       ]);
 
-      if (dbBuyers && dbBuyers.length > 0) {
-        this.buyerAccounts = dbBuyers;
-        this.activeBuyerAccount = dbBuyers[0];
-      }
-      if (dbVendors && dbVendors.length > 0) this.vendors = dbVendors;
-      if (dbRfqs && dbRfqs.length > 0) this.rfqs = dbRfqs;
-      if (dbEvals && dbEvals.length > 0) this.evaluations = dbEvals;
-      if (dbAudits && dbAudits.length > 0) this.auditLogs = dbAudits;
-      if (dbConfig) this.systemConfig = dbConfig;
+      this.vendors = vendors;
+      this.rfqs = rfqs;
+      this.evaluations = evaluations;
+      this.vendorCatalogue = vendorCatalogue;
+      this.buyerAccounts = buyerAccountsResult.accounts;
+      // activeBuyerAccount must stay a reference into this.buyerAccounts (the
+      // same invariant every mutator keeps), not a separately-hydrated duplicate.
+      this.activeBuyerAccount =
+        this.buyerAccounts.find((a) => a.id === buyerAccountsResult.activeId) || this.buyerAccounts[0] || null;
+      this.aiFeed = aiFeed;
+      this.auditLogs = auditLogs;
 
       this.isHydratedFromDB = true;
+      // The admin infrastructure list should describe the connection this load
+      // just used, not a placeholder, so it is refreshed off the same boot.
+      await this.refreshInfrastructureHealth().catch((err) =>
+        logger.warn('Infrastructure health probe failed after hydration', { error: err.message }, 'STORE_SERVICE')
+      );
+      logger.info(
+        'Domain records loaded from PostgreSQL',
+        {
+          vendors: vendors.length,
+          rfqs: rfqs.length,
+          evaluations: evaluations.length,
+          vendorCatalogue: vendorCatalogue.length,
+          buyerAccounts: this.buyerAccounts.length,
+          aiFeed: aiFeed.length,
+          auditLogs: auditLogs.length,
+        },
+        'STORE_SERVICE'
+      );
+      return { hydrated: true, source: 'postgres' };
     } catch (err) {
-      console.warn('Hydration from PostgreSQL encountered error, running with seed fallback:', err.message);
+      logger.error('Failed to load domain records from PostgreSQL', err, 'STORE_SERVICE');
+      this.isHydratedFromDB = false;
+      return { hydrated: false, source: 'unavailable', error: err.message };
     }
+  }
+
+  // Fire-and-forget write-through helpers — never awaited by callers, mirroring
+  // the pattern already used for identity-DB writes elsewhere in this backend.
+  _persistVendor(vendor) {
+    domainQueries.upsertVendorInDB(vendor).catch((err) => logger.error('Failed to persist vendor', err, 'STORE_SERVICE'));
+  }
+
+  _removeVendor(id) {
+    domainQueries.deleteVendorInDB(id).catch((err) => logger.error('Failed to delete persisted vendor', err, 'STORE_SERVICE'));
+  }
+
+  _persistRFQ(rfq) {
+    domainQueries.upsertRFQInDB(rfq).catch((err) => logger.error('Failed to persist RFQ', err, 'STORE_SERVICE'));
+  }
+
+  _removeRFQ(id) {
+    domainQueries.deleteRFQInDB(id).catch((err) => logger.error('Failed to delete persisted RFQ', err, 'STORE_SERVICE'));
+  }
+
+  _persistEvaluation(evaluation) {
+    domainQueries
+      .upsertEvaluationInDB(evaluation)
+      .catch((err) => logger.error('Failed to persist evaluation', err, 'STORE_SERVICE'));
+  }
+
+  _persistCatalogueProduct(product) {
+    domainQueries
+      .upsertCatalogueProductInDB(product)
+      .catch((err) => logger.error('Failed to persist catalogue product', err, 'STORE_SERVICE'));
+  }
+
+  _removeCatalogueProduct(id) {
+    domainQueries
+      .deleteCatalogueProductInDB(id)
+      .catch((err) => logger.error('Failed to delete persisted catalogue product', err, 'STORE_SERVICE'));
+  }
+
+  _persistBuyerAccount(account) {
+    domainQueries
+      .upsertBuyerAccountInDB(account)
+      .catch((err) => logger.error('Failed to persist buyer account', err, 'STORE_SERVICE'));
+  }
+
+  _removeBuyerAccount(id) {
+    domainQueries
+      .deleteBuyerAccountInDB(id)
+      .catch((err) => logger.error('Failed to delete persisted buyer account', err, 'STORE_SERVICE'));
+  }
+
+  _setActiveBuyerAccount(id) {
+    domainQueries
+      .setActiveBuyerAccountInDB(id)
+      .catch((err) => logger.error('Failed to persist active buyer account', err, 'STORE_SERVICE'));
+  }
+
+  _persistAIFeedItem(item) {
+    domainQueries
+      .upsertAIFeedItemInDB(item)
+      .catch((err) => logger.error('Failed to persist AI feed item', err, 'STORE_SERVICE'));
+  }
+
+  _persistAuditLog(entry) {
+    domainQueries
+      .upsertAuditLogInDB(entry)
+      .catch((err) => logger.error('Failed to persist audit log entry', err, 'STORE_SERVICE'));
   }
 
   // ==========================================
@@ -112,6 +194,13 @@ class StoreService {
 
   getActiveBuyerAccount() {
     return this.activeBuyerAccount;
+  }
+
+  /** Resolves a buyer account by its login email, case-insensitively. */
+  getBuyerAccountByEmail(email) {
+    if (!email) return null;
+    const target = email.toLowerCase();
+    return this.buyerAccounts.find((a) => (a.corporateEmail || '').toLowerCase() === target) || null;
   }
 
   addBuyerAccount(accData) {
@@ -129,14 +218,11 @@ class StoreService {
     };
 
     this.buyerAccounts.unshift(newAcc);
+    this._persistBuyerAccount(newAcc);
     this.addAuditLog({
       userEmail: newAcc.corporateEmail,
       action: `Created buyer account for ${newAcc.organizationName} (${newAcc.corporateEmail})`,
     });
-
-    if (poolModule.pool) {
-      upsertBuyerAccountInDB(newAcc).catch((e) => console.error('DB buyer save error:', e.message));
-    }
 
     return newAcc;
   }
@@ -151,13 +237,10 @@ class StoreService {
       syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
     };
     this.buyerAccounts[idx] = updated;
+    this._persistBuyerAccount(updated);
 
     if (this.activeBuyerAccount && this.activeBuyerAccount.id === id) {
       this.activeBuyerAccount = updated;
-    }
-
-    if (poolModule.pool) {
-      upsertBuyerAccountInDB(updated).catch((e) => console.error('DB buyer update error:', e.message));
     }
 
     return updated;
@@ -167,11 +250,10 @@ class StoreService {
     const beforeLen = this.buyerAccounts.length;
     this.buyerAccounts = this.buyerAccounts.filter((a) => a.id !== id);
     if (this.buyerAccounts.length < beforeLen) {
+      this._removeBuyerAccount(id);
       if (this.activeBuyerAccount && this.activeBuyerAccount.id === id) {
         this.activeBuyerAccount = this.buyerAccounts[0] || null;
-      }
-      if (poolModule.pool) {
-        deleteBuyerAccountInDB(id).catch((e) => console.error('DB buyer delete error:', e.message));
+        if (this.activeBuyerAccount) this._setActiveBuyerAccount(this.activeBuyerAccount.id);
       }
       return true;
     }
@@ -182,6 +264,7 @@ class StoreService {
     const target = this.buyerAccounts.find((a) => a.id === id);
     if (!target) return null;
     this.activeBuyerAccount = target;
+    this._setActiveBuyerAccount(id);
     return target;
   }
 
@@ -196,10 +279,19 @@ class StoreService {
     return this.vendors.find((v) => v.id === id || v.email === id);
   }
 
-  addVendor(vendorData) {
+  addVendor(vendorData, actorEmail = null) {
+    // A client-supplied id was previously trusted as-is (never checked for
+    // uniqueness) and the auto-generated fallback was only the last 4 digits
+    // of Date.now() — collision-prone within the same ~10s window, and a
+    // deliberate duplicate `id` in the request body would shadow an existing
+    // vendor for every future id-based lookup (getVendorById/updateVendor
+    // resolve by the *first* array match). The id is now always generated
+    // server-side; nothing in the app currently has a legitimate reason to
+    // request a specific vendor id.
+    const { id: _ignoredClientId, ...safeVendorData } = vendorData;
     const newVendor = {
-      ...vendorData,
-      id: vendorData.id || `v-${Date.now().toString().slice(-4)}`,
+      ...safeVendorData,
+      id: `v-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       rating: vendorData.rating || 4.5,
       score: vendorData.score || 85.0,
       source: vendorData.source || 'buyer_manual',
@@ -209,42 +301,53 @@ class StoreService {
       isExistingInDatabase: vendorData.isExistingInDatabase !== undefined ? vendorData.isExistingInDatabase : true,
       onboardingEmailStatus: vendorData.onboardingEmailStatus || 'sent',
       isCategoryAligned: vendorData.isCategoryAligned !== undefined ? vendorData.isCategoryAligned : true,
+      // Every vendor starts on the free client-uploaded tier with a clean
+      // download counter — these used to exist only as frontend useState
+      // (reset on every page refresh, never actually persisted or enforced).
+      subscriptionPlan: vendorData.subscriptionPlan || 'premium',
+      rfqDownloadsUsed: vendorData.rfqDownloadsUsed || 0,
     };
 
     this.vendors.unshift(newVendor);
+    this._persistVendor(newVendor);
     this.addAuditLog({
-      userEmail: 'procurement@enterprise.com',
+      // The signed-in caller when the controller could resolve one. Falls back to
+      // the system marker rather than naming a fabricated procurement mailbox.
+      userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
       action: `Registered vendor ${newVendor.name} in category ${newVendor.majorCategory}`,
     });
-
-    if (poolModule.pool) {
-      upsertVendorInDB(newVendor).catch((e) => console.error('DB vendor save error:', e.message));
-    }
 
     return newVendor;
   }
 
   updateVendor(id, updates) {
-    const idx = this.vendors.findIndex((v) => v.id === id);
+    const idx = this.vendors.findIndex((v) => v.id === id || v.email === id);
     if (idx === -1) return null;
 
-    const updated = { ...this.vendors[idx], ...updates };
+    // A client payload must never be able to reassign the record's primary
+    // key (would corrupt this.vendors' id-uniqueness and orphan the old id).
+    const { id: _ignoredId, ...safeUpdates } = updates;
+    const updated = { ...this.vendors[idx], ...safeUpdates };
     this.vendors[idx] = updated;
-
-    if (poolModule.pool) {
-      upsertVendorInDB(updated).catch((e) => console.error('DB vendor update error:', e.message));
-    }
+    this._persistVendor(updated);
 
     return updated;
   }
 
-  deleteVendor(id) {
+  deleteVendor(id, actorEmail = null) {
+    const target = this.vendors.find((v) => v.id === id);
     const beforeLen = this.vendors.length;
     this.vendors = this.vendors.filter((v) => v.id !== id);
     if (this.vendors.length < beforeLen) {
-      if (poolModule.pool) {
-        deleteVendorInDB(id).catch((e) => console.error('DB vendor delete error:', e.message));
-      }
+      this._removeVendor(id);
+      // Deletion was the only vendor mutation that wrote no audit entry, so a
+      // vendor disappearing from the master left no record of who removed it or
+      // when — the addVendor and updateVendor paths both log, and the removal of
+      // a supplier is the change most worth being able to account for.
+      this.addAuditLog({
+        userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
+        action: `Removed vendor ${target ? target.name : id} (${target && target.email ? target.email : 'no email on record'}) from the vendor master`,
+      });
       return true;
     }
     return false;
@@ -254,6 +357,9 @@ class StoreService {
     const vendor = this.getVendorById(vendorId);
     if (!vendor) return null;
 
+    // Nothing here is defaulted to an invented buyer. A revision is a record of
+    // who rated whom, so an unattributed one is stored as unattributed (null)
+    // rather than credited to a placeholder company and contact name.
     const { qualityScore, costScore, deliveryScore, remarks, buyerCompany, buyerName, buyerEmail } = ratingData;
     const { buyerAverage, newCompositeScore, newRating } = calculateRevisedRating({
       qualityScore: Number(qualityScore),
@@ -266,9 +372,9 @@ class StoreService {
       id: `rev-${Date.now()}`,
       vendorId: vendor.id,
       vendorName: vendor.name,
-      buyerCompany: buyerCompany || 'Enterprise Buyer',
-      buyerName: buyerName || 'Procurement Manager',
-      buyerEmail: buyerEmail || 'buyer@enterprise.com',
+      buyerCompany: buyerCompany || null,
+      buyerName: buyerName || null,
+      buyerEmail: buyerEmail || null,
       timestamp: new Date().toISOString(),
       qualityScore,
       costScore,
@@ -294,7 +400,7 @@ class StoreService {
     });
 
     this.addAuditLog({
-      userEmail: buyerEmail || 'buyer@enterprise.com',
+      userEmail: buyerEmail || SYSTEM_ACTOR_EMAIL,
       action: `Revised vendor rating for ${vendor.name}: ${vendor.rating} -> ${newRating} (Score: ${newCompositeScore})`,
     });
 
@@ -312,7 +418,7 @@ class StoreService {
     return this.rfqs.find((r) => r.id === id || r.rfqNumber === id);
   }
 
-  createRFQ(rfqData) {
+  createRFQ(rfqData, requestingBuyerAccount = null) {
     const nextNum = this.rfqs.length + 893;
     const rfqNumber = rfqData.rfqNumber || `RFQ-2026-0${nextNum}`;
     const id = rfqData.id || `rfq-${Date.now()}`;
@@ -321,35 +427,99 @@ class StoreService {
       id,
       rfqNumber,
       title: rfqData.title || 'Untitled RFQ',
-      category: rfqData.category || 'Engineering Spares - Mechanical',
+      // Not defaulted to a category the buyer never chose: 'Engineering Spares -
+      // Mechanical' used to be substituted here, which silently mis-filed the RFQ
+      // and routed it to the wrong vendor pool.
+      category: rfqData.category || null,
       createdAt: rfqData.createdAt || new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
-      deadline: rfqData.deadline || '2026-09-20',
-      status: rfqData.status || 'open',
+      // No hardcoded fallback date. A fixed '2026-09-20' was previously stamped on
+      // any RFQ that arrived without one, so an RFQ could show a deadline the
+      // buyer had not set — and one that was already in the past.
+      deadline: rfqData.deadline || rfqData.targetDeliveryDate || null,
+      // Budget was previously dropped here, so an RFQ saved through the API came
+      // back from hydration with no budget at all: the portfolio value totalled
+      // zero and the quote matrix crashed reading it. It is validated as a
+      // required positive number by VALIDATION_SCHEMAS.createRFQ.
+      budget: Number(rfqData.budget) || 0,
+      // Vendors price freight against these, so they round-trip with the RFQ.
+      deliveryLocation: rfqData.deliveryLocation || '',
+      deliveryPincode: rfqData.deliveryPincode || '',
+      // Metadata only. The bytes live in object storage under
+      // rfqAttachmentService, so the bootstrap payload stays a fixed size no
+      // matter how much is attached.
+      attachments: Array.isArray(rfqData.attachments) ? rfqData.attachments : [],
+      // Provenance. All four of these were previously dropped here — the field
+      // list below simply did not mention them — so every stored RFQ came back
+      // with a null `source` and a null `sourceFileName`. That mattered twice
+      // over: the RFQ details screen had no way to say where a record came from,
+      // and the ingestion wizard's own documented fallback for the uploaded
+      // document ("recorded as sourceFileName instead") could never have worked,
+      // because the value never reached the database.
+      source: rfqData.source || null,
+      sourceFileName: rfqData.sourceFileName || null,
+      sourceEmail: rfqData.sourceEmail || null,
+      raisedByEmail: requestingBuyerAccount ? requestingBuyerAccount.corporateEmail : rfqData.raisedByEmail || null,
+      status: rfqData.status || 'Quotes Pending',
+      // Stamped from the authenticated caller's own buyer account (resolved
+      // by the controller/resolver from the session, never trusted from the
+      // client body) so an RFQ is attributed to whoever actually created it.
+      // Falls back to the legacy system-wide "active" buyer account only for
+      // callers that don't have a per-request buyer identity to resolve
+      // (e.g. historical-data ingestion, admin-driven creation).
+      buyerAccountId: requestingBuyerAccount
+        ? requestingBuyerAccount.id
+        : this.activeBuyerAccount ? this.activeBuyerAccount.id : null,
+      buyerAccountName: requestingBuyerAccount
+        ? requestingBuyerAccount.organizationName
+        : this.activeBuyerAccount ? this.activeBuyerAccount.organizationName : null,
       sourcingMode: rfqData.sourcingMode || 'mode_1',
       quotesCount: rfqData.quotes ? rfqData.quotes.length : 0,
       chasingActive: rfqData.chasingActive !== undefined ? rfqData.chasingActive : true,
-      allocatedTime: rfqData.allocatedTime || '24 hrs',
-      elapsedTime: rfqData.elapsedTime || '0 hrs',
-      targetSavings: rfqData.targetSavings || '12-18%',
+      allocatedTime: rfqData.allocatedTime || RFQ_DEFAULTS.ALLOCATED_TIME,
+      elapsedTime: rfqData.elapsedTime || RFQ_DEFAULTS.ELAPSED_TIME,
+      // A savings target is a commitment the buyer sets, not a number the system
+      // invents. '12-18%' was previously stamped on every RFQ regardless.
+      targetSavings: rfqData.targetSavings || null,
       quotes: evaluateQuotes(rfqData.quotes || []),
-      lineItems: rfqData.lineItems || [],
+      // Real line items the buyer's document extraction produced. Previously
+      // only the legacy `lineItems` key was read here, so a real RFQ created
+      // through the actual app flow (which sends `extractedEntities`, the
+      // RFQItem field) silently lost every item on persistence — the buyer's
+      // own optimistic client state showed them, but a refresh (re-hydrated
+      // from this persisted shape) showed none, and PO generation
+      // (approvePurchaseOrder, which reads rfq.extractedEntities) produced
+      // an empty line-item PO for any RFQ created this way.
+      extractedEntities: rfqData.extractedEntities || rfqData.lineItems || [],
+      // AI-generated headline/scope/risk-notes built from the line items above,
+      // before the RFQ is constructed here (see rfqController.createRFQ) — a
+      // deterministic fallback when there's nothing to summarise or the model
+      // call fails, never fabricated content.
+      aiSummary: rfqData.aiSummary || null,
       assignedVendors: rfqData.assignedVendors || [],
+      // Counters start at zero and are driven up by real outreach. They used to be
+      // seeded with a channel total of 3 and 3 messages already "delivered" on
+      // every RFQ — including RFQs with no vendors assigned at all — so the
+      // follow-up panel reported delivery for messages that were never sent.
       followUpData: rfqData.followUpData || {
         rfqNumber,
-        totalInvited: (rfqData.assignedVendors || []).length || 3,
+        totalInvited: (rfqData.assignedVendors || []).length,
         respondedCount: 0,
-        callStats: { total: 3, connected: 0, avgDuration: '0s' },
-        whatsappStats: { total: 3, delivered: 3, read: 0, replied: 0 },
-        smsStats: { total: 3, delivered: 3, clicked: 0 },
+        callStats: { total: 0, connected: 0, avgDuration: '0s' },
+        whatsappStats: { total: 0, delivered: 0, read: 0, replied: 0 },
+        smsStats: { total: 0, delivered: 0, clicked: 0 },
         autoChasingEnabled: true,
         vendors: [],
       },
     };
 
     this.rfqs.unshift(newRFQ);
+    this._persistRFQ(newRFQ);
 
     this.addAuditLog({
-      userEmail: 'buyer@enterprise.com',
+      // Attributed to the buyer account the controller resolved from the session.
+      userEmail: requestingBuyerAccount
+        ? requestingBuyerAccount.corporateEmail
+        : this.activeBuyerAccount ? this.activeBuyerAccount.corporateEmail : SYSTEM_ACTOR_EMAIL,
       action: `Created ${rfqNumber} (${newRFQ.title}) under Sourcing ${newRFQ.sourcingMode}`,
       rfqNumber,
     });
@@ -360,10 +530,6 @@ class StoreService {
         const chaserLogs = simulateChaserOutreach(newRFQ, v);
         chaserLogs.forEach((log) => this.addAIFeedItem(log));
       });
-    }
-
-    if (poolModule.pool) {
-      upsertRFQInDB(newRFQ).catch((e) => console.error('DB RFQ save error:', e.message));
     }
 
     return newRFQ;
@@ -382,10 +548,7 @@ class StoreService {
       quotesCount: quotes.length,
     };
     this.rfqs[idx] = updated;
-
-    if (poolModule.pool) {
-      upsertRFQInDB(updated).catch((e) => console.error('DB RFQ update error:', e.message));
-    }
+    this._persistRFQ(updated);
 
     return updated;
   }
@@ -394,15 +557,27 @@ class StoreService {
     const rfq = this.getRFQById(rfqId);
     if (!rfq) return null;
 
-    const quotes = [...(rfq.quotes || []), quote];
+    // A resubmission from the same vendor replaces their previous quote on
+    // this RFQ rather than piling up duplicates (nothing enforced this before).
+    const existingQuotes = rfq.quotes || [];
+    const quotes = quote.vendorId
+      ? [...existingQuotes.filter((q) => q.vendorId !== quote.vendorId), quote]
+      : [...existingQuotes, quote];
     return this.updateRFQ(rfq.id, { quotes });
   }
 
   deleteRFQ(id) {
     const beforeLen = this.rfqs.length;
     this.rfqs = this.rfqs.filter((r) => r.id !== id && r.rfqNumber !== id);
-    return this.rfqs.length < beforeLen;
+    const removed = this.rfqs.length < beforeLen;
+    if (removed) this._removeRFQ(id);
+    return removed;
   }
+
+  // getRFQSummary was removed with the RFQ seeds. The portfolio roll-up now
+  // lives in rfqSummaryService.buildPortfolioSummary, which is handed one
+  // organisation's rows rather than reducing over a single global array, and
+  // which no longer invents follow-up channel statistics.
 
   // ==========================================
   // 4. EVALUATIONS
@@ -417,29 +592,34 @@ class StoreService {
     const newEval = {
       id: evalData.id || `eval-${Date.now()}`,
       vendorId: evalData.vendorId || `v-${Date.now()}`,
-      vendorName: evalData.vendorName || 'Enterprise Supplier',
-      contactPerson: evalData.contactPerson || 'Vendor Lead',
-      email: evalData.email || 'vendor@supplier.com',
-      phone: evalData.phone || '+91 98000 00000',
-      category: evalData.category || 'Engineering Spares - Mechanical',
+      // An evaluation identifies a real supplier or it identifies nobody. These
+      // used to default to 'Enterprise Supplier' / 'vendor@supplier.com' /
+      // '+91 98000 00000', which produced audit records that looked like a
+      // genuine assessment of a company that did not exist.
+      vendorName: evalData.vendorName || null,
+      contactPerson: evalData.contactPerson || null,
+      email: evalData.email || null,
+      phone: evalData.phone || null,
+      category: evalData.category || null,
       submissionDate: evalData.submissionDate || new Date().toISOString().substring(0, 10),
       status: evalData.status || status,
       overallScore: evalData.overallScore || overallScore,
       systemAction: evalData.systemAction || systemAction,
       moduleScores: evalData.moduleScores || moduleScores,
       documents: evalData.documents || [],
+      // The per-question detail was previously silently dropped here even
+      // though the client always sent it — only the rolled-up moduleScores
+      // survived.
+      questionBreakdown: evalData.questionBreakdown || [],
     };
 
     this.evaluations.unshift(newEval);
+    this._persistEvaluation(newEval);
 
     this.addAuditLog({
-      userEmail: 'auditor@procucev.ai',
-      action: `Executed 360° AI Supplier Audit for ${newEval.vendorName}: Score ${newEval.overallScore}% (${newEval.status})`,
+      userEmail: evalData.actorEmail || SYSTEM_ACTOR_EMAIL,
+      action: `Executed 360° AI Supplier Audit for ${newEval.vendorName || newEval.vendorId}: Score ${newEval.overallScore}% (${newEval.status})`,
     });
-
-    if (poolModule.pool) {
-      upsertEvaluationInDB(newEval).catch((e) => console.error('DB evaluation save error:', e.message));
-    }
 
     return newEval;
   }
@@ -455,12 +635,9 @@ class StoreService {
     const previousHash = this.auditLogs.length > 0 ? this.auditLogs[0].shaSignature : '';
     const entry = createAuditEntry({ userEmail, action, rfqNumber, ipAddress, previousHash });
     this.auditLogs.unshift(entry);
+    this._persistAuditLog(entry);
 
     logger.audit(action, userEmail || 'system@procucev.ai', { rfqNumber, ipAddress, shaSignature: entry.shaSignature }, rfqNumber);
-
-    if (poolModule.pool) {
-      insertAuditLogInDB(entry).catch((e) => console.error('DB audit log save error:', e.message));
-    }
 
     return entry;
   }
@@ -493,6 +670,10 @@ class StoreService {
 
     this.aiFeed.unshift(item);
     if (this.aiFeed.length > 100) this.aiFeed.pop();
+    // The DB-side upsert trims to the newest 100 rows itself (see
+    // domainQueries.upsertAIFeedItemInDB), so it stays in sync with the
+    // in-memory cap without needing to know which item .pop() just evicted.
+    this._persistAIFeedItem(item);
     return item;
   }
 
@@ -505,9 +686,6 @@ class StoreService {
 
   updateSystemConfig(updates) {
     this.systemConfig = { ...this.systemConfig, ...updates };
-    if (poolModule.pool) {
-      upsertSystemConfigInDB(this.systemConfig).catch((e) => console.error('DB config save error:', e.message));
-    }
     return this.systemConfig;
   }
 
@@ -515,56 +693,131 @@ class StoreService {
     return this.azureHealth;
   }
 
+  /**
+   * Replace the database row in the infrastructure list with a live probe result.
+   *
+   * The row is reported from an actual connection attempt rather than asserted:
+   * `latency` is the measured round trip and `status` reflects whether the query
+   * succeeded. `uptime` is left as '—' because nothing in this process observes
+   * it — the previous hardcoded '99.99%' was not measured from anything.
+   */
+  async refreshInfrastructureHealth() {
+    const health = await pool.checkDatabaseHealth();
+    const row = {
+      service: health.isConfigured
+        ? `${health.providerLabel}${health.database ? ` — ${health.database}` : ''}`
+        : DATABASE_HEALTH_SERVICE_LABEL,
+      status: health.isConnected ? 'ONLINE' : health.isConfigured ? 'UNREACHABLE' : 'NOT_CONFIGURED',
+      latency: health.isConnected ? `${health.latencyMs}ms` : '—',
+      uptime: '—',
+      details: health.isConnected
+        ? `${health.poolStatus}. ${health.userCount} active account(s), ${health.vendorCount} vendor(s), ${health.rfqCount} RFQ(s).`
+        : health.errorMessage || 'Database connection failed.',
+    };
+
+    const idx = this.azureHealth.findIndex(
+      (entry) => entry.service === DATABASE_HEALTH_SERVICE_LABEL || entry.service === row.service
+    );
+    if (idx === -1) {
+      this.azureHealth.unshift(row);
+    } else {
+      this.azureHealth[idx] = row;
+    }
+
+    return health;
+  }
+
   // ==========================================
   // 9. HISTORICAL PURCHASE DATA INGESTION & SETUP
   // ==========================================
-  processHistoricalPurchaseData(period, vendorRecords = []) {
+  /**
+   * Empanel suppliers from a buyer's historical purchase dump.
+   *
+   * Only what the dump actually contains is stored. Every missing field used to
+   * be back-filled with an invention — a name of "Historical Supplier 3", an
+   * address of "supplier.3@historical.com", a phone of "+91 98000 00000", a
+   * category of "Engineering Spares - Mechanical", a location of "Industrial
+   * Zone, India", a rating of 4.6 and a score of 88.0 — and the row was then
+   * marked `evaluated: true`. The result was a vendor master full of suppliers
+   * that could not be contacted, carrying scores nobody had assessed, which the
+   * RFQ engine would then select against.
+   *
+   * A record without a company name and a contact email cannot identify a
+   * supplier, so it is skipped and counted, and the caller is told how many were
+   * rejected and why.
+   */
+  processHistoricalPurchaseData(period, vendorRecords = [], requestingBuyerAccount = null) {
     let importedCount = 0;
-    const dateStr = new Date().toISOString().substring(0, 10);
+    const skipped = [];
 
     vendorRecords.forEach((rec, idx) => {
-      const existing = this.vendors.find(
-        (v) => (v.email && rec.email && v.email.toLowerCase() === rec.email.toLowerCase()) ||
-               (v.name && rec.companyName && v.name.toLowerCase() === rec.companyName.toLowerCase())
-      );
+      const name = (rec.companyName || rec.name || '').trim();
+      const email = (rec.email || '').trim();
 
-      if (!existing) {
-        const newVendor = {
-          id: `v-hist-${Date.now()}-${idx}`,
-          name: rec.companyName || rec.name || `Historical Supplier ${idx + 1}`,
-          contactPerson: rec.contactPerson || 'Procurement Contact',
-          email: rec.email || `supplier.${idx + 1}@historical.com`,
-          phone: rec.phone || '+91 98000 00000',
-          majorCategory: rec.majorCategory || 'Engineering Spares - Mechanical',
-          minorCategories: rec.minorCategories || ['Pumps & Accessories', 'Machinery Parts'],
-          location: rec.location || rec.address || 'Industrial Zone, India',
-          rating: rec.rating || 4.6,
-          score: rec.score || 88.0,
-          source: 'historical_purchase_dump',
-          status: 'PREFERRED ENTERPRISE SUPPLIER',
-          evaluated: true,
-          hasRecord: true,
-          isExistingInDatabase: true,
-          onboardingEmailStatus: 'sent',
-          clientMappedCategories: rec.minorCategories || ['Pumps & Accessories'],
-          vendorSelectedCategories: rec.minorCategories || ['Pumps & Accessories'],
-          isCategoryAligned: true,
-        };
-        this.vendors.push(newVendor);
-        importedCount++;
-
-        if (poolModule.pool) {
-          upsertVendorInDB(newVendor).catch((e) => console.error('DB vendor save error:', e.message));
-        }
+      if (!name || !email) {
+        skipped.push({
+          row: idx + 1,
+          reason: !name && !email
+            ? 'Missing both company name and contact email.'
+            : !name
+              ? 'Missing company name.'
+              : 'Missing contact email.',
+        });
+        return;
       }
+
+      const existing = this.vendors.find(
+        (v) => (v.email && v.email.toLowerCase() === email.toLowerCase()) ||
+               (v.name && v.name.toLowerCase() === name.toLowerCase())
+      );
+      if (existing) return;
+
+      const minorCategories = Array.isArray(rec.minorCategories) ? rec.minorCategories : [];
+      const newVendor = {
+        id: `v-hist-${Date.now()}-${idx}`,
+        name,
+        email,
+        contactPerson: (rec.contactPerson || '').trim() || null,
+        phone: (rec.phone || '').trim() || null,
+        majorCategory: (rec.majorCategory || '').trim() || null,
+        minorCategories,
+        location: (rec.location || rec.address || '').trim() || null,
+        // Absent, not assumed. A supplier arriving from a spend extract has not
+        // been rated or audited by anyone yet.
+        rating: Number.isFinite(Number(rec.rating)) ? Number(rec.rating) : null,
+        score: Number.isFinite(Number(rec.score)) ? Number(rec.score) : null,
+        source: 'historical_purchase_dump',
+        status: 'PENDING EVALUATION',
+        evaluated: false,
+        hasRecord: true,
+        isExistingInDatabase: true,
+        onboardingEmailStatus: 'pending',
+        clientMappedCategories: minorCategories,
+        vendorSelectedCategories: [],
+        // Nothing to align against until the vendor confirms their own categories.
+        isCategoryAligned: false,
+      };
+      this.vendors.push(newVendor);
+      this._persistVendor(newVendor);
+      importedCount++;
     });
 
+    // Attributed to the requesting buyer's own account when the controller
+    // resolved one from the session (same convention as createRFQ).
+    const attributedAccount = requestingBuyerAccount || this.activeBuyerAccount;
     this.addAuditLog({
-      userEmail: this.activeBuyerAccount ? this.activeBuyerAccount.corporateEmail : 'buyer@enterprise.com',
-      action: `Processed ${period.replace('_', ' ')} historical purchase dump: ${importedCount} unique suppliers empanelled into vendor master roster.`,
+      userEmail: attributedAccount ? attributedAccount.corporateEmail : SYSTEM_ACTOR_EMAIL,
+      action: `Processed ${period.replace('_', ' ')} historical purchase dump: ${importedCount} supplier(s) empanelled, ${skipped.length} row(s) rejected as unidentifiable.`,
     });
 
-    return { success: true, importedCount, period, totalVendors: this.vendors.length };
+    return {
+      success: true,
+      importedCount,
+      skippedCount: skipped.length,
+      skipped,
+      period,
+      totalVendors: this.vendors.length,
+    };
   }
 
   // ==========================================
@@ -654,43 +907,56 @@ class StoreService {
   // ==========================================
   // 12. VENDOR ITEM SKU CATALOGUE CRUD
   // ==========================================
-  getVendorCatalogue() {
-    return this.vendorCatalogue;
+  // Scoped per vendor. Called without a vendorId (the buyer-side catalogue
+  // browse) it returns every product; the three unowned demo SKUs that used to
+  // be visible only through that unfiltered path are gone.
+  getVendorCatalogue(vendorId) {
+    if (!vendorId) return this.vendorCatalogue;
+    return this.vendorCatalogue.filter((p) => p.vendorId === vendorId);
   }
 
-  addProductToCatalogue(product) {
+  getCatalogueProductById(id) {
+    return this.vendorCatalogue.find((p) => p.id === id);
+  }
+
+  addProductToCatalogue(product, vendorId, userEmail) {
     const newProd = {
       ...product,
       id: product.id || `prod-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+      vendorId,
       unitPrice: Number(product.unitPrice) || 0,
       leadTimeDays: Number(product.leadTimeDays) || 7,
       moq: Number(product.moq) || 1,
     };
     this.vendorCatalogue.unshift(newProd);
+    this._persistCatalogueProduct(newProd);
     this.addAuditLog({
-      userEmail: 'vendor@apex.com',
+      userEmail: userEmail || 'unknown',
       action: `Added product ${newProd.sku} (${newProd.name}) to item SKU catalogue`,
     });
     return newProd;
   }
 
-  updateCatalogueProduct(id, updates) {
+  updateCatalogueProduct(id, updates, userEmail) {
     const idx = this.vendorCatalogue.findIndex((p) => p.id === id);
     if (idx === -1) return null;
-    this.vendorCatalogue[idx] = { ...this.vendorCatalogue[idx], ...updates };
+    const { vendorId: _ignoredVendorId, id: _ignoredId, ...safeUpdates } = updates;
+    this.vendorCatalogue[idx] = { ...this.vendorCatalogue[idx], ...safeUpdates };
+    this._persistCatalogueProduct(this.vendorCatalogue[idx]);
     this.addAuditLog({
-      userEmail: 'vendor@apex.com',
+      userEmail: userEmail || 'unknown',
       action: `Updated SKU ${this.vendorCatalogue[idx].sku} in catalogue`,
     });
     return this.vendorCatalogue[idx];
   }
 
-  deleteCatalogueProduct(id) {
+  deleteCatalogueProduct(id, userEmail) {
     const idx = this.vendorCatalogue.findIndex((p) => p.id === id);
     if (idx === -1) return false;
     const removed = this.vendorCatalogue.splice(idx, 1)[0];
+    this._removeCatalogueProduct(id);
     this.addAuditLog({
-      userEmail: 'vendor@apex.com',
+      userEmail: userEmail || 'unknown',
       action: `Removed product ${removed.sku} from SKU catalogue`,
     });
     return true;
@@ -703,7 +969,20 @@ class StoreService {
     const rfq = this.getRFQById(rfqId);
     if (!rfq) return null;
 
-    const vendors = rfq.assignedVendors || this.vendors.slice(0, 3);
+    // Only the vendors actually invited to this RFQ. The fallback here used to be
+    // `this.vendors.slice(0, 3)` — the first three vendors in the master roster —
+    // so an RFQ with nobody assigned would chase three uninvolved suppliers and
+    // log outreach against them.
+    const vendors = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
+    if (vendors.length === 0) {
+      return {
+        success: false,
+        count: 0,
+        logs: [],
+        error: 'No vendors are assigned to this RFQ, so there is nobody to chase. Assign vendors first.',
+      };
+    }
+
     const outreachLogs = [];
 
     vendors.forEach((vendor) => {
@@ -712,6 +991,11 @@ class StoreService {
     });
 
     this.aiFeed.unshift(...outreachLogs);
+    // This bulk path bypassed addAIFeedItem's 100-item cap entirely before —
+    // trim here too so the in-memory list and the DB-side trim (which runs
+    // per insert regardless of which path added the row) stay consistent.
+    if (this.aiFeed.length > 100) this.aiFeed.splice(100);
+    outreachLogs.forEach((log) => this._persistAIFeedItem(log));
     this.addAuditLog({
       userEmail: 'chaser.bot@procucev.com',
       action: `Executed batch multi-channel outreach (${channels.join(' + ')}) for ${rfq.rfqNumber} to ${vendors.length} vendors`,
@@ -721,17 +1005,20 @@ class StoreService {
     return { success: true, count: outreachLogs.length, logs: outreachLogs };
   }
 
-  approvePurchaseOrder(rfqNumber, vendorName, totalAmount, approverNotes = '') {
+  approvePurchaseOrder(rfqNumber, vendorId, vendorName, totalAmount, approverNotes = '', approverEmail = null) {
     const rfq = this.rfqs.find((r) => r.rfqNumber === rfqNumber || r.id === rfqNumber);
-    if (rfq) {
-      rfq.status = 'PO Generated';
-      rfq.awardedVendor = vendorName;
-      rfq.awardedAmount = totalAmount;
-    }
+    if (!rfq) return null;
+
+    rfq.status = 'PO Generated';
+    rfq.awardedVendorId = vendorId || null;
+    rfq.awardedVendor = vendorName;
+    rfq.awardedAmount = totalAmount;
+    this._persistRFQ(rfq);
 
     const poNumber = `PO-2026-` + (rfqNumber || '').replace('RFQ-2026-', '');
+    const issueDate = new Date().toISOString().substring(0, 10);
     const auditRecord = this.addAuditLog({
-      userEmail: this.activeBuyerAccount ? this.activeBuyerAccount.corporateEmail : 'buyer@enterprise.com',
+      userEmail: approverEmail || (this.activeBuyerAccount ? this.activeBuyerAccount.corporateEmail : SYSTEM_ACTOR_EMAIL),
       action: `Formally approved & sealed Purchase Order ${poNumber} awarded to ${vendorName} ($${Number(totalAmount).toLocaleString()}). Notes: ${approverNotes}`,
       rfqNumber,
     });
@@ -740,8 +1027,17 @@ class StoreService {
       success: true,
       poNumber,
       rfqNumber,
+      vendorId: vendorId || null,
       vendorName,
       totalAmount,
+      issueDate,
+      // Real RFQ line items, not a hardcoded pump description — the PO
+      // document should reflect what was actually procured.
+      lineItems: (rfq.extractedEntities || []).map((ent) => ({
+        description: ent.itemName,
+        quantity: ent.quantity,
+        unit: ent.unit,
+      })),
       shaSignature: auditRecord.shaSignature,
     };
   }
@@ -749,12 +1045,20 @@ class StoreService {
   // ==========================================
   // 14. UNIFIED BOOTSTRAP DATA
   // ==========================================
+  /**
+   * Reference data the app needs to start up.
+   *
+   * RFQs are deliberately NOT here. This endpoint is anonymous, and returning the
+   * global RFQ array from it is what put one buyer's RFQs on another buyer's
+   * dashboard — scoping /api/rfqs alone would have changed nothing on screen
+   * while this remained the endpoint the store actually hydrated from. RFQs are
+   * now fetched from GET /api/rfqs, which is authenticated and org-scoped.
+   */
   getBootstrapData() {
     return {
       buyerAccounts: this.buyerAccounts,
       activeBuyerAccount: this.activeBuyerAccount,
       vendors: this.vendors,
-      rfqs: this.rfqs,
       evaluations: this.evaluations,
       auditLogs: this.auditLogs,
       aiFeed: this.aiFeed,

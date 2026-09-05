@@ -3,9 +3,46 @@
  * Single source of truth for all form validations, user input limits, and payload verification.
  */
 
+import { UI_STRINGS } from './uiStrings';
+
 export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export const GSTIN_PATTERN = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i;
 export const PHONE_PATTERN = /^[+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{7,15}$/;
+
+/**
+ * Indian mobile number accepted at sign-in and registration. The identity
+ * database stores these normalised to +91XXXXXXXXXX, so the input must resolve
+ * to exactly ten national digits beginning 6-9, optionally prefixed with
+ * +91 / 0 / 91.
+ */
+export const INDIAN_MOBILE_PATTERN = /^(?:\+?91[-\s]?|0)?[6-9]\d{9}$/;
+
+/**
+ * Delivery pincode or zipcode.
+ *
+ * Deliberately broader than an Indian six-digit PIN: the same field carries
+ * international zipcodes for export orders, which are alphanumeric and may
+ * contain a space or hyphen (for example SW1A 1AA or 12345-6789). It must still
+ * start with a letter or digit so a stray separator is rejected.
+ */
+export const PINCODE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9\s-]{2,9}$/;
+
+/**
+ * Statutory identifiers on the buyer organisation profile. Each mirrors the
+ * corresponding regex in backend/src/config/validationSchemas.js, which is the
+ * gate that actually protects the `organization` row; these exist so the buyer is
+ * told about a malformed value while typing rather than after a round trip.
+ */
+export const PAN_PATTERN = /^[A-Z]{5}[0-9]{4}[A-Z]$/i;
+export const CIN_PATTERN = /^[LUu][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$/i;
+export const WEBSITE_PATTERN = /^https?:\/\/[^\s/$.?#][^\s]*$/i;
+
+/**
+ * Registered-office PIN code. Narrower than PINCODE_PATTERN above, which carries
+ * international delivery zipcodes: a buyer's registered address is an Indian
+ * statutory address, so it is exactly six digits and cannot begin with zero.
+ */
+export const INDIAN_PINCODE_PATTERN = /^[1-9][0-9]{5}$/;
 
 export interface FieldRule {
   required?: boolean;
@@ -22,11 +59,39 @@ export interface FieldRule {
 export type FormSchema = Record<string, FieldRule>;
 
 export const FORM_SCHEMAS: Record<string, FormSchema> = {
+  /**
+   * Password sign-in. The backend re-checks the same three fields and resolves
+   * the account by email + mobile together, so the mobile number is a hard
+   * requirement here rather than an optional contact detail.
+   */
+  loginForm: {
+    email: { required: true, pattern: EMAIL_PATTERN, message: UI_STRINGS.auth.emailInvalid },
+    mobile: { required: true, pattern: INDIAN_MOBILE_PATTERN, message: UI_STRINGS.auth.mobileInvalid },
+    password: { required: true, message: UI_STRINGS.auth.passwordRequired },
+  },
+
   rfqIngestion: {
     title: { required: true, minLength: 3, maxLength: 200, message: 'Title must be between 3 and 200 characters' },
     category: { required: true, message: 'Category selection is required' },
-    budget: { required: true, type: 'number', min: 1, message: 'Estimated budget must be greater than zero' },
+    // Optional: a document that prices nothing yields no figure, and a required
+    // budget forced the buyer to invent a ceiling that vendors would then quote
+    // against. Zero is accepted and rendered as "not set" rather than as ₹0.
+    budget: { required: false, type: 'number', min: 0, message: 'Estimated budget cannot be negative' },
     targetDeliveryDate: { required: true, message: 'Target delivery date is required' },
+    // Both delivery fields are mandatory. Vendors rate freight on the destination
+    // and its pincode, so quotes raised without them are not comparable against
+    // quotes that have them, and the buyer cannot resolve the difference later.
+    deliveryLocation: {
+      required: true,
+      minLength: 3,
+      maxLength: 200,
+      message: UI_STRINGS.rfqExtraction.deliveryLocationSchemaMessage,
+    },
+    deliveryPincode: {
+      required: true,
+      pattern: PINCODE_PATTERN,
+      message: UI_STRINGS.rfqExtraction.deliveryPincodeInvalidMessage,
+    },
   },
 
   vendorQualification: {
@@ -42,6 +107,24 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
     totalPrice: { required: true, type: 'number', min: 0.01, message: 'Total price must be greater than zero' },
     leadTimeDays: { required: true, type: 'number', min: 1, message: 'Lead time must be at least 1 day' },
     paymentTerms: { required: true, minLength: 2, message: 'Payment terms are required' },
+  },
+
+  /**
+   * Buyer organisation profile form.
+   *
+   * Only the legal entity name is required, matching the server: the endpoint
+   * patches whatever is supplied and leaves the rest of the stored record alone,
+   * so a buyer can fill the profile in over several visits. The optional fields
+   * are still format-checked whenever they carry a value, which the old Angular
+   * screen did for GSTIN alone.
+   */
+  buyerProfile: {
+    companyName: { required: true, minLength: 2, maxLength: 255, message: UI_STRINGS.buyerProfile.companyNameRequired },
+    panNumber: { required: false, pattern: PAN_PATTERN, message: UI_STRINGS.buyerProfile.panInvalid },
+    gstNumber: { required: false, pattern: GSTIN_PATTERN, message: UI_STRINGS.buyerProfile.gstInvalid },
+    cinNumber: { required: false, pattern: CIN_PATTERN, message: UI_STRINGS.buyerProfile.cinInvalid },
+    website: { required: false, pattern: WEBSITE_PATTERN, message: UI_STRINGS.buyerProfile.websiteInvalid },
+    pincode: { required: false, pattern: INDIAN_PINCODE_PATTERN, message: UI_STRINGS.buyerProfile.pincodeInvalid },
   },
 
   buyerAccount: {

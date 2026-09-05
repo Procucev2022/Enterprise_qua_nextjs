@@ -5,33 +5,29 @@ import { useApp } from '@/lib/store';
 import { RFQItem } from '@/lib/types';
 import { MultiChannelChaserModal, VendorSurveyModal, RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
 import {
-  SlidersHorizontal,
   MessageSquare,
-  Sparkles,
   Share2,
   AlertTriangle,
   FileCheck,
-  Send,
-  Layers,
   ChevronRight,
-  Clock,
-  CheckCircle2,
   Sliders,
   TrendingUp,
   Search,
   Zap,
-  FileText,
-  Download,
-  Mail,
-  Phone,
-  Smartphone,
 } from 'lucide-react';
-import CompanyHoverTooltip from '@/app/components/CompanyHoverTooltip';
+import { SOURCING_MODES } from '@/lib/constants';
 
 interface KanbanBoardProps {
   onNavigateToMatrix?: (rfq: RFQItem) => void;
   onNavigateToSpend?: () => void;
 }
+
+/** Status → badge tone for the "AI Evaluation & Scored" column. */
+const SCORED_STATUS_TONE: Record<string, string> = {
+  'In Evaluation': 'badge-blue',
+  'AI Recommended': 'badge-emerald',
+  'PO Generated': 'badge-purple',
+};
 
 export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: KanbanBoardProps) {
   const {
@@ -49,21 +45,38 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
 
   const [chaserModalOpen, setChaserModalOpen] = useState(false);
   const [surveyModalOpen, setSurveyModalOpen] = useState(false);
-  const [selectedRfqForChaser, setSelectedRfqForChaser] = useState<string>('RFQ-2026-00421');
-  const [targetVendor, setTargetVendor] = useState<string>('Apex Supplies Ltd.');
+  const [selectedRfqForChaser, setSelectedRfqForChaser] = useState<string>('');
+  const [targetVendor, setTargetVendor] = useState<string>('Vendor Pool');
   const [chaserInitialChannel, setChaserInitialChannel] = useState<'call' | 'whatsapp' | 'sms'>('whatsapp');
 
-  // Group into 3 specification Kanban columns
+  // Group into 3 specification Kanban columns, driven by the real, live RFQ
+  // pipeline — no static demo cards. A column stays empty (with its own
+  // empty-state message below) rather than padding its count or back-filling
+  // it with placeholder cards when no real RFQ is at that stage.
   const col1_parsing = rfqs.filter((r) => r.status === 'Parsing');
   const col2_pending = rfqs.filter((r) => r.status === 'Quotes Pending');
   const col3_scored = rfqs.filter((r) => r.status === 'In Evaluation' || r.status === 'AI Recommended' || r.status === 'PO Generated');
 
-  const handleOpenChaser = (rfqNumber: string, vendor: string, channel: 'call' | 'whatsapp' | 'sms' | 'email') => {
-    setSelectedRfqForChaser(rfqNumber);
-    setTargetVendor(vendor);
+  const modeBadge = (modeId: RFQItem['sourcingMode']) => {
+    const mode = SOURCING_MODES.find((m) => m.id === modeId);
+    if (!mode) return null;
+    return <span className={`px-2 py-0.5 rounded border text-[10px] font-bold tracking-wide ${mode.badgeColor}`}>{mode.code}</span>;
+  };
+
+  const avgConfidence = (rfq: RFQItem): number | null => {
+    const entities = rfq.extractedEntities;
+    if (entities.length === 0) return null;
+    const total = entities.reduce((sum, e) => sum + e.confidence, 0);
+    return Math.round((total / entities.length) * 10) / 10;
+  };
+
+  const handleOpenChaser = (rfq: RFQItem, channel: 'call' | 'whatsapp' | 'sms' | 'email') => {
+    const primaryVendorName = rfq.followUpData?.vendors[0]?.vendorName || 'Vendor Pool';
+    setSelectedRfqForChaser(rfq.rfqNumber);
+    setTargetVendor(primaryVendorName);
     setChaserInitialChannel(channel === 'email' ? 'whatsapp' : channel);
     if (channel === 'email') {
-      triggerChannelChaser(rfqNumber, 'email', vendor);
+      triggerChannelChaser(rfq.rfqNumber, 'email', primaryVendorName);
     } else {
       setChaserModalOpen(true);
     }
@@ -84,10 +97,71 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
     showToast('Report Shared with Client', `Executive summary dispatched to client@procucev.com.`, 'info');
   };
 
-  const handleBatchFollowUp = () => {
-    triggerBatchChannelChaser('RFQ-2026-00421', ['call', 'whatsapp', 'sms']);
-    addAuditLog('Executed Global Override: Multi-Channel Batch Follow-up (Call + WhatsApp + SMS) to pending suppliers');
+  const handleViewMatrix = (rfq: RFQItem) => {
+    setSelectedRFQForMatrix(rfq);
+    if (onNavigateToMatrix) onNavigateToMatrix(rfq);
   };
+
+  const handleBatchFollowUp = () => {
+    if (col2_pending.length === 0) {
+      showToast('No RFQs Awaiting Quotes', 'There are no RFQs in Quotes Pending to batch-chase.', 'info');
+      return;
+    }
+    col2_pending.forEach((rfq) => triggerBatchChannelChaser(rfq.rfqNumber, ['call', 'whatsapp', 'sms']));
+    addAuditLog(
+      `Executed Global Override: Multi-Channel Batch Follow-up (Call + WhatsApp + SMS) to ${col2_pending.length} pending RFQ(s)`
+    );
+  };
+
+  // ── Real portfolio metrics for the top strip, all derived from the live
+  // `rfqs` collection so the headline numbers can never drift from the
+  // pipeline beneath them.
+  const totalRFQs = rfqs.length;
+  const activeChasing = rfqs.filter((r) => r.chasingActive).length;
+  const quotesReceived = rfqs.reduce((sum, r) => sum + (r.quotesCount || 0), 0);
+  const avgQuotesPerRFQ = totalRFQs === 0 ? 0 : Math.round((quotesReceived / totalRFQs) * 10) / 10;
+  const awaitingQuotes = rfqs.filter((r) => (r.quotesCount || 0) === 0).length;
+  const vendorsInvited = rfqs.reduce((sum, r) => sum + (r.followUpData?.totalInvited || 0), 0);
+  const vendorsResponded = rfqs.reduce((sum, r) => sum + (r.followUpData?.respondedCount || 0), 0);
+  const responseRate = vendorsInvited > 0 ? Math.round((vendorsResponded / vendorsInvited) * 100) : null;
+
+  const summaryCards = [
+    {
+      key: 'pipeline',
+      label: 'RFQs In Pipeline',
+      value: `${totalRFQs} Total`,
+      hint: `${activeChasing} Actively Chasing`,
+      tone: 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 border-indigo-200 dark:border-indigo-800',
+    },
+    {
+      key: 'quotes',
+      label: 'Quotes Received',
+      value: `${quotesReceived} Total`,
+      hint: `Avg ${avgQuotesPerRFQ} / RFQ`,
+      tone: 'text-sky-600 dark:text-cyan-400 bg-sky-50 dark:bg-cyan-950/60 border-sky-200 dark:border-sky-800',
+    },
+    {
+      key: 'response',
+      label: 'Vendor Response Rate',
+      value: responseRate === null ? '—' : `${responseRate}%`,
+      hint: responseRate === null ? 'No follow-ups sent yet' : '<24h Response',
+      tone: 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800',
+    },
+    {
+      key: 'vendors',
+      label: 'Vendors Invited',
+      value: `${vendorsInvited} Vendors`,
+      hint: `${vendorsResponded} Responded`,
+      tone: 'text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/60 border-purple-200 dark:border-purple-800',
+    },
+    {
+      key: 'awaiting',
+      label: 'Awaiting Quotes',
+      value: `${awaitingQuotes} Active`,
+      hint: `${quotesReceived} Received So Far`,
+      tone: 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/60 border-amber-200 dark:border-amber-800',
+    },
+  ];
 
   return (
     <div className="space-y-6 animate-fade-in pb-10">
@@ -112,47 +186,20 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
         </div>
       </div>
 
-      {/* Category Manager Top Executive Analytics Summary Strip */}
+      {/* Category Manager Top Executive Analytics Summary Strip — every figure derives from the live rfqs collection */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-        <div className="glass-panel p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs flex flex-col justify-between">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">RFQs Received</span>
-          <div className="flex items-baseline justify-between mt-1">
-            <span className="text-xl font-black text-slate-900 dark:text-white mono">12 Active</span>
-            <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-bold bg-indigo-50 dark:bg-indigo-950/60 px-1.5 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">Avg 2.4 / day</span>
+        {summaryCards.map((card) => (
+          <div
+            key={card.key}
+            className="glass-panel p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs flex flex-col justify-between"
+          >
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">{card.label}</span>
+            <div className="flex items-baseline justify-between mt-1 gap-2">
+              <span className="text-xl font-black text-slate-900 dark:text-white mono">{card.value}</span>
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border shrink-0 ${card.tone}`}>{card.hint}</span>
+            </div>
           </div>
-        </div>
-
-        <div className="glass-panel p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs flex flex-col justify-between">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">RFQs Downloaded</span>
-          <div className="flex items-baseline justify-between mt-1">
-            <span className="text-xl font-black text-slate-900 dark:text-white mono">312 Total</span>
-            <span className="text-[10px] text-sky-600 dark:text-cyan-400 font-bold bg-sky-50 dark:bg-cyan-950/60 px-1.5 py-0.5 rounded border border-sky-200 dark:border-sky-800">Avg 15.6 / day</span>
-          </div>
-        </div>
-
-        <div className="glass-panel p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs flex flex-col justify-between">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">Follow-Up SLA</span>
-          <div className="flex items-baseline justify-between mt-1">
-            <span className="text-xl font-black text-emerald-600 dark:text-emerald-400 mono">92.4%</span>
-            <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">&lt;24h Response</span>
-          </div>
-        </div>
-
-        <div className="glass-panel p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs flex flex-col justify-between">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">Avg Vendors / RFQ</span>
-          <div className="flex items-baseline justify-between mt-1">
-            <span className="text-xl font-black text-purple-600 dark:text-purple-400 mono">6.5 Vendors</span>
-            <span className="text-[10px] text-purple-600 dark:text-purple-300 font-bold bg-purple-50 dark:bg-purple-950/60 px-1.5 py-0.5 rounded border border-purple-200 dark:border-purple-800">Downloaded / RFQ</span>
-          </div>
-        </div>
-
-        <div className="glass-panel p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs flex flex-col justify-between col-span-2 sm:col-span-1">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">24h Escalations</span>
-          <div className="flex items-baseline justify-between mt-1">
-            <span className="text-xl font-black text-amber-600 dark:text-amber-400 mono">2 Active</span>
-            <span className="text-[10px] text-amber-600 dark:text-amber-400 font-bold">Email Reminders</span>
-          </div>
-        </div>
+        ))}
       </div>
 
       {/* Global Overrides Toolbar */}
@@ -183,7 +230,7 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
             onClick={handleBatchFollowUp}
             className="btn btn-emerald btn-sm font-semibold shadow-xs"
           >
-            <Zap size={13} /> Batch Multi-Channel Chaser
+            <Zap size={13} /> Batch Multi-Channel Chaser ({col2_pending.length})
           </button>
         </div>
       </div>
@@ -196,43 +243,49 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
             <div className="flex items-center gap-2">
               <div className="w-2.5 h-2.5 rounded-full bg-amber-500" />
               <h2 className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-gray-200">
-                Ingested / Parsing ({col1_parsing.length + 2})
+                Ingested / Parsing ({col1_parsing.length})
               </h2>
             </div>
             <span className="text-[10px] text-amber-600 dark:text-amber-400 font-mono font-bold">OCR Stage</span>
           </div>
 
           <div className="space-y-3 flex-1">
-            {/* Card 1: RFQ-00425 */}
-            <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900/90 border border-slate-200 dark:border-gray-800 hover:border-slate-300 dark:hover:border-gray-700 transition-all text-xs space-y-2 shadow-xs">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-slate-900 dark:text-white mono">RFQ-00425: Valves</span>
-                <span className="badge badge-amber text-[10px]">OCR Parsing</span>
+            {col1_parsing.length === 0 && (
+              <div className="text-center py-8 text-slate-400 dark:text-gray-600 text-[11px]">
+                No RFQs currently at the OCR/parsing stage.
               </div>
-              <p className="text-slate-700 dark:text-gray-300 text-[11px]">High Pressure Cryogenic Valves (16 Units)</p>
-              <div className="p-2 rounded bg-slate-50 dark:bg-gray-950 text-[10px] text-slate-600 dark:text-gray-400 space-y-1 border border-slate-100 dark:border-transparent">
-                <div className="flex justify-between">
-                  <span>Confidence:</span>
-                  <span className="text-emerald-600 dark:text-emerald-400 font-bold">94.2%</span>
+            )}
+            {col1_parsing.map((rfq) => {
+              const confidence = avgConfidence(rfq);
+              return (
+                <div
+                  key={rfq.id}
+                  className="p-3.5 rounded-xl bg-white dark:bg-gray-900/90 border border-slate-200 dark:border-gray-800 hover:border-slate-300 dark:hover:border-gray-700 transition-all text-xs space-y-2 shadow-xs"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-900 dark:text-white mono">{rfq.rfqNumber}</span>
+                    {modeBadge(rfq.sourcingMode)}
+                  </div>
+                  <p className="text-slate-700 dark:text-gray-300 text-[11px] truncate">{rfq.title}</p>
+                  <div className="p-2 rounded bg-slate-50 dark:bg-gray-950 text-[10px] text-slate-600 dark:text-gray-400 space-y-1 border border-slate-100 dark:border-transparent">
+                    <div className="flex justify-between">
+                      <span>Category:</span>
+                      <span className="text-slate-900 dark:text-gray-200 font-medium">{rfq.category}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Items:</span>
+                      <span className="text-slate-900 dark:text-gray-200 font-medium">{rfq.extractedEntities.length}</span>
+                    </div>
+                    {confidence !== null && (
+                      <div className="flex justify-between">
+                        <span>Avg. Extraction Confidence:</span>
+                        <span className="text-emerald-600 dark:text-emerald-400 font-bold">{confidence}%</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div className="flex justify-between">
-                  <span>Entities:</span>
-                  <span className="text-slate-900 dark:text-gray-200 font-medium">Globe Valve 2-in 600#</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Card 2: RFQ-00426 */}
-            <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900/90 border border-slate-200 dark:border-gray-800 hover:border-slate-300 dark:hover:border-gray-700 transition-all text-xs space-y-2 shadow-xs">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-slate-900 dark:text-white mono">RFQ-00426: Steel Pipe</span>
-                <span className="badge badge-blue text-[10px]">Validating</span>
-              </div>
-              <p className="text-slate-700 dark:text-gray-300 text-[11px]">Seamless Carbon Steel Pipes (480m)</p>
-              <div className="p-2 rounded bg-slate-50 dark:bg-gray-950 text-[10px] text-slate-600 dark:text-gray-400 border border-slate-100 dark:border-transparent">
-                <span>BOQ Schema verification in progress</span>
-              </div>
-            </div>
+              );
+            })}
           </div>
         </div>
 
@@ -242,95 +295,94 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
             <div className="flex items-center gap-2">
               <div className="w-2.5 h-2.5 rounded-full bg-sky-500" />
               <h2 className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-gray-200">
-                Quotes Pending / AI Follow-up ({col2_pending.length + 3})
+                Quotes Pending / AI Follow-up ({col2_pending.length})
               </h2>
             </div>
             <span className="text-[10px] text-sky-600 dark:text-cyan-400 font-mono font-bold">Multi-Channel Active</span>
           </div>
 
           <div className="space-y-3 flex-1">
-            {/* Card 1: RFQ-00421 */}
-            <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900/90 border border-indigo-200 dark:border-indigo-500/30 hover:border-indigo-400 dark:hover:border-indigo-500/60 transition-all text-xs space-y-3 shadow-xs">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-slate-900 dark:text-white mono">RFQ-00421: Pumps</span>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-500/30 flex items-center gap-1">
-                  <span className="live-dot" /> Multi-Channel: Active
-                </span>
+            {col2_pending.length === 0 && (
+              <div className="text-center py-8 text-slate-400 dark:text-gray-600 text-[11px]">
+                No RFQs currently awaiting vendor quotes.
               </div>
-              <p className="text-slate-700 dark:text-gray-300 text-[11px]">Centrifugal Water Pumps (500 GPM) • 5 Quotes In</p>
-
-              {/* 4-Channel Multi-Channel Follow-up telemetry pills */}
-              <div className="p-2 rounded-lg bg-slate-50 dark:bg-gray-950 border border-slate-100 dark:border-gray-800/80 space-y-1.5 text-[10px]">
-                <div className="flex justify-between items-center text-purple-700 dark:text-purple-300 font-semibold">
-                  <span>📞 Voice Calls:</span>
-                  <span className="mono">4/5 Connected (Avg 1m 48s)</span>
+            )}
+            {col2_pending.map((rfq) => (
+              <div
+                key={rfq.id}
+                className="p-3.5 rounded-xl bg-white dark:bg-gray-900/90 border border-indigo-200 dark:border-indigo-500/30 hover:border-indigo-400 dark:hover:border-indigo-500/60 transition-all text-xs space-y-3 shadow-xs"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-slate-900 dark:text-white mono">{rfq.rfqNumber}</span>
+                  {rfq.chasingActive ? (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-500/30 flex items-center gap-1">
+                      <span className="live-dot" /> Multi-Channel: Active
+                    </span>
+                  ) : (
+                    <span className="badge badge-amber text-[10px]">Chasing Paused</span>
+                  )}
                 </div>
-                <div className="flex justify-between items-center text-emerald-700 dark:text-emerald-300 font-semibold">
-                  <span>💬 WhatsApp Bot:</span>
-                  <span className="mono">4 Read • 3 Bids In</span>
-                </div>
-                <div className="flex justify-between items-center text-sky-700 dark:text-cyan-300 font-semibold">
-                  <span>📱 SMS Direct:</span>
-                  <span className="mono">5 Delivered (100% DLT)</span>
-                </div>
-                <div className="flex justify-between items-center text-amber-700 dark:text-amber-300 font-semibold">
-                  <span>✉️ 24h Email:</span>
-                  <span className="mono">2 Reminders Dispatched</span>
-                </div>
-              </div>
+                <p className="text-slate-700 dark:text-gray-300 text-[11px] truncate">{rfq.title}</p>
 
-              {/* Action Buttons */}
-              <div className="flex items-center gap-1 pt-1 flex-wrap">
-                <button
-                  onClick={() => handleOpenChaser('RFQ-2026-00421', 'Apex Supplies Ltd.', 'call')}
-                  className="px-2 py-1 rounded bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 hover:bg-purple-100 font-semibold text-[10px] flex items-center gap-1"
-                >
-                  <span>📞</span> Call
-                </button>
-                <button
-                  onClick={() => handleOpenChaser('RFQ-2026-00421', 'Apex Supplies Ltd.', 'whatsapp')}
-                  className="px-2 py-1 rounded bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100 font-semibold text-[10px] flex items-center gap-1"
-                >
-                  <MessageSquare size={10} /> WA
-                </button>
-                <button
-                  onClick={() => handleOpenChaser('RFQ-2026-00421', 'Apex Supplies Ltd.', 'sms')}
-                  className="px-2 py-1 rounded bg-sky-50 dark:bg-cyan-950/60 text-sky-700 dark:text-cyan-300 border border-sky-200 dark:border-cyan-800 hover:bg-sky-100 font-semibold text-[10px] flex items-center gap-1"
-                >
-                  <span>📱</span> SMS
-                </button>
-                <button
-                  onClick={() => handleOpenChaser('RFQ-2026-00421', 'WPIL Pumps Ltd.', 'email')}
-                  className="px-2 py-1 rounded bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-100 font-semibold text-[10px] flex items-center gap-1"
-                >
-                  <span>✉️</span> 24h Email
-                </button>
-                <button
-                  onClick={() => openRFQDeepDive(rfqs[0])}
-                  className="btn btn-secondary btn-sm text-[10px] px-2 ml-auto"
-                >
-                  <Search size={10} /> Deep Dive
-                </button>
-              </div>
-            </div>
+                {rfq.followUpData && (
+                  <div className="p-2 rounded-lg bg-slate-50 dark:bg-gray-950 border border-slate-100 dark:border-gray-800/80 space-y-1.5 text-[10px]">
+                    <div className="flex justify-between items-center text-purple-700 dark:text-purple-300 font-semibold">
+                      <span>📞 Voice Calls:</span>
+                      <span className="mono">{rfq.followUpData.callStats.connected}/{rfq.followUpData.callStats.total} Connected</span>
+                    </div>
+                    <div className="flex justify-between items-center text-emerald-700 dark:text-emerald-300 font-semibold">
+                      <span>💬 WhatsApp Bot:</span>
+                      <span className="mono">{rfq.followUpData.whatsappStats.read}/{rfq.followUpData.whatsappStats.total} Read</span>
+                    </div>
+                    <div className="flex justify-between items-center text-sky-700 dark:text-cyan-300 font-semibold">
+                      <span>📱 SMS Direct:</span>
+                      <span className="mono">{rfq.followUpData.smsStats.delivered}/{rfq.followUpData.smsStats.total} Delivered</span>
+                    </div>
+                  </div>
+                )}
 
-            {/* Card 2: RFQ-00422 */}
-            <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900/90 border border-slate-200 dark:border-gray-800 hover:border-slate-300 dark:hover:border-gray-700 transition-all text-xs space-y-3 shadow-xs">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-slate-900 dark:text-white mono">RFQ-00422: Cables</span>
-                <span className="badge badge-rose text-[10px]">24h Overdue</span>
-              </div>
-              <p className="text-slate-700 dark:text-gray-300 text-[11px]">Armored Power Transmission Cables 33kV</p>
+                {/* Action Buttons */}
+                <div className="flex items-center gap-1 pt-1 flex-wrap">
+                  <button
+                    onClick={() => handleOpenChaser(rfq, 'call')}
+                    className="px-2 py-1 rounded bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 hover:bg-purple-100 font-semibold text-[10px] flex items-center gap-1"
+                  >
+                    <span>📞</span> Call
+                  </button>
+                  <button
+                    onClick={() => handleOpenChaser(rfq, 'whatsapp')}
+                    className="px-2 py-1 rounded bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100 font-semibold text-[10px] flex items-center gap-1"
+                  >
+                    <MessageSquare size={10} /> WA
+                  </button>
+                  <button
+                    onClick={() => handleOpenChaser(rfq, 'sms')}
+                    className="px-2 py-1 rounded bg-sky-50 dark:bg-cyan-950/60 text-sky-700 dark:text-cyan-300 border border-sky-200 dark:border-cyan-800 hover:bg-sky-100 font-semibold text-[10px] flex items-center gap-1"
+                  >
+                    <span>📱</span> SMS
+                  </button>
+                  <button
+                    onClick={() => handleOpenChaser(rfq, 'email')}
+                    className="px-2 py-1 rounded bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-100 font-semibold text-[10px] flex items-center gap-1"
+                  >
+                    <span>✉️</span> 24h Email
+                  </button>
+                  <button
+                    onClick={() => openRFQDeepDive(rfq)}
+                    className="btn btn-secondary btn-sm text-[10px] px-2 ml-auto"
+                  >
+                    <Search size={10} /> Deep Dive
+                  </button>
+                </div>
 
-              <div className="flex items-center gap-2 pt-1">
                 <button
-                  onClick={() => handleEscalateToBuyer('RFQ-2026-00422')}
-                  className="btn btn-secondary btn-sm flex-1 text-rose-600 dark:text-rose-300 hover:text-rose-700 border-rose-300 dark:border-rose-500/30 font-semibold"
+                  onClick={() => handleEscalateToBuyer(rfq.rfqNumber)}
+                  className="btn btn-secondary btn-sm w-full text-rose-600 dark:text-rose-300 hover:text-rose-700 border-rose-300 dark:border-rose-500/30 font-semibold"
                 >
                   <AlertTriangle size={12} /> Escalate to Buyer
                 </button>
               </div>
-            </div>
+            ))}
           </div>
         </div>
 
@@ -347,48 +399,63 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
           </div>
 
           <div className="space-y-3 flex-1">
-            {/* Card 1: RFQ-00418 */}
-            <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900/90 border border-emerald-200 dark:border-emerald-500/40 hover:border-emerald-400 dark:hover:border-emerald-500/70 transition-all text-xs space-y-3 shadow-xs">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-slate-900 dark:text-white mono">RFQ-00418: Panels</span>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-500/30">
-                  Mode 3 Scored (&gt;80%)
-                </span>
+            {col3_scored.length === 0 && (
+              <div className="text-center py-8 text-slate-400 dark:text-gray-600 text-[11px]">
+                No RFQs currently in evaluation or scored.
               </div>
-              <p className="text-slate-700 dark:text-gray-300 text-[11px]">
-                Low Voltage Switchgear Panels • <span className="text-emerald-600 dark:text-emerald-400 font-bold">96% AI Match</span>
-              </p>
-
-              <div className="grid grid-cols-2 gap-2 pt-1">
-                <button
-                  onClick={() => handleApproveReport(rfqs[0])}
-                  className="btn btn-secondary btn-sm text-[11px] font-semibold"
+            )}
+            {col3_scored.map((rfq) => {
+              const hasQuotes = rfq.quotesCount > 0;
+              return (
+                <div
+                  key={rfq.id}
+                  className={`p-3.5 rounded-xl bg-white dark:bg-gray-900/90 border transition-all text-xs space-y-3 shadow-xs ${
+                    hasQuotes
+                      ? 'border-emerald-200 dark:border-emerald-500/40 hover:border-emerald-400 dark:hover:border-emerald-500/70'
+                      : 'border-slate-200 dark:border-gray-800'
+                  }`}
                 >
-                  <FileCheck size={12} /> Approve Report
-                </button>
-                <button
-                  onClick={() => handleShareReport(rfqs[0])}
-                  className="btn btn-primary btn-sm text-[11px] font-semibold"
-                >
-                  <Share2 size={12} /> Share Report
-                </button>
-              </div>
-            </div>
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-900 dark:text-white mono">{rfq.rfqNumber}</span>
+                    <span className={`badge ${SCORED_STATUS_TONE[rfq.status]} text-[10px]`}>{rfq.status}</span>
+                  </div>
+                  <p className="text-slate-700 dark:text-gray-300 text-[11px] truncate">
+                    {rfq.title}
+                    {typeof rfq.aiScore === 'number' && (
+                      <span className="text-emerald-600 dark:text-emerald-400 font-bold"> • {rfq.aiScore}% AI Match</span>
+                    )}
+                  </p>
+                  <div className="text-[10px] text-slate-500 dark:text-gray-400">
+                    {rfq.quotesCount} quote{rfq.quotesCount === 1 ? '' : 's'} evaluated
+                  </div>
 
-            {/* Card 2: RFQ-00421 Link to matrix */}
-            <div
-              onClick={() => {
-                setSelectedRFQForMatrix(rfqs[0]);
-                if (onNavigateToMatrix) onNavigateToMatrix(rfqs[0]);
-              }}
-              className="p-3.5 rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 hover:border-indigo-400 dark:hover:border-indigo-500/50 transition-all text-xs cursor-pointer group shadow-xs"
-            >
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-slate-900 dark:text-white mono">RFQ-00421: Matrix Ready</span>
-                <ChevronRight size={14} className="text-slate-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-300 transition-transform group-hover:translate-x-1" />
-              </div>
-              <p className="text-slate-500 dark:text-gray-400 text-[11px] mt-1">Vendor C scored 94% match. Click to inspect matrix.</p>
-            </div>
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <button
+                      onClick={() => handleApproveReport(rfq)}
+                      className="btn btn-secondary btn-sm text-[11px] font-semibold"
+                    >
+                      <FileCheck size={12} /> Approve Report
+                    </button>
+                    <button
+                      onClick={() => handleShareReport(rfq)}
+                      className="btn btn-primary btn-sm text-[11px] font-semibold"
+                    >
+                      <Share2 size={12} /> Share Report
+                    </button>
+                  </div>
+
+                  {hasQuotes && (
+                    <button
+                      onClick={() => handleViewMatrix(rfq)}
+                      className="w-full flex items-center justify-between p-2 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-500/30 text-indigo-700 dark:text-indigo-300 text-[11px] font-semibold hover:bg-indigo-100 dark:hover:bg-indigo-950/70 transition-all group"
+                    >
+                      <span>View Comparative Quote Matrix</span>
+                      <ChevronRight size={13} className="group-hover:translate-x-1 transition-transform" />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -412,7 +479,7 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
       <RFQFollowUpDeepDiveModal
         isOpen={deepDiveModalOpen}
         onClose={() => setDeepDiveModalOpen(false)}
-        rfq={selectedRFQForDeepDive || rfqs[0]}
+        rfq={selectedRFQForDeepDive}
       />
     </div>
   );

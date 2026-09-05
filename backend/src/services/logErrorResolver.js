@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { logger } = require('./loggerService');
 const { queryCache } = require('../db/queryCache');
-const poolModule = require('../db/pool');
+const pool = require('../db/pool');
 
 /**
  * Enterprise Log Error Auto-Resolver & Diagnostics Engine
@@ -123,7 +123,7 @@ class LogErrorResolver {
 
     if (actionType === 'RECONNECT_POOL_AND_INVALIDATE_CACHE') {
       queryCache.clear();
-      await poolModule.checkDBHealth();
+      await pool.checkDatabaseHealth();
       message = 'Cleared query cache and verified database connection lifecycle.';
     } else if (actionType === 'OPTIMIZE_QUERY_CACHE') {
       queryCache.clear();

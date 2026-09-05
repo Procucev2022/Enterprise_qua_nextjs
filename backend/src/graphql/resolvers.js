@@ -1,19 +1,76 @@
 const storeService = require('../services/storeService');
 const { queryCache } = require('../db/queryCache');
-const poolModule = require('../db/pool');
+const pool = require('../db/pool');
+const { getOptimizationMetrics } = require('../db/optimizationMetrics');
 const { logger } = require('../services/loggerService');
 const { logErrorResolver } = require('../services/logErrorResolver');
 const { performanceOptimizer } = require('../services/performanceOptimizer');
 const cryptoService = require('../services/cryptoService');
+const authService = require('../services/authService');
+const { extractToken } = require('../middleware/auth');
+const rfqSummaryService = require('../services/rfqSummaryService');
+const { AUTH_MESSAGES } = require('../config/constants');
+
+/**
+ * Mutations go through the same rootValue-as-plain-functions path as queries,
+ * bypassing the REST route middleware entirely — so auth has to be enforced
+ * here instead. graphql-js calls these as fn(args, context, info); context
+ * carries { req, res } from graphqlController.
+ */
+// Async because revocation is read from PostgreSQL now. Every caller awaits it,
+// so a logged-out token is rejected here too — while that check lived in a
+// per-process Set, GraphQL was a second route a revoked token could still pass
+// after a restart or on a different worker.
+async function requireAuth(context) {
+  const token = extractToken(context && context.req);
+  if (!token) {
+    throw new Error(AUTH_MESSAGES.NO_SESSION_TOKEN);
+  }
+  const verification = await authService.assertSessionActive(token);
+  if (!verification.valid) {
+    throw new Error(verification.error || AUTH_MESSAGES.INVALID_SESSION_FALLBACK);
+  }
+  return verification.user;
+}
+
+async function requireAdmin(context) {
+  const user = await requireAuth(context);
+  if (user.role !== 'admin') {
+    throw new Error('You do not have permission to perform this action.');
+  }
+  return user;
+}
+
+/**
+ * Which RFQs a caller may see, mirroring rfqController's resolveRfqReadScope.
+ *
+ * The `rfqs`/`rfq` resolvers used to read `storeService.getRFQs()` — the
+ * whole global array, with no session required at all. That made GraphQL a
+ * second, wider route to the same leak the REST endpoints had (7c8990c),
+ * and it would have quietly bypassed the scoping added there. Buyers are
+ * scoped to their own buyerAccountId; category managers, admins and
+ * vendors see the full list (see rfqController.js for why).
+ */
+async function requireRfqReadScope(context) {
+  const user = await requireAuth(context);
+  if (user.role === 'buyer') {
+    const account = storeService.getBuyerAccountByEmail(user.email);
+    return { user, restricted: true, buyerAccountId: account ? account.id : null };
+  }
+  return { user, restricted: false, buyerAccountId: null };
+}
 
 /**
  * GraphQL Root Resolvers
  */
 const rootResolvers = {
 
-  rfqs: (args = {}) => {
+  rfqs: async (args = {}, context) => {
+    const scope = await requireRfqReadScope(context);
     const { category, sourcingMode, status, limit = 50, offset = 0 } = args;
-    let result = storeService.getRFQs();
+    let result = scope.restricted
+      ? storeService.getRFQs().filter((rfq) => rfq.buyerAccountId === scope.buyerAccountId)
+      : storeService.getRFQs();
     if (category) {
       result = result.filter((r) => r.category && r.category.toLowerCase().includes(category.toLowerCase()));
     }
@@ -26,9 +83,14 @@ const rootResolvers = {
     return result.slice(offset, offset + limit);
   },
 
-  rfq: (args = {}) => {
+  rfq: async (args = {}, context) => {
+    const scope = await requireRfqReadScope(context);
     const key = args.id || args.rfqNumber;
-    return key ? storeService.getRFQById(key) || null : null;
+    if (!key) return null;
+    const rfq = storeService.getRFQById(key);
+    if (!rfq) return null;
+    if (scope.restricted && rfq.buyerAccountId !== scope.buyerAccountId) return null;
+    return rfq;
   },
 
   vendors: (args = {}) => {
@@ -107,11 +169,11 @@ const rootResolvers = {
   },
 
   dbHealth: async () => {
-    return await poolModule.checkDBHealth();
+    return await pool.checkDatabaseHealth();
   },
 
   optimizationMetrics: () => {
-    return poolModule.getOptimizationMetrics();
+    return getOptimizationMetrics();
   },
 
   diagnoseLogErrors: () => {
@@ -142,47 +204,69 @@ const rootResolvers = {
     return { plaintext };
   },
 
-  createRFQ: ({ input }) => {
+  createRFQ: async ({ input }, context) => {
+    const user = await requireAuth(context);
     logger.info('GraphQL Mutation: createRFQ', { title: input.title }, 'GRAPHQL_MUTATION');
-    return storeService.createRFQ(input);
+    const lineItems = Array.isArray(input.extractedEntities) ? input.extractedEntities : input.lineItems || [];
+    // A model or network failure here must not block RFQ creation —
+    // buildRFQSummary already falls back to a deterministic summary rather
+    // than throwing (mirrors rfqController.createRFQ).
+    const aiSummary = await rfqSummaryService.buildRFQSummary(
+      { ...input, extractedEntities: lineItems },
+      { orgName: user.orgName || '' }
+    );
+    const requestingBuyerAccount = storeService.getBuyerAccountByEmail(user.email);
+    return storeService.createRFQ({ ...input, extractedEntities: lineItems, aiSummary }, requestingBuyerAccount);
   },
 
-  updateRFQ: ({ id, input }) => {
+  updateRFQ: async ({ id, input }, context) => {
+    const scope = await requireRfqReadScope(context);
+    const existing = storeService.getRFQById(id);
+    if (!existing || (scope.restricted && existing.buyerAccountId !== scope.buyerAccountId)) {
+      return null;
+    }
     logger.info(`GraphQL Mutation: updateRFQ ${id}`, { id, input }, 'GRAPHQL_MUTATION');
     return storeService.updateRFQ(id, input);
   },
 
-  createVendor: ({ input }) => {
+  createVendor: async ({ input }, context) => {
+    const user = await requireAuth(context);
     logger.info('GraphQL Mutation: createVendor', { name: input.name }, 'GRAPHQL_MUTATION');
-    return storeService.addVendor(input);
+    return storeService.addVendor(input, user.email);
   },
 
-  updateVendor: ({ id, input }) => {
+  updateVendor: async ({ id, input }, context) => {
+    await requireAuth(context);
     logger.info(`GraphQL Mutation: updateVendor ${id}`, { id, input }, 'GRAPHQL_MUTATION');
     return storeService.updateVendor(id, input);
   },
 
-  deleteVendor: ({ id }) => {
+  deleteVendor: async ({ id }, context) => {
+    await requireAuth(context);
     logger.info(`GraphQL Mutation: deleteVendor ${id}`, { id }, 'GRAPHQL_MUTATION');
     return storeService.deleteVendor(id);
   },
 
-  createBuyerAccount: ({ input }) => {
+  createBuyerAccount: async ({ input }, context) => {
+    await requireAuth(context);
     logger.info('GraphQL Mutation: createBuyerAccount', { org: input.organizationName }, 'GRAPHQL_MUTATION');
     return storeService.addBuyerAccount(input);
   },
 
-  clearQueryCache: () => {
+  clearQueryCache: async (args, context) => {
+    await requireAuth(context);
     queryCache.clear();
     return true;
   },
 
-  purgeLogs: (args = {}) => {
+  purgeLogs: async (args = {}, context) => {
+    await requireAdmin(context);
     const maxAgeDays = args.maxAgeDays || 30;
     return logger.purgeExpiredLogs({ maxAgeDays });
   },
 
-  autoResolveLogErrors: async (args = {}) => {
+  autoResolveLogErrors: async (args = {}, context) => {
+    await requireAdmin(context);
     if (args.action) {
       const res = await logErrorResolver.executeRemediation(args.action);
       return {
@@ -194,12 +278,14 @@ const rootResolvers = {
     return await logErrorResolver.autoResolveAll();
   },
 
-  optimizePerformance: (args = {}) => {
+  optimizePerformance: async (args = {}, context) => {
+    await requireAdmin(context);
     const level = args.level || 'standard';
     return performanceOptimizer.optimizePerformance(level);
   },
 
-  encryptData: ({ input }) => {
+  encryptData: async ({ input }, context) => {
+    await requireAuth(context);
     const res = cryptoService.encrypt(input.plaintext, {
       secretKey: input.secretKey,
       additionalData: input.additionalData,
@@ -218,4 +304,3 @@ const rootResolvers = {
 };
 
 module.exports = rootResolvers;
-

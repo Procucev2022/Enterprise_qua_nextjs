@@ -1,5 +1,9 @@
 import {
   SOURCING_MODES,
+  CURRENCY,
+  formatCurrency,
+  formatFileSize,
+  MANUAL_LINE_ITEM_DEFAULTS,
   INITIAL_SYSTEM_CONFIG,
   INITIAL_AZURE_HEALTH,
   BUYER_SUBSCRIPTION_PLANS,
@@ -10,6 +14,10 @@ import {
   EMAIL_PATTERN,
   GSTIN_PATTERN,
   PHONE_PATTERN,
+  DISPLAY_TIMEZONE,
+  RFQ_STATUSES,
+  formatIndianDate,
+  formatIndianDateTime,
 } from '@/lib/constants';
 
 
@@ -74,6 +82,8 @@ describe('lib/constants', () => {
       category: 'Mechanical',
       budget: 20000,
       targetDeliveryDate: '2026-03-30',
+      deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+      deliveryPincode: '400701',
     });
     expect(result.isValid).toBe(true);
   });
@@ -88,3 +98,140 @@ describe('lib/constants', () => {
   });
 });
 
+describe('CURRENCY and formatCurrency', () => {
+  it('pairs the rupee symbol with Indian grouping', () => {
+    expect(CURRENCY.SYMBOL).toBe('₹');
+    expect(CURRENCY.CODE).toBe('INR');
+    expect(CURRENCY.LOCALE).toBe('en-IN');
+  });
+
+  it('groups amounts the Indian way, not in thousands', () => {
+    // 1,45,000 rather than 145,000: the symbol and the grouping must agree.
+    expect(formatCurrency(145000)).toBe('₹1,45,000');
+    expect(formatCurrency(0)).toBe('₹0');
+  });
+
+  it('rounds to whole rupees because every figure shown is a total', () => {
+    expect(formatCurrency(1500.4)).toBe('₹1,500');
+    expect(formatCurrency(1500.6)).toBe('₹1,501');
+  });
+
+  // A record written before budget was persisted yields NaN here, and a crash on
+  // a missing budget is exactly the defect this guard exists to prevent.
+  it('renders a non-finite amount as zero instead of NaN', () => {
+    expect(formatCurrency(NaN)).toBe('₹0');
+    expect(formatCurrency(Infinity)).toBe('₹0');
+    expect(formatCurrency(undefined as unknown as number)).toBe('₹0');
+  });
+});
+
+describe('MANUAL_LINE_ITEM_DEFAULTS', () => {
+  // Mirrors DELIVERY_DATE_OFFSET_DAYS in RFQ_INGESTION_CONFIG on the backend so a
+  // keyed RFQ and an ingested one fall back to the same delivery date.
+  it('matches the backend delivery-date offset', () => {
+    expect(MANUAL_LINE_ITEM_DEFAULTS.TARGET_DATE_OFFSET_DAYS).toBe(5);
+  });
+});
+
+describe('formatFileSize', () => {
+  test.each([
+    [0, '0 B'],
+    [512, '512 B'],
+    [1023, '1023 B'],
+    [1024, '1.0 KB'],
+    [2048, '2.0 KB'],
+    [1536, '1.5 KB'],
+    [1024 * 1024, '1.0 MB'],
+    [1024 * 1024 * 1024, '1.0 GB'],
+    // Capped at GB rather than rolling on to TB, which no attachment reaches.
+    [1024 * 1024 * 1024 * 5, '5.0 GB'],
+  ])('renders %i bytes as %s', (bytes, expected) => {
+    expect(formatFileSize(bytes)).toBe(expected);
+  });
+
+  // A record written before size was captured yields NaN, and "NaN B" in a
+  // document list is worse than reporting nothing.
+  test.each([NaN, Infinity, -1, undefined as unknown as number])('renders %p as zero bytes', (bytes) => {
+    expect(formatFileSize(bytes)).toBe('0 B');
+  });
+});
+
+// ==============================================================================
+// INDIAN DATE AND TIME FORMATTING
+// ==============================================================================
+// RFQ timestamps are stored in UTC, which is right for storage and wrong for
+// display: everyone reading them is in India, so a raised-at of
+// "2026-09-04T09:25:21.000Z" reads five and a half hours earlier than the moment
+// the buyer actually pressed save.
+// ==============================================================================
+
+describe('DISPLAY_TIMEZONE', () => {
+  it('presents timestamps in India', () => {
+    expect(DISPLAY_TIMEZONE).toBe('Asia/Kolkata');
+  });
+});
+
+describe('formatIndianDateTime', () => {
+  // 09:25 UTC is 14:55 IST, so the shift is what proves the timezone applied.
+  it('shifts a UTC instant into IST and names the zone', () => {
+    expect(formatIndianDateTime('2026-09-04T09:25:21.000Z')).toBe('04 Sept 2026, 02:55 pm IST');
+  });
+
+  // MySQL hands a DATETIME back with no zone designator. It stores UTC, so it has
+  // to be read as UTC — parsed as local time it would shift by the viewer's offset.
+  it('reads a bare MySQL DATETIME as UTC', () => {
+    expect(formatIndianDateTime('2026-09-02 11:07:16')).toBe('02 Sept 2026, 04:37 pm IST');
+  });
+
+  it('accepts a MySQL DATETIME without seconds', () => {
+    expect(formatIndianDateTime('2026-09-02 11:07')).toBe('02 Sept 2026, 04:37 pm IST');
+  });
+
+  it('crosses midnight forward when the UTC time is late enough', () => {
+    // 20:00 UTC on the 4th is 01:30 IST on the 5th.
+    expect(formatIndianDateTime('2026-09-04T20:00:00.000Z')).toBe('05 Sept 2026, 01:30 am IST');
+  });
+
+  it.each([[''], ['   '], [undefined]])('reports nothing for %p', (value) => {
+    expect(formatIndianDateTime(value)).toBe('');
+  });
+
+  // A legacy record should still show whatever it holds rather than "Invalid Date".
+  it('returns an unparseable value unchanged', () => {
+    expect(formatIndianDateTime('not a date')).toBe('not a date');
+  });
+});
+
+describe('formatIndianDate', () => {
+  // A date-only value must not slip to the previous day for a viewer behind UTC.
+  it('formats a plain date without shifting the day', () => {
+    expect(formatIndianDate('2026-09-15')).toBe('15 Sept 2026');
+  });
+
+  it('formats the date part of a full instant', () => {
+    expect(formatIndianDate('2026-09-02T11:07:16.000Z')).toBe('02 Sept 2026');
+  });
+
+  it.each([[''], ['  '], [undefined]])('reports nothing for %p', (value) => {
+    expect(formatIndianDate(value)).toBe('');
+  });
+
+  it('returns an unparseable value unchanged', () => {
+    expect(formatIndianDate('nope')).toBe('nope');
+  });
+});
+
+describe('RFQ_STATUSES', () => {
+  // The edit dialog builds its status dropdown from this list, so it has to match
+  // the RFQItem['status'] union exactly or the dialog offers a status the type
+  // does not allow.
+  it('lists every RFQ state in pipeline order', () => {
+    expect(RFQ_STATUSES).toEqual([
+      'Parsing',
+      'Quotes Pending',
+      'In Evaluation',
+      'AI Recommended',
+      'PO Generated',
+    ]);
+  });
+});

@@ -1,24 +1,19 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQItem } from '@/lib/types';
-import { SOURCING_MODES } from '@/lib/constants';
+import { formatCurrency } from '@/lib/constants';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import {
   Building2,
   Users,
   Search,
   ChevronRight,
-  TrendingUp,
   Clock,
-  DollarSign,
+  IndianRupee,
   Layers,
-  ArrowRight,
-  ShieldCheck,
-  FileCheck,
   ChevronDown,
-  Sparkles,
-  Award,
 } from 'lucide-react';
 import CompanyHoverTooltip from '@/app/components/CompanyHoverTooltip';
 
@@ -27,132 +22,87 @@ interface VendorConsoleProps {
   onNavigateToEvaluation?: () => void;
 }
 
+// Deterministic decorative avatar color, not a claim about the vendor —
+// picked from the company name so the same vendor always renders the same
+// color without needing a color stored anywhere.
+const AVATAR_PALETTE = [
+  { bg: 'bg-emerald-600 text-white', avatar: 'bg-emerald-100 text-emerald-800' },
+  { bg: 'bg-indigo-600 text-white', avatar: 'bg-indigo-100 text-indigo-800' },
+  { bg: 'bg-purple-600 text-white', avatar: 'bg-purple-100 text-purple-800' },
+  { bg: 'bg-cyan-600 text-white', avatar: 'bg-cyan-100 text-cyan-800' },
+  { bg: 'bg-orange-600 text-white', avatar: 'bg-orange-100 text-orange-800' },
+  { bg: 'bg-rose-600 text-white', avatar: 'bg-rose-100 text-rose-800' },
+];
+function avatarStyleFor(name: string) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  return AVATAR_PALETTE[hash % AVATAR_PALETTE.length];
+}
+
 export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluation }: VendorConsoleProps) {
-  const { rfqs } = useApp();
+  const { rfqs, buyerVendors } = useApp();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedVendorId, setSelectedVendorId] = useState<string | null>(null);
   const [expandedQuoteNumber, setExpandedQuoteNumber] = useState<string | null>(null);
+  // Tracks an explicit user collapse ("Hide Details") so dropdown-driven
+  // expansion cannot silently re-open a panel the user just dismissed.
+  const [drillDownDismissed, setDrillDownDismissed] = useState(false);
 
   // Dropdown filter states
   const [selectedCompany, setSelectedCompany] = useState<string>('all');
   const [selectedContactFilterId, setSelectedContactFilterId] = useState<string>('all');
 
-  // Static list of vendor profiles with their associated metrics and parameters
-  const VENDORS = [
-    {
-      id: 'vendor-1',
-      name: 'Rajesh Nair',
-      email: 'rajesh@apexsupplies.in',
-      company: 'Apex Supplies Ltd.',
-      logoLetter: 'A',
-      logoBg: 'bg-emerald-600 text-white',
-      avatarColor: 'bg-emerald-100 text-emerald-800',
-      category: 'Heavy Mechanical & Pumps',
-      location: 'Mumbai, MH',
-      rating: 4.8,
-      leadTimeDays: 12,
-      whatsappSla: 94.2,
-      awardedSpend: 420000,
-      rfqBids: ['RFQ-2026-00421', 'RFQ-2026-00423', 'RFQ-2026-00425'],
-    },
-    {
-      id: 'vendor-2',
-      name: 'Amit Kumar',
-      email: 'amit@kiranvalves.com',
-      company: 'Kiran Valve Industries',
-      logoLetter: 'K',
-      logoBg: 'bg-indigo-650 text-white',
-      avatarColor: 'bg-indigo-100 text-indigo-800',
-      category: 'Valves & Flow Control',
-      location: 'Ahmedabad, GJ',
-      rating: 4.5,
-      leadTimeDays: 14,
-      whatsappSla: 88.0,
-      awardedSpend: 280000,
-      rfqBids: ['RFQ-2026-00421', 'RFQ-2026-00424'],
-    },
-    {
-      id: 'vendor-3',
-      name: 'Sunita Reddy',
-      email: 'sunita@technoforce.in',
-      company: 'TechnoForce Engineering',
-      logoLetter: 'T',
-      logoBg: 'bg-purple-600 text-white',
-      avatarColor: 'bg-purple-100 text-purple-800',
-      category: 'Electrical & Switchgear',
-      location: 'Hyderabad, TS',
-      rating: 4.7,
-      leadTimeDays: 10,
-      whatsappSla: 91.5,
-      awardedSpend: 310000,
-      rfqBids: ['RFQ-2026-00422', 'RFQ-2026-00425'],
-    },
-    {
-      id: 'vendor-4',
-      name: 'Vikram Shah',
-      email: 'vikram@precisionpumps.co.in',
-      company: 'Precision Pumps Pvt Ltd',
-      logoLetter: 'P',
-      logoBg: 'bg-cyan-600 text-white',
-      avatarColor: 'bg-cyan-100 text-cyan-800',
-      category: 'Heavy Mechanical & Pumps',
-      location: 'Pune, MH',
-      rating: 4.3,
-      leadTimeDays: 15,
-      whatsappSla: 85.4,
-      awardedSpend: 130000,
-      rfqBids: ['RFQ-2026-00423', 'RFQ-2026-00426'],
-    },
-    {
-      id: 'vendor-5',
-      name: 'Priya Menon',
-      email: 'priya@coolairsys.com',
-      company: 'CoolAir Systems',
-      logoLetter: 'C',
-      logoBg: 'bg-orange-600 text-white',
-      avatarColor: 'bg-orange-100 text-orange-850',
-      category: 'Building Automation & HVAC',
-      location: 'Chennai, TN',
-      rating: 4.6,
-      leadTimeDays: 16,
-      whatsappSla: 89.2,
-      awardedSpend: 90000,
-      rfqBids: ['RFQ-2026-00424'],
-    },
-    {
-      id: 'vendor-6',
-      name: 'Rohan Verma',
-      email: 'rohan@voltas.com',
-      company: 'Voltas Electro Mech',
-      logoLetter: 'V',
-      logoBg: 'bg-rose-600 text-white',
-      avatarColor: 'bg-rose-100 text-rose-800',
-      category: 'HVAC & Refrigeration',
-      location: 'New Delhi, DL',
-      rating: 4.4,
-      leadTimeDays: 18,
-      whatsappSla: 84.0,
-      awardedSpend: 0,
-      rfqBids: ['RFQ-2026-99999'],
-    },
-  ];
+  // Was a hardcoded list of 6 fake vendor profiles with invented ratings,
+  // SLAs and awarded-spend figures. Every metric below is now derived from
+  // the real vendor directory and the real quotes vendors have actually
+  // submitted (both already loaded via useApp()) — nothing here is invented.
+  const compiledVendors = useMemo(() => {
+    return buyerVendors.map((vendor) => {
+      // Quote submission (Phase 6) always resolves vendorId server-side from
+      // the authenticated vendor, so matching by id alone is reliable here —
+      // no need to also match by name.
+      const rfqsList = rfqs.filter((r) => r.quotes.some((q) => q.vendorId === vendor.id));
 
-  // Helper to map RFQs where this vendor submitted a bid
-  const getVendorRfqs = (vendorId: string, bids: string[]) => {
-    return rfqs.filter((r) => bids.includes(r.rfqNumber));
-  };
+      const myQuotes = rfqsList
+        .map((r) => r.quotes.find((q) => q.vendorId === vendor.id))
+        .filter((q): q is NonNullable<typeof q> => !!q);
 
-  // Compile Vendor Summary Data
-  const compiledVendors = VENDORS.map((vendor) => {
-    const vendorRfqs = getVendorRfqs(vendor.id, vendor.rfqBids);
-    const activeBidsCount = vendorRfqs.filter((r) => r.status !== 'PO Generated').length;
-    
-    return {
-      ...vendor,
-      rfqsList: vendorRfqs,
-      activeBidsCount,
-    };
-  });
+      const avgLeadTimeDays =
+        myQuotes.length > 0
+          ? Math.round((myQuotes.reduce((sum, q) => sum + q.leadTimeDays, 0) / myQuotes.length) * 10) / 10
+          : null;
+
+      const compliantCount = myQuotes.filter((q) => q.complianceStatus === 'Fully Compliant').length;
+      const complianceRate = myQuotes.length > 0 ? Math.round((compliantCount / myQuotes.length) * 100) : null;
+
+      // approvePO always sets awardedVendor (name) alongside awardedAmount in
+      // the same update — awardedVendorId is never actually populated by that
+      // flow, so matching by name is the real path, not a rare fallback.
+      const awardedSpend = rfqs
+        .filter((r) => r.status === 'PO Generated' && r.awardedVendor === vendor.name)
+        .reduce((sum, r) => sum + (r.awardedAmount as number), 0);
+
+      const style = avatarStyleFor(vendor.name);
+
+      return {
+        id: vendor.id,
+        name: vendor.contactPerson || vendor.name,
+        email: vendor.email,
+        company: vendor.name,
+        logoLetter: vendor.name.charAt(0).toUpperCase(),
+        logoBg: style.bg,
+        avatarColor: style.avatar,
+        category: vendor.majorCategory,
+        location: vendor.location,
+        rating: vendor.rating,
+        leadTimeDays: avgLeadTimeDays,
+        complianceRate,
+        awardedSpend,
+        rfqsList,
+        activeBidsCount: rfqsList.filter((r) => r.status !== 'PO Generated').length,
+      };
+    });
+  }, [buyerVendors, rfqs]);
 
   // Filter vendors based on dropdown selector values
   const filteredByDropdownVendors = compiledVendors.filter((v) => {
@@ -171,16 +121,29 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
 
   // Overall Analytics computations based on dropdown filter scope
   const totalAwardedSpend = filteredByDropdownVendors.reduce((sum, v) => sum + v.awardedSpend, 0);
-  const totalBidsCount = filteredByDropdownVendors.reduce((sum, v) => sum + v.rfqsList.length, 0);
-  const avgSlaDays = filteredByDropdownVendors.length > 0
-    ? (filteredByDropdownVendors.reduce((sum, v) => sum + v.leadTimeDays, 0) / filteredByDropdownVendors.length).toFixed(1)
-    : '0.0';
-  const avgResponseSla = filteredByDropdownVendors.length > 0
-    ? (filteredByDropdownVendors.reduce((sum, v) => sum + v.whatsappSla, 0) / filteredByDropdownVendors.length).toFixed(1)
-    : '0.0';
+  const vendorsWithLeadTime = filteredByDropdownVendors.filter(
+    (v): v is typeof v & { leadTimeDays: number } => v.leadTimeDays !== null
+  );
+  const avgSlaDays =
+    vendorsWithLeadTime.length > 0
+      ? (vendorsWithLeadTime.reduce((sum, v) => sum + v.leadTimeDays, 0) / vendorsWithLeadTime.length).toFixed(1)
+      : '—';
+  const vendorsWithCompliance = filteredByDropdownVendors.filter(
+    (v): v is typeof v & { complianceRate: number } => v.complianceRate !== null
+  );
+  const avgComplianceRate =
+    vendorsWithCompliance.length > 0
+      ? Math.round(vendorsWithCompliance.reduce((sum, v) => sum + v.complianceRate, 0) / vendorsWithCompliance.length)
+      : null;
 
-  // Dynamic context drill down: if vendor is selected via dropdown, expand it. Otherwise use click-selected ID.
-  const activeVendorId = selectedContactFilterId !== 'all' ? selectedContactFilterId : selectedVendorId;
+  // Dynamic context drill down precedence:
+  //  1. An explicit "Hide Details" collapse always wins and keeps the panel closed,
+  //     even if the dropdown selection changes afterwards. Clicking a card's
+  //     expand action clears the dismissal.
+  //  2. Otherwise a specific dropdown selection drives the expansion.
+  //  3. Otherwise fall back to the manually expanded card.
+  const dropdownDrivenVendorId = selectedContactFilterId !== 'all' ? selectedContactFilterId : null;
+  const activeVendorId = drillDownDismissed ? null : dropdownDrivenVendorId ?? selectedVendorId;
   const selectedVendor = compiledVendors.find((v) => v.id === activeVendorId);
 
   return (
@@ -195,7 +158,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
             <span className="badge badge-purple">Screen 2.5</span>
           </div>
           <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
-            Category Manager Central Command: check vendor performance metrics, response SLAs, awarded spend share, and drill down into bid details.
+            Category Manager Central Command: check vendor performance metrics, quote compliance, awarded spend share, and drill down into bid details.
           </p>
         </div>
       </div>
@@ -208,7 +171,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
           <Building2 size={16} className="text-indigo-500" />
           <span>Active Context Selection:</span>
         </div>
-        
+
         <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto text-xs">
           {/* Vendor Company Dropdown */}
           <div className="flex items-center gap-2">
@@ -222,7 +185,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
               className="select py-1.5 px-3 text-xs bg-slate-50 dark:bg-gray-950 border border-slate-250 rounded-lg text-slate-800 dark:text-gray-250 font-bold"
             >
               <option value="all">🌐 All Vendor Companies</option>
-              {Array.from(new Set(VENDORS.map((v) => v.company))).map((company) => (
+              {Array.from(new Set(compiledVendors.map((v) => v.company))).map((company) => (
                 <option key={company} value={company}>
                   🏢 {company}
                 </option>
@@ -244,7 +207,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
               ) : (
                 <>
                   <option value="all">👥 All Contacts in Company</option>
-                  {VENDORS.filter((v) => v.company === selectedCompany).map((v) => (
+                  {compiledVendors.filter((v) => v.company === selectedCompany).map((v) => (
                     <option key={v.id} value={v.id}>
                       👤 {v.name}
                     </option>
@@ -265,17 +228,19 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
           <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-850 bg-white dark:bg-gray-900/80 shadow-sm flex items-center justify-between">
             <div>
               <div className="text-[10px] font-bold text-slate-500 dark:text-gray-450 uppercase tracking-wider">Awarded Spend Contracts</div>
-              <p className="text-2xl font-black text-slate-900 dark:text-white mt-1 mono">${totalAwardedSpend.toLocaleString()}</p>
+              <p className="text-2xl font-black text-slate-900 dark:text-white mt-1 mono">{formatCurrency(totalAwardedSpend)}</p>
             </div>
             <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 shrink-0">
-              <DollarSign size={20} />
+              <IndianRupee size={20} />
             </div>
           </div>
 
           <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-855 bg-white dark:bg-gray-900/80 shadow-sm flex items-center justify-between">
             <div>
-              <div className="text-[10px] font-bold text-slate-500 dark:text-gray-450 uppercase tracking-wider">Response Efficacy SLA</div>
-              <p className="text-2xl font-black text-slate-900 dark:text-white mt-1 mono">{avgResponseSla}%</p>
+              <div className="text-[10px] font-bold text-slate-500 dark:text-gray-450 uppercase tracking-wider">Avg Quote Compliance</div>
+              <p className="text-2xl font-black text-slate-900 dark:text-white mt-1 mono">
+                {avgComplianceRate === null ? '—' : `${avgComplianceRate}%`}
+              </p>
             </div>
             <div className="p-3 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 shrink-0">
               <Clock size={20} />
@@ -285,7 +250,9 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
           <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-860 bg-white dark:bg-gray-900/80 shadow-sm flex items-center justify-between">
             <div>
               <div className="text-[10px] font-bold text-slate-500 dark:text-gray-450 uppercase tracking-wider">Average Lead Time</div>
-              <p className="text-2xl font-black text-slate-900 dark:text-white mt-1 mono">{avgSlaDays} Days</p>
+              <p className="text-2xl font-black text-slate-900 dark:text-white mt-1 mono">
+                {avgSlaDays === '—' ? '—' : `${avgSlaDays} Days`}
+              </p>
             </div>
             <div className="p-3 rounded-lg bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 shrink-0">
               <Layers size={20} />
@@ -296,11 +263,14 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
         {/* Right Pane: Company Wise Performance & Scorecard */}
         <div className="lg:col-span-2 glass-panel p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm space-y-4">
           <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider border-b border-slate-100 dark:border-gray-800 pb-2 flex items-center justify-between">
-            <span>Vendor Company performance SLA scorecard</span>
-            <span className="text-[10px] text-slate-400 lowercase normal-case">Average WhatsApp & Lead SLA</span>
+            <span>Vendor Company performance scorecard</span>
+            <span className="text-[10px] text-slate-400 lowercase normal-case">Quote compliance & lead time, from real submitted quotes</span>
           </h3>
 
           <div className="space-y-3.5">
+            {filteredByDropdownVendors.length === 0 && (
+              <p className="text-[11px] text-slate-400 dark:text-gray-500 py-4 text-center">No vendors match the current selection.</p>
+            )}
             {filteredByDropdownVendors.map((v) => {
               return (
                 <div key={v.id} className="text-xs">
@@ -312,12 +282,12 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                       <span>{v.company} ({v.name})</span>
                     </span>
                     <span className="mono font-bold text-slate-900 dark:text-white text-[11px]">
-                      SLA: {v.whatsappSla}% · Lead: {v.leadTimeDays}d · Rating: ⭐ {v.rating}
+                      Compliance: {v.complianceRate === null ? '—' : `${v.complianceRate}%`} · Lead: {v.leadTimeDays === null ? '—' : `${v.leadTimeDays}d`} · Rating: ⭐ {v.rating}
                     </span>
                   </div>
-                  
+
                   <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
-                    <div className="bg-emerald-600 h-full rounded-full" style={{ width: `${v.whatsappSla}%` }} />
+                    <div className="bg-emerald-600 h-full rounded-full" style={{ width: `${v.complianceRate ?? 0}%` }} />
                   </div>
                 </div>
               );
@@ -354,8 +324,10 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
         {/* Vendors Performance Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filteredVendors.map((v) => {
-            const isSelected = selectedVendorId === v.id;
-            
+            // Reflect the resolved panel state so the toggle label always matches
+            // what is actually on screen, including dropdown-driven expansion.
+            const isSelected = activeVendorId === v.id;
+
             return (
               <div
                 key={v.id}
@@ -373,10 +345,14 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                     </div>
                     <div>
                       <h4 className="font-bold text-slate-900 dark:text-white text-xs">
-                        <CompanyHoverTooltip name={v.company} type="vendor" />
+                        <CompanyHoverTooltip
+                          name={v.company}
+                          type="vendor"
+                          contact={{ contactPerson: v.name, email: v.email, location: v.location }}
+                        />
                       </h4>
                       <p className="text-[10px] text-slate-400 dark:text-gray-500">{v.name} · {v.email}</p>
-                      
+
                       <div className="flex items-center gap-1.5 mt-1.5">
                         <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 text-[9px] font-semibold border border-slate-200 dark:border-gray-700">
                           {v.category}
@@ -384,7 +360,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                       </div>
                     </div>
                   </div>
-                  
+
                   <span className="px-2 py-0.5 rounded text-[9px] font-extrabold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200/30 flex items-center gap-0.5">
                     ⭐ {v.rating} Rating
                   </span>
@@ -394,36 +370,38 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                 <div className="grid grid-cols-3 gap-2 py-3 border-t border-b border-slate-100 dark:border-gray-850 text-center text-xs">
                   <div>
                     <div className="text-[9px] text-slate-450 dark:text-gray-500 font-bold uppercase">Total Bids</div>
-                    <div className="font-black text-slate-800 dark:text-white mt-0.5 mono">{v.rfqBids.length}</div>
+                    <div className="font-black text-slate-800 dark:text-white mt-0.5 mono">{v.rfqsList.length}</div>
                   </div>
                   <div>
-                    <div className="text-[9px] text-slate-450 dark:text-gray-500 font-bold uppercase">WhatsApp SLA</div>
-                    <div className="font-black text-slate-800 dark:text-white mt-0.5 mono">{v.whatsappSla}%</div>
+                    <div className="text-[9px] text-slate-450 dark:text-gray-500 font-bold uppercase">Quote Compliance</div>
+                    <div className="font-black text-slate-800 dark:text-white mt-0.5 mono">{v.complianceRate === null ? '—' : `${v.complianceRate}%`}</div>
                   </div>
                   <div>
                     <div className="text-[9px] text-slate-450 dark:text-gray-550 font-bold uppercase">Awarded Spend</div>
-                    <div className="font-black text-emerald-600 dark:text-emerald-400 mt-0.5 mono">${v.awardedSpend.toLocaleString()}</div>
+                    <div className="font-black text-emerald-600 dark:text-emerald-400 mt-0.5 mono">{formatCurrency(v.awardedSpend)}</div>
                   </div>
                 </div>
 
                 {/* Lower Block: Actions */}
                 <div className="flex justify-between items-center pt-1.5">
                   <span className="text-[9px] text-slate-400 flex items-center gap-1 font-mono">
-                    <Clock size={10} /> Lead time SLA: {v.leadTimeDays} days
+                    <Clock size={10} /> Avg lead time: {v.leadTimeDays === null ? 'No quotes yet' : `${v.leadTimeDays} days`}
                   </span>
-                  
+
                   <button
                     onClick={() => {
                       if (isSelected) {
                         setSelectedVendorId(null);
+                        setDrillDownDismissed(true);
                       } else {
                         setSelectedVendorId(v.id);
+                        setDrillDownDismissed(false);
                         setExpandedQuoteNumber(null);
                       }
                     }}
                     className="btn btn-secondary btn-xs font-bold flex items-center gap-1"
                   >
-                    <span>{isSelected ? 'Hide Details' : 'Review Performance'}</span>
+                    <span>{isSelected ? UI_STRINGS.actions.hideDetails : UI_STRINGS.actions.reviewVendorPerformance}</span>
                     <ChevronRight size={12} className={`transform transition-transform ${isSelected ? 'rotate-90' : ''}`} />
                   </button>
                 </div>
@@ -461,16 +439,11 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
             <div className="space-y-3">
               {selectedVendor.rfqsList.map((rfq) => {
                 const isQuoteExpanded = expandedQuoteNumber === rfq.rfqNumber;
-                
-                // Find matching quote from this vendor inside the RFQ list
-                const matchingQuote = rfq.quotes.find((q) => q.vendorName.toLowerCase().includes(selectedVendor.company.toLowerCase())) || {
-                  unitPrice: rfq.budget / 12,
-                  totalPrice: rfq.budget,
-                  leadTimeDays: selectedVendor.leadTimeDays,
-                  complianceStatus: 'Fully Compliant',
-                  paymentTerms: 'Net 30 Days',
-                  remarks: 'Standard quotation ingested via email attachment.',
-                };
+
+                // rfqsList is already scoped to RFQs where this vendor has a
+                // real quote (same predicate used here), so this always
+                // resolves — no fabricated fallback values.
+                const matchingQuote = rfq.quotes.find((q) => q.vendorId === selectedVendor.id)!;
 
                 return (
                   <div
@@ -494,9 +467,9 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                             </span>
                           </div>
                           <div className="flex items-center gap-3 text-[10px] text-slate-450 dark:text-gray-500 mt-1">
-                            <span>Sourced Spend: <strong>${rfq.budget.toLocaleString()}</strong></span>
+                            <span>Sourced Spend: <strong>{formatCurrency(rfq.budget)}</strong></span>
                             <span>Line Items: <strong>{rfq.extractedEntities.length}</strong></span>
-                            <span>Total Quote Value: <strong className="text-emerald-600">${matchingQuote.totalPrice.toLocaleString()}</strong></span>
+                            <span>Total Quote Value: <strong className="text-emerald-600">{formatCurrency(matchingQuote.totalPrice)}</strong></span>
                           </div>
                         </div>
                       </div>
@@ -528,7 +501,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                               </div>
                               <div className="flex justify-between">
                                 <span className="text-slate-500">Total Bidded Price:</span>
-                                <span className="font-bold text-emerald-600 dark:text-emerald-450 font-mono">${matchingQuote.totalPrice.toLocaleString()}</span>
+                                <span className="font-bold text-emerald-600 dark:text-emerald-450 font-mono">{formatCurrency(matchingQuote.totalPrice)}</span>
                               </div>
                               <div className="flex justify-between">
                                 <span className="text-slate-500">Payment Terms:</span>

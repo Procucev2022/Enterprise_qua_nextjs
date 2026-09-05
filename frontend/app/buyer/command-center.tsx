@@ -15,13 +15,11 @@ import {
   Bot,
   Layers,
   ChevronRight,
-  Download,
   Search,
   MessageSquare,
   Phone,
   Smartphone,
   Mail,
-  Database,
   FileSpreadsheet,
 } from 'lucide-react';
 
@@ -34,7 +32,7 @@ interface CommandCenterProps {
 
 export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, onNavigateToSubscription, onNavigateToDirectory }: CommandCenterProps) {
   const {
-    rfqs,
+    rfqs: allRfqs,
     aiFeed,
     currentMode,
     setSelectedRFQForMatrix,
@@ -54,15 +52,26 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   const [feedChannelFilter, setFeedChannelFilter] = useState<'all' | 'call' | 'whatsapp' | 'sms' | 'email' | 'system'>('all');
   const [quickChaserModalOpen, setQuickChaserModalOpen] = useState(false);
   const [quickChaserData, setQuickChaserData] = useState<{ rfqNumber: string; vendorName: string }>({
-    rfqNumber: 'RFQ-2026-00421',
-    vendorName: 'Apex Supplies Ltd.',
+    rfqNumber: '',
+    vendorName: '',
   });
 
   const [rfqSourceFilter, setRfqSourceFilter] = useState<'all' | 'email_gateway' | 'web_portal' | 'email_upload'>('all');
 
+  // GET /api/rfqs is itself scoped to the signed-in buyer's own account now
+  // (server-side, via the same buyer_accounts record RFQs are stamped with —
+  // see rfqController.js's resolveRfqReadScope), so allRfqs already contains
+  // only this buyer's own RFQs. Re-filtering here by activeBuyerAccount.id
+  // was comparing against the wrong identity system: activeBuyerAccount
+  // resolves from the shared MySQL identity schema's organizationId, a
+  // different id space than buyer_accounts' Neon-generated id that
+  // r.buyerAccountId actually holds — the two never matched, silently
+  // zeroing out a real, correctly-scoped list.
+  const rfqs = allRfqs;
+
   const totalActiveRFQs = rfqs.length;
-  const totalPendingQuotes = rfqs.reduce((acc, r) => acc + (r.quotesCount || 0), 0) + 24;
-  const totalSpend = '$1.24M';
+  const totalPendingQuotes = rfqs.reduce((acc, r) => acc + (r.quotesCount || (r.quotes ? r.quotes.length : 0)), 0);
+  const inEvaluationCount = rfqs.filter((r) => r.status === 'In Evaluation').length;
 
   // Intake Source Counts
   const emailGatewayRFQs = rfqs.filter(r => r.source === 'email_gateway');
@@ -165,11 +174,11 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
       {/* ── Header ── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-extrabold tracking-tight text-slate-900 dark:text-white">
-            Buyer Command Center
+          <h1 className="text-xl font-extrabold tracking-tight text-slate-900 dark:text-white flex items-center gap-2 flex-wrap">
+            <span>Enterprise Sourcing Dashboard</span>
           </h1>
-          <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-            Intake sources summary · Multi-mode sourcing · Chaser follow-ups
+          <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
+            Active RFQ pipeline tracking · Autonomous multi-channel follow-ups (Voice, WhatsApp, SMS) · Parametric quote matrix
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -186,33 +195,8 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
             <span>{initialSetupCompleted ? '✓ PO History Ingested' : '⚡ 1-3 Yr Purchase Setup'}</span>
           </button>
 
-          {onNavigateToDirectory && (
-            <button
-              onClick={onNavigateToDirectory}
-              className="btn btn-secondary btn-sm flex items-center gap-1.5 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800/60 hover:bg-amber-50 dark:hover:bg-amber-950/40"
-              title="View Integrated Buyer Directory & Public System Database"
-            >
-              <Database size={13} />
-              <span>Public Buyer DB ({activeBuyerAccount?.organizationName || 'L&T'})</span>
-            </button>
-          )}
           <button onClick={onNavigateToWizard} className="btn btn-primary btn-sm font-bold shadow-md">
-            <Plus size={14} /> Create / Ingest RFQ
-          </button>
-          <button
-            onClick={() => {
-              onNavigateToWizard();
-              showToast('Upload BOQ Ready', 'Drag and drop your BOQ spreadsheet for automated entity extraction.', 'info');
-            }}
-            className="btn btn-secondary btn-sm"
-          >
-            <UploadCloud size={13} /> Upload BOQ
-          </button>
-          <button
-            onClick={() => showToast('Analytics Exported', 'Executive spend & procurement pipeline exported to Excel.', 'info')}
-            className="btn btn-secondary btn-sm"
-          >
-            <Download size={13} />
+            <Plus size={14} /> AI RFQ Generator
           </button>
         </div>
       </div>
@@ -261,7 +245,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
             <div className="flex items-baseline gap-2">
               <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mono">{totalActiveRFQs}</span>
               <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-950/60 px-1.5 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
-                100% On Schedule
+                {totalActiveRFQs > 0 ? '100% On Schedule' : 'No Active RFQs'}
               </span>
             </div>
           </div>
@@ -283,7 +267,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                 <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" /> 📧 Email Gateway:
               </span>
               <span className="font-bold text-amber-700 dark:text-amber-300 font-mono">
-                {emailGatewayRFQs.length} ({Math.round((emailGatewayRFQs.length / (totalActiveRFQs || 1)) * 100)}%)
+                {emailGatewayRFQs.length} ({totalActiveRFQs > 0 ? Math.round((emailGatewayRFQs.length / totalActiveRFQs) * 100) : 0}%)
               </span>
             </div>
             <div className="flex items-center justify-between text-[11px]">
@@ -291,7 +275,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                 <span className="w-2 h-2 rounded-full bg-indigo-500 inline-block" /> 🌐 Web App Portal:
               </span>
               <span className="font-bold text-indigo-700 dark:text-indigo-300 font-mono">
-                {webPortalRFQs.length} ({Math.round((webPortalRFQs.length / (totalActiveRFQs || 1)) * 100)}%)
+                {webPortalRFQs.length} ({totalActiveRFQs > 0 ? Math.round((webPortalRFQs.length / totalActiveRFQs) * 100) : 0}%)
               </span>
             </div>
             <div className="flex items-center justify-between text-[11px]">
@@ -299,7 +283,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                 <span className="w-2 h-2 rounded-full bg-purple-500 inline-block" /> 📄 Email Upload:
               </span>
               <span className="font-bold text-purple-700 dark:text-purple-300 font-mono">
-                {emailUploadRFQs.length} ({Math.round((emailUploadRFQs.length / (totalActiveRFQs || 1)) * 100)}%)
+                {emailUploadRFQs.length} ({totalActiveRFQs > 0 ? Math.round((emailUploadRFQs.length / totalActiveRFQs) * 100) : 0}%)
               </span>
             </div>
           </div>
@@ -316,17 +300,23 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
             <div className="flex items-baseline gap-2">
               <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mono">{totalPendingQuotes}</span>
               <span className="text-[10px] text-sky-600 dark:text-cyan-400 font-bold bg-sky-50 dark:bg-cyan-950/60 px-1.5 py-0.5 rounded-full border border-sky-200 dark:border-cyan-800">
-                8 in evaluation
+                {inEvaluationCount} in evaluation
               </span>
             </div>
           </div>
-          <span className="text-[10px] text-slate-400">Replies received via unmodified subject lines</span>
+          <span className="text-[10px] text-slate-400">Total quotes received across active RFQs</span>
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-sky-500 to-blue-500" />
         </div>
 
         {/* Follow Ups Today */}
         <div
-          onClick={() => openRFQDeepDive(rfqs[0])}
+          onClick={() => {
+            if (rfqs.length > 0) {
+              openRFQDeepDive(rfqs[0]);
+            } else {
+              showToast('No Active RFQs', 'Create or ingest an RFQ to view multi-channel follow-up telemetry.', 'info');
+            }
+          }}
           className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-emerald-200 dark:border-emerald-500/30 relative overflow-hidden hover:border-emerald-400 dark:hover:border-emerald-400 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[124px]"
           title="Click to open multi-channel deep dive"
         >
@@ -341,20 +331,20 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
             </div>
           </div>
           <div className="flex items-center justify-between mt-2">
-            <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mono">{totalFollowupsToday || 31}</span>
+            <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mono">{totalFollowupsToday}</span>
             <div className="flex items-center gap-1 flex-wrap">
               <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
-                📞 {totalCalls || 9}
+                📞 {totalCalls}
               </span>
               <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                💬 {totalWhatsApp || 14}
+                💬 {totalWhatsApp}
               </span>
               <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-sky-50 dark:bg-cyan-950/60 text-sky-600 dark:text-cyan-300 border border-sky-200 dark:border-cyan-800">
-                📱 {totalSMS || 6}
+                📱 {totalSMS}
               </span>
             </div>
           </div>
-          <span className="text-[10px] text-slate-400">Automated sequence running in IST</span>
+          <span className="text-[10px] text-slate-400">Automated multi-channel outreach</span>
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-purple-500 via-emerald-500 to-amber-500" />
         </div>
       </div>
@@ -421,99 +411,107 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
 
           {/* Pipeline Cards */}
           <div className="divide-y divide-slate-100 dark:divide-gray-800/60 overflow-y-auto max-h-[520px]">
-            {filteredRFQs.map((rfq) => (
-              <div
-                key={rfq.id}
-                className="p-4 hover:bg-slate-50/80 dark:hover:bg-gray-800/30 transition-colors cursor-pointer group space-y-2"
-                onClick={() => openRFQDeepDive(rfq)}
-              >
-                {/* Row 1: RFQ Number + Source Badge + Status + Actions */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs font-bold text-slate-900 dark:text-white mono group-hover:text-indigo-600 dark:group-hover:text-indigo-300 transition-colors">
-                      {rfq.rfqNumber}
-                    </span>
-                    {getSourceBadge(rfq.source, rfq.autoCirculated)}
-                    {getModeBadge(rfq.sourcingMode)}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {getStatusBadge(rfq.status)}
-                    {rfq.status === 'AI Recommended' ? (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedRFQForMatrix(rfq);
-                          onNavigateToMatrix(rfq);
-                        }}
-                        className="btn btn-emerald text-[10px] px-2 py-1"
-                        style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '6px' }}
-                      >
-                        <Sparkles size={10} /> Matrix
-                      </button>
-                    ) : (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openRFQDeepDive(rfq);
-                        }}
-                        className="text-slate-400 dark:text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors p-1"
-                      >
-                        <ChevronRight size={15} />
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {/* Row 2: Title, Category & Origin Metadata */}
-                <div>
-                  <p className="text-xs text-slate-800 dark:text-gray-200 font-bold leading-snug">{rfq.title}</p>
-                  <div className="flex items-center gap-2 text-[10px] text-slate-400 dark:text-gray-500 mt-0.5">
-                    <span>{rfq.category}</span>
-                    <span>•</span>
-                    {rfq.source === 'email_gateway' ? (
-                      <span className="text-amber-600 dark:text-amber-400 font-mono">
-                        Origin: {rfq.sourceEmail || 'client@procucev.com'} (Auto-Circulated)
-                      </span>
-                    ) : rfq.source === 'email_upload' ? (
-                      <span className="text-purple-600 dark:text-purple-400 font-mono">
-                        File: {rfq.sourceFileName || 'Requisition_Email.eml'}
-                      </span>
-                    ) : (
-                      <span className="text-indigo-600 dark:text-indigo-400 font-mono">
-                        Intake: {rfq.sourceFileName || 'Web Portal Ingest'}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Row 3: Channel stats + Quotes */}
-                <div className="flex items-center justify-between pt-1 border-t border-slate-100/80 dark:border-gray-800/40">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {rfq.followUpData ? (
-                      <>
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-purple-50 dark:bg-purple-950/50 text-purple-600 dark:text-purple-300 border border-purple-100 dark:border-purple-800">
-                          📞 {rfq.followUpData.callStats.connected}/{rfq.followUpData.callStats.total}
-                        </span>
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-300 border border-emerald-100 dark:border-emerald-800">
-                          💬 {rfq.followUpData.whatsappStats.read}/{rfq.followUpData.whatsappStats.total}
-                        </span>
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-sky-50 dark:bg-cyan-950/50 text-sky-600 dark:text-cyan-300 border border-sky-100 dark:border-cyan-800">
-                          📱 {rfq.followUpData.smsStats.delivered}
-                        </span>
-                        <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-medium ml-1">
-                          {rfq.followUpData.respondedCount}/{rfq.followUpData.totalInvited} responded
-                        </span>
-                      </>
-                    ) : (
-                      <span className="text-[10px] text-slate-300 dark:text-gray-600 italic">Queued</span>
-                    )}
-                  </div>
-                  <span className="text-[10px] font-bold text-slate-600 dark:text-gray-300 mono bg-slate-100 dark:bg-gray-800 px-2 py-0.5 rounded">
-                    {rfq.quotesCount} quotes
-                  </span>
-                </div>
+            {filteredRFQs.length === 0 ? (
+              <div className="p-10 text-center text-slate-400 dark:text-gray-500">
+                <FileText size={32} className="mx-auto mb-2 opacity-40 text-indigo-500" />
+                <p className="text-xs font-semibold text-slate-600 dark:text-gray-400">No active requisitions found</p>
+                <p className="text-[11px] mt-1 text-slate-400">Click &quot;Create / Ingest RFQ&quot; or upload a BOQ to start your procurement pipeline.</p>
               </div>
-            ))}
+            ) : (
+              filteredRFQs.map((rfq) => (
+                <div
+                  key={rfq.id}
+                  className="p-4 hover:bg-slate-50/80 dark:hover:bg-gray-800/30 transition-colors cursor-pointer group space-y-2"
+                  onClick={() => openRFQDeepDive(rfq)}
+                >
+                  {/* Row 1: RFQ Number + Source Badge + Status + Actions */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-bold text-slate-900 dark:text-white mono group-hover:text-indigo-600 dark:group-hover:text-indigo-300 transition-colors">
+                        {rfq.rfqNumber}
+                      </span>
+                      {getSourceBadge(rfq.source, rfq.autoCirculated)}
+                      {getModeBadge(rfq.sourcingMode)}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {getStatusBadge(rfq.status)}
+                      {rfq.status === 'AI Recommended' ? (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedRFQForMatrix(rfq);
+                            onNavigateToMatrix(rfq);
+                          }}
+                          className="btn btn-emerald text-[10px] px-2 py-1"
+                          style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '6px' }}
+                        >
+                          <Sparkles size={10} /> Matrix
+                        </button>
+                      ) : (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openRFQDeepDive(rfq);
+                          }}
+                          className="text-slate-400 dark:text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors p-1"
+                        >
+                          <ChevronRight size={15} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Row 2: Title, Category & Origin Metadata */}
+                  <div>
+                    <p className="text-xs text-slate-800 dark:text-gray-200 font-bold leading-snug">{rfq.title}</p>
+                    <div className="flex items-center gap-2 text-[10px] text-slate-400 dark:text-gray-500 mt-0.5">
+                      <span>{rfq.category}</span>
+                      <span>•</span>
+                      {rfq.source === 'email_gateway' ? (
+                        <span className="text-amber-600 dark:text-amber-400 font-mono">
+                          Origin: {rfq.sourceEmail || activeBuyerAccount?.corporateEmail || 'Email Gateway'} (Auto-Circulated)
+                        </span>
+                      ) : rfq.source === 'email_upload' ? (
+                        <span className="text-purple-600 dark:text-purple-400 font-mono">
+                          File: {rfq.sourceFileName || 'Requisition_Email.eml'}
+                        </span>
+                      ) : (
+                        <span className="text-indigo-600 dark:text-indigo-400 font-mono">
+                          Intake: {rfq.sourceFileName || 'Web Portal Ingest'}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Row 3: Channel stats + Quotes */}
+                  <div className="flex items-center justify-between pt-1 border-t border-slate-100/80 dark:border-gray-800/40">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {rfq.followUpData ? (
+                        <>
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-purple-50 dark:bg-purple-950/50 text-purple-600 dark:text-purple-300 border border-purple-100 dark:border-purple-800">
+                            📞 {rfq.followUpData.callStats.connected}/{rfq.followUpData.callStats.total}
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-300 border border-emerald-100 dark:border-emerald-800">
+                            💬 {rfq.followUpData.whatsappStats.read}/{rfq.followUpData.whatsappStats.total}
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-sky-50 dark:bg-cyan-950/50 text-sky-600 dark:text-cyan-300 border border-sky-100 dark:border-cyan-800">
+                            📱 {rfq.followUpData.smsStats.delivered}
+                          </span>
+                          <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-medium ml-1">
+                            {rfq.followUpData.respondedCount}/{rfq.followUpData.totalInvited} responded
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-[10px] text-slate-300 dark:text-gray-600 italic">Queued</span>
+                      )}
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-600 dark:text-gray-300 mono bg-slate-100 dark:bg-gray-800 px-2 py-0.5 rounded">
+                      {rfq.quotesCount || (rfq.quotes ? rfq.quotes.length : 0)} quotes
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </div>
 
@@ -553,70 +551,78 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
 
           {/* Feed Stream */}
           <div className="flex-1 overflow-y-auto max-h-[480px] px-3 py-2 space-y-2">
-            {filteredFeed.map((item) => (
-              <div
-                key={item.id}
-                className="p-3 rounded-lg bg-slate-50/80 dark:bg-gray-900/60 border border-slate-100 dark:border-gray-800 hover:border-slate-200 dark:hover:border-gray-700 transition-all group"
-              >
-                {/* Title + Timestamp */}
-                <div className="flex items-start justify-between gap-2 mb-1">
-                  <span className="text-[11px] font-bold leading-tight">
-                    {item.type === 'call' || item.channel === 'call' ? (
-                      <span className="text-purple-600 dark:text-purple-400 flex items-center gap-1">
-                        <Phone size={11} /> {item.title}
-                      </span>
-                    ) : item.type === 'whatsapp' || item.channel === 'whatsapp' ? (
-                      <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-                        <MessageSquare size={11} /> {item.title}
-                      </span>
-                    ) : item.type === 'sms' || item.channel === 'sms' ? (
-                      <span className="text-sky-600 dark:text-cyan-400 flex items-center gap-1">
-                        <Smartphone size={11} /> {item.title}
-                      </span>
-                    ) : item.type === 'email' || item.channel === 'email' ? (
-                      <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1">
-                        <Mail size={11} /> {item.title}
-                      </span>
-                    ) : (
-                      <span className="text-indigo-700 dark:text-indigo-300 flex items-center gap-1">
-                        <Sparkles size={11} /> {item.title}
+            {filteredFeed.length === 0 ? (
+              <div className="p-8 text-center text-slate-400 dark:text-gray-500">
+                <Bot size={28} className="mx-auto mb-2 opacity-40 text-indigo-500" />
+                <p className="text-xs font-semibold text-slate-600 dark:text-gray-400">No outreach events yet</p>
+                <p className="text-[10px] mt-1 text-slate-400">Live multi-channel telemetry (calls, WhatsApp, SMS) will stream here once an RFQ is dispatched.</p>
+              </div>
+            ) : (
+              filteredFeed.map((item) => (
+                <div
+                  key={item.id}
+                  className="p-3 rounded-lg bg-slate-50/80 dark:bg-gray-900/60 border border-slate-100 dark:border-gray-800 hover:border-slate-200 dark:hover:border-gray-700 transition-all group"
+                >
+                  {/* Title + Timestamp */}
+                  <div className="flex items-start justify-between gap-2 mb-1">
+                    <span className="text-[11px] font-bold leading-tight">
+                      {item.type === 'call' || item.channel === 'call' ? (
+                        <span className="text-purple-600 dark:text-purple-400 flex items-center gap-1">
+                          <Phone size={11} /> {item.title}
+                        </span>
+                      ) : item.type === 'whatsapp' || item.channel === 'whatsapp' ? (
+                        <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                          <MessageSquare size={11} /> {item.title}
+                        </span>
+                      ) : item.type === 'sms' || item.channel === 'sms' ? (
+                        <span className="text-sky-600 dark:text-cyan-400 flex items-center gap-1">
+                          <Smartphone size={11} /> {item.title}
+                        </span>
+                      ) : item.type === 'email' || item.channel === 'email' ? (
+                        <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                          <Mail size={11} /> {item.title}
+                        </span>
+                      ) : (
+                        <span className="text-indigo-700 dark:text-indigo-300 flex items-center gap-1">
+                          <Sparkles size={11} /> {item.title}
+                        </span>
+                      )}
+                    </span>
+                    <span className="mono text-[9px] text-slate-400 dark:text-gray-500 shrink-0">{item.timestamp}</span>
+                  </div>
+
+                  {/* Message */}
+                  <p className="text-[11px] text-slate-600 dark:text-gray-400 leading-relaxed line-clamp-2">{item.message}</p>
+
+                  {/* Call Duration */}
+                  {item.channelDetails?.duration && (
+                    <div className="mt-1.5 text-[9px] text-purple-600 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/40 px-2 py-1 rounded inline-flex items-center gap-1">
+                      ⏱️ <span className="font-bold mono">{item.channelDetails.duration}</span> · Transcript logged
+                    </div>
+                  )}
+
+                  {/* Footer: Target + RFQ link */}
+                  <div className="flex items-center justify-between mt-1.5 text-[9px] text-slate-400 dark:text-gray-500">
+                    {item.recipient && (
+                      <span>
+                        Target: <span className="text-slate-600 dark:text-gray-300 font-medium">{item.recipient}</span>
                       </span>
                     )}
-                  </span>
-                  <span className="mono text-[9px] text-slate-400 dark:text-gray-500 shrink-0">{item.timestamp}</span>
-                </div>
-
-                {/* Message */}
-                <p className="text-[11px] text-slate-600 dark:text-gray-400 leading-relaxed line-clamp-2">{item.message}</p>
-
-                {/* Call Duration */}
-                {item.channelDetails?.duration && (
-                  <div className="mt-1.5 text-[9px] text-purple-600 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/40 px-2 py-1 rounded inline-flex items-center gap-1">
-                    ⏱️ <span className="font-bold mono">{item.channelDetails.duration}</span> · Transcript logged
+                    {item.rfqNumber && (
+                      <button
+                        onClick={() => {
+                          const targetRfq = rfqs.find((r) => r.rfqNumber === item.rfqNumber);
+                          if (targetRfq) openRFQDeepDive(targetRfq);
+                        }}
+                        className="text-indigo-600 dark:text-indigo-400 font-bold hover:underline mono"
+                      >
+                        {item.rfqNumber} ↗
+                      </button>
+                    )}
                   </div>
-                )}
-
-                {/* Footer: Target + RFQ link */}
-                <div className="flex items-center justify-between mt-1.5 text-[9px] text-slate-400 dark:text-gray-500">
-                  {item.recipient && (
-                    <span>
-                      Target: <span className="text-slate-600 dark:text-gray-300 font-medium">{item.recipient}</span>
-                    </span>
-                  )}
-                  {item.rfqNumber && (
-                    <button
-                      onClick={() => {
-                        const targetRfq = rfqs.find((r) => r.rfqNumber === item.rfqNumber);
-                        if (targetRfq) openRFQDeepDive(targetRfq);
-                      }}
-                      className="text-indigo-600 dark:text-indigo-400 font-bold hover:underline mono"
-                    >
-                      {item.rfqNumber} ↗
-                    </button>
-                  )}
                 </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
 
           {/* Footer */}

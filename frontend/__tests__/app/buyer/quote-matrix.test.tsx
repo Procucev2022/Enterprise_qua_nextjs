@@ -2,6 +2,7 @@ import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import QuoteMatrix from '../../../app/buyer/quote-matrix';
 import { useApp } from '../../../lib/store';
+import { formatCurrency } from '../../../lib/constants';
 
 jest.mock('../../../lib/store', () => ({
   useApp: jest.fn(),
@@ -40,6 +41,7 @@ describe('QuoteMatrix Component Tests', () => {
       targetDeliveryDate: '2026-03-25',
       budget: 85000,
       quotesCount: 2,
+      buyerAccountId: 'buyer-own',
       status: 'In Evaluation' as const,
       chasingActive: true,
       followUpData: {
@@ -105,6 +107,7 @@ describe('QuoteMatrix Component Tests', () => {
       targetDeliveryDate: '2026-03-30',
       budget: 120000,
       quotesCount: 0,
+      buyerAccountId: 'buyer-other',
       status: 'Quotes Pending' as const,
       quotes: [],
       lineItems: [],
@@ -130,7 +133,7 @@ describe('QuoteMatrix Component Tests', () => {
     expect(screen.getByText(/Comparative Quote Evaluation Matrix/i)).toBeInTheDocument();
     expect(screen.getByText(/Apex Supplies Ltd./i)).toBeInTheDocument();
     expect(screen.getByText(/Kiran Valve Industries/i)).toBeInTheDocument();
-    expect(screen.getByText(/\$85,000/i)).toBeInTheDocument();
+    expect(screen.getByText(formatCurrency(85000))).toBeInTheDocument();
   });
 
   test('allows selecting a different RFQ from dropdown', () => {
@@ -218,5 +221,77 @@ describe('QuoteMatrix Component Tests', () => {
 
     render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
     expect(screen.getByText(/No RFQs Available/i)).toBeInTheDocument();
+  });
+
+  describe('scopeToOwnBuyerAccount (the buyer route only — category manager leaves this off)', () => {
+    // GET /api/rfqs is scoped server-side by the caller's role now (see
+    // command-center.tsx), so on the buyer's own route `rfqs` from context
+    // already contains only this buyer's own RFQs — there is no client-side
+    // re-filtering left to exercise. What's still real and worth testing:
+    // selectedRFQForMatrix is app-wide store state, so a stale selection left
+    // over from a different role's navigation must not be trusted just
+    // because scopeToOwnBuyerAccount is on.
+    test('renders the buyer\'s own (already-scoped) RFQ list and default selection', () => {
+      (useApp as jest.Mock).mockReturnValue({
+        rfqs: [mockRFQs[0]],
+        selectedRFQForMatrix: null,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        showToast: mockShowToast,
+        openRFQDeepDive: mockOpenRFQDeepDive,
+        deepDiveModalOpen: false,
+        setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+        selectedRFQForDeepDive: null,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} scopeToOwnBuyerAccount />);
+
+      expect(screen.getByText('RFQ-2026-00421')).toBeInTheDocument();
+      expect(screen.getByText(/Apex Supplies Ltd./i)).toBeInTheDocument();
+
+      const select = screen.getByRole('combobox') as HTMLSelectElement;
+      const optionValues = Array.from(select.options).map((o) => o.value);
+      expect(optionValues).toEqual(['rfq-1']);
+    });
+
+    test('ignores a selectedRFQForMatrix left over from another role and falls back to this buyer\'s own list', () => {
+      (useApp as jest.Mock).mockReturnValue({
+        // The server only ever sends this buyer's own RFQ — rfq-2 belongs to
+        // a different buyer account and was never in this list to begin with.
+        rfqs: [mockRFQs[0]],
+        // A category manager's navigation left this pointed at a foreign RFQ.
+        selectedRFQForMatrix: mockRFQs[1],
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        showToast: mockShowToast,
+        openRFQDeepDive: mockOpenRFQDeepDive,
+        deepDiveModalOpen: false,
+        setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+        selectedRFQForDeepDive: null,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} scopeToOwnBuyerAccount />);
+
+      // Falls back to rfq-1 (this buyer's own), never renders the foreign rfq-2 selection
+      expect(screen.getByText('RFQ-2026-00421')).toBeInTheDocument();
+      expect(screen.queryByText('LV Switchgear Modular Panels')).not.toBeInTheDocument();
+    });
+
+    test('without the prop (category manager route), the full cross-buyer list is shown', () => {
+      (useApp as jest.Mock).mockReturnValue({
+        rfqs: mockRFQs,
+        selectedRFQForMatrix: null,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        showToast: mockShowToast,
+        openRFQDeepDive: mockOpenRFQDeepDive,
+        deepDiveModalOpen: false,
+        setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+        selectedRFQForDeepDive: null,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+
+      const select = screen.getByRole('combobox') as HTMLSelectElement;
+      const optionValues = Array.from(select.options).map((o) => o.value);
+      expect(optionValues).toEqual(['rfq-1', 'rfq-2']);
+    });
   });
 });

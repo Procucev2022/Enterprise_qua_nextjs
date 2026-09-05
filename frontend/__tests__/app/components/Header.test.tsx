@@ -5,6 +5,17 @@ import * as storeModule from '@/lib/store';
 
 jest.mock('@/lib/store');
 
+const mockReplace = jest.fn();
+jest.mock('next/navigation', () => ({
+  useRouter: () => ({ replace: mockReplace, push: jest.fn() }),
+}));
+
+jest.mock('@/lib/authClient', () => ({
+  authClient: { logout: jest.fn().mockResolvedValue(undefined) },
+}));
+
+const mockToggleThemeSignedOut = jest.fn();
+
 describe('Header', () => {
   const mockSetCurrentRole = jest.fn();
   const mockSetIsLoggedIn = jest.fn();
@@ -13,6 +24,7 @@ describe('Header', () => {
   const mockToggleTheme = jest.fn();
   const mockShowToast = jest.fn();
   const mockAddAuditLog = jest.fn();
+  const mockSetCurrentUserSession = jest.fn();
 
   beforeEach(() => {
     (storeModule.useApp as jest.Mock).mockReturnValue({
@@ -36,6 +48,16 @@ describe('Header', () => {
       showToast: mockShowToast,
       addAuditLog: mockAddAuditLog,
       activeBuyerAccount: { organizationName: 'Tata Motors' },
+      currentUserSession: {
+        id: 'usr-1',
+        email: 'navinchaudhary.dev@gmail.com',
+        name: 'Navin Chaudhary',
+        role: 'buyer',
+        orgId: 'org-1',
+        orgName: 'Navin Chaudhary Enterprises',
+        authMethod: 'PASSWORD',
+      },
+      setCurrentUserSession: mockSetCurrentUserSession,
     });
   });
 
@@ -161,47 +183,86 @@ describe('Header', () => {
     expect(screen.getByText('SMS Notice')).toBeInTheDocument();
   });
 
-  it('opens user persona dropdown and handles persona switch and logout', () => {
+  it('shows only the signed-in account details, with no demo persona switcher', () => {
     render(<Header />);
 
-    const profileBtn = screen.getByTitle('Click to Switch Persona / User Login Details');
-    fireEvent.click(profileBtn);
+    fireEvent.click(screen.getByTitle('Signed-in account details'));
 
-    expect(screen.getByText('Switch Active User / Demo Persona')).toBeInTheDocument();
+    // Real values from the verified session record
+    expect(screen.getAllByText('Navin Chaudhary').length).toBeGreaterThan(0);
+    expect(screen.getByText('navinchaudhary.dev@gmail.com')).toBeInTheDocument();
+    expect(screen.getByText('Password verified')).toBeInTheDocument();
+    // Initials are derived from the real name
+    expect(screen.getAllByText('NC').length).toBeGreaterThan(0);
 
-    const catManagerBtn = screen.getByText('Priya Sen');
-    fireEvent.click(catManagerBtn);
-    expect(mockSetCurrentRole).toHaveBeenCalledWith('category_manager');
+    // The hardcoded demo identities and the switcher are gone
+    expect(screen.queryByText('Switch Active User / Demo Persona')).not.toBeInTheDocument();
+    expect(screen.queryByText('Rajesh Sharma')).not.toBeInTheDocument();
+    expect(screen.queryByText('Priya Sen')).not.toBeInTheDocument();
+    expect(screen.queryByText('Arun Mehta')).not.toBeInTheDocument();
+    expect(screen.queryByText('Rajesh Nair')).not.toBeInTheDocument();
+  });
 
-    // Switch to admin persona
-    fireEvent.click(profileBtn);
-    const adminBtn = screen.getByText('Arun Mehta');
-    fireEvent.click(adminBtn);
-    expect(mockSetCurrentRole).toHaveBeenCalledWith('admin');
+  it('shows the organisation from the session, not an unrelated directory account', () => {
+    // activeBuyerAccount here is a different company (Tata Motors) that does not
+    // belong to the signed-in user, so it must never be labelled as their org.
+    render(<Header />);
 
-    // Switch to vendor persona
-    fireEvent.click(profileBtn);
-    const vendorBtn = screen.getByText('Rajesh Nair');
-    fireEvent.click(vendorBtn);
-    expect(mockSetCurrentRole).toHaveBeenCalledWith('vendor');
+    fireEvent.click(screen.getByTitle('Signed-in account details'));
 
-    // Switch to buyer persona
-    fireEvent.click(profileBtn);
-    const buyerBtns = screen.getAllByText('Rajesh Sharma');
-    fireEvent.click(buyerBtns[buyerBtns.length - 1]);
-    expect(mockSetCurrentRole).toHaveBeenCalledWith('buyer');
+    expect(screen.getAllByText('Navin Chaudhary Enterprises').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Tata Motors')).not.toBeInTheDocument();
+  });
 
-    // Reopen and test logout
-    fireEvent.click(profileBtn);
-    const logoutBtn = screen.getByText('Logout');
-    fireEvent.click(logoutBtn);
+  it('uses the aligned buyer account only when its email matches the session', () => {
+    const base = (storeModule.useApp as jest.Mock)();
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      ...base,
+      currentUserSession: { ...base.currentUserSession, orgName: '' },
+      activeBuyerAccount: {
+        organizationName: 'Navin Chaudhary Enterprises',
+        corporateEmail: 'navinchaudhary.dev@gmail.com',
+      },
+    });
+
+    render(<Header />);
+    fireEvent.click(screen.getByTitle('Signed-in account details'));
+
+    expect(screen.getAllByText('Navin Chaudhary Enterprises').length).toBeGreaterThan(0);
+  });
+
+  it('shows no organisation when neither the session nor a matching account has one', () => {
+    const base = (storeModule.useApp as jest.Mock)();
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      ...base,
+      currentUserSession: { ...base.currentUserSession, orgName: '' },
+      activeBuyerAccount: {
+        organizationName: 'Tata Motors',
+        corporateEmail: 'someone.else@tatamotors.com',
+      },
+    });
+
+    render(<Header />);
+    fireEvent.click(screen.getByTitle('Signed-in account details'));
+
+    expect(screen.queryByText('Tata Motors')).not.toBeInTheDocument();
+  });
+
+  it('clears the session and returns to the sign-in route on logout', () => {
+    render(<Header />);
+
+    fireEvent.click(screen.getByTitle('Signed-in account details'));
+    fireEvent.click(screen.getByText('Logout'));
+
     expect(mockSetIsLoggedIn).toHaveBeenCalledWith(false);
+    expect(mockSetCurrentUserSession).toHaveBeenCalledWith(null);
+    expect(mockReplace).toHaveBeenCalledWith('/login');
   });
 
   it('opens account modal and handles display name & password updates and top and bottom close buttons', () => {
     render(<Header />);
 
-    const profileBtn = screen.getByTitle('Click to Switch Persona / User Login Details');
+    const profileBtn = screen.getByTitle('Signed-in account details');
     fireEvent.click(profileBtn);
 
     const accountBtn = screen.getByText(/Account & Security/);
@@ -226,7 +287,7 @@ describe('Header', () => {
     fireEvent.click(updatePwdBtn);
     expect(mockShowToast).toHaveBeenCalledWith('Validation Error', 'Please enter your current password.', 'warning');
 
-    const currPwdInput = screen.getByPlaceholderText('••••••••••••');
+    const currPwdInput = screen.getByPlaceholderText('Enter your current password');
     const newPwdInput = screen.getByPlaceholderText('Min 8 characters');
     const confirmPwdInput = screen.getByPlaceholderText('Re-enter new password');
 
@@ -255,5 +316,204 @@ describe('Header', () => {
     const closeBottomBtn = screen.getByText('Close Settings');
     fireEvent.click(closeBottomBtn);
     expect(screen.queryByText('Account & Security Settings')).not.toBeInTheDocument();
+  });
+});
+
+// ==============================================================================
+// SESSION IDENTITY IN THE HEADER
+// ==============================================================================
+// Everything the header shows about the signed-in account comes from the session
+// claims, so the cases with a partial session matter: an account with no display
+// name has to fall back to the login email rather than showing a blank chip, and
+// signing out has to work whether or not an email was recorded.
+// ==============================================================================
+
+describe('Header session identity', () => {
+  const baseStore = () => ({
+    currentRole: 'buyer',
+    setCurrentRole: jest.fn(),
+    isLoggedIn: true,
+    setIsLoggedIn: jest.fn(),
+    currentMode: 'mode_1',
+    setCurrentMode: jest.fn(),
+    vendorSubscription: 'connect',
+    setVendorSubscription: jest.fn(),
+    vendorRfqDownloadsUsed: 5,
+    aiFeed: [],
+    theme: 'light',
+    toggleTheme: jest.fn(),
+    showToast: jest.fn(),
+    addAuditLog: jest.fn(),
+    activeBuyerAccount: null,
+    currentUserSession: null,
+    setCurrentUserSession: jest.fn(),
+  });
+
+  const mountWith = (overrides: Record<string, unknown>) => {
+    (storeModule.useApp as jest.Mock).mockReturnValue({ ...baseStore(), ...overrides });
+    return render(<Header />);
+  };
+
+  const openProfile = () => fireEvent.click(screen.getByTitle('Signed-in account details'));
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  // A one-word account name has no surname to take a second initial from.
+  it('derives two initials from a single-word account name', () => {
+    mountWith({
+      currentUserSession: {
+        id: 'u1',
+        email: 'navin@procucev.com',
+        name: 'Navin',
+        role: 'buyer',
+        orgId: 'o1',
+        orgName: 'Procucev',
+      },
+    });
+
+    expect(screen.getAllByText('NA').length).toBeGreaterThan(0);
+  });
+
+  it('falls back to the login email when the account has no display name', () => {
+    mountWith({
+      currentUserSession: {
+        id: 'u1',
+        email: 'buyer@procucev.com',
+        name: '',
+        role: 'buyer',
+        orgId: 'o1',
+        orgName: 'Procucev',
+      },
+    });
+    openProfile();
+    // Shown on the trigger and again on the persona card inside the popover.
+    expect(screen.getAllByText('buyer@procucev.com').length).toBeGreaterThan(1);
+
+    fireEvent.click(screen.getByText(/Account & Security/));
+    expect(screen.getByPlaceholderText('Enter your full display name...')).toHaveValue(
+      'buyer@procucev.com'
+    );
+  });
+
+  it('names the one-time-code method the session was verified with', () => {
+    mountWith({
+      currentUserSession: {
+        id: 'u1',
+        email: 'buyer@procucev.com',
+        name: 'Procucev Buyer',
+        role: 'buyer',
+        orgId: 'o1',
+        orgName: 'Procucev',
+        authMethod: 'EMAIL_OTP',
+      },
+    });
+    openProfile();
+
+    expect(screen.getByText('Email OTP verified')).toBeInTheDocument();
+  });
+
+  // The session can be gone by the time the buyer presses Logout, and the
+  // audit entry and the API call both have to cope with that.
+  it('signs out even when no session email was recorded', () => {
+    const setIsLoggedIn = jest.fn();
+    const addAuditLog = jest.fn();
+    mountWith({ currentUserSession: null, setIsLoggedIn, addAuditLog });
+    openProfile();
+
+    fireEvent.click(screen.getByText(/Logout/i));
+
+    expect(addAuditLog).toHaveBeenCalledWith('User logged out of session', undefined, undefined);
+    expect(setIsLoggedIn).toHaveBeenCalledWith(false);
+    expect(mockReplace).toHaveBeenCalled();
+  });
+
+  // The local session is already cleared by then, so a failed server-side logout
+  // must not surface as an unhandled rejection.
+  it('completes the sign-out when the logout call is rejected', async () => {
+    const { authClient } = jest.requireMock('@/lib/authClient');
+    authClient.logout.mockRejectedValueOnce(new Error('offline'));
+    const setIsLoggedIn = jest.fn();
+    mountWith({ setIsLoggedIn });
+    openProfile();
+
+    fireEvent.click(screen.getByText(/Logout/i));
+
+    expect(setIsLoggedIn).toHaveBeenCalledWith(false);
+    await Promise.resolve();
+  });
+});
+
+describe('Header vendor subscription pill', () => {
+  const vendorStore = (vendorSubscription: string) => ({
+    currentRole: 'vendor',
+    setCurrentRole: jest.fn(),
+    isLoggedIn: true,
+    setIsLoggedIn: jest.fn(),
+    currentMode: 'mode_1',
+    setCurrentMode: jest.fn(),
+    vendorSubscription,
+    setVendorSubscription: jest.fn(),
+    vendorRfqDownloadsUsed: 5,
+    aiFeed: [],
+    theme: 'dark',
+    toggleTheme: jest.fn(),
+    showToast: jest.fn(),
+    addAuditLog: jest.fn(),
+    activeBuyerAccount: null,
+    currentUserSession: {
+      id: 'v1',
+      email: 'vendor@apex.com',
+      name: 'Apex Supplies',
+      role: 'vendor',
+      orgId: 'o2',
+      orgName: 'Apex Supplies Ltd.',
+    },
+    setCurrentUserSession: jest.fn(),
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('names the Connect tier on the pill and marks it active in the dropdown', () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue(vendorStore('connect'));
+    render(<Header />);
+
+    expect(screen.getByText('Connect Model ($149 / 3mo)')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle('Vendor Subscription Access Model'));
+    expect(screen.getByText('Connect Model ($149 / 3 Months)')).toBeInTheDocument();
+    expect(screen.getByText(/5\/50 used/)).toBeInTheDocument();
+  });
+
+  it('names the Select tier when that is the active plan', () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue(vendorStore('select'));
+    render(<Header />);
+
+    expect(screen.getByText('Select Model ($349 / 3mo)')).toBeInTheDocument();
+  });
+});
+
+describe('Header theme control while signed out', () => {
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('offers dark mode and labels the current one as light', () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      isLoggedIn: false,
+      theme: 'light',
+      toggleTheme: mockToggleThemeSignedOut,
+    });
+
+    render(<Header />);
+
+    expect(screen.getByTitle('Switch to Dark Mode')).toBeInTheDocument();
+    expect(screen.getByText('Light')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle('Switch to Dark Mode'));
+    expect(mockToggleThemeSignedOut).toHaveBeenCalled();
   });
 });

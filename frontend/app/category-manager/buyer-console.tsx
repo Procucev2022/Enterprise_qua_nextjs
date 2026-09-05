@@ -1,23 +1,20 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQItem } from '@/lib/types';
-import { SOURCING_MODES } from '@/lib/constants';
+import { SOURCING_MODES, formatCurrency } from '@/lib/constants';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import {
   Building2,
   Users,
   Search,
   ChevronRight,
-  TrendingUp,
   Clock,
-  DollarSign,
+  IndianRupee,
   Layers,
   ArrowRight,
-  ShieldCheck,
-  FileCheck,
   ChevronDown,
-  Sparkles,
 } from 'lucide-react';
 import CompanyHoverTooltip from '@/app/components/CompanyHoverTooltip';
 
@@ -26,94 +23,68 @@ interface BuyerConsoleProps {
   onNavigateToEvaluation: () => void;
 }
 
+// Deterministic decorative avatar color, not a claim about the buyer — picked
+// from the org name so the same account always renders the same color
+// without needing a color stored anywhere.
+const AVATAR_PALETTE = [
+  { bg: 'bg-indigo-600 text-white', avatar: 'bg-indigo-100 text-indigo-800' },
+  { bg: 'bg-orange-500 text-white', avatar: 'bg-orange-100 text-orange-800' },
+  { bg: 'bg-purple-500 text-white', avatar: 'bg-purple-100 text-purple-800' },
+  { bg: 'bg-cyan-500 text-white', avatar: 'bg-cyan-100 text-cyan-800' },
+  { bg: 'bg-emerald-600 text-white', avatar: 'bg-emerald-100 text-emerald-800' },
+  { bg: 'bg-rose-600 text-white', avatar: 'bg-rose-100 text-rose-800' },
+];
+function avatarStyleFor(name: string) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  return AVATAR_PALETTE[hash % AVATAR_PALETTE.length];
+}
+
 export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluation }: BuyerConsoleProps) {
-  const { rfqs } = useApp();
+  const { rfqs, buyerAccounts } = useApp();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedBuyerId, setSelectedBuyerId] = useState<string | null>(null);
   const [expandedRfqNumber, setExpandedRfqNumber] = useState<string | null>(null);
+  // Tracks an explicit user collapse ("Hide Details") so dropdown-driven
+  // expansion cannot silently re-open a panel the user just dismissed.
+  const [drillDownDismissed, setDrillDownDismissed] = useState(false);
 
   // Dropdown context filter states
   const [selectedCompany, setSelectedCompany] = useState<string>('all');
   const [selectedBuyerFilterId, setSelectedBuyerFilterId] = useState<string>('all');
 
-  // Static list of buyer profiles with associated companies and parameters
-  const BUYERS = [
-    {
-      id: 'buyer-1',
-      name: 'Rajesh Nair',
-      email: 'rajesh.nair@ltindia.com',
-      company: 'Larsen & Toubro Ltd. (L&T)',
-      logoLetter: 'L',
-      logoBg: 'bg-indigo-600 text-white',
-      avatarColor: 'bg-indigo-100 text-indigo-800',
-      avgSlaDays: 4.1,
-      preferredMode: 'mode_3', // Version 3
-      rfqKeywords: ['RFQ-2026-00421', 'RFQ-2026-00423', 'RFQ-2026-00425', 'RFQ-2026-00427'],
-    },
-    {
-      id: 'buyer-2',
-      name: 'Sunita Sharma',
-      email: 'sunita.sharma@reliance.com',
-      company: 'Reliance Industries Ltd. (RIL)',
-      logoLetter: 'R',
-      logoBg: 'bg-orange-500 text-white',
-      avatarColor: 'bg-orange-100 text-orange-850',
-      avgSlaDays: 3.8,
-      preferredMode: 'mode_2', // Version 2
-      rfqKeywords: ['RFQ-2026-00422', 'RFQ-2026-00424'],
-    },
-    {
-      id: 'buyer-3',
-      name: 'Amit Kumar Tata',
-      email: 'amit.tata@tata.com',
-      company: 'Tata Steel Procurement',
-      logoLetter: 'T',
-      logoBg: 'bg-purple-500 text-white',
-      avatarColor: 'bg-purple-100 text-purple-800',
-      avgSlaDays: 4.5,
-      preferredMode: 'mode_3', // Version 3
-      rfqKeywords: ['RFQ-2026-00428', 'RFQ-2026-00429'],
-    },
-    {
-      id: 'buyer-4',
-      name: 'Vikram Adani',
-      email: 'vikram.adani@adani.com',
-      company: 'Adani Group Sourcing',
-      logoLetter: 'A',
-      logoBg: 'bg-cyan-500 text-white',
-      avatarColor: 'bg-cyan-100 text-cyan-800',
-      avgSlaDays: 5.2,
-      preferredMode: 'mode_1', // Version 1
-      rfqKeywords: ['RFQ-2026-00426'],
-    },
-  ];
+  // Was a hardcoded list of 4 fake buyer profiles, matched to RFQs via
+  // hand-picked RFQ-number lists (with a "default assign anything unmatched
+  // to Rajesh Nair" catch-all). RFQs now carry a real buyerAccountId, stamped
+  // server-side when the RFQ is created, so every metric below is derived
+  // from the real buyer directory and the real RFQs each account created.
+  const compiledBuyers = useMemo(() => {
+    return buyerAccounts.map((account) => {
+      const rfqsList = rfqs.filter((r) => r.buyerAccountId === account.id);
+      const totalSpend = rfqsList.reduce((sum, r) => sum + (r.budget || 0), 0);
+      const activeCount = rfqsList.filter((r) => r.status !== 'PO Generated').length;
+      const totalQuotes = rfqsList.reduce((sum, r) => sum + (r.quotesCount || 0), 0);
+      const avgQuotesPerRfq = rfqsList.length > 0 ? Math.round((totalQuotes / rfqsList.length) * 10) / 10 : null;
 
-  // Helper to map RFQs dynamically based on number/keyword match
-  const getBuyerRfqs = (buyerKeywords: string[]) => {
-    // If the RFQ matches the keywords, or if it is newly created (e.g. not in keywords but created in session),
-    // default-assign it to L&T (Rajesh Nair) who is our logged-in demo user.
-    return rfqs.filter((r) => {
-      const isMatchedKeyword = buyerKeywords.includes(r.rfqNumber);
-      const isNewRfq = !BUYERS.some((b) => b.rfqKeywords.includes(r.rfqNumber));
-      if (isMatchedKeyword) return true;
-      if (isNewRfq && buyerKeywords.includes('RFQ-2026-00421')) return true; // Default assign to Rajesh Nair
-      return false;
+      const style = avatarStyleFor(account.organizationName);
+
+      return {
+        id: account.id,
+        name: account.contactPerson,
+        email: account.corporateEmail,
+        company: account.organizationName,
+        logoLetter: (account.organizationName || '?').charAt(0).toUpperCase(),
+        logoBg: style.bg,
+        avatarColor: style.avatar,
+        // A real, configured account preference — not derived or invented.
+        preferredMode: account.sourcingMode,
+        avgQuotesPerRfq,
+        rfqsList,
+        totalSpend,
+        activeCount,
+      };
     });
-  };
-
-  // Compile Buyer Summary Data
-  const compiledBuyers = BUYERS.map((buyer) => {
-    const buyerRfqs = getBuyerRfqs(buyer.rfqKeywords);
-    const totalSpend = buyerRfqs.reduce((sum, r) => sum + r.budget, 0);
-    const activeCount = buyerRfqs.filter((r) => r.status !== 'PO Generated').length;
-    
-    return {
-      ...buyer,
-      rfqsList: buyerRfqs,
-      totalSpend,
-      activeCount,
-    };
-  });
+  }, [buyerAccounts, rfqs]);
 
   // Filter buyers based on dropdown context selection
   const filteredByDropdownBuyers = compiledBuyers.filter((b) => {
@@ -132,13 +103,23 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
   // Overall Analytics computations based on dropdown filter scope
   const grandTotalSpend = filteredByDropdownBuyers.reduce((sum, b) => sum + b.totalSpend, 0);
   const totalRfqCount = filteredByDropdownBuyers.reduce((sum, b) => sum + b.rfqsList.length, 0);
-  
-  const avgSystemSla = filteredByDropdownBuyers.length > 0 
-    ? (filteredByDropdownBuyers.reduce((sum, b) => sum + b.avgSlaDays, 0) / filteredByDropdownBuyers.length).toFixed(1)
-    : '0.0';
 
-  // Dynamic context drill down: if buyer is chosen from dropdown, show it. Otherwise check manual click selectedBuyerId.
-  const activeBuyerId = selectedBuyerFilterId !== 'all' ? selectedBuyerFilterId : selectedBuyerId;
+  const buyersWithQuotes = filteredByDropdownBuyers.filter(
+    (b): b is typeof b & { avgQuotesPerRfq: number } => b.avgQuotesPerRfq !== null
+  );
+  const avgQuotesAcrossBuyers =
+    buyersWithQuotes.length > 0
+      ? (buyersWithQuotes.reduce((sum, b) => sum + b.avgQuotesPerRfq, 0) / buyersWithQuotes.length).toFixed(1)
+      : '—';
+
+  // Dynamic context drill down precedence:
+  //  1. An explicit "Hide Details" collapse always wins and keeps the panel closed,
+  //     even if the dropdown selection changes afterwards. Clicking a card's
+  //     expand action clears the dismissal.
+  //  2. Otherwise a specific dropdown selection drives the expansion.
+  //  3. Otherwise fall back to the manually expanded card.
+  const dropdownDrivenBuyerId = selectedBuyerFilterId !== 'all' ? selectedBuyerFilterId : null;
+  const activeBuyerId = drillDownDismissed ? null : dropdownDrivenBuyerId ?? selectedBuyerId;
   const selectedBuyer = compiledBuyers.find((b) => b.id === activeBuyerId);
 
   return (
@@ -164,7 +145,7 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
           <Building2 size={16} className="text-indigo-500" />
           <span>Active Context Selection:</span>
         </div>
-        
+
         <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto text-xs">
           {/* Company Dropdown */}
           <div className="flex items-center gap-2">
@@ -178,7 +159,7 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
               className="select py-1.5 px-3 text-xs bg-slate-50 dark:bg-gray-950 border border-slate-250 rounded-lg text-slate-800 dark:text-gray-250 font-bold"
             >
               <option value="all">🌐 All Companies</option>
-              {Array.from(new Set(BUYERS.map((b) => b.company))).map((company) => (
+              {Array.from(new Set(compiledBuyers.map((b) => b.company))).map((company) => (
                 <option key={company} value={company}>
                   🏢 {company}
                 </option>
@@ -200,7 +181,7 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
               ) : (
                 <>
                   <option value="all">👥 All Buyers in Company</option>
-                  {BUYERS.filter((b) => b.company === selectedCompany).map((b) => (
+                  {compiledBuyers.filter((b) => b.company === selectedCompany).map((b) => (
                     <option key={b.id} value={b.id}>
                       👤 {b.name}
                     </option>
@@ -216,16 +197,16 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
       {/* BUYER WISE & BUYER COMPANY WISE ANALYTICS SECTION */}
       {/* ═══════════════════════════════════════════════════════════════ */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
+
         {/* Analytics Left Pane: Key Aggregated SLA & Volume Metrics */}
         <div className="lg:col-span-1 space-y-4">
           <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm flex items-center justify-between">
             <div>
               <div className="text-[10px] font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wider">Total Active Spend Sourced</div>
-              <p className="text-2xl font-black text-slate-900 dark:text-white mt-1 mono">${grandTotalSpend.toLocaleString()}</p>
+              <p className="text-2xl font-black text-slate-900 dark:text-white mt-1 mono">{formatCurrency(grandTotalSpend)}</p>
             </div>
             <div className="p-3 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-650 dark:text-indigo-400 shrink-0">
-              <DollarSign size={20} />
+              <IndianRupee size={20} />
             </div>
           </div>
 
@@ -241,8 +222,8 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
 
           <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm flex items-center justify-between">
             <div>
-              <div className="text-[10px] font-bold text-slate-500 dark:text-gray-450 uppercase tracking-wider">Average System Turnaround SLA</div>
-              <p className="text-2xl font-black text-slate-900 dark:text-white mt-1 mono">{avgSystemSla} Days</p>
+              <div className="text-[10px] font-bold text-slate-500 dark:text-gray-450 uppercase tracking-wider">Avg Quotes Per RFQ</div>
+              <p className="text-2xl font-black text-slate-900 dark:text-white mt-1 mono">{avgQuotesAcrossBuyers}</p>
             </div>
             <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 shrink-0">
               <Clock size={20} />
@@ -250,7 +231,7 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
           </div>
         </div>
 
-        {/* Analytics Right Pane: Company Wise Spend & SLA Breakdowns */}
+        {/* Analytics Right Pane: Company Wise Spend & Volume Breakdowns */}
         <div className="lg:col-span-2 glass-panel p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm space-y-4">
           <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider border-b border-slate-100 dark:border-gray-800 pb-2 flex items-center justify-between">
             <span>Buyer Company Wise Spend & RFQ Volume Distribution</span>
@@ -258,6 +239,9 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
           </h3>
 
           <div className="space-y-3.5">
+            {compiledBuyers.length === 0 && (
+              <p className="text-[11px] text-slate-400 dark:text-gray-500 py-4 text-center">No buyer accounts found.</p>
+            )}
             {compiledBuyers.map((b) => {
               const spendPercentage = grandTotalSpend > 0 ? ((b.totalSpend / grandTotalSpend) * 100).toFixed(0) : '0';
               return (
@@ -270,16 +254,16 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
                       <span>{b.company}</span>
                     </span>
                     <span className="mono font-bold text-slate-900 dark:text-white text-[11px]">
-                      ${b.totalSpend.toLocaleString()} ({spendPercentage}% · {b.rfqsList.length} RFQs)
+                      {formatCurrency(b.totalSpend)} ({spendPercentage}% · {b.rfqsList.length} RFQs)
                     </span>
                   </div>
-                  
+
                   <div className="flex items-center gap-3">
                     <div className="flex-grow bg-slate-100 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
                       <div className="bg-indigo-650 h-full rounded-full" style={{ width: `${spendPercentage}%` }} />
                     </div>
                     <span className="text-[9px] mono text-slate-400 dark:text-gray-500 shrink-0">
-                      SLA: {b.avgSlaDays}d
+                      Avg quotes: {b.avgQuotesPerRfq === null ? '—' : b.avgQuotesPerRfq}
                     </span>
                   </div>
                 </div>
@@ -317,9 +301,11 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
         {/* Buyers List Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filteredBuyers.map((b) => {
-            const isSelected = selectedBuyerId === b.id;
-            const preferredModeObj = SOURCING_MODES.find(m => m.id === b.preferredMode);
-            
+            // Reflect the resolved panel state so the toggle label always matches
+            // what is actually on screen, including dropdown-driven expansion.
+            const isSelected = activeBuyerId === b.id;
+            const preferredModeObj = SOURCING_MODES.find((m) => m.id === b.preferredMode);
+
             return (
               <div
                 key={b.id}
@@ -338,18 +324,22 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
                     <div>
                       <h4 className="font-bold text-slate-900 dark:text-white text-xs">{b.name}</h4>
                       <p className="text-[10px] text-slate-400 dark:text-gray-500">{b.email}</p>
-                      
+
                       <div className="flex items-center gap-1.5 mt-1.5">
                         <span className={`w-4 h-4 rounded ${b.logoBg} font-mono font-bold text-[8px] flex items-center justify-center shrink-0`}>
                           {b.logoLetter}
                         </span>
                         <span className="text-[10px] font-semibold text-slate-700 dark:text-gray-300">
-                          <CompanyHoverTooltip name={b.company} type="buyer" />
+                          <CompanyHoverTooltip
+                            name={b.company}
+                            type="buyer"
+                            contact={{ contactPerson: b.name, email: b.email }}
+                          />
                         </span>
                       </div>
                     </div>
                   </div>
-                  
+
                   {preferredModeObj && (
                     <span
                       className="px-2 py-0.5 rounded text-[8px] font-extrabold uppercase tracking-wider shrink-0"
@@ -376,28 +366,30 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
                   </div>
                   <div>
                     <div className="text-[9px] text-slate-450 dark:text-gray-550 font-bold uppercase">Sourced Spend</div>
-                    <div className="font-black text-indigo-600 dark:text-indigo-400 mt-0.5 mono">${b.totalSpend.toLocaleString()}</div>
+                    <div className="font-black text-indigo-600 dark:text-indigo-400 mt-0.5 mono">{formatCurrency(b.totalSpend)}</div>
                   </div>
                 </div>
 
                 {/* Action Block */}
                 <div className="flex justify-between items-center pt-1.5">
                   <span className="text-[9px] text-slate-400 flex items-center gap-1 font-mono">
-                    <Clock size={10} /> Avg turnaround: {b.avgSlaDays} days
+                    <Clock size={10} /> Avg quotes per RFQ: {b.avgQuotesPerRfq === null ? 'No RFQs yet' : b.avgQuotesPerRfq}
                   </span>
-                  
+
                   <button
                     onClick={() => {
                       if (isSelected) {
                         setSelectedBuyerId(null);
+                        setDrillDownDismissed(true);
                       } else {
                         setSelectedBuyerId(b.id);
+                        setDrillDownDismissed(false);
                         setExpandedRfqNumber(null);
                       }
                     }}
                     className="btn btn-secondary btn-xs font-bold flex items-center gap-1"
                   >
-                    <span>{isSelected ? 'Hide Details' : 'Review RFQ Details'}</span>
+                    <span>{isSelected ? UI_STRINGS.actions.hideDetails : UI_STRINGS.actions.reviewRfqDetails}</span>
                     <ChevronRight size={12} className={`transform transition-transform ${isSelected ? 'rotate-90' : ''}`} />
                   </button>
                 </div>
@@ -459,7 +451,7 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
                             </span>
                           </div>
                           <div className="flex items-center gap-3 text-[10px] text-slate-450 dark:text-gray-500 mt-1">
-                            <span>Sourced Spend: <strong>${rfq.budget.toLocaleString()}</strong></span>
+                            <span>Sourced Spend: <strong>{formatCurrency(rfq.budget)}</strong></span>
                             <span>Line Items: <strong>{rfq.extractedEntities.length}</strong></span>
                             <span>Quotes Recd: <strong>{rfq.quotesCount}</strong></span>
                           </div>
@@ -479,9 +471,9 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
                             {rfqModeObj.code} Sourcing
                           </span>
                         )}
-                        
+
                         <span className={`badge text-[9px] ${
-                          rfq.status === 'Parsing' ? 'badge-amber' : 
+                          rfq.status === 'Parsing' ? 'badge-amber' :
                           rfq.status === 'In Evaluation' ? 'badge-blue' : 'badge-emerald'
                         }`}>
                           {rfq.status}
@@ -494,7 +486,7 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
                     {/* RFQ Expanded Body Section */}
                     {isRfqExpanded && (
                       <div className="p-4 border-t border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900/90 space-y-4 animate-fade-in text-xs">
-                        
+
                         {/* 1. Line Item Table */}
                         <div className="space-y-1.5">
                           <h4 className="text-[10px] font-extrabold uppercase text-slate-450 dark:text-gray-500 tracking-wider">
@@ -538,7 +530,7 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
                               </span>
                             )}
                           </div>
-                          
+
                           <div className="flex items-center gap-2 shrink-0">
                             {rfq.quotesCount > 0 && (
                               <button

@@ -7,13 +7,181 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i;
 const PHONE_REGEX = /^[+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{7,15}$/;
 
+// Delivery pincode or zipcode. Broader than an Indian six-digit PIN because the
+// same field carries international zipcodes for export orders, which are
+// alphanumeric and may contain a space or hyphen. Mirrors PINCODE_PATTERN in
+// frontend/lib/validationSchemas.ts.
+const PINCODE_REGEX = /^[A-Za-z0-9][A-Za-z0-9\s-]{2,9}$/;
+
+// Indian mobile number accepted at sign-in and registration. Mirrors
+// INDIAN_MOBILE_PATTERN in frontend/lib/validationSchemas.ts. The identity
+// schema stores these normalised to +91XXXXXXXXXX, so the submitted value must
+// resolve to exactly ten national digits beginning 6-9.
+const INDIAN_MOBILE_REGEX = /^(?:\+?91[-\s]?|0)?[6-9]\d{9}$/;
+const INDIAN_MOBILE_MESSAGE = 'Enter a valid 10-digit Indian mobile number, for example 9876543210.';
+
+// Email OTPs are 6 numeric digits, matching the `otp_store.otp` column the Java
+// p2pservices app writes. Kept here rather than derived from IDENTITY_OTP_CONFIG
+// because config/constants.js requires this module, not the other way round.
+const OTP_CODE_REGEX = /^\d{6}$/;
+const OTP_CODE_MESSAGE = 'Enter the 6-digit verification code sent to your registered email address.';
+
+// ------------------------------------------------------------------------------
+// STATUTORY IDENTIFIERS (buyer organisation profile)
+// ------------------------------------------------------------------------------
+// The Java p2pservices app validates none of these — PAN, CIN and website were
+// free text and only GSTIN was checked, and then only in the Angular client. A
+// malformed GSTIN therefore reached the `organization` table and broke downstream
+// tax reporting. These are enforced here so an invalid identifier is rejected at
+// the API boundary regardless of which client submitted it.
+
+// Income-tax PAN: five letters, four digits, one letter.
+const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/i;
+const PAN_MESSAGE = 'PAN must be 10 characters in the format AAAAA9999A, for example AAACL1234F.';
+
+// MCA Corporate Identity Number: listing status, 5-digit industry code, 2-letter
+// state, 4-digit year, 3-letter ownership code, 6-digit registration number.
+const CIN_REGEX = /^[LUu][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$/i;
+const CIN_MESSAGE =
+  'CIN must be 21 characters in the format L99999AA9999AAA999999, for example L28920MH1946PLC004768.';
+
+const GSTIN_MESSAGE =
+  'GSTIN must be 15 characters in the format 99AAAAA9999A9Z9, for example 27AAACL1234F1Z5.';
+
+// Corporate website. Deliberately requires an http(s) scheme so the value can be
+// used directly as a link target without the caller having to guess a protocol.
+const WEBSITE_REGEX = /^https?:\/\/[^\s/$.?#][^\s]*$/i;
+const WEBSITE_MESSAGE = 'Website must be a full URL beginning http:// or https://, for example https://example.com.';
+
+// Registered-office PIN code. Narrower than the delivery PINCODE_REGEX above:
+// a buyer's registered address is an Indian statutory address, so it is exactly
+// six digits and cannot begin with zero.
+const INDIAN_PINCODE_REGEX = /^[1-9][0-9]{5}$/;
+const INDIAN_PINCODE_MESSAGE = 'PIN code must be 6 digits and cannot start with 0, for example 400001.';
+
+// Legal constitutions offered by the buyer profile screen. Anything else is a
+// client that has drifted from the shared taxonomy, so it is rejected rather
+// than written to `organization.type`.
+const ORGANIZATION_TYPES = [
+  'Public Limited',
+  'Private Limited',
+  'LLP',
+  'Partnership',
+  'Sole Proprietorship',
+];
+
 const VALIDATION_SCHEMAS = {
   createRFQ: {
     title: { type: 'string', required: true, minLength: 3, maxLength: 200 },
     category: { type: 'string', required: true, minLength: 2 },
-    budget: { type: 'number', required: true, min: 1 },
+    // Optional. A document that prices nothing yields no budget, and requiring
+    // one forced the buyer to invent a ceiling vendors would then quote against.
+    budget: { type: 'number', required: false, min: 0 },
+    // Required, unlike budget. Vendors rate freight on the destination and its
+    // pincode, so a quote raised without them cannot be compared against one
+    // that has them. Enforced here as well as in the wizard so an RFQ posted
+    // straight to the API cannot skip the destination.
+    deliveryLocation: {
+      type: 'string',
+      required: true,
+      minLength: 3,
+      maxLength: 200,
+      message: 'Delivery location is required and must be 3 to 200 characters.',
+    },
+    deliveryPincode: {
+      type: 'string',
+      required: true,
+      pattern: PINCODE_REGEX,
+      message: 'Pincode is required and must be 3 to 10 letters, digits, spaces or hyphens.',
+    },
+    // Metadata for documents already stored by POST /api/rfqs/attachments.
+    attachments: { type: 'array', required: false },
     targetDeliveryDate: { type: 'string', required: true },
     lineItems: { type: 'array', required: false },
+    // Provenance. Bounded here because these reach the stored record and are
+    // rendered on the RFQ details screen; they were previously unvalidated
+    // because storeService dropped them before they could be persisted at all.
+    source: { type: 'string', required: false, maxLength: 40 },
+    sourceFileName: { type: 'string', required: false, maxLength: 260 },
+    sourceEmail: {
+      type: 'string',
+      required: false,
+      pattern: EMAIL_REGEX,
+      message: 'Source email must be a valid email address.',
+    },
+  },
+
+  // Edit of an existing RFQ (PUT /api/rfqs/:id).
+  //
+  // Every field is optional because an edit is a partial update: the buyer may be
+  // correcting only the delivery pincode, and demanding the whole record back
+  // would make a small correction able to blank whatever the form did not resend.
+  // The format rules are identical to createRFQ, so a value that could not have
+  // been created cannot be introduced by an edit either.
+  //
+  // Ownership fields are absent on purpose. rfqNumber, rfqId, buyer identity and
+  // createdAt are not editable, and the query layer whitelists columns as well, so
+  // sending them here changes nothing.
+  updateRFQ: {
+    title: { type: 'string', required: false, minLength: 3, maxLength: 200 },
+    category: { type: 'string', required: false, minLength: 2 },
+    status: { type: 'string', required: false, minLength: 2, maxLength: 40 },
+    sourcingMode: { type: 'string', required: false, minLength: 2, maxLength: 20 },
+    budget: { type: 'number', required: false, min: 0 },
+    deliveryLocation: {
+      type: 'string',
+      required: false,
+      minLength: 3,
+      maxLength: 200,
+      message: 'Delivery location must be 3 to 200 characters.',
+    },
+    deliveryPincode: {
+      type: 'string',
+      required: false,
+      pattern: PINCODE_REGEX,
+      message: 'Pincode must be 3 to 10 letters, digits, spaces or hyphens.',
+    },
+    targetDeliveryDate: { type: 'string', required: false },
+    extractedEntities: { type: 'array', required: false },
+    attachments: { type: 'array', required: false },
+  },
+
+  // Document handed to POST /api/rfqs/extract for Gemini line-item extraction.
+  // Either documentText (client-flattened spreadsheet) or inlineData (PDF/image
+  // base64) must be present; that either/or rule is enforced in the service,
+  // which can report a precise reason the wizard shows to the buyer.
+  extractRFQ: {
+    fileName: { type: 'string', required: true, minLength: 1, maxLength: 260 },
+    documentText: { type: 'string', required: false },
+    inlineData: { type: 'string', required: false },
+    mimeType: { type: 'string', required: false, maxLength: 120 },
+  },
+
+  // Raw extracted rows handed to POST /api/rfqs/ingest. The rows themselves are
+  // A supporting document attached to an RFQ. The MIME allow-list and the size
+  // ceiling are enforced by rfqAttachmentService, which owns those limits.
+  uploadRFQAttachment: {
+    fileName: { type: 'string', required: true, minLength: 1, maxLength: 260 },
+    mimeType: { type: 'string', required: true, minLength: 3, maxLength: 150 },
+    content: { type: 'string', required: true, minLength: 1, message: 'content must be base64 file data.' },
+  },
+
+  // deliberately loose because they come from arbitrary spreadsheets; each row is
+  // normalised and validated per-field by rfqIngestionService instead.
+  ingestRFQ: {
+    lineItems: { type: 'array', required: true, message: 'lineItems must be an array of extracted rows.' },
+    title: { type: 'string', required: false, maxLength: 200 },
+    category: { type: 'string', required: false },
+    // Overall value stated on the document. Optional because most BOQs price only
+    // the individual lines, which the ingestion service sums instead.
+    estimatedBudget: { type: 'number', required: false, min: 0 },
+    source: {
+      type: 'string',
+      required: false,
+      enum: ['email_gateway', 'web_portal', 'email_upload', 'manual_entry'],
+    },
+    sourceFileName: { type: 'string', required: false, maxLength: 260 },
+    sourceEmail: { type: 'string', required: false, pattern: EMAIL_REGEX, message: 'Valid source email required' },
   },
 
   vendorRegistration: {
@@ -73,6 +241,91 @@ const VALIDATION_SCHEMAS = {
     ciphertext: { type: 'string', required: true, minLength: 1 },
     iv: { type: 'string', required: true, minLength: 12 },
     authTag: { type: 'string', required: true, minLength: 16 },
+  },
+
+  // `mobile` is optional at the schema level because the same endpoint also
+  // serves the OTP (`code`) path, which identifies the account by email alone.
+  // Password sign-in requires it, and that is enforced in authService.
+  login: {
+    email: { type: 'string', required: true, message: 'Email is required.' },
+    mobile: { type: 'string', required: false, pattern: INDIAN_MOBILE_REGEX, message: INDIAN_MOBILE_MESSAGE },
+    password: { type: 'string', required: false },
+    code: { type: 'string', required: false, pattern: OTP_CODE_REGEX, message: OTP_CODE_MESSAGE },
+  },
+
+  // The Java `/authenticate` OTP branch validates the email + phone pair before
+  // issuing a code, so the mobile number is mandatory on both OTP endpoints.
+  requestOtp: {
+    email: { type: 'string', required: true, message: 'Email is required to request OTP.' },
+    mobile: {
+      type: 'string',
+      required: true,
+      pattern: INDIAN_MOBILE_REGEX,
+      message: INDIAN_MOBILE_MESSAGE,
+    },
+    roleHint: { type: 'string', required: false },
+  },
+
+  verifyOtp: {
+    email: { type: 'string', required: true, message: 'Email and verification code are required.' },
+    code: {
+      type: 'string',
+      required: true,
+      pattern: OTP_CODE_REGEX,
+      message: OTP_CODE_MESSAGE,
+    },
+    mobile: {
+      type: 'string',
+      required: true,
+      pattern: INDIAN_MOBILE_REGEX,
+      message: INDIAN_MOBILE_MESSAGE,
+    },
+  },
+
+  register: {
+    email: { type: 'string', required: true, message: 'Email is required for registration.' },
+    name: { type: 'string', required: false },
+    password: { type: 'string', required: false },
+    mobile: { type: 'string', required: false, pattern: INDIAN_MOBILE_REGEX, message: INDIAN_MOBILE_MESSAGE },
+    role: { type: 'string', required: false },
+    orgName: { type: 'string', required: false },
+  },
+
+  // Buyer organisation profile submitted by PUT /api/buyer-profile/me.
+  //
+  // Ported from the fields ProcUserServiceImpl.updateBuyer patches onto the
+  // `organization` row. That method applies null-skip semantics — an omitted key
+  // leaves the stored value untouched — so almost everything here is optional and
+  // only the legal entity name, which identifies the organisation, is required.
+  //
+  // `email` and `organizationPhonenumber` are deliberately absent: they are owned
+  // by the `user` row established at sign-in and were read-only on the old screen
+  // too, so the service ignores them rather than letting a profile save
+  // reassign the account's login identity.
+  buyerProfile: {
+    companyName: { type: 'string', required: true, minLength: 2, maxLength: 255, message: 'Legal entity name is required.' },
+    brandName: { type: 'string', required: false, maxLength: 255 },
+    organizationType: {
+      type: 'string',
+      required: false,
+      enum: ORGANIZATION_TYPES,
+    },
+    panNumber: { type: 'string', required: false, pattern: PAN_REGEX, message: PAN_MESSAGE },
+    gstNumber: { type: 'string', required: false, pattern: GSTIN_REGEX, message: GSTIN_MESSAGE },
+    cinNumber: { type: 'string', required: false, pattern: CIN_REGEX, message: CIN_MESSAGE },
+    website: { type: 'string', required: false, pattern: WEBSITE_REGEX, message: WEBSITE_MESSAGE },
+    annualTurnover: { type: 'string', required: false, maxLength: 255 },
+    street: { type: 'string', required: false, maxLength: 255 },
+    city: { type: 'string', required: false, maxLength: 255 },
+    state: { type: 'string', required: false, maxLength: 255 },
+    pincode: { type: 'string', required: false, pattern: INDIAN_PINCODE_REGEX, message: INDIAN_PINCODE_MESSAGE },
+    country: { type: 'string', required: false, maxLength: 255 },
+    contactName: { type: 'string', required: false, maxLength: 255 },
+    contactDesignation: { type: 'string', required: false, maxLength: 255 },
+    // Flat [{ major, minor }] pairs, mirroring the org_division_category rows
+    // they become. Cardinality limits are enforced in the service, which can
+    // report which cap was exceeded.
+    categories: { type: 'array', required: false },
   },
 };
 
@@ -155,8 +408,23 @@ function validatePayload(schema, data = {}) {
 
 module.exports = {
   EMAIL_REGEX,
+  PINCODE_REGEX,
   GSTIN_REGEX,
+  GSTIN_MESSAGE,
   PHONE_REGEX,
+  INDIAN_MOBILE_REGEX,
+  INDIAN_MOBILE_MESSAGE,
+  OTP_CODE_REGEX,
+  OTP_CODE_MESSAGE,
+  PAN_REGEX,
+  PAN_MESSAGE,
+  CIN_REGEX,
+  CIN_MESSAGE,
+  WEBSITE_REGEX,
+  WEBSITE_MESSAGE,
+  INDIAN_PINCODE_REGEX,
+  INDIAN_PINCODE_MESSAGE,
+  ORGANIZATION_TYPES,
   VALIDATION_SCHEMAS,
   validatePayload,
 };

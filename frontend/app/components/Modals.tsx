@@ -20,44 +20,77 @@ import {
   UserCheck,
   Sliders,
   Hash,
+  CreditCard,
 } from 'lucide-react';
+
+interface POLineItem {
+  description: string;
+  quantity: number;
+  unit: string;
+}
 
 interface POModalProps {
   isOpen: boolean;
   onClose: () => void;
   rfqNumber: string;
+  vendorId: string | null;
   vendorName: string;
   totalAmount: number;
   unitPrice: number;
   leadTime: number;
   deliveryDate: string;
+  lineItems: POLineItem[];
 }
 
 export function PurchaseOrderModal({
   isOpen,
   onClose,
   rfqNumber,
+  vendorId,
   vendorName,
   totalAmount,
   unitPrice,
   leadTime,
   deliveryDate,
+  lineItems,
 }: POModalProps) {
-  const { approvePO, showToast } = useApp();
+  const { approvePO } = useApp();
   const [poSigned, setPoSigned] = useState(false);
+  const [approving, setApproving] = useState(false);
   const [approverNotes, setApproverNotes] = useState('Approved based on AI Evaluation Matrix >94% match score & lowest compliant price.');
+  // Populated from the real backend response once approval succeeds — shown
+  // instead of the fake, hardcoded-constant "SHA-256 seal" this used to
+  // display unconditionally (the same string regardless of what was
+  // actually approved).
+  const [approvedPo, setApprovedPo] = useState<{ poNumber: string; issueDate: string; shaSignature: string } | null>(null);
 
   if (!isOpen) return null;
 
-  const poNumber = `PO-2026-` + rfqNumber.replace('RFQ-2026-', '');
-  const shaSignature = 'c7d1e3a985f621b0e49c812d4a7f55e0921bc3d49f018a7c2b53e6144f5592a1';
+  // Deterministic preview before approval — this formula matches the
+  // backend's exactly, so it's accurate to show ahead of time; the real
+  // hash and issue date, unlike the PO number, can't be known until the
+  // backend actually seals them.
+  const previewPoNumber = `PO-2026-` + rfqNumber.replace('RFQ-2026-', '');
+  const poNumber = approvedPo?.poNumber || previewPoNumber;
+  const issueDate = approvedPo?.issueDate || null;
 
-  const handleApprove = () => {
-    setPoSigned(true);
-    approvePO(rfqNumber, vendorName, totalAmount);
-    setTimeout(() => {
-      onClose();
-    }, 1500);
+  const handleApprove = async () => {
+    setApproving(true);
+    const result = await approvePO(rfqNumber, vendorId, vendorName, totalAmount, approverNotes);
+    setApproving(false);
+    if (result.success) {
+      setPoSigned(true);
+      setApprovedPo({
+        poNumber: result.poNumber || previewPoNumber,
+        issueDate: result.issueDate || new Date().toISOString().substring(0, 10),
+        shaSignature: result.shaSignature || '',
+      });
+      setTimeout(() => {
+        onClose();
+      }, 1800);
+    }
+    // On failure, approvePO already surfaced a toast — stay open so the
+    // buyer can retry rather than silently closing on a failed approval.
   };
 
   return (
@@ -90,7 +123,7 @@ export function PurchaseOrderModal({
               <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-500/40 inline-flex items-center gap-1">
                 <ShieldCheck size={12} /> AI Verified & Compliant
               </span>
-              <p className="text-[10px] text-slate-500 dark:text-gray-400 mt-1">Issue Date: 19-Aug-2026</p>
+              <p className="text-[10px] text-slate-500 dark:text-gray-400 mt-1">Issue Date: {issueDate || 'Sealed upon approval'}</p>
             </div>
           </div>
 
@@ -98,7 +131,7 @@ export function PurchaseOrderModal({
             <div>
               <p className="text-[10px] text-slate-400 dark:text-gray-400 uppercase font-semibold">Contract Awarded To:</p>
               <p className="font-bold text-slate-900 dark:text-white text-xs mt-0.5">{vendorName}</p>
-              <p className="text-[11px] text-slate-500 dark:text-gray-400">Vendor ID: <span className="mono font-semibold">VN-APEX-4920</span></p>
+              <p className="text-[11px] text-slate-500 dark:text-gray-400">Vendor ID: <span className="mono font-semibold">{vendorId || '—'}</span></p>
               <p className="text-[11px] text-slate-500 dark:text-gray-400">Payment Terms: Net 30 Days (Pre-negotiated)</p>
             </div>
             <div>
@@ -109,7 +142,7 @@ export function PurchaseOrderModal({
             </div>
           </div>
 
-          {/* Line Items */}
+          {/* Line Items — the actual RFQ line items, not a hardcoded pump description */}
           <div>
             <p className="text-[10px] text-slate-400 dark:text-gray-400 uppercase font-semibold mb-1.5">Line-Item Summary</p>
             <div className="overflow-x-auto">
@@ -118,28 +151,44 @@ export function PurchaseOrderModal({
                   <tr>
                     <th className="p-2">Item Description</th>
                     <th className="p-2 text-center">Qty</th>
-                    <th className="p-2 text-right">Unit Rate</th>
-                    <th className="p-2 text-right">Total ($)</th>
+                    <th className="p-2 text-center">Unit</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 dark:divide-gray-800 text-slate-700 dark:text-gray-300">
-                  <tr>
-                    <td className="p-2">Centrifugal Water Pump 500 GPM (15 HP Motor, ANSI Flanged)</td>
-                    <td className="p-2 text-center">12</td>
-                    <td className="p-2 text-right mono font-semibold">${unitPrice.toLocaleString()}</td>
-                    <td className="p-2 text-right mono font-bold text-slate-900 dark:text-white">${totalAmount.toLocaleString()}</td>
-                  </tr>
+                  {lineItems.length > 0 ? (
+                    lineItems.map((li, idx) => (
+                      <tr key={idx}>
+                        <td className="p-2">{li.description}</td>
+                        <td className="p-2 text-center">{li.quantity}</td>
+                        <td className="p-2 text-center">{li.unit}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td className="p-2 text-slate-400 italic" colSpan={3}>No structured line items on this RFQ.</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
+            <div className="flex justify-end gap-6 mt-2 text-[11px]">
+              <span className="text-slate-500 dark:text-gray-400">Quoted Unit Price: <span className="font-bold text-slate-900 dark:text-white mono">₹{unitPrice.toLocaleString()}</span></span>
+              <span className="text-slate-500 dark:text-gray-400">Quoted Total: <span className="font-bold text-slate-900 dark:text-white mono">₹{totalAmount.toLocaleString()}</span></span>
+            </div>
           </div>
 
-          {/* SHA-256 Digital Fingerprint */}
+          {/* Cryptographic Audit Seal — only real once the backend has actually
+              sealed this PO; previously a hardcoded constant shown even before
+              approval, identical no matter what was approved. */}
           <div className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 flex items-start gap-2 text-[10px] text-slate-500 dark:text-gray-400 shadow-sm">
             <Hash size={14} className="text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
             <div>
               <span className="text-slate-800 dark:text-gray-300 font-semibold">Cryptographic Audit Seal (SHA-256):</span>
-              <p className="mono text-indigo-700 dark:text-indigo-300 break-all select-all font-semibold">{shaSignature}</p>
+              {approvedPo?.shaSignature ? (
+                <p className="mono text-indigo-700 dark:text-indigo-300 break-all select-all font-semibold">{approvedPo.shaSignature}</p>
+              ) : (
+                <p className="italic text-slate-400">Generated by the audit ledger once this PO is approved.</p>
+              )}
             </div>
           </div>
         </div>
@@ -159,7 +208,8 @@ export function PurchaseOrderModal({
         <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-gray-800">
           <div className="flex items-center gap-2">
             <button
-              onClick={() => showToast('PO Exported', 'Purchase Order PDF generated & downloaded.', 'info')}
+              onClick={() => window.print()}
+              title="Use your browser's print dialog to save as PDF"
               className="btn btn-secondary btn-sm"
             >
               <Download size={13} /> Export PDF
@@ -177,13 +227,15 @@ export function PurchaseOrderModal({
             </button>
             <button
               onClick={handleApprove}
-              disabled={poSigned}
+              disabled={poSigned || approving}
               className="btn btn-primary"
             >
               {poSigned ? (
                 <>
                   <CheckCircle2 size={15} /> Dispatched to Vendor & ERP!
                 </>
+              ) : approving ? (
+                <>Approving...</>
               ) : (
                 <>
                   <ShieldCheck size={15} /> APPROVE & GENERATE PO
@@ -920,6 +972,96 @@ export function VendorSurveyModal({ isOpen, onClose }: SurveyModalProps) {
           </button>
           <button onClick={handleTriggerSurvey} disabled={submitting} className="btn btn-primary">
             <Sparkles size={14} /> {submitting ? 'Dispatching...' : 'Execute Mode 3 Survey'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface SubscriptionPaymentModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  planName: string;
+  price: string;
+  onPaymentSuccess: () => void;
+}
+
+/**
+ * Simulated checkout for the paid vendor subscription tiers. This app has no
+ * real payment processor integration anywhere — this modal exists so the
+ * plan switch isn't a bare, instant, unexplained state flip on a screen that
+ * advertises real dollar prices; it's still just a demo/dummy gateway.
+ */
+export function VendorSubscriptionPaymentModal({ isOpen, onClose, planName, price, onPaymentSuccess }: SubscriptionPaymentModalProps) {
+  const [processing, setProcessing] = useState(false);
+  const [cardNumber, setCardNumber] = useState('4242 4242 4242 4242');
+
+  if (!isOpen) return null;
+
+  const handlePay = () => {
+    setProcessing(true);
+    setTimeout(() => {
+      setProcessing(false);
+      onPaymentSuccess();
+      onClose();
+    }, 1200);
+  };
+
+  return (
+    <div className="modal-overlay">
+      <div className="modal-content max-w-md p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-indigo-500/40">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-gray-800">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/30">
+              <CreditCard size={18} />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">Dummy Payment Gateway</h3>
+              <p className="text-xs text-slate-500 dark:text-gray-400">Simulated checkout — no real payment is processed</p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            disabled={processing}
+            className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 disabled:opacity-40"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="space-y-3 my-4 text-xs">
+          <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 flex items-center justify-between">
+            <span className="text-slate-500 dark:text-gray-400">Plan</span>
+            <span className="font-bold text-slate-900 dark:text-white">{planName}</span>
+          </div>
+          <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 flex items-center justify-between">
+            <span className="text-slate-500 dark:text-gray-400">Amount Due</span>
+            <span className="font-black text-lg text-indigo-600 dark:text-indigo-400">{price}</span>
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
+              Card Number (dummy — not validated)
+            </label>
+            <input
+              type="text"
+              value={cardNumber}
+              onChange={(e) => setCardNumber(e.target.value)}
+              disabled={processing}
+              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+            />
+          </div>
+          <p className="text-[10px] text-slate-400 italic">
+            Demo checkout for testing — no real charge is made and no payment processor is contacted.
+          </p>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200 dark:border-gray-800">
+          <button onClick={onClose} disabled={processing} className="btn btn-ghost btn-sm">
+            Cancel
+          </button>
+          <button onClick={handlePay} disabled={processing} className="btn btn-primary">
+            <CreditCard size={14} /> {processing ? 'Processing Payment...' : `Pay ${price} (Dummy Gateway)`}
           </button>
         </div>
       </div>

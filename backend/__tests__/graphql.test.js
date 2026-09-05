@@ -1,12 +1,32 @@
 const request = require('supertest');
+
 const app = require('../src/app');
 const storeService = require('../src/services/storeService');
 const { queryCache } = require('../src/db/queryCache');
 const { handleGraphQL } = require('../src/controllers/graphqlController');
+const { authHeader, TEST_USERS } = require('./testHelpers');
 
 describe('GraphQL API & Controller Integration Tests', () => {
+  // RFQ resolvers are buyer-scoped, so a fixture owned by the test buyer's
+  // own account has to exist for the read queries to return anything.
+  let seededRfq;
+
   beforeEach(() => {
     queryCache.clear();
+    const account = storeService.addBuyerAccount({
+      organizationName: 'GraphQL Fixture Org',
+      corporateEmail: TEST_USERS.buyer.email,
+    });
+    seededRfq = storeService.createRFQ(
+      {
+        title: 'GraphQL Fixture RFQ',
+        category: 'Engineering Spares - Mechanical',
+        sourcingMode: 'mode_2',
+        status: 'Quotes Pending',
+        budget: 145000,
+      },
+      account
+    );
   });
 
   test('POST /graphql executes rfqs, vendors, and buyerAccounts queries', async () => {
@@ -41,6 +61,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
 
     const res = await request(app)
       .post('/graphql')
+      .set(authHeader('buyer'))
       .send({ query })
       .expect(200);
 
@@ -52,10 +73,14 @@ describe('GraphQL API & Controller Integration Tests', () => {
   });
 
   test('POST /graphql supports filtered queries for RFQ and Vendor by id/rfqNumber/email', async () => {
-    const rfqList = storeService.getRFQs();
-    const vendorList = storeService.getVendors();
-    const testRFQ = rfqList[0];
-    const testVendor = vendorList[0];
+    const testRFQ = seededRfq;
+    // Created here rather than taken from the vendor roster: nothing is seeded, so
+    // getVendors() is empty until something is actually registered.
+    const testVendor = storeService.addVendor({
+      name: 'GraphQL Filter Vendor',
+      email: 'filter@graphql-vendor.test',
+      majorCategory: 'Engineering Spares - Mechanical',
+    });
 
     const query = `
       query GetSingleEntities($rfqId: String, $rfqNum: String, $vId: String, $vEmail: String) {
@@ -87,6 +112,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
 
     const res = await request(app)
       .post('/graphql')
+      .set(authHeader('buyer'))
       .send({ query, variables })
       .expect(200);
 
@@ -171,11 +197,14 @@ describe('GraphQL API & Controller Integration Tests', () => {
         }
       }
     `;
-    const resCreateRFQ = await request(app).post('/graphql').send({ query: createRFQMutation }).expect(200);
+    const resCreateRFQ = await request(app).post('/graphql').set(authHeader('buyer')).send({ query: createRFQMutation }).expect(200);
     const createdRFQ = resCreateRFQ.body.data.createRFQ;
     expect(createdRFQ.title).toBe('GraphQL Sourcing RFQ Test');
 
-    // 2. Update RFQ
+    // The server allocates the RFQ number, never the client.
+    expect(createdRFQ.rfqNumber).toMatch(/^RFQ-/);
+
+    // 2. Update RFQ.
     const updateRFQMutation = `
       mutation {
         updateRFQ(id: "${createdRFQ.id}", input: {
@@ -188,7 +217,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
         }
       }
     `;
-    const resUpdateRFQ = await request(app).post('/graphql').send({ query: updateRFQMutation }).expect(200);
+    const resUpdateRFQ = await request(app).post('/graphql').set(authHeader('buyer')).send({ query: updateRFQMutation }).expect(200);
     expect(resUpdateRFQ.body.data.updateRFQ.status).toBe('awarded');
 
     // 3. Create Vendor
@@ -207,7 +236,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
         }
       }
     `;
-    const resCreateVendor = await request(app).post('/graphql').send({ query: createVendorMutation }).expect(200);
+    const resCreateVendor = await request(app).post('/graphql').set(authHeader('buyer')).send({ query: createVendorMutation }).expect(200);
     const createdVendor = resCreateVendor.body.data.createVendor;
     expect(createdVendor.name).toBe('Apex Precision Castings');
 
@@ -224,7 +253,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
         }
       }
     `;
-    const resUpdateVendor = await request(app).post('/graphql').send({ query: updateVendorMutation }).expect(200);
+    const resUpdateVendor = await request(app).post('/graphql').set(authHeader('buyer')).send({ query: updateVendorMutation }).expect(200);
     expect(resUpdateVendor.body.data.updateVendor.rating).toBe(4.9);
 
     // 5. Delete Vendor
@@ -233,7 +262,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
         deleteVendor(id: "${createdVendor.id}")
       }
     `;
-    const resDeleteVendor = await request(app).post('/graphql').send({ query: deleteVendorMutation }).expect(200);
+    const resDeleteVendor = await request(app).post('/graphql').set(authHeader('buyer')).send({ query: deleteVendorMutation }).expect(200);
     expect(resDeleteVendor.body.data.deleteVendor).toBe(true);
 
     // 6. Create Buyer Account
@@ -251,7 +280,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
         }
       }
     `;
-    const resCreateBuyer = await request(app).post('/graphql').send({ query: createBuyerMutation }).expect(200);
+    const resCreateBuyer = await request(app).post('/graphql').set(authHeader('buyer')).send({ query: createBuyerMutation }).expect(200);
     expect(resCreateBuyer.body.data.createBuyerAccount.organizationName).toBe('JSW Energy Limited');
 
     // 7. Clear Query Cache
@@ -260,10 +289,10 @@ describe('GraphQL API & Controller Integration Tests', () => {
         clearQueryCache
       }
     `;
-    const resClearCache = await request(app).post('/graphql').send({ query: clearCacheMutation }).expect(200);
+    const resClearCache = await request(app).post('/graphql').set(authHeader('buyer')).send({ query: clearCacheMutation }).expect(200);
     expect(resClearCache.body.data.clearQueryCache).toBe(true);
 
-    // 8. Purge Logs
+    // 8. Purge Logs (admin-only)
     const purgeLogsMutation = `
       mutation {
         purgeLogs(maxAgeDays: 14) {
@@ -271,8 +300,32 @@ describe('GraphQL API & Controller Integration Tests', () => {
         }
       }
     `;
-    const resPurgeLogs = await request(app).post('/graphql').send({ query: purgeLogsMutation }).expect(200);
+    const resPurgeLogs = await request(app).post('/graphql').set(authHeader('admin')).send({ query: purgeLogsMutation }).expect(200);
     expect(resPurgeLogs.body.data.purgeLogs.success).toBe(true);
+  });
+
+  test('mutations reject unauthenticated requests, and admin-only mutations reject non-admin roles', async () => {
+    const createRFQMutation = `
+      mutation {
+        createRFQ(input: { title: "Unauthenticated RFQ", category: "X", budget: 1 }) {
+          id
+        }
+      }
+    `;
+    const resUnauth = await request(app).post('/graphql').send({ query: createRFQMutation }).expect(200);
+    expect(resUnauth.body.errors).toBeDefined();
+    expect(resUnauth.body.data.createRFQ).toBeNull();
+
+    const purgeLogsMutation = `
+      mutation {
+        purgeLogs(maxAgeDays: 14) {
+          success
+        }
+      }
+    `;
+    const resNonAdmin = await request(app).post('/graphql').set(authHeader('buyer')).send({ query: purgeLogsMutation }).expect(200);
+    expect(resNonAdmin.body.errors).toBeDefined();
+    expect(resNonAdmin.body.data.purgeLogs).toBeNull();
   });
 
   test('GET /graphql supports query execution and handles string variables and invalid JSON variables fallback', async () => {
@@ -368,6 +421,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
 
     const encRes = await request(app)
       .post('/graphql')
+      .set(authHeader('buyer'))
       .send({
         query: encMutation,
         variables: { input: { plaintext: 'Confidential ERP Quote' } },

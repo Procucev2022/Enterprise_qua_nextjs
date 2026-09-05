@@ -1,0 +1,727 @@
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import ManualRFQModal from '@/app/buyer/ManualRFQModal';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { SOURCING_MODES } from '@/lib/constants';
+import { CATEGORY_TAXONOMY_FIXTURE as categoriesData } from '../../../test-fixtures/categoryTaxonomy';
+import type {
+  ExtractedEntity,
+  RFQAttachment,
+  RFQExtractionResult,
+  RFQItem,
+} from '@/lib/types';
+
+jest.mock('@/lib/rfqClient', () => ({
+  createRFQ: jest.fn(),
+  uploadRFQAttachment: jest.fn(),
+  extractLineItemsFromDocument: jest.fn(),
+}));
+
+// Reading a File is jsdom's business, not this dialog's: the request builder is
+// exercised directly in documentExtraction.test.ts.
+jest.mock('@/lib/documentExtraction', () => ({
+  buildExtractionRequest: jest.fn(async (file: File) => ({
+    fileName: file.name,
+    inlineData: 'ZmFrZQ==',
+    mimeType: file.type || 'application/pdf',
+  })),
+}));
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const rfqClient = require('@/lib/rfqClient');
+
+const MODAL = UI_STRINGS.manualRfqModal;
+const MANUAL = UI_STRINGS.manualRfq;
+
+const onClose = jest.fn();
+const onCreated = jest.fn();
+
+const renderModal = (isOpen = true) =>
+  render(<ManualRFQModal isOpen={isOpen} onClose={onClose} onCreated={onCreated} />);
+
+function savedRFQ(overrides: Partial<RFQItem> = {}): RFQItem {
+  return {
+    id: '41',
+    rfqNumber: 'RFQ260409000512',
+    title: 'Mechanical Spares Procurement',
+    category: 'Engineering Spares - Mechanical',
+    sourcingMode: 'mode_1',
+    status: 'Quotes Pending',
+    quotesCount: 0,
+    targetDeliveryDate: '2026-09-30',
+    budget: 0,
+    createdAt: '2026-09-04T10:00:00.000Z',
+    extractedEntities: [],
+    quotes: [],
+    chasingActive: false,
+    ...overrides,
+  } as RFQItem;
+}
+
+function attachment(overrides: Partial<RFQAttachment> = {}): RFQAttachment {
+  return {
+    id: 'a1',
+    fileName: 'annexure.pdf',
+    mimeType: 'application/pdf',
+    size: 2048,
+    uploadedAt: '2026-09-02T11:07:16.000Z',
+    ...overrides,
+  };
+}
+
+/** The single row the dialog opens with. */
+const firstRow = () => screen.getAllByRole('row')[1];
+
+/** Complete every field a line item needs before dispatch. */
+function fillRow() {
+  const row = firstRow();
+  fireEvent.change(within(row).getByLabelText(MODAL.colItem), {
+    target: { value: 'Centrifugal Water Pump' },
+  });
+  fireEvent.change(within(row).getByLabelText(MODAL.colMajor), {
+    target: { value: categoriesData[0].majorCategory },
+  });
+  fireEvent.change(within(row).getByLabelText(MODAL.colMinor), {
+    target: { value: categoriesData[0].minorCategories[0] },
+  });
+  fireEvent.change(within(row).getByLabelText(MODAL.colQty), { target: { value: '12' } });
+  fireEvent.change(within(row).getByLabelText(MODAL.colUnit), { target: { value: 'Nos' } });
+}
+
+/** Fill the mandatory delivery destination. */
+function fillDelivery() {
+  fireEvent.change(screen.getByLabelText(new RegExp(MODAL.deliveryLocationLabel, 'i')), {
+    target: { value: 'Navi Mumbai Plant, Gate 3' },
+  });
+  fireEvent.change(screen.getByLabelText(new RegExp(MODAL.deliveryPincodeLabel, 'i')), {
+    target: { value: '400701' },
+  });
+}
+
+const clickSave = () => fireEvent.click(screen.getByRole('button', { name: MODAL.saveAction }));
+
+/** One extracted line item, in the shape the extraction endpoint returns. */
+function extractedEntity(overrides: Partial<ExtractedEntity> = {}): ExtractedEntity {
+  return {
+    id: 'ent-1',
+    itemName: 'Centrifugal Water Pump 500 GPM',
+    quantity: 12,
+    unit: 'Units',
+    targetDate: '2026-09-15',
+    technicalSpecs: 'SS316 impeller',
+    confidence: 90,
+    category: categoriesData[0].minorCategories[0],
+    majorCategory: categoriesData[0].majorCategory,
+    minorCategory: categoriesData[0].minorCategories[0],
+    ...overrides,
+  };
+}
+
+function extractionResult({
+  entities = [extractedEntity()],
+  title = 'Pump Requirement',
+  estimatedBudget = 250000 as number | null,
+}: {
+  entities?: ExtractedEntity[];
+  title?: string;
+  estimatedBudget?: number | null;
+} = {}): RFQExtractionResult {
+  return {
+    success: true,
+    data: {
+      title,
+      category: categoriesData[0].majorCategory,
+      targetDeliveryDate: '2026-09-15',
+      estimatedBudget,
+      extractedEntities: entities,
+      source: 'web_portal',
+    },
+    classification: {
+      totalExtracted: entities.length,
+      accepted: entities.length,
+      duplicatesRemoved: 0,
+      needsReview: 0,
+      autoClassified: entities.length,
+    },
+    extraction: { model: 'gemini-3.6-flash' },
+  };
+}
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  rfqClient.createRFQ.mockResolvedValue({ success: true, rfq: savedRFQ() });
+  // A distinct id and name per upload: the list is keyed on the id, and two
+  // documents in one selection must not collide.
+  let uploadCount = 0;
+  rfqClient.uploadRFQAttachment.mockImplementation((file: File) => {
+    uploadCount += 1;
+    return Promise.resolve({
+      success: true,
+      data: attachment({ id: `a${uploadCount}`, fileName: file.name }),
+    });
+  });
+  rfqClient.extractLineItemsFromDocument.mockResolvedValue(extractionResult());
+});
+
+describe('ManualRFQModal: visibility', () => {
+  it('renders nothing while closed', () => {
+    renderModal(false);
+    expect(screen.queryByTestId('manual-rfq-modal')).not.toBeInTheDocument();
+  });
+
+  it('renders as a labelled modal dialog', () => {
+    renderModal();
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(screen.getByRole('heading', { name: MODAL.title })).toBeInTheDocument();
+  });
+
+  it('closes from the header control and from Cancel', () => {
+    renderModal();
+    fireEvent.click(screen.getByRole('button', { name: MODAL.closeAria }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: MODAL.cancelAction }));
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it('opens with exactly one blank line item', () => {
+    renderModal();
+    // Header row plus one item row.
+    expect(screen.getAllByRole('row')).toHaveLength(2);
+    expect(within(firstRow()).getByLabelText(MODAL.colItem)).toHaveValue('');
+  });
+
+  // A blank row must read blank. A zero is indistinguishable from a buyer who
+  // meant zero, and zero is what used to reach vendors unnoticed.
+  it('shows an unanswered quantity as blank rather than zero', () => {
+    renderModal();
+    expect(within(firstRow()).getByLabelText(MODAL.colQty)).toHaveValue(null);
+  });
+
+  it('shows an unanswered budget as blank rather than zero', () => {
+    renderModal();
+    expect(
+      screen.getByLabelText(/Estimated Budget/i)
+    ).toHaveValue(null);
+  });
+});
+
+describe('ManualRFQModal: line items', () => {
+  it('adds and removes rows', () => {
+    renderModal();
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(MODAL.addItemAction, 'i') }));
+    expect(screen.getAllByRole('row')).toHaveLength(3);
+
+    fireEvent.click(
+      screen.getAllByRole('button', {
+        name: formatString(MODAL.removeItemAria, { item: MODAL.untitledItem }),
+      })[0]
+    );
+    expect(screen.getAllByRole('row')).toHaveLength(2);
+  });
+
+  it('reports an empty list rather than rendering an empty table', () => {
+    renderModal();
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: formatString(MODAL.removeItemAria, { item: MODAL.untitledItem }),
+      })
+    );
+    expect(screen.getByText(MODAL.noItemsMessage)).toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  // Nothing can be chosen until the major is set, because the options depend on it.
+  it('disables the minor category until a major is chosen', () => {
+    renderModal();
+    const row = firstRow();
+    expect(within(row).getByLabelText(MODAL.colMinor)).toBeDisabled();
+
+    fireEvent.change(within(row).getByLabelText(MODAL.colMajor), {
+      target: { value: categoriesData[0].majorCategory },
+    });
+    expect(within(row).getByLabelText(MODAL.colMinor)).toBeEnabled();
+  });
+
+  // A minor from the previous major is invalid under the new one, and leaving it
+  // would dispatch a mismatched pair to vendors.
+  it('clears the minor category when the major changes', () => {
+    renderModal();
+    const row = firstRow();
+    const major = within(row).getByLabelText(MODAL.colMajor);
+    const minor = within(row).getByLabelText(MODAL.colMinor) as HTMLSelectElement;
+
+    fireEvent.change(major, { target: { value: categoriesData[0].majorCategory } });
+    fireEvent.change(minor, { target: { value: categoriesData[0].minorCategories[0] } });
+    expect(minor.value).toBe(categoriesData[0].minorCategories[0]);
+
+    fireEvent.change(major, { target: { value: categoriesData[1].majorCategory } });
+    expect(minor.value).toBe('');
+  });
+});
+
+describe('ManualRFQModal: validation', () => {
+  // Validating on open would greet the buyer with a screen of red against fields
+  // they have not reached.
+  it('shows no errors until the buyer tries to save', () => {
+    renderModal();
+    expect(screen.queryByText(MANUAL.itemNameRequired)).not.toBeInTheDocument();
+    expect(screen.queryByText(MANUAL.deliveryLocationRequired)).not.toBeInTheDocument();
+  });
+
+  it('reports every blocking field once Save is pressed', () => {
+    renderModal();
+    clickSave();
+
+    expect(screen.getByText(MANUAL.itemNameRequired)).toBeInTheDocument();
+    expect(screen.getByText(MANUAL.quantityRequired)).toBeInTheDocument();
+    expect(screen.getByText(MANUAL.unitRequired)).toBeInTheDocument();
+    expect(screen.getByText(MANUAL.majorCategoryRequired)).toBeInTheDocument();
+    expect(screen.getByText(MANUAL.deliveryLocationRequired)).toBeInTheDocument();
+    expect(screen.getByText(MANUAL.deliveryPincodeRequired)).toBeInTheDocument();
+  });
+
+  it('does not post an invalid form', () => {
+    renderModal();
+    clickSave();
+    expect(rfqClient.createRFQ).not.toHaveBeenCalled();
+  });
+
+  it('distinguishes a malformed pincode from a blank one', () => {
+    renderModal();
+    fireEvent.change(screen.getByLabelText(new RegExp(MODAL.deliveryPincodeLabel, 'i')), {
+      target: { value: '!!' },
+    });
+    clickSave();
+
+    expect(screen.getByText(MANUAL.deliveryPincodeInvalid)).toBeInTheDocument();
+    expect(screen.queryByText(MANUAL.deliveryPincodeRequired)).not.toBeInTheDocument();
+  });
+
+  it('rejects a negative budget', () => {
+    renderModal();
+    fireEvent.change(
+      screen.getByLabelText(/Estimated Budget/i),
+      { target: { value: '-5' } }
+    );
+    clickSave();
+    expect(screen.getByText(MANUAL.budgetNegative)).toBeInTheDocument();
+  });
+
+  it('clears an error once the field is filled', () => {
+    renderModal();
+    clickSave();
+    expect(screen.getByText(MANUAL.deliveryLocationRequired)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(new RegExp(MODAL.deliveryLocationLabel, 'i')), {
+      target: { value: 'Navi Mumbai Plant, Gate 3' },
+    });
+    expect(screen.queryByText(MANUAL.deliveryLocationRequired)).not.toBeInTheDocument();
+  });
+});
+
+describe('ManualRFQModal: saving', () => {
+  it('posts the form and hands back the server record', async () => {
+    renderModal();
+    fillRow();
+    fillDelivery();
+    clickSave();
+
+    await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalledTimes(1));
+
+    const payload = rfqClient.createRFQ.mock.calls[0][0];
+    expect(payload.source).toBe('manual_entry');
+    expect(payload.deliveryPincode).toBe('400701');
+    expect(payload.extractedEntities).toHaveLength(1);
+    // The server allocates the number, so the client must not send one.
+    expect(payload).not.toHaveProperty('rfqNumber');
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith(savedRFQ()));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('reports a failure and keeps the dialog open', async () => {
+    rfqClient.createRFQ.mockResolvedValue({
+      success: false,
+      reason: 'SERVER',
+      error: 'The RFQ could not be saved.',
+    });
+
+    renderModal();
+    fillRow();
+    fillDelivery();
+    clickSave();
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('The RFQ could not be saved.'));
+    expect(onCreated).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('disables the controls while saving', async () => {
+    let release: (value: unknown) => void = () => {};
+    rfqClient.createRFQ.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      })
+    );
+
+    renderModal();
+    fillRow();
+    fillDelivery();
+    clickSave();
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: MODAL.savingAction })).toBeDisabled()
+    );
+    expect(screen.getByRole('button', { name: MODAL.cancelAction })).toBeDisabled();
+
+    release({ success: true, rfq: savedRFQ() });
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+  });
+});
+
+describe('ManualRFQModal: supporting documents', () => {
+  const chooseFiles = (files: File[]) =>
+    fireEvent.change(screen.getByTestId('manual-modal-attachment-input'), { target: { files } });
+
+  it('uploads a chosen document and lists it', async () => {
+    renderModal();
+    chooseFiles([new File(['x'], 'annexure.pdf', { type: 'application/pdf' })]);
+
+    await waitFor(() => expect(screen.getByText('annexure.pdf')).toBeInTheDocument());
+    expect(rfqClient.uploadRFQAttachment).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a change that carries no files', () => {
+    renderModal();
+    chooseFiles([]);
+    expect(rfqClient.uploadRFQAttachment).not.toHaveBeenCalled();
+  });
+
+  // Uploaded one at a time so a rejection names the file that caused it.
+  it('reports a refused document against its own file', async () => {
+    rfqClient.uploadRFQAttachment
+      .mockResolvedValueOnce({ success: true, data: attachment({ id: 'ok', fileName: 'good.pdf' }) })
+      .mockResolvedValueOnce({ success: false, error: 'That file type cannot be attached.' });
+
+    renderModal();
+    chooseFiles([
+      new File(['x'], 'good.pdf', { type: 'application/pdf' }),
+      new File(['y'], 'bad.exe', { type: 'application/x-msdownload' }),
+    ]);
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('bad.exe'));
+    // The one that succeeded is still attached.
+    expect(screen.getByText('good.pdf')).toBeInTheDocument();
+  });
+
+  it('removes an attachment', async () => {
+    renderModal();
+    chooseFiles([new File(['x'], 'annexure.pdf', { type: 'application/pdf' })]);
+    await waitFor(() => expect(screen.getByText('annexure.pdf')).toBeInTheDocument());
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: formatString(MODAL.removeAttachmentAria, { fileName: 'annexure.pdf' }),
+      })
+    );
+    expect(screen.queryByText('annexure.pdf')).not.toBeInTheDocument();
+  });
+
+  it('carries the attachments onto the saved RFQ', async () => {
+    renderModal();
+    chooseFiles([new File(['x'], 'annexure.pdf', { type: 'application/pdf' })]);
+    await waitFor(() => expect(screen.getByText('annexure.pdf')).toBeInTheDocument());
+
+    fillRow();
+    fillDelivery();
+    clickSave();
+
+    await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
+    expect(rfqClient.createRFQ.mock.calls[0][0].attachments).toHaveLength(1);
+  });
+});
+
+describe('ManualRFQModal: header and item fields', () => {
+  it('records the RFQ title, budget and target date on the payload', async () => {
+    renderModal();
+    fireEvent.change(screen.getByLabelText(new RegExp(MODAL.titleLabel, 'i')), {
+      target: { value: 'Monsoon Pump Overhaul' },
+    });
+    fireEvent.change(screen.getByLabelText(/Estimated Budget/i), { target: { value: '250000' } });
+    fireEvent.change(screen.getByLabelText(new RegExp(MODAL.targetDateLabel, 'i')), {
+      target: { value: '2026-10-31' },
+    });
+    fillRow();
+    fillDelivery();
+    clickSave();
+
+    await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
+    const payload = rfqClient.createRFQ.mock.calls[0][0];
+    expect(payload.title).toBe('Monsoon Pump Overhaul');
+    expect(payload.budget).toBe(250000);
+    expect(payload.targetDeliveryDate).toBe('2026-10-31');
+  });
+
+  it('records the per-item specs and target date on the payload', async () => {
+    renderModal();
+    fillRow();
+    const row = firstRow();
+    fireEvent.change(within(row).getByLabelText(MODAL.colSpecs), {
+      target: { value: 'SS316 impeller, 415V' },
+    });
+    fireEvent.change(within(row).getByLabelText(MODAL.colTargetDate), {
+      target: { value: '2026-11-05' },
+    });
+    fillDelivery();
+    clickSave();
+
+    await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
+    const item = rfqClient.createRFQ.mock.calls[0][0].extractedEntities[0];
+    expect(item.technicalSpecs).toBe('SS316 impeller, 415V');
+    expect(item.targetDate).toBe('2026-11-05');
+  });
+
+  it('clears an entered budget back to unstated rather than to zero', () => {
+    renderModal();
+    const budget = screen.getByLabelText(/Estimated Budget/i);
+    fireEvent.change(budget, { target: { value: '250000' } });
+    expect(budget).toHaveValue(250000);
+
+    fireEvent.change(budget, { target: { value: '' } });
+    expect(budget).toHaveValue(null);
+  });
+});
+
+describe('ManualRFQModal: sourcing mode', () => {
+  it('starts on the first mode and switches on selection', async () => {
+    renderModal();
+    const modes = screen.getAllByRole('radio');
+    expect(modes[0]).toHaveAttribute('aria-checked', 'true');
+
+    fireEvent.click(modes[2]);
+    expect(modes[2]).toHaveAttribute('aria-checked', 'true');
+    expect(modes[0]).toHaveAttribute('aria-checked', 'false');
+
+    fillRow();
+    fillDelivery();
+    clickSave();
+    await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
+    expect(rfqClient.createRFQ.mock.calls[0][0].sourcingMode).toBe(SOURCING_MODES[2].id);
+  });
+
+  // Each card states the reach that tier buys as well as how it routes, so the
+  // three can be compared before one is chosen. Asserted against the constants
+  // rather than literals so the copy can be reworded without breaking the test.
+  it('shows the routing description and the tier feature summary on every mode card', () => {
+    renderModal();
+
+    SOURCING_MODES.forEach((mode) => {
+      const card = screen.getByTestId(`manual-mode-${mode.id}`);
+      expect(card).toHaveTextContent(mode.description);
+      expect(card).toHaveTextContent(mode.featureSummary);
+    });
+  });
+
+  it('gives each mode its own feature summary naming the tiers it includes', () => {
+    renderModal();
+
+    const summaries = SOURCING_MODES.map((mode) => mode.featureSummary);
+    // No two cards may claim the same reach, which is what made the tiers
+    // indistinguishable on this screen before.
+    expect(new Set(summaries).size).toBe(SOURCING_MODES.length);
+    // The summaries are cumulative: each tier includes the ones beneath it.
+    expect(screen.getByTestId('manual-mode-mode_1')).toHaveTextContent('Features of Version 1');
+    expect(screen.getByTestId('manual-mode-mode_2')).toHaveTextContent('Features of Version 1 & 2');
+    expect(screen.getByTestId('manual-mode-mode_3')).toHaveTextContent('Features of Version 1, 2 & 3');
+  });
+
+  // The bullet is a visual marker, not content, so it must not be announced.
+  it('hides the decorative bullet from assistive technology', () => {
+    renderModal();
+    const card = screen.getByTestId('manual-mode-mode_1');
+    expect(card.querySelector('[aria-hidden="true"]')).not.toBeNull();
+  });
+});
+
+describe('ManualRFQModal: extraction from an attached document', () => {
+  const chooseFiles = (files: File[]) =>
+    fireEvent.change(screen.getByTestId('manual-modal-attachment-input'), { target: { files } });
+
+  const attachOne = async (name = 'boq.pdf') => {
+    chooseFiles([new File(['x'], name, { type: 'application/pdf' })]);
+    await waitFor(() => expect(rfqClient.uploadRFQAttachment).toHaveBeenCalled());
+  };
+
+  const extractBtn = () => screen.getByTestId('manual-extract');
+
+  it('opens the file picker from the attach control', () => {
+    renderModal();
+    const input = screen.getByTestId('manual-modal-attachment-input');
+    const click = jest.spyOn(input, 'click');
+
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(MODAL.attachAction, 'i') }));
+    expect(click).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers no extraction until a document is attached', async () => {
+    renderModal();
+    expect(extractBtn()).toBeDisabled();
+
+    await attachOne();
+    expect(extractBtn()).toBeEnabled();
+  });
+
+  it('fills the table, title, budget and category from the document', async () => {
+    renderModal();
+    await attachOne();
+    fireEvent.click(extractBtn());
+
+    await waitFor(() =>
+      expect(within(firstRow()).getByLabelText(MODAL.colItem)).toHaveValue(
+        'Centrifugal Water Pump 500 GPM'
+      )
+    );
+    expect(within(firstRow()).getByLabelText(MODAL.colQty)).toHaveValue(12);
+    expect(screen.getByLabelText(new RegExp(MODAL.titleLabel, 'i'))).toHaveValue('Pump Requirement');
+    expect(screen.getByLabelText(/Estimated Budget/i)).toHaveValue(250000);
+    expect(within(firstRow()).getByLabelText(MODAL.colMajor)).toHaveValue(
+      categoriesData[0].majorCategory
+    );
+  });
+
+  it('leaves rows editable after extraction', async () => {
+    renderModal();
+    await attachOne();
+    fireEvent.click(extractBtn());
+    await waitFor(() =>
+      expect(within(firstRow()).getByLabelText(MODAL.colQty)).toHaveValue(12)
+    );
+
+    fireEvent.change(within(firstRow()).getByLabelText(MODAL.colQty), { target: { value: '30' } });
+    expect(within(firstRow()).getByLabelText(MODAL.colQty)).toHaveValue(30);
+  });
+
+  it('keeps what the buyer already typed in preference to the document', async () => {
+    renderModal();
+    fireEvent.change(screen.getByLabelText(new RegExp(MODAL.titleLabel, 'i')), {
+      target: { value: 'Buyer-supplied title' },
+    });
+    fireEvent.change(screen.getByLabelText(/Estimated Budget/i), { target: { value: '999' } });
+    await attachOne();
+    fireEvent.click(extractBtn());
+
+    await waitFor(() =>
+      expect(within(firstRow()).getByLabelText(MODAL.colQty)).toHaveValue(12)
+    );
+    expect(screen.getByLabelText(new RegExp(MODAL.titleLabel, 'i'))).toHaveValue(
+      'Buyer-supplied title'
+    );
+    expect(screen.getByLabelText(/Estimated Budget/i)).toHaveValue(999);
+  });
+
+  it('takes nothing from a document that names neither a title nor a budget', async () => {
+    rfqClient.extractLineItemsFromDocument.mockResolvedValue(
+      extractionResult({ title: '', estimatedBudget: null })
+    );
+
+    renderModal();
+    await attachOne();
+    fireEvent.click(extractBtn());
+
+    await waitFor(() =>
+      expect(within(firstRow()).getByLabelText(MODAL.colQty)).toHaveValue(12)
+    );
+    expect(screen.getByLabelText(new RegExp(MODAL.titleLabel, 'i'))).toHaveValue('');
+    expect(screen.getByLabelText(/Estimated Budget/i)).toHaveValue(null);
+  });
+
+  it('shows the in-progress label while the document is being read', async () => {
+    let release: (value: unknown) => void = () => {};
+    rfqClient.extractLineItemsFromDocument.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      })
+    );
+
+    renderModal();
+    await attachOne();
+    fireEvent.click(extractBtn());
+
+    await waitFor(() => expect(screen.getByText(MODAL.extractingAction)).toBeInTheDocument());
+    expect(extractBtn()).toBeDisabled();
+
+    release(extractionResult());
+    await waitFor(() => expect(screen.getByText(MODAL.extractAction)).toBeInTheDocument());
+  });
+
+  // A failure must cost the buyer nothing they had already keyed.
+  it('reports a failed extraction and leaves the keyed rows alone', async () => {
+    rfqClient.extractLineItemsFromDocument.mockResolvedValue({
+      success: false,
+      error: 'The document could not be read.',
+    });
+
+    renderModal();
+    fillRow();
+    await attachOne();
+    fireEvent.click(extractBtn());
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('The document could not be read.')
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('boq.pdf');
+    expect(within(firstRow()).getByLabelText(MODAL.colItem)).toHaveValue('Centrifugal Water Pump');
+  });
+
+  // Reported per document, so one unreadable file does not discard the other's rows.
+  it('keeps the rows from a readable document when another fails', async () => {
+    rfqClient.extractLineItemsFromDocument
+      .mockResolvedValueOnce(extractionResult())
+      .mockResolvedValueOnce({ success: false, error: 'Unsupported layout.' });
+
+    renderModal();
+    chooseFiles([
+      new File(['x'], 'good.pdf', { type: 'application/pdf' }),
+      new File(['y'], 'bad.pdf', { type: 'application/pdf' }),
+    ]);
+    await waitFor(() => expect(rfqClient.uploadRFQAttachment).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(extractBtn());
+
+    await waitFor(() =>
+      expect(within(firstRow()).getByLabelText(MODAL.colQty)).toHaveValue(12)
+    );
+    expect(screen.getByText(/bad\.pdf: Unsupported layout\./)).toBeInTheDocument();
+  });
+
+  it('changes nothing when the document yields no line items', async () => {
+    rfqClient.extractLineItemsFromDocument.mockResolvedValue(extractionResult({ entities: [] }));
+
+    renderModal();
+    fillRow();
+    await attachOne();
+    fireEvent.click(extractBtn());
+
+    await waitFor(() => expect(rfqClient.extractLineItemsFromDocument).toHaveBeenCalled());
+    expect(within(firstRow()).getByLabelText(MODAL.colItem)).toHaveValue('Centrifugal Water Pump');
+    expect(screen.getByLabelText(new RegExp(MODAL.titleLabel, 'i'))).toHaveValue('');
+  });
+
+  it('dispatches the extracted rows on save', async () => {
+    renderModal();
+    await attachOne();
+    fireEvent.click(extractBtn());
+    await waitFor(() =>
+      expect(within(firstRow()).getByLabelText(MODAL.colQty)).toHaveValue(12)
+    );
+
+    fillDelivery();
+    clickSave();
+
+    await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
+    const payload = rfqClient.createRFQ.mock.calls[0][0];
+    expect(payload.extractedEntities).toHaveLength(1);
+    expect(payload.extractedEntities[0].itemName).toBe('Centrifugal Water Pump 500 GPM');
+  });
+});

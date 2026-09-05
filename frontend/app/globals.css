@@ -2,10 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 :root, .light {
-  --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-display: 'Space Grotesk', sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
 
   /* Color Palette - Official Procucev Brand Design system */
@@ -383,11 +385,19 @@ h1, h2, h3, h4, h5, h6 {
   border-color: rgba(255, 255, 255, 0.15);
 }
 
-/* Custom Input Styles */
+/* Custom Input Styles
+   Covers every text-like input type. password/tel/search were previously
+   omitted, which left the sign-in and registration fields with no border,
+   background or padding. */
 input[type="text"],
 input[type="number"],
 input[type="email"],
 input[type="date"],
+input[type="password"],
+input[type="tel"],
+input[type="search"],
+input[type="url"],
+input:not([type]),
 select,
 textarea {
   width: 100%;
@@ -405,6 +415,11 @@ textarea {
 .dark input[type="number"],
 .dark input[type="email"],
 .dark input[type="date"],
+.dark input[type="password"],
+.dark input[type="tel"],
+.dark input[type="search"],
+.dark input[type="url"],
+.dark input:not([type]),
 .dark select,
 .dark textarea {
   background: rgba(13, 17, 28, 0.95);
@@ -416,6 +431,19 @@ select:focus,
 textarea:focus {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
+}
+
+/* Inputs rendered with a leading or trailing icon.
+   The base `input[type="..."]` rules above are more specific than a Tailwind
+   utility class, so `pl-9` alone loses and the icon ends up sitting on top of
+   the placeholder text. These element+class selectors win and reserve the gutter. */
+input.has-leading-icon,
+select.has-leading-icon {
+  padding-left: 2.375rem;
+}
+
+input.has-trailing-icon {
+  padding-right: 2.375rem;
 }
 
 input[type="range"] {

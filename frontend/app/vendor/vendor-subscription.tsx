@@ -1,35 +1,61 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
+import { VendorSubscriptionPaymentModal } from '@/app/components/Modals';
 import { Sparkles, ShieldCheck, Check, Zap, Layers, AlertCircle, RefreshCw, Download, Package, ArrowRight } from 'lucide-react';
 
 export default function VendorSubscriptionCenter() {
   const {
     vendorSubscription,
-    setVendorSubscription,
+    updateVendorSubscription,
     vendorRfqDownloadsUsed,
     setVendorRfqDownloadsUsed,
     showToast,
     addAuditLog,
     vendorCatalogue,
+    currentUserSession,
   } = useApp();
 
-  const handleSubscribe = (plan: 'premium' | 'connect' | 'select') => {
-    setVendorSubscription(plan);
-    const planName =
-      plan === 'premium'
-        ? 'Premium Model (Client Uploaded Vendor)'
-        : plan === 'connect'
-        ? 'Connect Model (50 RFQs / 3 Months)'
-        : 'Select Model (Catalogue & 100 RFQs / 3 Months)';
+  const [pendingPayment, setPendingPayment] = useState<{ planId: 'connect' | 'select'; planName: string; price: string } | null>(null);
+  const [isUpdatingPlan, setIsUpdatingPlan] = useState(false);
 
+  const planLabel = (plan: 'premium' | 'connect' | 'select') =>
+    plan === 'premium'
+      ? 'Premium Model (Client Uploaded Vendor)'
+      : plan === 'connect'
+      ? 'Connect Model (50 RFQs / 3 Months)'
+      : 'Select Model (Catalogue & 100 RFQs / 3 Months)';
+
+  const handleSubscribe = async (plan: 'premium' | 'connect' | 'select') => {
+    if (isUpdatingPlan) return;
+    setIsUpdatingPlan(true);
+    const saved = await updateVendorSubscription(plan);
+    setIsUpdatingPlan(false);
+    if (!saved) return;
+
+    const planName = planLabel(plan);
     showToast(
       'Vendor Subscription Updated!',
       `Successfully switched to ${planName}.`,
       'success'
     );
-    addAuditLog(`Apex Supplies Ltd. updated vendor subscription to ${planName}`, 'VN-APEX-4920', 'vendor@apex.com');
+    addAuditLog(
+      `${currentUserSession?.orgName || 'Vendor'} updated vendor subscription to ${planName}`,
+      undefined,
+      currentUserSession?.email
+    );
+  };
+
+  // Premium is free (granted on buyer roster upload) so it switches instantly;
+  // Connect/Select advertise real $ prices, so they go through the dummy
+  // payment gateway first rather than flipping the plan for free on click.
+  const handlePlanButtonClick = (plan: 'premium' | 'connect' | 'select', price: string) => {
+    if (plan === 'premium') {
+      handleSubscribe(plan);
+      return;
+    }
+    setPendingPayment({ planId: plan, planName: planLabel(plan), price });
   };
 
   const handleResetQuota = () => {
@@ -282,8 +308,8 @@ export default function VendorSubscriptionCenter() {
               {/* Card Footer Button */}
               <div className="p-6 bg-slate-50 dark:bg-gray-950/40 border-t border-slate-150 dark:border-gray-800/60">
                 <button
-                  onClick={() => handleSubscribe(p.id)}
-                  disabled={isActive}
+                  onClick={() => handlePlanButtonClick(p.id, p.price)}
+                  disabled={isActive || isUpdatingPlan}
                   className={`btn w-full text-xs font-bold py-2.5 flex items-center justify-center gap-1.5 ${
                     isActive
                       ? 'btn-secondary border-emerald-300 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300 cursor-default opacity-85'
@@ -302,6 +328,16 @@ export default function VendorSubscriptionCenter() {
           );
         })}
       </div>
+
+      <VendorSubscriptionPaymentModal
+        isOpen={!!pendingPayment}
+        onClose={() => setPendingPayment(null)}
+        planName={pendingPayment?.planName || ''}
+        price={pendingPayment?.price || ''}
+        onPaymentSuccess={() => {
+          if (pendingPayment) handleSubscribe(pendingPayment.planId);
+        }}
+      />
     </div>
   );
 }
