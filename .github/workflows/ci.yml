@@ -2,13 +2,20 @@ name: Enterprise CI Pipeline & Quality Gate
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches: [main, master, develop]
   pull_request:
-    branches: [ main, master, develop ]
+    branches: [main, master, develop]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+# Required permissions for GitHub Actions
+# to read, create, and update PR/issue comments.
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
 
 jobs:
   quality-gate:
@@ -17,7 +24,7 @@ jobs:
 
     strategy:
       matrix:
-        node-version: [ 20.x ]
+        node-version: [20.x]
 
     steps:
       - name: Checkout Repository
@@ -27,7 +34,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-          cache: 'npm'
+          cache: "npm"
 
       - name: Install Workspace Dependencies
         run: |
@@ -64,28 +71,47 @@ jobs:
           script: |
             const fs = require('fs');
             const path = require('path');
-            
+
             let summaryMarkdown = '';
+
             try {
               // Capture output from generator
-              const summaryScript = path.resolve('scripts/generate-ci-summary.js');
+              const summaryScript = path.resolve(
+                'scripts/generate-ci-summary.js'
+              );
+
               const { execSync } = require('child_process');
-              summaryMarkdown = execSync(`node ${summaryScript}`, { encoding: 'utf8' });
+
+              summaryMarkdown = execSync(
+                `node ${summaryScript}`,
+                { encoding: 'utf8' }
+              );
             } catch (err) {
-              summaryMarkdown = '## 🚀 Quality Gate Execution Completed';
+              summaryMarkdown =
+                '## 🚀 Quality Gate Execution Completed';
             }
 
-            const botCommentIdentifier = '<!-- procucev-ci-summary-comment -->';
-            const body = `${botCommentIdentifier}\n${summaryMarkdown}`;
+            const botCommentIdentifier =
+              '<!-- procucev-ci-summary-comment -->';
 
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
+            const body =
+              `${botCommentIdentifier}\n${summaryMarkdown}`;
 
-            const existingComment = comments.find(c => c.body.includes(botCommentIdentifier));
+            // Get existing PR/issue comments
+            const { data: comments } =
+              await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+              });
 
+            const existingComment = comments.find(
+              (comment) =>
+                comment.body &&
+                comment.body.includes(botCommentIdentifier)
+            );
+
+            // Update existing comment
             if (existingComment) {
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,
@@ -93,7 +119,9 @@ jobs:
                 comment_id: existingComment.id,
                 body: body,
               });
-            } else {
+            }
+            // Create new comment
+            else {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
