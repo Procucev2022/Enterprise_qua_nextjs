@@ -338,6 +338,52 @@ describe('API Route Endpoints', () => {
       expect(res.body.data.budget).toBe(90000);
     });
 
+    // The attachment metadata and the document provenance have to survive the
+    // round trip, because the RFQ details screen reads both. All four provenance
+    // fields were previously dropped by storeService.createRFQ, so a stored RFQ
+    // came back with a null source and a null sourceFileName — and the ingestion
+    // wizard's documented fallback for the uploaded document could never work.
+    test('POST /api/rfqs round-trips attachment metadata and document provenance', async () => {
+      const attachment = {
+        id: 'a1b2c3d4-0000-4000-8000-abcdefabcdef',
+        fileName: 'BOQ-pumps.xlsx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        size: 4096,
+        uploadedAt: '2026-09-05T06:00:00.000Z',
+      };
+
+      const created = await request(app)
+        .post('/api/rfqs')
+        .set(authHeader('buyer'))
+        .send({
+          title: 'Procurement of Attached Pumps',
+          category: 'Engineering Spares - Mechanical',
+          targetDeliveryDate: '2026-10-05',
+          sourcingMode: 'mode_1',
+          deliveryLocation: 'Navi Mumbai Plant, Gate 3',
+          deliveryPincode: '400701',
+          attachments: [attachment],
+          source: 'web_portal',
+          sourceFileName: 'BOQ-pumps.xlsx',
+        });
+
+      expect(created.statusCode).toBe(201);
+      expect(created.body.data.attachments).toEqual([attachment]);
+      expect(created.body.data.source).toBe('web_portal');
+      expect(created.body.data.sourceFileName).toBe('BOQ-pumps.xlsx');
+
+      // Read back through the endpoint the details page actually calls, so the
+      // assertion covers the shape that screen receives rather than only the
+      // create response.
+      const fetched = await request(app)
+        .get(`/api/rfqs/${created.body.data.rfqNumber}`)
+        .set(authHeader('buyer'));
+
+      expect(fetched.statusCode).toBe(200);
+      expect(fetched.body.data.attachments).toEqual([attachment]);
+      expect(fetched.body.data.sourceFileName).toBe('BOQ-pumps.xlsx');
+    });
+
     // The budget stays optional even though the destination is now mandatory: a
     // document that prices nothing yields no figure, and requiring one only made
     // buyers invent a ceiling vendors would quote against.
@@ -689,15 +735,22 @@ describe('API Route Endpoints', () => {
       expect(res.body).toHaveProperty('auditing');
     });
 
-    test('GET /api/db/status reports the identity connection and the domain store mode', async () => {
+    // One connection, one status. This used to report two datastores side by side
+    // plus a `domainStore.mode` saying whether the app was serving persisted rows
+    // or in-memory seed data; neither distinction exists now.
+    test('GET /api/db/status reports the single database connection and what is loaded', async () => {
       const res = await request(app).get('/api/db/status');
       expect(res.statusCode).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body).toHaveProperty('poolStatus');
-      expect(res.body.domainStore).toEqual(
+      expect(res.body).not.toHaveProperty('domainDatabase');
+      expect(res.body).not.toHaveProperty('domainStore');
+      expect(res.body.loadedRecords).toEqual(
         expect.objectContaining({
-          mode: expect.any(String),
+          isLoadedFromDatabase: expect.any(Boolean),
           buyerAccounts: expect.any(Number),
+          vendors: expect.any(Number),
+          rfqs: expect.any(Number),
         })
       );
     });
@@ -713,12 +766,12 @@ describe('API Route Endpoints', () => {
     });
 
     // The pool is stubbed explicitly rather than relying on whether this machine
-    // happens to have MySQL credentials, so the result is the same in CI as it is
+    // happens to have a DATABASE_URL, so the result is the same in CI as it is
     // locally.
     test('GET /api/buyer-accounts/active reports an unavailable directory rather than inventing an account', async () => {
-      const identityPool = require('../src/db/identityPool');
-      const originalPool = identityPool.pool;
-      identityPool.pool = null;
+      const pool = require('../src/db/pool');
+      const originalPool = pool.pool;
+      pool.pool = null;
       try {
         const res = await request(app).get('/api/buyer-accounts/active').set(authHeader('buyer'));
         expect(res.statusCode).toBe(503);
@@ -727,15 +780,15 @@ describe('API Route Endpoints', () => {
         // Crucially, no account is invented to fill the gap.
         expect(res.body.data).toBeUndefined();
       } finally {
-        identityPool.pool = originalPool;
+        pool.pool = originalPool;
       }
     });
 
     test('GET /api/buyer-accounts/active returns the caller\'s own organisation', async () => {
-      const identityPool = require('../src/db/identityPool');
+      const pool = require('../src/db/pool');
       const buyerProfileQueries = require('../src/db/buyerProfileQueries');
-      const originalPool = identityPool.pool;
-      identityPool.pool = { stub: true };
+      const originalPool = pool.pool;
+      pool.pool = { stub: true };
       const spy = jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({
         profile: {
           organizationId: 'org-real-01',
@@ -763,7 +816,7 @@ describe('API Route Endpoints', () => {
         expect(res.body.data.totalRFQsCreated).toBe(0);
       } finally {
         spy.mockRestore();
-        identityPool.pool = originalPool;
+        pool.pool = originalPool;
       }
     });
 

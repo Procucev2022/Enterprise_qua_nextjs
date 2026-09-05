@@ -444,9 +444,21 @@ class StoreService {
       // Vendors price freight against these, so they round-trip with the RFQ.
       deliveryLocation: rfqData.deliveryLocation || '',
       deliveryPincode: rfqData.deliveryPincode || '',
-      // Metadata only. The bytes live on disk under rfqAttachmentService, so the
-      // bootstrap payload stays a fixed size no matter how much is attached.
+      // Metadata only. The bytes live in object storage under
+      // rfqAttachmentService, so the bootstrap payload stays a fixed size no
+      // matter how much is attached.
       attachments: Array.isArray(rfqData.attachments) ? rfqData.attachments : [],
+      // Provenance. All four of these were previously dropped here — the field
+      // list below simply did not mention them — so every stored RFQ came back
+      // with a null `source` and a null `sourceFileName`. That mattered twice
+      // over: the RFQ details screen had no way to say where a record came from,
+      // and the ingestion wizard's own documented fallback for the uploaded
+      // document ("recorded as sourceFileName instead") could never have worked,
+      // because the value never reached the database.
+      source: rfqData.source || null,
+      sourceFileName: rfqData.sourceFileName || null,
+      sourceEmail: rfqData.sourceEmail || null,
+      raisedByEmail: requestingBuyerAccount ? requestingBuyerAccount.corporateEmail : rfqData.raisedByEmail || null,
       status: rfqData.status || 'Quotes Pending',
       // Stamped from the authenticated caller's own buyer account (resolved
       // by the controller/resolver from the session, never trusted from the

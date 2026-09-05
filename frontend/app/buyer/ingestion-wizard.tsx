@@ -515,6 +515,48 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
    * automatic matching and firing chaser sequences at suppliers who have not been
    * selected yet.
    */
+  /**
+   * Store the document this RFQ was extracted from, so it is retrievable later.
+   *
+   * The wizard used to send `attachments: []` unconditionally and keep only the
+   * file *name*, which meant the BOQ or specification a buyer uploaded was read
+   * for extraction and then thrown away. The RFQ details screen had nothing to
+   * list, so its attachments panel was permanently empty for every RFQ raised
+   * through this flow — only the manual dialog, which has its own picker, ever
+   * produced one.
+   *
+   * Uploaded at dispatch rather than at extraction time: a wizard session that is
+   * abandoned part way would otherwise leave an object in storage with no RFQ
+   * referencing it.
+   *
+   * A failed upload does not block dispatch. The RFQ itself is the thing the
+   * buyer is trying to raise, and refusing to create it because a copy of the
+   * source document could not be stored would be the wrong trade — so it warns
+   * and continues, and the panel reports the RFQ as having no attachment rather
+   * than implying one is there.
+   */
+  const storeSourceDocument = async (): Promise<{ attachments: RFQAttachment[]; failure: string | null }> => {
+    // Only the upload paths have a document. Email ingestion has a pasted body,
+    // and manual entry posts its own RFQ from the dialog.
+    if (!uploadedFile) return { attachments: [], failure: null };
+
+    const result = await uploadRFQAttachment(uploadedFile);
+    if (result?.success && result.data) return { attachments: [result.data], failure: null };
+
+    // Returned rather than announced here. The upload has to finish before the RFQ
+    // is posted, so a toast raised at this point is immediately replaced by the
+    // dispatch confirmation and the buyer never reads it. The caller reports it
+    // once the RFQ has actually been created, which is also when the message
+    // ("the RFQ was created, but...") becomes true.
+    return {
+      attachments: [],
+      failure: formatString(EXTRACTION.attachmentStoreFailedMessage, {
+        fileName: uploadedFile.name,
+        reason: result?.error || '',
+      }),
+    };
+  };
+
   const handleDispatch = async () => {
     // Line-item completeness is not re-checked here: `unlockedStep` locks Step 3
     // the moment a row loses its description, so this screen cannot be reached
@@ -533,6 +575,10 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
     // every row before Step 3 unlocks, so the leading item always carries one.
     const mainMajor = entities[0].majorCategory;
     const vendorsToDispatch: VendorEntry[] = [];
+    // Awaited before the RFQ is posted, because the attachment metadata has to
+    // travel with the create payload. Any failure is held back and reported after
+    // the RFQ exists.
+    const { attachments: sourceAttachments, failure: attachmentFailure } = await storeSourceDocument();
 
     // No rfqNumber is sent: the server allocates it under the same scheme the Java
     // p2pservices app uses. This screen used to mint one with Math.random(), which
@@ -550,10 +596,9 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
         budget,
         deliveryLocation: trimmedDeliveryLocation,
         deliveryPincode: trimmedDeliveryPincode,
-        // The extraction path has no attachment picker: the document that was
-        // read is recorded as sourceFileName instead. Attachments belong to the
-        // manual dialog, which posts its own RFQ.
-        attachments: [],
+        // The document this RFQ was extracted from, so the details screen can
+        // list it and the buyer can reopen what they actually uploaded.
+        attachments: sourceAttachments,
         extractedEntities: entities,
         aiScore: selectedMode === 'mode_3' ? 95 : 88,
         source:
@@ -565,11 +610,19 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
       vendorsToDispatch
     );
 
-    showToast(
-      EXTRACTION.manualCreatedTitle,
-      formatString(EXTRACTION.manualCreatedMessage, { rfqNumber: saved.rfqNumber }),
-      'success'
-    );
+    // The attachment warning takes precedence over the success toast when both
+    // apply: the buyer already knows the RFQ was raised (the wizard closes and the
+    // record appears), whereas a document that silently failed to store is the
+    // part they would otherwise never find out about. The message says both.
+    if (attachmentFailure) {
+      showToast(EXTRACTION.attachmentStoreFailedTitle, attachmentFailure, 'warning');
+    } else {
+      showToast(
+        EXTRACTION.manualCreatedTitle,
+        formatString(EXTRACTION.manualCreatedMessage, { rfqNumber: saved.rfqNumber }),
+        'success'
+      );
+    }
     onComplete();
   };
 

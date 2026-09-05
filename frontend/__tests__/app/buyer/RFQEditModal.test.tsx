@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import { RFQDeleteDialog, RFQEditModal, changedFields, toFormState, validateRFQEdit } from '@/app/buyer/RFQEditModal';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { formatIndianDateTime } from '@/lib/constants';
-import categoriesData from '@/lib/categories.json';
+import { CATEGORY_TAXONOMY_FIXTURE as categoriesData } from '../../../test-fixtures/categoryTaxonomy';
 import type { ExtractedEntity, RFQAttachment, RFQEditFormState, RFQItem } from '@/lib/types';
 
 jest.mock('@/lib/rfqClient', () => ({

@@ -358,6 +358,13 @@ export const UI_STRINGS = {
     manualCreatedTitle: 'RFQ Created',
     manualCreatedMessage: '{rfqNumber} was saved and is now in your RFQ portfolio.',
 
+    // The uploaded document is stored alongside the RFQ so the details screen can
+    // offer it back. A storage failure does not stop the RFQ being raised, so the
+    // message says exactly what is missing and what still went through.
+    attachmentStoreFailedTitle: 'Document Not Attached',
+    attachmentStoreFailedMessage:
+      'The RFQ was created, but {fileName} could not be stored with it, so it will not appear under Supporting Documents. {reason} You can attach it again from the RFQ details screen.',
+
     deliveryPincodeInvalidTitle: 'Check the Delivery Details',
     deliveryPincodeInvalidMessage:
       'Enter a pincode or zipcode of 3 to 10 letters, digits, spaces or hyphens, for example 400701.',

@@ -98,6 +98,17 @@ const VALIDATION_SCHEMAS = {
     attachments: { type: 'array', required: false },
     targetDeliveryDate: { type: 'string', required: true },
     lineItems: { type: 'array', required: false },
+    // Provenance. Bounded here because these reach the stored record and are
+    // rendered on the RFQ details screen; they were previously unvalidated
+    // because storeService dropped them before they could be persisted at all.
+    source: { type: 'string', required: false, maxLength: 40 },
+    sourceFileName: { type: 'string', required: false, maxLength: 260 },
+    sourceEmail: {
+      type: 'string',
+      required: false,
+      pattern: EMAIL_REGEX,
+      message: 'Source email must be a valid email address.',
+    },
   },
 
   // Edit of an existing RFQ (PUT /api/rfqs/:id).

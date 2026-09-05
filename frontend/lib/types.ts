@@ -10,6 +10,13 @@ export interface SourcingModeDetail {
   name: string;
   shortLabel: string;
   description: string;
+  /**
+   * One-line summary of the vendor reach a mode buys, plus which plan tiers it
+   * includes. Shown alongside `description` on the mode cards: the description
+   * explains how a mode routes an RFQ, this says what the buyer gets and makes
+   * the cumulative nature of the tiers explicit.
+   */
+  featureSummary: string;
   badgeColor: string;
 }
 

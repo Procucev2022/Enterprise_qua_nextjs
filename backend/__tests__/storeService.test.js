@@ -1,19 +1,25 @@
 const storeService = require('../src/services/storeService');
 
 describe('Store Service & Business Operations', () => {
-  test('initializes with seed data', () => {
-    expect(storeService.getVendors().length).toBeGreaterThan(0);
-    expect(storeService.getEvaluations().length).toBeGreaterThan(0);
-    expect(storeService.getAzureHealth().length).toBeGreaterThan(0);
-    // Buyer accounts are not seeded: the signed-in buyer's account is resolved
-    // from the identity schema, so no fabricated company is attributed to anyone.
+  test('initializes with no records at all', () => {
+    // Nothing is seeded. Every collection is filled from PostgreSQL by
+    // hydrateFromDB, and an empty one means there are no rows — it is not a cue
+    // to substitute fabricated vendors, evaluations or catalogue products, which
+    // is what the constructor used to do.
+    expect(storeService.getVendors()).toEqual([]);
+    expect(storeService.getEvaluations()).toEqual([]);
+    expect(storeService.getVendorCatalogue()).toEqual([]);
+    // Buyer accounts are not seeded either: the signed-in buyer's account is
+    // resolved from their own account record, so no fabricated company is
+    // attributed to anyone.
     expect(storeService.getBuyerAccounts()).toEqual([]);
     expect(storeService.getActiveBuyerAccount()).toBeNull();
-    // RFQs and the narrative around them are no longer seeded or held here:
-    // they live in qua_enterprice_rfq, owned by a buyer organisation.
     expect(storeService.getRFQs()).toEqual([]);
     expect(storeService.getAuditLogs()).toEqual([]);
     expect(storeService.getBootstrapData()).not.toHaveProperty('rfqs');
+    // System config and the infrastructure list are static defaults, not records.
+    expect(storeService.getAzureHealth().length).toBeGreaterThan(0);
+    expect(storeService.getSystemConfig()).toBeTruthy();
   });
 
   describe('Buyer Accounts Management', () => {
@@ -157,6 +163,76 @@ describe('Store Service & Business Operations', () => {
       expect(rfq.extractedEntities).toEqual(entities);
     });
 
+    // ── Attachments and provenance ────────────────────────────────────────────
+    // These four fields were absent from the object createRFQ builds, so they were
+    // silently dropped on every save: the stored RFQ came back with a null
+    // `source` and a null `sourceFileName`, which left the details screen unable
+    // to say where a record came from, and made the ingestion wizard's documented
+    // fallback for the uploaded document impossible.
+    test('createRFQ persists the attachment metadata it is given', () => {
+      const attachment = {
+        id: 'att-1',
+        fileName: 'boq-pumps.xlsx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        size: 2048,
+        uploadedAt: '2026-09-05T06:00:00.000Z',
+      };
+
+      const rfq = storeService.createRFQ({
+        title: 'Attachment RFQ',
+        category: 'Raw Material',
+        attachments: [attachment],
+      });
+
+      expect(rfq.attachments).toEqual([attachment]);
+    });
+
+    test('createRFQ defaults attachments to an empty list when none are supplied', () => {
+      const rfq = storeService.createRFQ({ title: 'No Attachment RFQ', category: 'Raw Material' });
+      expect(rfq.attachments).toEqual([]);
+    });
+
+    test('createRFQ ignores a non-array attachments value rather than storing it', () => {
+      const rfq = storeService.createRFQ({
+        title: 'Bad Attachment RFQ',
+        category: 'Raw Material',
+        attachments: 'not-an-array',
+      });
+      expect(rfq.attachments).toEqual([]);
+    });
+
+    test('createRFQ retains the document provenance fields', () => {
+      const rfq = storeService.createRFQ({
+        title: 'Provenance RFQ',
+        category: 'Raw Material',
+        source: 'web_portal',
+        sourceFileName: 'boq-pumps.xlsx',
+        sourceEmail: 'project.procurement@example.com',
+      });
+
+      expect(rfq.source).toBe('web_portal');
+      expect(rfq.sourceFileName).toBe('boq-pumps.xlsx');
+      expect(rfq.sourceEmail).toBe('project.procurement@example.com');
+    });
+
+    test('createRFQ reports absent provenance as null rather than undefined', () => {
+      // Persisted as JSONB, where an undefined key vanishes entirely and an
+      // explicit null round-trips — so the details screen can distinguish
+      // "not recorded" from "field does not exist on this record".
+      const rfq = storeService.createRFQ({ title: 'Bare RFQ', category: 'Raw Material' });
+
+      expect(rfq.source).toBeNull();
+      expect(rfq.sourceFileName).toBeNull();
+      expect(rfq.sourceEmail).toBeNull();
+    });
+
+    test('createRFQ stamps raisedByEmail from the requesting buyer account', () => {
+      const account = { id: 'buyer-acc-raised', organizationName: 'Raised Co', corporateEmail: 'raiser@co.com' };
+      const rfq = storeService.createRFQ({ title: 'Raised RFQ', category: 'Raw Material' }, account);
+
+      expect(rfq.raisedByEmail).toBe('raiser@co.com');
+    });
+
     test('createRFQ defaults an unset status to a real, valid RFQ status', () => {
       const rfq = storeService.createRFQ({ title: 'Default Status RFQ', category: 'Raw Material' });
       expect(rfq.status).toBe('Quotes Pending');
@@ -251,34 +327,30 @@ describe('demo RFQ seeding', () => {
     expect(storeService.shouldSeedDemoRFQs).toBeUndefined();
   });
 
-  test.each(['SEED_RFQS', 'SEED_AUDIT_LOGS', 'SEED_AI_FEED'])(
-    '%s is no longer exported by the seed module',
-    (exportName) => {
-      // eslint-disable-next-line global-require
-      const seed = require('../src/db/seed');
-      expect(seed[exportName]).toBeUndefined();
-    }
-  );
+  // The seed module is deleted outright, not emptied. While it existed, any of
+  // its arrays could be repopulated and would land straight back in the same
+  // collections a buyer's real records occupy.
+  test('the seed module no longer exists', () => {
+    expect(() => require('../src/db/seed')).toThrow(/Cannot find module/);
+  });
 
   test.each([['true'], ['false'], [undefined]])(
-    'a store built with SEED_DEMO_RFQS=%s still starts with no RFQs, feed or audit trail',
+    'a store built with SEED_DEMO_RFQS=%s starts completely empty',
     (flag) => {
       if (flag === undefined) delete process.env.SEED_DEMO_RFQS;
       else process.env.SEED_DEMO_RFQS = flag;
       jest.resetModules();
 
-      // Re-required so the constructor runs again under this environment.
+      // Re-required so the constructor runs again under this environment. The flag
+      // is inert now — there is no seed data left for it to switch on.
       const freshStore = require('../src/services/storeService');
 
       expect(freshStore.rfqs).toEqual([]);
       expect(freshStore.aiFeed).toEqual([]);
       expect(freshStore.auditLogs).toEqual([]);
-      // Vendors and buyer accounts are load-bearing for sign-in and vendor
-      // selection and have no database table yet, so they are still seeded.
-      expect(freshStore.vendors.length).toBeGreaterThan(0);
-      // Buyer accounts are no longer seeded either. The signed-in buyer's account
-      // is resolved from the identity schema, so no fabricated company can be
-      // attributed to a session.
+      expect(freshStore.vendors).toEqual([]);
+      expect(freshStore.evaluations).toEqual([]);
+      expect(freshStore.vendorCatalogue).toEqual([]);
       expect(freshStore.buyerAccounts).toEqual([]);
       expect(freshStore.activeBuyerAccount).toBeNull();
     }

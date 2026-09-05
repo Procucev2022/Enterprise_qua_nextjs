@@ -554,6 +554,13 @@ const RFQ_ATTACHMENT_CONFIG = {
     'image/png',
     'image/jpeg',
     'image/webp',
+    // Email files. The ingestion wizard's own file picker offers `.eml` / `.msg`
+    // (its accept list has always included them), so a buyer could stage one,
+    // have it read for extraction, and then have the store of that same document
+    // refused by this list. Both are inert message containers, served back with
+    // their own content type, so nothing here is executable.
+    'message/rfc822',
+    'application/vnd.ms-outlook',
   ],
   // Identifiers are generated server-side and must match this before ever being
   // joined onto a path, which is what keeps `../` out of the storage directory.

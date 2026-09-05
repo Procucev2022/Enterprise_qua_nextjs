@@ -5,7 +5,7 @@ import { AppProvider, useApp } from '@/lib/store';
 import { extractLineItemsFromDocument, classifyLineItems, uploadRFQAttachment } from '@/lib/rfqClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { SOURCING_MODES } from '@/lib/constants';
-import categoriesData from '@/lib/categories.json';
+import { CATEGORY_TAXONOMY_FIXTURE as categoriesData } from '../../../test-fixtures/categoryTaxonomy';
 import type { ExtractedEntity, RFQAttachment, RFQExtractionResult } from '@/lib/types';
 
 // Only the three functions the wizard drives are doubled. The rest of the module
@@ -338,6 +338,19 @@ describe('IngestionWizard: Step 3 sourcing mode only', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // Dispatch stores the extracted document, so every test in this block reaches
+    // the uploader. Defaulted to success here so only the tests that care about
+    // attachment behaviour have to say anything about it.
+    mockAttach.mockResolvedValue({
+      success: true,
+      data: {
+        id: 'att-default',
+        fileName: 'BOQ.xlsx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        size: 1024,
+        uploadedAt: '2026-09-05T06:00:00.000Z',
+      },
+    });
   });
 
   it('offers every sourcing mode', async () => {
@@ -426,6 +439,110 @@ describe('IngestionWizard: Step 3 sourcing mode only', () => {
     fireEvent.click(screen.getByRole('button', { name: /Back to Review/i }));
 
     expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument();
+  });
+
+  // ── The uploaded document is kept ────────────────────────────────────────────
+  // This wizard used to send `attachments: []` unconditionally and retain only the
+  // file *name*, so the BOQ a buyer uploaded was read for extraction and then
+  // discarded. The RFQ details screen had nothing to list, which is why its
+  // Supporting Documents panel was empty for every RFQ raised through this flow.
+  it('stores the document it extracted from and sends its metadata with the RFQ', async () => {
+    const stored: RFQAttachment = {
+      id: 'att-boq-1',
+      fileName: 'BOQ.xlsx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      size: 1024,
+      uploadedAt: '2026-09-05T06:00:00.000Z',
+    };
+    mockAttach.mockResolvedValue({ success: true, data: stored });
+    mockExtract.mockResolvedValue(successResult());
+
+    const file = new File(['x'], 'BOQ.xlsx', { type: '' });
+    renderWizard({ forceSubscription: 'version_3' });
+    uploadFile(file);
+    clickExtract();
+    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
+    proceedToSourcing();
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') }));
+
+    // Uploaded at dispatch, not at extraction: an abandoned wizard session must
+    // not leave an orphaned object in storage.
+    await waitFor(() => expect(mockAttach).toHaveBeenCalledWith(file));
+
+    const createCall = (global.fetch as jest.Mock).mock.calls.find(
+      ([url, init]) => /\/api\/rfqs(\?|$)/.test(String(url)) && init?.method === 'POST'
+    );
+    expect(createCall).toBeDefined();
+    expect(JSON.parse(createCall![1].body).attachments).toEqual([stored]);
+  });
+
+  it('still raises the RFQ when the document cannot be stored, and says what is missing', async () => {
+    // The RFQ is what the buyer came to create. Refusing it because a copy of the
+    // source document could not be kept would be the wrong trade-off, so the
+    // failure is reported and the RFQ goes through without the attachment.
+    mockAttach.mockResolvedValue({ success: false, error: 'Storage unavailable.' });
+    mockExtract.mockResolvedValue(successResult());
+
+    // The toast host lives in the app layout, not in AppProvider, so the warning
+    // is read off store state rather than the DOM.
+    // Collected rather than sampled: several toasts fire during a dispatch and
+    // only the most recent survives in state, so a single read races them.
+    const toastTitles: string[] = [];
+    function Harness() {
+      const { toastMessage } = useApp();
+      if (toastMessage && !toastTitles.includes(toastMessage.title)) toastTitles.push(toastMessage.title);
+      return <IngestionWizard onComplete={jest.fn()} onCancel={jest.fn()} forceSubscription="version_3" />;
+    }
+    render(
+      <AppProvider>
+        <Harness />
+      </AppProvider>
+    );
+
+    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
+    clickExtract();
+    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
+    proceedToSourcing();
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') }));
+
+    await waitFor(() => expect(mockAttach).toHaveBeenCalled());
+
+    const createCall = await waitFor(() => {
+      const call = (global.fetch as jest.Mock).mock.calls.find(
+        ([url, init]) => /\/api\/rfqs(\?|$)/.test(String(url)) && init?.method === 'POST'
+      );
+      expect(call).toBeDefined();
+      return call;
+    });
+    // Reported as having no attachment rather than implying one is there.
+    expect(JSON.parse(createCall![1].body).attachments).toEqual([]);
+    await waitFor(() => expect(toastTitles).toContain(EXTRACTION.attachmentStoreFailedTitle));
+    // The warning is what the buyer is left looking at, not the success toast it
+    // would otherwise have been overwritten by.
+    expect(toastTitles).not.toContain(EXTRACTION.manualCreatedTitle);
+  });
+
+  it('does not attempt an upload when the RFQ came from the email gateway', async () => {
+    // Email ingestion has a pasted body, not a file, so there is nothing to store
+    // and no upload should be attempted.
+    mockExtract.mockResolvedValue(successResult());
+    renderWizard({ forceSubscription: 'version_3' });
+
+    fireEvent.click(screen.getByRole('button', { name: /Email Ingestion Gateway/i }));
+    clickExtract();
+    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
+    proceedToSourcing();
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') }));
+
+    const createCall = await waitFor(() => {
+      const call = (global.fetch as jest.Mock).mock.calls.find(
+        ([url, init]) => /\/api\/rfqs(\?|$)/.test(String(url)) && init?.method === 'POST'
+      );
+      expect(call).toBeDefined();
+      return call;
+    });
+    expect(mockAttach).not.toHaveBeenCalled();
+    expect(JSON.parse(createCall![1].body).attachments).toEqual([]);
   });
 });
 

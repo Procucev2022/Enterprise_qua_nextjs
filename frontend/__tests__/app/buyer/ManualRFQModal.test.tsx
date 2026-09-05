@@ -2,7 +2,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import ManualRFQModal from '@/app/buyer/ManualRFQModal';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { SOURCING_MODES } from '@/lib/constants';
-import categoriesData from '@/lib/categories.json';
+import { CATEGORY_TAXONOMY_FIXTURE as categoriesData } from '../../../test-fixtures/categoryTaxonomy';
 import type {
   ExtractedEntity,
   RFQAttachment,
@@ -508,6 +508,39 @@ describe('ManualRFQModal: sourcing mode', () => {
     clickSave();
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
     expect(rfqClient.createRFQ.mock.calls[0][0].sourcingMode).toBe(SOURCING_MODES[2].id);
+  });
+
+  // Each card states the reach that tier buys as well as how it routes, so the
+  // three can be compared before one is chosen. Asserted against the constants
+  // rather than literals so the copy can be reworded without breaking the test.
+  it('shows the routing description and the tier feature summary on every mode card', () => {
+    renderModal();
+
+    SOURCING_MODES.forEach((mode) => {
+      const card = screen.getByTestId(`manual-mode-${mode.id}`);
+      expect(card).toHaveTextContent(mode.description);
+      expect(card).toHaveTextContent(mode.featureSummary);
+    });
+  });
+
+  it('gives each mode its own feature summary naming the tiers it includes', () => {
+    renderModal();
+
+    const summaries = SOURCING_MODES.map((mode) => mode.featureSummary);
+    // No two cards may claim the same reach, which is what made the tiers
+    // indistinguishable on this screen before.
+    expect(new Set(summaries).size).toBe(SOURCING_MODES.length);
+    // The summaries are cumulative: each tier includes the ones beneath it.
+    expect(screen.getByTestId('manual-mode-mode_1')).toHaveTextContent('Features of Version 1');
+    expect(screen.getByTestId('manual-mode-mode_2')).toHaveTextContent('Features of Version 1 & 2');
+    expect(screen.getByTestId('manual-mode-mode_3')).toHaveTextContent('Features of Version 1, 2 & 3');
+  });
+
+  // The bullet is a visual marker, not content, so it must not be announced.
+  it('hides the decorative bullet from assistive technology', () => {
+    renderModal();
+    const card = screen.getByTestId('manual-mode-mode_1');
+    expect(card.querySelector('[aria-hidden="true"]')).not.toBeNull();
   });
 });
 

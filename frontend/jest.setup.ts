@@ -1,5 +1,7 @@
 import '@testing-library/jest-dom';
 import { TextEncoder, TextDecoder } from 'util';
+import { setCategoryTaxonomy } from '@/lib/categoryTaxonomy';
+import { CATEGORY_TAXONOMY_FIXTURE } from './test-fixtures/categoryTaxonomy';
 
 // Polyfill TextEncoder and TextDecoder
 if (typeof global.TextEncoder === 'undefined') {
@@ -42,9 +44,23 @@ const TEST_SESSION_USER = {
 localStorage.setItem('procucev_auth_token', 'test-session-token');
 localStorage.setItem('procucev_user_session', JSON.stringify(TEST_SESSION_USER));
 
+// The procurement category master.
+//
+// Screens read it from the module registry the store fills after fetching
+// `/api/buyer-profile/categories`, and the non-React validation helpers in
+// manualRfqModel read the same registry. Priming it here rather than per suite
+// mirrors how the app behaves once signed in, and is required because there is no
+// bundled categories.json to fall back on any more — an unprimed registry renders
+// every category dropdown empty.
+//
+// Written at module scope as well as in beforeEach so a module evaluated during
+// import (rather than during a test) still sees a populated taxonomy.
+setCategoryTaxonomy(CATEGORY_TAXONOMY_FIXTURE);
+
 beforeEach(() => {
   localStorage.setItem('procucev_auth_token', 'test-session-token');
   localStorage.setItem('procucev_user_session', JSON.stringify(TEST_SESSION_USER));
+  setCategoryTaxonomy(CATEGORY_TAXONOMY_FIXTURE);
 });
 
 // Global fetch mock
@@ -134,6 +150,11 @@ global.fetch = jest.fn().mockImplementation((url: string, init?: { method?: stri
     json: async () => {
       if (typeof url === 'string' && /\/api\/rfqs(\?|$)/.test(url)) {
         return { success: true, data: RFQ_FIXTURES };
+      }
+      // Served in the grouped shape findCategoryTaxonomy returns, so the store's
+      // own load path is exercised rather than bypassed.
+      if (typeof url === 'string' && url.includes('/api/buyer-profile/categories')) {
+        return { success: true, count: CATEGORY_TAXONOMY_FIXTURE.length, data: CATEGORY_TAXONOMY_FIXTURE };
       }
       if (typeof url === 'string' && url.includes('/api/bootstrap')) {
         return {

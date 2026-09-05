@@ -618,15 +618,46 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
               Last, because it is the dispatch decision: it only makes sense once
               the buyer can see what is actually being sourced. Cards rather than a
               dropdown so the three modes can be compared before choosing. */}
-          <section className="space-y-2">
-            <h3 className="text-xs font-bold text-slate-900 dark:text-white">{MODAL.sourcingModeLabel}</h3>
+          {/* ── Sourcing mode ─────────────────────────────────────────────── */}
+          <section className="space-y-3">
+            <div>
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                  {MODAL.sourcingModeLabel}
+                </h3>
+
+                <span className="text-[10px] font-medium text-slate-400 dark:text-gray-500">
+                  Choose how vendors will be sourced
+                </span>
+              </div>
+            </div>
+
             <div
               role="radiogroup"
               aria-label={MODAL.sourcingModeLabel}
-              className="grid grid-cols-1 md:grid-cols-3 gap-2"
+              className="grid grid-cols-1 md:grid-cols-3 gap-3"
             >
-              {SOURCING_MODES.map((mode) => {
+              {SOURCING_MODES.map((mode, index) => {
                 const isSelected = form.sourcingMode === mode.id;
+
+                const modeConfig = [
+                  {
+                    icon: "🎯",
+                    accent: "indigo",
+                    badge: index === 0 ? "STARTER" : null,
+                  },
+                  {
+                    icon: "⚡",
+                    accent: "violet",
+                    badge: index === 1 ? "RECOMMENDED" : null,
+                  },
+                  {
+                    icon: "🚀",
+                    accent: "emerald",
+                    badge: index === 2 ? "FULL REACH" : null,
+                  },
+                ][index];
+
                 return (
                   <button
                     key={mode.id}
@@ -634,29 +665,119 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                     role="radio"
                     aria-checked={isSelected}
                     data-testid={`manual-mode-${mode.id}`}
-                    onClick={() => patchForm('sourcingMode', mode.id as SourcingMode)}
-                    className={`text-left p-3 rounded-xl border transition-all ${
-                      isSelected
-                        ? 'border-indigo-500 bg-indigo-50/70 dark:bg-indigo-950/30 ring-1 ring-indigo-500'
-                        : 'border-slate-200 dark:border-gray-800 hover:border-slate-300 dark:hover:border-gray-700'
-                    }`}
+                    onClick={() =>
+                      patchForm("sourcingMode", mode.id as SourcingMode)
+                    }
+                    className={`
+            group relative text-left rounded-2xl border p-4
+            transition-all duration-200
+            ${isSelected
+                        ? "border-indigo-500 bg-indigo-50/80 dark:bg-indigo-950/30 shadow-sm ring-2 ring-indigo-500/15"
+                        : "border-slate-200 bg-white hover:border-indigo-300 hover:bg-slate-50/70 dark:border-gray-800 dark:bg-gray-900 dark:hover:border-gray-700"
+                      }
+          `}
                   >
-                    <span className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-bold text-slate-900 dark:text-white">
+                    {/* Top row */}
+                    <div className="flex items-start justify-between gap-3">
+                      <div
+                        className={`
+                flex h-9 w-9 shrink-0 items-center justify-center
+                rounded-xl text-base
+                ${isSelected
+                            ? "bg-indigo-100 dark:bg-indigo-900/50"
+                            : "bg-slate-100 dark:bg-gray-800"
+                          }
+              `}
+                      >
+                        {modeConfig.icon}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {modeConfig.badge && (
+                          <span
+                            className={`
+                    rounded-full px-2 py-0.5 text-[8px]
+                    font-extrabold tracking-wider
+                    ${isSelected
+                                ? "bg-indigo-600 text-white"
+                                : "bg-slate-100 text-slate-500 dark:bg-gray-800 dark:text-gray-400"
+                              }
+                  `}
+                          >
+                            {modeConfig.badge}
+                          </span>
+                        )}
+
+                        <span
+                          className={`
+                  flex h-4 w-4 items-center justify-center rounded-full border
+                  ${isSelected
+                              ? "border-indigo-600 bg-indigo-600"
+                              : "border-slate-300 dark:border-gray-600"
+                            }
+                `}
+                        >
+                          {isSelected && (
+                            <span className="h-1.5 w-1.5 rounded-full bg-white" />
+                          )}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Title */}
+                    <div className="mt-3">
+                      <h4
+                        className={`
+                text-sm font-bold
+                ${isSelected
+                            ? "text-indigo-950 dark:text-indigo-100"
+                            : "text-slate-900 dark:text-white"
+                          }
+              `}
+                      >
                         {mode.shortLabel}
-                      </span>
-                      {isSelected && <CheckCircle2 size={14} className="text-indigo-600 shrink-0" />}
-                    </span>
-                    {/* badgeColor is a Tailwind class, so it is applied as one
-                        rather than interpolated into inline CSS. */}
-                    <span
-                      className={`inline-block mt-1 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-wide ${mode.badgeColor}`}
+                      </h4>
+
+                      <p className="mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-gray-400">
+                        {mode.description}
+                      </p>
+                    </div>
+
+                    {/* Main feature */}
+                    <div
+                      className={`
+              mt-3 rounded-lg px-2.5 py-2
+              ${isSelected
+                          ? "bg-white/80 dark:bg-gray-900/60"
+                          : "bg-slate-50 dark:bg-gray-950/60"
+                        }
+            `}
                     >
-                      {mode.code}
-                    </span>
-                    <span className="block text-[10px] text-slate-500 dark:text-gray-400 mt-1.5 leading-snug">
-                      {mode.description}
-                    </span>
+                      <div className="flex items-start gap-2">
+                        <CheckCircle2
+                          size={13}
+                          className={`
+                  mt-0.5 shrink-0
+                  ${isSelected
+                              ? "text-indigo-600"
+                              : "text-slate-400 dark:text-gray-500"
+                            }
+                `}
+                        />
+
+                        <span className="text-[10px] font-semibold leading-relaxed text-slate-700 dark:text-gray-300">
+                          {mode.featureSummary}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Selected footer */}
+                    {isSelected && (
+                      <div className="mt-3 flex items-center gap-1.5 text-[10px] font-bold text-indigo-600 dark:text-indigo-400">
+                        <CheckCircle2 size={12} />
+                        Selected sourcing mode
+                      </div>
+                    )}
                   </button>
                 );
               })}

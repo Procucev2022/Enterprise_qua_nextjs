@@ -21,7 +21,7 @@ import {
   validateManualRFQLineItem,
 } from '@/lib/manualRfqModel';
 import { UI_STRINGS } from '@/lib/uiStrings';
-import categoriesData from '@/lib/categories.json';
+import { CATEGORY_TAXONOMY_FIXTURE as categoriesData } from '../../test-fixtures/categoryTaxonomy';
 import type { ExtractedEntity, ManualRFQForm, ManualRFQLineItem } from '@/lib/types';
 
 const MANUAL = UI_STRINGS.manualRfq;
