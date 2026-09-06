@@ -534,6 +534,74 @@ describe('Store Service & Business Operations', () => {
     });
   });
 
+  describe('Vendor RFQ visibility (vendorCoversRFQ / getRFQsForVendor)', () => {
+    test('matches on the RFQ category or any line-item category, case-insensitively', () => {
+      const v = storeService.addVendor({ name: 'Signal Vendor', email: 'signal@ex.com', majorCategory: 'Pumps & Accessories' });
+
+      expect(storeService.vendorCoversRFQ(v, { category: 'pumps & accessories' })).toBe(true);
+      expect(
+        storeService.vendorCoversRFQ(v, {
+          category: null,
+          extractedEntities: [{ minorCategory: 'Pumps & Accessories' }],
+        })
+      ).toBe(true);
+      expect(storeService.vendorCoversRFQ(v, { category: 'Cables' })).toBe(false);
+    });
+
+    test('a vendor the buyer added sees that buyer’s RFQ regardless of category', () => {
+      const v = storeService.addVendor({
+        name: 'Rostered Vendor',
+        email: 'rostered@ex.com',
+        majorCategory: 'Bearings',
+        addedByBuyerCompany: 'Acme Buyer Co',
+      });
+      expect(storeService.vendorCoversRFQ(v, { category: 'Cables', buyerAccountName: 'Acme Buyer Co' })).toBe(true);
+      expect(storeService.vendorCoversRFQ(v, { category: 'Cables', buyerAccountName: 'Other Co' })).toBe(false);
+    });
+
+    test('an explicitly invited vendor (assignedVendors) sees the RFQ regardless of category', () => {
+      const v = storeService.addVendor({ name: 'Invited Vendor', email: 'invited@ex.com', majorCategory: 'Bearings' });
+      expect(
+        storeService.vendorCoversRFQ(v, { category: 'Cables', assignedVendors: [{ email: 'INVITED@ex.com' }] })
+      ).toBe(true);
+      expect(storeService.vendorCoversRFQ(v, { category: 'Cables', assignedVendors: [{ id: v.id }] })).toBe(true);
+    });
+
+    test('a vendor with no category profile at all matches nothing', () => {
+      const v = storeService.addVendor({ name: 'No Cat Vendor', email: 'nocat2@ex.com' });
+      v.majorCategory = '';
+      expect(storeService.vendorCoversRFQ(v, { category: 'Anything' })).toBe(false);
+    });
+
+    test('getRFQsForVendor returns only the RFQs that vendor may see; an unknown vendor gets []', () => {
+      const v = storeService.addVendor({ name: 'Scope Vendor', email: 'scope@ex.com', majorCategory: 'Valves-Scope-Test' });
+      const mine = storeService.createRFQ({ title: 'Valves enquiry', category: 'Valves-Scope-Test' });
+      storeService.createRFQ({ title: 'Cables enquiry', category: 'Cables-Scope-Test' });
+
+      const visible = storeService.getRFQsForVendor('scope@ex.com');
+      expect(visible.map((r) => r.rfqNumber)).toContain(mine.rfqNumber);
+      expect(visible.every((r) => storeService.vendorCoversRFQ(v, r))).toBe(true);
+      expect(visible.some((r) => r.title === 'Cables enquiry')).toBe(false);
+
+      expect(storeService.getRFQsForVendor('ghost@nowhere.test')).toEqual([]);
+    });
+
+    test('notifyVendorsOfNewRFQ now uses the same rule — a rostered vendor is notified even off-category', () => {
+      const rostered = storeService.addVendor({
+        name: 'Notify Rostered',
+        email: 'notifyrostered@ex.com',
+        majorCategory: 'Bearings',
+        addedByBuyerCompany: 'Notify Roster Buyer',
+      });
+      const buyer = storeService.addBuyerAccount({
+        organizationName: 'Notify Roster Buyer',
+        corporateEmail: 'notify-roster@ex.com',
+      });
+      storeService.createRFQ({ title: 'Off-category but rostered', category: 'Totally-Different-Cat' }, buyer);
+      expect(storeService.getNotificationsFor('vendor', rostered.id)).toHaveLength(1);
+    });
+  });
+
   describe('Evaluations & Config', () => {
     test('createEvaluation adds 360 audit record', () => {
       const ev = storeService.createEvaluation({

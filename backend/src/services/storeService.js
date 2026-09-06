@@ -803,18 +803,78 @@ class StoreService {
   }
 
   /**
-   * Raise a notification for every vendor whose category matches a new RFQ.
+   * Every category string an RFQ carries — its own `category` plus each
+   * confirmed line item's major/minor/category. An RFQ raised from a BOQ often
+   * only tags the line items, not the RFQ header, so matching on the header
+   * alone would route nothing.
+   */
+  _rfqCategorySignals(rfq) {
+    const signals = [];
+    if (rfq.category) signals.push(rfq.category);
+    for (const ent of Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : []) {
+      if (ent.majorCategory) signals.push(ent.majorCategory);
+      if (ent.minorCategory) signals.push(ent.minorCategory);
+      if (ent.category) signals.push(ent.category);
+    }
+    return signals;
+  }
+
+  /**
+   * Whether an RFQ should reach a given vendor.
    *
-   * Fired from createRFQ. Nothing to do when the RFQ has no category (it is not
-   * defaulted any more) or when no vendor covers it. The whole fan-out is one
-   * batched insert.
+   * True when the vendor was explicitly added by the RFQ's buyer
+   * (`addedByBuyerCompany`), is on the RFQ's `assignedVendors` invite list, or
+   * covers at least one of the RFQ's category signals. A vendor with no
+   * category profile at all matches nothing — the onboarding flow tells them
+   * exactly this ("map your categories … in order to receive enquiries").
+   */
+  vendorCoversRFQ(vendor, rfq) {
+    if (!vendor || !rfq) return false;
+
+    if (
+      vendor.addedByBuyerCompany &&
+      rfq.buyerAccountName &&
+      vendor.addedByBuyerCompany.trim().toLowerCase() === rfq.buyerAccountName.trim().toLowerCase()
+    ) {
+      return true;
+    }
+
+    const invited = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
+    if (
+      invited.some(
+        (v) =>
+          v &&
+          ((v.id && v.id === vendor.id) ||
+            (v.email && vendor.email && v.email.toLowerCase() === vendor.email.toLowerCase()) ||
+            (v.name && vendor.name && v.name.toLowerCase() === vendor.name.toLowerCase()))
+      )
+    ) {
+      return true;
+    }
+
+    return this._rfqCategorySignals(rfq).some((c) => this.vendorCoversCategory(vendor, c));
+  }
+
+  /** The RFQs one vendor may see, in the store's current (newest-first) order. */
+  getRFQsForVendor(vendorIdOrEmail) {
+    const vendor = this.getVendorById(vendorIdOrEmail);
+    if (!vendor) return [];
+    return this.rfqs.filter((rfq) => this.vendorCoversRFQ(vendor, rfq));
+  }
+
+  /**
+   * Raise a notification for every vendor an RFQ should reach.
+   *
+   * Fired from createRFQ. Uses the exact same `vendorCoversRFQ` rule the
+   * opportunity feed and RFQ reads are scoped by, so a vendor is notified about
+   * precisely the RFQs they can actually see. The whole fan-out is one batched
+   * insert.
    */
   notifyVendorsOfNewRFQ(rfq) {
-    // Only reached from createRFQ with the freshly-built RFQ, so `rfq` is always
-    // present; a null category (not defaulted any more) is the real skip case.
-    if (!rfq.category) return [];
-    const matches = this.vendors.filter((v) => this.vendorCoversCategory(v, rfq.category));
+    const matches = this.vendors.filter((v) => this.vendorCoversRFQ(v, rfq));
     if (matches.length === 0) return [];
+
+    const categoryLabel = rfq.category || this._rfqCategorySignals(rfq)[0] || 'your categories';
 
     const created = matches.map((vendor) =>
       this._buildNotification({
@@ -822,9 +882,9 @@ class StoreService {
         recipientId: vendor.id,
         kind: 'rfq_category_match',
         rfq,
-        title: `New RFQ in ${rfq.category}`,
+        title: `New RFQ in ${categoryLabel}`,
         message: `${rfq.buyerAccountName || 'A buyer'} raised ${rfq.rfqNumber} — ${rfq.title}.`,
-        meta: { category: rfq.category, buyerAccountName: rfq.buyerAccountName || null },
+        meta: { category: categoryLabel, buyerAccountName: rfq.buyerAccountName || null },
       })
     );
 

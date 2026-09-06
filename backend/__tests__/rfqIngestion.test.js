@@ -683,6 +683,94 @@ describe('RFQ ingestion & summary HTTP routes', () => {
     });
   });
 
+  describe('GET /api/rfqs — vendor category scoping', () => {
+    // The default test vendor (vendor@apexsupplies.com) gets a category profile
+    // and two RFQs, one in category and one not.
+    let inCatNumber;
+    let outCatNumber;
+
+    beforeAll(async () => {
+      await request(app)
+        .post('/api/vendors')
+        .set(authHeader('vendor'))
+        .send({ name: 'Scoping Test Vendor', majorCategory: 'Vendor-Scope-Cat' });
+
+      await request(app).post('/api/buyer-accounts').set(authHeader('buyer')).send({
+        organizationName: 'Scoping Test Buyer',
+        corporateEmail: 'buyer@procucev.com',
+      });
+
+      const inCat = await request(app).post('/api/rfqs').set(authHeader('buyer')).send({
+        title: 'Vendor-visible scoped enquiry',
+        category: 'Vendor-Scope-Cat',
+        budget: 1000,
+        targetDeliveryDate: '2026-12-01',
+        deadline: '2026-12-01',
+        sourcingMode: 'mode_2',
+        deliveryLocation: 'Plant A',
+        deliveryPincode: '400001',
+      });
+      inCatNumber = inCat.body.data.rfqNumber;
+
+      const outCat = await request(app).post('/api/rfqs').set(authHeader('buyer')).send({
+        title: 'Vendor-hidden scoped enquiry',
+        category: 'Some-Other-Scope-Cat',
+        budget: 1000,
+        targetDeliveryDate: '2026-12-01',
+        deadline: '2026-12-01',
+        sourcingMode: 'mode_2',
+        deliveryLocation: 'Plant A',
+        deliveryPincode: '400001',
+      });
+      outCatNumber = outCat.body.data.rfqNumber;
+    });
+
+    test('a vendor sees RFQs in their category and not others', async () => {
+      const res = await request(app).get('/api/rfqs').set(authHeader('vendor'));
+      expect(res.statusCode).toBe(200);
+      const numbers = res.body.data.map((r) => r.rfqNumber);
+      expect(numbers).toContain(inCatNumber);
+      expect(numbers).not.toContain(outCatNumber);
+    });
+
+    test('a vendor whose email has no vendor record sees nothing', async () => {
+      const orphanToken = require('../src/services/authService').generateSessionToken({
+        id: 'usr-orphan-vendor',
+        email: 'orphan-vendor@nowhere.test',
+        name: 'Orphan',
+        role: 'vendor',
+        orgId: 'o',
+        orgName: 'O',
+      });
+      const res = await request(app).get('/api/rfqs').set({ Authorization: `Bearer ${orphanToken}` });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data).toEqual([]);
+    });
+
+    test('GET /api/rfqs/:id 404s a vendor for an out-of-category RFQ', async () => {
+      const res = await request(app).get(`/api/rfqs/${outCatNumber}`).set(authHeader('vendor'));
+      expect(res.statusCode).toBe(404);
+    });
+
+    test('POST /api/rfqs/:id/quotes 404s a vendor for an out-of-category RFQ', async () => {
+      const res = await request(app)
+        .post(`/api/rfqs/${outCatNumber}/quotes`)
+        .set(authHeader('vendor'))
+        .send({ unitPrice: 100 });
+      expect(res.statusCode).toBe(404);
+    });
+
+    test('a vendor can read and quote an in-category RFQ', async () => {
+      const read = await request(app).get(`/api/rfqs/${inCatNumber}`).set(authHeader('vendor'));
+      expect(read.statusCode).toBe(200);
+      const quote = await request(app)
+        .post(`/api/rfqs/${inCatNumber}/quotes`)
+        .set(authHeader('vendor'))
+        .send({ unitPrice: 100, totalPrice: 100 });
+      expect(quote.statusCode).toBe(200);
+    });
+  });
+
   // The roll-up moved off storeService, which reduced over a single global array,
   // and onto rfqSummaryService, which is handed one organisation's rows.
   describe('rfqSummaryService.buildPortfolioSummary', () => {
