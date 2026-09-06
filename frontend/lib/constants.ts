@@ -323,6 +323,16 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       group: NAV_GROUPS.categoryGovernance,
       route: '/category-manager/category-summary',
     },
+    {
+      id: 'all_rfqs',
+      screenTag: 'Screen 2.7',
+      shortTag: '2.7',
+      label: NAV_ITEMS.allRfqsConsole.label,
+      description: NAV_ITEMS.allRfqsConsole.description,
+      icon: 'ClipboardList',
+      group: NAV_GROUPS.categoryGovernance,
+      route: '/category-manager/all-rfqs',
+    },
   ],
   vendor: [
     {

@@ -7,11 +7,11 @@ import { SOURCING_MODES, ROLE_SIDEBAR_NAV, LOGIN_ROUTE } from '@/lib/constants';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import PasswordInput from '@/app/components/PasswordInput';
+import NotificationBell from '@/app/components/NotificationBell';
 import type { SourcingMode, UserRole } from '@/lib/types';
 import {
   ShieldCheck,
   ChevronDown,
-  Bell,
   Layers,
   Sparkles,
   User,
@@ -106,7 +106,6 @@ export default function Header() {
     vendorSubscription,
     setVendorSubscription,
     vendorRfqDownloadsUsed,
-    aiFeed,
     theme,
     toggleTheme,
     showToast,
@@ -120,7 +119,6 @@ export default function Header() {
 
   const [modeDropdownOpen, setModeDropdownOpen] = useState(false);
   const [userProfileDropdownOpen, setUserProfileDropdownOpen] = useState(false);
-  const [notifDropdownOpen, setNotifDropdownOpen] = useState(false);
 
   // Account Settings Modal State
   const [accountModalOpen, setAccountModalOpen] = useState(false);
@@ -274,7 +272,6 @@ export default function Header() {
               onClick={() => {
                 setModeDropdownOpen(!modeDropdownOpen);
                 setUserProfileDropdownOpen(false);
-                setNotifDropdownOpen(false);
               }}
               className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-700/60 hover:border-emerald-500 transition-all text-xs font-medium text-emerald-900 dark:text-emerald-200 shadow-sm"
               title="Vendor Subscription Access Model"
@@ -296,7 +293,6 @@ export default function Header() {
               onClick={() => {
                 setModeDropdownOpen(!modeDropdownOpen);
                 setUserProfileDropdownOpen(false);
-                setNotifDropdownOpen(false);
               }}
               className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-gray-900/80 border border-slate-300 dark:border-gray-700/60 hover:border-indigo-500 transition-all text-xs font-medium text-slate-800 dark:text-gray-200 shadow-sm"
               title="Switch Sourcing Mode"
@@ -426,56 +422,8 @@ export default function Header() {
             )}
           </button>
 
-          {/* AI Notifications / Live Bell */}
-          <div className="relative">
-            <button
-              onClick={() => {
-                setNotifDropdownOpen(!notifDropdownOpen);
-                setModeDropdownOpen(false);
-                setUserProfileDropdownOpen(false);
-              }}
-              className="relative p-2 rounded-xl bg-slate-100 dark:bg-gray-800/70 border border-slate-300 dark:border-gray-700 hover:bg-slate-200 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-300 transition-all shadow-sm"
-              title="Real-time AI Chaser Alerts"
-            >
-              <Bell size={16} />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-emerald-500" />
-            </button>
-
-            {notifDropdownOpen && (
-              <div className="absolute top-full mt-2 w-80 sm:w-96 right-0 bg-white dark:bg-gray-900/95 border border-slate-200 dark:border-gray-700 rounded-2xl shadow-2xl p-3 z-50 backdrop-blur-xl animate-fade-in max-h-96 overflow-y-auto">
-                <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-gray-800">
-                  <div className="flex items-center gap-2">
-                    <span className="live-dot" />
-                    <span className="text-xs font-bold text-slate-800 dark:text-gray-200">Vendor Follow Up Status</span>
-                  </div>
-                  <span className="text-[10px] text-slate-500 dark:text-gray-400">{aiFeed.length} Events</span>
-                </div>
-                <div className="mt-2 space-y-2">
-                  {aiFeed.slice(0, 6).map((item) => (
-                    <div key={item.id} className="p-2.5 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700/50 text-xs">
-                      <div className="flex items-center justify-between text-slate-500 dark:text-gray-400 text-[10px] mb-1">
-                        <span className="font-semibold text-indigo-700 dark:text-indigo-300 flex items-center gap-1">
-                          {item.type === 'call' || item.channel === 'call' ? (
-                            <span className="text-purple-600 dark:text-purple-400 font-bold">📞 Call</span>
-                          ) : item.type === 'whatsapp' || item.channel === 'whatsapp' ? (
-                            <span className="text-emerald-600 dark:text-emerald-400 font-bold">💬 WhatsApp</span>
-                          ) : item.type === 'sms' || item.channel === 'sms' ? (
-                            <span className="text-sky-600 dark:text-cyan-400 font-bold">📱 SMS</span>
-                          ) : (
-                            <Sparkles size={11} className="text-indigo-500" />
-                          )}
-                          <span className="text-slate-800 dark:text-gray-200">{item.title}</span>
-                        </span>
-                        <span className="mono">{item.timestamp}</span>
-                      </div>
-                      <p className="text-slate-700 dark:text-gray-300 text-[11px] leading-relaxed">{item.message}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
+          {/* Notifications — real per-recipient inbox for vendor/buyer, AI chaser feed for CM/admin */}
+          <NotificationBell />
 
           {/* ═══════════════════════════════════════════════════════════════ */}
           {/* SLEEK CORNER USER PROFILE BOX & PERSONA SWITCHER */}
@@ -485,7 +433,6 @@ export default function Header() {
               onClick={() => {
                 setUserProfileDropdownOpen(!userProfileDropdownOpen);
                 setModeDropdownOpen(false);
-                setNotifDropdownOpen(false);
               }}
               className="flex items-center gap-2.5 p-1.5 pr-2.5 rounded-2xl hover:bg-slate-100 dark:hover:bg-gray-800/80 transition-all border border-slate-200/80 dark:border-gray-700/60 bg-slate-50/50 dark:bg-gray-900/50 shadow-xs text-left group"
               title="Signed-in account details"

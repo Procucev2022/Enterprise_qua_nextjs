@@ -6,6 +6,7 @@ import {
   createRFQ,
   fetchRFQById,
   fetchRFQList,
+  fetchAllRFQs,
   updateRFQ,
   deleteRFQ,
 } from '@/lib/rfqClient';
@@ -938,6 +939,85 @@ describe('rfqClient RFQ persistence', () => {
       const res = await fetchRFQList();
 
       expect(res.success === false && res.error).toBe('Not available.');
+    });
+  });
+
+  describe('fetchAllRFQs', () => {
+    test('reads the cross-buyer oversight list', async () => {
+      global.fetch = reply(200, { success: true, data: [RFQ] });
+
+      const res = await fetchAllRFQs();
+
+      expect(res.success && res.rfqs).toEqual([RFQ]);
+      expect(lastPath()).toBe('/api/rfqs/all');
+    });
+
+    test('attaches the session token when one is held', async () => {
+      signIn();
+      global.fetch = reply(200, { success: true, data: [] });
+
+      await fetchAllRFQs();
+
+      expect(lastInit().headers).toEqual({ Authorization: 'Bearer jwt-token' });
+    });
+
+    test('sends no headers when there is no session', async () => {
+      global.fetch = reply(200, { success: true, data: [] });
+
+      await fetchAllRFQs();
+
+      expect(lastInit().headers).toEqual({});
+    });
+
+    test('reports an unreachable API', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('offline'));
+
+      const res = await fetchAllRFQs();
+
+      expect(res).toEqual({ success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable });
+    });
+
+    test('names the status when the reply cannot be read', async () => {
+      global.fetch = unreadable(500);
+
+      const res = await fetchAllRFQs();
+
+      expect(res.success === false && res.error).toBe(
+        formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: 500 })
+      );
+    });
+
+    test('reports UNAUTHORIZED when a buyer or vendor token is rejected with 403', async () => {
+      global.fetch = reply(403, { error: 'Forbidden.' });
+
+      const res = await fetchAllRFQs();
+
+      expect(res).toEqual({ success: false, reason: 'UNAUTHORIZED', error: 'Forbidden.' });
+    });
+
+    test('falls back to the session message on an unexplained 401', async () => {
+      global.fetch = reply(401, {});
+
+      const res = await fetchAllRFQs();
+
+      expect(res.success === false && res.error).toBe(UI_STRINGS.auth.sessionExpired);
+    });
+
+    test('reports a server fault on a 500', async () => {
+      global.fetch = reply(500, { error: 'Query failed.' });
+
+      const res = await fetchAllRFQs();
+
+      expect(res).toEqual({ success: false, reason: 'SERVER', error: 'Query failed.' });
+    });
+
+    test('rejects a body whose data is not an array', async () => {
+      global.fetch = reply(200, { success: true, data: null });
+
+      const res = await fetchAllRFQs();
+
+      expect(res.success === false && res.reason).toBe('SERVER');
+      expect(res.success === false && res.error).toBe(UI_STRINGS.rfqDetails.loadFailed);
     });
   });
 });

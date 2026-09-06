@@ -273,6 +273,79 @@ async function upsertAuditLogInDB(entry) {
   return result.rows[0]?.raw || null;
 }
 
+// ── Notifications ────────────────────────────────────────────────────────────
+
+async function getNotificationsFromDB() {
+  if (!pool.pool) return [];
+  const result = await pool.query('SELECT raw FROM notifications ORDER BY sequence DESC', []);
+  return result.rows.map((row) => row.raw);
+}
+
+async function insertNotificationInDB(notification) {
+  if (!pool.pool) return null;
+  const { id, recipientType, recipientId, kind, rfqId, read } = notification;
+  const result = await pool.query(
+    `INSERT INTO notifications (id, recipient_type, recipient_id, kind, rfq_id, is_read, raw)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (id) DO UPDATE SET
+       is_read = EXCLUDED.is_read,
+       raw = EXCLUDED.raw
+     RETURNING raw`,
+    [id, recipientType, recipientId, kind, rfqId || null, !!read, JSON.stringify(notification)]
+  );
+  return result.rows[0]?.raw || null;
+}
+
+// One multi-row INSERT for the whole fan-out of a single RFQ to every matched
+// vendor, rather than a write per vendor.
+async function bulkInsertNotificationsInDB(notifications) {
+  if (!pool.pool || notifications.length === 0) return [];
+  const values = [];
+  const placeholders = notifications.map((n, i) => {
+    const base = i * 7;
+    values.push(
+      n.id,
+      n.recipientType,
+      n.recipientId,
+      n.kind,
+      n.rfqId || null,
+      !!n.read,
+      JSON.stringify(n)
+    );
+    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7})`;
+  });
+  const result = await pool.query(
+    `INSERT INTO notifications (id, recipient_type, recipient_id, kind, rfq_id, is_read, raw)
+     VALUES ${placeholders.join(', ')}
+     ON CONFLICT (id) DO NOTHING
+     RETURNING id`,
+    values
+  );
+  return result.rows.map((row) => row.id);
+}
+
+async function markNotificationReadInDB(id) {
+  if (!pool.pool) return false;
+  const result = await pool.query(
+    `UPDATE notifications
+       SET is_read = true, raw = jsonb_set(raw, '{read}', 'true'::jsonb)
+     WHERE id = $1`,
+    [id]
+  );
+  return result.rowCount > 0;
+}
+
+async function markAllNotificationsReadInDB(recipientType, recipientId) {
+  if (!pool.pool) return 0;
+  const result = await pool.query(
+    `UPDATE notifications
+       SET is_read = true, raw = jsonb_set(raw, '{read}', 'true'::jsonb)
+     WHERE recipient_type = $1 AND recipient_id = $2 AND is_read = false`,
+    [recipientType, recipientId]
+  );
+  return result.rowCount;
+}
+
 module.exports = {
   getVendorsFromDB,
   upsertVendorInDB,
@@ -294,4 +367,9 @@ module.exports = {
   upsertAIFeedItemInDB,
   getAuditLogsFromDB,
   upsertAuditLogInDB,
+  getNotificationsFromDB,
+  insertNotificationInDB,
+  bulkInsertNotificationsInDB,
+  markNotificationReadInDB,
+  markAllNotificationsReadInDB,
 };

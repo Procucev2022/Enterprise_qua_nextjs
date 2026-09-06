@@ -621,6 +621,68 @@ describe('RFQ ingestion & summary HTTP routes', () => {
     });
   });
 
+  describe('GET /api/rfqs/all (category-manager All RFQs console)', () => {
+    test('returns the full cross-buyer list to a category manager', async () => {
+      const res = await request(app).get('/api/rfqs/all').set(authHeader('category_manager'));
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(Array.isArray(res.body.data)).toBe(true);
+      expect(res.body.data.length).toBe(storeService.getRFQs().length);
+    });
+
+    test('is also open to an admin', async () => {
+      const res = await request(app).get('/api/rfqs/all').set(authHeader('admin'));
+      expect(res.statusCode).toBe(200);
+    });
+
+    test('orders the list newest first', async () => {
+      const spy = jest.spyOn(storeService, 'getRFQs').mockReturnValue([
+        { id: 'a', createdAt: '2026-01-01T00:00:00Z' },
+        { id: 'b', createdAt: '2026-03-01T00:00:00Z' },
+        { id: 'c', createdAt: '2026-02-01T00:00:00Z' },
+      ]);
+      try {
+        const res = await request(app).get('/api/rfqs/all').set(authHeader('admin'));
+        expect(res.body.data.map((r) => r.id)).toEqual(['b', 'c', 'a']);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    test('rejects a buyer with 403', async () => {
+      const res = await request(app).get('/api/rfqs/all').set(authHeader('buyer'));
+      expect(res.statusCode).toBe(403);
+    });
+
+    test('rejects a vendor with 403', async () => {
+      const res = await request(app).get('/api/rfqs/all').set(authHeader('vendor'));
+      expect(res.statusCode).toBe(403);
+    });
+
+    test('requires a session', async () => {
+      const res = await request(app).get('/api/rfqs/all');
+      expect(res.statusCode).toBe(401);
+    });
+
+    test('is not shadowed by the RFQ-by-id route', async () => {
+      const res = await request(app).get('/api/rfqs/all').set(authHeader('category_manager'));
+      expect(res.body.success).toBe(true);
+      expect(res.body.error).toBeUndefined();
+    });
+
+    test('surfaces an unexpected failure through the error handler', async () => {
+      const spy = jest.spyOn(storeService, 'getRFQs').mockImplementation(() => {
+        throw new Error('boom');
+      });
+      try {
+        const res = await request(app).get('/api/rfqs/all').set(authHeader('admin'));
+        expect(res.statusCode).toBeGreaterThanOrEqual(500);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
   // The roll-up moved off storeService, which reduced over a single global array,
   // and onto rfqSummaryService, which is handed one organisation's rows.
   describe('rfqSummaryService.buildPortfolioSummary', () => {

@@ -460,6 +460,26 @@ export interface AIBotFeedItem {
   };
 }
 
+/**
+ * One in-app notification, as served by GET /api/notifications. The list is
+ * always scoped server-side to the signed-in recipient: a vendor sees
+ * `rfq_category_match` alerts for RFQs in their category, a buyer sees
+ * `quote_received` alerts for quotes on their own RFQs.
+ */
+export interface AppNotification {
+  id: string;
+  recipientType: 'vendor' | 'buyer';
+  recipientId: string;
+  kind: 'rfq_category_match' | 'quote_received';
+  rfqId: string | null;
+  rfqNumber: string | null;
+  title: string;
+  message: string;
+  read: boolean;
+  createdAt: string;
+  meta?: Record<string, unknown>;
+}
+
 export interface VendorOpportunity {
   id: string;
   rfqNumber: string;

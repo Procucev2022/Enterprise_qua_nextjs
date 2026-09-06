@@ -113,6 +113,34 @@ function getRFQs(req, res, next) {
 }
 
 /**
+ * Every RFQ in the system, for the category manager's "All RFQs" console.
+ *
+ * Deliberately a separate endpoint from getRFQs rather than a query flag on
+ * it: getRFQs' scoping rules are about who owns which RFQ and are expected to
+ * keep evolving, whereas this view has one fixed contract — the whole
+ * cross-buyer list, newest first, for a role that oversees all sourcing. The
+ * route is gated to category_manager/admin, so the "no scope" here can never
+ * be reached by a buyer or vendor.
+ */
+function getAllRFQs(req, res, next) {
+  try {
+    const rfqs = storeService
+      .getRFQs()
+      .slice()
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    logger.info('Fetching all RFQs for CM console', { count: rfqs.length }, 'RFQ_CONTROLLER');
+    res.json({
+      success: true,
+      source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory',
+      data: rfqs,
+    });
+  } catch (err) {
+    logger.error('Error fetching all RFQs', err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
+/**
  * One RFQ, by RFQ number or row id.
  *
  * A hit on another buyer's RFQ returns the same 404 as an id that does not
@@ -606,6 +634,7 @@ function approvePO(req, res, next) {
 
 module.exports = {
   getRFQs,
+  getAllRFQs,
   getRFQById,
   getRFQSummary,
   createRFQ,

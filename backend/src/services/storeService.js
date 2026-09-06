@@ -36,6 +36,7 @@ class StoreService {
     this.evaluations = [];
     this.auditLogs = [];
     this.aiFeed = [];
+    this.notifications = [];
     this.vendorCatalogue = [];
     this.systemConfig = JSON.parse(JSON.stringify(INITIAL_SYSTEM_CONFIG));
     this.azureHealth = JSON.parse(JSON.stringify(INITIAL_AZURE_HEALTH));
@@ -70,20 +71,23 @@ class StoreService {
     }
 
     try {
-      const [vendors, rfqs, evaluations, vendorCatalogue, buyerAccountsResult, aiFeed, auditLogs] = await Promise.all([
-        domainQueries.getVendorsFromDB(),
-        domainQueries.getRFQsFromDB(),
-        domainQueries.getEvaluationsFromDB(),
-        domainQueries.getVendorCatalogueFromDB(),
-        domainQueries.getBuyerAccountsFromDB(),
-        domainQueries.getAIFeedFromDB(),
-        domainQueries.getAuditLogsFromDB(),
-      ]);
+      const [vendors, rfqs, evaluations, vendorCatalogue, buyerAccountsResult, aiFeed, auditLogs, notifications] =
+        await Promise.all([
+          domainQueries.getVendorsFromDB(),
+          domainQueries.getRFQsFromDB(),
+          domainQueries.getEvaluationsFromDB(),
+          domainQueries.getVendorCatalogueFromDB(),
+          domainQueries.getBuyerAccountsFromDB(),
+          domainQueries.getAIFeedFromDB(),
+          domainQueries.getAuditLogsFromDB(),
+          domainQueries.getNotificationsFromDB(),
+        ]);
 
       this.vendors = vendors;
       this.rfqs = rfqs;
       this.evaluations = evaluations;
       this.vendorCatalogue = vendorCatalogue;
+      this.notifications = notifications;
       this.buyerAccounts = buyerAccountsResult.accounts;
       // activeBuyerAccount must stay a reference into this.buyerAccounts (the
       // same invariant every mutator keeps), not a separately-hydrated duplicate.
@@ -108,6 +112,7 @@ class StoreService {
           buyerAccounts: this.buyerAccounts.length,
           aiFeed: aiFeed.length,
           auditLogs: auditLogs.length,
+          notifications: notifications.length,
         },
         'STORE_SERVICE'
       );
@@ -183,6 +188,18 @@ class StoreService {
     domainQueries
       .upsertAuditLogInDB(entry)
       .catch((err) => logger.error('Failed to persist audit log entry', err, 'STORE_SERVICE'));
+  }
+
+  _persistNotification(notification) {
+    domainQueries
+      .insertNotificationInDB(notification)
+      .catch((err) => logger.error('Failed to persist notification', err, 'STORE_SERVICE'));
+  }
+
+  _persistNotificationBatch(notifications) {
+    domainQueries
+      .bulkInsertNotificationsInDB(notifications)
+      .catch((err) => logger.error('Failed to persist notification batch', err, 'STORE_SERVICE'));
   }
 
   // ==========================================
@@ -630,6 +647,9 @@ class StoreService {
       });
     }
 
+    // In-app alert to every vendor whose category covers this RFQ.
+    this.notifyVendorsOfNewRFQ(newRFQ);
+
     return newRFQ;
   }
 
@@ -661,7 +681,14 @@ class StoreService {
     const quotes = quote.vendorId
       ? [...existingQuotes.filter((q) => q.vendorId !== quote.vendorId), quote]
       : [...existingQuotes, quote];
-    return this.updateRFQ(rfq.id, { quotes });
+    const updated = this.updateRFQ(rfq.id, { quotes });
+
+    // Tell the RFQ's owning buyer a quote has landed. `rfq` was just resolved by
+    // id above, so updateRFQ always finds it — no need to re-guard on `updated`.
+    // The pre-update `rfq` carries the identity fields, which updateRFQ preserves.
+    this.notifyBuyerOfQuote(rfq, quote);
+
+    return updated;
   }
 
   deleteRFQ(id) {
@@ -676,6 +703,165 @@ class StoreService {
   // lives in rfqSummaryService.buildPortfolioSummary, which is handed one
   // organisation's rows rather than reducing over a single global array, and
   // which no longer invents follow-up channel statistics.
+
+  // ==========================================
+  // 3b. NOTIFICATIONS
+  // ==========================================
+  // In-app alerts, persisted to Neon like every other domain collection. Two
+  // producers today: a category-matched RFQ fan-out to vendors (createRFQ) and
+  // a "quote received" alert to the RFQ's owning buyer (addQuoteToRFQ). Reads
+  // are always scoped to one recipient — the controller resolves the caller's
+  // vendor row or buyer account from the session and passes its id here.
+
+  /** Every notification addressed to one recipient, newest first. */
+  getNotificationsFor(recipientType, recipientId) {
+    if (!recipientId) return [];
+    return this.notifications.filter(
+      (n) => n.recipientType === recipientType && n.recipientId === recipientId
+    );
+  }
+
+  /** Count of that recipient's unread notifications. */
+  getUnreadNotificationCountFor(recipientType, recipientId) {
+    return this.getNotificationsFor(recipientType, recipientId).filter((n) => !n.read).length;
+  }
+
+  // Both producers pass a real RFQ and a meta object; keep it that way so this
+  // has no defensive branches to leave uncovered.
+  _buildNotification({ recipientType, recipientId, kind, rfq, title, message, meta }) {
+    return {
+      id: `ntf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      recipientType,
+      recipientId,
+      kind,
+      rfqId: rfq.id,
+      rfqNumber: rfq.rfqNumber,
+      title,
+      message,
+      meta,
+      read: false,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Mark one notification read, but only if it belongs to the caller — a
+   * recipient must not be able to flip another recipient's notification by id.
+   * Returns the updated notification, or null when it is not theirs / not found.
+   */
+  markNotificationRead(id, recipientType, recipientId) {
+    const notification = this.notifications.find(
+      (n) => n.id === id && n.recipientType === recipientType && n.recipientId === recipientId
+    );
+    if (!notification) return null;
+    if (!notification.read) {
+      notification.read = true;
+      domainQueries
+        .markNotificationReadInDB(id)
+        .catch((err) => logger.error('Failed to persist notification read', err, 'STORE_SERVICE'));
+    }
+    return notification;
+  }
+
+  /** Mark all of one recipient's notifications read. Returns how many changed. */
+  markAllNotificationsRead(recipientType, recipientId) {
+    let changed = 0;
+    for (const n of this.notifications) {
+      if (n.recipientType === recipientType && n.recipientId === recipientId && !n.read) {
+        n.read = true;
+        changed += 1;
+      }
+    }
+    if (changed > 0) {
+      domainQueries
+        .markAllNotificationsReadInDB(recipientType, recipientId)
+        .catch((err) => logger.error('Failed to persist bulk notification read', err, 'STORE_SERVICE'));
+    }
+    return changed;
+  }
+
+  /**
+   * Whether a vendor covers an RFQ's category.
+   *
+   * The RFQ carries one `category` string (major or minor). A vendor covers it
+   * when it equals their `majorCategory` or appears in `minorCategories` /
+   * `vendorSelectedCategories` / `clientMappedCategories`. Compared
+   * case-insensitively and trimmed, because the taxonomy master and the vendor
+   * upload sheets disagree on casing.
+   */
+  vendorCoversCategory(vendor, category) {
+    if (!category) return false;
+    const target = String(category).trim().toLowerCase();
+    if (!target) return false;
+    const pools = [
+      vendor.majorCategory,
+      ...(Array.isArray(vendor.minorCategories) ? vendor.minorCategories : []),
+      ...(Array.isArray(vendor.vendorSelectedCategories) ? vendor.vendorSelectedCategories : []),
+      ...(Array.isArray(vendor.clientMappedCategories) ? vendor.clientMappedCategories : []),
+    ];
+    return pools.some((c) => String(c || '').trim().toLowerCase() === target);
+  }
+
+  /**
+   * Raise a notification for every vendor whose category matches a new RFQ.
+   *
+   * Fired from createRFQ. Nothing to do when the RFQ has no category (it is not
+   * defaulted any more) or when no vendor covers it. The whole fan-out is one
+   * batched insert.
+   */
+  notifyVendorsOfNewRFQ(rfq) {
+    // Only reached from createRFQ with the freshly-built RFQ, so `rfq` is always
+    // present; a null category (not defaulted any more) is the real skip case.
+    if (!rfq.category) return [];
+    const matches = this.vendors.filter((v) => this.vendorCoversCategory(v, rfq.category));
+    if (matches.length === 0) return [];
+
+    const created = matches.map((vendor) =>
+      this._buildNotification({
+        recipientType: 'vendor',
+        recipientId: vendor.id,
+        kind: 'rfq_category_match',
+        rfq,
+        title: `New RFQ in ${rfq.category}`,
+        message: `${rfq.buyerAccountName || 'A buyer'} raised ${rfq.rfqNumber} — ${rfq.title}.`,
+        meta: { category: rfq.category, buyerAccountName: rfq.buyerAccountName || null },
+      })
+    );
+
+    this.notifications.unshift(...created);
+    this._persistNotificationBatch(created);
+    return created;
+  }
+
+  /**
+   * Tell an RFQ's owning buyer that a vendor has quoted.
+   *
+   * Fired from addQuoteToRFQ. The buyer is resolved from the RFQ's
+   * `buyerAccountId` (the Neon buyer-account id stamped at creation), so a
+   * quote against an RFQ with no owner attributed raises nothing.
+   */
+  notifyBuyerOfQuote(rfq, quote) {
+    // Only reached from addQuoteToRFQ, which has already resolved a real RFQ and
+    // built the quote — the one thing that can be missing is an owning buyer.
+    if (!rfq.buyerAccountId) return null;
+    const notification = this._buildNotification({
+      recipientType: 'buyer',
+      recipientId: rfq.buyerAccountId,
+      kind: 'quote_received',
+      rfq,
+      title: `New quote on ${rfq.rfqNumber}`,
+      message: `${quote.vendorName || 'A vendor'} submitted a quote on ${rfq.rfqNumber} — ${rfq.title}.`,
+      meta: {
+        vendorId: quote.vendorId || null,
+        vendorName: quote.vendorName || null,
+        totalPrice: quote.totalPrice ?? null,
+        unitPrice: quote.unitPrice ?? null,
+      },
+    });
+    this.notifications.unshift(notification);
+    this._persistNotification(notification);
+    return notification;
+  }
 
   // ==========================================
   // 4. EVALUATIONS

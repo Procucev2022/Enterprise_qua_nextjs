@@ -348,6 +348,47 @@ export async function fetchRFQList(): Promise<RFQListResult> {
 }
 
 /**
+ * List every RFQ in the system, for the category manager's "All RFQs" console.
+ *
+ * Backed by `GET /api/rfqs/all`, which the server gates to the category_manager
+ * and admin roles. A buyer or vendor token gets a 403 here — this is not a
+ * wider view of the buyer-scoped `fetchRFQList`, it is a separate oversight
+ * endpoint. The rows come back newest first.
+ */
+export async function fetchAllRFQs(): Promise<RFQListResult> {
+  const token = authClient.getToken();
+
+  let res: Response;
+  try {
+    res = await fetch('/api/rfqs/all', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  } catch {
+    return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
+  }
+
+  let body: { success?: boolean; data?: RFQItem[]; error?: string } = {};
+  try {
+    body = await res.json();
+  } catch {
+    return {
+      success: false,
+      reason: 'NETWORK',
+      error: formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: res.status }),
+    };
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
+  }
+  if (!res.ok || !body.success || !Array.isArray(body.data)) {
+    return { success: false, reason: 'SERVER', error: body.error || UI_STRINGS.rfqDetails.loadFailed };
+  }
+
+  return { success: true, rfqs: body.data };
+}
+
+/**
  * Apply an edit to one RFQ.
  *
  * Partial by design: only the fields the caller supplies are sent, and the API

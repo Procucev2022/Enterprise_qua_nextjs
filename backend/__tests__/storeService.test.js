@@ -387,6 +387,153 @@ describe('Store Service & Business Operations', () => {
     });
   });
 
+  describe('Notifications', () => {
+    test('createRFQ raises a category-matched notification for every covering vendor and nobody else', () => {
+      const covering = storeService.addVendor({
+        name: 'Pumps R Us',
+        email: 'pumps@example.com',
+        majorCategory: 'Pumps & Accessories',
+        minorCategories: [],
+      });
+      const minorMatch = storeService.addVendor({
+        name: 'Minor Match Co',
+        email: 'minor@example.com',
+        majorCategory: 'Something Else',
+        minorCategories: ['pumps & accessories'], // casing deliberately different
+      });
+      const unrelated = storeService.addVendor({
+        name: 'Cables Only Co',
+        email: 'cables@example.com',
+        majorCategory: 'Cables',
+        minorCategories: [],
+      });
+
+      const rfq = storeService.createRFQ({ title: 'Centrifugal Pumps', category: 'Pumps & Accessories' });
+
+      const forCovering = storeService.getNotificationsFor('vendor', covering.id);
+      const forMinor = storeService.getNotificationsFor('vendor', minorMatch.id);
+      const forUnrelated = storeService.getNotificationsFor('vendor', unrelated.id);
+
+      expect(forCovering).toHaveLength(1);
+      expect(forCovering[0]).toMatchObject({
+        recipientType: 'vendor',
+        kind: 'rfq_category_match',
+        rfqNumber: rfq.rfqNumber,
+        read: false,
+      });
+      expect(forMinor).toHaveLength(1);
+      expect(forUnrelated).toHaveLength(0);
+      expect(storeService.getUnreadNotificationCountFor('vendor', covering.id)).toBe(1);
+    });
+
+    test('createRFQ raises nothing when the RFQ has no category', () => {
+      const vendor = storeService.addVendor({
+        name: 'No Category Vendor',
+        email: 'nocat@example.com',
+        majorCategory: 'Raw Material',
+        minorCategories: [],
+      });
+      storeService.createRFQ({ title: 'Uncategorised', category: null });
+      expect(storeService.getNotificationsFor('vendor', vendor.id)).toHaveLength(0);
+    });
+
+    test('addQuoteToRFQ notifies the RFQ owning buyer, resolved from buyerAccountId', () => {
+      const buyer = storeService.addBuyerAccount({
+        organizationName: 'Quote Notify Co',
+        corporateEmail: 'quote-notify@example.com',
+      });
+      const rfq = storeService.createRFQ({ title: 'Steel', category: 'Raw Material' }, buyer);
+
+      storeService.addQuoteToRFQ(rfq.id, { vendorId: 'v-x', vendorName: 'Bidder Co', unitPrice: 100, totalPrice: 1000 });
+
+      const forBuyer = storeService
+        .getNotificationsFor('buyer', buyer.id)
+        .filter((n) => n.kind === 'quote_received');
+      expect(forBuyer).toHaveLength(1);
+      expect(forBuyer[0]).toMatchObject({
+        rfqNumber: rfq.rfqNumber,
+        meta: { vendorName: 'Bidder Co', totalPrice: 1000 },
+      });
+    });
+
+    test('addQuoteToRFQ notifies nothing for an RFQ with no owning buyer', () => {
+      const before = storeService.notifications.length;
+      // createRFQ with no requesting account and no active account resolves
+      // buyerAccountId to null.
+      const rfq = storeService.createRFQ({ title: 'Ownerless', category: 'Raw Material' });
+      if (rfq.buyerAccountId) return; // environment has an active account; skip
+      storeService.addQuoteToRFQ(rfq.id, { vendorId: 'v-y', vendorName: 'X', unitPrice: 1 });
+      const quoteNotifs = storeService.notifications
+        .slice(0, storeService.notifications.length - before)
+        .filter((n) => n.kind === 'quote_received');
+      expect(quoteNotifs).toHaveLength(0);
+    });
+
+    test('markNotificationRead only flips the caller’s own notification', () => {
+      const vendor = storeService.addVendor({
+        name: 'Read Test Vendor',
+        email: 'readtest@example.com',
+        majorCategory: 'Valves',
+        minorCategories: [],
+      });
+      storeService.createRFQ({ title: 'Valves RFQ', category: 'Valves' });
+      const [notification] = storeService.getNotificationsFor('vendor', vendor.id);
+
+      // Wrong recipient id → treated as not found, nothing changes.
+      expect(storeService.markNotificationRead(notification.id, 'vendor', 'someone-else')).toBeNull();
+      expect(storeService.getNotificationsFor('vendor', vendor.id)[0].read).toBe(false);
+
+      const updated = storeService.markNotificationRead(notification.id, 'vendor', vendor.id);
+      expect(updated.read).toBe(true);
+      // Idempotent: a second call is a no-op that still returns the row.
+      expect(storeService.markNotificationRead(notification.id, 'vendor', vendor.id).read).toBe(true);
+    });
+
+    test('markAllNotificationsRead clears every unread notification for one recipient', () => {
+      const vendor = storeService.addVendor({
+        name: 'Bulk Read Vendor',
+        email: 'bulkread@example.com',
+        majorCategory: 'Compressors & Accessories',
+        minorCategories: [],
+      });
+      storeService.createRFQ({ title: 'Compressor A', category: 'Compressors & Accessories' });
+      storeService.createRFQ({ title: 'Compressor B', category: 'Compressors & Accessories' });
+
+      expect(storeService.getUnreadNotificationCountFor('vendor', vendor.id)).toBe(2);
+      expect(storeService.markAllNotificationsRead('vendor', vendor.id)).toBe(2);
+      expect(storeService.getUnreadNotificationCountFor('vendor', vendor.id)).toBe(0);
+      // Nothing left to change on a second sweep.
+      expect(storeService.markAllNotificationsRead('vendor', vendor.id)).toBe(0);
+    });
+
+    test('getNotificationsFor returns an empty list when no recipient id is given', () => {
+      expect(storeService.getNotificationsFor('vendor', null)).toEqual([]);
+    });
+
+    test('vendorCoversCategory handles a null category, a whitespace category and a vendor with no category arrays', () => {
+      const bareVendor = storeService.addVendor({ name: 'Bare Vendor', email: 'bare@example.com', majorCategory: 'Bearings' });
+      expect(storeService.vendorCoversCategory(bareVendor, null)).toBe(false);
+      expect(storeService.vendorCoversCategory(bareVendor, '   ')).toBe(false);
+      expect(storeService.vendorCoversCategory(bareVendor, 'Bearings')).toBe(true);
+      // A whitespace-only category on a real RFQ matches nobody.
+      storeService.createRFQ({ title: 'Whitespace Category RFQ', category: '   ' });
+      expect(storeService.getNotificationsFor('vendor', bareVendor.id)).toHaveLength(0);
+    });
+
+    test('addQuoteToRFQ still notifies the buyer for a quote with no vendorId', () => {
+      const buyer = storeService.addBuyerAccount({
+        organizationName: 'No VendorId Co',
+        corporateEmail: 'no-vendorid@example.com',
+      });
+      const rfq = storeService.createRFQ({ title: 'No VendorId RFQ', category: 'Raw Material' }, buyer);
+      storeService.addQuoteToRFQ(rfq.id, { unitPrice: 9, totalPrice: 9 });
+      const forBuyer = storeService
+        .getNotificationsFor('buyer', buyer.id)
+        .filter((n) => n.kind === 'quote_received' && n.rfqNumber === rfq.rfqNumber);
+      expect(forBuyer).toHaveLength(1);
+    });
+  });
+
   describe('Evaluations & Config', () => {
     test('createEvaluation adds 360 audit record', () => {
       const ev = storeService.createEvaluation({
