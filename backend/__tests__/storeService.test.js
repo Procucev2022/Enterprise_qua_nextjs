@@ -1,6 +1,7 @@
 const storeService = require('../src/services/storeService');
 const domainPool = require('../src/db/pool');
 const domainQueries = require('../src/db/domainQueries');
+const mailerService = require('../src/services/mailerService');
 
 describe('Store Service & Business Operations', () => {
   test('initializes with no records at all', () => {
@@ -586,7 +587,7 @@ describe('Store Service & Business Operations', () => {
       expect(storeService.getRFQsForVendor('ghost@nowhere.test')).toEqual([]);
     });
 
-    test('notifyVendorsOfNewRFQ now uses the same rule — a rostered vendor is notified even off-category', () => {
+    test('notifyVendorsOfNewRFQ still fires (unchanged) — a rostered vendor is notified even off-category', () => {
       const rostered = storeService.addVendor({
         name: 'Notify Rostered',
         email: 'notifyrostered@ex.com',
@@ -599,6 +600,100 @@ describe('Store Service & Business Operations', () => {
       });
       storeService.createRFQ({ title: 'Off-category but rostered', category: 'Totally-Different-Cat' }, buyer);
       expect(storeService.getNotificationsFor('vendor', rostered.id)).toHaveLength(1);
+    });
+  });
+
+  describe('Transactional email (RFQ fan-out + quote-received)', () => {
+    let inviteSpy;
+    let quoteSpy;
+
+    beforeEach(() => {
+      inviteSpy = jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: false, reason: 'test environment' });
+      quoteSpy = jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockResolvedValue({ sent: false, reason: 'test environment' });
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    test('_vendorTierRank orders the plans and treats anything unknown as lowest', () => {
+      expect(storeService._vendorTierRank('select')).toBe(3);
+      expect(storeService._vendorTierRank('connect')).toBe(2);
+      expect(storeService._vendorTierRank('premium')).toBe(1);
+      expect(storeService._vendorTierRank('premium_network')).toBe(1);
+      expect(storeService._vendorTierRank(undefined)).toBe(0);
+      expect(storeService._vendorTierRank('free_trial')).toBe(0);
+    });
+
+    test('selectVendorsForRFQEmail ranks by tier, then a pincode match, then rating, and caps at the limit', () => {
+      const cat = 'Email-Rank-Cat';
+      const mk = (over) =>
+        storeService.addVendor({ minorCategories: [], majorCategory: cat, ...over });
+
+      const lowTierPincode = mk({ name: 'Low tier, pincode match', email: 'a@ex.com', subscriptionPlan: 'premium', pincode: '400001', rating: 5 });
+      const highTierNoPincode = mk({ name: 'High tier, no pincode', email: 'b@ex.com', subscriptionPlan: 'select', pincode: '999999', rating: 1 });
+      const midTierPincode = mk({ name: 'Mid tier, pincode match', email: 'c@ex.com', subscriptionPlan: 'connect', pincode: '400001', rating: 2 });
+      mk({ name: 'No email vendor', email: '', subscriptionPlan: 'select', pincode: '400001' });
+
+      const rfq = { category: cat, deliveryPincode: '400001', extractedEntities: [] };
+      const ranked = storeService.selectVendorsForRFQEmail(rfq, 2);
+
+      expect(ranked).toHaveLength(2);
+      expect(ranked[0].id).toBe(highTierNoPincode.id); // tier beats pincode
+      expect(ranked[1].id).toBe(midTierPincode.id); // connect+pincode beats premium+pincode
+      void lowTierPincode;
+    });
+
+    test('createRFQ emails the top matched vendors', () => {
+      const cat = 'Email-Create-Cat';
+      storeService.addVendor({ name: 'Emailed Vendor', email: 'emailed@ex.com', majorCategory: cat, minorCategories: [] });
+      const buyer = storeService.addBuyerAccount({ organizationName: 'Email Create Buyer', corporateEmail: 'ecb@ex.com' });
+
+      storeService.createRFQ({ title: 'Emailed RFQ', category: cat }, buyer);
+
+      expect(inviteSpy).toHaveBeenCalledWith(
+        'emailed@ex.com',
+        expect.objectContaining({ rfq: expect.objectContaining({ title: 'Emailed RFQ' }) })
+      );
+    });
+
+    test('emailRFQToMatchedVendors logs (does not throw) when a send rejects', async () => {
+      inviteSpy.mockRejectedValueOnce(new Error('smtp down'));
+      const cat = 'Email-Fail-Cat';
+      storeService.addVendor({ name: 'Failing Send Vendor', email: 'fail@ex.com', majorCategory: cat, minorCategories: [] });
+
+      const count = storeService.emailRFQToMatchedVendors({ category: cat, extractedEntities: [], rfqNumber: 'RFQ-X', title: 'T' });
+      expect(count).toBe(1);
+      await new Promise((r) => setImmediate(r)); // let the rejected promise settle
+    });
+
+    test('addQuoteToRFQ emails the owning buyer with the quote', () => {
+      const buyer = storeService.addBuyerAccount({ organizationName: 'Quote Email Buyer', corporateEmail: 'qeb@ex.com' });
+      const rfq = storeService.createRFQ({ title: 'Quote Email RFQ', category: 'Raw Material' }, buyer);
+
+      storeService.addQuoteToRFQ(rfq.id, { vendorId: 'v-1', vendorName: 'Bidder', unitPrice: 10, totalPrice: 100 });
+
+      expect(quoteSpy).toHaveBeenCalledWith(
+        'qeb@ex.com',
+        expect.objectContaining({ quote: expect.objectContaining({ vendorName: 'Bidder' }), recipientName: 'Quote Email Buyer' })
+      );
+    });
+
+    test('emailQuoteToBuyer no-ops without an owning buyer, an unknown buyer, or a buyer with no email', () => {
+      expect(storeService.emailQuoteToBuyer({ buyerAccountId: null }, {})).toBe(false);
+      expect(storeService.emailQuoteToBuyer({ buyerAccountId: 'does-not-exist' }, {})).toBe(false);
+
+      const emailless = storeService.addBuyerAccount({ organizationName: 'Emailless Buyer' });
+      emailless.corporateEmail = '';
+      expect(storeService.emailQuoteToBuyer({ buyerAccountId: emailless.id }, {})).toBe(false);
+      expect(quoteSpy).not.toHaveBeenCalled();
+    });
+
+    test('emailQuoteToBuyer logs (does not throw) when the send rejects', async () => {
+      quoteSpy.mockRejectedValueOnce(new Error('smtp down'));
+      const buyer = storeService.addBuyerAccount({ organizationName: 'Reject Email Buyer', corporateEmail: 'reb@ex.com' });
+      expect(storeService.emailQuoteToBuyer({ buyerAccountId: buyer.id, rfqNumber: 'RFQ-Y', title: 'T' }, { unitPrice: 1 })).toBe(true);
+      await new Promise((r) => setImmediate(r));
     });
   });
 

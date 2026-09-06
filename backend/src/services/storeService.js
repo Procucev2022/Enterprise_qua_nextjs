@@ -10,6 +10,10 @@ const domainQueries = require('../db/domainQueries');
 const { createAuditEntry, verifyAuditTrail } = require('./auditService');
 const { evaluateQuotes, calculate360Evaluation, calculateRevisedRating } = require('./evaluationService');
 const { simulateChaserOutreach } = require('./aiChaserService');
+// Called through the namespace so tests can stub the senders without rewiring
+// storeService; every send is fire-and-forget and no-ops under test / when SMTP
+// is unconfigured.
+const mailerService = require('./mailerService');
 const { logger } = require('./loggerService');
 
 class StoreService {
@@ -647,8 +651,10 @@ class StoreService {
       });
     }
 
-    // In-app alert to every vendor whose category covers this RFQ.
+    // In-app alert to every vendor whose category covers this RFQ, and an email
+    // to the top matched vendors (same category, ranked by pincode + tier).
     this.notifyVendorsOfNewRFQ(newRFQ);
+    this.emailRFQToMatchedVendors(newRFQ);
 
     return newRFQ;
   }
@@ -683,10 +689,12 @@ class StoreService {
       : [...existingQuotes, quote];
     const updated = this.updateRFQ(rfq.id, { quotes });
 
-    // Tell the RFQ's owning buyer a quote has landed. `rfq` was just resolved by
-    // id above, so updateRFQ always finds it — no need to re-guard on `updated`.
-    // The pre-update `rfq` carries the identity fields, which updateRFQ preserves.
+    // Tell the RFQ's owning buyer a quote has landed — in-app and by email.
+    // `rfq` was just resolved by id above, so updateRFQ always finds it — no
+    // need to re-guard on `updated`. The pre-update `rfq` carries the identity
+    // fields, which updateRFQ preserves.
     this.notifyBuyerOfQuote(rfq, quote);
+    this.emailQuoteToBuyer(rfq, quote);
 
     return updated;
   }
@@ -921,6 +929,67 @@ class StoreService {
     this.notifications.unshift(notification);
     this._persistNotification(notification);
     return notification;
+  }
+
+  // ==========================================
+  // 3c. TRANSACTIONAL EMAIL (RFQ fan-out + quote-received)
+  // ==========================================
+  // Every send is fire-and-forget: mailerService no-ops under test and when
+  // SMTP is unconfigured, and a real per-recipient failure is logged, never
+  // thrown, so one bad address can't stop the rest of a fan-out.
+
+  /** Subscription-tier priority for RFQ-email ranking. Unknown/free → 0. */
+  _vendorTierRank(plan) {
+    if (plan === 'select') return 3;
+    if (plan === 'connect') return 2;
+    if (plan === 'premium' || plan === 'premium_network') return 1;
+    return 0;
+  }
+
+  /**
+   * Up to `limit` vendors to email a new RFQ to.
+   *
+   * Starts from the vendors the RFQ actually reaches (`vendorCoversRFQ` — same
+   * category rule as the opportunity feed), keeps only those with an email
+   * address, then ranks by subscription tier, a delivery-pincode match, and
+   * rating so the enquiry lands with the best-matched suppliers first.
+   */
+  selectVendorsForRFQEmail(rfq, limit = 10) {
+    const pincode = rfq.deliveryPincode ? String(rfq.deliveryPincode).trim() : null;
+    return this.vendors
+      .filter((v) => v.email && this.vendorCoversRFQ(v, rfq))
+      .map((v) => ({
+        vendor: v,
+        score:
+          this._vendorTierRank(v.subscriptionPlan) * 1000 +
+          (pincode && v.pincode && String(v.pincode).trim() === pincode ? 100 : 0) +
+          (Number(v.rating) || 0),
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map((x) => x.vendor);
+  }
+
+  /** Email a newly-created RFQ to its top matched vendors. Fired from createRFQ. */
+  emailRFQToMatchedVendors(rfq) {
+    const recipients = this.selectVendorsForRFQEmail(rfq);
+    for (const vendor of recipients) {
+      mailerService
+        .sendRfqInviteEmail(vendor.email, { rfq, recipientName: vendor.contactPerson || vendor.name })
+        .catch((err) => logger.error('Failed to email RFQ invite to vendor', err, 'STORE_SERVICE'));
+    }
+    return recipients.length;
+  }
+
+  /** Email a submitted quote to the RFQ's owning buyer. Fired from addQuoteToRFQ. */
+  emailQuoteToBuyer(rfq, quote) {
+    if (!rfq.buyerAccountId) return false;
+    const buyer = this.buyerAccounts.find((a) => a.id === rfq.buyerAccountId);
+    if (!buyer || !buyer.corporateEmail) return false;
+    mailerService
+      .sendQuoteReceivedEmail(buyer.corporateEmail, { rfq, quote, recipientName: buyer.organizationName })
+      .catch((err) => logger.error('Failed to email quote to buyer', err, 'STORE_SERVICE'));
+    return true;
   }
 
   // ==========================================
