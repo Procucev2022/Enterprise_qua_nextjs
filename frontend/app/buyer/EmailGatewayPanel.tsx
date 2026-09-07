@@ -1,8 +1,7 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '@/lib/store';
-import { fetchEmailGatewayStatus } from '@/lib/emailGatewayClient';
 import { createRFQ, extractLineItemsFromDocument } from '@/lib/rfqClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
@@ -10,7 +9,6 @@ import type { ExtractedEntity, RFQItem } from '@/lib/types';
 import {
   Mail,
   RefreshCw,
-  TriangleAlert,
   Send,
 } from 'lucide-react';
 
@@ -23,32 +21,12 @@ interface EmailGatewayPanelProps {
 export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelProps) {
   const { showToast, activeBuyerAccount, adoptCreatedRFQ } = useApp();
 
-  const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
   // Email composer state - defaults empty for subject and body as requested
   const [emailSender, setEmailSender] = useState<string>('project.procurement@lt-heavy.com');
   const [emailGatewayTo, setEmailGatewayTo] = useState<string>('navinchaudhary.dev@gmail.com');
   const [emailSubject, setEmailSubject] = useState<string>('');
   const [emailBody, setEmailBody] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const loadStatus = useCallback(async () => {
-    const result = await fetchEmailGatewayStatus();
-    if (result.success && result.data) {
-      setLoadError(null);
-      if (result.data.gatewayAddress) {
-        setEmailGatewayTo(result.data.gatewayAddress);
-      }
-    } else {
-      setLoadError(result.error || GATEWAY.statusUnavailable);
-    }
-    setIsLoading(false);
-  }, []);
-
-  useEffect(() => {
-    void loadStatus();
-  }, [loadStatus]);
 
   // Sync active buyer account email when available
   useEffect(() => {
@@ -142,34 +120,8 @@ export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelPro
       showToast('Ingestion Failed', errMessage, 'warning');
     } finally {
       setIsSubmitting(false);
-      await loadStatus();
     }
   };
-
-  if (isLoading) {
-    return (
-      <div
-        data-testid="gateway-loading"
-        className="p-5 rounded-2xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 text-xs text-slate-500 dark:text-gray-400 flex items-center gap-2"
-      >
-        <RefreshCw size={14} className="animate-spin" /> {GATEWAY.title}
-      </div>
-    );
-  }
-
-  if (loadError) {
-    return (
-      <div
-        data-testid="gateway-error"
-        className="p-5 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-700/60 text-xs space-y-1"
-      >
-        <p className="font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
-          <TriangleAlert size={14} /> {GATEWAY.title}
-        </p>
-        <p className="text-[11px] text-amber-900/80 dark:text-amber-200/80">{loadError}</p>
-      </div>
-    );
-  }
 
   return (
     <div

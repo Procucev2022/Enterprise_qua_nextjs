@@ -566,7 +566,6 @@ describe('IngestionWizard: Step 1 intake controls', () => {
   it('offers document upload only, with no email-file sub-tab', () => {
     renderWizard();
 
-    expect(screen.getByText(EXTRACTION.boqTabLabel)).toBeInTheDocument();
     expect(screen.getByText(EXTRACTION.dropZoneHeading)).toBeInTheDocument();
     // An emailed requisition is picked up by the gateway, so no email container is
     // accepted here and the picker must not advertise one.
@@ -605,7 +604,7 @@ describe('IngestionWizard: Step 1 intake controls', () => {
     fireEvent.click(screen.getByRole('button', { name: /Email Ingestion Gateway/i }));
     expect(await screen.findByTestId('gateway-panel')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /Web Portal & File Ingestion/i }));
+    fireEvent.click(screen.getByRole('button', { name: /AI RFQ Create/i }));
     expect(screen.getByText(EXTRACTION.dropZoneHeading)).toBeInTheDocument();
   });
 

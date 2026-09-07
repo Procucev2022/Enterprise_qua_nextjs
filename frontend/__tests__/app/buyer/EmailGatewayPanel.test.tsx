@@ -2,16 +2,11 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import EmailGatewayPanel from '@/app/buyer/EmailGatewayPanel';
 import { useApp } from '@/lib/store';
-import { fetchEmailGatewayStatus } from '@/lib/emailGatewayClient';
 import { createRFQ, extractLineItemsFromDocument } from '@/lib/rfqClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import type { RFQItem } from '@/lib/types';
 
 jest.mock('@/lib/store', () => ({ useApp: jest.fn() }));
-jest.mock('@/lib/emailGatewayClient', () => ({
-  fetchEmailGatewayStatus: jest.fn(),
-  pollEmailGateway: jest.fn(),
-}));
 jest.mock('@/lib/rfqClient', () => ({
   createRFQ: jest.fn(),
   extractLineItemsFromDocument: jest.fn(),
@@ -20,7 +15,6 @@ jest.mock('@/lib/rfqClient', () => ({
 const GATEWAY = UI_STRINGS.emailGateway;
 const mockShowToast = jest.fn();
 const mockAdoptCreatedRFQ = jest.fn();
-const mockFetchStatus = fetchEmailGatewayStatus as jest.Mock;
 const mockCreateRFQ = createRFQ as jest.Mock;
 const mockExtract = extractLineItemsFromDocument as jest.Mock;
 
@@ -30,12 +24,6 @@ beforeEach(() => {
     showToast: mockShowToast,
     activeBuyerAccount: { corporateEmail: 'buyer.lead@lt-heavy.com' },
     adoptCreatedRFQ: mockAdoptCreatedRFQ,
-  });
-  mockFetchStatus.mockResolvedValue({
-    success: true,
-    data: {
-      gatewayAddress: 'navinchaudhary.dev@gmail.com',
-    },
   });
   mockExtract.mockResolvedValue({
     success: true,
@@ -70,38 +58,6 @@ beforeEach(() => {
       status: 'Parsing',
       extractedEntities: [{ id: 'item-1', itemName: 'Centrifugal Water Pump 500 GPM' }],
     } as unknown as RFQItem,
-  });
-});
-
-describe('EmailGatewayPanel loading and failure', () => {
-  test('shows a loading state before the status arrives', async () => {
-    mockFetchStatus.mockReturnValue(new Promise(() => {}));
-    render(<EmailGatewayPanel />);
-    expect(screen.getByTestId('gateway-loading')).toBeInTheDocument();
-  });
-
-  test('reports a status that could not be read', async () => {
-    mockFetchStatus.mockResolvedValue({ success: false, error: 'Backend is starting up.' });
-    render(<EmailGatewayPanel />);
-
-    expect(await screen.findByTestId('gateway-error')).toHaveTextContent('Backend is starting up.');
-  });
-
-  test('reports fallback status when no error string is provided', async () => {
-    mockFetchStatus.mockResolvedValue({ success: false, error: null });
-    render(<EmailGatewayPanel />);
-
-    expect(await screen.findByTestId('gateway-error')).toHaveTextContent(GATEWAY.statusUnavailable);
-  });
-
-  test('loads status when gatewayAddress is missing from status payload', async () => {
-    mockFetchStatus.mockResolvedValue({
-      success: true,
-      data: { gatewayAddress: null },
-    });
-    render(<EmailGatewayPanel />);
-    await screen.findByTestId('gateway-panel');
-    expect(screen.getByDisplayValue('navinchaudhary.dev@gmail.com')).toBeInTheDocument();
   });
 });
 

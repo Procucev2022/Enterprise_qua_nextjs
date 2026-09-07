@@ -681,10 +681,10 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
             <div>
               <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
                 <UploadCloud size={18} className="text-indigo-600 dark:text-indigo-400" />
-                STEP 1: INGESTION SOURCE (EMAIL GATEWAY OR WEB PORTAL)
+                STEP 1: INGESTION SOURCE (EMAIL GATEWAY OR AI RFQ CREATE)
               </h2>
               <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                Choose incoming intake source: Autonomous Email Ingestion Gateway or interactive Web Portal upload.
+                Choose incoming intake source: Autonomous Email Ingestion Gateway or interactive AI RFQ Creation.
               </p>
             </div>
             <div className="flex items-center gap-1 bg-slate-100 dark:bg-gray-900 p-1 rounded-xl border border-slate-200 dark:border-gray-800 text-xs">
@@ -706,7 +706,7 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                     : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
-                <Globe size={13} /> 🌐 Web Portal & File Ingestion
+                <Globe size={13} /> 🌐 AI RFQ Create
               </button>
               <button
                 data-testid="intake-manual"
@@ -748,14 +748,6 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
             </div>
           ) : ingestionMethod === 'upload' ? (
             <div className="space-y-4">
-              {/* This tab is documents only. An emailed requisition is picked up
-                  by the autonomous gateway instead, so there is no email-file
-                  upload here and `.eml` / `.msg` are not offered. */}
-              <div className="flex items-center gap-2 border-b border-slate-200 dark:border-gray-800 pb-2">
-                <span className="px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                  <FileSpreadsheet size={14} /> {EXTRACTION.boqTabLabel}
-                </span>
-              </div>
 
               {/* Hidden file input */}
               <input
