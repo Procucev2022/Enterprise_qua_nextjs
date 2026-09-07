@@ -1,4 +1,5 @@
 import { authClient } from './authClient';
+import { readAsBase64 } from './documentExtraction';
 import { UI_STRINGS, formatString } from './uiStrings';
 import type {
   ExtractedEntity,
@@ -78,6 +79,79 @@ export async function extractLineItemsFromDocument(
     data: body.data as RFQExtractionResult['data'],
     classification: body.classification,
     extraction: body.extraction,
+  };
+}
+
+/**
+ * Extract RFQ line items from an emailed requisition (`.eml`).
+ *
+ * The whole message is uploaded and parsed on the server: MIME multipart, folded
+ * headers, quoted-printable bodies and base64 attachment parts are not something
+ * the browser can read, and mailparser is Node-only. The server then runs the
+ * same extraction and taxonomy classification as `extractLineItemsFromDocument`,
+ * so the response shape is identical apart from the added `email` metadata.
+ *
+ * Provenance travels back from the parsed headers rather than being supplied
+ * here, so the sender recorded on the RFQ is the real one.
+ */
+export async function extractLineItemsFromEmail(file: File): Promise<RFQExtractionResult> {
+  const token = authClient.getToken();
+
+  let content: string;
+  try {
+    content = await readAsBase64(file);
+  } catch {
+    return {
+      success: false,
+      reason: 'UNREADABLE',
+      error: UI_STRINGS.rfqExtraction.emailFileUnreadable,
+    };
+  }
+
+  let res: Response;
+  try {
+    res = await fetch('/api/rfqs/extract-email', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ fileName: file.name, content }),
+    });
+  } catch {
+    return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
+  }
+
+  if (res.status >= 500) {
+    return {
+      success: false,
+      reason: 'NETWORK',
+      error: formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: res.status }),
+    };
+  }
+
+  let body: Partial<RFQExtractionResult> & { data?: unknown } = {};
+  try {
+    body = await res.json();
+  } catch {
+    return { success: false, reason: 'AI_FAILED', error: UI_STRINGS.rfqExtraction.unreadableResponse };
+  }
+
+  if (!res.ok || !body.success || !body.data) {
+    return {
+      success: false,
+      reason: body.reason || 'AI_FAILED',
+      error: body.error || UI_STRINGS.rfqExtraction.unreadableResponse,
+    };
+  }
+
+  return {
+    success: true,
+    data: body.data as RFQExtractionResult['data'],
+    classification: body.classification,
+    extraction: body.extraction,
+    email: body.email,
+    warning: body.warning,
   };
 }
 

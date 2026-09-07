@@ -1,5 +1,6 @@
 import {
   extractLineItemsFromDocument,
+  extractLineItemsFromEmail,
   classifyLineItems,
   uploadRFQAttachment,
   rfqAttachmentUrl,
@@ -1315,5 +1316,193 @@ describe('rfqClient.deleteRFQ', () => {
     const res = await deleteRFQ('41');
 
     expect(res.success === false && res.error).toBe('Not deleted.');
+  });
+});
+
+// ==============================================================================
+// EMAIL EXTRACTION
+// ==============================================================================
+// The whole `.eml` is uploaded and parsed server-side. What matters on this side
+// is that provenance comes back from the parsed headers rather than being sent up,
+// and that each refusal keeps its machine-readable reason so the wizard can name
+// the recovery step instead of showing one generic failure.
+// ==============================================================================
+
+describe('rfqClient.extractLineItemsFromEmail', () => {
+  const eml = () =>
+    new File(['From: a@b.com\r\nSubject: Req\r\n\r\nPump - 4 Nos'], 'requisition.eml', {
+      type: 'message/rfc822',
+    });
+
+  const EMAIL_META = {
+    messageId: '<req-1@buyer.example.com>',
+    subject: 'Urgent Requisition - Pumps',
+    fromAddress: 'project.procurement@lt-heavy.com',
+    fromName: 'Rajesh Iyer',
+    toAddress: 'client@procucev.com',
+    sentAt: '2026-09-07T03:44:22.000Z',
+    attachmentNames: ['requisition.pdf'],
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  test('posts the file name and base64 body to the email endpoint', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: { title: 'Pumps', source: 'email_upload' },
+        email: EMAIL_META,
+      }),
+    });
+
+    const res = await extractLineItemsFromEmail(eml());
+
+    expect(res.success).toBe(true);
+    const [path, init] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(path).toBe('/api/rfqs/extract-email');
+    expect(init.method).toBe('POST');
+    const body = JSON.parse(init.body);
+    expect(body.fileName).toBe('requisition.eml');
+    expect(typeof body.content).toBe('string');
+    expect(body.content.length).toBeGreaterThan(0);
+    // Provenance is never sent up; it is read out of the message server-side.
+    expect(body.sourceEmail).toBeUndefined();
+  });
+
+  test('returns the parsed message headers alongside the draft', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: { title: 'Pumps', source: 'email_upload' },
+        email: EMAIL_META,
+        classification: { accepted: 2 },
+        extraction: { model: 'gemini-test' },
+      }),
+    });
+
+    const res = await extractLineItemsFromEmail(eml());
+
+    expect(res.email).toEqual(EMAIL_META);
+    expect(res.classification).toEqual({ accepted: 2 });
+    expect(res.extraction).toEqual({ model: 'gemini-test' });
+  });
+
+  test('passes a non-fatal attachment warning through', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        data: { title: 'Steel', source: 'email_upload' },
+        email: EMAIL_META,
+        warning: 'The attachment boq.xlsx was not read.',
+      }),
+    });
+
+    const res = await extractLineItemsFromEmail(eml());
+
+    expect(res.success).toBe(true);
+    expect(res.warning).toContain('boq.xlsx');
+  });
+
+  test('keeps the server reason for a refused message', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      json: async () => ({
+        success: false,
+        reason: 'OUTLOOK_MSG_UNSUPPORTED',
+        error: 'Outlook .msg files cannot be read.',
+      }),
+    });
+
+    const res = await extractLineItemsFromEmail(eml());
+
+    expect(res.success).toBe(false);
+    expect(res.reason).toBe('OUTLOOK_MSG_UNSUPPORTED');
+    expect(res.error).toBe('Outlook .msg files cannot be read.');
+  });
+
+  // Fails closed: the buyer is never shown fabricated line items.
+  test('reports the API as unreachable on a transport failure', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error('connection refused'));
+
+    const res = await extractLineItemsFromEmail(eml());
+
+    expect(res).toMatchObject({ success: false, reason: 'NETWORK' });
+    expect(res.error).toBe(UI_STRINGS.auth.networkUnreachable);
+  });
+
+  // A 5xx is the API failing, not the model misreading the message: every genuine
+  // extraction refusal comes back as a 422 with a reason.
+  test('treats a 5xx as a transport problem', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      json: async () => ({ success: false }),
+    });
+
+    const res = await extractLineItemsFromEmail(eml());
+
+    expect(res.reason).toBe('NETWORK');
+    expect(res.error).toContain('503');
+  });
+
+  test('reports an unreadable response body', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new Error('not json');
+      },
+    });
+
+    const res = await extractLineItemsFromEmail(eml());
+
+    expect(res).toMatchObject({ success: false, reason: 'AI_FAILED' });
+    expect(res.error).toBe(UI_STRINGS.rfqExtraction.unreadableResponse);
+  });
+
+  test('falls back when a refusal carries no reason or message', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true }),
+    });
+
+    const res = await extractLineItemsFromEmail(eml());
+
+    expect(res).toMatchObject({ success: false, reason: 'AI_FAILED' });
+    expect(res.error).toBe(UI_STRINGS.rfqExtraction.unreadableResponse);
+  });
+
+  test('reports a file that cannot be read off disk', async () => {
+    const unreadable = eml();
+    // A FileReader error is what a revoked or moved file produces.
+    const OriginalFileReader = global.FileReader;
+    class FailingFileReader {
+      public onerror: (() => void) | null = null;
+      public onload: (() => void) | null = null;
+      public result = '';
+      readAsDataURL() {
+        if (this.onerror) this.onerror();
+      }
+    }
+    (global as unknown as { FileReader: unknown }).FileReader = FailingFileReader;
+    global.fetch = jest.fn();
+
+    const res = await extractLineItemsFromEmail(unreadable);
+
+    expect(res).toMatchObject({ success: false, reason: 'UNREADABLE' });
+    expect(res.error).toBe(UI_STRINGS.rfqExtraction.emailFileUnreadable);
+    expect(global.fetch).not.toHaveBeenCalled();
+
+    (global as unknown as { FileReader: unknown }).FileReader = OriginalFileReader;
   });
 });

@@ -158,6 +158,20 @@ const VALIDATION_SCHEMAS = {
   // Either documentText (client-flattened spreadsheet) or inlineData (PDF/image
   // base64) must be present; that either/or rule is enforced in the service,
   // which can report a precise reason the wizard shows to the buyer.
+  // An emailed requisition submitted to POST /api/rfqs/extract-email. Only the
+  // container is accepted; the sender, subject and Message-ID are read out of the
+  // message itself rather than trusted from the client, so provenance recorded on
+  // the RFQ cannot be forged by editing the request body.
+  extractRFQFromEmail: {
+    fileName: { type: 'string', required: true, minLength: 1, maxLength: 260 },
+    content: {
+      type: 'string',
+      required: true,
+      minLength: 1,
+      message: 'The email file content is required.',
+    },
+  },
+
   extractRFQ: {
     fileName: { type: 'string', required: true, minLength: 1, maxLength: 260 },
     documentText: { type: 'string', required: false },

@@ -582,6 +582,74 @@ const RFQ_ATTACHMENT_CONFIG = {
   ID_PATTERN: /^[a-f0-9-]{8,64}$/,
 };
 
+// ==============================================================================
+// EMAIL-TO-RFQ INGESTION
+// ==============================================================================
+// Shapes how an emailed requisition is turned into extractor input. See
+// services/emailIngestionService.js — in particular why workbook attachments are
+// deliberately not parsed server-side.
+const EMAIL_INGESTION_CONFIG = {
+  // RFC822 containers this pipeline reads.
+  EML_PATTERN: /\.eml$/i,
+  // Outlook's Compound File Binary format, which is not RFC822 and is refused
+  // with an instruction to re-export rather than failing silently.
+  MSG_PATTERN: /\.msg$/i,
+  MAX_BYTES: Number(process.env.EMAIL_INGESTION_MAX_BYTES || 15 * 1024 * 1024),
+  MAX_ATTACHMENTS: Number(process.env.EMAIL_INGESTION_MAX_ATTACHMENTS || 10),
+  // Cap on how much of a decoded text attachment is appended, so one oversized
+  // CSV cannot crowd the body out of the extractor's context window.
+  MAX_TEXT_ATTACHMENT_CHARS: Number(process.env.EMAIL_INGESTION_MAX_TEXT_CHARS || 40000),
+  // Decoded inline and appended to the document text.
+  TEXT_ATTACHMENT_MIME_TYPES: ['text/plain', 'text/csv', 'text/tab-separated-values'],
+  // Passed to Gemini as base64. Kept as a subset of GEMINI_INLINE_MIME_TYPES so a
+  // type can never be forwarded that the extractor would then refuse.
+  INLINE_ATTACHMENT_MIME_TYPES: ['application/pdf', 'image/png', 'image/jpeg', 'image/webp'],
+  // A line matching any of these starts the quoted thread beneath a forwarded
+  // requisition; everything from there down is dropped before extraction.
+  QUOTE_MARKERS: [
+    /^\s*-{2,}\s*original message\s*-{2,}\s*$/i,
+    /^\s*-{2,}\s*forwarded message\s*-{2,}\s*$/i,
+    /^\s*_{5,}\s*$/,
+    /^\s*on .+ wrote:\s*$/i,
+    /^\s*from:\s.+\ssent:\s/i,
+    /^\s*>{1,}\s?/,
+  ],
+};
+
+/** Outcome of preparing an email for extraction. */
+const EMAIL_INGESTION_STATUS = {
+  READY: 'READY',
+  NOT_AN_EMAIL: 'NOT_AN_EMAIL',
+  OUTLOOK_MSG_UNSUPPORTED: 'OUTLOOK_MSG_UNSUPPORTED',
+  NO_CONTENT: 'NO_CONTENT',
+  TOO_LARGE: 'TOO_LARGE',
+  UNREADABLE: 'UNREADABLE',
+};
+
+/**
+ * Buyer-facing explanation for each email ingestion refusal.
+ *
+ * Every one names the specific recovery step, per the descriptive-error standard:
+ * re-export the message, send the workbook through the BOQ tab, or key the items.
+ */
+const EMAIL_INGESTION_MESSAGES = {
+  NOT_AN_EMAIL:
+    'That file is not an email message. Upload a .eml file exported from your mail client, or use the BOQ Spreadsheet / Drawing tab for documents.',
+  OUTLOOK_MSG_UNSUPPORTED:
+    'Outlook .msg files cannot be read. In Outlook, open the message and use File > Save As to save it as a .eml file, then upload that instead.',
+  NO_CONTENT:
+    'This email has no readable body and no PDF, image or CSV attachment to extract from. If the requisition is in a spreadsheet, upload it through the BOQ Spreadsheet / Drawing tab.',
+  TOO_LARGE: `That email is larger than the ${Math.floor(
+    Number(process.env.EMAIL_INGESTION_MAX_BYTES || 15 * 1024 * 1024) / (1024 * 1024)
+  )}MB limit. Forward just the requisition without the earlier thread, or upload the attachment on its own.`,
+  UNREADABLE:
+    'This email could not be parsed. Re-export it from your mail client as a .eml file, or add the line items manually.',
+  // Appended when the message did yield line items but also carried an
+  // attachment this pipeline cannot read.
+  SPREADSHEET_ATTACHMENT_SKIPPED:
+    'The attachment {fileNames} was not read. Spreadsheet attachments are not extracted from email — upload it through the BOQ Spreadsheet / Drawing tab to include its line items.',
+};
+
 // Buyer-facing explanation for each extraction outcome. Every one of these ends
 // by pointing at manual line-item entry, because that is the recovery path.
 const EXTRACTION_REASON_MESSAGES = {
@@ -753,6 +821,9 @@ module.exports = {
   GEMINI_CONFIG,
   GEMINI_INLINE_MIME_TYPES,
   EXTRACTION_REASON_MESSAGES,
+  EMAIL_INGESTION_CONFIG,
+  EMAIL_INGESTION_STATUS,
+  EMAIL_INGESTION_MESSAGES,
   EMAIL_REGEX,
   GSTIN_REGEX,
   GSTIN_MESSAGE,

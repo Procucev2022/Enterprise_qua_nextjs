@@ -12,6 +12,9 @@ router.get('/summary', authenticate, rfqController.getRFQSummary);
 router.post('/', authenticate, rfqController.createRFQ);
 router.post('/ingest', authenticate, rfqController.ingestRFQ);
 router.post('/extract', authenticate, rfqController.extractRFQFromDocument);
+// An emailed requisition (.eml). Parsed server-side, then run through the same
+// extraction and classification as /extract.
+router.post('/extract-email', authenticate, rfqController.extractRFQFromEmail);
 // Registered before '/:id' so 'attachments' is not read as an RFQ identifier.
 // Both require a session: an attachment is commercial-in-confidence, so the
 // download must never be anonymous.

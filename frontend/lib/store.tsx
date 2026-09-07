@@ -2051,6 +2051,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       status: 'Quotes Pending',
       source: rfqData.source || 'web_portal',
       sourceFileName: rfqData.sourceFileName,
+      // Origin of an emailed requisition. Previously omitted here, so the sender
+      // the wizard had already parsed was dropped before it ever reached the API.
+      sourceEmail: rfqData.sourceEmail,
       budget: Number(rfqData.budget) || 0,
       targetDeliveryDate: rfqData.targetDeliveryDate,
       deliveryLocation: rfqData.deliveryLocation || '',

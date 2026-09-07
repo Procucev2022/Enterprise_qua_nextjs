@@ -319,6 +319,15 @@ export interface RFQCreatePayload {
   status: string;
   source: RFQSource;
   sourceFileName?: string;
+  /**
+   * Address the requisition arrived from, for an emailed RFQ.
+   *
+   * Read out of the message server-side rather than typed by the buyer, so the
+   * recorded origin cannot be attributed to an address no mail was received from.
+   * This was missing from the payload while the wizard was already collecting it,
+   * which is why email provenance never reached the database.
+   */
+  sourceEmail?: string;
   budget: number;
   targetDeliveryDate: string;
   deliveryLocation: string;
@@ -1117,7 +1126,29 @@ export type RFQExtractionReason =
   | 'UNSUPPORTED_TYPE'
   | 'AI_FAILED'
   | 'NO_ITEMS_FOUND'
-  | 'NETWORK';
+  | 'NETWORK'
+  // Email-specific refusals from POST /api/rfqs/extract-email.
+  | 'NOT_AN_EMAIL'
+  | 'OUTLOOK_MSG_UNSUPPORTED'
+  | 'TOO_LARGE'
+  | 'UNREADABLE';
+
+/**
+ * Headers read out of an ingested email message.
+ *
+ * Every field comes from the message itself, parsed on the server. The wizard
+ * displays these so the buyer can confirm the requisition was read from the mail
+ * they expected before dispatching it.
+ */
+export interface RFQEmailMetadata {
+  messageId: string;
+  subject: string;
+  fromAddress: string;
+  fromName: string;
+  toAddress: string;
+  sentAt: string | null;
+  attachmentNames: string[];
+}
 
 /**
  * Document posted to POST /api/rfqs/extract. Spreadsheets are flattened to text
@@ -1143,6 +1174,13 @@ export interface RFQExtractionResult {
   extraction?: RFQExtractionMeta;
   reason?: RFQExtractionReason;
   error?: string;
+  /** Present when the source was an email message. */
+  email?: RFQEmailMetadata;
+  /**
+   * Non-fatal note about something the pipeline could not read — a workbook
+   * attachment, for instance. Line items were still extracted.
+   */
+  warning?: string;
 }
 
 /** Outcome of storing one supporting document. */

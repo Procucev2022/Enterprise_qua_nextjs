@@ -8,16 +8,23 @@ import {
   MANUAL_LINE_ITEM_DEFAULTS,
   PINCODE_PATTERN,
   formatFileSize,
+  formatIndianDateTime,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { extractLineItemsFromDocument, classifyLineItems, uploadRFQAttachment } from '@/lib/rfqClient';
+import {
+  extractLineItemsFromDocument,
+  extractLineItemsFromEmail,
+  classifyLineItems,
+  uploadRFQAttachment,
+} from '@/lib/rfqClient';
 import ManualRFQModal from '@/app/buyer/ManualRFQModal';
-import { buildExtractionRequest } from '@/lib/documentExtraction';
+import { buildExtractionRequest, isEmailFileName } from '@/lib/documentExtraction';
 import type {
   SourcingMode,
   ExtractedEntity,
   VendorEntry,
   RFQAttachment,
+  RFQEmailMetadata,
   RFQExtractionRequest,
   RFQExtractionResult,
   RFQItem,
@@ -128,6 +135,10 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
   /** Whether the manual RFQ entry dialog is showing. */
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [uploadTab, setUploadTab] = useState<'boq' | 'email_file'>('boq');
+  // Headers of the message the current draft was read from, when the staged file
+  // was an email. Drives the confirmation panel on the review step and the
+  // provenance recorded at dispatch.
+  const [ingestedEmail, setIngestedEmail] = useState<RFQEmailMetadata | null>(null);
   const [isDraggingDoc, setIsDraggingDoc] = useState(false);
 
   // The staged document plus the outcome of the last AI extraction attempt.
@@ -271,6 +282,21 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
 
     setIsProcessingDoc(true);
     try {
+      // An email container is parsed server-side: MIME multipart, folded headers
+      // and base64 attachment parts are not readable in the browser. Everything
+      // else is flattened or base64-encoded here as before.
+      if (isEmailFileName(uploadedFile.name)) {
+        const emailResult = await extractLineItemsFromEmail(uploadedFile);
+        setIngestedEmail(emailResult.email ?? null);
+        applyExtraction(emailResult, uploadedFile.name);
+        // Reported after the extraction result so it is not overwritten by it.
+        if (emailResult.success && emailResult.warning) {
+          showToast(EXTRACTION.emailAttachmentSkippedTitle, emailResult.warning, 'warning');
+        }
+        return;
+      }
+
+      setIngestedEmail(null);
       const payload = await buildExtractionRequest(uploadedFile);
       applyExtraction(await extractLineItemsFromDocument(payload), uploadedFile.name);
     } catch {
@@ -601,9 +627,20 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
         attachments: sourceAttachments,
         extractedEntities: entities,
         aiScore: selectedMode === 'mode_3' ? 95 : 88,
-        source:
-          ingestionMethod === 'email' ? 'email_gateway' : ingestionMethod === 'manual' ? 'manual_entry' : 'web_portal',
-        sourceEmail: ingestionMethod === 'email' ? emailSender : undefined,
+        // An uploaded `.eml` is its own intake source, distinct from both the
+        // autonomous gateway and a plain portal upload. The buyer dashboard
+        // already renders and filters on `email_upload`; nothing produced it
+        // before, so that surface was unreachable.
+        source: ingestedEmail
+          ? 'email_upload'
+          : ingestionMethod === 'email'
+            ? 'email_gateway'
+            : ingestionMethod === 'manual'
+              ? 'manual_entry'
+              : 'web_portal',
+        // Taken from the parsed message headers when there is one, so the recorded
+        // origin is the address mail was actually received from.
+        sourceEmail: ingestedEmail ? ingestedEmail.fromAddress : ingestionMethod === 'email' ? emailSender : undefined,
         sourceFileName: uploadedFileName,
         autoCirculated: false,
       },
@@ -999,6 +1036,52 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
               <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
                 Every extracted item is categorized into its standardized <strong>Major Category</strong> and <strong>Minor Category</strong> from the Excel taxonomy.
               </p>
+
+              {/* Which message these line items came from. Shown so the buyer can
+                  confirm the right email was read before dispatching, and so the
+                  recorded sender is visible rather than implied. */}
+              {ingestedEmail && (
+                <div
+                  data-testid="ingested-email-summary"
+                  className="mt-3 p-3 rounded-xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/50 text-[11px] space-y-1"
+                >
+                  <p className="font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                    <Mail size={12} /> {EXTRACTION.emailSourceTitle}
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-0.5 text-slate-600 dark:text-gray-300">
+                    <span>
+                      <strong className="text-slate-500 dark:text-gray-400">
+                        {EXTRACTION.emailSourceFrom}:
+                      </strong>{' '}
+                      <span className="font-mono">
+                        {ingestedEmail.fromName
+                          ? `${ingestedEmail.fromName} <${ingestedEmail.fromAddress}>`
+                          : ingestedEmail.fromAddress}
+                      </span>
+                    </span>
+                    <span>
+                      <strong className="text-slate-500 dark:text-gray-400">
+                        {EXTRACTION.emailSourceReceived}:
+                      </strong>{' '}
+                      {ingestedEmail.sentAt ? formatIndianDateTime(ingestedEmail.sentAt) : '—'}
+                    </span>
+                    <span className="sm:col-span-2">
+                      <strong className="text-slate-500 dark:text-gray-400">
+                        {EXTRACTION.emailSourceSubject}:
+                      </strong>{' '}
+                      {ingestedEmail.subject || '—'}
+                    </span>
+                    <span className="sm:col-span-2">
+                      <strong className="text-slate-500 dark:text-gray-400">
+                        {EXTRACTION.emailSourceAttachments}:
+                      </strong>{' '}
+                      {ingestedEmail.attachmentNames.length > 0
+                        ? ingestedEmail.attachmentNames.join(', ')
+                        : EXTRACTION.emailSourceNoAttachments}
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <button

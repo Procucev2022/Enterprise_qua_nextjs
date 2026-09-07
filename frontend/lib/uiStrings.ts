@@ -362,6 +362,19 @@ export const UI_STRINGS = {
     // offer it back. A storage failure does not stop the RFQ being raised, so the
     // message says exactly what is missing and what still went through.
     attachmentStoreFailedTitle: 'Document Not Attached',
+
+    // Emailed requisitions (.eml). Parsed server-side, so these cover the cases
+    // the browser reports before the request is made, plus the panel that shows
+    // which message a draft was read from.
+    emailFileUnreadable:
+      'That email file could not be read from disk. Try exporting it again from your mail client.',
+    emailAttachmentSkippedTitle: 'Attachment Not Read',
+    emailSourceTitle: 'Read from email',
+    emailSourceFrom: 'From',
+    emailSourceSubject: 'Subject',
+    emailSourceReceived: 'Sent',
+    emailSourceAttachments: 'Attachments',
+    emailSourceNoAttachments: 'None',
     attachmentStoreFailedMessage:
       'The RFQ was created, but {fileName} could not be stored with it, so it will not appear under Supporting Documents. {reason} You can attach it again from the RFQ details screen.',
 

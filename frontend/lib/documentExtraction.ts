@@ -22,6 +22,20 @@ export function isSpreadsheet(name: string): boolean {
 }
 
 /**
+ * Email containers, which go to a different endpoint.
+ *
+ * These cannot be prepared here: reading one means MIME multipart parsing, folded
+ * headers, quoted-printable decoding and base64 attachment parts, and the parser
+ * for that is Node-only. Previously such a file fell through to `readAsBase64`
+ * below and was sent to Gemini labelled `application/pdf`, which the extractor
+ * refused as an unsupported type. `.msg` is included so it reaches the endpoint
+ * and gets an explanation rather than that same silent refusal.
+ */
+export function isEmailFileName(name: string): boolean {
+  return /\.(eml|msg)$/i.test(name);
+}
+
+/**
  * Turn a workbook into the " | "-delimited text layout the extraction prompt
  * describes, preserving row structure so quantities stay aligned with the item
  * they belong to.
