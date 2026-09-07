@@ -885,33 +885,6 @@ export interface PurchaseOrderLineItemRecord {
   department?: string;
 }
 
-export interface BuyerVendorRecord {
-  id: string;
-  buyerOrgId?: string;
-  vendorId?: string;
-  vendorCode?: string;
-  companyName: string;
-  contactPerson?: string;
-  email: string;
-  phone?: string;
-  address?: string;
-  gstin?: string;
-  rating?: number;
-  hasPoHistory: boolean;
-  poCount: number;
-  totalSpend: number;
-  timeHorizon?: '1_year' | '2_years' | '3_years' | string;
-  primaryMajorCategory: string;
-  minorCategories: string[];
-  productLines?: string[];
-  aiConfidenceScore?: number;
-  aiReason?: string;
-  mappingStatus: 'AI_MAPPED' | 'APPROVED' | 'MANUAL_EDITED' | 'SELF_MAP_REQUIRED' | 'PENDING' | string;
-  emailDispatchStatus?: 'PENDING' | 'SENT' | 'DELIVERED' | 'FAILED' | string;
-  dispatchedAt?: string;
-  itemsSupplied?: string[];
-}
-
 export interface HistoricalPurchaseVendorRecord {
   id: string;
   vendorCode?: string;
@@ -926,17 +899,10 @@ export interface HistoricalPurchaseVendorRecord {
   categoriesMappedByBuyer: boolean; // True if buyer mapped 1st & 2nd set categories from POs
   itemsSupplied: string[]; // List of items purchased in the past
   pastPoSpend?: string;
-  totalSpend?: number;
   poCount?: number;
   firstSetMajorCategory: string; // 1st Set: Primary Major Category
   secondSetMinorCategories: string[]; // 2nd Set: Minor Categories
   secondSetSecondaryMajors?: string[]; // 2nd Set: Secondary Major Categories
-  productLines?: string[];
-  aiConfidenceScore?: number; // 0 to 100
-  aiReason?: string;
-  mappingStatus?: 'AI_MAPPED' | 'APPROVED' | 'MANUAL_EDITED' | 'SELF_MAP_REQUIRED' | 'PENDING' | string;
-  emailDispatchStatus?: 'PENDING' | 'SENT' | 'DELIVERED' | 'FAILED' | string;
-  dispatchedAt?: string;
   isExistingInDatabase?: boolean;
   tempPassword?: string;
 }
