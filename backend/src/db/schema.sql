@@ -359,5 +359,46 @@ CREATE TABLE IF NOT EXISTS email_ingestion_log (
   detail TEXT,
   processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
 CREATE INDEX IF NOT EXISTS idx_email_ingestion_log_processed_at ON email_ingestion_log (processed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_email_ingestion_log_status ON email_ingestion_log (status);
+
+-- ==============================================================================
+-- BUYER VENDOR RELATIONSHIPS & AI CATEGORIZATION
+-- ==============================================================================
+-- Holds buyer-specific vendor mappings scoped by buyer_org_id.
+-- Stores both the Vendor Master identity attributes and the AI-analyzed PO
+-- purchasing history (spend, frequency, confidence scores, category assignments).
+CREATE TABLE IF NOT EXISTS buyer_vendor (
+  id VARCHAR(64) PRIMARY KEY,
+  buyer_org_id VARCHAR(64),
+  vendor_id VARCHAR(64),
+  vendor_code VARCHAR(64),
+  company_name VARCHAR(512) NOT NULL,
+  contact_person VARCHAR(255),
+  email VARCHAR(255),
+  phone VARCHAR(64),
+  address TEXT,
+  gstin VARCHAR(64),
+  rating NUMERIC,
+  has_po_history BOOLEAN DEFAULT false,
+  po_count INTEGER DEFAULT 0,
+  total_spend NUMERIC DEFAULT 0,
+  time_horizon VARCHAR(32),
+  primary_major_category VARCHAR(255),
+  minor_categories JSONB DEFAULT '[]'::jsonb,
+  product_lines JSONB DEFAULT '[]'::jsonb,
+  ai_confidence_score INTEGER DEFAULT 0,
+  ai_reason TEXT,
+  mapping_status VARCHAR(64) DEFAULT 'PENDING',
+  email_dispatch_status VARCHAR(64) DEFAULT 'PENDING',
+  dispatched_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  raw JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_buyer_vendor_buyer_org_id ON buyer_vendor (buyer_org_id);
+CREATE INDEX IF NOT EXISTS idx_buyer_vendor_vendor_code ON buyer_vendor (vendor_code);
+CREATE INDEX IF NOT EXISTS idx_buyer_vendor_email ON buyer_vendor (email);
+CREATE INDEX IF NOT EXISTS idx_buyer_vendor_mapping_status ON buyer_vendor (mapping_status);

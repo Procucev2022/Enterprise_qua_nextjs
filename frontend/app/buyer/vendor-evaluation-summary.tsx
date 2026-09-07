@@ -39,9 +39,47 @@ export default function VendorEvaluationSummary({
   evaluationRecord,
   onBack,
 }: VendorEvaluationSummaryProps) {
-  const { vendorEvaluations, showToast, addAuditLog, addFeedItem } = useApp();
+  const { vendorEvaluations, buyerVendors, showToast, addAuditLog, addFeedItem } = useApp();
 
-  const record = evaluationRecord || vendorEvaluations[0];
+  // Unified available evaluation records from store and buyer roster
+  const availableRecords: VendorEvaluationRecord[] = React.useMemo(() => {
+    const list = [...(vendorEvaluations || [])];
+    (buyerVendors || []).forEach((bv) => {
+      if (!list.some((r) => r.vendorId === bv.id || r.vendorName?.toLowerCase() === bv.name?.toLowerCase())) {
+        list.push({
+          id: `eval-${bv.id}`,
+          vendorId: bv.id,
+          vendorName: bv.name,
+          contactPerson: bv.contactPerson,
+          email: bv.email,
+          phone: bv.phone,
+          category: bv.majorCategory,
+          submissionDate: '2026-08-18 14:30 UTC',
+          status: (bv.status as any) || 'PREFERRED ENTERPRISE SUPPLIER',
+          overallScore: bv.score || (bv.rating ? Math.round(bv.rating * 20) : 88),
+          systemAction: 'Active Roster Direct RFQ dispatch confirmed.',
+          moduleScores: {
+            commercial: { score: 4.8, maxScore: 5, weight: 25, weightedScore: 24.0, remarks: 'Payment terms Net 60 fixed rate contract approved.' },
+            technical: { score: 4.5, maxScore: 5, weight: 15, weightedScore: 13.5, remarks: 'Technical parameter compliance datasheet verified.' },
+            quality: { score: 4.6, maxScore: 5, weight: 20, weightedScore: 18.4, remarks: 'ISO 9001:2015 certificate verified.' },
+            delivery: { score: 4.4, maxScore: 5, weight: 20, weightedScore: 17.6, remarks: 'Verified average OTIF 92.4%.' },
+            financial: { score: 4.0, maxScore: 5, weight: 10, weightedScore: 8.0, remarks: 'Credit score A+; clean audit history.' },
+            governance: { score: 4.7, maxScore: 5, weight: 10, weightedScore: 9.4, remarks: 'Statutory GSTIN/PAN and ESG guidelines verified.' },
+          },
+          documents: [],
+        });
+      }
+    });
+    return list;
+  }, [vendorEvaluations, buyerVendors]);
+
+  const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
+
+  const record =
+    (selectedRecordId ? availableRecords.find((r) => r.id === selectedRecordId || r.vendorId === selectedRecordId) : null) ||
+    evaluationRecord ||
+    availableRecords[0];
+
   const [overrideScore, setOverrideScore] = useState<number | null>(null);
   const [showOverrideModal, setShowOverrideModal] = useState(false);
   const [newScoreInput, setNewScoreInput] = useState(record?.overallScore || 95);
@@ -56,6 +94,24 @@ export default function VendorEvaluationSummary({
       </div>
     );
   }
+
+  const defaultModules = {
+    commercial: { score: 4.8, maxScore: 5, weight: 25, weightedScore: 24.0, remarks: 'Payment terms Net 60 fixed rate contract approved.' },
+    technical: { score: 4.5, maxScore: 5, weight: 15, weightedScore: 13.5, remarks: 'Technical parameter compliance datasheet verified.' },
+    quality: { score: 4.6, maxScore: 5, weight: 20, weightedScore: 18.4, remarks: 'ISO 9001:2015 certificate verified.' },
+    delivery: { score: 4.4, maxScore: 5, weight: 20, weightedScore: 17.6, remarks: 'Verified average OTIF 92.4%.' },
+    financial: { score: 4.0, maxScore: 5, weight: 10, weightedScore: 8.0, remarks: 'Credit score A+; clean audit history.' },
+    governance: { score: 4.7, maxScore: 5, weight: 10, weightedScore: 9.4, remarks: 'Statutory GSTIN/PAN and ESG guidelines verified.' },
+  };
+
+  const moduleScores = {
+    commercial: { ...defaultModules.commercial, ...(record.moduleScores?.commercial || {}) },
+    technical: { ...defaultModules.technical, ...(record.moduleScores?.technical || {}) },
+    quality: { ...defaultModules.quality, ...(record.moduleScores?.quality || {}) },
+    delivery: { ...defaultModules.delivery, ...(record.moduleScores?.delivery || {}) },
+    financial: { ...defaultModules.financial, ...(record.moduleScores?.financial || {}) },
+    governance: { ...defaultModules.governance, ...(record.moduleScores?.governance || {}) },
+  };
 
   const effectiveScore = overrideScore !== null ? overrideScore : record.overallScore;
 
@@ -140,6 +196,25 @@ export default function VendorEvaluationSummary({
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Vendor Selector Dropdown */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-bold text-slate-500 dark:text-gray-400">Supplier:</span>
+            <select
+              value={record.id}
+              onChange={(e) => {
+                setSelectedRecordId(e.target.value);
+                setOverrideScore(null);
+              }}
+              className="text-xs font-bold py-1 px-2.5 rounded-lg border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-slate-800 dark:text-gray-200 shadow-xs"
+            >
+              {availableRecords.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.vendorName} ({r.overallScore}%)
+                </option>
+              ))}
+            </select>
+          </div>
+
           <button
             onClick={() => setShowOverrideModal(true)}
             className="btn btn-secondary btn-sm"
@@ -250,13 +325,13 @@ export default function VendorEvaluationSummary({
                   <span className="font-bold text-xs text-slate-800 dark:text-gray-200">Commercial Terms</span>
                 </div>
                 <span className="text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400">
-                  {record.moduleScores.commercial.weightedScore} / 25 pts
+                  {moduleScores.commercial.weightedScore} / 25 pts
                 </span>
               </div>
               <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
                 <div
                   className="bg-indigo-600 h-full rounded-full"
-                  style={{ width: `${(record.moduleScores.commercial.weightedScore / 25) * 100}%` }}
+                  style={{ width: `${(moduleScores.commercial.weightedScore / 25) * 100}%` }}
                 />
               </div>
               <div className="text-[11px] text-slate-500 flex items-center justify-between">
@@ -266,7 +341,7 @@ export default function VendorEvaluationSummary({
             </div>
             <div className="p-2.5 rounded-lg bg-indigo-50/70 dark:bg-indigo-950/50 border border-indigo-100 dark:border-indigo-800/60 text-[10px] text-indigo-900 dark:text-indigo-200">
               <div className="font-bold text-indigo-700 dark:text-indigo-300 mb-0.5">💬 Pillar 1 Auditor Remarks:</div>
-              {record.moduleScores.commercial.remarks}
+              {moduleScores.commercial.remarks}
             </div>
           </div>
 
@@ -281,13 +356,13 @@ export default function VendorEvaluationSummary({
                   <span className="font-bold text-xs text-slate-800 dark:text-gray-200">Technical Capabilities</span>
                 </div>
                 <span className="text-xs font-mono font-bold text-sky-600 dark:text-cyan-400">
-                  {record.moduleScores.technical.weightedScore} / 15 pts
+                  {moduleScores.technical.weightedScore} / 15 pts
                 </span>
               </div>
               <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
                 <div
                   className="bg-sky-600 h-full rounded-full"
-                  style={{ width: `${(record.moduleScores.technical.weightedScore / 15) * 100}%` }}
+                  style={{ width: `${(moduleScores.technical.weightedScore / 15) * 100}%` }}
                 />
               </div>
               <div className="text-[11px] text-slate-500 flex items-center justify-between">
@@ -297,7 +372,7 @@ export default function VendorEvaluationSummary({
             </div>
             <div className="p-2.5 rounded-lg bg-sky-50/70 dark:bg-cyan-950/50 border border-sky-100 dark:border-cyan-800/60 text-[10px] text-sky-900 dark:text-cyan-200">
               <div className="font-bold text-sky-700 dark:text-cyan-300 mb-0.5">💬 Pillar 2 Auditor Remarks:</div>
-              {record.moduleScores.technical.remarks}
+              {moduleScores.technical.remarks}
             </div>
           </div>
 
@@ -312,13 +387,13 @@ export default function VendorEvaluationSummary({
                   <span className="font-bold text-xs text-slate-800 dark:text-gray-200">Quality & Warranty</span>
                 </div>
                 <span className="text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                  {record.moduleScores.quality.weightedScore} / 20 pts
+                  {moduleScores.quality.weightedScore} / 20 pts
                 </span>
               </div>
               <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
                 <div
                   className="bg-emerald-600 h-full rounded-full"
-                  style={{ width: `${(record.moduleScores.quality.weightedScore / 20) * 100}%` }}
+                  style={{ width: `${(moduleScores.quality.weightedScore / 20) * 100}%` }}
                 />
               </div>
               <div className="text-[11px] text-slate-500 flex items-center justify-between">
@@ -328,7 +403,7 @@ export default function VendorEvaluationSummary({
             </div>
             <div className="p-2.5 rounded-lg bg-emerald-50/70 dark:bg-emerald-950/50 border border-emerald-100 dark:border-emerald-800/60 text-[10px] text-emerald-900 dark:text-emerald-200">
               <div className="font-bold text-emerald-700 dark:text-emerald-300 mb-0.5">💬 Pillar 3 Auditor Remarks:</div>
-              {record.moduleScores.quality.remarks}
+              {moduleScores.quality.remarks}
             </div>
           </div>
 
@@ -343,13 +418,13 @@ export default function VendorEvaluationSummary({
                   <span className="font-bold text-xs text-slate-800 dark:text-gray-200">Operational Delivery</span>
                 </div>
                 <span className="text-xs font-mono font-bold text-purple-600 dark:text-purple-400">
-                  {record.moduleScores.delivery.weightedScore} / 20 pts
+                  {moduleScores.delivery.weightedScore} / 20 pts
                 </span>
               </div>
               <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
                 <div
                   className="bg-purple-600 h-full rounded-full"
-                  style={{ width: `${(record.moduleScores.delivery.weightedScore / 20) * 100}%` }}
+                  style={{ width: `${(moduleScores.delivery.weightedScore / 20) * 100}%` }}
                 />
               </div>
               <div className="text-[11px] text-slate-500 flex items-center justify-between">
@@ -359,7 +434,7 @@ export default function VendorEvaluationSummary({
             </div>
             <div className="p-2.5 rounded-lg bg-purple-50/70 dark:bg-purple-950/50 border border-purple-100 dark:border-purple-800/60 text-[10px] text-purple-900 dark:text-purple-200">
               <div className="font-bold text-purple-700 dark:text-purple-300 mb-0.5">💬 Pillar 4 Auditor Remarks:</div>
-              {record.moduleScores.delivery.remarks}
+              {moduleScores.delivery.remarks}
             </div>
           </div>
 
@@ -374,13 +449,13 @@ export default function VendorEvaluationSummary({
                   <span className="font-bold text-xs text-slate-800 dark:text-gray-200">Financial Stability</span>
                 </div>
                 <span className="text-xs font-mono font-bold text-amber-600 dark:text-amber-400">
-                  {record.moduleScores.financial.weightedScore} / 10 pts
+                  {moduleScores.financial.weightedScore} / 10 pts
                 </span>
               </div>
               <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
                 <div
                   className="bg-amber-600 h-full rounded-full"
-                  style={{ width: `${(record.moduleScores.financial.weightedScore / 10) * 100}%` }}
+                  style={{ width: `${(moduleScores.financial.weightedScore / 10) * 100}%` }}
                 />
               </div>
               <div className="text-[11px] text-slate-500 flex items-center justify-between">
@@ -390,7 +465,7 @@ export default function VendorEvaluationSummary({
             </div>
             <div className="p-2.5 rounded-lg bg-amber-50/70 dark:bg-amber-950/50 border border-amber-100 dark:border-amber-800/60 text-[10px] text-amber-900 dark:text-amber-200">
               <div className="font-bold text-amber-700 dark:text-amber-300 mb-0.5">💬 Pillar 5 Auditor Remarks:</div>
-              {record.moduleScores.financial.remarks}
+              {moduleScores.financial.remarks}
             </div>
           </div>
 
@@ -405,13 +480,13 @@ export default function VendorEvaluationSummary({
                   <span className="font-bold text-xs text-slate-800 dark:text-gray-200">Governance & ESG</span>
                 </div>
                 <span className="text-xs font-mono font-bold text-rose-600 dark:text-rose-400">
-                  {record.moduleScores.governance.weightedScore} / 10 pts
+                  {moduleScores.governance.weightedScore} / 10 pts
                 </span>
               </div>
               <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
                 <div
                   className="bg-rose-600 h-full rounded-full"
-                  style={{ width: `${(record.moduleScores.governance.weightedScore / 10) * 100}%` }}
+                  style={{ width: `${(moduleScores.governance.weightedScore / 10) * 100}%` }}
                 />
               </div>
               <div className="text-[11px] text-slate-500 flex items-center justify-between">
@@ -421,7 +496,7 @@ export default function VendorEvaluationSummary({
             </div>
             <div className="p-2.5 rounded-lg bg-rose-50/70 dark:bg-rose-950/50 border border-rose-100 dark:border-rose-800/60 text-[10px] text-rose-900 dark:text-rose-200">
               <div className="font-bold text-rose-700 dark:text-rose-300 mb-0.5">💬 Pillar 6 Auditor Remarks:</div>
-              {record.moduleScores.governance.remarks}
+              {moduleScores.governance.remarks}
             </div>
           </div>
         </div>

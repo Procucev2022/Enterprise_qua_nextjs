@@ -45,6 +45,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
     remainingFreeRFQs,
     activeSubscription,
     activeBuyerAccount,
+    buyerVendors,
     setInitialSetupModalOpen,
     initialSetupCompleted,
   } = useApp();
@@ -150,7 +151,37 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
     }
   };
 
-  const filteredFeed = aiFeed.filter((item) => {
+  const buyerRfqNumbers = new Set(rfqs.map((r) => r.rfqNumber));
+  const activeOrgId = activeBuyerAccount?.id || null;
+  const activeOrgName = (activeBuyerAccount?.organizationName || '').toLowerCase().trim();
+  const buyerVendorNames = new Set((buyerVendors || []).map((v) => (v.name || '').toLowerCase().trim()));
+
+  const buyerScopedFeed = aiFeed.filter((item) => {
+    // 1. If feed item is linked to an RFQ, ensure it belongs to active buyer
+    if (item.rfqNumber) {
+      return buyerRfqNumbers.has(item.rfqNumber);
+    }
+
+    // 2. If feed item is explicitly tagged with an organization ID
+    if ((item as any).organizationId && activeOrgId && (item as any).organizationId !== activeOrgId) {
+      return false;
+    }
+    if ((item as any).buyerOrgId && activeOrgId && (item as any).buyerOrgId !== activeOrgId) {
+      return false;
+    }
+
+    // 3. If feed message references an organization ID, ensure it matches active buyer
+    if (activeOrgId && item.message && item.message.includes('for Organization ')) {
+      const match = item.message.match(/for Organization (\S+?)(?:\.|$|\s)/i);
+      if (match && match[1] && match[1] !== activeOrgId) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+
+  const filteredFeed = buyerScopedFeed.filter((item) => {
     if (feedChannelFilter === 'all') return true;
     if (feedChannelFilter === 'call') return item.type === 'call' || item.channel === 'call';
     if (feedChannelFilter === 'whatsapp') return item.type === 'whatsapp' || item.channel === 'whatsapp';
@@ -161,7 +192,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   });
 
   const channelFilterTabs = [
-    { key: 'all' as const, label: 'All', count: aiFeed.length, activeClass: 'bg-slate-800 dark:bg-white text-white dark:text-slate-900' },
+    { key: 'all' as const, label: 'All', count: buyerScopedFeed.length, activeClass: 'bg-slate-800 dark:bg-white text-white dark:text-slate-900' },
     { key: 'call' as const, label: 'Calls', icon: <Phone size={11} />, activeClass: 'bg-purple-600 text-white' },
     { key: 'whatsapp' as const, label: 'WA', icon: <MessageSquare size={11} />, activeClass: 'bg-emerald-600 text-white' },
     { key: 'sms' as const, label: 'SMS', icon: <Smartphone size={11} />, activeClass: 'bg-sky-600 text-white' },

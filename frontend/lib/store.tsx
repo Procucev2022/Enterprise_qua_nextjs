@@ -28,6 +28,7 @@ import {
   MajorMinorCategory,
 } from './types';
 import { authClient } from './authClient';
+import { logger } from './logger';
 import { fetchCategoryTaxonomy } from './buyerProfileClient';
 import { setCategoryTaxonomy, clearCategoryTaxonomy } from './categoryTaxonomy';
 import { UI_STRINGS, formatString } from './uiStrings';
@@ -150,6 +151,7 @@ interface AppContextType {
   // Buyer Uploaded Vendors, Database Check & Automated Onboarding Emails
   buyerVendors: VendorEntry[];
   addBuyerVendor: (vendor: Omit<VendorEntry, 'id'>) => VendorEntry;
+  updateBuyerVendor: (vendorId: string, updates: Partial<VendorEntry>) => void;
   importBuyerVendors: (vendorsToImport: Omit<VendorEntry, 'id'>[]) => number;
   deleteBuyerVendor: (vendorId: string) => void;
   matchSuitableVendors: (entities: ExtractedEntity[], mode: SourcingMode, customList?: VendorEntry[]) => VendorEntry[];
@@ -885,6 +887,38 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           })),
         }),
       });
+
+      // Also persist to buyer_vendor table with buyer_org_id and AI metrics
+      fetch('/api/buyer-accounts/save-buyer-vendors', {
+        method: 'POST',
+        headers: authFetchHeaders(),
+        body: JSON.stringify({
+          period,
+          buyerVendors: vendors.map((v) => ({
+            id: v.id,
+            vendorCode: v.vendorCode,
+            companyName: v.companyName,
+            contactPerson: v.contactPerson,
+            email: v.email,
+            phone: v.phone,
+            address: v.address,
+            gstin: v.gstNumber,
+            rating: v.vendorRatingScore,
+            hasPoHistory: v.hasPoHistory,
+            poCount: v.poCount || (v.hasPoHistory ? 1 : 0),
+            totalSpend: v.totalSpend || 0,
+            timeHorizon: period,
+            primaryMajorCategory: v.categoriesMappedByBuyer ? v.firstSetMajorCategory : 'Not Available',
+            minorCategories: v.secondSetMinorCategories || [],
+            productLines: v.productLines || [],
+            aiConfidenceScore: v.aiConfidenceScore || (v.hasPoHistory ? 94 : 0),
+            aiReason: v.aiReason || '',
+            mappingStatus: v.mappingStatus || (v.hasPoHistory ? 'AI_MAPPED' : 'SELF_MAP_REQUIRED'),
+            emailDispatchStatus: 'SENT',
+            dispatchedAt: new Date().toISOString(),
+          })),
+        }),
+      }).catch((err) => console.warn('Non-blocking buyer-vendors persistence:', err));
     } catch (e) {
       console.error('Failed to ingest historical purchase data:', e);
       showToast('Import Failed', 'Could not reach the server. Please try again.', 'warning');
@@ -1359,8 +1393,46 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return created.length;
   };
 
+  const updateBuyerVendor = (vendorId: string, updates: Partial<VendorEntry>) => {
+    setBuyerVendors((prev) =>
+      prev.map((v) => (v.id === vendorId ? { ...v, ...updates } : v))
+    );
+
+    if (typeof window !== 'undefined') {
+      const token = authClient.getToken();
+      fetch(`/api/buyer-accounts/buyer-vendors/${encodeURIComponent(vendorId)}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ updates, buyerOrgId: activeBuyerAccount?.id }),
+      }).catch((err) => {
+        logger.warn('Failed to update buyer vendor on backend', err);
+      });
+    }
+
+    addAuditLog(`Updated vendor details for record ID ${vendorId}.`);
+    showToast('Vendor Updated', 'Supplier record updated successfully.', 'success');
+  };
+
   const deleteBuyerVendor = (vendorId: string) => {
     setBuyerVendors((prev) => prev.filter((v) => v.id !== vendorId));
+
+    if (typeof window !== 'undefined') {
+      const token = authClient.getToken();
+      fetch(`/api/buyer-accounts/buyer-vendors/${encodeURIComponent(vendorId)}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ buyerOrgId: activeBuyerAccount?.id }),
+      }).catch((err) => {
+        logger.warn('Failed to delete buyer vendor on backend', err);
+      });
+    }
+
     addAuditLog(`Removed vendor record ID ${vendorId} from buyer vendor master.`);
     showToast('Vendor Removed', 'Vendor deleted from directory.', 'info');
   };
@@ -2228,6 +2300,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         processHistoricalPurchaseData,
         buyerVendors,
         addBuyerVendor,
+        updateBuyerVendor,
         importBuyerVendors,
         deleteBuyerVendor,
         matchSuitableVendors,
