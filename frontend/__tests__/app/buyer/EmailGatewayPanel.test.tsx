@@ -20,8 +20,6 @@ jest.mock('@/lib/rfqClient', () => ({
 const GATEWAY = UI_STRINGS.emailGateway;
 const mockShowToast = jest.fn();
 const mockAdoptCreatedRFQ = jest.fn();
-const mockSetCurrentRole = jest.fn();
-const mockSetActiveTab = jest.fn();
 const mockFetchStatus = fetchEmailGatewayStatus as jest.Mock;
 const mockCreateRFQ = createRFQ as jest.Mock;
 const mockExtract = extractLineItemsFromDocument as jest.Mock;
@@ -32,8 +30,6 @@ beforeEach(() => {
     showToast: mockShowToast,
     activeBuyerAccount: { corporateEmail: 'buyer.lead@lt-heavy.com' },
     adoptCreatedRFQ: mockAdoptCreatedRFQ,
-    setCurrentRole: mockSetCurrentRole,
-    setActiveTab: mockSetActiveTab,
   });
   mockFetchStatus.mockResolvedValue({
     success: true,
@@ -141,7 +137,7 @@ describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
     expect(bodyTextarea).toHaveValue('Generator 500kVA - 2 Units');
   });
 
-  test('submitting requisition creates RFQ, shows card, allows dismiss/reset and navigation', async () => {
+  test('submitting requisition creates RFQ, calls adoptCreatedRFQ, and resets fields', async () => {
     const mockOnCreated = jest.fn();
     render(<EmailGatewayPanel onRFQCreated={mockOnCreated} />);
     await screen.findByTestId('gateway-panel');
@@ -166,24 +162,8 @@ describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
       );
     });
 
-    const successBanner = await screen.findByTestId('created-rfq-banner');
-    expect(successBanner).toHaveTextContent('RFQ-2026-0912');
-    expect(screen.getByRole('button', { name: new RegExp(GATEWAY.viewInKanbanAction, 'i') })).toBeInTheDocument();
-
-    // Click Send Another Requisition button to reset banner and fields
-    const sendAnotherBtn = screen.getByRole('button', { name: new RegExp(GATEWAY.sendAnotherAction, 'i') });
-    fireEvent.click(sendAnotherBtn);
-    expect(screen.queryByTestId('created-rfq-banner')).not.toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/Paste or write line items/i)).toHaveValue('');
-
-    // Trigger submit again and navigate to kanban (without onRFQCreated)
-    fireEvent.change(subjectInput, { target: { value: 'Requisition 2' } });
-    fireEvent.change(bodyTextarea, { target: { value: '1. Pump - Qty: 10' } });
-    fireEvent.click(submitBtn);
-    await screen.findByTestId('created-rfq-banner');
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(GATEWAY.viewInKanbanAction, 'i') }));
-    expect(mockSetCurrentRole).toHaveBeenCalledWith('category_manager');
-    expect(mockSetActiveTab).toHaveBeenCalledWith('kanban_board');
+    expect(subjectInput).toHaveValue('');
+    expect(bodyTextarea).toHaveValue('');
   });
 
   test('submitting requisition when extracted data has partial fields (no category/budget/date)', async () => {
@@ -355,8 +335,6 @@ describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
       showToast: mockShowToast,
       activeBuyerAccount: null,
       adoptCreatedRFQ: mockAdoptCreatedRFQ,
-      setCurrentRole: mockSetCurrentRole,
-      setActiveTab: mockSetActiveTab,
     });
 
     render(<EmailGatewayPanel />);

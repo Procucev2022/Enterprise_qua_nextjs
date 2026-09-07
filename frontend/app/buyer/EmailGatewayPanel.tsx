@@ -11,10 +11,6 @@ import {
   Mail,
   RefreshCw,
   TriangleAlert,
-  Zap,
-  CheckCircle2,
-  Sparkles,
-  ArrowRight,
   Send,
 } from 'lucide-react';
 
@@ -25,7 +21,7 @@ interface EmailGatewayPanelProps {
 }
 
 export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelProps) {
-  const { showToast, activeBuyerAccount, adoptCreatedRFQ, setCurrentRole, setActiveTab } = useApp();
+  const { showToast, activeBuyerAccount, adoptCreatedRFQ } = useApp();
 
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -36,7 +32,6 @@ export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelPro
   const [emailSubject, setEmailSubject] = useState<string>('');
   const [emailBody, setEmailBody] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [createdRFQ, setCreatedRFQ] = useState<RFQItem | null>(null);
 
   const loadStatus = useCallback(async () => {
     const result = await fetchEmailGatewayStatus();
@@ -131,7 +126,8 @@ export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelPro
       }
 
       adoptCreatedRFQ(saveRes.rfq);
-      setCreatedRFQ(saveRes.rfq);
+      setEmailSubject('');
+      setEmailBody('');
       showToast(
         'Requisition Ingested Successfully',
         `RFQ ${saveRes.rfq.rfqNumber} has been added to the database and is now on the Category Manager Kanban Board.`,
@@ -147,11 +143,6 @@ export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelPro
       setIsSubmitting(false);
       await loadStatus();
     }
-  };
-
-  const handleNavigateToKanban = () => {
-    setCurrentRole('category_manager');
-    setActiveTab('kanban_board');
   };
 
   if (isLoading) {
@@ -190,67 +181,6 @@ export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelPro
           <Mail size={16} /> {GATEWAY.title}
         </div>
       </div>
-
-      {/* Success Banner when RFQ is Created */}
-      {createdRFQ && (
-        <div
-          data-testid="created-rfq-banner"
-          className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-700/60 text-emerald-900 dark:text-emerald-100 space-y-2 animate-fade-in"
-        >
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <p className="font-bold flex items-center gap-1.5 text-emerald-800 dark:text-emerald-200 text-sm">
-              <CheckCircle2 size={18} className="text-emerald-600 dark:text-emerald-400" />
-              {GATEWAY.createdSuccessTitle}
-            </p>
-            <span className="px-2.5 py-0.5 rounded-full font-mono text-[11px] font-bold bg-emerald-200 dark:bg-emerald-900 text-emerald-900 dark:text-emerald-100">
-              {createdRFQ.rfqNumber}
-            </span>
-          </div>
-          <p className="text-[11px] text-emerald-800/90 dark:text-emerald-200/90">
-            {GATEWAY.createdSuccessSubtitle}
-          </p>
-
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-emerald-200 dark:border-emerald-800/60 text-[11px]">
-            <div>
-              <span className="text-[10px] uppercase font-bold text-emerald-700/80 dark:text-emerald-300/80">Title</span>
-              <div className="font-semibold truncate">{createdRFQ.title}</div>
-            </div>
-            <div>
-              <span className="text-[10px] uppercase font-bold text-emerald-700/80 dark:text-emerald-300/80">Category</span>
-              <div className="font-semibold truncate">{createdRFQ.category}</div>
-            </div>
-            <div>
-              <span className="text-[10px] uppercase font-bold text-emerald-700/80 dark:text-emerald-300/80">Line Items</span>
-              <div className="font-semibold font-mono">{createdRFQ.extractedEntities?.length || 0} Items</div>
-            </div>
-            <div>
-              <span className="text-[10px] uppercase font-bold text-emerald-700/80 dark:text-emerald-300/80">Status</span>
-              <div className="font-bold text-amber-700 dark:text-amber-300">{createdRFQ.status} (Held for CM)</div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 pt-2 flex-wrap">
-            <button
-              type="button"
-              onClick={handleNavigateToKanban}
-              className="btn btn-primary btn-xs font-bold flex items-center gap-1.5"
-            >
-              <Sparkles size={12} /> {GATEWAY.viewInKanbanAction} <ArrowRight size={12} />
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setCreatedRFQ(null);
-                setEmailSubject('');
-                setEmailBody('');
-              }}
-              className="btn btn-secondary btn-xs font-bold"
-            >
-              {GATEWAY.sendAnotherAction}
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Requisition Composer Form */}
       <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-3">
@@ -328,4 +258,5 @@ export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelPro
     </div>
   );
 }
+
 
