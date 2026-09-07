@@ -63,6 +63,10 @@ export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelPro
   }, [activeBuyerAccount]);
 
   const handleSubmitRequisition = async () => {
+    if (!emailSubject.trim()) {
+      showToast('Missing Subject', 'Please provide a requisition subject.', 'warning');
+      return;
+    }
     if (!emailBody.trim()) {
       showToast('Missing Requirement', 'Please provide email body and line-item specs.', 'warning');
       return;
@@ -278,7 +282,7 @@ export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelPro
 
         <div>
           <label className="text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 block mb-1">
-            {GATEWAY.subjectInputLabel}
+            {GATEWAY.subjectInputLabel} <span className="text-rose-500 font-bold">*</span>
           </label>
           <input
             type="text"
@@ -291,7 +295,7 @@ export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelPro
 
         <div>
           <label className="text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 block mb-1">
-            {GATEWAY.bodyInputLabel}
+            {GATEWAY.bodyInputLabel} <span className="text-rose-500 font-bold">*</span>
           </label>
           <textarea
             rows={5}
@@ -306,7 +310,7 @@ export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelPro
           <button
             type="button"
             onClick={handleSubmitRequisition}
-            disabled={isSubmitting || !emailBody.trim()}
+            disabled={isSubmitting}
             className="btn btn-primary btn-sm font-bold flex items-center gap-2 shadow-md shadow-indigo-600/20 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isSubmitting ? (

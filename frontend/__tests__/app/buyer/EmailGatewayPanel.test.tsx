@@ -146,6 +146,9 @@ describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
     render(<EmailGatewayPanel onRFQCreated={mockOnCreated} />);
     await screen.findByTestId('gateway-panel');
 
+    const subjectInput = screen.getByPlaceholderText(/e\.g\. URGENT: Requisition/i);
+    fireEvent.change(subjectInput, { target: { value: 'URGENT: Water Pumps Requirement' } });
+
     const bodyTextarea = screen.getByPlaceholderText(/Paste or write line items/i);
     fireEvent.change(bodyTextarea, { target: { value: '1. Centrifugal Pump 500 GPM - Qty: 12 Units' } });
 
@@ -174,6 +177,7 @@ describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
     expect(screen.getByPlaceholderText(/Paste or write line items/i)).toHaveValue('');
 
     // Trigger submit again and navigate to kanban (without onRFQCreated)
+    fireEvent.change(subjectInput, { target: { value: 'Requisition 2' } });
     fireEvent.change(bodyTextarea, { target: { value: '1. Pump - Qty: 10' } });
     fireEvent.click(submitBtn);
     await screen.findByTestId('created-rfq-banner');
@@ -203,6 +207,9 @@ describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
     render(<EmailGatewayPanel />);
     await screen.findByTestId('gateway-panel');
 
+    const subjectInput = screen.getByPlaceholderText(/e\.g\. URGENT: Requisition/i);
+    fireEvent.change(subjectInput, { target: { value: 'Gate Valve Request' } });
+
     const bodyTextarea = screen.getByPlaceholderText(/Paste or write line items/i);
     fireEvent.change(bodyTextarea, { target: { value: 'Gate Valve 4 inch - 5 Units' } });
 
@@ -228,7 +235,7 @@ describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
       rfq: {
         id: 'rfq-fallback-1',
         rfqNumber: 'RFQ-2026-0999',
-        title: 'Custom Requisition Requirement',
+        title: 'Non-Urgent Valves',
         category: 'Engineering Spares - Mechanical',
         sourcingMode: 'mode_1',
         status: 'Parsing',
@@ -265,6 +272,9 @@ describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
     render(<EmailGatewayPanel />);
     await screen.findByTestId('gateway-panel');
 
+    const subjectInput = screen.getByPlaceholderText(/e\.g\. URGENT: Requisition/i);
+    fireEvent.change(subjectInput, { target: { value: 'Subject Test' } });
+
     const bodyTextarea = screen.getByPlaceholderText(/Paste or write line items/i);
     fireEvent.change(bodyTextarea, { target: { value: 'Some item details' } });
 
@@ -286,6 +296,9 @@ describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
     render(<EmailGatewayPanel />);
     await screen.findByTestId('gateway-panel');
 
+    const subjectInput = screen.getByPlaceholderText(/e\.g\. URGENT: Requisition/i);
+    fireEvent.change(subjectInput, { target: { value: 'Subject Test' } });
+
     const bodyTextarea = screen.getByPlaceholderText(/Paste or write line items/i);
     fireEvent.change(bodyTextarea, { target: { value: 'Some item details' } });
 
@@ -301,12 +314,40 @@ describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
     });
   });
 
+  test('shows warning toast if email subject is empty when submit is triggered', async () => {
+    render(<EmailGatewayPanel />);
+    await screen.findByTestId('gateway-panel');
+
+    const bodyTextarea = screen.getByPlaceholderText(/Paste or write line items/i);
+    fireEvent.change(bodyTextarea, { target: { value: 'Some item specs' } });
+
+    const submitBtn = screen.getByRole('button', { name: new RegExp(GATEWAY.submitAction, 'i') });
+    fireEvent.click(submitBtn);
+
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Missing Subject',
+      'Please provide a requisition subject.',
+      'warning'
+    );
+    expect(mockCreateRFQ).not.toHaveBeenCalled();
+  });
+
   test('shows warning toast if email body is empty when submit is triggered', async () => {
     render(<EmailGatewayPanel />);
     await screen.findByTestId('gateway-panel');
 
+    const subjectInput = screen.getByPlaceholderText(/e\.g\. URGENT: Requisition/i);
+    fireEvent.change(subjectInput, { target: { value: 'Valid Subject' } });
+
     const submitBtn = screen.getByRole('button', { name: new RegExp(GATEWAY.submitAction, 'i') });
-    expect(submitBtn).toBeDisabled();
+    fireEvent.click(submitBtn);
+
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Missing Requirement',
+      'Please provide email body and line-item specs.',
+      'warning'
+    );
+    expect(mockCreateRFQ).not.toHaveBeenCalled();
   });
 
   test('handles activeBuyerAccount being undefined gracefully', async () => {
