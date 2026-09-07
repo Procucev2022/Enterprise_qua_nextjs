@@ -293,5 +293,39 @@ describe('QuoteMatrix Component Tests', () => {
       const optionValues = Array.from(select.options).map((o) => o.value);
       expect(optionValues).toEqual(['rfq-1', 'rfq-2']);
     });
+
+    test('renders parametric score breakdown when scoreBreakdown is present on quote', () => {
+      const rfqWithBreakdown = {
+        ...mockRFQs[0],
+        quotes: [
+          {
+            ...mockRFQs[0].quotes[0],
+            aiMatchScore: 70,
+            scoreBreakdown: {
+              price: { score: 100, weighted: 45, maxWeight: 45 },
+              leadTime: { score: 0, weighted: 0, maxWeight: 30 },
+              warranty: { score: 100, weighted: 25, maxWeight: 25 },
+            },
+          },
+        ],
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        rfqs: [rfqWithBreakdown],
+        selectedRFQForMatrix: rfqWithBreakdown,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        showToast: mockShowToast,
+        openRFQDeepDive: mockOpenRFQDeepDive,
+        deepDiveModalOpen: false,
+        setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+        selectedRFQForDeepDive: null,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+      expect(screen.getByText('70%')).toBeInTheDocument();
+      expect(screen.getByText('P: 45')).toBeInTheDocument();
+      expect(screen.getByText('L: 0')).toBeInTheDocument();
+      expect(screen.getByText('W: 25')).toBeInTheDocument();
+    });
   });
 });

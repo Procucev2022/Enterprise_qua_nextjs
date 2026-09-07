@@ -66,6 +66,11 @@ export interface QuoteComparison {
   complianceStatus: 'Fully Compliant' | 'Minor Exception' | 'Pending Review';
   paymentTerms: string;
   remarks: string;
+  scoreBreakdown?: {
+    price: { score: number; weighted: number; maxWeight: number };
+    leadTime: { score: number; weighted: number; maxWeight: number };
+    warranty: { score: number; weighted: number; maxWeight: number };
+  };
 }
 
 export type FollowUpChannel = 'call' | 'whatsapp' | 'sms';
@@ -319,6 +324,19 @@ export interface RFQCreatePayload {
   status: string;
   source: RFQSource;
   sourceFileName?: string;
+  /**
+   * Address the requisition arrived from, for an emailed RFQ.
+   *
+   * Read out of the message server-side rather than typed by the buyer, so the
+   * recorded origin cannot be attributed to an address no mail was received from.
+   * This was missing from the payload while the wizard was already collecting it,
+   * which is why email provenance never reached the database.
+   */
+  sourceEmail?: string;
+  /**
+   * Target gateway mailbox (e.g. navinchaudhary.dev@gmail.com) for email notification dispatch.
+   */
+  targetGatewayEmail?: string;
   budget: number;
   targetDeliveryDate: string;
   deliveryLocation: string;
@@ -1118,6 +1136,84 @@ export type RFQExtractionReason =
   | 'AI_FAILED'
   | 'NO_ITEMS_FOUND'
   | 'NETWORK';
+
+/** Outcome recorded against one message the autonomous gateway considered. */
+export type EmailGatewayOutcome =
+  | 'INGESTED'
+  | 'SENDER_NOT_ALLOWED'
+  | 'NO_LINE_ITEMS'
+  | 'UNREADABLE'
+  | 'FAILED';
+
+/** One row of the gateway's ingestion ledger. */
+export interface EmailGatewayLogEntry {
+  message_id: string;
+  rfq_id: string | null;
+  rfq_number: string | null;
+  from_address: string | null;
+  subject: string | null;
+  status: EmailGatewayOutcome;
+  detail: string | null;
+  processed_at: string;
+}
+
+/**
+ * State of the autonomous mailbox watcher.
+ *
+ * Carries no credentials — only the account being watched, which the buyer needs
+ * in order to know where to send requisitions.
+ */
+/** Gateway connection state, as reported by the server. */
+export type EmailGatewayConnectionState =
+  | 'ACTIVE_LISTENING'
+  | 'CONNECTION_ERROR'
+  | 'SWITCHED_OFF'
+  | 'NOT_CONFIGURED';
+
+export interface EmailGatewayStatus {
+  enabled: boolean;
+  configured: boolean;
+  watching: boolean;
+  connectionState: EmailGatewayConnectionState;
+  /** The Procucev intake address buyers send their requisition TO. */
+  gatewayAddress: string | null;
+  /** IMAP account the backend collects from. Operational detail, not a destination. */
+  mailboxUser: string | null;
+  /** Mail older than this is never considered, so an existing backlog is left alone. */
+  watchingSince: string;
+  mailbox: string;
+  host: string | null;
+  pollIntervalMs: number;
+  /** Empty means any sender that maps to a registered buyer account. */
+  allowedSenders: string[];
+  allowedDomains: string[];
+  lastPollAt: string | null;
+  lastPollDurationMs: number | null;
+  lastConnectedAt: string | null;
+  lastError: string | null;
+  isPolling: boolean;
+  counts: Partial<Record<EmailGatewayOutcome, number>>;
+  recent: EmailGatewayLogEntry[];
+  /** Status an ingested RFQ is parked in for review. */
+  ingestedStatus: string;
+}
+
+/** Result of one mailbox check. */
+export interface EmailGatewayPollResult {
+  considered: number;
+  ingested: number;
+  pending: number;
+}
+
+export interface RFQEmailMetadata {
+  messageId: string;
+  subject: string;
+  fromAddress: string;
+  fromName: string;
+  toAddress: string;
+  sentAt: string | null;
+  attachmentNames: string[];
+}
 
 /**
  * Document posted to POST /api/rfqs/extract. Spreadsheets are flattened to text

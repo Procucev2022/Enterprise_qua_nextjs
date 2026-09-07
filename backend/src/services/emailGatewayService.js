@@ -1,0 +1,577 @@
+// ==============================================================================
+// AUTONOMOUS EMAIL INGESTION GATEWAY
+// ==============================================================================
+// Watches a mailbox and turns inbound requisitions into RFQs without anyone
+// uploading a file.
+//
+// It owns none of the parsing or extraction logic. A fetched message goes through
+// exactly the same emailIngestionService -> geminiService -> rfqIngestionService
+// path as an `.eml` a buyer uploads by hand, so there is one implementation of
+// "read an email into line items" and both routes cannot drift.
+//
+// THREE DELIBERATE CONSTRAINTS, none of which are incidental:
+//
+//   1. The sender must resolve to an existing buyer account. This is both the
+//      security control and a functional necessity — RFQs are scoped by
+//      buyerAccountId, so a requisition from an unknown address has no owner and
+//      would appear on nobody's dashboard. Without this check, anyone who learns
+//      the intake address could inject RFQs and reach the vendor panel.
+//   2. An ingested RFQ lands in 'Parsing', not 'Quotes Pending'. Nothing has
+//      reviewed it, and the category manager kanban already has a Parsing column
+//      standing empty. Auto-circulating unreviewed inbound mail to vendors is not
+//      something that should happen by default.
+//   3. Idempotence comes from our own ledger, not from the IMAP \Seen flag. See
+//      db/emailGatewayQueries.js for why the flag alone is not enough.
+// ==============================================================================
+
+const { ImapFlow } = require('imapflow');
+const emailIngestionService = require('./emailIngestionService');
+const geminiService = require('./geminiService');
+const rfqIngestionService = require('./rfqIngestionService');
+const storeService = require('./storeService');
+const emailGatewayQueries = require('../db/emailGatewayQueries');
+const { logger } = require('./loggerService');
+const {
+  EMAIL_GATEWAY_CONFIG,
+  EMAIL_GATEWAY_MESSAGES,
+  EMAIL_GATEWAY_STATE,
+  EMAIL_GATEWAY_SMTP_PORTS,
+  EMAIL_INGESTION_STATUS,
+} = require('../config/constants');
+
+const { INGESTION_OUTCOME } = emailGatewayQueries;
+
+/** Live state, reported by getStatus and mutated only by the poll loop. */
+const runtime = {
+  pollTimer: null,
+  isPolling: false,
+  // Mail older than this is never considered. Set when watching begins so an
+  // existing backlog is left alone; see the search call in pollOnce.
+  watchingSince: new Date().toISOString(),
+  lastPollAt: null,
+  lastPollDurationMs: null,
+  lastError: null,
+  lastConnectedAt: null,
+  consideredThisRun: 0,
+  ingestedThisRun: 0,
+};
+
+/**
+ * Resolve gateway configuration from the environment.
+ *
+ * Read on every call rather than captured at import, so a test can vary it and so
+ * a deployment does not need a restart to change the allow-list.
+ */
+function resolveConfig(env = process.env) {
+  const splitList = (value) =>
+    String(value || '')
+      .split(',')
+      .map((entry) => entry.trim().toLowerCase())
+      .filter(Boolean);
+
+  return {
+    enabled: String(env.EMAIL_GATEWAY_ENABLED || '').toLowerCase() === 'true',
+    host: (env.EMAIL_GATEWAY_HOST || '').trim(),
+    port: Number(env.EMAIL_GATEWAY_PORT || 993),
+    secure: String(env.EMAIL_GATEWAY_SECURE || 'true').toLowerCase() !== 'false',
+    // IMAP login. An operational credential — this is the account the backend
+    // authenticates as, and it is not what a buyer needs to know.
+    user: (env.EMAIL_GATEWAY_USER || '').trim(),
+    password: env.EMAIL_GATEWAY_PASSWORD || '',
+    // The Procucev intake address buyers actually send their requisition TO.
+    // Kept separate from the IMAP login because the two are different things and
+    // routinely differ: mail addressed to an alias or shared mailbox such as
+    // client@procucev.com can be collected by a login of intake@procucev.com.
+    // Conflating them is what put a personal Gmail login in front of buyers as
+    // though it were the address to forward requisitions to.
+    address: (env.EMAIL_GATEWAY_ADDRESS || env.EMAIL_GATEWAY_USER || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS).trim(),
+    mailbox: (env.EMAIL_GATEWAY_MAILBOX || 'INBOX').trim(),
+    pollIntervalMs: Math.max(
+      Number(env.EMAIL_GATEWAY_POLL_MS || EMAIL_GATEWAY_CONFIG.DEFAULT_POLL_MS),
+      EMAIL_GATEWAY_CONFIG.MIN_POLL_MS
+    ),
+    maxPerPoll: Math.max(Number(env.EMAIL_GATEWAY_MAX_PER_POLL || EMAIL_GATEWAY_CONFIG.DEFAULT_MAX_PER_POLL), 1),
+    // Optional extra restriction on top of the buyer-account requirement.
+    allowedDomains: splitList(env.EMAIL_GATEWAY_ALLOWED_DOMAINS),
+    allowedSenders: splitList(env.EMAIL_GATEWAY_ALLOWED_SENDERS),
+  };
+}
+
+/** True when enough is configured to attempt a connection. */
+function isConfigured(config = resolveConfig()) {
+  return !!(config.host && config.user && config.password);
+}
+
+/**
+ * Catch the misconfiguration that cannot be diagnosed from the socket error.
+ *
+ * Pointing this at an SMTP host or port fails with
+ * `SSL routines::wrong version number`, which says nothing about the cause. The
+ * check happens before connecting so the panel can name the wrong variable.
+ *
+ * Returns a message, or null when the combination looks sane.
+ */
+function describeConfigurationFault(config = resolveConfig()) {
+  if (/^smtp\./i.test(config.host)) {
+    return EMAIL_GATEWAY_MESSAGES.SMTP_HOST_CONFIGURED.replace('{host}', config.host);
+  }
+  if (EMAIL_GATEWAY_SMTP_PORTS.includes(config.port)) {
+    return EMAIL_GATEWAY_MESSAGES.SMTP_PORT_CONFIGURED.replace('{port}', String(config.port));
+  }
+  return null;
+}
+
+/**
+ * Translate a connection failure into something actionable.
+ *
+ * The raw errors here are OpenSSL and IMAP protocol text — a stack trace
+ * mentioning `SSL routines` tells the reader nothing about which environment
+ * variable is wrong. The original message is still logged; only the panel gets
+ * this version.
+ */
+function describeConnectionError(err) {
+  const message = String((err && err.message) || '');
+
+  if (/wrong version number|packet length too long|record layer/i.test(message)) {
+    return EMAIL_GATEWAY_MESSAGES.TLS_VERSION_MISMATCH;
+  }
+  if (/AUTHENTICATIONFAILED|Invalid credentials|Username and Password not accepted|LOGIN failed/i.test(message)) {
+    return EMAIL_GATEWAY_MESSAGES.AUTH_REJECTED;
+  }
+  if (/ENOTFOUND|EAI_AGAIN|getaddrinfo/i.test(message)) {
+    return EMAIL_GATEWAY_MESSAGES.HOST_UNRESOLVED;
+  }
+  if (/ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ECONNRESET|timed out/i.test(message)) {
+    return EMAIL_GATEWAY_MESSAGES.HOST_UNREACHABLE;
+  }
+  if (/certificate|CERT_|self.signed|altname/i.test(message)) {
+    return EMAIL_GATEWAY_MESSAGES.CERTIFICATE_REJECTED;
+  }
+  return EMAIL_GATEWAY_MESSAGES.CONNECTION_FAILED_FALLBACK;
+}
+
+/**
+ * Which of the four states the panel should show.
+ *
+ * A configuration fault counts as a connection error even before a connection has
+ * been attempted, because the outcome is already known and the buyer needs to be
+ * told the gateway is not going to work.
+ */
+function resolveConnectionState(config, { lastError, watching } = {}) {
+  if (!isConfigured(config)) return EMAIL_GATEWAY_STATE.NOT_CONFIGURED;
+  if (describeConfigurationFault(config)) return EMAIL_GATEWAY_STATE.CONNECTION_ERROR;
+  if (!config.enabled) return EMAIL_GATEWAY_STATE.SWITCHED_OFF;
+  if (lastError) return EMAIL_GATEWAY_STATE.CONNECTION_ERROR;
+  if (watching) return EMAIL_GATEWAY_STATE.ACTIVE_LISTENING;
+  return EMAIL_GATEWAY_STATE.SWITCHED_OFF;
+}
+
+/**
+ * May a requisition from this address be ingested?
+ *
+ * Order matters. An explicit sender allow-list, when set, is the whole rule — that
+ * is the tightest configuration and it should not be widened by the account lookup
+ * below. Otherwise the address must belong to a buyer account, optionally narrowed
+ * further to a set of domains.
+ *
+ * Returns `{ allowed, reason, buyerAccount }`. `buyerAccount` is needed by the
+ * caller regardless, to scope the RFQ.
+ */
+function resolveSenderAuthorisation(fromAddress, config = resolveConfig()) {
+  const address = String(fromAddress || '').trim().toLowerCase();
+  if (!address) {
+    return { allowed: false, reason: EMAIL_GATEWAY_MESSAGES.SENDER_MISSING, buyerAccount: null };
+  }
+
+  const buyerAccount = storeService.getBuyerAccountByEmail(address) || null;
+
+  if (config.allowedSenders.length > 0) {
+    if (!config.allowedSenders.includes(address)) {
+      return {
+        allowed: false,
+        reason: EMAIL_GATEWAY_MESSAGES.SENDER_NOT_LISTED.replace('{address}', address),
+        buyerAccount,
+      };
+    }
+    // Still needs an owning account: an RFQ with no buyerAccountId is invisible.
+    if (!buyerAccount) {
+      return {
+        allowed: false,
+        reason: EMAIL_GATEWAY_MESSAGES.SENDER_NO_ACCOUNT.replace('{address}', address),
+        buyerAccount: null,
+      };
+    }
+    return { allowed: true, reason: null, buyerAccount };
+  }
+
+  if (config.allowedDomains.length > 0) {
+    const domain = address.split('@')[1] || '';
+    if (!config.allowedDomains.includes(domain)) {
+      return {
+        allowed: false,
+        reason: EMAIL_GATEWAY_MESSAGES.DOMAIN_NOT_LISTED.replace('{domain}', domain || address),
+        buyerAccount,
+      };
+    }
+  }
+
+  if (!buyerAccount) {
+    return {
+      allowed: false,
+      reason: EMAIL_GATEWAY_MESSAGES.SENDER_NO_ACCOUNT.replace('{address}', address),
+      buyerAccount: null,
+    };
+  }
+
+  return { allowed: true, reason: null, buyerAccount };
+}
+
+/**
+ * Turn one raw message into an RFQ.
+ *
+ * Resolves to the ledger outcome rather than throwing, so one unusable message
+ * cannot abort the rest of the batch. Every path records why.
+ */
+async function processMessage(rawSource, config = resolveConfig()) {
+  const prepared = await emailIngestionService.prepareEmailForExtraction({
+    // The gateway holds raw bytes; prepareEmailForExtraction takes base64, the
+    // same shape the upload route provides.
+    fileName: EMAIL_GATEWAY_CONFIG.SYNTHETIC_FILE_NAME,
+    content: Buffer.isBuffer(rawSource) ? rawSource.toString('base64') : String(rawSource || ''),
+  });
+
+  if (prepared.status !== EMAIL_INGESTION_STATUS.READY) {
+    return {
+      status: INGESTION_OUTCOME.UNREADABLE,
+      detail: EMAIL_GATEWAY_MESSAGES.PREPARE_REFUSED.replace('{status}', prepared.status),
+      message: prepared.message || null,
+    };
+  }
+
+  const { message } = prepared;
+
+  const authorisation = resolveSenderAuthorisation(message.fromAddress, config);
+  if (!authorisation.allowed) {
+    return { status: INGESTION_OUTCOME.SENDER_NOT_ALLOWED, detail: authorisation.reason, message };
+  }
+
+  const extraction = await geminiService.extractLineItems(prepared.extractionInput);
+  if (extraction.status !== geminiService.EXTRACTION_STATUS.SUCCESS) {
+    return {
+      status: INGESTION_OUTCOME.NO_LINE_ITEMS,
+      detail: EMAIL_GATEWAY_MESSAGES.EXTRACTION_FAILED.replace('{status}', extraction.status),
+      message,
+    };
+  }
+
+  const { draft, classification } = await rfqIngestionService.buildRFQDraft({
+    lineItems: extraction.lineItems,
+    title: extraction.documentTitle || message.subject,
+    category: extraction.category,
+    estimatedBudget: extraction.estimatedBudget,
+    source: 'email_gateway',
+    sourceEmail: message.fromAddress,
+  });
+
+  if (classification.accepted === 0) {
+    return {
+      status: INGESTION_OUTCOME.NO_LINE_ITEMS,
+      detail: EMAIL_GATEWAY_MESSAGES.NO_ITEMS_ACCEPTED,
+      message,
+    };
+  }
+
+  const created = storeService.createRFQ(
+    {
+      title: draft.title,
+      category: draft.category,
+      sourcingMode: EMAIL_GATEWAY_CONFIG.INGESTED_SOURCING_MODE,
+      // Held for review rather than circulated. Nothing has checked this yet.
+      status: EMAIL_GATEWAY_CONFIG.INGESTED_STATUS,
+      source: 'email_gateway',
+      sourceEmail: message.fromAddress,
+      sourceFileName: message.subject || EMAIL_GATEWAY_CONFIG.SYNTHETIC_FILE_NAME,
+      raisedByEmail: message.fromAddress,
+      budget: draft.estimatedBudget || 0,
+      targetDeliveryDate: draft.targetDeliveryDate,
+      extractedEntities: draft.extractedEntities,
+      attachments: [],
+    },
+    authorisation.buyerAccount
+  );
+
+  logger.audit(
+    `RFQ ${created.rfqNumber} raised from inbound email`,
+    message.fromAddress,
+    { rfqId: created.id, messageId: message.messageId, accepted: classification.accepted }
+  );
+
+  return {
+    status: INGESTION_OUTCOME.INGESTED,
+    detail: EMAIL_GATEWAY_MESSAGES.INGESTED_DETAIL.replace(
+      '{count}',
+      String(classification.accepted)
+    ).replace('{needsReview}', String(classification.needsReview)),
+    message,
+    rfq: created,
+  };
+}
+
+/**
+ * Read the mailbox once and ingest whatever is new.
+ *
+ * Only unseen messages are fetched, and only up to `maxPerPoll` per run so a
+ * backlog cannot spend an unbounded amount of time (and Gemini quota) in one
+ * pass — the remainder is picked up next tick.
+ *
+ * A message is marked \Seen only after its outcome is in the ledger. Doing it the
+ * other way round would lose the requisition entirely if the ledger write failed.
+ *
+ * Overlapping runs are refused rather than queued: a slow extraction should not
+ * cause two passes to fetch the same unseen message concurrently.
+ */
+async function pollOnce(config = resolveConfig()) {
+  if (runtime.isPolling) {
+    return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.POLL_ALREADY_RUNNING };
+  }
+  if (!isConfigured(config)) {
+    return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
+  }
+
+  // Refused before opening a socket: the failure is already certain, and the
+  // socket error it would produce names none of the offending variables.
+  const configurationFault = describeConfigurationFault(config);
+  if (configurationFault) {
+    runtime.lastError = configurationFault;
+    logger.error(
+      'Email gateway is misconfigured and was not contacted',
+      new Error(configurationFault),
+      'EMAIL_GATEWAY'
+    );
+    return { skipped: true, reason: configurationFault };
+  }
+
+  runtime.isPolling = true;
+  runtime.consideredThisRun = 0;
+  runtime.ingestedThisRun = 0;
+  const startedAt = Date.now();
+  const outcomes = [];
+
+  const client = new emailGateway.ImapFlow({
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    auth: { user: config.user, pass: config.password },
+    // The library logs every protocol frame at info level otherwise, which buries
+    // app.log and would include message headers.
+    logger: false,
+  });
+
+  try {
+    await client.connect();
+    runtime.lastConnectedAt = new Date().toISOString();
+    const lock = await client.getMailboxLock(config.mailbox);
+    try {
+      // Bounded by when the gateway started watching, not just by the unseen
+      // flag. A real mailbox has a backlog — the account this was first pointed at
+      // had 110 unread messages — and without this bound the gateway would work
+      // through years of unrelated mail, spend its per-poll budget on it, and
+      // never reach the requisition that just arrived.
+      const unseenUids = await client.search({ seen: false, since: new Date(runtime.watchingSince) });
+      const batch = (unseenUids || []).slice(0, config.maxPerPoll);
+
+      for (const uid of batch) {
+        runtime.consideredThisRun += 1;
+        let messageId = null;
+        try {
+          const fetched = await client.fetchOne(String(uid), { source: true, envelope: true });
+          if (!fetched || !fetched.source) {
+            outcomes.push({ uid, status: INGESTION_OUTCOME.UNREADABLE });
+            continue;
+          }
+          messageId = fetched.envelope && fetched.envelope.messageId ? fetched.envelope.messageId : null;
+
+          // Ours is the authoritative dedupe check; see emailGatewayQueries.
+          if (messageId && (await emailGatewayQueries.hasProcessed(messageId))) {
+            await client.messageFlagsAdd(String(uid), ['\\Seen']);
+            outcomes.push({ uid, messageId, status: EMAIL_GATEWAY_MESSAGES.ALREADY_PROCESSED });
+            continue;
+          }
+
+          const result = await emailGateway.processMessage(fetched.source, config);
+          const resolvedMessageId =
+            messageId || (result.message && result.message.messageId) || `uid-${uid}@${config.mailbox}`;
+
+          await emailGatewayQueries.recordProcessed({
+            messageId: resolvedMessageId,
+            status: result.status,
+            detail: result.detail,
+            fromAddress: result.message ? result.message.fromAddress : null,
+            subject: result.message ? result.message.subject : null,
+            rfqId: result.rfq ? result.rfq.id : null,
+            rfqNumber: result.rfq ? result.rfq.rfqNumber : null,
+          });
+
+          if (result.status === INGESTION_OUTCOME.INGESTED) {
+            runtime.ingestedThisRun += 1;
+            // Marked read only for a message we actually acted on, and only after
+            // the ledger write, so a failed write leaves it to be retried. Mail
+            // the gateway rejected is left untouched: it belongs to the mailbox
+            // owner, not to us, and the ledger already stops it being
+            // reconsidered on the next poll.
+            await client.messageFlagsAdd(String(uid), ['\\Seen']);
+          }
+          outcomes.push({ uid, messageId: resolvedMessageId, status: result.status });
+        } catch (err) {
+          logger.error('Inbound message could not be processed', err, 'EMAIL_GATEWAY');
+          if (messageId) {
+            await emailGatewayQueries.recordProcessed({
+              messageId,
+              status: INGESTION_OUTCOME.FAILED,
+              detail: err.message,
+            });
+          }
+          outcomes.push({ uid, messageId, status: INGESTION_OUTCOME.FAILED });
+        }
+      }
+
+      runtime.lastError = null;
+      return {
+        skipped: false,
+        considered: runtime.consideredThisRun,
+        ingested: runtime.ingestedThisRun,
+        pending: Math.max((unseenUids || []).length - batch.length, 0),
+        outcomes,
+      };
+    } finally {
+      lock.release();
+    }
+  } catch (err) {
+    // A connection or authentication failure. Reported through status rather than
+    // thrown, so the panel can explain it and the interval keeps trying. The raw
+    // OpenSSL/IMAP text goes to the log; the panel gets the actionable version.
+    runtime.lastError = err.message;
+    logger.error(`Email gateway poll failed: ${err.message}`, err, 'EMAIL_GATEWAY');
+    return { skipped: false, error: err.message, considered: runtime.consideredThisRun, outcomes };
+  } finally {
+    try {
+      await client.logout();
+    } catch {
+      // Already disconnected; nothing useful to do.
+    }
+    runtime.isPolling = false;
+    runtime.lastPollAt = new Date().toISOString();
+    runtime.lastPollDurationMs = Date.now() - startedAt;
+  }
+}
+
+/**
+ * Begin polling on an interval.
+ *
+ * The first backend background task, so it is deliberately conservative: it
+ * refuses to start twice, does nothing when unconfigured or disabled, and unrefs
+ * the timer so it can never hold the process open on shutdown.
+ */
+function startPolling(config = resolveConfig()) {
+  if (runtime.pollTimer) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.ALREADY_STARTED };
+  if (!config.enabled) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.DISABLED };
+  if (!isConfigured(config)) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
+
+  // Surfaced at boot rather than on the first tick, so a bad host or port is in
+  // the startup log instead of appearing two minutes later as a TLS error.
+  const configurationFault = describeConfigurationFault(config);
+  if (configurationFault) {
+    runtime.lastError = configurationFault;
+    return { started: false, reason: configurationFault };
+  }
+
+  // Anchored here so only mail arriving from now on is considered.
+  runtime.watchingSince = new Date().toISOString();
+  runtime.pollTimer = setInterval(() => {
+    emailGateway.pollOnce(resolveConfig()).catch((err) => {
+      logger.error('Email gateway interval poll threw', err, 'EMAIL_GATEWAY');
+    });
+  }, config.pollIntervalMs);
+  if (typeof runtime.pollTimer.unref === 'function') runtime.pollTimer.unref();
+
+  logger.info(
+    `Email ingestion gateway watching ${config.user} every ${Math.round(config.pollIntervalMs / 1000)}s`,
+    { mailbox: config.mailbox, host: config.host },
+    'EMAIL_GATEWAY'
+  );
+  return { started: true, pollIntervalMs: config.pollIntervalMs };
+}
+
+/** Stop the interval. Safe to call when it was never started. */
+function stopPolling() {
+  if (!runtime.pollTimer) return false;
+  clearInterval(runtime.pollTimer);
+  runtime.pollTimer = null;
+  return true;
+}
+
+/**
+ * Everything the gateway panel needs.
+ *
+ * Credentials are never included — only the account being watched, which the buyer
+ * has to see to know which address to forward requisitions to.
+ */
+async function getStatus() {
+  const config = resolveConfig();
+  const configured = isConfigured(config);
+
+  const configurationFault = configured ? describeConfigurationFault(config) : null;
+  // A configuration fault is reported as the last error even before a connection
+  // has been tried, because the outcome is already known.
+  const lastError = configurationFault || runtime.lastError;
+
+  return {
+    enabled: config.enabled,
+    configured,
+    watching: !!runtime.pollTimer,
+    connectionState: resolveConnectionState(config, { lastError, watching: !!runtime.pollTimer }),
+    // What a buyer addresses their requisition to.
+    gatewayAddress: config.address || null,
+    // The IMAP account the backend reads it from. Operational detail, shown as
+    // such rather than presented to the buyer as a destination.
+    mailboxUser: config.user || null,
+    mailbox: config.mailbox,
+    host: config.host || null,
+    pollIntervalMs: config.pollIntervalMs,
+    // Empty means "any address that maps to a buyer account", which is the
+    // baseline rule and worth stating explicitly in the panel.
+    allowedSenders: config.allowedSenders,
+    allowedDomains: config.allowedDomains,
+    watchingSince: runtime.watchingSince,
+    lastPollAt: runtime.lastPollAt,
+    lastPollDurationMs: runtime.lastPollDurationMs,
+    lastConnectedAt: runtime.lastConnectedAt,
+    lastError,
+    isPolling: runtime.isPolling,
+    counts: configured ? await emailGatewayQueries.countsByStatus() : {},
+    recent: configured ? await emailGatewayQueries.listRecent() : [],
+    // So the panel can say where an ingested RFQ ends up without hardcoding it.
+    ingestedStatus: EMAIL_GATEWAY_CONFIG.INGESTED_STATUS,
+  };
+}
+
+// Mutable holder, like viewModule in db/view.js, so the interval callback and
+// pollOnce resolve their collaborators at call time and stay substitutable.
+const emailGateway = {
+  runtime,
+  INGESTION_OUTCOME,
+  resolveConfig,
+  isConfigured,
+  describeConfigurationFault,
+  describeConnectionError,
+  resolveConnectionState,
+  resolveSenderAuthorisation,
+  processMessage,
+  pollOnce,
+  startPolling,
+  stopPolling,
+  getStatus,
+  ImapFlow,
+};
+
+module.exports = emailGateway;

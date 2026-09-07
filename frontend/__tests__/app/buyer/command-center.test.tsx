@@ -79,7 +79,7 @@ describe('app/buyer/command-center.tsx', () => {
       sourcingMode: 'mode_3',
       quotesCount: 5,
       budget: 800000,
-      source: 'email_upload',
+      source: 'manual_entry',
       sourceFileName: 'Specs.eml',
       extractedEntities: [],
       quotes: [],
@@ -261,12 +261,12 @@ describe('app/buyer/command-center.tsx', () => {
     expect(screen.getByText('Titanium Valves')).toBeInTheDocument();
     expect(screen.queryByText('Centrifugal Slurry Pumps')).not.toBeInTheDocument();
 
-    // Click Web Portal filter
-    fireEvent.click(screen.getByText(/Web Portal \(2\)/i));
+    // Click AI RFQ Create filter
+    fireEvent.click(screen.getByText(/AI RFQ Create \(2\)/i));
     expect(screen.getByText('Centrifugal Slurry Pumps')).toBeInTheDocument();
 
-    // Click Email Upload filter
-    fireEvent.click(screen.getByText(/Email Upload \(1\)/i));
+    // Click Manual RFQ filter
+    fireEvent.click(screen.getByText(/Manual RFQ \(1\)/i));
     expect(screen.getByText('Electrical Transformers')).toBeInTheDocument();
 
     // Click All Sources

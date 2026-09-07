@@ -21,23 +21,31 @@ function evaluateQuotes(quotes = []) {
     // Price Score: Inverse ratio to minimum price
     const priceScore = currentPrice > 0 ? Math.min(100, Math.round((minPrice / currentPrice) * 100)) : 80;
     
-    // Lead time score (faster is better)
-    const leadTime = Number(q.leadTimeDays || 14);
-    const leadTimeScore = Math.max(60, Math.min(100, 100 - leadTime * 1.5));
+    // Lead time score (faster is better; decays to 0 for excessive delays)
+    const leadTime = Number(q.leadTimeDays !== undefined && q.leadTimeDays !== null ? q.leadTimeDays : 14);
+    const leadTimeScore = Math.max(0, Math.min(100, Math.round(100 - leadTime * 2)));
 
-    // Warranty score
-    const warranty = Number(q.warrantyYears || 1);
-    const warrantyScore = Math.min(100, 70 + warranty * 10);
+    // Warranty score (more years of coverage yields higher score)
+    const warranty = Number(q.warrantyYears !== undefined && q.warrantyYears !== null ? q.warrantyYears : 1);
+    const warrantyScore = Math.min(100, Math.max(0, 50 + warranty * 10));
 
-    // Composite AI Match Score
-    const aiMatchScore = Math.round(priceScore * 0.45 + leadTimeScore * 0.3 + warrantyScore * 0.25);
+    // Weighted composite AI Match Score
+    const priceWeight = Math.round(priceScore * 0.45);
+    const leadTimeWeight = Math.round(leadTimeScore * 0.3);
+    const warrantyWeight = Math.round(warrantyScore * 0.25);
+    const aiMatchScore = Math.min(100, Math.max(0, priceWeight + leadTimeWeight + warrantyWeight));
 
     return {
       ...q,
       isBestPrice,
-      aiMatchScore: q.aiMatchScore || aiMatchScore,
-      complianceStatus: q.complianceStatus || 'Fully Compliant',
-      warrantyYears: q.warrantyYears || 2,
+      aiMatchScore,
+      scoreBreakdown: {
+        price: { score: priceScore, weighted: priceWeight, maxWeight: 45 },
+        leadTime: { score: leadTimeScore, weighted: leadTimeWeight, maxWeight: 30 },
+        warranty: { score: warrantyScore, weighted: warrantyWeight, maxWeight: 25 },
+      },
+      complianceStatus: q.complianceStatus || 'Pending Review',
+      warrantyYears: q.warrantyYears !== undefined && q.warrantyYears !== null ? q.warrantyYears : 2,
     };
   });
 }

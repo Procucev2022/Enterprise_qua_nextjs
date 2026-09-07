@@ -46,6 +46,65 @@ function buildOtpEmail(to, code, expiresInSeconds) {
   };
 }
 
+function buildRequisitionEmail(to, rfq = {}, fromEmail = '') {
+  const safeRfq = rfq || {};
+  const lineItems = Array.isArray(safeRfq.extractedEntities)
+    ? safeRfq.extractedEntities
+    : Array.isArray(safeRfq.items)
+      ? safeRfq.items
+      : [];
+  const lineItemsHtml = lineItems.length > 0
+    ? lineItems.map((item, index) => `
+        <tr style="border-bottom: 1px solid #e2e8f0;">
+          <td style="padding: 10px; font-weight: bold;">${index + 1}. ${item.itemName || item.name || 'Line Item'}</td>
+          <td style="padding: 10px; text-align: center;">${item.quantity || 1} ${item.unit || item.uom || 'Units'}</td>
+          <td style="padding: 10px; font-size: 12px; color: #475569;">${item.technicalSpecs || item.specs || item.description || '-'}</td>
+        </tr>
+      `).join('')
+    : `<tr><td colspan="3" style="padding: 10px; color: #64748b;">No specific line items itemized.</td></tr>`;
+
+  return {
+    from: process.env.SMTP_USER || 'no-reply@procucev.com',
+    to: to || 'navinchaudhary.dev@gmail.com',
+    replyTo: fromEmail || safeRfq.sourceEmail || undefined,
+    subject: `[Procucev Requisition] ${safeRfq.title || 'New Inbound Requisition'} (${safeRfq.rfqNumber || 'Draft'})`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #1e293b; line-height: 1.6;">
+        <div style="background: #0f172a; padding: 20px; border-radius: 8px 8px 0 0; color: white;">
+          <h2 style="margin: 0; font-size: 18px; letter-spacing: 0.5px;">PROCUCEV ENTERPRISE</h2>
+          <p style="margin: 4px 0 0 0; opacity: 0.8; font-size: 13px;">Autonomous Requisition Ingestion Notification</p>
+        </div>
+        <div style="padding: 20px; border: 1px solid #e2e8f0; border-top: none; background: #ffffff; border-radius: 0 0 8px 8px;">
+          <div style="background: #f8fafc; padding: 14px; border-radius: 6px; margin-bottom: 18px; border-left: 4px solid #0284c7;">
+            <p style="margin: 0; font-size: 13px;"><strong>From (Buyer / Plant Engineer):</strong> ${fromEmail || rfq.sourceEmail || 'Buyer'}</p>
+            <p style="margin: 4px 0 0 0; font-size: 13px;"><strong>RFQ Number:</strong> <span style="font-family: monospace; color: #0284c7; font-weight: bold;">${rfq.rfqNumber}</span></p>
+            <p style="margin: 4px 0 0 0; font-size: 13px;"><strong>Category:</strong> ${rfq.category || 'General Procurement'}</p>
+            <p style="margin: 4px 0 0 0; font-size: 13px;"><strong>Target Delivery Date:</strong> ${rfq.targetDeliveryDate || 'Immediate'}</p>
+          </div>
+
+          <h3 style="font-size: 14px; margin: 0 0 10px 0; color: #0f172a; text-transform: uppercase; letter-spacing: 0.5px;">Extracted Line Items</h3>
+          <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px;">
+            <thead>
+              <tr style="background: #f1f5f9; text-align: left; font-size: 11px; text-transform: uppercase; color: #64748b;">
+                <th style="padding: 8px 10px;">Item Description</th>
+                <th style="padding: 8px 10px; text-align: center;">Qty</th>
+                <th style="padding: 8px 10px;">Technical Specs</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${lineItemsHtml}
+            </tbody>
+          </table>
+
+          <div style="padding: 12px; background: #eff6ff; border-radius: 6px; font-size: 12px; color: #1e40af;">
+            ⚡ <strong>Status: Parsing / Held for Category Manager Review.</strong> No vendors have been released yet.
+          </div>
+        </div>
+      </div>
+    `,
+  };
+}
+
 /**
  * Sends the OTP code by email. No-ops (does not throw) when SMTP isn't
  * configured or during test runs, so callers can safely fire-and-forget this.
@@ -66,6 +125,32 @@ async function sendOtpEmail(to, code, expiresInSeconds) {
   return { sent: true, messageId: info.messageId };
 }
 
+/**
+ * Sends a requisition notification email when a buyer creates/ingests an RFQ.
+ */
+async function sendRequisitionNotificationEmail(to, rfq, fromEmail) {
+  if (process.env.NODE_ENV === 'test') {
+    return { sent: false, reason: 'test environment' };
+  }
+
+  const activeTransporter = getTransporter();
+  if (!activeTransporter) {
+    logger.warn('SMTP not configured — requisition notification email not sent', { to, rfqNumber: rfq && rfq.rfqNumber }, 'MAILER_SERVICE');
+    return { sent: false, reason: 'SMTP not configured' };
+  }
+
+  try {
+    const safeRfq = rfq || {};
+    const emailData = buildRequisitionEmail(to, safeRfq, fromEmail);
+    const info = await activeTransporter.sendMail(emailData);
+    logger.info(`Requisition notification email sent to ${to}`, { messageId: info.messageId, rfqNumber: safeRfq.rfqNumber }, 'MAILER_SERVICE');
+    return { sent: true, messageId: info.messageId };
+  } catch (err) {
+    logger.error(`Failed to send requisition email to ${to}`, err, 'MAILER_SERVICE');
+    return { sent: false, error: err.message };
+  }
+}
+
 function isConfigured() {
   return Boolean(process.env.SMTP_USER && process.env.SMTP_PASSWORD);
 }
@@ -73,5 +158,8 @@ function isConfigured() {
 module.exports = {
   getTransporter,
   sendOtpEmail,
+  sendRequisitionNotificationEmail,
+  buildRequisitionEmail,
   isConfigured,
 };
+

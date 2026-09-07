@@ -582,6 +582,158 @@ const RFQ_ATTACHMENT_CONFIG = {
   ID_PATTERN: /^[a-f0-9-]{8,64}$/,
 };
 
+// ==============================================================================
+// EMAIL-TO-RFQ INGESTION
+// ==============================================================================
+// Shapes how an emailed requisition is turned into extractor input. See
+// services/emailIngestionService.js — in particular why workbook attachments are
+// deliberately not parsed server-side.
+const EMAIL_INGESTION_CONFIG = {
+  // RFC822 containers this pipeline reads.
+  EML_PATTERN: /\.eml$/i,
+  // Outlook's Compound File Binary format, which is not RFC822 and is refused
+  // with an instruction to re-export rather than failing silently.
+  MSG_PATTERN: /\.msg$/i,
+  MAX_BYTES: Number(process.env.EMAIL_INGESTION_MAX_BYTES || 15 * 1024 * 1024),
+  MAX_ATTACHMENTS: Number(process.env.EMAIL_INGESTION_MAX_ATTACHMENTS || 10),
+  // Cap on how much of a decoded text attachment is appended, so one oversized
+  // CSV cannot crowd the body out of the extractor's context window.
+  MAX_TEXT_ATTACHMENT_CHARS: Number(process.env.EMAIL_INGESTION_MAX_TEXT_CHARS || 40000),
+  // Decoded inline and appended to the document text.
+  TEXT_ATTACHMENT_MIME_TYPES: ['text/plain', 'text/csv', 'text/tab-separated-values'],
+  // Passed to Gemini as base64. Kept as a subset of GEMINI_INLINE_MIME_TYPES so a
+  // type can never be forwarded that the extractor would then refuse.
+  INLINE_ATTACHMENT_MIME_TYPES: ['application/pdf', 'image/png', 'image/jpeg', 'image/webp'],
+  // A line matching any of these starts the quoted thread beneath a forwarded
+  // requisition; everything from there down is dropped before extraction.
+  QUOTE_MARKERS: [
+    /^\s*-{2,}\s*original message\s*-{2,}\s*$/i,
+    /^\s*-{2,}\s*forwarded message\s*-{2,}\s*$/i,
+    /^\s*_{5,}\s*$/,
+    /^\s*on .+ wrote:\s*$/i,
+    /^\s*from:\s.+\ssent:\s/i,
+    /^\s*>{1,}\s?/,
+  ],
+};
+
+// ==============================================================================
+// AUTONOMOUS EMAIL INGESTION GATEWAY
+// ==============================================================================
+// The mailbox poller. See services/emailGatewayService.js for why an ingested RFQ
+// is held for review rather than circulated.
+const EMAIL_GATEWAY_CONFIG = {
+  DEFAULT_POLL_MS: 120000,
+  // Floor on the interval regardless of configuration. Each poll opens an IMAP
+  // connection and may call Gemini per message, so a misconfigured 1s interval
+  // would burn provider quota and risk the mail host throttling the account.
+  MIN_POLL_MS: 30000,
+  // Cap per pass so a backlog cannot spend unbounded time and quota in one run.
+  DEFAULT_MAX_PER_POLL: 10,
+  // Inbound requisitions are held for a category manager to check. The kanban
+  // already renders this column and nothing else writes to it.
+  INGESTED_STATUS: 'Parsing',
+  // Conservative default: the buyer's own roster only. Widening the vendor pool is
+  // a commercial decision and must not be made by an unattended process.
+  INGESTED_SOURCING_MODE: 'mode_1',
+  // Emails have no file name; this stands in wherever one is recorded.
+  SYNTHETIC_FILE_NAME: 'inbound-email.eml',
+  DEFAULT_GATEWAY_ADDRESS: 'navinchaudhary.dev@gmail.com',
+};
+
+/** Connection state reported to the gateway panel. */
+const EMAIL_GATEWAY_STATE = {
+  ACTIVE_LISTENING: 'ACTIVE_LISTENING',
+  CONNECTION_ERROR: 'CONNECTION_ERROR',
+  SWITCHED_OFF: 'SWITCHED_OFF',
+  NOT_CONFIGURED: 'NOT_CONFIGURED',
+};
+
+/**
+ * Ports that belong to sending mail, not reading it.
+ *
+ * Pointing the gateway at 587 (SMTP submission) with implicit TLS on is what
+ * produced `SSL routines::wrong version number`: 587 opens in plaintext and
+ * upgrades via STARTTLS, so a TLS ClientHello gets a plaintext SMTP greeting
+ * back. Detected explicitly rather than left to fail at the socket.
+ */
+const EMAIL_GATEWAY_SMTP_PORTS = [25, 465, 587, 2525];
+
+/** Buyer-facing detail recorded against each considered message. */
+const EMAIL_GATEWAY_MESSAGES = {
+  // Configuration faults, named precisely because the underlying socket error is
+  // unreadable to anyone who has not seen it before.
+  SMTP_HOST_CONFIGURED:
+    'EMAIL_GATEWAY_HOST is set to {host}, which is a mail sending server. The gateway reads a mailbox, so it needs an IMAP host — use imap.gmail.com for Gmail or outlook.office365.com for Microsoft 365.',
+  SMTP_PORT_CONFIGURED:
+    'EMAIL_GATEWAY_PORT is {port}, which is a mail sending port. IMAP uses 993 with EMAIL_GATEWAY_SECURE=true, or 143 with EMAIL_GATEWAY_SECURE=false.',
+  TLS_VERSION_MISMATCH:
+    'The mail server answered without TLS, so the connection was refused. This is almost always the wrong host or port: IMAP is 993 with EMAIL_GATEWAY_SECURE=true, or 143 with EMAIL_GATEWAY_SECURE=false. Check EMAIL_GATEWAY_HOST is an IMAP host and not an SMTP one.',
+  AUTH_REJECTED:
+    'The mail server rejected the credentials. For Gmail, IMAP must be enabled in Settings > Forwarding and POP/IMAP, and EMAIL_GATEWAY_PASSWORD must be an App Password rather than the account password.',
+  HOST_UNRESOLVED:
+    'EMAIL_GATEWAY_HOST could not be resolved. Check the hostname for a typo and that this machine has DNS and outbound network access.',
+  HOST_UNREACHABLE:
+    'The mail server did not accept a connection on that port. Check EMAIL_GATEWAY_PORT and that outbound IMAP is not blocked by a firewall.',
+  CERTIFICATE_REJECTED:
+    'The mail server presented a certificate that could not be verified. Confirm EMAIL_GATEWAY_HOST matches the certificate, and do not disable TLS to work around it.',
+  CONNECTION_FAILED_FALLBACK:
+    'The mailbox could not be reached. Check EMAIL_GATEWAY_HOST, EMAIL_GATEWAY_PORT and the credentials, then try again.',
+  NOT_CONFIGURED:
+    'The email gateway is not configured. Set EMAIL_GATEWAY_HOST, EMAIL_GATEWAY_USER and EMAIL_GATEWAY_PASSWORD in backend/.env to connect a mailbox.',
+  DISABLED: 'The email gateway is switched off. Set EMAIL_GATEWAY_ENABLED=true to start watching the mailbox.',
+  ALREADY_STARTED: 'The email gateway is already watching the mailbox.',
+  POLL_ALREADY_RUNNING: 'A mailbox check is already in progress.',
+  ALREADY_PROCESSED: 'ALREADY_PROCESSED',
+  SENDER_MISSING: 'The message carried no sender address, so it could not be attributed to a buyer account.',
+  SENDER_NOT_LISTED:
+    'The sender {address} is not on EMAIL_GATEWAY_ALLOWED_SENDERS, so the requisition was not raised.',
+  DOMAIN_NOT_LISTED:
+    'The domain {domain} is not on EMAIL_GATEWAY_ALLOWED_DOMAINS, so the requisition was not raised.',
+  // The baseline rule: without an owning account an RFQ has no buyerAccountId and
+  // would not appear on any dashboard, so this is a functional bar as well as a
+  // security one.
+  SENDER_NO_ACCOUNT:
+    'No buyer account is registered against {address}. Add it as a buyer account before requisitions from that address can be raised.',
+  PREPARE_REFUSED: 'The message could not be read for extraction ({status}).',
+  EXTRACTION_FAILED: 'AI extraction produced no line items ({status}).',
+  NO_ITEMS_ACCEPTED: 'No usable procurement line items were found in the message.',
+  INGESTED_DETAIL: 'Raised with {count} line item(s), {needsReview} needing category review.',
+};
+
+/** Outcome of preparing an email for extraction. */
+const EMAIL_INGESTION_STATUS = {
+  READY: 'READY',
+  NOT_AN_EMAIL: 'NOT_AN_EMAIL',
+  OUTLOOK_MSG_UNSUPPORTED: 'OUTLOOK_MSG_UNSUPPORTED',
+  NO_CONTENT: 'NO_CONTENT',
+  TOO_LARGE: 'TOO_LARGE',
+  UNREADABLE: 'UNREADABLE',
+};
+
+/**
+ * Buyer-facing explanation for each email ingestion refusal.
+ *
+ * Every one names the specific recovery step, per the descriptive-error standard:
+ * re-export the message, send the workbook through the BOQ tab, or key the items.
+ */
+const EMAIL_INGESTION_MESSAGES = {
+  NOT_AN_EMAIL:
+    'That file is not an email message. Upload a .eml file exported from your mail client, or use the BOQ Spreadsheet / Drawing tab for documents.',
+  OUTLOOK_MSG_UNSUPPORTED:
+    'Outlook .msg files cannot be read. In Outlook, open the message and use File > Save As to save it as a .eml file, then upload that instead.',
+  NO_CONTENT:
+    'This email has no readable body and no PDF, image or CSV attachment to extract from. If the requisition is in a spreadsheet, upload it through the BOQ Spreadsheet / Drawing tab.',
+  TOO_LARGE: `That email is larger than the ${Math.floor(
+    Number(process.env.EMAIL_INGESTION_MAX_BYTES || 15 * 1024 * 1024) / (1024 * 1024)
+  )}MB limit. Forward just the requisition without the earlier thread, or upload the attachment on its own.`,
+  UNREADABLE:
+    'This email could not be parsed. Re-export it from your mail client as a .eml file, or add the line items manually.',
+  // Appended when the message did yield line items but also carried an
+  // attachment this pipeline cannot read.
+  SPREADSHEET_ATTACHMENT_SKIPPED:
+    'The attachment {fileNames} was not read. Spreadsheet attachments are not extracted from email — upload it through the BOQ Spreadsheet / Drawing tab to include its line items.',
+};
+
 // Buyer-facing explanation for each extraction outcome. Every one of these ends
 // by pointing at manual line-item entry, because that is the recovery path.
 const EXTRACTION_REASON_MESSAGES = {
@@ -753,6 +905,13 @@ module.exports = {
   GEMINI_CONFIG,
   GEMINI_INLINE_MIME_TYPES,
   EXTRACTION_REASON_MESSAGES,
+  EMAIL_INGESTION_CONFIG,
+  EMAIL_INGESTION_STATUS,
+  EMAIL_INGESTION_MESSAGES,
+  EMAIL_GATEWAY_CONFIG,
+  EMAIL_GATEWAY_MESSAGES,
+  EMAIL_GATEWAY_STATE,
+  EMAIL_GATEWAY_SMTP_PORTS,
   EMAIL_REGEX,
   GSTIN_REGEX,
   GSTIN_MESSAGE,

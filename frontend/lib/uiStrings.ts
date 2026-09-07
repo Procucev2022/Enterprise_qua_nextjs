@@ -362,6 +362,14 @@ export const UI_STRINGS = {
     // offer it back. A storage failure does not stop the RFQ being raised, so the
     // message says exactly what is missing and what still went through.
     attachmentStoreFailedTitle: 'Document Not Attached',
+
+    // Document upload tab. This tab takes documents only — an emailed requisition
+    // is picked up by the autonomous gateway, so no email container is offered here.
+    boqTabLabel: 'BOQ Spreadsheet / Drawing (.xlsx, .pdf, .docx)',
+    processingDocumentLabel: 'Processing Document & Extracting Line-Items with AI OCR...',
+    dropZoneHeading: 'Click to Browse or Drag & Drop RFQ Document / BOQ Spreadsheet',
+    dropZoneHint: 'Supports Excel (.xlsx, .xls), PDF drawings, CSV, and Word specifications (.docx).',
+    extractFooterHint: 'Your document is read by Gemini AI, then you confirm the line items in Step 2.',
     attachmentStoreFailedMessage:
       'The RFQ was created, but {fileName} could not be stored with it, so it will not appear under Supporting Documents. {reason} You can attach it again from the RFQ details screen.',
 
@@ -895,6 +903,141 @@ export const UI_STRINGS = {
 
     // Modal-only affordance, used where the panel is presented as an overlay
     closeAction: 'Close',
+  },
+
+  // ============================================================================
+  // CATEGORY MANAGER KANBAN
+  // ============================================================================
+  // Copy for the Ingested / Parsing column, which is where an email-ingested RFQ
+  // lands. It has had no human review, so the card states its origin, what the
+  // extractor could not place, and who it came from.
+  categoryManagerKanban: {
+    buyerLabel: 'Buyer',
+    majorCategoryLabel: 'Major category',
+    minorCategoryLabel: 'Minor category',
+    itemsLabel: 'Line items',
+    receivedLabel: 'Received',
+    confidenceLabel: 'Avg. extraction confidence',
+    reviewAction: 'Open & Review Categories',
+    needsCategoryReview: '{count} need category',
+    sourceLabels: {
+      email_gateway: 'Email Gateway (Autonomous)',
+      email_upload: 'Email File Upload',
+      web_portal: 'Web Portal',
+      manual_entry: 'Manual Entry',
+    } as Record<string, string>,
+  },
+
+  // ============================================================================
+  // AUTONOMOUS EMAIL INGESTION GATEWAY
+  // ============================================================================
+  // Copy for the Step 1 gateway panel. This replaced a simulator: a textarea with
+  // three hardcoded sample requisitions and a green "Active & Listening" badge
+  // with no connection behind it. Everything here now reflects real state, so the
+  // not-configured and error cases matter as much as the healthy one.
+  emailGateway: {
+    title: 'Autonomous Email Ingestion Gateway',
+    watchingLabel: 'Watching',
+    notWatchingLabel: 'Not watching',
+    offLabel: 'Switched off',
+    notConfiguredLabel: 'Not configured',
+    activeListeningLabel: 'Active & Listening',
+    connectionErrorLabel_state: 'Connection error',
+
+    // How it works. Deliberately stops at Category Manager review: this gateway
+    // does not shortlist or contact vendors, and saying otherwise was the
+    // misleading claim the simulator used to make.
+    howItWorks:
+      'Requisitions emailed to the gateway are automatically extracted and categorized, then sent to the Category Manager for review.',
+    lightsOutTitle: 'Autonomous Lights-Out Ingestion',
+    // The prototype's banner claimed this step also shortlisted vendors and
+    // circulated the RFQ. It does neither: extraction and categorization are
+    // automatic, release to vendors is a Category Manager decision.
+    howItWorksAddressed:
+      'When a requisition arrives from a registered buyer at {address}, the system automatically extracts the line items and assigns major and minor categories, then raises the RFQ for Category Manager review. No vendor is shortlisted or contacted at this stage.',
+
+    // The intake address buyers send TO. Distinct from the IMAP login below,
+    // which is the account the backend reads and is an operational detail.
+    gatewayAddressLabel: 'Send requisitions to',
+    gatewayAddressHint: 'Procucev intake mailbox',
+    mailboxAccountLabel: 'Collected from',
+    checkedEveryLabel: 'Checked every',
+    reviewStatusLabel: 'Ingested RFQs are held in',
+
+    // Worked example, so the direction of the flow cannot be misread.
+    exampleTitle: 'How to send a requisition',
+    exampleFromLabel: 'From',
+    exampleFromValue: 'your registered buyer email',
+    exampleToLabel: 'To',
+    exampleSubjectLabel: 'Subject',
+    exampleSubjectValue: 'RFQ - Industrial Water Pump',
+    exampleBodyLabel: 'Body',
+    exampleBodyValue: 'Line items and specifications, or attach a PDF / CSV',
+
+    // What happens next, and explicitly what does not.
+    nextStepsTitle: 'What happens next',
+    nextStepExtract: 'Line items and major/minor categories are extracted automatically.',
+    nextStepReview: 'The RFQ is created and appears on the Category Manager board for review.',
+    nextStepNoVendors: 'No vendor is contacted from here. Releasing to vendors is the Category Manager\u2019s step.',
+
+    // Who is allowed to raise a requisition by email.
+    allowedAnyAccount:
+      'Any sender registered as a buyer account. A message from an unknown address is recorded and skipped.',
+    allowedSendersLabel: 'Allowed senders',
+    allowedDomainsLabel: 'Allowed domains',
+
+    // Not configured: name the exact variables, since this is a deployment step.
+    setupTitle: 'No mailbox connected',
+    setupBody:
+      'Set EMAIL_GATEWAY_HOST, EMAIL_GATEWAY_USER and EMAIL_GATEWAY_PASSWORD in backend/.env, then set EMAIL_GATEWAY_ENABLED=true and restart the backend.',
+    setupHint:
+      'For Gmail use imap.gmail.com on port 993 with an App Password — a normal account password will be refused.',
+
+    // Manual check
+    checkNowAction: 'Check Mailbox Now',
+    checkingLabel: 'Checking…',
+    checkCompleteTitle: 'Mailbox Checked',
+    checkCompleteMessage: 'Considered {considered} message(s), raised {ingested} RFQ(s). {pending} still queued.',
+    checkFailedTitle: 'Mailbox Check Failed',
+    pollFailed: 'The mailbox could not be checked. Confirm the gateway credentials and that the host is reachable.',
+    statusUnavailable:
+      'The gateway status could not be read. The backend may be starting up — retry in a moment.',
+
+    // Activity ledger
+    recentTitle: 'Recent inbound messages',
+    recentEmpty: 'No inbound messages have been processed yet.',
+    lastCheckedLabel: 'Last checked',
+    neverChecked: 'Never',
+    connectionErrorLabel: 'Last error',
+
+    // Requisition composer form & submission
+    sampleSelectorTitle: 'Select Incoming Email Requisition Sample:',
+    samplePumps: 'Mechanical Pumps & Valves',
+    sampleElectrical: 'Electrical Switchgear',
+    sampleSteel: 'Civil & PEB Steel',
+    fromPlantEngineerLabel: 'FROM (PLANT ENGINEER)',
+    toGatewayLabel: 'TO (ENTERPRISE GATEWAY)',
+    subjectInputLabel: 'SUBJECT',
+    bodyInputLabel: 'EMAIL BODY & LINE-ITEM SPECS',
+    submitAction: 'Autonomous Ingest, Categorize & Auto-Circulate RFQ',
+    submittingAction: 'Ingesting & Processing with AI…',
+    createdSuccessTitle: 'Requisition Ingested & RFQ Created Successfully',
+    createdSuccessSubtitle:
+      'The requisition was processed into line items and saved to the database. It is now queued for Category Manager review.',
+    createdRfqNumberLabel: 'RFQ Number',
+    createdStatusLabel: 'Status',
+    createdItemsLabel: 'Extracted Line Items',
+    createdBudgetLabel: 'Est. Budget',
+    createdStatusValue: 'Ingested · Parsing (Awaiting Category Manager)',
+    sendAnotherAction: 'Submit Another Requisition',
+    viewInKanbanAction: 'View on Category Manager Board',
+
+    // Ledger outcomes, keyed to the server's status values.
+    outcomeIngested: 'RFQ raised',
+    outcomeSenderNotAllowed: 'Sender not allowed',
+    outcomeNoLineItems: 'No line items',
+    outcomeUnreadable: 'Unreadable',
+    outcomeFailed: 'Failed',
   },
 };
 

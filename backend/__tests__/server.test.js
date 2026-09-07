@@ -195,3 +195,60 @@ describe('installCrashHandlers', () => {
     expect(onSpy).toHaveBeenCalledWith('uncaughtException', expect.any(Function));
   });
 });
+
+// ==============================================================================
+// EMAIL GATEWAY STARTUP HOOK
+// ==============================================================================
+// The gateway is the first background task in this backend, so boot must be safe
+// in both directions: it starts when a mailbox is configured, and says why it did
+// not when one is not. Neither case may prevent the server from listening.
+// ==============================================================================
+
+describe('bootstrapServer email gateway hook', () => {
+  const emailGatewayService = require('../src/services/emailGatewayService');
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('reports the reason when the gateway does not start', async () => {
+    jest
+      .spyOn(emailGatewayService, 'startPolling')
+      .mockReturnValue({ started: false, reason: 'no mailbox configured' });
+    const info = jest.spyOn(logger, 'info');
+
+    const server = await bootstrapServer(0);
+    try {
+      expect(info).toHaveBeenCalledWith(
+        expect.stringContaining('no mailbox configured'),
+        expect.anything(),
+        'SERVER'
+      );
+    } finally {
+      server.close();
+    }
+  });
+
+  test('stays quiet when the gateway starts', async () => {
+    jest.spyOn(emailGatewayService, 'startPolling').mockReturnValue({ started: true, pollIntervalMs: 120000 });
+    const info = jest.spyOn(logger, 'info');
+
+    const server = await bootstrapServer(0);
+    try {
+      const notStartedLogs = info.mock.calls.filter(([message]) =>
+        String(message).includes('Email ingestion gateway not started')
+      );
+      expect(notStartedLogs).toHaveLength(0);
+    } finally {
+      server.close();
+    }
+  });
+
+  // A gateway that throws on boot must not stop the server from listening.
+  test('a listening server is returned regardless', async () => {
+    jest.spyOn(emailGatewayService, 'startPolling').mockReturnValue({ started: true });
+    const server = await bootstrapServer(0);
+    expect(server.listening).toBe(true);
+    server.close();
+  });
+});
