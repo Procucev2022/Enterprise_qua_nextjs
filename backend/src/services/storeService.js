@@ -509,11 +509,18 @@ class StoreService {
   // 3. RFQS
   // ==========================================
   getRFQs() {
-    return this.rfqs;
+    return this.rfqs.map((r) => (r.quotes ? { ...r, quotes: evaluateQuotes(r.quotes) } : r));
   }
 
   getRFQById(id) {
-    return this.rfqs.find((r) => r.id === id || r.rfqNumber === id);
+    const rfq = this.rfqs.find((r) => r.id === id || r.rfqNumber === id);
+    if (!rfq) return undefined;
+    return rfq.quotes
+      ? {
+          ...rfq,
+          quotes: evaluateQuotes(rfq.quotes),
+        }
+      : rfq;
   }
 
   createRFQ(rfqData, requestingBuyerAccount = null) {

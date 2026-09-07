@@ -5,7 +5,6 @@ import {
   readAsBase64,
   readAsArrayBuffer,
   buildExtractionRequest,
-  isEmailFileName,
 } from '@/lib/documentExtraction';
 
 // ==============================================================================
@@ -236,34 +235,5 @@ describe('buildExtractionRequest', () => {
     await expect(buildExtractionRequest(file)).resolves.toMatchObject({
       mimeType: 'image/png',
     });
-  });
-});
-
-// ==============================================================================
-// EMAIL CONTAINERS
-// ==============================================================================
-// These do not go through buildExtractionRequest at all. Reading one means MIME
-// multipart parsing and quoted-printable decoding, which is server-side work, so
-// the wizard routes them to a different endpoint. Before this existed an `.eml`
-// fell through to the base64 branch below and was sent up labelled
-// `application/pdf`, which the extractor then refused as an unsupported type.
-// ==============================================================================
-
-describe('isEmailFileName', () => {
-  test.each([
-    ['requisition.eml', true],
-    ['REQUISITION.EML', true],
-    ['Fwd Requisition 2026.eml', true],
-    // Included so it reaches the endpoint and gets a real explanation rather than
-    // the silent unsupported-type refusal it used to produce.
-    ['message.msg', true],
-    ['MESSAGE.MSG', true],
-    ['boq.xlsx', false],
-    ['drawing.pdf', false],
-    ['notes.txt', false],
-    ['email.eml.xlsx', false],
-    ['', false],
-  ])('isEmailFileName(%p) is %p', (name, expected) => {
-    expect(isEmailFileName(name)).toBe(expected);
   });
 });

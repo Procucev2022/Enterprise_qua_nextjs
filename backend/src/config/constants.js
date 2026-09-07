@@ -616,6 +616,53 @@ const EMAIL_INGESTION_CONFIG = {
   ],
 };
 
+// ==============================================================================
+// AUTONOMOUS EMAIL INGESTION GATEWAY
+// ==============================================================================
+// The mailbox poller. See services/emailGatewayService.js for why an ingested RFQ
+// is held for review rather than circulated.
+const EMAIL_GATEWAY_CONFIG = {
+  DEFAULT_POLL_MS: 120000,
+  // Floor on the interval regardless of configuration. Each poll opens an IMAP
+  // connection and may call Gemini per message, so a misconfigured 1s interval
+  // would burn provider quota and risk the mail host throttling the account.
+  MIN_POLL_MS: 30000,
+  // Cap per pass so a backlog cannot spend unbounded time and quota in one run.
+  DEFAULT_MAX_PER_POLL: 10,
+  // Inbound requisitions are held for a category manager to check. The kanban
+  // already renders this column and nothing else writes to it.
+  INGESTED_STATUS: 'Parsing',
+  // Conservative default: the buyer's own roster only. Widening the vendor pool is
+  // a commercial decision and must not be made by an unattended process.
+  INGESTED_SOURCING_MODE: 'mode_1',
+  // Emails have no file name; this stands in wherever one is recorded.
+  SYNTHETIC_FILE_NAME: 'inbound-email.eml',
+};
+
+/** Buyer-facing detail recorded against each considered message. */
+const EMAIL_GATEWAY_MESSAGES = {
+  NOT_CONFIGURED:
+    'The email gateway is not configured. Set EMAIL_GATEWAY_HOST, EMAIL_GATEWAY_USER and EMAIL_GATEWAY_PASSWORD in backend/.env to connect a mailbox.',
+  DISABLED: 'The email gateway is switched off. Set EMAIL_GATEWAY_ENABLED=true to start watching the mailbox.',
+  ALREADY_STARTED: 'The email gateway is already watching the mailbox.',
+  POLL_ALREADY_RUNNING: 'A mailbox check is already in progress.',
+  ALREADY_PROCESSED: 'ALREADY_PROCESSED',
+  SENDER_MISSING: 'The message carried no sender address, so it could not be attributed to a buyer account.',
+  SENDER_NOT_LISTED:
+    'The sender {address} is not on EMAIL_GATEWAY_ALLOWED_SENDERS, so the requisition was not raised.',
+  DOMAIN_NOT_LISTED:
+    'The domain {domain} is not on EMAIL_GATEWAY_ALLOWED_DOMAINS, so the requisition was not raised.',
+  // The baseline rule: without an owning account an RFQ has no buyerAccountId and
+  // would not appear on any dashboard, so this is a functional bar as well as a
+  // security one.
+  SENDER_NO_ACCOUNT:
+    'No buyer account is registered against {address}. Add it as a buyer account before requisitions from that address can be raised.',
+  PREPARE_REFUSED: 'The message could not be read for extraction ({status}).',
+  EXTRACTION_FAILED: 'AI extraction produced no line items ({status}).',
+  NO_ITEMS_ACCEPTED: 'No usable procurement line items were found in the message.',
+  INGESTED_DETAIL: 'Raised with {count} line item(s), {needsReview} needing category review.',
+};
+
 /** Outcome of preparing an email for extraction. */
 const EMAIL_INGESTION_STATUS = {
   READY: 'READY',
@@ -824,6 +871,8 @@ module.exports = {
   EMAIL_INGESTION_CONFIG,
   EMAIL_INGESTION_STATUS,
   EMAIL_INGESTION_MESSAGES,
+  EMAIL_GATEWAY_CONFIG,
+  EMAIL_GATEWAY_MESSAGES,
   EMAIL_REGEX,
   GSTIN_REGEX,
   GSTIN_MESSAGE,

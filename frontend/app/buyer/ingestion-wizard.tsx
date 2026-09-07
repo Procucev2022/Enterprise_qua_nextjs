@@ -8,23 +8,17 @@ import {
   MANUAL_LINE_ITEM_DEFAULTS,
   PINCODE_PATTERN,
   formatFileSize,
-  formatIndianDateTime,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import {
-  extractLineItemsFromDocument,
-  extractLineItemsFromEmail,
-  classifyLineItems,
-  uploadRFQAttachment,
-} from '@/lib/rfqClient';
+import { extractLineItemsFromDocument, classifyLineItems, uploadRFQAttachment } from '@/lib/rfqClient';
 import ManualRFQModal from '@/app/buyer/ManualRFQModal';
-import { buildExtractionRequest, isEmailFileName } from '@/lib/documentExtraction';
+import EmailGatewayPanel from '@/app/buyer/EmailGatewayPanel';
+import { buildExtractionRequest } from '@/lib/documentExtraction';
 import type {
   SourcingMode,
   ExtractedEntity,
   VendorEntry,
   RFQAttachment,
-  RFQEmailMetadata,
   RFQExtractionRequest,
   RFQExtractionResult,
   RFQItem,
@@ -134,11 +128,8 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
   // locked and there would be no way to reach the line-item table.
   /** Whether the manual RFQ entry dialog is showing. */
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
-  const [uploadTab, setUploadTab] = useState<'boq' | 'email_file'>('boq');
-  // Headers of the message the current draft was read from, when the staged file
-  // was an email. Drives the confirmation panel on the review step and the
-  // provenance recorded at dispatch.
-  const [ingestedEmail, setIngestedEmail] = useState<RFQEmailMetadata | null>(null);
+
+
   const [isDraggingDoc, setIsDraggingDoc] = useState(false);
 
   // The staged document plus the outcome of the last AI extraction attempt.
@@ -152,13 +143,6 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-
-  // Email Ingestion Simulator State
-  const [emailSender, setEmailSender] = useState('project.procurement@lt-heavy.com');
-  const [emailSubject, setEmailSubject] = useState('URGENT: Requisition for Centrifugal Water Pumps & Industrial Valves');
-  const [emailBody, setEmailBody] = useState(
-    `Dear Procurement Team,\n\nPlease raise RFQ for immediate delivery to Navi Mumbai Site:\n1. Centrifugal Water Pump 500 GPM (15 HP Motor, SS316 Impeller, ANSI Flanged, 150 PSI) - Qty: 12 Units - Due: 2026-09-15\n2. Flanged Gate Valve 4-inch Class 150 (ASTM A216 WCB Cast Carbon Steel Body) - Qty: 24 Units - Due: 2026-09-18\n\nPlease categorize under appropriate mechanical minor categories and dispatch standard RFQ emails.`
-  );
 
   // Filled from the AI-derived document title, or keyed by the buyer on Step 2.
   const [rfqTitle, setRfqTitle] = useState('');
@@ -282,21 +266,6 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
 
     setIsProcessingDoc(true);
     try {
-      // An email container is parsed server-side: MIME multipart, folded headers
-      // and base64 attachment parts are not readable in the browser. Everything
-      // else is flattened or base64-encoded here as before.
-      if (isEmailFileName(uploadedFile.name)) {
-        const emailResult = await extractLineItemsFromEmail(uploadedFile);
-        setIngestedEmail(emailResult.email ?? null);
-        applyExtraction(emailResult, uploadedFile.name);
-        // Reported after the extraction result so it is not overwritten by it.
-        if (emailResult.success && emailResult.warning) {
-          showToast(EXTRACTION.emailAttachmentSkippedTitle, emailResult.warning, 'warning');
-        }
-        return;
-      }
-
-      setIngestedEmail(null);
       const payload = await buildExtractionRequest(uploadedFile);
       applyExtraction(await extractLineItemsFromDocument(payload), uploadedFile.name);
     } catch {
@@ -309,22 +278,6 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
     }
   };
 
-  /**
-   * Email gateway action: the pasted requisition body is itself the document, so
-   * it goes to the same extraction endpoint as an uploaded file.
-   */
-  const handleExtractEmail = async () => {
-    setIsProcessingDoc(true);
-    try {
-      const documentText = `SUBJECT: ${emailSubject}\n\nFROM: ${emailSender}\n\n${emailBody}`;
-      applyExtraction(
-        await extractLineItemsFromDocument({ fileName: emailSubject || 'requisition-email', documentText }),
-        emailSubject || 'requisition email'
-      );
-    } finally {
-      setIsProcessingDoc(false);
-    }
-  };
 
 
   const handleEntityChange = (id: string, field: keyof ExtractedEntity, value: any) => {
@@ -627,20 +580,10 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
         attachments: sourceAttachments,
         extractedEntities: entities,
         aiScore: selectedMode === 'mode_3' ? 95 : 88,
-        // An uploaded `.eml` is its own intake source, distinct from both the
-        // autonomous gateway and a plain portal upload. The buyer dashboard
-        // already renders and filters on `email_upload`; nothing produced it
-        // before, so that surface was unreachable.
-        source: ingestedEmail
-          ? 'email_upload'
-          : ingestionMethod === 'email'
-            ? 'email_gateway'
-            : ingestionMethod === 'manual'
-              ? 'manual_entry'
-              : 'web_portal',
-        // Taken from the parsed message headers when there is one, so the recorded
-        // origin is the address mail was actually received from.
-        sourceEmail: ingestedEmail ? ingestedEmail.fromAddress : ingestionMethod === 'email' ? emailSender : undefined,
+        // This wizard raises portal and manual RFQs only. `email_gateway` is
+        // stamped by the autonomous gateway service, which creates its RFQs
+        // server-side without going through here.
+        source: ingestionMethod === 'manual' ? 'manual_entry' : 'web_portal',
         sourceFileName: uploadedFileName,
         autoCirculated: false,
       },
@@ -805,28 +748,13 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
             </div>
           ) : ingestionMethod === 'upload' ? (
             <div className="space-y-4">
-              {/* File Upload Subtabs */}
+              {/* This tab is documents only. An emailed requisition is picked up
+                  by the autonomous gateway instead, so there is no email-file
+                  upload here and `.eml` / `.msg` are not offered. */}
               <div className="flex items-center gap-2 border-b border-slate-200 dark:border-gray-800 pb-2">
-                <button
-                  onClick={() => setUploadTab('boq')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                    uploadTab === 'boq'
-                      ? 'bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800'
-                      : 'text-slate-500 hover:text-slate-800 dark:hover:text-gray-200'
-                  }`}
-                >
-                  <FileSpreadsheet size={14} /> BOQ Spreadsheet / Drawing (.xlsx, .pdf, .docx)
-                </button>
-                <button
-                  onClick={() => setUploadTab('email_file')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                    uploadTab === 'email_file'
-                      ? 'bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800'
-                      : 'text-slate-500 hover:text-slate-800 dark:hover:text-gray-200'
-                  }`}
-                >
-                  <FileText size={14} /> Upload Email File (.eml / .msg)
-                </button>
+                <span className="px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                  <FileSpreadsheet size={14} /> {EXTRACTION.boqTabLabel}
+                </span>
               </div>
 
               {/* Hidden file input */}
@@ -834,7 +762,7 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                 type="file"
                 ref={fileInputRef}
                 className="hidden"
-                accept=".xlsx,.xls,.csv,.pdf,.docx,.doc,.eml,.msg,.txt"
+                accept=".xlsx,.xls,.csv,.pdf,.docx,.doc,.txt"
                 onChange={(e) => {
                   const file = e.target.files?.[0];
                   if (file) handleRealFileUpload(file);
@@ -861,19 +789,13 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                 }`}
               >
                 <div className="w-14 h-14 rounded-2xl bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-300 dark:border-indigo-500/40 flex items-center justify-center mx-auto text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
-                  {uploadTab === 'email_file' ? <Mail size={28} /> : <FileSpreadsheet size={28} />}
+                  <FileSpreadsheet size={28} />
                 </div>
                 <h3 className="text-sm font-bold text-slate-900 dark:text-white mt-3">
-                  {isProcessingDoc
-                    ? 'Processing Document & Extracting Line-Items with AI OCR...'
-                    : uploadTab === 'email_file'
-                    ? 'Click to Browse or Drag & Drop Requisition Email (.eml / .msg)'
-                    : 'Click to Browse or Drag & Drop RFQ Document / BOQ Spreadsheet'}
+                  {isProcessingDoc ? EXTRACTION.processingDocumentLabel : EXTRACTION.dropZoneHeading}
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-gray-400 mt-1 max-w-md mx-auto">
-                  {uploadTab === 'email_file'
-                    ? 'Extracts email headers, sender specifications, attachments, and line items.'
-                    : 'Supports Excel (.xlsx, .xls), PDF drawings, CSV, and Word specifications (.docx).'}
+                  {EXTRACTION.dropZoneHint}
                 </p>
                 {/* Only shown once a real file is staged; nothing is pre-filled. */}
                 {uploadedFileName && (
@@ -887,110 +809,18 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
               </div>
             </div>
           ) : (
-            <div className="p-5 rounded-2xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 space-y-4 text-xs">
-              <div className="flex items-center justify-between border-b border-slate-200 dark:border-gray-800 pb-3">
-                <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 font-bold">
-                  <Mail size={16} /> Autonomous Email Ingestion Gateway (client@procucev.com)
-                </div>
-                <span className="badge badge-emerald flex items-center gap-1">
-                  <span className="live-dot" style={{ width: 6, height: 6 }} /> Active & Listening
-                </span>
-              </div>
-
-              {/* Banner explaining autonomous lights out */}
-              <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-200 space-y-1">
-                <div className="font-bold flex items-center gap-1.5">
-                  <Zap size={14} className="text-amber-600 dark:text-amber-400" />
-                  Autonomous Lights-Out Ingestion:
-                </div>
-                <p className="text-[11px] text-slate-600 dark:text-gray-300 leading-relaxed">
-                  When an RFQ comes through email to <strong className="text-amber-700 dark:text-amber-300 font-mono">client@procucev.com</strong>, the system <strong>directly completes line-item minor categorization, vendor shortlisting, and email circulation automatically</strong> without requiring manual intervention.
-                </p>
-              </div>
-
-              {/* Sample Email Simulator Box */}
-              <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-3">
-                <div className="flex items-center justify-between text-[11px] flex-wrap gap-2">
-                  <span className="font-bold text-slate-700 dark:text-gray-300">Select Incoming Email Requisition Sample:</span>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <button
-                      onClick={() => {
-                        setEmailSubject('URGENT: Requisition for Centrifugal Water Pumps & Industrial Valves');
-                        setEmailBody('Dear Procurement Team,\n\nPlease raise RFQ for immediate delivery to Navi Mumbai Site:\n1. Centrifugal Water Pump 500 GPM (15 HP Motor, SS316 Impeller, ANSI Flanged, 150 PSI) - Qty: 12 Units - Due: 2026-09-15\n2. Flanged Gate Valve 4-inch Class 150 (ASTM A216 WCB Cast Carbon Steel Body) - Qty: 24 Units - Due: 2026-09-18\n\nPlease categorize under appropriate mechanical minor categories and dispatch standard RFQ emails.');
-                      }}
-                      className="px-2.5 py-1 rounded-md bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 font-semibold text-[10px] border border-indigo-200/50 hover:bg-indigo-100"
-                    >
-                      Mechanical Pumps & Valves
-                    </button>
-                    <button
-                      onClick={() => {
-                        setEmailSubject('URGENT: Requisition for LV Switchgear Panels & MCCB Breakers');
-                        setEmailBody('Dear Procurement Team,\n\nRequisition for Electrical Infrastructure at Pune Plant:\n1. Form 4b Low Voltage Switchgear Panel 4000A (IEC 61439-2 certified, 65kA fault withstand, IP54) - Qty: 2 Sets - Due: 2026-09-28\n2. Molded Case Circuit Breaker MCCB 400A 4P 50kA - Qty: 16 Units - Due: 2026-09-28\n3. XLPE Armoured Copper Cable 3.5C x 240 sq.mm - Qty: 800 Meters - Due: 2026-09-30\n\nPlease auto-categorize and dispatch.');
-                      }}
-                      className="px-2.5 py-1 rounded-md bg-amber-50 dark:bg-amber-950 text-amber-600 dark:text-amber-400 font-semibold text-[10px] border border-amber-200/50 hover:bg-amber-100"
-                    >
-                      Electrical Switchgear
-                    </button>
-                    <button
-                      onClick={() => {
-                        setEmailSubject('URGENT: Structural Steel PEB & High-Grade TMT Rebars');
-                        setEmailBody('Dear Procurement Team,\n\nRequisition for Civil & Warehouse Extension:\n1. Primary Steel Pre-Engineered Building (PEB Structure) - Qty: 140 Metric Tons - Due: 2026-10-05\n2. Fe500D High Strength TMT Rebar (16mm & 25mm) - Qty: 85 Metric Tons - Due: 2026-09-25\n\nPlease dispatch standard emails to civil vendors.');
-                      }}
-                      className="px-2.5 py-1 rounded-md bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 font-semibold text-[10px] border border-emerald-200/50 hover:bg-emerald-100"
-                    >
-                      Civil & PEB Steel
-                    </button>
-                  </div>
-                </div>
-
-                <div className="space-y-2 text-xs">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-[10px] uppercase font-bold text-slate-400">From (Plant Engineer)</label>
-                      <input
-                        type="text"
-                        value={emailSender}
-                        onChange={(e) => setEmailSender(e.target.value)}
-                        className="w-full text-xs font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] uppercase font-bold text-slate-400">To (Enterprise Gateway)</label>
-                      <input
-                        type="text"
-                        value="client@procucev.com"
-                        readOnly
-                        className="w-full text-xs font-mono opacity-80"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-[10px] uppercase font-bold text-slate-400">Subject</label>
-                    <input
-                      type="text"
-                      value={emailSubject}
-                      onChange={(e) => setEmailSubject(e.target.value)}
-                      className="w-full text-xs font-semibold"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] uppercase font-bold text-slate-400">Email Body & Line-Item Specs</label>
-                    <textarea
-                      rows={4}
-                      value={emailBody}
-                      onChange={(e) => setEmailBody(e.target.value)}
-                      className="w-full text-xs font-mono"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
+            /* Autonomous gateway. No extract action here: the gateway raises
+               RFQs on its own and parks them for review, so there is nothing
+               for the buyer to submit on this tab. */
+            <EmailGatewayPanel />
           )}
 
-          {/* The extract footer belongs to the two AI paths only. Manual entry
-              carries its own continue action, and offering "Extract Line Items
-              with AI" beside it would imply a document had been supplied. */}
-          {ingestionMethod !== 'manual' &&
+          {/* The extract footer belongs to the document upload path only. Manual
+              entry carries its own continue action, and the gateway tab has no
+              submit at all — it reports a background process rather than taking
+              input, so an "Extract Line Items with AI" button beside either would
+              imply a document had been supplied. */}
+          {ingestionMethod === 'upload' &&
             (isProcessingDoc ? (
             <div className="p-4 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-500/40 text-center space-y-2">
               <div className="flex items-center justify-center gap-2 text-indigo-700 dark:text-indigo-300 font-bold text-xs">
@@ -1004,14 +834,10 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
             </div>
           ) : (
             <div className="flex items-center justify-between flex-wrap gap-2 pt-2 border-t border-slate-100 dark:border-gray-800">
-              <div className="text-[11px] text-slate-400">
-                {ingestionMethod === 'email'
-                  ? 'The requisition text is read by Gemini AI, then you confirm the line items in Step 2.'
-                  : 'Your document is read by Gemini AI, then you confirm the line items in Step 2.'}
-              </div>
+              <div className="text-[11px] text-slate-400">{EXTRACTION.extractFooterHint}</div>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={ingestionMethod === 'email' ? handleExtractEmail : handleExtractDocument}
+                  onClick={handleExtractDocument}
                   className="btn btn-primary font-bold flex items-center gap-2"
                 >
                   <Sparkles size={14} /> <span>{EXTRACTION.extractAction}</span> <ArrowRight size={15} />
@@ -1037,51 +863,6 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                 Every extracted item is categorized into its standardized <strong>Major Category</strong> and <strong>Minor Category</strong> from the Excel taxonomy.
               </p>
 
-              {/* Which message these line items came from. Shown so the buyer can
-                  confirm the right email was read before dispatching, and so the
-                  recorded sender is visible rather than implied. */}
-              {ingestedEmail && (
-                <div
-                  data-testid="ingested-email-summary"
-                  className="mt-3 p-3 rounded-xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/50 text-[11px] space-y-1"
-                >
-                  <p className="font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
-                    <Mail size={12} /> {EXTRACTION.emailSourceTitle}
-                  </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-0.5 text-slate-600 dark:text-gray-300">
-                    <span>
-                      <strong className="text-slate-500 dark:text-gray-400">
-                        {EXTRACTION.emailSourceFrom}:
-                      </strong>{' '}
-                      <span className="font-mono">
-                        {ingestedEmail.fromName
-                          ? `${ingestedEmail.fromName} <${ingestedEmail.fromAddress}>`
-                          : ingestedEmail.fromAddress}
-                      </span>
-                    </span>
-                    <span>
-                      <strong className="text-slate-500 dark:text-gray-400">
-                        {EXTRACTION.emailSourceReceived}:
-                      </strong>{' '}
-                      {ingestedEmail.sentAt ? formatIndianDateTime(ingestedEmail.sentAt) : '—'}
-                    </span>
-                    <span className="sm:col-span-2">
-                      <strong className="text-slate-500 dark:text-gray-400">
-                        {EXTRACTION.emailSourceSubject}:
-                      </strong>{' '}
-                      {ingestedEmail.subject || '—'}
-                    </span>
-                    <span className="sm:col-span-2">
-                      <strong className="text-slate-500 dark:text-gray-400">
-                        {EXTRACTION.emailSourceAttachments}:
-                      </strong>{' '}
-                      {ingestedEmail.attachmentNames.length > 0
-                        ? ingestedEmail.attachmentNames.join(', ')
-                        : EXTRACTION.emailSourceNoAttachments}
-                    </span>
-                  </div>
-                </div>
-              )}
             </div>
             <div className="flex items-center gap-2">
               <button

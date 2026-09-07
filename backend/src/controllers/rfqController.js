@@ -7,13 +7,11 @@ const geminiService = require('../services/geminiService');
 const rfqAttachmentService = require('../services/rfqAttachmentService');
 const rfqSummaryService = require('../services/rfqSummaryService');
 const { logger } = require('../services/loggerService');
-const emailIngestionService = require('../services/emailIngestionService');
+const emailGatewayService = require('../services/emailGatewayService');
 const {
   VALIDATION_SCHEMAS,
   validatePayload,
   EXTRACTION_REASON_MESSAGES,
-  EMAIL_INGESTION_STATUS,
-  EMAIL_INGESTION_MESSAGES,
   RFQ_ATTACHMENT_CONFIG,
 } = require('../config/constants');
 
@@ -218,6 +216,55 @@ async function ingestRFQ(req, res, next) {
 }
 
 /**
+ * Report the autonomous mailbox gateway's state.
+ *
+ * Diagnostic, and readable by any signed-in user: the buyer needs to know which
+ * address to forward requisitions to and whether anything is being watched.
+ * Credentials are never part of the payload.
+ */
+async function getEmailGatewayStatus(req, res, next) {
+  try {
+    const status = await emailGatewayService.getStatus();
+    return res.json({ success: true, data: status });
+  } catch (err) {
+    logger.error('Error reading email gateway status', err, 'RFQ_CONTROLLER');
+    return next(err);
+  }
+}
+
+/**
+ * Check the mailbox now rather than waiting for the next interval.
+ *
+ * Exists because a two-minute poll makes the feature untestable by hand. The
+ * ingestion ledger still de-duplicates, so pressing this repeatedly cannot raise
+ * the same requisition twice.
+ */
+async function pollEmailGateway(req, res, next) {
+  try {
+    const result = await emailGatewayService.pollOnce();
+
+    if (result.skipped) {
+      // Not a fault: the gateway is off, unconfigured, or a check is already
+      // running. A 409 lets the UI explain rather than report a failure.
+      return res.status(409).json({ success: false, error: result.reason });
+    }
+    if (result.error) {
+      return res.status(502).json({ success: false, error: result.error });
+    }
+
+    logger.info(
+      `Manual mailbox check by ${req.user && req.user.email}: ${result.ingested} of ${result.considered} ingested`,
+      { considered: result.considered, ingested: result.ingested, pending: result.pending },
+      'RFQ_CONTROLLER'
+    );
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    logger.error('Error polling the email gateway', err, 'RFQ_CONTROLLER');
+    return next(err);
+  }
+}
+
+/**
  * Extract RFQ line items from an uploaded document using Gemini, then classify
  * them through the same ingestion pipeline the manual path uses.
  *
@@ -226,111 +273,6 @@ async function ingestRFQ(req, res, next) {
  * The response therefore always carries a machine-readable `reason` so the UI can
  * explain precisely what happened (no API key, unreadable file, nothing found).
  */
-/**
- * Extract RFQ line items from an emailed requisition (`.eml`).
- *
- * The message is parsed server-side into extractor input and then handed to the
- * very same Gemini extraction and taxonomy classification as an uploaded
- * document, so an emailed RFQ is shaped identically to one from the web portal.
- *
- * Provenance is read out of the message, never taken from the request body: the
- * response carries the real sender, subject, sent date and Message-ID, and the
- * draft is stamped `source: 'email_upload'`. That means a buyer cannot attribute
- * an RFQ to an address they did not receive mail from.
- *
- * As with /extract, a refusal is an expected outcome and comes back as a 422 with
- * a machine-readable `reason` the wizard turns into specific recovery copy.
- */
-async function extractRFQFromEmail(req, res, next) {
-  try {
-    const body = req.body || {};
-
-    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.extractRFQFromEmail, body);
-    if (!isValid) {
-      logger.warn('Email extraction rejected: payload validation failed', { errors }, 'RFQ_CONTROLLER');
-      return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
-    }
-
-    const prepared = await emailIngestionService.prepareEmailForExtraction({
-      fileName: body.fileName,
-      content: body.content,
-    });
-
-    if (prepared.status !== EMAIL_INGESTION_STATUS.READY) {
-      logger.warn(
-        `Email could not be prepared for extraction (${prepared.status})`,
-        { fileName: body.fileName, status: prepared.status },
-        'RFQ_CONTROLLER'
-      );
-      return res.status(422).json({
-        success: false,
-        reason: prepared.status,
-        error: EMAIL_INGESTION_MESSAGES[prepared.status] || EMAIL_INGESTION_MESSAGES.UNREADABLE,
-      });
-    }
-
-    const extraction = await geminiService.extractLineItems(prepared.extractionInput);
-
-    if (extraction.status !== geminiService.EXTRACTION_STATUS.SUCCESS) {
-      logger.warn(
-        `Email extraction produced no line items (${extraction.status})`,
-        { fileName: body.fileName, status: extraction.status },
-        'RFQ_CONTROLLER'
-      );
-      return res.status(422).json({
-        success: false,
-        reason: extraction.status,
-        error: EXTRACTION_REASON_MESSAGES[extraction.status] || EXTRACTION_REASON_MESSAGES.AI_FAILED,
-      });
-    }
-
-    const { draft, classification } = await rfqIngestionService.buildRFQDraft({
-      lineItems: extraction.lineItems,
-      title: extraction.documentTitle || prepared.message.subject,
-      category: extraction.category,
-      estimatedBudget: extraction.estimatedBudget,
-      source: 'email_upload',
-      sourceFileName: body.fileName,
-      sourceEmail: prepared.message.fromAddress,
-    });
-
-    if (classification.accepted === 0) {
-      return res.status(422).json({
-        success: false,
-        reason: geminiService.EXTRACTION_STATUS.NO_ITEMS_FOUND,
-        error: EXTRACTION_REASON_MESSAGES.NO_ITEMS_FOUND,
-      });
-    }
-
-    logger.info(
-      `Email extraction complete: ${classification.accepted} line items via ${extraction.model}`,
-      { ...classification, model: extraction.model, fromAddress: prepared.message.fromAddress },
-      'RFQ_CONTROLLER'
-    );
-
-    res.json({
-      success: true,
-      data: draft,
-      classification,
-      email: prepared.message,
-      // Present only when the message carried an attachment this pipeline cannot
-      // read, so the buyer is told rather than left with a short line-item list.
-      ...(prepared.unreadableAttachments.length > 0
-        ? {
-            warning: EMAIL_INGESTION_MESSAGES.SPREADSHEET_ATTACHMENT_SKIPPED.replace(
-              '{fileNames}',
-              prepared.unreadableAttachments.join(', ')
-            ),
-          }
-        : {}),
-      extraction: { model: extraction.model, deliveryDate: extraction.deliveryDate },
-    });
-  } catch (err) {
-    logger.error('Error extracting RFQ line items from email', err, 'RFQ_CONTROLLER');
-    next(err);
-  }
-}
-
 async function extractRFQFromDocument(req, res, next) {
   try {
     const body = req.body || {};
@@ -719,7 +661,8 @@ module.exports = {
   createRFQ,
   ingestRFQ,
   extractRFQFromDocument,
-  extractRFQFromEmail,
+  getEmailGatewayStatus,
+  pollEmailGateway,
   uploadRFQAttachment,
   downloadRFQAttachment,
   updateRFQ,

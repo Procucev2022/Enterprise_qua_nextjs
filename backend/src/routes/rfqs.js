@@ -14,7 +14,11 @@ router.post('/ingest', authenticate, rfqController.ingestRFQ);
 router.post('/extract', authenticate, rfqController.extractRFQFromDocument);
 // An emailed requisition (.eml). Parsed server-side, then run through the same
 // extraction and classification as /extract.
-router.post('/extract-email', authenticate, rfqController.extractRFQFromEmail);
+// Autonomous mailbox gateway. Registered before '/:id' so neither path segment is
+// read as an RFQ identifier. Status is diagnostic; the manual check exists so a
+// buyer can pull the mailbox now instead of waiting for the next interval.
+router.get('/email-gateway/status', authenticate, rfqController.getEmailGatewayStatus);
+router.post('/email-gateway/poll', authenticate, rfqController.pollEmailGateway);
 // Registered before '/:id' so 'attachments' is not read as an RFQ identifier.
 // Both require a session: an attachment is commercial-in-confidence, so the
 // download must never be anonymous.

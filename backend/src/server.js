@@ -1,6 +1,7 @@
 const app = require('./app');
 const pool = require('./db/pool');
 const storeService = require('./services/storeService');
+const emailGatewayService = require('./services/emailGatewayService');
 const { logger } = require('./services/loggerService');
 
 const PORT = process.env.PORT || 4000;
@@ -66,6 +67,13 @@ async function bootstrapServer(port = PORT) {
   await reportDatabaseHealth();
   await storeService.hydrateFromDB();
   const server = app.listen(port);
+  // Started after the store is hydrated: ingesting a requisition needs the buyer
+  // accounts loaded to attribute it to one. No-ops unless a mailbox is configured
+  // and EMAIL_GATEWAY_ENABLED is true.
+  const gateway = emailGatewayService.startPolling();
+  if (!gateway.started) {
+    logger.info(`Email ingestion gateway not started: ${gateway.reason}`, {}, 'SERVER');
+  }
   return server;
 }
 

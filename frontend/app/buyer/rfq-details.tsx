@@ -950,37 +950,50 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete }: RFQDetails
                   </tr>
                 </thead>
                 <tbody>
-                  {quotes.map((quote: QuoteComparison, index: number) => (
-                    <tr
-                      key={quote.vendorId}
-                      className={`border-t border-slate-100 dark:border-gray-800/70 ${
-                        index % 2 === 1 ? 'bg-slate-50/50 dark:bg-gray-950/30' : ''
-                      }`}
-                    >
-                      <td className="px-4 py-2.5 font-semibold text-slate-900 dark:text-white">{quote.vendorName}</td>
-                      <td className="px-4 py-2.5 text-right mono">{formatCurrency(quote.unitPrice)}</td>
-                      <td className="px-4 py-2.5 text-right mono font-bold">{formatCurrency(quote.totalPrice)}</td>
-                      <td className="px-4 py-2.5">{formatString(DETAILS.leadTimeDays, { days: quote.leadTimeDays })}</td>
-                      <td className="px-4 py-2.5 text-slate-500 dark:text-gray-400">{quote.complianceStatus}</td>
-                      <td className="px-4 py-2.5 text-center mono font-bold text-emerald-700 dark:text-emerald-400">
-                        {quote.aiMatchScore}%
-                      </td>
-                    </tr>
-                  ))}
+                  {quotes.map((quote: QuoteComparison, index: number) => {
+                    const pricePts = quote.scoreBreakdown?.price?.weighted ?? Math.round((quote.isBestPrice ? 100 : 80) * 0.45);
+                    const leadPts = quote.scoreBreakdown?.leadTime?.weighted ?? Math.round(Math.max(0, Math.min(100, 100 - (quote.leadTimeDays || 14) * 2)) * 0.3);
+                    const warPts = quote.scoreBreakdown?.warranty?.weighted ?? Math.round(Math.min(100, Math.max(0, 50 + (quote.warrantyYears || 1) * 10)) * 0.25);
+                    const displayScore = quote.aiMatchScore ?? (pricePts + leadPts + warPts);
+
+                    return (
+                      <tr
+                        key={quote.vendorId}
+                        className={`border-t border-slate-100 dark:border-gray-800/70 ${
+                          index % 2 === 1 ? 'bg-slate-50/50 dark:bg-gray-950/30' : ''
+                        }`}
+                      >
+                        <td className="px-4 py-2.5 font-semibold text-slate-900 dark:text-white">{quote.vendorName}</td>
+                        <td className="px-4 py-2.5 text-right mono">{formatCurrency(quote.unitPrice)}</td>
+                        <td className="px-4 py-2.5 text-right mono font-bold">{formatCurrency(quote.totalPrice)}</td>
+                        <td className="px-4 py-2.5">{formatString(DETAILS.leadTimeDays, { days: quote.leadTimeDays })}</td>
+                        <td className="px-4 py-2.5 text-slate-500 dark:text-gray-400">{quote.complianceStatus}</td>
+                        <td className="px-4 py-2.5 text-center mono font-bold text-emerald-700 dark:text-emerald-400">
+                          {displayScore}%
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
 
             {/* Mobile: one card per vendor. */}
             <div className="md:hidden border-t border-slate-200 dark:border-gray-800 divide-y divide-slate-100 dark:divide-gray-800/70">
-              {quotes.map((quote: QuoteComparison) => (
-                <div key={quote.vendorId} className="p-4 space-y-2.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold text-slate-900 dark:text-white">{quote.vendorName}</span>
-                    <span className="mono font-bold text-emerald-700 dark:text-emerald-400 text-xs shrink-0">
-                      {quote.aiMatchScore}% {DETAILS.colMatchScore}
-                    </span>
-                  </div>
+              {quotes.map((quote: QuoteComparison) => {
+                const pricePts = quote.scoreBreakdown?.price?.weighted ?? Math.round((quote.isBestPrice ? 100 : 80) * 0.45);
+                const leadPts = quote.scoreBreakdown?.leadTime?.weighted ?? Math.round(Math.max(0, Math.min(100, 100 - (quote.leadTimeDays || 14) * 2)) * 0.3);
+                const warPts = quote.scoreBreakdown?.warranty?.weighted ?? Math.round(Math.min(100, Math.max(0, 50 + (quote.warrantyYears || 1) * 10)) * 0.25);
+                const displayScore = quote.aiMatchScore ?? (pricePts + leadPts + warPts);
+
+                return (
+                  <div key={quote.vendorId} className="p-4 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-slate-900 dark:text-white">{quote.vendorName}</span>
+                      <span className="mono font-bold text-emerald-700 dark:text-emerald-400 text-xs shrink-0">
+                        {displayScore}% {DETAILS.colMatchScore}
+                      </span>
+                    </div>
                   <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
                     <CardField label={DETAILS.colUnitPrice}>
                       <span className="mono">{formatCurrency(quote.unitPrice)}</span>
@@ -994,7 +1007,8 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete }: RFQDetails
                     <CardField label={DETAILS.colCompliance}>{quote.complianceStatus}</CardField>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </>
         )}

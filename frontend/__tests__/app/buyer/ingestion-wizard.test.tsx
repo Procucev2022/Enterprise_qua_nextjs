@@ -2,12 +2,7 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import IngestionWizard from '@/app/buyer/ingestion-wizard';
 import { AppProvider, useApp } from '@/lib/store';
-import {
-  extractLineItemsFromDocument,
-  extractLineItemsFromEmail,
-  classifyLineItems,
-  uploadRFQAttachment,
-} from '@/lib/rfqClient';
+import { extractLineItemsFromDocument, classifyLineItems, uploadRFQAttachment } from '@/lib/rfqClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { SOURCING_MODES } from '@/lib/constants';
 import { CATEGORY_TAXONOMY_FIXTURE as categoriesData } from '../../../test-fixtures/categoryTaxonomy';
@@ -19,9 +14,35 @@ import type { ExtractedEntity, RFQAttachment, RFQExtractionResult } from '@/lib/
 jest.mock('@/lib/rfqClient', () => ({
   ...jest.requireActual('@/lib/rfqClient'),
   extractLineItemsFromDocument: jest.fn(),
-  extractLineItemsFromEmail: jest.fn(),
   classifyLineItems: jest.fn(),
   uploadRFQAttachment: jest.fn(),
+}));
+// The gateway tab renders EmailGatewayPanel, which reads status on mount. Doubled
+// here so this suite stays about the wizard; the panel has its own suite.
+jest.mock('@/lib/emailGatewayClient', () => ({
+  fetchEmailGatewayStatus: jest.fn().mockResolvedValue({
+    success: true,
+    data: {
+      enabled: false,
+      configured: false,
+      watching: false,
+      mailboxUser: null,
+      mailbox: 'INBOX',
+      host: null,
+      pollIntervalMs: 120000,
+      allowedSenders: [],
+      allowedDomains: [],
+      lastPollAt: null,
+      lastPollDurationMs: null,
+      lastConnectedAt: null,
+      lastError: null,
+      isPolling: false,
+      counts: {},
+      recent: [],
+      ingestedStatus: 'Parsing',
+    },
+  }),
+  pollEmailGateway: jest.fn().mockResolvedValue({ success: true, data: { considered: 0, ingested: 0, pending: 0 } }),
 }));
 
 // The wizard flattens a workbook with header:1, so the mock returns row arrays.
@@ -38,7 +59,6 @@ jest.mock('xlsx', () => ({
 
 const EXTRACTION = UI_STRINGS.rfqExtraction;
 const mockExtract = extractLineItemsFromDocument as jest.Mock;
-const mockExtractEmail = extractLineItemsFromEmail as jest.Mock;
 const mockClassify = classifyLineItems as jest.Mock;
 const mockAttach = uploadRFQAttachment as jest.Mock;
 
@@ -224,18 +244,6 @@ describe('IngestionWizard: Step 1 AI document extraction', () => {
     expect(mockExtract.mock.calls[0][0].mimeType).toBe('application/pdf');
   });
 
-  it('extracts the pasted requisition text on the email gateway path', async () => {
-    renderWizard();
-    fireEvent.click(screen.getByRole('button', { name: /Email Ingestion Gateway/i }));
-
-    clickExtract();
-
-    await waitFor(() => expect(mockExtract).toHaveBeenCalled());
-    const payload = mockExtract.mock.calls[0][0];
-    expect(payload.documentText).toContain('SUBJECT:');
-    expect(payload.documentText).toContain('FROM:');
-    expect(payload.documentText).toContain('Centrifugal Water Pump');
-  });
 });
 
 describe('IngestionWizard: Step 2 review of extracted line items', () => {
@@ -529,27 +537,18 @@ describe('IngestionWizard: Step 3 sourcing mode only', () => {
     expect(toastTitles).not.toContain(EXTRACTION.manualCreatedTitle);
   });
 
-  it('does not attempt an upload when the RFQ came from the email gateway', async () => {
-    // Email ingestion has a pasted body, not a file, so there is nothing to store
-    // and no upload should be attempted.
-    mockExtract.mockResolvedValue(successResult());
+  it('offers no extract action on the gateway tab', async () => {
     renderWizard({ forceSubscription: 'version_3' });
 
     fireEvent.click(screen.getByRole('button', { name: /Email Ingestion Gateway/i }));
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-    proceedToSourcing();
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') }));
 
-    const createCall = await waitFor(() => {
-      const call = (global.fetch as jest.Mock).mock.calls.find(
-        ([url, init]) => /\/api\/rfqs(\?|$)/.test(String(url)) && init?.method === 'POST'
-      );
-      expect(call).toBeDefined();
-      return call;
-    });
+    expect(await screen.findByTestId('gateway-panel')).toBeInTheDocument();
+    // The gateway raises RFQs on its own; there is nothing for the buyer to submit.
+    expect(
+      screen.queryByRole('button', { name: new RegExp(EXTRACTION.extractAction, 'i') })
+    ).not.toBeInTheDocument();
+    expect(mockExtract).not.toHaveBeenCalled();
     expect(mockAttach).not.toHaveBeenCalled();
-    expect(JSON.parse(createCall![1].body).attachments).toEqual([]);
   });
 });
 
@@ -564,14 +563,17 @@ describe('IngestionWizard: Step 1 intake controls', () => {
 
   const dropZone = () => screen.getByText(/Click to Browse or Drag & Drop/i).closest('div') as HTMLElement;
 
-  it('switches between the BOQ and email-file upload tabs', () => {
+  it('offers document upload only, with no email-file sub-tab', () => {
     renderWizard();
 
-    fireEvent.click(screen.getByRole('button', { name: /Upload Email File/i }));
-    expect(screen.getByText(/Drag & Drop Requisition Email/i)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /BOQ Spreadsheet \/ Drawing/i }));
-    expect(screen.getByText(/Drag & Drop RFQ Document/i)).toBeInTheDocument();
+    expect(screen.getByText(EXTRACTION.boqTabLabel)).toBeInTheDocument();
+    expect(screen.getByText(EXTRACTION.dropZoneHeading)).toBeInTheDocument();
+    // An emailed requisition is picked up by the gateway, so no email container is
+    // accepted here and the picker must not advertise one.
+    expect(screen.queryByRole('button', { name: /Upload Email File/i })).not.toBeInTheDocument();
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(input.accept).not.toContain('.eml');
+    expect(input.accept).not.toContain('.msg');
   });
 
   it('accepts a dropped document and shows the selected file', async () => {
@@ -598,49 +600,13 @@ describe('IngestionWizard: Step 1 intake controls', () => {
     expect(screen.queryByText(/Selected File:/i)).not.toBeInTheDocument();
   });
 
-  it('loads each sample requisition into the email simulator', () => {
+  it('returns to the web portal method from the email gateway', async () => {
     renderWizard();
     fireEvent.click(screen.getByRole('button', { name: /Email Ingestion Gateway/i }));
-
-    fireEvent.click(screen.getByRole('button', { name: /Electrical Switchgear/i }));
-    expect(screen.getByDisplayValue(/LV Switchgear Panels & MCCB Breakers/i)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /Civil & PEB Steel/i }));
-    expect(screen.getByDisplayValue(/Structural Steel PEB & High-Grade TMT Rebars/i)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /Mechanical Pumps & Valves/i }));
-    expect(screen.getByDisplayValue(/Centrifugal Water Pumps & Industrial Valves/i)).toBeInTheDocument();
-  });
-
-  it('lets the buyer edit the sender, subject and body before extracting', async () => {
-    renderWizard();
-    fireEvent.click(screen.getByRole('button', { name: /Email Ingestion Gateway/i }));
-
-    fireEvent.change(screen.getByDisplayValue(/project.procurement@lt-heavy.com/i), {
-      target: { value: 'plant@buyer.com' },
-    });
-    fireEvent.change(screen.getByDisplayValue(/Centrifugal Water Pumps & Industrial Valves/i), {
-      target: { value: 'Need 4 gearboxes' },
-    });
-    const body = document.querySelector('textarea') as HTMLTextAreaElement;
-    fireEvent.change(body, { target: { value: 'Gearbox 40 HP - Qty 4' } });
-
-    clickExtract();
-
-    await waitFor(() => expect(mockExtract).toHaveBeenCalled());
-    const payload = mockExtract.mock.calls[0][0];
-    expect(payload.fileName).toBe('Need 4 gearboxes');
-    expect(payload.documentText).toContain('plant@buyer.com');
-    expect(payload.documentText).toContain('Gearbox 40 HP - Qty 4');
-  });
-
-  it('returns to the web portal method from the email gateway', () => {
-    renderWizard();
-    fireEvent.click(screen.getByRole('button', { name: /Email Ingestion Gateway/i }));
-    expect(screen.getByText(/Autonomous Lights-Out Ingestion/i)).toBeInTheDocument();
+    expect(await screen.findByTestId('gateway-panel')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Web Portal & File Ingestion/i }));
-    expect(screen.getByText(/Click to Browse or Drag & Drop/i)).toBeInTheDocument();
+    expect(screen.getByText(EXTRACTION.dropZoneHeading)).toBeInTheDocument();
   });
 
   it('exits the wizard through the header control', () => {
@@ -970,19 +936,6 @@ describe('IngestionWizard: fallback branches', () => {
     expect(screen.queryByText(/Selected File:/i)).not.toBeInTheDocument();
   });
 
-  it('names the email payload generically when the subject is cleared', async () => {
-    renderWizard();
-    fireEvent.click(screen.getByRole('button', { name: /Email Ingestion Gateway/i }));
-    fireEvent.change(screen.getByDisplayValue(/Centrifugal Water Pumps & Industrial Valves/i), {
-      target: { value: '' },
-    });
-
-    clickExtract();
-
-    await waitFor(() => expect(mockExtract).toHaveBeenCalled());
-    expect(mockExtract.mock.calls[0][0].fileName).toBe('requisition-email');
-  });
-
   it('keeps the extracted title when the model supplies none', async () => {
     const result = successResult();
     result.data!.title = '';
@@ -1201,7 +1154,6 @@ describe('IngestionWizard: manual entry and delivery details', () => {
     jest.clearAllMocks();
     mockExtract.mockResolvedValue(successResult([entity()], 348000));
   });
-
 
   it('offers a manual path that skips extraction entirely', () => {
     renderWizard();
@@ -1449,167 +1401,5 @@ describe('IngestionWizard: manual entry dialog', () => {
     expect(
       screen.queryByRole('button', { name: new RegExp(EXTRACTION.extractAction, 'i') })
     ).not.toBeInTheDocument();
-  });
-});
-
-// ==============================================================================
-// EMAILED REQUISITIONS (.eml)
-// ==============================================================================
-// An email container goes to a different endpoint: MIME multipart parsing and
-// quoted-printable decoding are server-side work. Before this, an `.eml` fell
-// through to the base64 branch and was sent up labelled `application/pdf`, which
-// the extractor refused as an unsupported type — the ".eml / .msg" sub-tab in the
-// UI was cosmetic.
-//
-// The two things that matter here: the right transport is chosen by file name, and
-// the provenance recorded at dispatch comes from the parsed message headers rather
-// than from anything typed into the form.
-// ==============================================================================
-
-const EMAIL_META = {
-  messageId: '<REQ-2026-0914@lt-heavy.com>',
-  subject: 'Urgent Requisition - Centrifugal Pumps',
-  fromAddress: 'project.procurement@lt-heavy.com',
-  fromName: 'Rajesh Iyer',
-  toAddress: 'client@procucev.com',
-  sentAt: '2026-09-07T03:44:22.000Z',
-  attachmentNames: ['requisition.pdf'],
-};
-
-function emailSuccessResult(overrides: Partial<RFQExtractionResult> = {}): RFQExtractionResult {
-  const base = successResult();
-  return {
-    ...base,
-    data: { ...base.data!, source: 'email_upload', sourceEmail: EMAIL_META.fromAddress },
-    email: EMAIL_META,
-    ...overrides,
-  };
-}
-
-const emlFile = (name = 'Requisition.eml') =>
-  new File(['From: a@b.com\r\nSubject: Req\r\n\r\nPump - 4 Nos'], name, { type: 'message/rfc822' });
-
-describe('ingestion wizard: emailed requisitions', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    mockExtractEmail.mockResolvedValue(emailSuccessResult());
-    mockClassify.mockResolvedValue({ success: true, data: [entity()] });
-    mockAttach.mockResolvedValue({ success: true, data: { id: 'att-1', fileName: 'Requisition.eml' } });
-  });
-
-  it('routes a .eml through the email endpoint and not the document endpoint', async () => {
-    renderWizard();
-    uploadFile(emlFile());
-
-    clickExtract();
-
-    await waitFor(() => expect(mockExtractEmail).toHaveBeenCalledTimes(1));
-    expect(mockExtractEmail.mock.calls[0][0]).toBeInstanceOf(File);
-    expect((mockExtractEmail.mock.calls[0][0] as File).name).toBe('Requisition.eml');
-    // The whole message is uploaded; nothing is flattened or base64'd here.
-    expect(mockExtract).not.toHaveBeenCalled();
-  });
-
-  it('routes a .msg through the email endpoint so it gets a real explanation', async () => {
-    mockExtractEmail.mockResolvedValue({
-      success: false,
-      reason: 'OUTLOOK_MSG_UNSUPPORTED',
-      error: 'Outlook .msg files cannot be read. Save it as .eml instead.',
-    });
-    renderWizard();
-    uploadFile(new File(['binary'], 'Requisition.msg', { type: 'application/vnd.ms-outlook' }));
-
-    clickExtract();
-
-    await waitFor(() => expect(mockExtractEmail).toHaveBeenCalledTimes(1));
-    expect(mockExtract).not.toHaveBeenCalled();
-  });
-
-  it('keeps sending a spreadsheet through the document endpoint', async () => {
-    mockExtract.mockResolvedValue(successResult());
-    renderWizard();
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-
-    clickExtract();
-
-    await waitFor(() => expect(mockExtract).toHaveBeenCalledTimes(1));
-    expect(mockExtractEmail).not.toHaveBeenCalled();
-  });
-
-  it('shows which message the line items were read from', async () => {
-    renderWizard();
-    uploadFile(emlFile());
-    clickExtract();
-
-    const summary = await screen.findByTestId('ingested-email-summary');
-    expect(summary).toHaveTextContent(EXTRACTION.emailSourceTitle);
-    expect(summary).toHaveTextContent('Rajesh Iyer');
-    expect(summary).toHaveTextContent(EMAIL_META.fromAddress);
-    expect(summary).toHaveTextContent('Urgent Requisition - Centrifugal Pumps');
-    expect(summary).toHaveTextContent('requisition.pdf');
-  });
-
-  it('names the message as having no attachments when it carried none', async () => {
-    mockExtractEmail.mockResolvedValue(
-      emailSuccessResult({ email: { ...EMAIL_META, attachmentNames: [], sentAt: null } })
-    );
-    renderWizard();
-    uploadFile(emlFile());
-    clickExtract();
-
-    const summary = await screen.findByTestId('ingested-email-summary');
-    expect(summary).toHaveTextContent(EXTRACTION.emailSourceNoAttachments);
-  });
-
-  it('falls back to the bare address when the message carried no display name', async () => {
-    mockExtractEmail.mockResolvedValue(
-      emailSuccessResult({ email: { ...EMAIL_META, fromName: '' } })
-    );
-    renderWizard();
-    uploadFile(emlFile());
-    clickExtract();
-
-    const summary = await screen.findByTestId('ingested-email-summary');
-    expect(summary).toHaveTextContent(EMAIL_META.fromAddress);
-    expect(summary).not.toHaveTextContent('Rajesh Iyer');
-  });
-
-  it('omits the summary entirely for a document that is not an email', async () => {
-    mockExtract.mockResolvedValue(successResult());
-    renderWizard();
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-
-    await waitFor(() => expect(mockExtract).toHaveBeenCalled());
-    expect(screen.queryByTestId('ingested-email-summary')).not.toBeInTheDocument();
-  });
-
-  // A message whose extraction failed has no parsed headers to show.
-  it('omits the summary when the email could not be read', async () => {
-    mockExtractEmail.mockResolvedValue({
-      success: false,
-      reason: 'NO_CONTENT',
-      error: 'This email has no readable body.',
-    });
-    renderWizard();
-    uploadFile(emlFile());
-    clickExtract();
-
-    await waitFor(() => expect(mockExtractEmail).toHaveBeenCalled());
-    expect(screen.queryByTestId('ingested-email-summary')).not.toBeInTheDocument();
-  });
-
-  it('reports an attachment the pipeline could not read', async () => {
-    mockExtractEmail.mockResolvedValue(
-      emailSuccessResult({ warning: 'The attachment boq.xlsx was not read.' })
-    );
-    renderWizard();
-    uploadFile(emlFile());
-    clickExtract();
-
-    // The line items still arrive; the note is additional, not a failure.
-    const summary = await screen.findByTestId('ingested-email-summary');
-    expect(summary).toBeInTheDocument();
-    expect(mockExtractEmail).toHaveBeenCalledTimes(1);
   });
 });

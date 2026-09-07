@@ -327,3 +327,37 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_logs_sequence ON audit_logs (sequence);
+
+-- ==============================================================================
+-- EMAIL INGESTION GATEWAY LOG
+-- ==============================================================================
+-- One row per inbound message the autonomous gateway has considered, keyed by the
+-- message's own RFC822 Message-ID.
+--
+-- This exists to make ingestion idempotent. The poller reads a mailbox on an
+-- interval, and marking a message seen over IMAP is not a reliable guard on its
+-- own: the mark can fail after the RFQ has been created, another client can clear
+-- it, and a re-delivered or manually re-flagged message would then be ingested a
+-- second time. Duplicate RFQs reach vendors, so the check has to be ours and it
+-- has to be indexed — rfqs.raw is JSONB and cannot serve as a dedupe key.
+--
+-- Rejected and failed messages are recorded too, not just successes. Without that
+-- a refused sender is retried on every poll for as long as the message sits in the
+-- mailbox, and there is no way to answer "why was that requisition never raised".
+CREATE TABLE IF NOT EXISTS email_ingestion_log (
+  -- The full Message-ID including angle brackets, as it appears on the wire.
+  message_id VARCHAR(512) PRIMARY KEY,
+  -- Populated only when the message produced an RFQ.
+  rfq_id VARCHAR(64),
+  rfq_number VARCHAR(100),
+  from_address VARCHAR(320),
+  subject TEXT,
+  -- INGESTED | SENDER_NOT_ALLOWED | NO_LINE_ITEMS | UNREADABLE | FAILED
+  status VARCHAR(40) NOT NULL,
+  -- Human-readable reason, shown in the gateway panel so a skipped requisition
+  -- can be explained without reading the server log.
+  detail TEXT,
+  processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_email_ingestion_log_processed_at ON email_ingestion_log (processed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_email_ingestion_log_status ON email_ingestion_log (status);

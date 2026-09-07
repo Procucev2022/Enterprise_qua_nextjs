@@ -66,6 +66,11 @@ export interface QuoteComparison {
   complianceStatus: 'Fully Compliant' | 'Minor Exception' | 'Pending Review';
   paymentTerms: string;
   remarks: string;
+  scoreBreakdown?: {
+    price: { score: number; weighted: number; maxWeight: number };
+    leadTime: { score: number; weighted: number; maxWeight: number };
+    warranty: { score: number; weighted: number; maxWeight: number };
+  };
 }
 
 export type FollowUpChannel = 'call' | 'whatsapp' | 'sms';
@@ -1126,20 +1131,63 @@ export type RFQExtractionReason =
   | 'UNSUPPORTED_TYPE'
   | 'AI_FAILED'
   | 'NO_ITEMS_FOUND'
-  | 'NETWORK'
-  // Email-specific refusals from POST /api/rfqs/extract-email.
-  | 'NOT_AN_EMAIL'
-  | 'OUTLOOK_MSG_UNSUPPORTED'
-  | 'TOO_LARGE'
-  | 'UNREADABLE';
+  | 'NETWORK';
+
+/** Outcome recorded against one message the autonomous gateway considered. */
+export type EmailGatewayOutcome =
+  | 'INGESTED'
+  | 'SENDER_NOT_ALLOWED'
+  | 'NO_LINE_ITEMS'
+  | 'UNREADABLE'
+  | 'FAILED';
+
+/** One row of the gateway's ingestion ledger. */
+export interface EmailGatewayLogEntry {
+  message_id: string;
+  rfq_id: string | null;
+  rfq_number: string | null;
+  from_address: string | null;
+  subject: string | null;
+  status: EmailGatewayOutcome;
+  detail: string | null;
+  processed_at: string;
+}
 
 /**
- * Headers read out of an ingested email message.
+ * State of the autonomous mailbox watcher.
  *
- * Every field comes from the message itself, parsed on the server. The wizard
- * displays these so the buyer can confirm the requisition was read from the mail
- * they expected before dispatching it.
+ * Carries no credentials — only the account being watched, which the buyer needs
+ * in order to know where to send requisitions.
  */
+export interface EmailGatewayStatus {
+  enabled: boolean;
+  configured: boolean;
+  watching: boolean;
+  mailboxUser: string | null;
+  mailbox: string;
+  host: string | null;
+  pollIntervalMs: number;
+  /** Empty means any sender that maps to a registered buyer account. */
+  allowedSenders: string[];
+  allowedDomains: string[];
+  lastPollAt: string | null;
+  lastPollDurationMs: number | null;
+  lastConnectedAt: string | null;
+  lastError: string | null;
+  isPolling: boolean;
+  counts: Partial<Record<EmailGatewayOutcome, number>>;
+  recent: EmailGatewayLogEntry[];
+  /** Status an ingested RFQ is parked in for review. */
+  ingestedStatus: string;
+}
+
+/** Result of one mailbox check. */
+export interface EmailGatewayPollResult {
+  considered: number;
+  ingested: number;
+  pending: number;
+}
+
 export interface RFQEmailMetadata {
   messageId: string;
   subject: string;
@@ -1174,13 +1222,6 @@ export interface RFQExtractionResult {
   extraction?: RFQExtractionMeta;
   reason?: RFQExtractionReason;
   error?: string;
-  /** Present when the source was an email message. */
-  email?: RFQEmailMetadata;
-  /**
-   * Non-fatal note about something the pipeline could not read — a workbook
-   * attachment, for instance. Line items were still extracted.
-   */
-  warning?: string;
 }
 
 /** Outcome of storing one supporting document. */

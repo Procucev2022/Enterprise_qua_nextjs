@@ -363,18 +363,13 @@ export const UI_STRINGS = {
     // message says exactly what is missing and what still went through.
     attachmentStoreFailedTitle: 'Document Not Attached',
 
-    // Emailed requisitions (.eml). Parsed server-side, so these cover the cases
-    // the browser reports before the request is made, plus the panel that shows
-    // which message a draft was read from.
-    emailFileUnreadable:
-      'That email file could not be read from disk. Try exporting it again from your mail client.',
-    emailAttachmentSkippedTitle: 'Attachment Not Read',
-    emailSourceTitle: 'Read from email',
-    emailSourceFrom: 'From',
-    emailSourceSubject: 'Subject',
-    emailSourceReceived: 'Sent',
-    emailSourceAttachments: 'Attachments',
-    emailSourceNoAttachments: 'None',
+    // Document upload tab. This tab takes documents only — an emailed requisition
+    // is picked up by the autonomous gateway, so no email container is offered here.
+    boqTabLabel: 'BOQ Spreadsheet / Drawing (.xlsx, .pdf, .docx)',
+    processingDocumentLabel: 'Processing Document & Extracting Line-Items with AI OCR...',
+    dropZoneHeading: 'Click to Browse or Drag & Drop RFQ Document / BOQ Spreadsheet',
+    dropZoneHint: 'Supports Excel (.xlsx, .xls), PDF drawings, CSV, and Word specifications (.docx).',
+    extractFooterHint: 'Your document is read by Gemini AI, then you confirm the line items in Step 2.',
     attachmentStoreFailedMessage:
       'The RFQ was created, but {fileName} could not be stored with it, so it will not appear under Supporting Documents. {reason} You can attach it again from the RFQ details screen.',
 
@@ -908,6 +903,65 @@ export const UI_STRINGS = {
 
     // Modal-only affordance, used where the panel is presented as an overlay
     closeAction: 'Close',
+  },
+
+  // ============================================================================
+  // AUTONOMOUS EMAIL INGESTION GATEWAY
+  // ============================================================================
+  // Copy for the Step 1 gateway panel. This replaced a simulator: a textarea with
+  // three hardcoded sample requisitions and a green "Active & Listening" badge
+  // with no connection behind it. Everything here now reflects real state, so the
+  // not-configured and error cases matter as much as the healthy one.
+  emailGateway: {
+    title: 'Autonomous Email Ingestion Gateway',
+    watchingLabel: 'Watching',
+    notWatchingLabel: 'Not watching',
+    offLabel: 'Switched off',
+    notConfiguredLabel: 'Not configured',
+
+    // How it works, stated plainly rather than overpromising.
+    howItWorks:
+      'Requisitions emailed to the watched mailbox are read automatically, turned into line items, and raised as an RFQ for review. Nothing is sent to vendors until a category manager releases it.',
+    forwardToLabel: 'Forward requisitions to',
+    checkedEveryLabel: 'Checked every',
+    reviewStatusLabel: 'Ingested RFQs are held in',
+
+    // Who is allowed to raise a requisition by email.
+    allowedAnyAccount:
+      'Any sender registered as a buyer account. A message from an unknown address is recorded and skipped.',
+    allowedSendersLabel: 'Allowed senders',
+    allowedDomainsLabel: 'Allowed domains',
+
+    // Not configured: name the exact variables, since this is a deployment step.
+    setupTitle: 'No mailbox connected',
+    setupBody:
+      'Set EMAIL_GATEWAY_HOST, EMAIL_GATEWAY_USER and EMAIL_GATEWAY_PASSWORD in backend/.env, then set EMAIL_GATEWAY_ENABLED=true and restart the backend.',
+    setupHint:
+      'For Gmail use imap.gmail.com on port 993 with an App Password — a normal account password will be refused.',
+
+    // Manual check
+    checkNowAction: 'Check Mailbox Now',
+    checkingLabel: 'Checking…',
+    checkCompleteTitle: 'Mailbox Checked',
+    checkCompleteMessage: 'Considered {considered} message(s), raised {ingested} RFQ(s). {pending} still queued.',
+    checkFailedTitle: 'Mailbox Check Failed',
+    pollFailed: 'The mailbox could not be checked. Confirm the gateway credentials and that the host is reachable.',
+    statusUnavailable:
+      'The gateway status could not be read. The backend may be starting up — retry in a moment.',
+
+    // Activity ledger
+    recentTitle: 'Recent inbound messages',
+    recentEmpty: 'No inbound messages have been processed yet.',
+    lastCheckedLabel: 'Last checked',
+    neverChecked: 'Never',
+    connectionErrorLabel: 'Last error',
+
+    // Ledger outcomes, keyed to the server's status values.
+    outcomeIngested: 'RFQ raised',
+    outcomeSenderNotAllowed: 'Sender not allowed',
+    outcomeNoLineItems: 'No line items',
+    outcomeUnreadable: 'Unreadable',
+    outcomeFailed: 'Failed',
   },
 };
 
