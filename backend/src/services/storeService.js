@@ -838,10 +838,12 @@ class StoreService {
    * Whether an RFQ should reach a given vendor.
    *
    * True when the vendor was explicitly added by the RFQ's buyer
-   * (`addedByBuyerCompany`), is on the RFQ's `assignedVendors` invite list, or
-   * covers at least one of the RFQ's category signals. A vendor with no
-   * category profile at all matches nothing — the onboarding flow tells them
-   * exactly this ("map your categories … in order to receive enquiries").
+   * (`addedByBuyerCompany`) or is on the RFQ's `assignedVendors` invite list —
+   * that's it. Category coverage alone is deliberately NOT enough: it used to
+   * grant access directly, but a category manager now has to review the
+   * category-matched pool (`candidateVendorsForRFQ`) and explicitly invite
+   * from it (`inviteVendorsToRFQ`) before a vendor can see, be notified about,
+   * be emailed about, or quote an RFQ.
    */
   vendorCoversRFQ(vendor, rfq) {
     if (!vendor || !rfq) return false;
@@ -854,20 +856,102 @@ class StoreService {
       return true;
     }
 
+    return this._isInvitedVendor(vendor, rfq);
+  }
+
+  /** Whether a vendor is on the RFQ's assignedVendors invite list. */
+  _isInvitedVendor(vendor, rfq) {
     const invited = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
-    if (
-      invited.some(
-        (v) =>
-          v &&
-          ((v.id && v.id === vendor.id) ||
-            (v.email && vendor.email && v.email.toLowerCase() === vendor.email.toLowerCase()) ||
-            (v.name && vendor.name && v.name.toLowerCase() === vendor.name.toLowerCase()))
-      )
-    ) {
-      return true;
+    return invited.some(
+      (v) =>
+        v &&
+        ((v.id && v.id === vendor.id) ||
+          (v.email && vendor.email && v.email.toLowerCase() === vendor.email.toLowerCase()) ||
+          (v.name && vendor.name && v.name.toLowerCase() === vendor.name.toLowerCase()))
+    );
+  }
+
+  /**
+   * Every vendor whose category covers this RFQ — the candidate pool a
+   * category manager picks invitees from. Grants no access by itself; only
+   * `inviteVendorsToRFQ` (via `assignedVendors`) does that. Flags which
+   * candidates are already invited so a picker UI can show that state.
+   */
+  candidateVendorsForRFQ(rfq) {
+    const signals = this._rfqCategorySignals(rfq);
+    return this.vendors
+      .filter((v) => signals.some((c) => this.vendorCoversCategory(v, c)))
+      .map((v) => ({ ...v, alreadyInvited: this._isInvitedVendor(v, rfq) }));
+  }
+
+  /**
+   * A category manager invites specific vendors to an RFQ.
+   *
+   * Merges the given vendor ids into `assignedVendors` (dedup'd against
+   * whoever's already on it), then — for each vendor newly added — fires the
+   * same simulated multi-channel chaser outreach `createRFQ` fires for an
+   * RFQ's initial assignedVendors, a real in-app notification, and a real
+   * RFQ-invite email. Unknown vendor ids are silently skipped rather than
+   * failing the whole batch.
+   */
+  inviteVendorsToRFQ(rfqId, vendorIds, actorEmail) {
+    const rfq = this.getRFQById(rfqId);
+    if (!rfq) return null;
+
+    const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
+    const newlyInvited = [];
+    for (const id of Array.isArray(vendorIds) ? vendorIds : []) {
+      const vendor = this.getVendorById(id);
+      if (!vendor) continue;
+      if (this._isInvitedVendor(vendor, rfq)) continue;
+      newlyInvited.push(vendor);
+    }
+    if (newlyInvited.length === 0) return { updatedRFQ: rfq, invitedCount: 0 };
+
+    const entries = newlyInvited.map((v) => ({
+      id: v.id,
+      name: v.name,
+      email: v.email || null,
+      contactPerson: v.contactPerson || null,
+      phone: v.phone || null,
+    }));
+    const updatedRFQ = this.updateRFQ(rfq.id, { assignedVendors: [...existing, ...entries] });
+
+    this.addAuditLog({
+      userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
+      action: `Invited ${newlyInvited.length} vendor(s) to ${rfq.rfqNumber}`,
+      rfqNumber: rfq.rfqNumber,
+    });
+
+    for (const vendor of newlyInvited) {
+      // Simulated multi-channel chaser outreach — same mechanism createRFQ
+      // already fires for anyone on assignedVendors.
+      const chaserLogs = simulateChaserOutreach(updatedRFQ, vendor);
+      chaserLogs.forEach((log) => this.addAIFeedItem(log));
+
+      // Real in-app notification, same shape notifyVendorsOfNewRFQ builds.
+      const categoryLabel = updatedRFQ.category || this._rfqCategorySignals(updatedRFQ)[0] || 'your categories';
+      const notification = this._buildNotification({
+        recipientType: 'vendor',
+        recipientId: vendor.id,
+        kind: 'rfq_category_match',
+        rfq: updatedRFQ,
+        title: `New RFQ in ${categoryLabel}`,
+        message: `${updatedRFQ.buyerAccountName || 'A buyer'} invited you to ${updatedRFQ.rfqNumber} — ${updatedRFQ.title}.`,
+        meta: { category: categoryLabel, buyerAccountName: updatedRFQ.buyerAccountName || null },
+      });
+      this.notifications.unshift(notification);
+      this._persistNotification(notification);
+
+      // Real invite email, if the vendor has an address.
+      if (vendor.email) {
+        mailerService
+          .sendRfqInviteEmail(vendor.email, { rfq: updatedRFQ, recipientName: vendor.contactPerson || vendor.name })
+          .catch((err) => logger.error('Failed to email RFQ invite to vendor', err, 'STORE_SERVICE'));
+      }
     }
 
-    return this._rfqCategorySignals(rfq).some((c) => this.vendorCoversCategory(vendor, c));
+    return { updatedRFQ, invitedCount: newlyInvited.length };
   }
 
   /** The RFQs one vendor may see, in the store's current (newest-first) order. */

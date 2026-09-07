@@ -672,6 +672,26 @@ export const UI_STRINGS = {
     viewMatrixAria: 'Open the comparative quote matrix for {rfqNumber}',
     viewDetailsAction: 'Details',
     viewDetailsAria: 'View the full submitted detail for {rfqNumber}',
+    inviteVendorsAction: 'Invite Vendors',
+    inviteVendorsAria: 'Invite vendors to {rfqNumber}',
+  },
+
+  inviteVendors: {
+    title: 'Invite Vendors',
+    subtitle: 'Category-matched candidates for {rfqNumber}',
+    closeAria: 'Close',
+    loading: 'Loading candidate vendors…',
+    loadFailed: 'The vendor candidate list could not be loaded.',
+    noCandidates: 'No vendors cover this RFQ’s category yet.',
+    candidateCount: '{count} candidates',
+    selectAll: 'Select all',
+    deselectAll: 'Deselect all',
+    alreadyInvitedBadge: 'Invited',
+    cancelAction: 'Cancel',
+    inviteAction: 'Invite ({count})',
+    successTitle: 'Vendors Invited',
+    successMessage: '{count} vendor(s) invited to {rfqNumber}. They can now see it, and have been notified.',
+    failTitle: 'Could Not Invite Vendors',
   },
 
   notifications: {

@@ -5,7 +5,8 @@ import { RFQItem } from '@/lib/types';
 import { formatCurrency } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { fetchAllRFQs } from '@/lib/rfqClient';
-import { ClipboardList, Search, ChevronRight, RefreshCw, AlertTriangle, FileText } from 'lucide-react';
+import { ClipboardList, Search, ChevronRight, RefreshCw, AlertTriangle, FileText, UserPlus } from 'lucide-react';
+import InviteVendorsModal from './InviteVendorsModal';
 
 interface AllRFQsConsoleProps {
   /** Open the comparative quote matrix for one RFQ. */
@@ -49,6 +50,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [buyerFilter, setBuyerFilter] = useState<string>('all');
+  const [inviteTargetRfq, setInviteTargetRfq] = useState<RFQItem | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -224,6 +226,14 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                     <div className="flex items-center justify-end gap-3">
                       <button
                         type="button"
+                        onClick={() => setInviteTargetRfq(rfq)}
+                        aria-label={formatString(S.inviteVendorsAria, { rfqNumber: rfq.rfqNumber })}
+                        className="inline-flex items-center gap-1 text-xs font-bold text-slate-600 dark:text-gray-300 hover:underline"
+                      >
+                        <UserPlus size={13} /> {S.inviteVendorsAction}
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => onViewDetails?.(rfq)}
                         aria-label={formatString(S.viewDetailsAria, { rfqNumber: rfq.rfqNumber })}
                         className="inline-flex items-center gap-1 text-xs font-bold text-slate-600 dark:text-gray-300 hover:underline"
@@ -246,6 +256,15 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
           </table>
         </div>
       )}
+
+      <InviteVendorsModal
+        isOpen={inviteTargetRfq !== null}
+        rfq={inviteTargetRfq}
+        onClose={() => setInviteTargetRfq(null)}
+        onInvited={(updatedRfq) => {
+          setRfqs((prev) => prev.map((r) => (r.id === updatedRfq.id ? updatedRfq : r)));
+        }}
+      />
     </div>
   );
 }

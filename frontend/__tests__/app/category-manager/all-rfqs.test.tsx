@@ -5,7 +5,7 @@ import CategoryManagerAllRFQsPage from '@/app/category-manager/all-rfqs/page';
 import * as rfqClient from '@/lib/rfqClient';
 import * as storeModule from '@/lib/store';
 import { RFQItem } from '@/lib/types';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 
 jest.mock('@/lib/rfqClient');
 jest.mock('@/lib/store');
@@ -16,6 +16,7 @@ jest.mock('next/navigation', () => ({
 }));
 
 const S = UI_STRINGS.allRfqs;
+const S2 = UI_STRINGS.inviteVendors;
 
 function makeRfq(overrides: Partial<RFQItem> & { id: string }): RFQItem {
   return {
@@ -43,11 +44,13 @@ const ROWS: RFQItem[] = [
 ];
 
 const mockFetch = rfqClient.fetchAllRFQs as jest.Mock;
+const mockShowToast = jest.fn();
 
 beforeEach(() => {
   jest.clearAllMocks();
   push.mockClear();
   mockFetch.mockResolvedValue({ success: true, rfqs: ROWS });
+  (storeModule.useApp as jest.Mock).mockReturnValue({ showToast: mockShowToast });
 });
 
 describe('AllRFQsConsole', () => {
@@ -171,6 +174,44 @@ describe('AllRFQsConsole', () => {
     fireEvent.click(screen.getByLabelText(`View the full submitted detail for ${ROWS[1].rfqNumber}`));
     // No assertion beyond "it rendered and clicked without error".
     expect(screen.getByText('Steel Pumps')).toBeInTheDocument();
+  });
+
+  it('opens the Invite Vendors modal for a row, and applies the updated RFQ to the table on success', async () => {
+    const mockFetchCandidates = rfqClient.fetchVendorCandidates as jest.Mock;
+    const mockInvite = rfqClient.inviteVendorsToRFQ as jest.Mock;
+    mockFetchCandidates.mockResolvedValue({
+      success: true,
+      candidates: [{ id: 'v-1', name: 'Steel Vendor', majorCategory: 'Pumps', alreadyInvited: false }],
+    });
+    const updatedRow = { ...ROWS[1], quotesCount: 9 };
+    mockInvite.mockResolvedValue({ success: true, rfq: updatedRow, invitedCount: 1 });
+
+    render(<AllRFQsConsole />);
+    await waitFor(() => expect(screen.getByText('Steel Pumps')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText(`Invite vendors to ${ROWS[1].rfqNumber}`));
+
+    await waitFor(() => expect(mockFetchCandidates).toHaveBeenCalledWith(ROWS[1].id));
+    await waitFor(() => expect(screen.getByText('Steel Vendor')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: formatString(S2.inviteAction, { count: 1 }) }));
+
+    await waitFor(() => expect(mockInvite).toHaveBeenCalledWith(ROWS[1].id, ['v-1']));
+    // The modal closes and the row's quotesCount reflects the server's updated RFQ.
+    await waitFor(() => expect(screen.queryByTestId('invite-vendors-modal')).not.toBeInTheDocument());
+    expect(screen.getByText('9')).toBeInTheDocument();
+  });
+
+  it('closes the Invite Vendors modal without changing the table when cancelled', async () => {
+    render(<AllRFQsConsole />);
+    await waitFor(() => expect(screen.getByText('Steel Pumps')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText(`Invite vendors to ${ROWS[1].rfqNumber}`));
+    await waitFor(() => expect(screen.getByTestId('invite-vendors-modal')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText(S2.closeAria));
+    await waitFor(() => expect(screen.queryByTestId('invite-vendors-modal')).not.toBeInTheDocument());
   });
 });
 

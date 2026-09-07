@@ -98,18 +98,25 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
     );
   });
 
-  test('rfq resolvers scope a vendor to the RFQs their category covers', async () => {
-    // A vendor covering the fixture RFQ's category sees it; one that does not, doesn't.
-    storeService.addVendor({
+  test('rfq resolvers scope a vendor to RFQs they were invited to — category match alone is not enough', async () => {
+    // A vendor covering the fixture RFQ's category doesn't see it until a
+    // category manager invites them onto it.
+    const coveringVendor = storeService.addVendor({
       name: 'Covering Resolver Vendor',
       email: TEST_USERS.vendor.email,
       majorCategory: 'Engineering Spares - Mechanical',
     });
     const coveringCtx = contextFor('vendor');
+    expect(await rootResolvers.rfqs({}, coveringCtx)).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: seededRfq.id })])
+    );
+    expect(await rootResolvers.rfq({ rfqNumber: seededRfq.rfqNumber }, coveringCtx)).toBeNull();
+
+    storeService.inviteVendorsToRFQ(seededRfq.id, [coveringVendor.id], TEST_USERS.category_manager.email);
     expect(await rootResolvers.rfqs({}, coveringCtx)).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: seededRfq.id })])
     );
-    expect(await rootResolvers.rfq({ rfqNumber: seededRfq.rfqNumber }, coveringCtx)).toEqual(seededRfq);
+    expect((await rootResolvers.rfq({ rfqNumber: seededRfq.rfqNumber }, coveringCtx))?.id).toEqual(seededRfq.id);
 
     const orphanVendorToken = require('../src/services/authService').generateSessionToken({
       id: 'usr-orphan-resolver-vendor',

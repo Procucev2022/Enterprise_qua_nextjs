@@ -35,5 +35,20 @@ router.post('/:id/batch-chaser', authenticate, rfqController.triggerBatchChaser)
 router.post('/:id/approve-po', authenticate, rfqController.approvePO);
 // The preview embeds the RFQ's commercial detail, so it cannot be anonymous.
 router.get('/:id/email-preview', authenticate, rfqController.generateEmailPreview);
+// Category-manager vendor-invite flow: the category-matched candidate pool, and
+// inviting specific vendors from it. Gated the same way '/all' is — only an
+// invite grants a vendor visibility (see storeService.vendorCoversRFQ).
+router.get(
+  '/:id/vendor-candidates',
+  authenticate,
+  requireRole('category_manager', 'admin'),
+  rfqController.getVendorCandidates
+);
+router.post(
+  '/:id/invite-vendors',
+  authenticate,
+  requireRole('category_manager', 'admin'),
+  rfqController.inviteVendors
+);
 
 module.exports = router;

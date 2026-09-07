@@ -271,6 +271,16 @@ export type RFQListResult =
   | { success: true; rfqs: RFQItem[] }
   | { success: false; reason: RFQTransportFailure; error: string };
 
+/** Outcome of listing an RFQ's category-matched vendor invite candidates. */
+export type RFQVendorCandidatesResult =
+  | { success: true; candidates: RFQVendorCandidate[] }
+  | { success: false; reason: RFQTransportFailure; error: string };
+
+/** Outcome of inviting vendors to an RFQ. */
+export type RFQInviteVendorsResult =
+  | { success: true; rfq: RFQItem; invitedCount: number }
+  | { success: false; reason: RFQTransportFailure; error: string };
+
 /**
  * The editable commercial and delivery terms of an RFQ, as the edit dialog holds
  * them. `budget` is null when no ceiling is stated, which is a different answer
@@ -457,6 +467,27 @@ export interface RFQItem {
   /** The buyer account this RFQ was created under (the app's single globally "active" buyer account at creation time, not a per-request identity). */
   buyerAccountId?: string | null;
   buyerAccountName?: string | null;
+  /**
+   * Vendors a category manager has explicitly invited to this RFQ. Category
+   * match alone no longer grants a vendor visibility — only being on this
+   * list (or being a vendor the buyer directly added) does. See
+   * category-manager/all-rfqs.tsx's "Invite Vendors" action.
+   */
+  assignedVendors?: RFQAssignedVendor[];
+}
+
+/** One entry on RFQItem.assignedVendors — a vendor invited to this RFQ. */
+export interface RFQAssignedVendor {
+  id: string;
+  name: string;
+  email?: string | null;
+  contactPerson?: string | null;
+  phone?: string | null;
+}
+
+/** A candidate vendor for RFQ invitation — a VendorEntry plus invite state. */
+export interface RFQVendorCandidate extends VendorEntry {
+  alreadyInvited: boolean;
 }
 
 export interface AIBotFeedItem {

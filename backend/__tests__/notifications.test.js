@@ -36,8 +36,9 @@ describe('GET /api/notifications', () => {
     expect(res.body).toEqual({ success: true, data: [], unreadCount: 0 });
   });
 
-  test('a vendor sees the category-matched notification a new RFQ raises', async () => {
-    storeService.createRFQ({ title: 'Notif RFQ One', category: 'Notification-Test-Category' });
+  test('a vendor sees the notification raised when a CM invites them to a new RFQ', async () => {
+    const rfq = storeService.createRFQ({ title: 'Notif RFQ One', category: 'Notification-Test-Category' });
+    storeService.inviteVendorsToRFQ(rfq.id, [vendorRecord.id], TEST_USERS.category_manager.email);
 
     const res = await request(app).get('/api/notifications').set(authHeader('vendor'));
 
@@ -62,7 +63,8 @@ describe('GET /api/notifications', () => {
 
 describe('PATCH /api/notifications/:id/read', () => {
   test('marks the caller’s own notification read', async () => {
-    storeService.createRFQ({ title: 'Notif RFQ Three', category: 'Notification-Test-Category' });
+    const rfq = storeService.createRFQ({ id: 'rfq-notif-three', title: 'Notif RFQ Three', category: 'Notification-Test-Category' });
+    storeService.inviteVendorsToRFQ(rfq.id, [vendorRecord.id], TEST_USERS.category_manager.email);
     const [notification] = storeService.getNotificationsFor('vendor', vendorRecord.id).filter((n) => !n.read);
 
     const res = await request(app)
@@ -74,7 +76,8 @@ describe('PATCH /api/notifications/:id/read', () => {
   });
 
   test('reports another recipient’s notification as not found', async () => {
-    storeService.createRFQ({ title: 'Notif RFQ Four', category: 'Notification-Test-Category' });
+    const rfq = storeService.createRFQ({ id: 'rfq-notif-four', title: 'Notif RFQ Four', category: 'Notification-Test-Category' });
+    storeService.inviteVendorsToRFQ(rfq.id, [vendorRecord.id], TEST_USERS.category_manager.email);
     const [notification] = storeService.getNotificationsFor('vendor', vendorRecord.id);
 
     // The category manager has no inbox, so this id is "not theirs".
@@ -100,8 +103,10 @@ describe('PATCH /api/notifications/:id/read', () => {
 
 describe('POST /api/notifications/read-all', () => {
   test('clears every unread notification for the caller', async () => {
-    storeService.createRFQ({ title: 'Notif RFQ Five', category: 'Notification-Test-Category' });
-    storeService.createRFQ({ title: 'Notif RFQ Six', category: 'Notification-Test-Category' });
+    const rfqFive = storeService.createRFQ({ id: 'rfq-notif-five', title: 'Notif RFQ Five', category: 'Notification-Test-Category' });
+    const rfqSix = storeService.createRFQ({ id: 'rfq-notif-six', title: 'Notif RFQ Six', category: 'Notification-Test-Category' });
+    storeService.inviteVendorsToRFQ(rfqFive.id, [vendorRecord.id], TEST_USERS.category_manager.email);
+    storeService.inviteVendorsToRFQ(rfqSix.id, [vendorRecord.id], TEST_USERS.category_manager.email);
     expect(storeService.getUnreadNotificationCountFor('vendor', vendorRecord.id)).toBeGreaterThan(0);
 
     const res = await request(app).post('/api/notifications/read-all').set(authHeader('vendor'));

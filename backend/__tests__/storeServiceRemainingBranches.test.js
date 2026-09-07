@@ -545,8 +545,19 @@ describe('Store Service — remaining branch coverage', () => {
         bulkInsertNotificationsInDB: jest.fn().mockRejectedValue(new Error('boom')),
       });
 
-      freshStore.addVendor({ name: 'Fanout Co', email: 'fanout@x.com', majorCategory: 'Fanout-Cat' });
-      freshStore.createRFQ({ rfqNumber: 'RFQ-NTF-1', category: 'Fanout-Cat' });
+      // notifyVendorsOfNewRFQ (the batched fan-out) only fires at creation for
+      // vendors with immediate access — an addedByBuyerCompany match, since
+      // category match alone no longer grants vendorCoversRFQ.
+      freshStore.addVendor({
+        name: 'Fanout Co',
+        email: 'fanout@x.com',
+        majorCategory: 'Fanout-Cat',
+        addedByBuyerCompany: 'Fanout Buyer',
+      });
+      freshStore.createRFQ(
+        { rfqNumber: 'RFQ-NTF-1', category: 'Fanout-Cat' },
+        { organizationName: 'Fanout Buyer' }
+      );
       await flush();
 
       expect(errorSpy).toHaveBeenCalledWith('Failed to persist notification batch', expect.any(Error), 'STORE_SERVICE');
@@ -571,7 +582,8 @@ describe('Store Service — remaining branch coverage', () => {
       });
 
       const vendor = freshStore.addVendor({ name: 'Read Co', email: 'read@x.com', majorCategory: 'Read-Cat' });
-      freshStore.createRFQ({ rfqNumber: 'RFQ-NTF-3', category: 'Read-Cat' });
+      const rfq = freshStore.createRFQ({ rfqNumber: 'RFQ-NTF-3', category: 'Read-Cat' });
+      freshStore.inviteVendorsToRFQ(rfq.id, [vendor.id], 'cm@x.com');
       const [n] = freshStore.getNotificationsFor('vendor', vendor.id);
       freshStore.markNotificationRead(n.id, 'vendor', vendor.id);
       await flush();
@@ -585,7 +597,8 @@ describe('Store Service — remaining branch coverage', () => {
       });
 
       const vendor = freshStore.addVendor({ name: 'BulkRead Co', email: 'bulkread@x.com', majorCategory: 'Bulk-Cat' });
-      freshStore.createRFQ({ rfqNumber: 'RFQ-NTF-4', category: 'Bulk-Cat' });
+      const rfq = freshStore.createRFQ({ rfqNumber: 'RFQ-NTF-4', category: 'Bulk-Cat' });
+      freshStore.inviteVendorsToRFQ(rfq.id, [vendor.id], 'cm@x.com');
       freshStore.markAllNotificationsRead('vendor', vendor.id);
       await flush();
 

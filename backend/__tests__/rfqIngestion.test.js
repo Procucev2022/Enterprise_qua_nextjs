@@ -683,17 +683,23 @@ describe('RFQ ingestion & summary HTTP routes', () => {
     });
   });
 
-  describe('GET /api/rfqs — vendor category scoping', () => {
+  describe('GET /api/rfqs — vendor visibility requires a CM invite', () => {
     // The default test vendor (vendor@apexsupplies.com) gets a category profile
-    // and two RFQs, one in category and one not.
+    // and two RFQs, one in its category and one not — category alone no longer
+    // grants visibility, so `inCat` is explicitly invited via the CM endpoint and
+    // `outCat` is left uninvited throughout.
+    let inCatId;
     let inCatNumber;
+    let outCatId;
     let outCatNumber;
+    let vendorId;
 
     beforeAll(async () => {
-      await request(app)
+      const vendorRes = await request(app)
         .post('/api/vendors')
         .set(authHeader('vendor'))
         .send({ name: 'Scoping Test Vendor', majorCategory: 'Vendor-Scope-Cat' });
+      vendorId = vendorRes.body.data.id;
 
       await request(app).post('/api/buyer-accounts').set(authHeader('buyer')).send({
         organizationName: 'Scoping Test Buyer',
@@ -710,6 +716,7 @@ describe('RFQ ingestion & summary HTTP routes', () => {
         deliveryLocation: 'Plant A',
         deliveryPincode: '400001',
       });
+      inCatId = inCat.body.data.id;
       inCatNumber = inCat.body.data.rfqNumber;
 
       const outCat = await request(app).post('/api/rfqs').set(authHeader('buyer')).send({
@@ -722,12 +729,53 @@ describe('RFQ ingestion & summary HTTP routes', () => {
         deliveryLocation: 'Plant A',
         deliveryPincode: '400001',
       });
+      outCatId = outCat.body.data.id;
       outCatNumber = outCat.body.data.rfqNumber;
     });
 
-    test('a vendor sees RFQs in their category and not others', async () => {
+    test('before any invite, the vendor sees neither RFQ', async () => {
       const res = await request(app).get('/api/rfqs').set(authHeader('vendor'));
       expect(res.statusCode).toBe(200);
+      const numbers = res.body.data.map((r) => r.rfqNumber);
+      expect(numbers).not.toContain(inCatNumber);
+      expect(numbers).not.toContain(outCatNumber);
+    });
+
+    test('GET /api/rfqs/:id/vendor-candidates lists the category-matched vendor, rejects buyer/vendor callers', async () => {
+      const cmRes = await request(app).get(`/api/rfqs/${inCatId}/vendor-candidates`).set(authHeader('category_manager'));
+      expect(cmRes.statusCode).toBe(200);
+      const candidate = cmRes.body.data.find((c) => c.id === vendorId);
+      expect(candidate).toMatchObject({ alreadyInvited: false });
+
+      expect((await request(app).get(`/api/rfqs/${inCatId}/vendor-candidates`).set(authHeader('buyer'))).statusCode).toBe(403);
+      expect((await request(app).get(`/api/rfqs/${inCatId}/vendor-candidates`).set(authHeader('vendor'))).statusCode).toBe(403);
+    });
+
+    test('POST /api/rfqs/:id/invite-vendors rejects non-CM/admin callers and a bad body', async () => {
+      expect(
+        (await request(app).post(`/api/rfqs/${inCatId}/invite-vendors`).set(authHeader('buyer')).send({ vendorIds: [vendorId] }))
+          .statusCode
+      ).toBe(403);
+      expect(
+        (await request(app).post(`/api/rfqs/${inCatId}/invite-vendors`).set(authHeader('vendor')).send({ vendorIds: [vendorId] }))
+          .statusCode
+      ).toBe(403);
+      const badBody = await request(app)
+        .post(`/api/rfqs/${inCatId}/invite-vendors`)
+        .set(authHeader('category_manager'))
+        .send({ vendorIds: [] });
+      expect(badBody.statusCode).toBe(400);
+    });
+
+    test('CM invites the vendor to inCat only — vendor now sees inCat, still not outCat', async () => {
+      const invite = await request(app)
+        .post(`/api/rfqs/${inCatId}/invite-vendors`)
+        .set(authHeader('category_manager'))
+        .send({ vendorIds: [vendorId] });
+      expect(invite.statusCode).toBe(200);
+      expect(invite.body.invitedCount).toBe(1);
+
+      const res = await request(app).get('/api/rfqs').set(authHeader('vendor'));
       const numbers = res.body.data.map((r) => r.rfqNumber);
       expect(numbers).toContain(inCatNumber);
       expect(numbers).not.toContain(outCatNumber);
@@ -747,12 +795,12 @@ describe('RFQ ingestion & summary HTTP routes', () => {
       expect(res.body.data).toEqual([]);
     });
 
-    test('GET /api/rfqs/:id 404s a vendor for an out-of-category RFQ', async () => {
+    test('GET /api/rfqs/:id 404s a vendor for the never-invited RFQ', async () => {
       const res = await request(app).get(`/api/rfqs/${outCatNumber}`).set(authHeader('vendor'));
       expect(res.statusCode).toBe(404);
     });
 
-    test('POST /api/rfqs/:id/quotes 404s a vendor for an out-of-category RFQ', async () => {
+    test('POST /api/rfqs/:id/quotes 404s a vendor for the never-invited RFQ', async () => {
       const res = await request(app)
         .post(`/api/rfqs/${outCatNumber}/quotes`)
         .set(authHeader('vendor'))
@@ -760,7 +808,7 @@ describe('RFQ ingestion & summary HTTP routes', () => {
       expect(res.statusCode).toBe(404);
     });
 
-    test('a vendor can read and quote an in-category RFQ', async () => {
+    test('a vendor can read and quote the RFQ they were invited to', async () => {
       const read = await request(app).get(`/api/rfqs/${inCatNumber}`).set(authHeader('vendor'));
       expect(read.statusCode).toBe(200);
       const quote = await request(app)
@@ -768,6 +816,28 @@ describe('RFQ ingestion & summary HTTP routes', () => {
         .set(authHeader('vendor'))
         .send({ unitPrice: 100, totalPrice: 100 });
       expect(quote.statusCode).toBe(200);
+    });
+
+    test('GET /api/rfqs/:id/vendor-candidates 404s for an unknown RFQ', async () => {
+      const res = await request(app).get('/api/rfqs/does-not-exist/vendor-candidates').set(authHeader('category_manager'));
+      expect(res.statusCode).toBe(404);
+    });
+
+    test('POST /api/rfqs/:id/invite-vendors 404s for an unknown RFQ', async () => {
+      const res = await request(app)
+        .post('/api/rfqs/does-not-exist/invite-vendors')
+        .set(authHeader('category_manager'))
+        .send({ vendorIds: [vendorId] });
+      expect(res.statusCode).toBe(404);
+    });
+
+    test('re-inviting the same vendor is a no-op (invitedCount 0)', async () => {
+      const res = await request(app)
+        .post(`/api/rfqs/${inCatId}/invite-vendors`)
+        .set(authHeader('category_manager'))
+        .send({ vendorIds: [vendorId] });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.invitedCount).toBe(0);
     });
   });
 

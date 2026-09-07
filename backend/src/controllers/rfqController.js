@@ -154,6 +154,54 @@ function getAllRFQs(req, res, next) {
 }
 
 /**
+ * The category-matched vendor pool a category manager can invite from.
+ *
+ * Grants no access by itself — see storeService.candidateVendorsForRFQ. Route
+ * is gated to category_manager/admin.
+ */
+function getVendorCandidates(req, res, next) {
+  try {
+    const { id } = req.params;
+    const rfq = storeService.getRFQById(id);
+    if (!rfq) {
+      return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+    }
+    const candidates = storeService.candidateVendorsForRFQ(rfq);
+    res.json({ success: true, data: candidates });
+  } catch (err) {
+    logger.error(`Error fetching vendor candidates for RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
+/**
+ * A category manager invites specific vendors to an RFQ.
+ *
+ * Only invited vendors (plus any the buyer directly added) can see, be
+ * notified about, be emailed about, or quote this RFQ afterward — see
+ * storeService.vendorCoversRFQ. Route is gated to category_manager/admin.
+ */
+function inviteVendors(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { vendorIds } = req.body || {};
+    if (!Array.isArray(vendorIds) || vendorIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'vendorIds must be a non-empty array.' });
+    }
+    const rfq = storeService.getRFQById(id);
+    if (!rfq) {
+      return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+    }
+    const result = storeService.inviteVendorsToRFQ(id, vendorIds, req.user && req.user.email);
+    logger.info(`Invited vendors to RFQ ${id}`, { id, invitedCount: result.invitedCount }, 'RFQ_CONTROLLER');
+    res.json({ success: true, data: result.updatedRFQ, invitedCount: result.invitedCount });
+  } catch (err) {
+    logger.error(`Error inviting vendors to RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
+/**
  * One RFQ, by RFQ number or row id.
  *
  * A hit on another buyer's RFQ returns the same 404 as an id that does not
@@ -715,6 +763,8 @@ function approvePO(req, res, next) {
 module.exports = {
   getRFQs,
   getAllRFQs,
+  getVendorCandidates,
+  inviteVendors,
   getRFQById,
   getRFQSummary,
   createRFQ,
