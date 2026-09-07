@@ -2,6 +2,7 @@ import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import Header from '@/app/components/Header';
 import * as storeModule from '@/lib/store';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 jest.mock('@/lib/store');
 
@@ -11,11 +12,18 @@ jest.mock('next/navigation', () => ({
 }));
 
 jest.mock('@/lib/authClient', () => ({
-  authClient: { logout: jest.fn().mockResolvedValue(undefined), getToken: jest.fn().mockReturnValue(null) },
+  // getToken is reached through NotificationBell/notificationClient (exercised in
+  // NotificationBell.test.tsx; here it only needs a quiet transport so Header
+  // renders). changePassword is reached through the Account & Security panel the
+  // header renders in its overlay — no test here submits that form, but the
+  // module has to expose it so the panel can import it.
+  authClient: {
+    logout: jest.fn().mockResolvedValue(undefined),
+    getToken: jest.fn().mockReturnValue(null),
+    changePassword: jest.fn().mockResolvedValue({ success: true }),
+  },
 }));
 
-// The notification bell is exercised in NotificationBell.test.tsx; here it only
-// needs a quiet transport so Header renders.
 jest.mock('@/lib/notificationClient', () => ({
   fetchNotifications: jest.fn().mockResolvedValue({ success: true, notifications: [], unreadCount: 0 }),
   markNotificationRead: jest.fn().mockResolvedValue(true),
@@ -266,63 +274,47 @@ describe('Header', () => {
     expect(mockReplace).toHaveBeenCalledWith('/login');
   });
 
-  it('opens account modal and handles display name & password updates and top and bottom close buttons', () => {
+  // Buyers reach these forms as Section 4 of /buyer/profile, so offering the
+  // overlay as well would give the same settings two homes.
+  it('omits the account overlay for buyers, who manage it on their profile page', () => {
+    render(<Header />);
+
+    fireEvent.click(screen.getByTitle('Signed-in account details'));
+
+    expect(screen.queryByText(UI_STRINGS.accountSecurity.menuLabel)).not.toBeInTheDocument();
+    expect(screen.queryByText(UI_STRINGS.accountSecurity.panelTitle)).not.toBeInTheDocument();
+  });
+
+  // Vendor, category manager and admin have no profile screen of their own, so
+  // the overlay stays reachable for them.
+  it('opens the account overlay for roles without a profile page and closes it from both controls', () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      ...(storeModule.useApp as jest.Mock)(),
+      currentRole: 'vendor',
+    });
+
     render(<Header />);
 
     const profileBtn = screen.getByTitle('Signed-in account details');
     fireEvent.click(profileBtn);
+    fireEvent.click(screen.getByText(UI_STRINGS.accountSecurity.menuLabel));
 
-    const accountBtn = screen.getByText(/Account & Security/);
-    fireEvent.click(accountBtn);
+    // The overlay supplies the chrome; the forms come from AccountSecurityPanel,
+    // which is covered by its own suite.
+    expect(screen.getByText(UI_STRINGS.accountSecurity.panelTitle)).toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText(UI_STRINGS.accountSecurity.currentPasswordPlaceholder)
+    ).toBeInTheDocument();
 
-    expect(screen.getByText('Account & Security Settings')).toBeInTheDocument();
+    // Close from the header ✕.
+    fireEvent.click(screen.getByText('✕'));
+    expect(screen.queryByText(UI_STRINGS.accountSecurity.panelTitle)).not.toBeInTheDocument();
 
-    // Display Name Update validation and success
-    const nameInput = screen.getByPlaceholderText('Enter your full display name...');
-    const saveNameBtn = screen.getByText('Save Name');
-
-    fireEvent.change(nameInput, { target: { value: '' } });
-    fireEvent.click(saveNameBtn);
-    expect(mockShowToast).toHaveBeenCalledWith('Validation Error', 'Display Name cannot be empty.', 'warning');
-
-    fireEvent.change(nameInput, { target: { value: 'New Name' } });
-    fireEvent.click(saveNameBtn);
-    expect(mockShowToast).toHaveBeenCalledWith('Profile Updated', 'Account display name set to: New Name', 'success');
-
-    // Password Update validation
-    const updatePwdBtn = screen.getByText('Update Password');
-    fireEvent.click(updatePwdBtn);
-    expect(mockShowToast).toHaveBeenCalledWith('Validation Error', 'Please enter your current password.', 'warning');
-
-    const currPwdInput = screen.getByPlaceholderText('Enter your current password');
-    const newPwdInput = screen.getByPlaceholderText('Min 8 characters');
-    const confirmPwdInput = screen.getByPlaceholderText('Re-enter new password');
-
-    fireEvent.change(currPwdInput, { target: { value: 'old123' } });
-    fireEvent.change(newPwdInput, { target: { value: 'short' } });
-    fireEvent.click(updatePwdBtn);
-    expect(mockShowToast).toHaveBeenCalledWith('Weak Password', expect.any(String), 'warning');
-
-    fireEvent.change(newPwdInput, { target: { value: 'password123' } });
-    fireEvent.change(confirmPwdInput, { target: { value: 'password456' } });
-    fireEvent.click(updatePwdBtn);
-    expect(mockShowToast).toHaveBeenCalledWith('Password Mismatch', expect.any(String), 'warning');
-
-    fireEvent.change(confirmPwdInput, { target: { value: 'password123' } });
-    fireEvent.click(updatePwdBtn);
-    expect(mockShowToast).toHaveBeenCalledWith('Password Changed Successfully', expect.any(String), 'success');
-
-    // Close Settings with top X button
-    const closeXBtn = screen.getByText('✕');
-    fireEvent.click(closeXBtn);
-    expect(screen.queryByText('Account & Security Settings')).not.toBeInTheDocument();
-
-    // Reopen and test bottom Close Settings button
+    // Reopen and close from the footer button.
     fireEvent.click(profileBtn);
-    fireEvent.click(screen.getByText(/Account & Security/));
-    const closeBottomBtn = screen.getByText('Close Settings');
-    fireEvent.click(closeBottomBtn);
-    expect(screen.queryByText('Account & Security Settings')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText(UI_STRINGS.accountSecurity.menuLabel));
+    fireEvent.click(screen.getByText(UI_STRINGS.accountSecurity.closeAction));
+    expect(screen.queryByText(UI_STRINGS.accountSecurity.panelTitle)).not.toBeInTheDocument();
   });
 });
 
@@ -396,12 +388,9 @@ describe('Header session identity', () => {
     });
     openProfile();
     // Shown on the trigger and again on the persona card inside the popover.
+    // The same fallback is asserted for the Account & Security form in that
+    // component's own suite.
     expect(screen.getAllByText('buyer@procucev.com').length).toBeGreaterThan(1);
-
-    fireEvent.click(screen.getByText(/Account & Security/));
-    expect(screen.getByPlaceholderText('Enter your full display name...')).toHaveValue(
-      'buyer@procucev.com'
-    );
   });
 
   it('names the one-time-code method the session was verified with', () => {

@@ -5,7 +5,7 @@
 function generateStandardRFQEmail(rfq, vendor) {
   const vendorName = vendor ? vendor.name : 'Preferred Supplier Partner';
   const contactPerson = vendor ? vendor.contactPerson : 'Procurement Team';
-  const vendorEmail = vendor ? vendor.email : 'partner@enterprise.com';
+  const vendorEmail = (vendor && vendor.email) || 'navinchaudhary.dev@gmail.com';
   const rfqNumber = rfq.rfqNumber || 'RFQ-2026';
   const deadline = rfq.deadline || '2026-09-15';
   const category = rfq.category || 'Industrial Equipment & Spares';

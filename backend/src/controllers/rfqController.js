@@ -7,6 +7,8 @@ const geminiService = require('../services/geminiService');
 const rfqAttachmentService = require('../services/rfqAttachmentService');
 const rfqSummaryService = require('../services/rfqSummaryService');
 const { logger } = require('../services/loggerService');
+const emailGatewayService = require('../services/emailGatewayService');
+const mailerService = require('../services/mailerService');
 const {
   VALIDATION_SCHEMAS,
   validatePayload,
@@ -208,6 +210,17 @@ async function createRFQ(req, res, next) {
     // logged in rather than a client-supplied or globally-shared value.
     const requestingBuyerAccount = req.user ? storeService.getBuyerAccountByEmail(req.user.email) : null;
     const created = storeService.createRFQ({ ...body, extractedEntities: lineItems, aiSummary }, requestingBuyerAccount);
+
+    // Dispatch real email notification to target gateway address (e.g. navinchaudhary.dev@gmail.com)
+    if (body.source === 'email_gateway' || body.targetGatewayEmail) {
+      const recipientEmail = body.targetGatewayEmail || 'navinchaudhary.dev@gmail.com';
+      void mailerService.sendRequisitionNotificationEmail(
+        recipientEmail,
+        created,
+        body.sourceEmail || (req.user && req.user.email)
+      );
+    }
+
     res.status(201).json({ success: true, data: created });
   } catch (err) {
     logger.error('Error creating RFQ', err, 'RFQ_CONTROLLER');
@@ -250,6 +263,55 @@ async function ingestRFQ(req, res, next) {
   } catch (err) {
     logger.error('Error ingesting RFQ line items', err, 'RFQ_CONTROLLER');
     next(err);
+  }
+}
+
+/**
+ * Report the autonomous mailbox gateway's state.
+ *
+ * Diagnostic, and readable by any signed-in user: the buyer needs to know which
+ * address to forward requisitions to and whether anything is being watched.
+ * Credentials are never part of the payload.
+ */
+async function getEmailGatewayStatus(req, res, next) {
+  try {
+    const status = await emailGatewayService.getStatus();
+    return res.json({ success: true, data: status });
+  } catch (err) {
+    logger.error('Error reading email gateway status', err, 'RFQ_CONTROLLER');
+    return next(err);
+  }
+}
+
+/**
+ * Check the mailbox now rather than waiting for the next interval.
+ *
+ * Exists because a two-minute poll makes the feature untestable by hand. The
+ * ingestion ledger still de-duplicates, so pressing this repeatedly cannot raise
+ * the same requisition twice.
+ */
+async function pollEmailGateway(req, res, next) {
+  try {
+    const result = await emailGatewayService.pollOnce();
+
+    if (result.skipped) {
+      // Not a fault: the gateway is off, unconfigured, or a check is already
+      // running. A 409 lets the UI explain rather than report a failure.
+      return res.status(409).json({ success: false, error: result.reason });
+    }
+    if (result.error) {
+      return res.status(502).json({ success: false, error: result.error });
+    }
+
+    logger.info(
+      `Manual mailbox check by ${req.user && req.user.email}: ${result.ingested} of ${result.considered} ingested`,
+      { considered: result.considered, ingested: result.ingested, pending: result.pending },
+      'RFQ_CONTROLLER'
+    );
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    logger.error('Error polling the email gateway', err, 'RFQ_CONTROLLER');
+    return next(err);
   }
 }
 
@@ -658,6 +720,8 @@ module.exports = {
   createRFQ,
   ingestRFQ,
   extractRFQFromDocument,
+  getEmailGatewayStatus,
+  pollEmailGateway,
   uploadRFQAttachment,
   downloadRFQAttachment,
   updateRFQ,

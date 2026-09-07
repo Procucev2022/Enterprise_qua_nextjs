@@ -295,6 +295,49 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     );
     expect(next).toHaveBeenCalled();
 
+    // Test createRFQ with email_gateway source and explicit targetGatewayEmail
+    const emailRes = mockRes();
+    await rfqController.createRFQ(
+      buyerReq({
+        user: { email: 'buyer@procucev.com', orgName: 'L&T' },
+        body: {
+          title: 'Gate Valves Requisition',
+          category: 'Piping',
+          budget: 25000,
+          targetDeliveryDate: '2026-10-15',
+          deliveryLocation: 'Navi Mumbai',
+          deliveryPincode: '400701',
+          source: 'email_gateway',
+          targetGatewayEmail: 'navinchaudhary.dev@gmail.com',
+          sourceEmail: 'requisition@buyer.com',
+          extractedEntities: [{ itemName: 'Valve', quantity: 2, technicalSpecs: 'DN50' }],
+        },
+      }),
+      emailRes,
+      next
+    );
+    expect(emailRes.status).toHaveBeenCalledWith(201);
+
+    // Test createRFQ with targetGatewayEmail fallback to default recipient
+    const emailRes2 = mockRes();
+    await rfqController.createRFQ(
+      {
+        body: {
+          title: 'Gasket Requisition',
+          category: 'Piping',
+          budget: 5000,
+          targetDeliveryDate: '2026-10-15',
+          deliveryLocation: 'Navi Mumbai',
+          deliveryPincode: '400701',
+          source: 'email_gateway',
+          lineItems: [{ itemName: 'Gasket', quantity: 10 }],
+        },
+      },
+      emailRes2,
+      next
+    );
+    expect(emailRes2.status).toHaveBeenCalledWith(201);
+
     // ── Ingestion & summary error branches ──
     const rfqSummaryService = require('../src/services/rfqSummaryService');
     jest.spyOn(rfqSummaryService, 'buildPortfolioSummary').mockImplementationOnce(() => {

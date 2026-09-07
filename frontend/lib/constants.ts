@@ -449,6 +449,11 @@ export const LOGIN_ROUTE = '/login';
 export const OTP_CODE_LENGTH = 6;
 export const OTP_EXPIRY_MINUTES = 15;
 
+// PASSWORD_MIN_LENGTH is defined in ./validationSchemas and re-exported at the
+// bottom of this file. It lives there because the change-password schema needs it
+// to build its `minLength` rule, and importing it back from here would close a
+// cycle: this module already imports from that one.
+
 /**
  * Buyer organisation profile endpoints.
  *
@@ -639,5 +644,6 @@ export {
   GSTIN_PATTERN,
   PHONE_PATTERN,
   PINCODE_PATTERN,
+  PASSWORD_MIN_LENGTH,
 } from './validationSchemas';
 

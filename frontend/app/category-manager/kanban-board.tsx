@@ -13,9 +13,14 @@ import {
   Sliders,
   TrendingUp,
   Search,
+  Sparkles,
   Zap,
 } from 'lucide-react';
-import { SOURCING_MODES } from '@/lib/constants';
+import { SOURCING_MODES, formatIndianDateTime } from '@/lib/constants';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { RFQEditModal } from '@/app/buyer/RFQEditModal';
+
+const KANBAN = UI_STRINGS.categoryManagerKanban;
 
 interface KanbanBoardProps {
   onNavigateToMatrix?: (rfq: RFQItem) => void;
@@ -37,12 +42,16 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
     addAuditLog,
     showToast,
     setSelectedRFQForMatrix,
+    updateRFQ,
     openRFQDeepDive,
     deepDiveModalOpen,
     setDeepDiveModalOpen,
     selectedRFQForDeepDive,
   } = useApp();
 
+  // The RFQ the category manager is reviewing. Reuses the existing edit dialog
+  // rather than introducing a second category-management surface.
+  const [rfqUnderReview, setRfqUnderReview] = useState<RFQItem | null>(null);
   const [chaserModalOpen, setChaserModalOpen] = useState(false);
   const [surveyModalOpen, setSurveyModalOpen] = useState(false);
   const [selectedRfqForChaser, setSelectedRfqForChaser] = useState<string>('');
@@ -257,32 +266,99 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
             )}
             {col1_parsing.map((rfq) => {
               const confidence = avgConfidence(rfq);
+              const items = rfq.extractedEntities || [];
+              // Rows the extractor could not place. This is what the category
+              // manager is being asked to resolve, so it is stated on the card
+              // rather than only discoverable after opening the RFQ.
+              const needsCategoryReview = items.filter(
+                (item) => !item.majorCategory || !item.minorCategory
+              ).length;
+              const majors = Array.from(
+                new Set(items.map((item) => item.majorCategory).filter(Boolean))
+              );
+              const minors = Array.from(
+                new Set(items.map((item) => item.minorCategory).filter(Boolean))
+              );
               return (
                 <div
                   key={rfq.id}
+                  data-testid={`parsing-card-${rfq.rfqNumber}`}
                   className="p-3.5 rounded-xl bg-white dark:bg-gray-900/90 border border-slate-200 dark:border-gray-800 hover:border-slate-300 dark:hover:border-gray-700 transition-all text-xs space-y-2 shadow-xs"
                 >
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <span className="font-bold text-slate-900 dark:text-white mono">{rfq.rfqNumber}</span>
                     {modeBadge(rfq.sourcingMode)}
                   </div>
-                  <p className="text-slate-700 dark:text-gray-300 text-[11px] truncate">{rfq.title}</p>
+                  <p className="text-slate-700 dark:text-gray-300 text-[11px] truncate" title={rfq.title}>
+                    {rfq.title}
+                  </p>
+
+                  {/* Where it came from. An autonomously ingested RFQ has had no
+                      human involvement yet, which changes how it should be read. */}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span
+                      className={`text-[9px] font-extrabold px-2 py-0.5 rounded-full ${
+                        rfq.source === 'email_gateway'
+                          ? 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300'
+                          : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300'
+                      }`}
+                    >
+                      {KANBAN.sourceLabels[rfq.source || 'web_portal'] || rfq.source}
+                    </span>
+                    {needsCategoryReview > 0 && (
+                      <span className="text-[9px] font-extrabold px-2 py-0.5 rounded-full bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300">
+                        {formatString(KANBAN.needsCategoryReview, { count: needsCategoryReview })}
+                      </span>
+                    )}
+                  </div>
+
                   <div className="p-2 rounded bg-slate-50 dark:bg-gray-950 text-[10px] text-slate-600 dark:text-gray-400 space-y-1 border border-slate-100 dark:border-transparent">
-                    <div className="flex justify-between">
-                      <span>Category:</span>
-                      <span className="text-slate-900 dark:text-gray-200 font-medium">{rfq.category}</span>
+                    <div className="flex justify-between gap-2">
+                      <span>{KANBAN.buyerLabel}:</span>
+                      <span className="text-slate-900 dark:text-gray-200 font-medium truncate">
+                        {rfq.buyerAccountName || rfq.sourceEmail || '—'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span>{KANBAN.majorCategoryLabel}:</span>
+                      <span className="text-slate-900 dark:text-gray-200 font-medium truncate">
+                        {majors.length > 0 ? majors.join(', ') : rfq.category || '—'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span>{KANBAN.minorCategoryLabel}:</span>
+                      <span className="text-slate-900 dark:text-gray-200 font-medium truncate">
+                        {minors.length > 0 ? minors.join(', ') : '—'}
+                      </span>
                     </div>
                     <div className="flex justify-between">
-                      <span>Items:</span>
-                      <span className="text-slate-900 dark:text-gray-200 font-medium">{rfq.extractedEntities.length}</span>
+                      <span>{KANBAN.itemsLabel}:</span>
+                      <span className="text-slate-900 dark:text-gray-200 font-medium">{items.length}</span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span>{KANBAN.receivedLabel}:</span>
+                      <span className="text-slate-900 dark:text-gray-200 font-medium">
+                        {rfq.createdAt ? formatIndianDateTime(rfq.createdAt) : '—'}
+                      </span>
                     </div>
                     {confidence !== null && (
                       <div className="flex justify-between">
-                        <span>Avg. Extraction Confidence:</span>
+                        <span>{KANBAN.confidenceLabel}:</span>
                         <span className="text-emerald-600 dark:text-emerald-400 font-bold">{confidence}%</span>
                       </div>
                     )}
                   </div>
+
+                  {/* Review reuses the existing RFQ edit dialog, which already
+                      edits per-row major/minor category. Releasing to vendors is
+                      deliberately not offered yet — it is the next phase. */}
+                  <button
+                    type="button"
+                    onClick={() => setRfqUnderReview(rfq)}
+                    className="btn btn-secondary btn-xs w-full font-bold flex items-center justify-center gap-1.5"
+                  >
+                    <Sparkles size={12} /> {KANBAN.reviewAction}
+                  </button>
                 </div>
               );
             })}
@@ -461,6 +537,16 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
       </div>
 
       {/* Multi-Channel Chaser Modal */}
+      {/* Category review for an ingested RFQ. Same dialog the buyer uses, so the
+          line items and their major/minor categories are edited in one place. It
+          saves through PUT /api/rfqs/:id and does not change the RFQ's status, so
+          reviewing does not release anything to vendors. */}
+      <RFQEditModal
+        rfq={rfqUnderReview}
+        onClose={() => setRfqUnderReview(null)}
+        onSave={updateRFQ}
+      />
+
       <MultiChannelChaserModal
         isOpen={chaserModalOpen}
         onClose={() => setChaserModalOpen(false)}

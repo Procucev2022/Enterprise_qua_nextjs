@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const { logger } = require('./loggerService');
 const storeService = require('./storeService');
 const mailerService = require('./mailerService');
-const { AUTH_MESSAGES, IDENTITY_OTP_CONFIG } = require('../config/constants');
+const { AUTH_MESSAGES, IDENTITY_OTP_CONFIG, PASSWORD_MIN_LENGTH } = require('../config/constants');
 const pool = require('../db/pool');
 const identityQueries = require('../db/identityQueries');
 const authSessionQueries = require('../db/authSessionQueries');
@@ -378,6 +378,79 @@ async function authenticateWithPassword(email, password, ipAddress, mobile) {
 }
 
 /**
+ * Change the password of the account the caller is signed in as.
+ *
+ * The session token proves who is asking, but not that they still know the
+ * credential — a borrowed or forgotten-unlocked browser would otherwise be
+ * enough to lock the real owner out. So the current password is re-verified
+ * against a freshly loaded row on every attempt, and the account is located by
+ * its primary key rather than by email, which is not unique in this schema.
+ *
+ * NOTE ON STORAGE: the new password is written in the same form as the existing
+ * one, which is plaintext. That is not this endpoint's choice — sign-in compares
+ * with identityQueries.verifyStoredPassword, a constant-time plaintext
+ * comparison, because accounts carried over from the previous schema were stored
+ * that way. Hashing here would lock every one of those accounts out at their next
+ * sign-in. Introducing hashing needs a migration that makes login hash-aware
+ * first; see the note in identityQueries.
+ */
+async function changePassword({ userUuid, email, currentPassword, newPassword, ipAddress }) {
+  if (!currentPassword || !newPassword) {
+    throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_FIELDS_REQUIRED);
+  }
+  if (String(newPassword).length < PASSWORD_MIN_LENGTH) {
+    throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_TOO_SHORT);
+  }
+  if (currentPassword === newPassword) {
+    throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_UNCHANGED);
+  }
+
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+
+  // Read the row rather than trusting the token: the token carries no password,
+  // and the account may have been deactivated since it was issued.
+  const user = await loadIdentityUser(normalizedEmail);
+  if (!user || (userUuid && user.id !== userUuid)) {
+    logger.warn(
+      `Password change blocked, account record not resolvable for ${normalizedEmail}`,
+      { ipAddress },
+      'AUTH_SERVICE'
+    );
+    throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_ACCOUNT_MISSING);
+  }
+
+  assertUserCanSignIn(user, normalizedEmail, ipAddress);
+
+  if (!identityQueries.verifyStoredPassword(currentPassword, user.password)) {
+    logger.warn(
+      `Password change rejected, current password incorrect for ${normalizedEmail}`,
+      { ipAddress },
+      'AUTH_SERVICE'
+    );
+    throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_CURRENT_INCORRECT);
+  }
+
+  const written = await identityQueries.updateUserPasswordByUuid(user.id, newPassword, user.email);
+  if (!written) {
+    logger.error(
+      'Password change matched no row, so the existing password still stands',
+      new Error(AUTH_MESSAGES.CHANGE_PASSWORD_WRITE_FAILED),
+      'AUTH_SERVICE'
+    );
+    throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_WRITE_FAILED);
+  }
+
+  logger.audit(`Password changed for ${user.email}`, user.email, { role: user.role, ipAddress });
+  storeService.addAuditLog({
+    userEmail: user.email,
+    action: 'Account password changed by the account holder',
+    ipAddress,
+  });
+
+  return { success: true, message: AUTH_MESSAGES.CHANGE_PASSWORD_SUCCESS };
+}
+
+/**
  * Generate and dispatch a 6-digit email OTP.
  *
  * The email + mobile pair is validated and the approval gates are applied first,
@@ -578,6 +651,7 @@ module.exports = {
   assertSessionActive,
   revokeSessionToken,
   authenticateWithPassword,
+  changePassword,
   requestOtp,
   verifyOtp,
   registerUser,

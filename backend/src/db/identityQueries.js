@@ -354,12 +354,33 @@ async function insertBuyerAccount({
 }
 
 /**
- * Update an account password.
+ * Update an account password, addressed by login email.
+ *
+ * `username` carries no unique index, so this can touch more than one row when
+ * the migrated data holds duplicate logins. It is kept for the provisioning
+ * script, which works from an email address and no session. Self-service changes
+ * must use updateUserPasswordByUuid instead.
  */
 async function updateUserPassword(email, newPassword) {
   const result = await pool.query(
     'update "user" set password = $1, last_modified_ts = now() where lower(username) = $2',
     [newPassword, String(email).trim().toLowerCase()]
+  );
+  return (result.rowCount || 0) > 0;
+}
+
+/**
+ * Update an account password, addressed by primary key.
+ *
+ * Used by the self-service change-password endpoint, where the account is known
+ * from the session token's `sub` claim. Keying on the primary key guarantees the
+ * write lands on exactly the caller's row, which the email-keyed variant above
+ * cannot promise.
+ */
+async function updateUserPasswordByUuid(userUuid, newPassword, actorEmail) {
+  const result = await pool.query(
+    'update "user" set password = $1, last_modified_by = $2, last_modified_ts = now() where uuid = $3',
+    [newPassword, actorEmail || 'enterprise-workspace', String(userUuid)]
   );
   return (result.rowCount || 0) > 0;
 }
@@ -378,6 +399,7 @@ module.exports = {
   buildCompanyId,
   insertBuyerAccount,
   updateUserPassword,
+  updateUserPasswordByUuid,
   MASTER_TABLES,
   USER_SELECT,
 };

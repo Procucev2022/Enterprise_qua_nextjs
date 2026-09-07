@@ -145,6 +145,8 @@ describe('app/buyer/buyer-profile.tsx', () => {
     (useApp as jest.Mock).mockReturnValue({
       addAuditLog: mockAddAuditLog,
       showToast: mockShowToast,
+      // The Security section rendered at the bottom of the page reads showToast
+      // only; it identifies the account from the session token server-side.
     });
     (saveBuyerProfile as jest.Mock).mockResolvedValue({
       success: true,
@@ -162,6 +164,28 @@ describe('app/buyer/buyer-profile.tsx', () => {
     expect(screen.getByText(/Registered Corporate Address/i)).toBeInTheDocument();
     expect(screen.getByText(/Key Procurement Contact Person/i)).toBeInTheDocument();
     expect(screen.getByText(/Section 3: Relevant Procurement Categories/i)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.accountSecurity.sectionTitle)).toBeInTheDocument();
+  });
+
+  // The section's own forms are covered in AccountSecurityPanel's suite. What
+  // matters here is that they are not nested inside the organisation form, which
+  // would make the browser drop them and hand their submit buttons to the
+  // profile save instead.
+  it('renders the account security forms outside the organization profile form', async () => {
+    await renderLoaded();
+
+    const currentPasswordInput = screen.getByPlaceholderText(
+      UI_STRINGS.accountSecurity.currentPasswordPlaceholder
+    );
+    const accountForm = currentPasswordInput.closest('form');
+    expect(accountForm).not.toBeNull();
+
+    const legalEntityInput = screen.getByDisplayValue('Navin Chaudhary Enterprises');
+    const profileForm = legalEntityInput.closest('form');
+    expect(profileForm).not.toBeNull();
+
+    expect(accountForm).not.toBe(profileForm);
+    expect(profileForm?.contains(accountForm as Node)).toBe(false);
   });
 
   // ── Load ──────────────────────────────────────────────────────────────────

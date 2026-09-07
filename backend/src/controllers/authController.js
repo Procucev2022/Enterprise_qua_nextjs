@@ -141,6 +141,47 @@ async function logout(req, res, next) {
   }
 }
 
+/**
+ * Change the signed-in account's own password.
+ *
+ * Runs behind `authenticate`, so the target account comes from the verified
+ * session claims and never from the request body — a caller cannot nominate
+ * somebody else's account to change.
+ */
+async function changePassword(req, res, next) {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+    const ipAddress = getClientIp(req);
+
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.changePassword, {
+      currentPassword,
+      newPassword,
+    });
+    if (!isValid) {
+      return res.status(400).json({ success: false, error: Object.values(errors)[0] });
+    }
+
+    const result = await authService.changePassword({
+      userUuid: req.user?.sub,
+      email: req.user?.email,
+      currentPassword,
+      newPassword,
+      ipAddress,
+    });
+    return res.json(result);
+  } catch (err) {
+    logger.warn(
+      'Password change failed in authController',
+      { error: err.message, email: req.user?.email },
+      'AUTH_CONTROLLER'
+    );
+    return res.status(400).json({
+      success: false,
+      error: err.message || AUTH_MESSAGES.CHANGE_PASSWORD_WRITE_FAILED,
+    });
+  }
+}
+
 async function listUsers(req, res, next) {
   try {
     const users = await authService.getAllUsers();
@@ -160,5 +201,6 @@ module.exports = {
   register,
   getSession,
   logout,
+  changePassword,
   listUsers,
 };
