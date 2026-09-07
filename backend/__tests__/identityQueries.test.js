@@ -468,4 +468,52 @@ describe('Identity queries (Neon PostgreSQL)', () => {
       expect(spy).toHaveBeenCalledWith(expect.any(String), ['New@1234', 'a@b.com']);
     });
   });
+
+  // `username` has no unique index, so the email-keyed update above can rewrite
+  // more than one row. Self-service password changes address the primary key
+  // instead, which is what this variant exists for.
+  describe('updateUserPasswordByUuid', () => {
+    const UUID = '1b7083fa-78b1-4372-bf11-6eca62db9b7e';
+
+    test('reports success when the row was updated', async () => {
+      jest.spyOn(dbPool, 'query').mockResolvedValue({ rowCount: 1 });
+      await expect(
+        identityQueries.updateUserPasswordByUuid(UUID, 'New@1234', 'buyer@procucev.com')
+      ).resolves.toBe(true);
+    });
+
+    test('reports failure when no row matched the uuid', async () => {
+      jest.spyOn(dbPool, 'query').mockResolvedValue({ rowCount: 0 });
+      await expect(
+        identityQueries.updateUserPasswordByUuid(UUID, 'New@1234', 'buyer@procucev.com')
+      ).resolves.toBe(false);
+    });
+
+    test('treats an absent rowCount as no update rather than throwing', async () => {
+      jest.spyOn(dbPool, 'query').mockResolvedValue({});
+      await expect(
+        identityQueries.updateUserPasswordByUuid(UUID, 'New@1234', 'buyer@procucev.com')
+      ).resolves.toBe(false);
+    });
+
+    test('filters on the primary key and records the actor', async () => {
+      const spy = jest.spyOn(dbPool, 'query').mockResolvedValue({ rowCount: 1 });
+      await identityQueries.updateUserPasswordByUuid(UUID, 'New@1234', 'buyer@procucev.com');
+
+      const [sql, params] = spy.mock.calls[0];
+      expect(sql).toContain('where uuid = $3');
+      expect(sql).not.toContain('username');
+      expect(params).toEqual(['New@1234', 'buyer@procucev.com', UUID]);
+    });
+
+    test('falls back to a system actor when no email is supplied', async () => {
+      const spy = jest.spyOn(dbPool, 'query').mockResolvedValue({ rowCount: 1 });
+      await identityQueries.updateUserPasswordByUuid(UUID, 'New@1234');
+      expect(spy).toHaveBeenCalledWith(expect.any(String), [
+        'New@1234',
+        'enterprise-workspace',
+        UUID,
+      ]);
+    });
+  });
 });

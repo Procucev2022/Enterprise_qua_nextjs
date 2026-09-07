@@ -26,6 +26,14 @@ const INDIAN_MOBILE_MESSAGE = 'Enter a valid 10-digit Indian mobile number, for 
 const OTP_CODE_REGEX = /^\d{6}$/;
 const OTP_CODE_MESSAGE = 'Enter the 6-digit verification code sent to your registered email address.';
 
+// Shortest password accepted when an account holder changes their own password.
+// Mirrors PASSWORD_MIN_LENGTH in frontend/lib/constants.ts, which also drives the
+// `minLength` attribute on the field, so the browser hint and this boundary
+// cannot disagree. Deliberately not applied to sign-in: existing accounts
+// migrated from the previous schema may hold shorter passwords, and rejecting
+// them at login would lock those users out instead of prompting a change.
+const PASSWORD_MIN_LENGTH = 8;
+
 // ------------------------------------------------------------------------------
 // STATUTORY IDENTIFIERS (buyer organisation profile)
 // ------------------------------------------------------------------------------
@@ -302,6 +310,27 @@ const VALIDATION_SCHEMAS = {
     },
   },
 
+  // Self-service password change, POST /api/auth/change-password.
+  //
+  // The caller is identified by the session token, so no email is accepted in
+  // the body: a request can only ever change the password of the account it is
+  // authenticated as. `minLength` is the only strength rule enforced here, and
+  // it matches PASSWORD_MIN_LENGTH on the frontend so the browser hint and the
+  // server boundary agree.
+  changePassword: {
+    currentPassword: {
+      type: 'string',
+      required: true,
+      message: 'Enter your current password to authorise the change.',
+    },
+    newPassword: {
+      type: 'string',
+      required: true,
+      minLength: PASSWORD_MIN_LENGTH,
+      message: 'Choose a new password of at least 8 characters.',
+    },
+  },
+
   register: {
     email: { type: 'string', required: true, message: 'Email is required for registration.' },
     name: { type: 'string', required: false },
@@ -436,6 +465,7 @@ module.exports = {
   INDIAN_MOBILE_MESSAGE,
   OTP_CODE_REGEX,
   OTP_CODE_MESSAGE,
+  PASSWORD_MIN_LENGTH,
   PAN_REGEX,
   PAN_MESSAGE,
   CIN_REGEX,

@@ -462,3 +462,161 @@ describe('authClient session restoration', () => {
     expect(client.getSessionUser()).toBeNull();
   });
 });
+
+// ==============================================================================
+// CHANGE PASSWORD
+// ==============================================================================
+// POST /api/auth/change-password identifies the account from the bearer token, so
+// this method sends only the credential pair. Every failure path has to be
+// distinguishable by the caller: an unreachable API, a rejected token and a
+// refused password all need different handling on screen.
+// ==============================================================================
+
+describe('AuthClient.changePassword', () => {
+  const CURRENT = 'Pass@123';
+  const NEXT = 'Brand@New456';
+
+  beforeEach(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+    authClient.setSession(null, null);
+    jest.clearAllMocks();
+  });
+
+  /** Put the client in a signed-in state so the token is attached. */
+  const signIn = () => {
+    authClient.setSession(
+      {
+        id: 'usr-buyer-001',
+        email: 'buyer@procucev.com',
+        name: 'Procucev Buyer Desk',
+        role: 'buyer' as const,
+        orgId: 'org-procucev-01',
+        orgName: 'Procucev Heavy Engineering',
+      },
+      'test-jwt-token'
+    );
+  };
+
+  test('sends only the credential pair, with the token as a bearer header', async () => {
+    signIn();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, message: 'Your password has been changed.' }),
+    });
+
+    const res = await authClient.changePassword(CURRENT, NEXT);
+
+    expect(res.success).toBe(true);
+    expect(res.message).toBe('Your password has been changed.');
+
+    const [path, init] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(path).toBe('/api/auth/change-password');
+    expect(init.method).toBe('POST');
+    expect(init.headers.Authorization).toBe('Bearer test-jwt-token');
+    expect(JSON.parse(init.body)).toEqual({ currentPassword: CURRENT, newPassword: NEXT });
+  });
+
+  // Nothing is posted without a token: the endpoint requires authentication, so a
+  // request would be refused anyway and the real problem is the missing session.
+  test('reports an expired session and makes no request when no token is held', async () => {
+    global.fetch = jest.fn();
+
+    const res = await authClient.changePassword(CURRENT, NEXT);
+
+    expect(res).toEqual({ success: false, error: UI_STRINGS.auth.sessionExpired });
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  // Fails closed: the server-side password state is unknown, so the caller must
+  // not be shown a success.
+  test('reports the API as unreachable on a transport failure', async () => {
+    signIn();
+    global.fetch = jest.fn().mockRejectedValue(new Error('connection refused'));
+
+    const res = await authClient.changePassword(CURRENT, NEXT);
+
+    expect(res).toEqual({ success: false, error: UI_STRINGS.auth.networkUnreachable });
+  });
+
+  test('reports a server error when the response body cannot be parsed', async () => {
+    signIn();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => {
+        throw new Error('not json');
+      },
+    });
+
+    const res = await authClient.changePassword(CURRENT, NEXT);
+
+    expect(res).toEqual({ success: false, error: UI_STRINGS.auth.serverErrorFallback });
+  });
+
+  test('clears the local session when the token is rejected', async () => {
+    signIn();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ success: false, error: 'No active session token provided.' }),
+    });
+
+    const res = await authClient.changePassword(CURRENT, NEXT);
+
+    expect(res.success).toBe(false);
+    expect(res.error).toBe('No active session token provided.');
+    expect(authClient.getToken()).toBeNull();
+    expect(authClient.getSessionUser()).toBeNull();
+  });
+
+  test('falls back to expired-session copy when a 401 carries no reason', async () => {
+    signIn();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ success: false }),
+    });
+
+    const res = await authClient.changePassword(CURRENT, NEXT);
+
+    expect(res.error).toBe(UI_STRINGS.auth.sessionExpired);
+    expect(authClient.getToken()).toBeNull();
+  });
+
+  // A refused password is a 400 with an explanation, which is passed through
+  // unchanged so the panel can show exactly which rule failed.
+  test('passes a rejection reason through untouched', async () => {
+    signIn();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({
+        success: false,
+        error: 'Your current password is not correct, so the password was not changed.',
+      }),
+    });
+
+    const res = await authClient.changePassword(CURRENT, NEXT);
+
+    expect(res.error).toBe(
+      'Your current password is not correct, so the password was not changed.'
+    );
+    // A refused password is not a session problem, so the token is kept.
+    expect(authClient.getToken()).toBe('test-jwt-token');
+  });
+
+  test('supplies a fallback when a non-401 failure carries no reason', async () => {
+    signIn();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({ success: false }),
+    });
+
+    const res = await authClient.changePassword(CURRENT, NEXT);
+
+    expect(res.error).toBe(UI_STRINGS.auth.serverErrorFallback);
+  });
+});

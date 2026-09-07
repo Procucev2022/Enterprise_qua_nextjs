@@ -836,6 +836,66 @@ export const UI_STRINGS = {
     maxMinorReached:
       'You have selected {count} of {max} minor procurement categories. Clear one before adding another.',
   },
+
+  // ============================================================================
+  // ACCOUNT & SECURITY
+  // ============================================================================
+  // Copy for the display-name and password-change forms. These used to be inline
+  // literals in the header component; they moved here when the panel was lifted
+  // out of the header so the buyer profile page and the header could share one
+  // implementation without duplicating strings.
+  accountSecurity: {
+    // Headings. The panel holds only the password form, so it is named for
+    // that rather than for "account" settings it no longer contains.
+    menuLabel: 'Security',
+    sectionTitle: 'Section 4: Security',
+    panelTitle: 'Security Settings',
+    sectionDescription:
+      'Change the password used to sign in to your Procucev workspace.',
+
+    // Password fields
+    passwordSectionLabel: 'Change Sign-In Password',
+    currentPasswordLabel: 'Current Password',
+    currentPasswordPlaceholder: 'Enter your current password',
+    newPasswordLabel: 'New Password',
+    newPasswordPlaceholder: 'Min 8 characters',
+    confirmPasswordLabel: 'Confirm New Password',
+    confirmPasswordPlaceholder: 'Re-enter new password',
+    updatePasswordAction: 'Update Password',
+    updatingPasswordAction: 'Updating…',
+
+    // Guidance shown beside the fields. This states what the server actually
+    // enforces and separates it from what is merely advisable: the previous
+    // copy listed an uppercase-and-symbol rule that nothing checked, and
+    // claimed AES encryption at rest that is not in place.
+    policyTitle: 'Password requirements:',
+    policyMinLength: 'At least 8 characters. This is checked when you save.',
+    policyReuse: 'Must be different from your current password.',
+    policyComplexity:
+      'Recommended: mix upper and lower case with at least one number and one symbol.',
+
+    // Toast titles
+    validationErrorTitle: 'Validation Error',
+    weakPasswordTitle: 'Weak Password',
+    passwordMismatchTitle: 'Password Mismatch',
+    passwordChangedTitle: 'Password Changed',
+    changeFailedTitle: 'Password Not Changed',
+
+    // Toast messages. Failure text is supplied by the API so the reason is
+    // specific; these cover the client-side checks and the fallbacks.
+    currentPasswordRequired: 'Enter your current password to authorise the change.',
+    weakPasswordMessage: 'Choose a new password of at least 8 characters.',
+    passwordMismatchMessage: 'The new password and its confirmation do not match.',
+    passwordSameAsCurrent:
+      'The new password is the same as your current one. Choose a different password.',
+    passwordChangedFallback:
+      'Your password has been changed. Use it the next time you sign in.',
+    changeFailedFallback:
+      'Your password could not be changed and your existing password is still in effect. Try again in a moment.',
+
+    // Modal-only affordance, used where the panel is presented as an overlay
+    closeAction: 'Close',
+  },
 };
 
 /**

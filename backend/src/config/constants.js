@@ -257,6 +257,21 @@ const AUTH_MESSAGES = {
   SESSION_EXPIRED: 'Session token has expired',
   TOKEN_DECODE_FAILED: 'Failed to decode token payload',
   LOGOUT_SUCCESS: 'Logged out successfully.',
+  // Self-service password change. The current password is re-verified against
+  // the stored row on every attempt, because the session token proves who the
+  // caller is but not that they still know the credential.
+  CHANGE_PASSWORD_FIELDS_REQUIRED:
+    'Both your current password and the new password are required to change it.',
+  CHANGE_PASSWORD_CURRENT_INCORRECT:
+    'Your current password is not correct, so the password was not changed. Re-enter it and try again.',
+  CHANGE_PASSWORD_TOO_SHORT: 'Choose a new password of at least 8 characters.',
+  CHANGE_PASSWORD_UNCHANGED:
+    'The new password is the same as your current one. Choose a different password.',
+  CHANGE_PASSWORD_ACCOUNT_MISSING:
+    'Your account record could not be read, so the password was not changed. Sign in again and retry.',
+  CHANGE_PASSWORD_WRITE_FAILED:
+    'The new password could not be saved, so your existing password is still in effect. Try again in a moment.',
+  CHANGE_PASSWORD_SUCCESS: 'Your password has been changed. Use it the next time you sign in.',
   LOGOUT_REVOCATION_FAILED:
     'Your session could not be ended because the database is unreachable. Try again; if it persists, close the browser to discard the session locally.',
   IDENTITY_DB_UNAVAILABLE:
@@ -706,6 +721,7 @@ const {
   INDIAN_PINCODE_REGEX,
   INDIAN_PINCODE_MESSAGE,
   ORGANIZATION_TYPES,
+  PASSWORD_MIN_LENGTH,
   VALIDATION_SCHEMAS,
   validatePayload,
 } = require('./validationSchemas');
@@ -756,6 +772,7 @@ module.exports = {
   INDIAN_PINCODE_REGEX,
   INDIAN_PINCODE_MESSAGE,
   ORGANIZATION_TYPES,
+  PASSWORD_MIN_LENGTH,
   VALIDATION_SCHEMAS,
   validatePayload,
 };

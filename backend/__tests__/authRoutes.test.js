@@ -1054,3 +1054,250 @@ describe('Authentication against the account records (/api/auth)', () => {
     });
   });
 });
+
+// ==============================================================================
+// SELF-SERVICE PASSWORD CHANGE (POST /api/auth/change-password)
+// ==============================================================================
+// The account is taken from the session token, never from the request body, so a
+// caller cannot nominate somebody else's account. Being authenticated is not
+// enough on its own either: the current password is re-verified against a freshly
+// read row on every attempt, because a token proves who is asking but not that
+// they still know the credential.
+// ==============================================================================
+
+describe('Changing your own password', () => {
+  const UUID = 'usr-buyer-001';
+  const CURRENT = 'Pass@123';
+  const NEXT = 'Brand@New456';
+
+  /** The signed-in buyer, matching testHelpers' buyer token claims. */
+  function signedInBuyer(overrides = {}) {
+    return buyerRecord({
+      id: UUID,
+      email: 'buyer@procucev.com',
+      password: CURRENT,
+      ...overrides,
+    });
+  }
+
+  let originalPool;
+
+  beforeEach(() => {
+    originalPool = dbPool.pool;
+    dbPool.pool = { query: jest.fn() };
+    jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(signedInBuyer());
+    jest.spyOn(identityQueries, 'updateUserPasswordByUuid').mockResolvedValue(true);
+  });
+
+  afterEach(() => {
+    dbPool.pool = originalPool;
+    jest.restoreAllMocks();
+  });
+
+  // ── Service ───────────────────────────────────────────────────────────────
+  describe('authService.changePassword', () => {
+    const call = (overrides = {}) =>
+      authService.changePassword({
+        userUuid: UUID,
+        email: 'buyer@procucev.com',
+        currentPassword: CURRENT,
+        newPassword: NEXT,
+        ipAddress: '127.0.0.1',
+        ...overrides,
+      });
+
+    test('writes the new password against the primary key and reports success', async () => {
+      await expect(call()).resolves.toEqual({
+        success: true,
+        message: AUTH_MESSAGES.CHANGE_PASSWORD_SUCCESS,
+      });
+      expect(identityQueries.updateUserPasswordByUuid).toHaveBeenCalledWith(
+        UUID,
+        NEXT,
+        'buyer@procucev.com'
+      );
+    });
+
+    test.each([
+      ['no current password', { currentPassword: '' }],
+      ['no new password', { newPassword: '' }],
+    ])('rejects %s', async (_label, overrides) => {
+      await expect(call(overrides)).rejects.toThrow(
+        AUTH_MESSAGES.CHANGE_PASSWORD_FIELDS_REQUIRED
+      );
+      expect(identityQueries.updateUserPasswordByUuid).not.toHaveBeenCalled();
+    });
+
+    test('rejects a new password below the minimum length', async () => {
+      await expect(call({ newPassword: 'Short1' })).rejects.toThrow(
+        AUTH_MESSAGES.CHANGE_PASSWORD_TOO_SHORT
+      );
+      expect(identityQueries.updateUserPasswordByUuid).not.toHaveBeenCalled();
+    });
+
+    test('rejects a new password identical to the current one', async () => {
+      await expect(call({ newPassword: CURRENT })).rejects.toThrow(
+        AUTH_MESSAGES.CHANGE_PASSWORD_UNCHANGED
+      );
+      expect(identityQueries.updateUserPasswordByUuid).not.toHaveBeenCalled();
+    });
+
+    test('rejects a wrong current password without writing', async () => {
+      await expect(call({ currentPassword: 'NotMyPassword1' })).rejects.toThrow(
+        AUTH_MESSAGES.CHANGE_PASSWORD_CURRENT_INCORRECT
+      );
+      expect(identityQueries.updateUserPasswordByUuid).not.toHaveBeenCalled();
+    });
+
+    test('refuses when the account row can no longer be read', async () => {
+      identityQueries.findUserByEmail.mockResolvedValue(null);
+      await expect(call()).rejects.toThrow(AUTH_MESSAGES.CHANGE_PASSWORD_ACCOUNT_MISSING);
+    });
+
+    // Guards against a token whose subject no longer matches the row resolved
+    // from its email claim, which duplicate usernames make possible.
+    test('refuses when the resolved row is not the token subject', async () => {
+      identityQueries.findUserByEmail.mockResolvedValue(signedInBuyer({ id: 'someone-else' }));
+      await expect(call()).rejects.toThrow(AUTH_MESSAGES.CHANGE_PASSWORD_ACCOUNT_MISSING);
+      expect(identityQueries.updateUserPasswordByUuid).not.toHaveBeenCalled();
+    });
+
+    test('applies the same active-account gate as sign-in', async () => {
+      identityQueries.findUserByEmail.mockResolvedValue(signedInBuyer({ isActive: false }));
+      await expect(call()).rejects.toThrow(AUTH_MESSAGES.ACCOUNT_INACTIVE);
+    });
+
+    // The password on the server is unchanged, and the caller is told so rather
+    // than shown a success they cannot rely on.
+    test('reports a failed write instead of claiming success', async () => {
+      identityQueries.updateUserPasswordByUuid.mockResolvedValue(false);
+      await expect(call()).rejects.toThrow(AUTH_MESSAGES.CHANGE_PASSWORD_WRITE_FAILED);
+    });
+
+    test('fails closed when no database is configured', async () => {
+      dbPool.pool = null;
+      await expect(call()).rejects.toThrow(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
+    });
+  });
+
+  // ── Controller ────────────────────────────────────────────────────────────
+  describe('authController.changePassword', () => {
+    const reqFor = (body, user = { sub: UUID, email: 'buyer@procucev.com' }) => ({
+      body,
+      user,
+      headers: {},
+      ip: '127.0.0.1',
+    });
+
+    test('passes the session identity through and returns the service result', async () => {
+      const res = mockRes();
+      await authController.changePassword(
+        reqFor({ currentPassword: CURRENT, newPassword: NEXT }),
+        res,
+        jest.fn()
+      );
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        message: AUTH_MESSAGES.CHANGE_PASSWORD_SUCCESS,
+      });
+    });
+
+    test('rejects a payload missing the current password with 400', async () => {
+      const res = mockRes();
+      await authController.changePassword(reqFor({ newPassword: NEXT }), res, jest.fn());
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: expect.stringContaining('current password'),
+      });
+    });
+
+    test('rejects a new password below the minimum with 400', async () => {
+      const res = mockRes();
+      await authController.changePassword(
+        reqFor({ currentPassword: CURRENT, newPassword: 'Short1' }),
+        res,
+        jest.fn()
+      );
+      expect(res.status).toHaveBeenCalledWith(400);
+    });
+
+    test('tolerates a request with no body at all', async () => {
+      const res = mockRes();
+      await authController.changePassword({ user: {}, headers: {} }, res, jest.fn());
+      expect(res.status).toHaveBeenCalledWith(400);
+    });
+
+    test('reports a service failure as 400 with the service reason', async () => {
+      identityQueries.findUserByEmail.mockResolvedValue(signedInBuyer());
+      const res = mockRes();
+      await authController.changePassword(
+        reqFor({ currentPassword: 'WrongPassword1', newPassword: NEXT }),
+        res,
+        jest.fn()
+      );
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: AUTH_MESSAGES.CHANGE_PASSWORD_CURRENT_INCORRECT,
+      });
+    });
+  });
+
+  // ── Route ─────────────────────────────────────────────────────────────────
+  describe('POST /api/auth/change-password', () => {
+    test('requires a session token', async () => {
+      const res = await request(app)
+        .post('/api/auth/change-password')
+        .send({ currentPassword: CURRENT, newPassword: NEXT });
+
+      expect(res.status).toBe(401);
+      expect(res.body.success).toBe(false);
+      expect(identityQueries.updateUserPasswordByUuid).not.toHaveBeenCalled();
+    });
+
+    test('changes the password for the authenticated account', async () => {
+      const res = await request(app)
+        .post('/api/auth/change-password')
+        .set(authHeader('buyer'))
+        .send({ currentPassword: CURRENT, newPassword: NEXT });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        success: true,
+        message: AUTH_MESSAGES.CHANGE_PASSWORD_SUCCESS,
+      });
+    });
+
+    test('rejects a wrong current password with 400', async () => {
+      const res = await request(app)
+        .post('/api/auth/change-password')
+        .set(authHeader('buyer'))
+        .send({ currentPassword: 'WrongPassword1', newPassword: NEXT });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe(AUTH_MESSAGES.CHANGE_PASSWORD_CURRENT_INCORRECT);
+    });
+
+    // No email is accepted from the body, so supplying one changes nothing about
+    // which account is written.
+    test('ignores an account named in the body', async () => {
+      const res = await request(app)
+        .post('/api/auth/change-password')
+        .set(authHeader('buyer'))
+        .send({
+          email: 'someone.else@procucev.com',
+          currentPassword: CURRENT,
+          newPassword: NEXT,
+        });
+
+      expect(res.status).toBe(200);
+      expect(identityQueries.findUserByEmail).toHaveBeenCalledWith('buyer@procucev.com');
+      expect(identityQueries.updateUserPasswordByUuid).toHaveBeenCalledWith(
+        UUID,
+        NEXT,
+        'buyer@procucev.com'
+      );
+    });
+  });
+});

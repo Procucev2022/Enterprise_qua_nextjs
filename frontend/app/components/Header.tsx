@@ -6,7 +6,8 @@ import { useRouter } from 'next/navigation';
 import { SOURCING_MODES, ROLE_SIDEBAR_NAV, LOGIN_ROUTE } from '@/lib/constants';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
-import PasswordInput from '@/app/components/PasswordInput';
+import AccountSecurityPanel from '@/app/components/AccountSecurityPanel';
+import { deriveInitials, resolveSessionOrgName } from '@/lib/accountIdentity';
 import type { SourcingMode, UserRole } from '@/lib/types';
 import {
   ShieldCheck,
@@ -14,7 +15,6 @@ import {
   Bell,
   Layers,
   Sparkles,
-  User,
   CheckCircle2,
   Cpu,
   Building2,
@@ -79,15 +79,6 @@ const ROLE_CHROME: Record<UserRole, RoleChrome> = {
   },
 };
 
-/** Initials derived from the real account name, falling back to the email. */
-function deriveInitials(name?: string, email?: string): string {
-  const source = (name || '').trim() || (email || '').split('@')[0] || '';
-  const words = source.split(/[\s._-]+/).filter(Boolean);
-  if (words.length === 0) return '--';
-  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
-  return (words[0][0] + words[words.length - 1][0]).toUpperCase();
-}
-
 /** Human label for the authentication method recorded on the session. */
 function authMethodLabel(method?: string): string | null {
   if (method === 'PASSWORD') return 'Password verified';
@@ -122,12 +113,9 @@ export default function Header() {
   const [userProfileDropdownOpen, setUserProfileDropdownOpen] = useState(false);
   const [notifDropdownOpen, setNotifDropdownOpen] = useState(false);
 
-  // Account Settings Modal State
+  // Visibility of the Account & Security overlay. The forms inside it live in
+  // AccountSecurityPanel, which owns its own field state.
   const [accountModalOpen, setAccountModalOpen] = useState(false);
-  const [userDisplayName, setUserDisplayName] = useState('');
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
 
   // Everything shown about the user comes from the verified session record.
   const chrome = ROLE_CHROME[currentRole] || ROLE_CHROME.buyer;
@@ -137,45 +125,10 @@ export default function Header() {
   const authLabel = authMethodLabel(currentUserSession?.authMethod) || chrome.authLabel;
   const moduleCount = ROLE_SIDEBAR_NAV[currentRole]?.length ?? 0;
 
-  // The organisation on the verified session record is authoritative. The
-  // aligned buyer account is only used when it demonstrably belongs to this
-  // user, so an unrelated account from the directory can never be shown as
-  // the signed-in user's own company.
-  const alignedAccountName =
-    activeBuyerAccount?.corporateEmail &&
-    activeBuyerAccount.corporateEmail.toLowerCase() === sessionEmail.toLowerCase()
-      ? activeBuyerAccount.organizationName
-      : '';
-  const currentOrgName = currentUserSession?.orgName || alignedAccountName || '';
-
-  const handleUpdateDisplayName = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!userDisplayName.trim()) {
-      showToast('Validation Error', 'Display Name cannot be empty.', 'warning');
-      return;
-    }
-    showToast('Profile Updated', `Account display name set to: ${userDisplayName}`, 'success');
-  };
-
-  const handleChangePassword = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!currentPassword.trim()) {
-      showToast('Validation Error', 'Please enter your current password.', 'warning');
-      return;
-    }
-    if (newPassword.length < 8) {
-      showToast('Weak Password', 'New password must be at least 8 characters long.', 'warning');
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      showToast('Password Mismatch', 'New password and confirmation do not match.', 'warning');
-      return;
-    }
-    setCurrentPassword('');
-    setNewPassword('');
-    setConfirmPassword('');
-    showToast('Password Changed Successfully', 'Your account credentials have been updated and encrypted with Azure KeyVault.', 'success');
-  };
+  // The organisation on the verified session record is authoritative; see
+  // resolveSessionOrgName for why the active buyer account is only a conditional
+  // fallback.
+  const currentOrgName = resolveSessionOrgName(currentUserSession, activeBuyerAccount);
 
   const activeModeObj = SOURCING_MODES.find((m) => m.id === currentMode) || SOURCING_MODES[1];
 
@@ -560,16 +513,22 @@ export default function Header() {
                 </div>
                 {/* Session Actions Footer */}
                 <div className="pt-2 border-t border-slate-100 dark:border-gray-800 flex items-center justify-between gap-2 text-xs">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setUserProfileDropdownOpen(false);
-                      setAccountModalOpen(true);
-                    }}
-                    className="btn btn-ghost btn-xs font-bold text-slate-600 dark:text-gray-300 flex items-center gap-1"
-                  >
-                    <Key size={12} /> Account &amp; Security
-                  </button>
+                  {/* Buyers manage this on their profile page (Section 4), so the */}
+                  {/* overlay is only offered to the roles that have no profile    */}
+                  {/* screen of their own. `justify-between` still puts Logout on   */}
+                  {/* the right when this button is absent.                         */}
+                  {currentRole !== 'buyer' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUserProfileDropdownOpen(false);
+                        setAccountModalOpen(true);
+                      }}
+                      className="btn btn-ghost btn-xs font-bold text-slate-600 dark:text-gray-300 flex items-center gap-1"
+                    >
+                      <Key size={12} /> {UI_STRINGS.accountSecurity.menuLabel}
+                    </button>
+                  )}
 
                   <button
                     type="button"
@@ -596,7 +555,9 @@ export default function Header() {
                   {initials}
                 </div>
                 <div>
-                  <h3 className="text-base font-extrabold text-slate-900 dark:text-white">Account &amp; Security Settings</h3>
+                  <h3 className="text-base font-extrabold text-slate-900 dark:text-white">
+                    {UI_STRINGS.accountSecurity.panelTitle}
+                  </h3>
                   <p className="text-xs text-slate-500 dark:text-gray-400">{sessionEmail} • {currentOrgName}</p>
                 </div>
               </div>
@@ -608,118 +569,10 @@ export default function Header() {
               </button>
             </div>
 
-            {/* Modal Body */}
-            <div className="p-6 space-y-6 max-h-[75vh] overflow-y-auto">
-              {/* Section 1: Display Name & Profile Details */}
-              <form onSubmit={handleUpdateDisplayName} className="space-y-3 pb-5 border-b border-slate-100 dark:border-gray-800">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 flex items-center gap-1.5">
-                    <User size={14} className="text-indigo-600 dark:text-indigo-400" /> Account Display Name
-                  </label>
-                  <span className="text-[10px] text-slate-400">Visible across RFQ logs &amp; audits</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    defaultValue={sessionName || sessionEmail}
-                    onChange={(e) => setUserDisplayName(e.target.value)}
-                    placeholder="Enter your full display name..."
-                    className="flex-1 px-3.5 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-semibold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
-                  />
-                  <button
-                    type="submit"
-                    className="btn btn-primary text-xs px-4 py-2 font-bold shrink-0"
-                  >
-                    Save Name
-                  </button>
-                </div>
-              </form>
-
-              {/* Section 2: Password Update */}
-              <form onSubmit={handleChangePassword} className="space-y-4 pb-5 border-b border-slate-100 dark:border-gray-800">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 flex items-center gap-1.5">
-                    <ShieldCheck size={14} className="text-emerald-600 dark:text-emerald-400" /> Change Security Password
-                  </label>
-                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">Azure SSO Active</span>
-                </div>
-
-                <div className="space-y-3">
-                  <PasswordInput
-                    id="current-password"
-                    label="Current Password"
-                    placeholder="Enter your current password"
-                    value={currentPassword}
-                    onChange={setCurrentPassword}
-                    autoComplete="current-password"
-                    showLeadingIcon={false}
-                    labelClassName="text-[10px] font-bold uppercase tracking-wider text-slate-400"
-                    inputClassName="rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
-                  />
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <PasswordInput
-                      id="new-password"
-                      label="New Password"
-                      placeholder="Min 8 characters"
-                      value={newPassword}
-                      onChange={setNewPassword}
-                      autoComplete="new-password"
-                      minLength={8}
-                      showLeadingIcon={false}
-                      labelClassName="text-[10px] font-bold uppercase tracking-wider text-slate-400"
-                      inputClassName="rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
-                    />
-                    <PasswordInput
-                      id="confirm-password"
-                      label="Confirm New Password"
-                      placeholder="Re-enter new password"
-                      value={confirmPassword}
-                      onChange={setConfirmPassword}
-                      autoComplete="new-password"
-                      showLeadingIcon={false}
-                      labelClassName="text-[10px] font-bold uppercase tracking-wider text-slate-400"
-                      inputClassName="rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
-                    />
-                  </div>
-
-                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-950/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500 dark:text-gray-400 space-y-1">
-                    <p className="font-bold text-slate-700 dark:text-gray-300">Password Policy Requirements:</p>
-                    <ul className="list-disc list-inside text-[10px] space-y-0.5 text-slate-500 dark:text-gray-400">
-                      <li>At least 8 characters long</li>
-                      <li>Includes at least 1 uppercase letter &amp; 1 special symbol (@, #, $, etc.)</li>
-                      <li>Encrypted with Azure KeyVault 256-bit AES protection</li>
-                    </ul>
-                  </div>
-
-                  <div className="flex justify-end">
-                    <button
-                      type="submit"
-                      className="btn btn-secondary text-xs px-5 py-2 font-bold"
-                    >
-                      Update Password
-                    </button>
-                  </div>
-                </div>
-              </form>
-
-              {/* Section 3: SSO & Security Info */}
-              <div className="p-4 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-900/40 text-xs space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-indigo-900 dark:text-indigo-200">Organization &amp; Single Sign-On</span>
-                  <span className="badge badge-purple text-[10px] font-mono">Azure AD Tenant</span>
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-600 dark:text-gray-300">
-                  <div>
-                    <span className="text-slate-400 block text-[10px]">Connected Entity</span>
-                    <strong className="text-slate-900 dark:text-white">{currentOrgName}</strong>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block text-[10px]">Verified Email</span>
-                    <strong className="text-slate-900 dark:text-white font-mono">{sessionEmail}</strong>
-                  </div>
-                </div>
-              </div>
+            {/* Modal Body: the forms themselves are shared with the buyer
+                profile page, so this overlay only supplies the chrome. */}
+            <div className="p-6 max-h-[75vh] overflow-y-auto">
+              <AccountSecurityPanel />
             </div>
 
             {/* Modal Footer */}
@@ -728,7 +581,7 @@ export default function Header() {
                 onClick={() => setAccountModalOpen(false)}
                 className="btn btn-secondary text-xs px-5 font-bold"
               >
-                Close Settings
+                {UI_STRINGS.accountSecurity.closeAction}
               </button>
             </div>
           </div>
