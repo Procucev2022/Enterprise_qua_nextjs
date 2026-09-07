@@ -1010,6 +1010,28 @@ export const UI_STRINGS = {
     neverChecked: 'Never',
     connectionErrorLabel: 'Last error',
 
+    // Requisition composer form & submission
+    sampleSelectorTitle: 'Select Incoming Email Requisition Sample:',
+    samplePumps: 'Mechanical Pumps & Valves',
+    sampleElectrical: 'Electrical Switchgear',
+    sampleSteel: 'Civil & PEB Steel',
+    fromPlantEngineerLabel: 'FROM (PLANT ENGINEER)',
+    toGatewayLabel: 'TO (ENTERPRISE GATEWAY)',
+    subjectInputLabel: 'SUBJECT',
+    bodyInputLabel: 'EMAIL BODY & LINE-ITEM SPECS',
+    submitAction: 'Autonomous Ingest, Categorize & Auto-Circulate RFQ',
+    submittingAction: 'Ingesting & Processing with AI…',
+    createdSuccessTitle: 'Requisition Ingested & RFQ Created Successfully',
+    createdSuccessSubtitle:
+      'The requisition was processed into line items and saved to the database. It is now queued for Category Manager review.',
+    createdRfqNumberLabel: 'RFQ Number',
+    createdStatusLabel: 'Status',
+    createdItemsLabel: 'Extracted Line Items',
+    createdBudgetLabel: 'Est. Budget',
+    createdStatusValue: 'Ingested · Parsing (Awaiting Category Manager)',
+    sendAnotherAction: 'Submit Another Requisition',
+    viewInKanbanAction: 'View on Category Manager Board',
+
     // Ledger outcomes, keyed to the server's status values.
     outcomeIngested: 'RFQ raised',
     outcomeSenderNotAllowed: 'Sender not allowed',

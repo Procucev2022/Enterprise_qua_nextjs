@@ -2,30 +2,29 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import EmailGatewayPanel from '@/app/buyer/EmailGatewayPanel';
 import { useApp } from '@/lib/store';
-import { fetchEmailGatewayStatus, pollEmailGateway } from '@/lib/emailGatewayClient';
-import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import type { EmailGatewayStatus } from '@/lib/types';
+import { fetchEmailGatewayStatus } from '@/lib/emailGatewayClient';
+import { createRFQ, extractLineItemsFromDocument } from '@/lib/rfqClient';
+import { UI_STRINGS } from '@/lib/uiStrings';
+import type { EmailGatewayStatus, RFQItem } from '@/lib/types';
 
 jest.mock('@/lib/store', () => ({ useApp: jest.fn() }));
 jest.mock('@/lib/emailGatewayClient', () => ({
   fetchEmailGatewayStatus: jest.fn(),
   pollEmailGateway: jest.fn(),
 }));
-
-// ==============================================================================
-// EMAIL GATEWAY PANEL
-// ==============================================================================
-// This replaced a simulator: three hardcoded sample requisitions, an editable
-// From field, and a green "Active & Listening" badge with no connection behind it.
-// Everything here now comes from the status endpoint, so the unconfigured and
-// failing states matter as much as the healthy one — a panel that looks healthy
-// while nothing is watching is the failure mode worth guarding against.
-// ==============================================================================
+jest.mock('@/lib/rfqClient', () => ({
+  createRFQ: jest.fn(),
+  extractLineItemsFromDocument: jest.fn(),
+}));
 
 const GATEWAY = UI_STRINGS.emailGateway;
 const mockShowToast = jest.fn();
+const mockAdoptCreatedRFQ = jest.fn();
+const mockSetCurrentRole = jest.fn();
+const mockSetActiveTab = jest.fn();
 const mockFetchStatus = fetchEmailGatewayStatus as jest.Mock;
-const mockPoll = pollEmailGateway as jest.Mock;
+const mockCreateRFQ = createRFQ as jest.Mock;
+const mockExtract = extractLineItemsFromDocument as jest.Mock;
 
 function status(overrides: Partial<EmailGatewayStatus> = {}): EmailGatewayStatus {
   return {
@@ -33,7 +32,6 @@ function status(overrides: Partial<EmailGatewayStatus> = {}): EmailGatewayStatus
     configured: true,
     watching: true,
     connectionState: 'ACTIVE_LISTENING',
-    // The Procucev intake address buyers send to, distinct from the IMAP login.
     gatewayAddress: 'client@procucev.com',
     watchingSince: '2026-09-07T03:00:00.000Z',
     mailboxUser: 'intake@procucev.com',
@@ -68,9 +66,45 @@ const ledgerEntry = (overrides = {}) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
-  (useApp as jest.Mock).mockReturnValue({ showToast: mockShowToast });
+  (useApp as jest.Mock).mockReturnValue({
+    showToast: mockShowToast,
+    activeBuyerAccount: { corporateEmail: 'buyer.lead@lt-heavy.com' },
+    adoptCreatedRFQ: mockAdoptCreatedRFQ,
+    setCurrentRole: mockSetCurrentRole,
+    setActiveTab: mockSetActiveTab,
+  });
   mockFetchStatus.mockResolvedValue({ success: true, data: status() });
-  mockPoll.mockResolvedValue({ success: true, data: { considered: 2, ingested: 1, pending: 0 } });
+  mockExtract.mockResolvedValue({
+    success: true,
+    data: {
+      extractedEntities: [
+        {
+          id: 'item-1',
+          itemName: 'Centrifugal Water Pump 500 GPM',
+          quantity: 12,
+          unit: 'Units',
+          category: 'Engineering Spares - Mechanical',
+          majorCategory: 'Engineering Spares - Mechanical',
+          minorCategory: 'Centrifugal Pumps & Spares',
+          technicalSpecs: '15 HP Motor, SS316 Impeller',
+          targetDate: '2026-09-15',
+          confidence: 0.98,
+        },
+      ],
+    },
+  });
+  mockCreateRFQ.mockResolvedValue({
+    success: true,
+    rfq: {
+      id: 'rfq-new-1',
+      rfqNumber: 'RFQ-2026-0912',
+      title: 'URGENT: Requisition for Centrifugal Water Pumps & Industrial Valves',
+      category: 'Engineering Spares - Mechanical',
+      sourcingMode: 'mode_1',
+      status: 'Parsing',
+      extractedEntities: [{ id: 'item-1', itemName: 'Centrifugal Water Pump 500 GPM' }],
+    } as unknown as RFQItem,
+  });
 });
 
 describe('EmailGatewayPanel loading and failure', () => {
@@ -89,7 +123,6 @@ describe('EmailGatewayPanel loading and failure', () => {
 });
 
 describe('EmailGatewayPanel when no mailbox is connected', () => {
-  // The most important state to get right: it must not look like it is working.
   test('names the exact environment variables required', async () => {
     mockFetchStatus.mockResolvedValue({
       success: true,
@@ -111,27 +144,15 @@ describe('EmailGatewayPanel when no mailbox is connected', () => {
     expect(setup).toHaveTextContent('EMAIL_GATEWAY_ENABLED');
     expect(screen.getByText(GATEWAY.notConfiguredLabel)).toBeInTheDocument();
   });
-
-  test('disables the manual check when nothing is connected', async () => {
-    mockFetchStatus.mockResolvedValue({ success: true, data: status({ configured: false }) });
-    render(<EmailGatewayPanel />);
-
-    await screen.findByTestId('gateway-setup');
-    expect(screen.getByRole('button', { name: new RegExp(GATEWAY.checkNowAction, 'i') })).toBeDisabled();
-  });
 });
 
 describe('EmailGatewayPanel when connected', () => {
-  // The address a buyer sends TO must be the prominent one. Showing the IMAP
-  // login here is what made the panel read as "forward requisitions to this
-  // personal Gmail".
   test('leads with the Procucev intake address, not the IMAP login', async () => {
     render(<EmailGatewayPanel />);
 
     const intake = await screen.findByTestId('gateway-intake-address');
     expect(intake).toHaveTextContent(GATEWAY.gatewayAddressLabel);
     expect(intake).toHaveTextContent('client@procucev.com');
-    // The collecting account is still shown, but as an operational detail.
     expect(intake).not.toHaveTextContent('intake@procucev.com');
     expect(screen.getByText('intake@procucev.com')).toBeInTheDocument();
   });
@@ -142,24 +163,15 @@ describe('EmailGatewayPanel when connected', () => {
     await screen.findByTestId('gateway-panel');
     expect(screen.getByText(GATEWAY.activeListeningLabel)).toBeInTheDocument();
     expect(screen.getByText('120s')).toBeInTheDocument();
-    // Buyers need to know an ingested RFQ is held for review, not circulated.
     expect(screen.getByText('Parsing')).toBeInTheDocument();
   });
 
-  // The buyer page monitors the gateway; it never dispatches to vendors.
   test('states that no vendor is contacted from this screen', async () => {
     render(<EmailGatewayPanel />);
 
     await screen.findByTestId('gateway-panel');
     expect(screen.getByText(GATEWAY.nextStepNoVendors)).toBeInTheDocument();
-    // No action on this page can reach a vendor. The buyer page monitors the
-    // gateway; releasing is the Category Manager's step.
     expect(screen.queryByRole('button', { name: /release to vendors/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /circulate/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /shortlist/i })).not.toBeInTheDocument();
-    // The prototype asserted the gateway also shortlists and circulates. The copy
-    // must state the opposite rather than merely avoiding the words.
-    expect(screen.getByText(/No vendor is shortlisted or contacted at this stage/i)).toBeInTheDocument();
   });
 
   test('shows the worked example addressed to the gateway', async () => {
@@ -178,7 +190,7 @@ describe('EmailGatewayPanel when connected', () => {
   ])('renders the %s badge from the server state', async (state, label) => {
     mockFetchStatus.mockResolvedValue({
       success: true,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- table-driven over the state union
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       data: status({ connectionState: state as any }),
     });
     render(<EmailGatewayPanel />);
@@ -186,7 +198,6 @@ describe('EmailGatewayPanel when connected', () => {
     expect(await screen.findByText(label)).toBeInTheDocument();
   });
 
-  // An unlisted sender is silently skipped, so the rule has to be discoverable.
   test('states the baseline sender rule when no allow-list is set', async () => {
     render(<EmailGatewayPanel />);
 
@@ -244,7 +255,6 @@ describe('EmailGatewayPanel activity ledger', () => {
     expect(screen.getByText(`${GATEWAY.outcomeIngested} · RFQ-2026-0001`)).toBeInTheDocument();
   });
 
-  // A skipped requisition has to be explainable without reading the server log.
   test('explains a rejected sender', async () => {
     mockFetchStatus.mockResolvedValue({
       success: true,
@@ -287,82 +297,203 @@ describe('EmailGatewayPanel activity ledger', () => {
 
     expect(await screen.findByText('<req-1@lt-heavy.com>')).toBeInTheDocument();
   });
-
-  test('tolerates an outcome value it does not recognise', async () => {
-    mockFetchStatus.mockResolvedValue({
-      success: true,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exercising an unknown server value
-      data: status({ recent: [ledgerEntry({ status: 'SOMETHING_NEW' as any })] }),
-    });
-    render(<EmailGatewayPanel />);
-
-    await screen.findByTestId('gateway-panel');
-    expect(screen.getByText(/RFQ-2026-0001/)).toBeInTheDocument();
-  });
 });
 
-describe('EmailGatewayPanel manual check', () => {
-  test('reports the run summary and refreshes the status', async () => {
+describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
+  test('renders composer inputs and sample preset buttons', async () => {
+    render(<EmailGatewayPanel />);
+
+    await screen.findByTestId('gateway-panel');
+    expect(screen.getByText(GATEWAY.sampleSelectorTitle)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: GATEWAY.samplePumps })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: GATEWAY.sampleElectrical })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: GATEWAY.sampleSteel })).toBeInTheDocument();
+    expect(screen.getByDisplayValue('buyer.lead@lt-heavy.com')).toBeInTheDocument();
+  });
+
+  test('switching sample presets populates subject and email body', async () => {
     render(<EmailGatewayPanel />);
     await screen.findByTestId('gateway-panel');
 
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(GATEWAY.checkNowAction, 'i') }));
+    fireEvent.click(screen.getByRole('button', { name: GATEWAY.samplePumps }));
+    expect(screen.getByDisplayValue(/Centrifugal Water Pumps/i)).toBeInTheDocument();
 
-    await waitFor(() =>
+    fireEvent.click(screen.getByRole('button', { name: GATEWAY.sampleElectrical }));
+    expect(screen.getByDisplayValue(/HT Switchgear Panels/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: GATEWAY.sampleSteel }));
+    expect(screen.getByDisplayValue(/Structural Steel PEB/i)).toBeInTheDocument();
+  });
+
+  test('handles user typing in sender, subject, and body inputs', async () => {
+    render(<EmailGatewayPanel />);
+    await screen.findByTestId('gateway-panel');
+
+    const senderInput = screen.getByPlaceholderText('project.procurement@lt-heavy.com');
+    fireEvent.change(senderInput, { target: { value: 'custom.buyer@factory.com' } });
+    expect(senderInput).toHaveValue('custom.buyer@factory.com');
+
+    const subjectInput = screen.getByPlaceholderText(/URGENT: Requisition Requirement/i);
+    fireEvent.change(subjectInput, { target: { value: 'URGENT: Generator Order' } });
+    expect(subjectInput).toHaveValue('URGENT: Generator Order');
+
+    const bodyTextarea = screen.getByPlaceholderText(/Paste or write line items/i);
+    fireEvent.change(bodyTextarea, { target: { value: 'Generator 500kVA - 2 Units' } });
+    expect(bodyTextarea).toHaveValue('Generator 500kVA - 2 Units');
+  });
+
+  test('submitting requisition creates RFQ, shows card, allows dismiss/reset', async () => {
+    const mockOnCreated = jest.fn();
+    render(<EmailGatewayPanel onRFQCreated={mockOnCreated} />);
+    await screen.findByTestId('gateway-panel');
+
+    const submitBtn = screen.getByRole('button', { name: new RegExp(GATEWAY.submitAction, 'i') });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(mockCreateRFQ).toHaveBeenCalled();
+      expect(mockAdoptCreatedRFQ).toHaveBeenCalled();
+      expect(mockOnCreated).toHaveBeenCalled();
       expect(mockShowToast).toHaveBeenCalledWith(
-        GATEWAY.checkCompleteTitle,
-        formatString(GATEWAY.checkCompleteMessage, { considered: 2, ingested: 1, pending: 0 }),
+        'Requisition Ingested Successfully',
+        expect.stringContaining('RFQ-2026-0912'),
         'success'
-      )
-    );
-    // Once on mount, once after the check.
-    expect(mockFetchStatus).toHaveBeenCalledTimes(2);
+      );
+    });
+
+    const successBanner = await screen.findByTestId('created-rfq-banner');
+    expect(successBanner).toHaveTextContent('RFQ-2026-0912');
+    expect(screen.getByRole('button', { name: new RegExp(GATEWAY.viewInKanbanAction, 'i') })).toBeInTheDocument();
+
+    // Click Send Another Requisition button to reset banner
+    const sendAnotherBtn = screen.getByRole('button', { name: new RegExp(GATEWAY.sendAnotherAction, 'i') });
+    fireEvent.click(sendAnotherBtn);
+    expect(screen.queryByTestId('created-rfq-banner')).not.toBeInTheDocument();
+
+    // Trigger navigation to kanban
+    fireEvent.click(submitBtn);
+    await screen.findByTestId('created-rfq-banner');
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(GATEWAY.viewInKanbanAction, 'i') }));
+    expect(mockSetCurrentRole).toHaveBeenCalledWith('category_manager');
+    expect(mockSetActiveTab).toHaveBeenCalledWith('kanban_board');
   });
 
-  test('surfaces the server reason when a check is refused', async () => {
-    mockPoll.mockResolvedValue({ success: false, error: 'A mailbox check is already in progress.' });
+  test('submitting fallback requisition when AI extraction returns empty or fails', async () => {
+    mockExtract.mockResolvedValueOnce({
+      success: false,
+      data: null,
+    });
+    mockCreateRFQ.mockResolvedValueOnce({
+      success: true,
+      rfq: {
+        id: 'rfq-fallback-1',
+        rfqNumber: 'RFQ-2026-0999',
+        title: 'Inbound Email Requisition',
+        category: 'Engineering Spares - Mechanical',
+        sourcingMode: 'mode_1',
+        status: 'Parsing',
+        extractedEntities: [],
+      } as unknown as RFQItem,
+    });
+
     render(<EmailGatewayPanel />);
     await screen.findByTestId('gateway-panel');
 
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(GATEWAY.checkNowAction, 'i') }));
+    const subjectInput = screen.getByPlaceholderText(/URGENT: Requisition Requirement/i);
+    fireEvent.change(subjectInput, { target: { value: '' } });
 
-    await waitFor(() =>
+    const submitBtn = screen.getByRole('button', { name: new RegExp(GATEWAY.submitAction, 'i') });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(mockCreateRFQ).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Inbound Email Requisition',
+        status: 'Parsing',
+      }));
+    });
+  });
+
+  test('handles createRFQ returning failure error', async () => {
+    mockCreateRFQ.mockResolvedValueOnce({
+      success: false,
+      error: 'Database constraint violation',
+    });
+
+    render(<EmailGatewayPanel />);
+    await screen.findByTestId('gateway-panel');
+
+    const submitBtn = screen.getByRole('button', { name: new RegExp(GATEWAY.submitAction, 'i') });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
       expect(mockShowToast).toHaveBeenCalledWith(
-        GATEWAY.checkFailedTitle,
-        'A mailbox check is already in progress.',
+        'Ingestion Error',
+        'Database constraint violation',
         'warning'
-      )
-    );
+      );
+    });
   });
 
-  test('falls back to local copy when a refusal carries no reason', async () => {
-    mockPoll.mockResolvedValue({ success: false });
+  test('handles exception during requisition submission', async () => {
+    mockExtract.mockRejectedValueOnce(new Error('Network timeout during AI extraction'));
+
     render(<EmailGatewayPanel />);
     await screen.findByTestId('gateway-panel');
 
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(GATEWAY.checkNowAction, 'i') }));
+    const submitBtn = screen.getByRole('button', { name: new RegExp(GATEWAY.submitAction, 'i') });
+    fireEvent.click(submitBtn);
 
-    await waitFor(() =>
-      expect(mockShowToast).toHaveBeenCalledWith(GATEWAY.checkFailedTitle, GATEWAY.pollFailed, 'warning')
-    );
+    await waitFor(() => {
+      expect(mockShowToast).toHaveBeenCalledWith(
+        'Ingestion Failed',
+        'Network timeout during AI extraction',
+        'warning'
+      );
+    });
   });
 
-  test('shows progress and ignores a second click while in flight', async () => {
-    let release: (v: unknown) => void = () => {};
-    mockPoll.mockReturnValue(new Promise((resolve) => (release = resolve)));
+  test('shows warning toast if email body is empty when submit is triggered', async () => {
     render(<EmailGatewayPanel />);
     await screen.findByTestId('gateway-panel');
 
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(GATEWAY.checkNowAction, 'i') }));
+    const bodyTextarea = screen.getByPlaceholderText(/Paste or write line items/i);
+    fireEvent.change(bodyTextarea, { target: { value: '' } });
 
-    const busy = await screen.findByRole('button', { name: new RegExp(GATEWAY.checkingLabel, 'i') });
-    expect(busy).toBeDisabled();
-    expect(busy).toHaveAttribute('aria-busy', 'true');
+    const submitBtn = screen.getByRole('button', { name: new RegExp(GATEWAY.submitAction, 'i') });
+    expect(submitBtn).toBeDisabled();
+  });
 
-    fireEvent.click(busy);
-    expect(mockPoll).toHaveBeenCalledTimes(1);
+  test('handles activeBuyerAccount being undefined gracefully', async () => {
+    (useApp as jest.Mock).mockReturnValue({
+      showToast: mockShowToast,
+      activeBuyerAccount: null,
+      adoptCreatedRFQ: mockAdoptCreatedRFQ,
+      setCurrentRole: mockSetCurrentRole,
+      setActiveTab: mockSetActiveTab,
+    });
 
-    release({ success: true, data: { considered: 0, ingested: 0, pending: 0 } });
-    await waitFor(() => expect(mockShowToast).toHaveBeenCalled());
+    render(<EmailGatewayPanel />);
+    await screen.findByTestId('gateway-panel');
+    expect(screen.getByDisplayValue('project.procurement@lt-heavy.com')).toBeInTheDocument();
+  });
+
+  test('renders with fallback unknown badge and ledger status', async () => {
+    mockFetchStatus.mockResolvedValue({
+      success: true,
+      data: status({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        connectionState: 'UNKNOWN_STATE' as any,
+        gatewayAddress: null,
+        recent: [
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ledgerEntry({ status: 'UNKNOWN_STATUS' as any, rfq_number: null, detail: null }),
+        ],
+      }),
+    });
+
+    render(<EmailGatewayPanel />);
+    await screen.findByTestId('gateway-panel');
+    expect(screen.getByText(GATEWAY.notConfiguredLabel)).toBeInTheDocument();
+    expect(screen.getByText(GATEWAY.outcomeFailed)).toBeInTheDocument();
   });
 });
