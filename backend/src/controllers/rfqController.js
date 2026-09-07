@@ -8,6 +8,7 @@ const rfqAttachmentService = require('../services/rfqAttachmentService');
 const rfqSummaryService = require('../services/rfqSummaryService');
 const { logger } = require('../services/loggerService');
 const emailGatewayService = require('../services/emailGatewayService');
+const mailerService = require('../services/mailerService');
 const {
   VALIDATION_SCHEMAS,
   validatePayload,
@@ -170,6 +171,17 @@ async function createRFQ(req, res, next) {
     // logged in rather than a client-supplied or globally-shared value.
     const requestingBuyerAccount = req.user ? storeService.getBuyerAccountByEmail(req.user.email) : null;
     const created = storeService.createRFQ({ ...body, extractedEntities: lineItems, aiSummary }, requestingBuyerAccount);
+
+    // Dispatch real email notification to target gateway address (e.g. navinchaudhary.dev@gmail.com)
+    if (body.source === 'email_gateway' || body.targetGatewayEmail) {
+      const recipientEmail = body.targetGatewayEmail || 'navinchaudhary.dev@gmail.com';
+      void mailerService.sendRequisitionNotificationEmail(
+        recipientEmail,
+        created,
+        body.sourceEmail || (req.user && req.user.email)
+      );
+    }
+
     res.status(201).json({ success: true, data: created });
   } catch (err) {
     logger.error('Error creating RFQ', err, 'RFQ_CONTROLLER');

@@ -333,6 +333,10 @@ export interface RFQCreatePayload {
    * which is why email provenance never reached the database.
    */
   sourceEmail?: string;
+  /**
+   * Target gateway mailbox (e.g. navinchaudhary.dev@gmail.com) for email notification dispatch.
+   */
+  targetGatewayEmail?: string;
   budget: number;
   targetDeliveryDate: string;
   deliveryLocation: string;

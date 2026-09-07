@@ -56,7 +56,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
     vendorName: '',
   });
 
-  const [rfqSourceFilter, setRfqSourceFilter] = useState<'all' | 'email_gateway' | 'web_portal' | 'email_upload'>('all');
+  const [rfqSourceFilter, setRfqSourceFilter] = useState<'all' | 'email_gateway' | 'web_portal' | 'manual_entry'>('all');
 
   // GET /api/rfqs is itself scoped to the signed-in buyer's own account now
   // (server-side, via the same buyer_accounts record RFQs are stamped with —
@@ -76,7 +76,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   // Intake Source Counts
   const emailGatewayRFQs = rfqs.filter(r => r.source === 'email_gateway');
   const webPortalRFQs = rfqs.filter(r => r.source === 'web_portal' || !r.source);
-  const emailUploadRFQs = rfqs.filter(r => r.source === 'email_upload');
+  const manualRFQs = rfqs.filter(r => r.source === 'manual_entry');
 
   // Multi-channel totals calculation
   const totalCalls = rfqs.reduce((acc, r) => acc + (r.followUpData?.callStats.total || 0), 0);
@@ -95,18 +95,18 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
         </span>
       );
     }
-    if (source === 'email_upload') {
+    if (source === 'manual_entry') {
       return (
-        <span className="px-2 py-0.5 rounded-md text-[9px] font-bold bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 flex items-center gap-1 shrink-0">
-          <FileText size={10} className="text-purple-600 dark:text-purple-400" />
-          <span>Email File Upload</span>
+        <span className="px-2 py-0.5 rounded-md text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1 shrink-0">
+          <FileSpreadsheet size={10} className="text-emerald-600 dark:text-emerald-400" />
+          <span>Manual RFQ</span>
         </span>
       );
     }
     return (
       <span className="px-2 py-0.5 rounded-md text-[9px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 flex items-center gap-1 shrink-0">
         <UploadCloud size={10} className="text-indigo-600 dark:text-indigo-400" />
-        <span>Web App Portal</span>
+        <span>AI RFQ Create</span>
       </span>
     );
   };
@@ -114,6 +114,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   const filteredRFQs = rfqs.filter((rfq) => {
     if (rfqSourceFilter === 'all') return true;
     if (rfqSourceFilter === 'web_portal') return rfq.source === 'web_portal' || !rfq.source;
+    if (rfqSourceFilter === 'manual_entry') return rfq.source === 'manual_entry';
     return rfq.source === rfqSourceFilter;
   });
 
@@ -272,7 +273,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
             </div>
             <div className="flex items-center justify-between text-[11px]">
               <span className="text-slate-600 dark:text-gray-400 flex items-center gap-1 font-medium">
-                <span className="w-2 h-2 rounded-full bg-indigo-500 inline-block" /> 🌐 Web App Portal:
+                <span className="w-2 h-2 rounded-full bg-indigo-500 inline-block" /> 🌐 AI RFQ Create:
               </span>
               <span className="font-bold text-indigo-700 dark:text-indigo-300 font-mono">
                 {webPortalRFQs.length} ({totalActiveRFQs > 0 ? Math.round((webPortalRFQs.length / totalActiveRFQs) * 100) : 0}%)
@@ -280,14 +281,14 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
             </div>
             <div className="flex items-center justify-between text-[11px]">
               <span className="text-slate-600 dark:text-gray-400 flex items-center gap-1 font-medium">
-                <span className="w-2 h-2 rounded-full bg-purple-500 inline-block" /> 📄 Email Upload:
+                <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> ✏️ Manual RFQ:
               </span>
-              <span className="font-bold text-purple-700 dark:text-purple-300 font-mono">
-                {emailUploadRFQs.length} ({totalActiveRFQs > 0 ? Math.round((emailUploadRFQs.length / totalActiveRFQs) * 100) : 0}%)
+              <span className="font-bold text-emerald-700 dark:text-emerald-300 font-mono">
+                {manualRFQs.length} ({totalActiveRFQs > 0 ? Math.round((manualRFQs.length / totalActiveRFQs) * 100) : 0}%)
               </span>
             </div>
           </div>
-          <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-500 via-indigo-500 to-purple-500" />
+          <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-500 via-indigo-500 to-emerald-500" />
         </div>
 
         {/* Pending Quotes */}
@@ -394,17 +395,17 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                     : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-900/40 hover:bg-indigo-100'
                 }`}
               >
-                <UploadCloud size={11} /> 🌐 Web Portal ({webPortalRFQs.length})
+                <UploadCloud size={11} /> 🌐 AI RFQ Create ({webPortalRFQs.length})
               </button>
               <button
-                onClick={() => setRfqSourceFilter('email_upload')}
+                onClick={() => setRfqSourceFilter('manual_entry')}
                 className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all shrink-0 flex items-center gap-1 ${
-                  rfqSourceFilter === 'email_upload'
-                    ? 'bg-purple-600 text-white shadow-xs'
-                    : 'bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-900/40 hover:bg-purple-100'
+                  rfqSourceFilter === 'manual_entry'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/40 hover:bg-emerald-100'
                 }`}
               >
-                <FileText size={11} /> 📄 Email Upload ({emailUploadRFQs.length})
+                <FileSpreadsheet size={11} /> ✏️ Manual RFQ ({manualRFQs.length})
               </button>
             </div>
           </div>

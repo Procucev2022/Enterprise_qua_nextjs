@@ -112,6 +112,7 @@ export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelPro
         source: 'email_gateway',
         sourceFileName: 'inbound-email.eml',
         sourceEmail: emailSender,
+        targetGatewayEmail: emailGatewayTo,
         budget,
         targetDeliveryDate,
         deliveryLocation: 'Enterprise Logistics Hub (Navi Mumbai CIF Site)',
