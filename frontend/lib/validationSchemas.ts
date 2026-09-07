@@ -5,6 +5,19 @@
 
 import { UI_STRINGS } from './uiStrings';
 
+/**
+ * Shortest password accepted when an account holder changes their own password.
+ *
+ * Drives both the `minLength` attribute on the field and the schema rule below,
+ * and mirrors PASSWORD_MIN_LENGTH in backend/src/config/validationSchemas.js, so
+ * the browser hint, the client check and the server boundary all agree.
+ *
+ * Defined here rather than in ./constants because that module imports from this
+ * one; the reverse import would be circular. It is re-exported from ./constants
+ * for callers that expect to find constants there.
+ */
+export const PASSWORD_MIN_LENGTH = 8;
+
 export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export const GSTIN_PATTERN = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i;
 export const PHONE_PATTERN = /^[+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{7,15}$/;
@@ -68,6 +81,24 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
     email: { required: true, pattern: EMAIL_PATTERN, message: UI_STRINGS.auth.emailInvalid },
     mobile: { required: true, pattern: INDIAN_MOBILE_PATTERN, message: UI_STRINGS.auth.mobileInvalid },
     password: { required: true, message: UI_STRINGS.auth.passwordRequired },
+  },
+
+  /**
+   * Self-service password change. No email field: the account is resolved from
+   * the session token server-side, so the form only ever collects the credential
+   * proof and the replacement. `minLength` matches PASSWORD_MIN_LENGTH and the
+   * backend's `changePassword` schema, so all three agree on the boundary.
+   */
+  changePasswordForm: {
+    currentPassword: {
+      required: true,
+      message: UI_STRINGS.accountSecurity.currentPasswordRequired,
+    },
+    newPassword: {
+      required: true,
+      minLength: PASSWORD_MIN_LENGTH,
+      message: UI_STRINGS.accountSecurity.weakPasswordMessage,
+    },
   },
 
   rfqIngestion: {

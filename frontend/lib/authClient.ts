@@ -183,6 +183,56 @@ class AuthClient {
   }
 
   /**
+   * Change the signed-in account's own password.
+   *
+   * The account is identified server-side from the bearer token, so no email is
+   * sent: the request can only ever change the caller's own credential. A missing
+   * token is reported as an expired session rather than posted and refused, since
+   * the endpoint requires authentication.
+   */
+  public async changePassword(currentPassword: string, newPassword: string): Promise<AuthResponse> {
+    if (!this.token) {
+      return { success: false, error: UI_STRINGS.auth.sessionExpired };
+    }
+
+    let res: Response;
+    try {
+      res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.token}`,
+        },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+    } catch {
+      // Fail closed: the password state on the server is unknown, so the caller
+      // is told the request never landed rather than shown a success.
+      return { success: false, error: UI_STRINGS.auth.networkUnreachable };
+    }
+
+    let data: AuthResponse | null = null;
+    try {
+      data = (await res.json()) as AuthResponse;
+    } catch {
+      data = null;
+    }
+
+    if (!data) {
+      return { success: false, error: UI_STRINGS.auth.serverErrorFallback };
+    }
+    if (res.status === 401) {
+      // The token was rejected outright, so the local session is stale.
+      this.setSession(null, null);
+      return { ...data, success: false, error: data.error || UI_STRINGS.auth.sessionExpired };
+    }
+    if (!res.ok && !data.error) {
+      return { ...data, success: false, error: UI_STRINGS.auth.serverErrorFallback };
+    }
+    return data;
+  }
+
+  /**
    * Sign out, revoking the token server-side and clearing local state.
    */
   public async logout(email?: string): Promise<void> {

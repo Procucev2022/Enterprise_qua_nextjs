@@ -13,11 +13,13 @@ import { BUYER_PROFILE_LIMITS, ORGANIZATION_TYPE_OPTIONS } from '@/lib/constants
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { FORM_SCHEMAS, validateFormData } from '@/lib/validationSchemas';
 import { logger } from '@/lib/logger';
+import AccountSecurityPanel from '@/app/components/AccountSecurityPanel';
 import type { BuyerProfileUpdatePayload, MajorMinorCategory, OrganizationType } from '@/lib/types';
 import {
   Building2,
   ShieldCheck,
   CheckCircle2,
+  KeyRound,
   MapPin,
   User,
   Search,
@@ -871,6 +873,29 @@ export default function BuyerProfilePage() {
           </button>
         </div>
       </form>
+
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* Section 4: Account & Security                                          */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* Sits outside the organisation form above on purpose. The panel has its  */}
+      {/* own submit handlers, and nesting a <form> inside another is invalid     */}
+      {/* HTML — the inner one is dropped during parsing, which would wire the    */}
+      {/* password button up to the profile save instead.                        */}
+      <div className="glass-panel p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-gray-800 pb-3">
+          <div>
+            <h2 className="text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
+              <KeyRound className="text-indigo-600 dark:text-indigo-400" size={18} />{' '}
+              {UI_STRINGS.accountSecurity.sectionTitle}
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+              {UI_STRINGS.accountSecurity.sectionDescription}
+            </p>
+          </div>
+        </div>
+
+        <AccountSecurityPanel />
+      </div>
     </div>
   );
 }
