@@ -509,6 +509,7 @@ export interface AIBotFeedItem {
   message: string;
   recipient?: string;
   rfqNumber?: string;
+  buyerAccountId?: string;
   status: 'delivered' | 'read' | 'completed' | 'processing' | 'answered' | 'connected' | 'failed';
   channelDetails?: {
     duration?: string;

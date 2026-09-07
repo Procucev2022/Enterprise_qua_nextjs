@@ -44,6 +44,26 @@ async function authenticate(req, res, next) {
 }
 
 /**
+ * Optional authentication: resolves and attaches req.user if a valid token is
+ * supplied, but does not block requests that lack a token.
+ */
+async function optionalAuthenticate(req, res, next) {
+  const token = extractToken(req);
+  if (!token) {
+    return next();
+  }
+  try {
+    const verification = await authService.assertSessionActive(token);
+    if (verification.valid) {
+      req.user = verification.user;
+    }
+  } catch {
+    // Non-blocking fallback for optional endpoints
+  }
+  return next();
+}
+
+/**
  * Must run after authenticate(). Rejects any req.user whose role isn't in
  * the allowed list.
  */
@@ -62,5 +82,6 @@ function requireRole(...roles) {
 module.exports = {
   extractToken,
   authenticate,
+  optionalAuthenticate,
   requireRole,
 };

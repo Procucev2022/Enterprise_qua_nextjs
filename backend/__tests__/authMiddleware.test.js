@@ -1,4 +1,4 @@
-const { authenticate, requireRole, extractToken } = require('../src/middleware/auth');
+const { authenticate, optionalAuthenticate, requireRole, extractToken } = require('../src/middleware/auth');
 const { getTestToken } = require('./testHelpers');
 
 function mockRes() {
@@ -48,6 +48,37 @@ describe('auth middleware', () => {
       expect(req.user).toBeDefined();
       expect(req.user.role).toBe('vendor');
       expect(res.status).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('optionalAuthenticate', () => {
+    test('passes without user if no token provided', async () => {
+      const req = { headers: {} };
+      const res = mockRes();
+      const next = jest.fn();
+      await optionalAuthenticate(req, res, next);
+      expect(next).toHaveBeenCalled();
+      expect(req.user).toBeUndefined();
+    });
+
+    test('attaches user when valid token provided', async () => {
+      const token = getTestToken('buyer');
+      const req = { headers: { authorization: `Bearer ${token}` } };
+      const res = mockRes();
+      const next = jest.fn();
+      await optionalAuthenticate(req, res, next);
+      expect(next).toHaveBeenCalled();
+      expect(req.user).toBeDefined();
+      expect(req.user.role).toBe('buyer');
+    });
+
+    test('ignores invalid token and continues without user', async () => {
+      const req = { headers: { authorization: 'Bearer bad.token.here' } };
+      const res = mockRes();
+      const next = jest.fn();
+      await optionalAuthenticate(req, res, next);
+      expect(next).toHaveBeenCalled();
+      expect(req.user).toBeUndefined();
     });
   });
 
