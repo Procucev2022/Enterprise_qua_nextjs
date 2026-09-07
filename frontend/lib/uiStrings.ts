@@ -906,6 +906,29 @@ export const UI_STRINGS = {
   },
 
   // ============================================================================
+  // CATEGORY MANAGER KANBAN
+  // ============================================================================
+  // Copy for the Ingested / Parsing column, which is where an email-ingested RFQ
+  // lands. It has had no human review, so the card states its origin, what the
+  // extractor could not place, and who it came from.
+  categoryManagerKanban: {
+    buyerLabel: 'Buyer',
+    majorCategoryLabel: 'Major category',
+    minorCategoryLabel: 'Minor category',
+    itemsLabel: 'Line items',
+    receivedLabel: 'Received',
+    confidenceLabel: 'Avg. extraction confidence',
+    reviewAction: 'Open & Review Categories',
+    needsCategoryReview: '{count} need category',
+    sourceLabels: {
+      email_gateway: 'Email Gateway (Autonomous)',
+      email_upload: 'Email File Upload',
+      web_portal: 'Web Portal',
+      manual_entry: 'Manual Entry',
+    } as Record<string, string>,
+  },
+
+  // ============================================================================
   // AUTONOMOUS EMAIL INGESTION GATEWAY
   // ============================================================================
   // Copy for the Step 1 gateway panel. This replaced a simulator: a textarea with
@@ -918,13 +941,44 @@ export const UI_STRINGS = {
     notWatchingLabel: 'Not watching',
     offLabel: 'Switched off',
     notConfiguredLabel: 'Not configured',
+    activeListeningLabel: 'Active & Listening',
+    connectionErrorLabel_state: 'Connection error',
 
-    // How it works, stated plainly rather than overpromising.
+    // How it works. Deliberately stops at Category Manager review: this gateway
+    // does not shortlist or contact vendors, and saying otherwise was the
+    // misleading claim the simulator used to make.
     howItWorks:
-      'Requisitions emailed to the watched mailbox are read automatically, turned into line items, and raised as an RFQ for review. Nothing is sent to vendors until a category manager releases it.',
-    forwardToLabel: 'Forward requisitions to',
+      'Requisitions emailed to the gateway are automatically extracted and categorized, then sent to the Category Manager for review.',
+    lightsOutTitle: 'Autonomous Lights-Out Ingestion',
+    // The prototype's banner claimed this step also shortlisted vendors and
+    // circulated the RFQ. It does neither: extraction and categorization are
+    // automatic, release to vendors is a Category Manager decision.
+    howItWorksAddressed:
+      'When a requisition arrives from a registered buyer at {address}, the system automatically extracts the line items and assigns major and minor categories, then raises the RFQ for Category Manager review. No vendor is shortlisted or contacted at this stage.',
+
+    // The intake address buyers send TO. Distinct from the IMAP login below,
+    // which is the account the backend reads and is an operational detail.
+    gatewayAddressLabel: 'Send requisitions to',
+    gatewayAddressHint: 'Procucev intake mailbox',
+    mailboxAccountLabel: 'Collected from',
     checkedEveryLabel: 'Checked every',
     reviewStatusLabel: 'Ingested RFQs are held in',
+
+    // Worked example, so the direction of the flow cannot be misread.
+    exampleTitle: 'How to send a requisition',
+    exampleFromLabel: 'From',
+    exampleFromValue: 'your registered buyer email',
+    exampleToLabel: 'To',
+    exampleSubjectLabel: 'Subject',
+    exampleSubjectValue: 'RFQ - Industrial Water Pump',
+    exampleBodyLabel: 'Body',
+    exampleBodyValue: 'Line items and specifications, or attach a PDF / CSV',
+
+    // What happens next, and explicitly what does not.
+    nextStepsTitle: 'What happens next',
+    nextStepExtract: 'Line items and major/minor categories are extracted automatically.',
+    nextStepReview: 'The RFQ is created and appears on the Category Manager board for review.',
+    nextStepNoVendors: 'No vendor is contacted from here. Releasing to vendors is the Category Manager\u2019s step.',
 
     // Who is allowed to raise a requisition by email.
     allowedAnyAccount:

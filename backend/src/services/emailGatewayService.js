@@ -34,6 +34,8 @@ const { logger } = require('./loggerService');
 const {
   EMAIL_GATEWAY_CONFIG,
   EMAIL_GATEWAY_MESSAGES,
+  EMAIL_GATEWAY_STATE,
+  EMAIL_GATEWAY_SMTP_PORTS,
   EMAIL_INGESTION_STATUS,
 } = require('../config/constants');
 
@@ -43,6 +45,9 @@ const { INGESTION_OUTCOME } = emailGatewayQueries;
 const runtime = {
   pollTimer: null,
   isPolling: false,
+  // Mail older than this is never considered. Set when watching begins so an
+  // existing backlog is left alone; see the search call in pollOnce.
+  watchingSince: new Date().toISOString(),
   lastPollAt: null,
   lastPollDurationMs: null,
   lastError: null,
@@ -69,8 +74,17 @@ function resolveConfig(env = process.env) {
     host: (env.EMAIL_GATEWAY_HOST || '').trim(),
     port: Number(env.EMAIL_GATEWAY_PORT || 993),
     secure: String(env.EMAIL_GATEWAY_SECURE || 'true').toLowerCase() !== 'false',
+    // IMAP login. An operational credential — this is the account the backend
+    // authenticates as, and it is not what a buyer needs to know.
     user: (env.EMAIL_GATEWAY_USER || '').trim(),
     password: env.EMAIL_GATEWAY_PASSWORD || '',
+    // The Procucev intake address buyers actually send their requisition TO.
+    // Kept separate from the IMAP login because the two are different things and
+    // routinely differ: mail addressed to an alias or shared mailbox such as
+    // client@procucev.com can be collected by a login of intake@procucev.com.
+    // Conflating them is what put a personal Gmail login in front of buyers as
+    // though it were the address to forward requisitions to.
+    address: (env.EMAIL_GATEWAY_ADDRESS || env.EMAIL_GATEWAY_USER || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS).trim(),
     mailbox: (env.EMAIL_GATEWAY_MAILBOX || 'INBOX').trim(),
     pollIntervalMs: Math.max(
       Number(env.EMAIL_GATEWAY_POLL_MS || EMAIL_GATEWAY_CONFIG.DEFAULT_POLL_MS),
@@ -86,6 +100,70 @@ function resolveConfig(env = process.env) {
 /** True when enough is configured to attempt a connection. */
 function isConfigured(config = resolveConfig()) {
   return !!(config.host && config.user && config.password);
+}
+
+/**
+ * Catch the misconfiguration that cannot be diagnosed from the socket error.
+ *
+ * Pointing this at an SMTP host or port fails with
+ * `SSL routines::wrong version number`, which says nothing about the cause. The
+ * check happens before connecting so the panel can name the wrong variable.
+ *
+ * Returns a message, or null when the combination looks sane.
+ */
+function describeConfigurationFault(config = resolveConfig()) {
+  if (/^smtp\./i.test(config.host)) {
+    return EMAIL_GATEWAY_MESSAGES.SMTP_HOST_CONFIGURED.replace('{host}', config.host);
+  }
+  if (EMAIL_GATEWAY_SMTP_PORTS.includes(config.port)) {
+    return EMAIL_GATEWAY_MESSAGES.SMTP_PORT_CONFIGURED.replace('{port}', String(config.port));
+  }
+  return null;
+}
+
+/**
+ * Translate a connection failure into something actionable.
+ *
+ * The raw errors here are OpenSSL and IMAP protocol text — a stack trace
+ * mentioning `SSL routines` tells the reader nothing about which environment
+ * variable is wrong. The original message is still logged; only the panel gets
+ * this version.
+ */
+function describeConnectionError(err) {
+  const message = String((err && err.message) || '');
+
+  if (/wrong version number|packet length too long|record layer/i.test(message)) {
+    return EMAIL_GATEWAY_MESSAGES.TLS_VERSION_MISMATCH;
+  }
+  if (/AUTHENTICATIONFAILED|Invalid credentials|Username and Password not accepted|LOGIN failed/i.test(message)) {
+    return EMAIL_GATEWAY_MESSAGES.AUTH_REJECTED;
+  }
+  if (/ENOTFOUND|EAI_AGAIN|getaddrinfo/i.test(message)) {
+    return EMAIL_GATEWAY_MESSAGES.HOST_UNRESOLVED;
+  }
+  if (/ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ECONNRESET|timed out/i.test(message)) {
+    return EMAIL_GATEWAY_MESSAGES.HOST_UNREACHABLE;
+  }
+  if (/certificate|CERT_|self.signed|altname/i.test(message)) {
+    return EMAIL_GATEWAY_MESSAGES.CERTIFICATE_REJECTED;
+  }
+  return EMAIL_GATEWAY_MESSAGES.CONNECTION_FAILED_FALLBACK;
+}
+
+/**
+ * Which of the four states the panel should show.
+ *
+ * A configuration fault counts as a connection error even before a connection has
+ * been attempted, because the outcome is already known and the buyer needs to be
+ * told the gateway is not going to work.
+ */
+function resolveConnectionState(config, { lastError, watching } = {}) {
+  if (!isConfigured(config)) return EMAIL_GATEWAY_STATE.NOT_CONFIGURED;
+  if (describeConfigurationFault(config)) return EMAIL_GATEWAY_STATE.CONNECTION_ERROR;
+  if (!config.enabled) return EMAIL_GATEWAY_STATE.SWITCHED_OFF;
+  if (lastError) return EMAIL_GATEWAY_STATE.CONNECTION_ERROR;
+  if (watching) return EMAIL_GATEWAY_STATE.ACTIVE_LISTENING;
+  return EMAIL_GATEWAY_STATE.SWITCHED_OFF;
 }
 
 /**
@@ -260,6 +338,19 @@ async function pollOnce(config = resolveConfig()) {
     return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
   }
 
+  // Refused before opening a socket: the failure is already certain, and the
+  // socket error it would produce names none of the offending variables.
+  const configurationFault = describeConfigurationFault(config);
+  if (configurationFault) {
+    runtime.lastError = configurationFault;
+    logger.error(
+      'Email gateway is misconfigured and was not contacted',
+      new Error(configurationFault),
+      'EMAIL_GATEWAY'
+    );
+    return { skipped: true, reason: configurationFault };
+  }
+
   runtime.isPolling = true;
   runtime.consideredThisRun = 0;
   runtime.ingestedThisRun = 0;
@@ -281,7 +372,12 @@ async function pollOnce(config = resolveConfig()) {
     runtime.lastConnectedAt = new Date().toISOString();
     const lock = await client.getMailboxLock(config.mailbox);
     try {
-      const unseenUids = await client.search({ seen: false });
+      // Bounded by when the gateway started watching, not just by the unseen
+      // flag. A real mailbox has a backlog — the account this was first pointed at
+      // had 110 unread messages — and without this bound the gateway would work
+      // through years of unrelated mail, spend its per-poll budget on it, and
+      // never reach the requisition that just arrived.
+      const unseenUids = await client.search({ seen: false, since: new Date(runtime.watchingSince) });
       const batch = (unseenUids || []).slice(0, config.maxPerPoll);
 
       for (const uid of batch) {
@@ -316,10 +412,15 @@ async function pollOnce(config = resolveConfig()) {
             rfqNumber: result.rfq ? result.rfq.rfqNumber : null,
           });
 
-          if (result.status === INGESTION_OUTCOME.INGESTED) runtime.ingestedThisRun += 1;
-          // Flagged after the ledger write, so a failed write leaves the message
-          // to be retried rather than silently dropped.
-          await client.messageFlagsAdd(String(uid), ['\\Seen']);
+          if (result.status === INGESTION_OUTCOME.INGESTED) {
+            runtime.ingestedThisRun += 1;
+            // Marked read only for a message we actually acted on, and only after
+            // the ledger write, so a failed write leaves it to be retried. Mail
+            // the gateway rejected is left untouched: it belongs to the mailbox
+            // owner, not to us, and the ledger already stops it being
+            // reconsidered on the next poll.
+            await client.messageFlagsAdd(String(uid), ['\\Seen']);
+          }
           outcomes.push({ uid, messageId: resolvedMessageId, status: result.status });
         } catch (err) {
           logger.error('Inbound message could not be processed', err, 'EMAIL_GATEWAY');
@@ -347,9 +448,10 @@ async function pollOnce(config = resolveConfig()) {
     }
   } catch (err) {
     // A connection or authentication failure. Reported through status rather than
-    // thrown, so the panel can explain it and the interval keeps trying.
+    // thrown, so the panel can explain it and the interval keeps trying. The raw
+    // OpenSSL/IMAP text goes to the log; the panel gets the actionable version.
     runtime.lastError = err.message;
-    logger.error('Email gateway poll failed', err, 'EMAIL_GATEWAY');
+    logger.error(`Email gateway poll failed: ${err.message}`, err, 'EMAIL_GATEWAY');
     return { skipped: false, error: err.message, considered: runtime.consideredThisRun, outcomes };
   } finally {
     try {
@@ -375,6 +477,16 @@ function startPolling(config = resolveConfig()) {
   if (!config.enabled) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.DISABLED };
   if (!isConfigured(config)) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
 
+  // Surfaced at boot rather than on the first tick, so a bad host or port is in
+  // the startup log instead of appearing two minutes later as a TLS error.
+  const configurationFault = describeConfigurationFault(config);
+  if (configurationFault) {
+    runtime.lastError = configurationFault;
+    return { started: false, reason: configurationFault };
+  }
+
+  // Anchored here so only mail arriving from now on is considered.
+  runtime.watchingSince = new Date().toISOString();
   runtime.pollTimer = setInterval(() => {
     emailGateway.pollOnce(resolveConfig()).catch((err) => {
       logger.error('Email gateway interval poll threw', err, 'EMAIL_GATEWAY');
@@ -408,10 +520,20 @@ async function getStatus() {
   const config = resolveConfig();
   const configured = isConfigured(config);
 
+  const configurationFault = configured ? describeConfigurationFault(config) : null;
+  // A configuration fault is reported as the last error even before a connection
+  // has been tried, because the outcome is already known.
+  const lastError = configurationFault || runtime.lastError;
+
   return {
     enabled: config.enabled,
     configured,
     watching: !!runtime.pollTimer,
+    connectionState: resolveConnectionState(config, { lastError, watching: !!runtime.pollTimer }),
+    // What a buyer addresses their requisition to.
+    gatewayAddress: config.address || null,
+    // The IMAP account the backend reads it from. Operational detail, shown as
+    // such rather than presented to the buyer as a destination.
     mailboxUser: config.user || null,
     mailbox: config.mailbox,
     host: config.host || null,
@@ -420,10 +542,11 @@ async function getStatus() {
     // baseline rule and worth stating explicitly in the panel.
     allowedSenders: config.allowedSenders,
     allowedDomains: config.allowedDomains,
+    watchingSince: runtime.watchingSince,
     lastPollAt: runtime.lastPollAt,
     lastPollDurationMs: runtime.lastPollDurationMs,
     lastConnectedAt: runtime.lastConnectedAt,
-    lastError: runtime.lastError,
+    lastError,
     isPolling: runtime.isPolling,
     counts: configured ? await emailGatewayQueries.countsByStatus() : {},
     recent: configured ? await emailGatewayQueries.listRecent() : [],
@@ -439,6 +562,9 @@ const emailGateway = {
   INGESTION_OUTCOME,
   resolveConfig,
   isConfigured,
+  describeConfigurationFault,
+  describeConnectionError,
+  resolveConnectionState,
   resolveSenderAuthorisation,
   processMessage,
   pollOnce,

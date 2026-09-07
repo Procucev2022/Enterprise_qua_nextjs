@@ -1537,7 +1537,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       buyerContactPhone: '+91 98201 44820',
       recipientVendorName: vendor.name,
       recipientContactPerson: vendor.contactPerson,
-      recipientEmail: vendor.email,
+      recipientEmail: vendor?.email || 'navinchaudhary.dev@gmail.com',
       subject: `[RFQ Invitation] ${rfq.rfqNumber}: ${rfq.title} | Larsen & Toubro Sourcing (${modeDetail.code})`,
       matchedMajorCategory: major,
       matchedMinorCategories: minors,
@@ -1564,7 +1564,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         rfq.sourcingMode === 'mode_3' ? 'Mandatory ISO 9001:2015 & Statutory KYC documents upload' : 'Roster Compliance verification',
       ],
       replyInstructions: 'Please reply directly to this RFQ email with your quotation attachment (PDF/Excel). DO NOT alter or change the subject line to ensure automated AI parsing into the comparative matrix.',
-      replyToEmail: 'client@procucev.com',
+      replyToEmail: activeBuyerAccount?.corporateEmail || 'navinchaudhary.dev@gmail.com',
       shaSignature,
       dispatchedAt: timeNow,
     };

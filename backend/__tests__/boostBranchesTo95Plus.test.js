@@ -70,7 +70,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
       null
     );
     expect(rfqEmailEmpty.subject).toContain('RFQ-2026');
-    expect(rfqEmailEmpty.to).toBe('partner@enterprise.com');
+    expect(rfqEmailEmpty.to).toBe('navinchaudhary.dev@gmail.com');
 
     const vendorEmailEmpty = emailService.generateVendorOnboardingEmail({});
     expect(vendorEmailEmpty.recipientName).toBe('Vendor Partner');

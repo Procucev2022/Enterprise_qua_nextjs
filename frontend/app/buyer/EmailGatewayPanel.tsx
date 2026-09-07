@@ -7,9 +7,17 @@ import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { formatIndianDateTime } from '@/lib/constants';
 import { logger } from '@/lib/logger';
 import type { EmailGatewayOutcome, EmailGatewayStatus } from '@/lib/types';
-import { Mail, RefreshCw, ShieldCheck, TriangleAlert, Inbox } from 'lucide-react';
+import { Mail, RefreshCw, ShieldCheck, TriangleAlert, Inbox, Zap } from 'lucide-react';
 
 const GATEWAY = UI_STRINGS.emailGateway;
+
+/** Connection state -> badge label and styling. */
+const STATE_PRESENTATION: Record<string, { label: string; className: string }> = {
+  ACTIVE_LISTENING: { label: GATEWAY.activeListeningLabel, className: 'badge-emerald' },
+  CONNECTION_ERROR: { label: GATEWAY.connectionErrorLabel_state, className: 'badge-rose' },
+  SWITCHED_OFF: { label: GATEWAY.offLabel, className: 'badge-purple' },
+  NOT_CONFIGURED: { label: GATEWAY.notConfiguredLabel, className: 'badge-purple' },
+};
 
 /** Ledger status -> buyer-facing label and badge styling. */
 const OUTCOME_PRESENTATION: Record<EmailGatewayOutcome, { label: string; className: string }> = {
@@ -124,14 +132,10 @@ export default function EmailGatewayPanel() {
     );
   }
 
-  const isLive = status.configured && status.enabled && status.watching;
-  const badge = !status.configured
-    ? { label: GATEWAY.notConfiguredLabel, className: 'badge-purple' }
-    : !status.enabled
-      ? { label: GATEWAY.offLabel, className: 'badge-purple' }
-      : status.watching
-        ? { label: GATEWAY.watchingLabel, className: 'badge-emerald' }
-        : { label: GATEWAY.notWatchingLabel, className: 'badge-purple' };
+  // Driven by the server's connectionState so a configuration fault reads as a
+  // connection error rather than as a healthy gateway that simply is not watching.
+  const badge = STATE_PRESENTATION[status.connectionState] || STATE_PRESENTATION.NOT_CONFIGURED;
+  const isLive = status.connectionState === 'ACTIVE_LISTENING';
 
   return (
     <div
@@ -139,8 +143,13 @@ export default function EmailGatewayPanel() {
       className="p-5 rounded-2xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 space-y-4 text-xs"
     >
       <div className="flex items-center justify-between gap-3 border-b border-slate-200 dark:border-gray-800 pb-3 flex-wrap">
+        {/* The intake address sits in the heading, as in the prototype, so the
+            address a buyer sends to is the first thing read. */}
         <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 font-bold">
           <Mail size={16} /> {GATEWAY.title}
+          {status.gatewayAddress && (
+            <span className="font-mono font-semibold">({status.gatewayAddress})</span>
+          )}
         </div>
         <span className={`badge ${badge.className} flex items-center gap-1`}>
           {isLive && <span className="live-dot" style={{ width: 6, height: 6 }} />}
@@ -159,14 +168,44 @@ export default function EmailGatewayPanel() {
         </div>
       ) : (
         <>
-          <p className="text-[11px] text-slate-600 dark:text-gray-300 leading-relaxed">
-            {GATEWAY.howItWorks}
-          </p>
+          {/* The prototype's lights-out banner, kept as the visual anchor but with
+              the claim corrected. It asserted that the system also shortlists
+              vendors and circulates the RFQ automatically; it does neither, and
+              releasing to vendors is the Category Manager's decision. */}
+          <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 space-y-1">
+            <p className="font-bold flex items-center gap-1.5 text-amber-900 dark:text-amber-200">
+              <Zap size={14} className="text-amber-600 dark:text-amber-400" />
+              {GATEWAY.lightsOutTitle}
+            </p>
+            <p className="text-[11px] text-slate-600 dark:text-gray-300 leading-relaxed">
+              {formatString(GATEWAY.howItWorksAddressed, {
+                address: status.gatewayAddress || GATEWAY.gatewayAddressHint,
+              })}
+            </p>
+          </div>
+
+          {/* The intake address, given prominence: it is the one thing a buyer has
+              to act on. The IMAP account it is collected from is shown below as an
+              operational detail, not as somewhere to send mail. */}
+          <div
+            data-testid="gateway-intake-address"
+            className="p-3 rounded-xl bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-900/50"
+          >
+            <p className="text-[10px] uppercase font-bold tracking-wider text-indigo-700 dark:text-indigo-300">
+              {GATEWAY.gatewayAddressLabel}
+            </p>
+            <p className="font-mono text-sm font-bold text-indigo-900 dark:text-indigo-200 break-all">
+              {status.gatewayAddress}
+            </p>
+            <p className="text-[10px] text-indigo-700/70 dark:text-indigo-300/70">
+              {GATEWAY.gatewayAddressHint}
+            </p>
+          </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
             <span>
-              <strong className="text-slate-500 dark:text-gray-400">{GATEWAY.forwardToLabel}:</strong>{' '}
-              <span className="font-mono text-indigo-600 dark:text-indigo-300">{status.mailboxUser}</span>
+              <strong className="text-slate-500 dark:text-gray-400">{GATEWAY.mailboxAccountLabel}:</strong>{' '}
+              <span className="font-mono">{status.mailboxUser}</span>
             </span>
             <span>
               <strong className="text-slate-500 dark:text-gray-400">{GATEWAY.checkedEveryLabel}:</strong>{' '}
@@ -199,6 +238,37 @@ export default function EmailGatewayPanel() {
                 : status.allowedDomains.length > 0
                   ? status.allowedDomains.join(', ')
                   : GATEWAY.allowedAnyAccount}
+            </p>
+          </div>
+
+          {/* Worked example plus the explicit boundary of this screen, so the
+              direction of the flow cannot be misread as the buyer dispatching to
+              vendors. */}
+          <div className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5">
+            <p className="font-bold text-slate-700 dark:text-gray-300">{GATEWAY.exampleTitle}</p>
+            <div className="text-[11px] font-mono space-y-0.5 text-slate-600 dark:text-gray-300">
+              <p>
+                <span className="text-slate-400">{GATEWAY.exampleFromLabel}:</span> {GATEWAY.exampleFromValue}
+              </p>
+              <p>
+                <span className="text-slate-400">{GATEWAY.exampleToLabel}:</span>{' '}
+                <strong className="text-indigo-600 dark:text-indigo-300">{status.gatewayAddress}</strong>
+              </p>
+              <p>
+                <span className="text-slate-400">{GATEWAY.exampleSubjectLabel}:</span>{' '}
+                {GATEWAY.exampleSubjectValue}
+              </p>
+              <p>
+                <span className="text-slate-400">{GATEWAY.exampleBodyLabel}:</span> {GATEWAY.exampleBodyValue}
+              </p>
+            </div>
+            <p className="font-bold text-slate-700 dark:text-gray-300 pt-1.5">{GATEWAY.nextStepsTitle}</p>
+            <ol className="list-decimal list-inside text-[10px] space-y-0.5 text-slate-500 dark:text-gray-400">
+              <li>{GATEWAY.nextStepExtract}</li>
+              <li>{GATEWAY.nextStepReview}</li>
+            </ol>
+            <p className="text-[10px] font-semibold text-amber-700 dark:text-amber-400">
+              {GATEWAY.nextStepNoVendors}
             </p>
           </div>
 

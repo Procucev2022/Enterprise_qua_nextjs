@@ -1159,11 +1159,24 @@ export interface EmailGatewayLogEntry {
  * Carries no credentials — only the account being watched, which the buyer needs
  * in order to know where to send requisitions.
  */
+/** Gateway connection state, as reported by the server. */
+export type EmailGatewayConnectionState =
+  | 'ACTIVE_LISTENING'
+  | 'CONNECTION_ERROR'
+  | 'SWITCHED_OFF'
+  | 'NOT_CONFIGURED';
+
 export interface EmailGatewayStatus {
   enabled: boolean;
   configured: boolean;
   watching: boolean;
+  connectionState: EmailGatewayConnectionState;
+  /** The Procucev intake address buyers send their requisition TO. */
+  gatewayAddress: string | null;
+  /** IMAP account the backend collects from. Operational detail, not a destination. */
   mailboxUser: string | null;
+  /** Mail older than this is never considered, so an existing backlog is left alone. */
+  watchingSince: string;
   mailbox: string;
   host: string | null;
   pollIntervalMs: number;

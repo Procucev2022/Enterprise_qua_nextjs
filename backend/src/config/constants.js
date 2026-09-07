@@ -637,10 +637,47 @@ const EMAIL_GATEWAY_CONFIG = {
   INGESTED_SOURCING_MODE: 'mode_1',
   // Emails have no file name; this stands in wherever one is recorded.
   SYNTHETIC_FILE_NAME: 'inbound-email.eml',
+  DEFAULT_GATEWAY_ADDRESS: 'navinchaudhary.dev@gmail.com',
 };
+
+/** Connection state reported to the gateway panel. */
+const EMAIL_GATEWAY_STATE = {
+  ACTIVE_LISTENING: 'ACTIVE_LISTENING',
+  CONNECTION_ERROR: 'CONNECTION_ERROR',
+  SWITCHED_OFF: 'SWITCHED_OFF',
+  NOT_CONFIGURED: 'NOT_CONFIGURED',
+};
+
+/**
+ * Ports that belong to sending mail, not reading it.
+ *
+ * Pointing the gateway at 587 (SMTP submission) with implicit TLS on is what
+ * produced `SSL routines::wrong version number`: 587 opens in plaintext and
+ * upgrades via STARTTLS, so a TLS ClientHello gets a plaintext SMTP greeting
+ * back. Detected explicitly rather than left to fail at the socket.
+ */
+const EMAIL_GATEWAY_SMTP_PORTS = [25, 465, 587, 2525];
 
 /** Buyer-facing detail recorded against each considered message. */
 const EMAIL_GATEWAY_MESSAGES = {
+  // Configuration faults, named precisely because the underlying socket error is
+  // unreadable to anyone who has not seen it before.
+  SMTP_HOST_CONFIGURED:
+    'EMAIL_GATEWAY_HOST is set to {host}, which is a mail sending server. The gateway reads a mailbox, so it needs an IMAP host — use imap.gmail.com for Gmail or outlook.office365.com for Microsoft 365.',
+  SMTP_PORT_CONFIGURED:
+    'EMAIL_GATEWAY_PORT is {port}, which is a mail sending port. IMAP uses 993 with EMAIL_GATEWAY_SECURE=true, or 143 with EMAIL_GATEWAY_SECURE=false.',
+  TLS_VERSION_MISMATCH:
+    'The mail server answered without TLS, so the connection was refused. This is almost always the wrong host or port: IMAP is 993 with EMAIL_GATEWAY_SECURE=true, or 143 with EMAIL_GATEWAY_SECURE=false. Check EMAIL_GATEWAY_HOST is an IMAP host and not an SMTP one.',
+  AUTH_REJECTED:
+    'The mail server rejected the credentials. For Gmail, IMAP must be enabled in Settings > Forwarding and POP/IMAP, and EMAIL_GATEWAY_PASSWORD must be an App Password rather than the account password.',
+  HOST_UNRESOLVED:
+    'EMAIL_GATEWAY_HOST could not be resolved. Check the hostname for a typo and that this machine has DNS and outbound network access.',
+  HOST_UNREACHABLE:
+    'The mail server did not accept a connection on that port. Check EMAIL_GATEWAY_PORT and that outbound IMAP is not blocked by a firewall.',
+  CERTIFICATE_REJECTED:
+    'The mail server presented a certificate that could not be verified. Confirm EMAIL_GATEWAY_HOST matches the certificate, and do not disable TLS to work around it.',
+  CONNECTION_FAILED_FALLBACK:
+    'The mailbox could not be reached. Check EMAIL_GATEWAY_HOST, EMAIL_GATEWAY_PORT and the credentials, then try again.',
   NOT_CONFIGURED:
     'The email gateway is not configured. Set EMAIL_GATEWAY_HOST, EMAIL_GATEWAY_USER and EMAIL_GATEWAY_PASSWORD in backend/.env to connect a mailbox.',
   DISABLED: 'The email gateway is switched off. Set EMAIL_GATEWAY_ENABLED=true to start watching the mailbox.',
@@ -873,6 +910,8 @@ module.exports = {
   EMAIL_INGESTION_MESSAGES,
   EMAIL_GATEWAY_CONFIG,
   EMAIL_GATEWAY_MESSAGES,
+  EMAIL_GATEWAY_STATE,
+  EMAIL_GATEWAY_SMTP_PORTS,
   EMAIL_REGEX,
   GSTIN_REGEX,
   GSTIN_MESSAGE,

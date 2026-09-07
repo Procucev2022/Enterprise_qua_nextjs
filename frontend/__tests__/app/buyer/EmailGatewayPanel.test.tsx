@@ -32,6 +32,10 @@ function status(overrides: Partial<EmailGatewayStatus> = {}): EmailGatewayStatus
     enabled: true,
     configured: true,
     watching: true,
+    connectionState: 'ACTIVE_LISTENING',
+    // The Procucev intake address buyers send to, distinct from the IMAP login.
+    gatewayAddress: 'client@procucev.com',
+    watchingSince: '2026-09-07T03:00:00.000Z',
     mailboxUser: 'intake@procucev.com',
     mailbox: 'INBOX',
     host: 'imap.gmail.com',
@@ -89,7 +93,14 @@ describe('EmailGatewayPanel when no mailbox is connected', () => {
   test('names the exact environment variables required', async () => {
     mockFetchStatus.mockResolvedValue({
       success: true,
-      data: status({ configured: false, enabled: false, watching: false, mailboxUser: null }),
+      data: status({
+        configured: false,
+        enabled: false,
+        watching: false,
+        connectionState: 'NOT_CONFIGURED',
+        gatewayAddress: null,
+        mailboxUser: null,
+      }),
     });
     render(<EmailGatewayPanel />);
 
@@ -111,32 +122,68 @@ describe('EmailGatewayPanel when no mailbox is connected', () => {
 });
 
 describe('EmailGatewayPanel when connected', () => {
-  test('shows the watched mailbox, interval and review destination', async () => {
+  // The address a buyer sends TO must be the prominent one. Showing the IMAP
+  // login here is what made the panel read as "forward requisitions to this
+  // personal Gmail".
+  test('leads with the Procucev intake address, not the IMAP login', async () => {
+    render(<EmailGatewayPanel />);
+
+    const intake = await screen.findByTestId('gateway-intake-address');
+    expect(intake).toHaveTextContent(GATEWAY.gatewayAddressLabel);
+    expect(intake).toHaveTextContent('client@procucev.com');
+    // The collecting account is still shown, but as an operational detail.
+    expect(intake).not.toHaveTextContent('intake@procucev.com');
+    expect(screen.getByText('intake@procucev.com')).toBeInTheDocument();
+  });
+
+  test('shows the interval and where an ingested RFQ is held', async () => {
     render(<EmailGatewayPanel />);
 
     await screen.findByTestId('gateway-panel');
-    expect(screen.getByText('intake@procucev.com')).toBeInTheDocument();
-    expect(screen.getByText(GATEWAY.watchingLabel)).toBeInTheDocument();
+    expect(screen.getByText(GATEWAY.activeListeningLabel)).toBeInTheDocument();
     expect(screen.getByText('120s')).toBeInTheDocument();
-    // Buyers need to know an ingested RFQ is held, not circulated.
+    // Buyers need to know an ingested RFQ is held for review, not circulated.
     expect(screen.getByText('Parsing')).toBeInTheDocument();
   });
 
-  test('reports that it is not watching when the gateway is switched off', async () => {
+  // The buyer page monitors the gateway; it never dispatches to vendors.
+  test('states that no vendor is contacted from this screen', async () => {
+    render(<EmailGatewayPanel />);
+
+    await screen.findByTestId('gateway-panel');
+    expect(screen.getByText(GATEWAY.nextStepNoVendors)).toBeInTheDocument();
+    // No action on this page can reach a vendor. The buyer page monitors the
+    // gateway; releasing is the Category Manager's step.
+    expect(screen.queryByRole('button', { name: /release to vendors/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /circulate/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /shortlist/i })).not.toBeInTheDocument();
+    // The prototype asserted the gateway also shortlists and circulates. The copy
+    // must state the opposite rather than merely avoiding the words.
+    expect(screen.getByText(/No vendor is shortlisted or contacted at this stage/i)).toBeInTheDocument();
+  });
+
+  test('shows the worked example addressed to the gateway', async () => {
+    render(<EmailGatewayPanel />);
+
+    await screen.findByTestId('gateway-panel');
+    expect(screen.getByText(GATEWAY.exampleTitle)).toBeInTheDocument();
+    expect(screen.getByText(GATEWAY.exampleFromValue)).toBeInTheDocument();
+    expect(screen.getAllByText('client@procucev.com').length).toBeGreaterThan(1);
+  });
+
+  test.each([
+    ['SWITCHED_OFF', GATEWAY.offLabel],
+    ['CONNECTION_ERROR', GATEWAY.connectionErrorLabel_state],
+    ['ACTIVE_LISTENING', GATEWAY.activeListeningLabel],
+  ])('renders the %s badge from the server state', async (state, label) => {
     mockFetchStatus.mockResolvedValue({
       success: true,
-      data: status({ enabled: false, watching: false }),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- table-driven over the state union
+      data: status({ connectionState: state as any }),
     });
     render(<EmailGatewayPanel />);
 
-    expect(await screen.findByText(GATEWAY.offLabel)).toBeInTheDocument();
-  });
-
-  test('reports configured but not watching', async () => {
-    mockFetchStatus.mockResolvedValue({ success: true, data: status({ watching: false }) });
-    render(<EmailGatewayPanel />);
-
-    expect(await screen.findByText(GATEWAY.notWatchingLabel)).toBeInTheDocument();
+    expect(await screen.findByText(label)).toBeInTheDocument();
   });
 
   // An unlisted sender is silently skipped, so the rule has to be discoverable.

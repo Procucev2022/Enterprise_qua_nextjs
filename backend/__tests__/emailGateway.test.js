@@ -782,3 +782,84 @@ describe('emailGatewayService.pollOnce edge paths', () => {
     expect(emailGatewayService.runtime.isPolling).toBe(false);
   });
 });
+
+describe('emailGatewayService configuration helpers and connection diagnostics', () => {
+  test('describeConfigurationFault identifies SMTP hosts and ports', () => {
+    expect(
+      emailGatewayService.describeConfigurationFault({ host: 'smtp.gmail.com', port: 993 })
+    ).toContain('smtp.gmail.com');
+
+    expect(
+      emailGatewayService.describeConfigurationFault({ host: 'imap.gmail.com', port: 587 })
+    ).toContain('587');
+
+    expect(
+      emailGatewayService.describeConfigurationFault({ host: 'imap.gmail.com', port: 993 })
+    ).toBeNull();
+  });
+
+  test('describeConnectionError categorizes known network and auth errors', () => {
+    expect(
+      emailGatewayService.describeConnectionError(new Error('wrong version number in SSL routines'))
+    ).toBe(EMAIL_GATEWAY_MESSAGES.TLS_VERSION_MISMATCH);
+
+    expect(
+      emailGatewayService.describeConnectionError(new Error('Invalid credentials'))
+    ).toBe(EMAIL_GATEWAY_MESSAGES.AUTH_REJECTED);
+
+    expect(
+      emailGatewayService.describeConnectionError(new Error('getaddrinfo ENOTFOUND'))
+    ).toBe(EMAIL_GATEWAY_MESSAGES.HOST_UNRESOLVED);
+
+    expect(
+      emailGatewayService.describeConnectionError(new Error('connect ECONNREFUSED'))
+    ).toBe(EMAIL_GATEWAY_MESSAGES.HOST_UNREACHABLE);
+
+    expect(
+      emailGatewayService.describeConnectionError(new Error('unable to verify the first certificate'))
+    ).toBe(EMAIL_GATEWAY_MESSAGES.CERTIFICATE_REJECTED);
+
+    expect(
+      emailGatewayService.describeConnectionError(new Error('Unknown generic error'))
+    ).toBe(EMAIL_GATEWAY_MESSAGES.CONNECTION_FAILED_FALLBACK);
+  });
+
+  test('resolveConnectionState determines correct UI connection states', () => {
+    const unconfigured = emailGatewayService.resolveConfig({});
+    expect(emailGatewayService.resolveConnectionState(unconfigured)).toBe('NOT_CONFIGURED');
+
+    const smtpConfig = { ...emailGatewayService.resolveConfig(FULL_ENV), host: 'smtp.gmail.com' };
+    expect(emailGatewayService.resolveConnectionState(smtpConfig)).toBe('CONNECTION_ERROR');
+
+    const disabledConfig = { ...emailGatewayService.resolveConfig(FULL_ENV), enabled: false };
+    expect(emailGatewayService.resolveConnectionState(disabledConfig)).toBe('SWITCHED_OFF');
+
+    const errorConfig = emailGatewayService.resolveConfig(FULL_ENV);
+    expect(
+      emailGatewayService.resolveConnectionState(errorConfig, { lastError: 'Some error' })
+    ).toBe('CONNECTION_ERROR');
+
+    expect(
+      emailGatewayService.resolveConnectionState(errorConfig, { watching: true })
+    ).toBe('ACTIVE_LISTENING');
+
+    expect(
+      emailGatewayService.resolveConnectionState(errorConfig, { watching: false })
+    ).toBe('SWITCHED_OFF');
+  });
+
+  test('startPolling stops on configuration faults', () => {
+    const smtpConfig = { ...emailGatewayService.resolveConfig(FULL_ENV), host: 'smtp.gmail.com' };
+    const res = emailGatewayService.startPolling(smtpConfig);
+    expect(res.started).toBe(false);
+    expect(res.reason).toContain('smtp.gmail.com');
+  });
+
+  test('pollOnce refuses execution when configuration fault is present', async () => {
+    const smtpConfig = { ...emailGatewayService.resolveConfig(FULL_ENV), host: 'smtp.gmail.com' };
+    const res = await emailGatewayService.pollOnce(smtpConfig);
+    expect(res.skipped).toBe(true);
+    expect(res.reason).toContain('smtp.gmail.com');
+  });
+});
+
