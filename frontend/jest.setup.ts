@@ -259,6 +259,9 @@ global.fetch = jest.fn().mockImplementation((url: string, init?: { method?: stri
           },
         };
       }
+      if (typeof url === 'string' && url.includes('/api/ai-feed')) {
+        return { success: true, data: [] };
+      }
       return { success: true, data: {} };
     },
     text: async () => '',

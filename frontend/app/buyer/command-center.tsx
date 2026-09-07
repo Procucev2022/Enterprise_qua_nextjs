@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useApp } from '@/lib/store';
 import { SOURCING_MODES } from '@/lib/constants';
 import { RFQItem } from '@/lib/types';
@@ -55,7 +55,6 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
     rfqNumber: '',
     vendorName: '',
   });
-
   const [rfqSourceFilter, setRfqSourceFilter] = useState<'all' | 'email_gateway' | 'web_portal' | 'manual_entry'>('all');
 
   // GET /api/rfqs is itself scoped to the signed-in buyer's own account now
@@ -150,7 +149,17 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
     }
   };
 
-  const filteredFeed = aiFeed.filter((item) => {
+  const buyerScopedFeed = useMemo(() => {
+    const feed = aiFeed || [];
+    return feed.filter((item) => {
+      if (activeBuyerAccount?.id && item.buyerAccountId && item.buyerAccountId !== activeBuyerAccount.id) {
+        return false;
+      }
+      return true;
+    });
+  }, [aiFeed, activeBuyerAccount]);
+
+  const filteredFeed = buyerScopedFeed.filter((item) => {
     if (feedChannelFilter === 'all') return true;
     if (feedChannelFilter === 'call') return item.type === 'call' || item.channel === 'call';
     if (feedChannelFilter === 'whatsapp') return item.type === 'whatsapp' || item.channel === 'whatsapp';
@@ -161,7 +170,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   });
 
   const channelFilterTabs = [
-    { key: 'all' as const, label: 'All', count: aiFeed.length, activeClass: 'bg-slate-800 dark:bg-white text-white dark:text-slate-900' },
+    { key: 'all' as const, label: `All (${buyerScopedFeed.length})`, activeClass: 'bg-slate-800 dark:bg-white text-white dark:text-slate-900' },
     { key: 'call' as const, label: 'Calls', icon: <Phone size={11} />, activeClass: 'bg-purple-600 text-white' },
     { key: 'whatsapp' as const, label: 'WA', icon: <MessageSquare size={11} />, activeClass: 'bg-emerald-600 text-white' },
     { key: 'sms' as const, label: 'SMS', icon: <Smartphone size={11} />, activeClass: 'bg-sky-600 text-white' },
@@ -545,7 +554,6 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
               >
                 {tab.icon}
                 {tab.label}
-                {tab.count !== undefined && ` (${tab.count})`}
               </button>
             ))}
           </div>

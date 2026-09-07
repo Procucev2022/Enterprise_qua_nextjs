@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const aiFeedController = require('../controllers/aiFeedController');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, optionalAuthenticate } = require('../middleware/auth');
 
-router.get('/', aiFeedController.getAIFeed);
+router.get('/', optionalAuthenticate, aiFeedController.getAIFeed);
 router.post('/', authenticate, aiFeedController.createFeedItem);
 
 module.exports = router;

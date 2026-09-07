@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useApp } from '@/lib/store';
 import { useRouter } from 'next/navigation';
 import { SOURCING_MODES, ROLE_SIDEBAR_NAV, LOGIN_ROUTE } from '@/lib/constants';
@@ -97,6 +97,7 @@ export default function Header() {
     vendorSubscription,
     setVendorSubscription,
     vendorRfqDownloadsUsed,
+    rfqs,
     aiFeed,
     theme,
     toggleTheme,
@@ -106,6 +107,17 @@ export default function Header() {
     currentUserSession,
     setCurrentUserSession,
   } = useApp();
+
+  const buyerScopedFeed = useMemo(() => {
+    const feed = aiFeed || [];
+    if (currentRole === 'vendor') return feed;
+    return feed.filter((item) => {
+      if (activeBuyerAccount?.id && item.buyerAccountId && item.buyerAccountId !== activeBuyerAccount.id) {
+        return false;
+      }
+      return true;
+    });
+  }, [aiFeed, activeBuyerAccount, currentRole]);
 
   const router = useRouter();
 
@@ -402,10 +414,15 @@ export default function Header() {
                     <span className="live-dot" />
                     <span className="text-xs font-bold text-slate-800 dark:text-gray-200">Vendor Follow Up Status</span>
                   </div>
-                  <span className="text-[10px] text-slate-500 dark:text-gray-400">{aiFeed.length} Events</span>
+                  <span className="text-[10px] text-slate-500 dark:text-gray-400">{buyerScopedFeed.length} Events</span>
                 </div>
                 <div className="mt-2 space-y-2">
-                  {aiFeed.slice(0, 6).map((item) => (
+                  {buyerScopedFeed.length === 0 ? (
+                    <div className="py-6 text-center text-xs text-slate-400 dark:text-gray-500">
+                      No follow-up events recorded for your active requisitions.
+                    </div>
+                  ) : (
+                    buyerScopedFeed.slice(0, 6).map((item) => (
                     <div key={item.id} className="p-2.5 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700/50 text-xs">
                       <div className="flex items-center justify-between text-slate-500 dark:text-gray-400 text-[10px] mb-1">
                         <span className="font-semibold text-indigo-700 dark:text-indigo-300 flex items-center gap-1">
@@ -424,7 +441,7 @@ export default function Header() {
                       </div>
                       <p className="text-slate-700 dark:text-gray-300 text-[11px] leading-relaxed">{item.message}</p>
                     </div>
-                  ))}
+                  )))}
                 </div>
               </div>
             )}

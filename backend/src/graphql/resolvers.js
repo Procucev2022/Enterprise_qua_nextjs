@@ -159,9 +159,20 @@ const rootResolvers = {
     return items;
   },
 
-  aiFeed: (args = {}) => {
+  aiFeed: (args = {}, context) => {
     const limit = args.limit || 20;
-    return storeService.getAIFeed().slice(0, limit);
+    const all = storeService.getAIFeed();
+    if (context && context.req && context.req.user && context.req.user.role === 'buyer') {
+      const account = storeService.getBuyerAccountByEmail(context.req.user.email);
+      const buyerAccountId = account ? account.id : null;
+      if (!buyerAccountId) return [];
+      const buyerRfqs = storeService.getRFQs().filter((r) => r.buyerAccountId === buyerAccountId);
+      const buyerRfqNumbers = new Set(buyerRfqs.map((r) => r.rfqNumber).filter(Boolean));
+      return all
+        .filter((item) => item.buyerAccountId === buyerAccountId || (item.rfqNumber && buyerRfqNumbers.has(item.rfqNumber)))
+        .slice(0, limit);
+    }
+    return all.slice(0, limit);
   },
 
   systemConfig: () => {

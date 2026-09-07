@@ -759,6 +759,14 @@ class StoreService {
   }
 
   addAIFeedItem(feedItem) {
+    let buyerAccountId = feedItem.buyerAccountId || null;
+    if (!buyerAccountId && feedItem.rfqNumber) {
+      const rfq = this.getRFQById(feedItem.rfqNumber);
+      if (rfq && rfq.buyerAccountId) {
+        buyerAccountId = rfq.buyerAccountId;
+      }
+    }
+
     const item = {
       id: feedItem.id || `feed-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
       timestamp: feedItem.timestamp || new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC',
@@ -769,6 +777,7 @@ class StoreService {
       message: feedItem.message || '',
       recipient: feedItem.recipient || 'Vendor Contact',
       rfqNumber: feedItem.rfqNumber || null,
+      buyerAccountId,
       status: feedItem.status || 'delivered',
       channelDetails: feedItem.channelDetails || {},
     };
@@ -1152,12 +1161,10 @@ class StoreService {
   // ==========================================
   /**
    * Reference data the app needs to start up.
-   *
-   * RFQs are deliberately NOT here. This endpoint is anonymous, and returning the
-   * global RFQ array from it is what put one buyer's RFQs on another buyer's
-   * dashboard — scoping /api/rfqs alone would have changed nothing on screen
-   * while this remained the endpoint the store actually hydrated from. RFQs are
-   * now fetched from GET /api/rfqs, which is authenticated and org-scoped.
+   * RFQs and AI Bot feed events are deliberately NOT here. This endpoint is anonymous,
+   * and returning global arrays from it leaks one buyer's data onto another buyer's
+   * dashboard. RFQs are fetched from GET /api/rfqs and follow-up alerts from
+   * GET /api/ai-feed, which are both authenticated and org-scoped.
    */
   getBootstrapData() {
     return {
@@ -1166,7 +1173,7 @@ class StoreService {
       vendors: this.vendors,
       evaluations: this.evaluations,
       auditLogs: this.auditLogs,
-      aiFeed: this.aiFeed,
+      aiFeed: [],
       systemConfig: this.systemConfig,
       azureHealth: this.azureHealth,
       vendorCatalogue: this.vendorCatalogue,
