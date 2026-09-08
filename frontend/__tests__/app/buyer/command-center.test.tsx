@@ -427,4 +427,93 @@ describe('app/buyer/command-center.tsx', () => {
     );
     expect(screen.getByText(/Version 3 \(AI Autonomous Sourcing Plan\)/i)).toBeInTheDocument();
   });
+
+  it('filters AI feed strictly when activeBuyerAccount is present and handles various status badges', () => {
+    const customRfqs: RFQItem[] = [
+      {
+        id: 'rfq-custom-1',
+        rfqNumber: 'RFQ-CUSTOM-1',
+        title: 'Custom Status RFQ',
+        category: 'Mechanical',
+        createdAt: '2026-08-29',
+        targetDeliveryDate: '2026-09-20',
+        status: 'Draft' as any,
+        sourcingMode: 'invalid_mode_id' as any,
+        quotesCount: 1,
+        budget: 100000,
+        source: 'manual_entry',
+        chasingActive: false,
+        extractedEntities: [],
+        quotes: [],
+      },
+    ];
+
+    const scopedFeed: AIBotFeedItem[] = [
+      {
+        id: 'feed-own',
+        title: 'My Feed Item',
+        message: 'Own buyer message',
+        timestamp: '12:00 PM',
+        timeAgo: 'Just now',
+        type: 'call',
+        channel: 'call',
+        buyerAccountId: 'my-active-buyer-id',
+        status: 'completed',
+        channelDetails: { duration: '2m 10s' },
+      },
+      {
+        id: 'feed-other',
+        title: 'Other Buyer Feed Item',
+        message: 'Other buyer message',
+        timestamp: '12:05 PM',
+        timeAgo: 'Just now',
+        type: 'whatsapp',
+        channel: 'whatsapp',
+        buyerAccountId: 'other-buyer-id',
+        status: 'completed',
+      },
+      {
+        id: 'feed-email-item',
+        title: 'Email Feed Item',
+        message: 'Email item message',
+        timestamp: '12:10 PM',
+        timeAgo: 'Just now',
+        type: 'email',
+        channel: 'email',
+        status: 'completed',
+      },
+    ];
+
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: customRfqs,
+      aiFeed: scopedFeed,
+      currentMode: 'mode_1',
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      selectedRFQForDeepDive: null,
+      setSelectedRFQForDeepDive: mockSetSelectedRFQForDeepDive,
+      deepDiveModalOpen: false,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      remainingFreeRFQs: 5,
+      activeSubscription: 'free_trial',
+      activeBuyerAccount: { id: 'my-active-buyer-id', companyName: 'My Buyer Co' },
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      initialSetupCompleted: true,
+    });
+
+    render(
+      <CommandCenter
+        onNavigateToWizard={mockNavigateToWizard}
+        onNavigateToMatrix={mockNavigateToMatrix}
+        onNavigateToSubscription={mockNavigateToSubscription}
+        onNavigateToDirectory={mockNavigateToDirectory}
+      />
+    );
+
+    expect(screen.getByText(/My Feed Item/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Other Buyer Feed Item/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Custom Status RFQ')).toBeInTheDocument();
+    expect(screen.getByText('Draft')).toBeInTheDocument();
+  });
 });

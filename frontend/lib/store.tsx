@@ -121,6 +121,7 @@ interface AppContextType {
   isLoadingDB: boolean;
   dbConnected: boolean;
   refreshFromDB: () => Promise<void>;
+  refreshAIFeed: () => Promise<void>;
 
   // Procurement category master, read from the database. Empty until loaded —
   // there is no bundled copy to fall back to, so a screen shows "no categories
@@ -527,7 +528,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setVendorEvaluations(d.evaluations || []);
         setSelectedVendorEvaluation((prev) => prev || (d.evaluations || [])[0] || null);
         setAuditLogs(d.auditLogs || []);
-        setAiFeed(d.aiFeed || []);
         if (d.systemConfig) {
           setSystemConfig(d.systemConfig);
         }
@@ -610,19 +610,47 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  /**
+   * Load the AI bot follow-up feed scoped to the signed-in buyer.
+   *
+   * Vendor follow-up events and telemetry are scoped server-side by the caller's
+   * buyer organisation so follow-ups dispatched by one buyer are never visible
+   * on another buyer's command center / follow-up status bell.
+   */
+  const refreshAIFeed = async () => {
+    if (!authClient.getToken()) {
+      setAiFeed([]);
+      return;
+    }
+    try {
+      const activeBuyerId = activeBuyerAccount?.id;
+      const queryParam = activeBuyerId ? `?buyerAccountId=${encodeURIComponent(activeBuyerId)}` : '';
+      const res = await fetch(`/api/ai-feed${queryParam}`, { headers: authFetchHeaders() });
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data)) {
+        setAiFeed(json.data);
+      } else {
+        setAiFeed([]);
+      }
+    } catch (err) {
+      console.error('Failed to load AI feed:', err);
+    }
+  };
+
   useEffect(() => {
     refreshFromDB();
   }, []);
 
   // Re-run whenever the session changes, so signing in loads that buyer's RFQs
-  // and signing out clears them rather than leaving the previous buyer's on screen.
+  // and follow-up feeds, and signing out clears them rather than leaving the previous buyer's on screen.
   useEffect(() => {
     void refreshRFQs();
     void refreshActiveBuyerAccount();
     void refreshCategoryTaxonomy();
+    void refreshAIFeed();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on identity,
     // not on the callbacks, which are recreated every render.
-  }, [isLoggedIn, currentUserSession?.id]);
+  }, [isLoggedIn, currentUserSession?.id, activeBuyerAccount?.id]);
 
   // Integrated Buyer Accounts Management & Public Database Sync
   const addBuyerAccount = (account: Omit<BuyerAccount, 'id' | 'syncTimestamp' | 'createdDate'>): BuyerAccount => {
@@ -1658,6 +1686,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       message,
       recipient,
       rfqNumber,
+      buyerAccountId: activeBuyerAccount?.id,
       status: 'completed',
       channelDetails,
     };
@@ -2181,6 +2210,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         isLoadingDB,
         dbConnected,
         refreshFromDB,
+        refreshAIFeed,
         categoryTaxonomy,
         categoryTaxonomyError,
         isLoadingCategoryTaxonomy,

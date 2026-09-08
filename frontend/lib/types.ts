@@ -353,7 +353,7 @@ export interface RFQCreatePayload {
    */
   sourceEmail?: string;
   /**
-   * Target gateway mailbox (e.g. navinchaudhary.dev@gmail.com) for email notification dispatch.
+   * Target gateway mailbox (e.g. RFQ@procucev.com) for email notification dispatch.
    */
   targetGatewayEmail?: string;
   budget: number;
@@ -509,6 +509,7 @@ export interface AIBotFeedItem {
   message: string;
   recipient?: string;
   rfqNumber?: string;
+  buyerAccountId?: string;
   status: 'delivered' | 'read' | 'completed' | 'processing' | 'answered' | 'connected' | 'failed';
   channelDetails?: {
     duration?: string;
@@ -1408,9 +1409,9 @@ export interface SidebarNavItem {
   /** Active screen key consumed by the screen switchboard */
   id: string;
   /** Full screen reference used for accessible names (e.g. "Screen 1.1") */
-  screenTag: string;
+  screenTag?: string;
   /** Compact screen reference rendered as a sidebar badge (e.g. "1.1") */
-  shortTag: string;
+  shortTag?: string;
   label: string;
   description: string;
   icon: SidebarIconKey;

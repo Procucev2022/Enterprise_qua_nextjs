@@ -94,7 +94,8 @@ describe('RoleNavigation Sidebar Dashboard', () => {
         mockPathname = item.route;
         mockStore({ currentRole: role });
         const { unmount } = render(<RoleNavigation onLogout={mockOnLogout} />);
-        expect(screen.getByRole('link', { name: `${item.screenTag}: ${item.label}` })).toHaveAttribute(
+        const accessibleName = item.screenTag ? `${item.screenTag}: ${item.label}` : item.label;
+        expect(screen.getByRole('link', { name: accessibleName })).toHaveAttribute(
           'aria-current',
           'page'
         );
@@ -108,12 +109,15 @@ describe('RoleNavigation Sidebar Dashboard', () => {
       render(<RoleNavigation onLogout={mockOnLogout} />);
 
       items.forEach((item) => {
-        const link = screen.getByRole('link', { name: `${item.screenTag}: ${item.label}` });
+        const accessibleName = item.screenTag ? `${item.screenTag}: ${item.label}` : item.label;
+        const link = screen.getByRole('link', { name: accessibleName });
         expect(link).toHaveAttribute('href', item.route);
         expect(link).not.toHaveAttribute('aria-current');
         expect(screen.getByText(item.label)).toBeInTheDocument();
         expect(screen.getByText(item.description)).toBeInTheDocument();
-        expect(screen.getByText(item.shortTag)).toBeInTheDocument();
+        if (item.shortTag) {
+          expect(screen.getByText(item.shortTag)).toBeInTheDocument();
+        }
       });
     }
   );

@@ -16,19 +16,10 @@ import {
   Layers,
   Sparkles,
   CheckCircle2,
-  Cpu,
-  Building2,
-  Truck,
-  SlidersHorizontal,
   Sun,
   Moon,
   LogOut,
   Key,
-  Mail,
-  Check,
-  ArrowRight,
-  UserCheck,
-  Building,
 } from 'lucide-react';
 
 /**
@@ -140,7 +131,12 @@ export default function Header() {
   const handleVendorSubscriptionSelect = (tier: 'premium' | 'connect' | 'select') => {
     setVendorSubscription(tier);
     setModeDropdownOpen(false);
-    const tierName = tier === 'premium' ? 'Premium (Client Uploaded)' : tier === 'connect' ? 'Connect Model ($149)' : 'Select Model ($349)';
+    const tierName =
+      tier === 'premium'
+        ? 'Premium (Client Uploaded)'
+        : tier === 'connect'
+        ? 'Connect Model ($149)'
+        : 'Select Model ($349)';
     showToast('Vendor Tier Switched', `Active vendor access model set to: ${tierName}`, 'success');
   };
 
@@ -217,7 +213,7 @@ export default function Header() {
           </span>
         </div>
 
-        {/* Dynamic Mode Indicator: Sourcing Mode for Buyers/CMs vs Vendor Tier for Vendors */}
+        {/* Dynamic Mode Indicator */}
         <div className="relative">
           {currentRole === 'vendor' ? (
             /* VENDOR ACCESS TIER PILL */
@@ -238,7 +234,12 @@ export default function Header() {
                   ? 'Connect Model ($149 / 3mo)'
                   : 'Select Model ($349 / 3mo)'}
               </span>
-              <ChevronDown size={14} className={`text-emerald-600 dark:text-emerald-400 transition-transform ${modeDropdownOpen ? 'rotate-180' : ''}`} />
+              <ChevronDown
+                size={14}
+                className={`text-emerald-600 dark:text-emerald-400 transition-transform ${
+                  modeDropdownOpen ? 'rotate-180' : ''
+                }`}
+              />
             </button>
           ) : (
             /* BUYER / CM SOURCING MODE PILL */
@@ -255,7 +256,12 @@ export default function Header() {
               <span className="font-extrabold px-2 py-0.5 rounded bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60">
                 {activeModeObj.code}: {activeModeObj.shortLabel}
               </span>
-              <ChevronDown size={14} className={`text-slate-400 dark:text-gray-400 transition-transform ${modeDropdownOpen ? 'rotate-180' : ''}`} />
+              <ChevronDown
+                size={14}
+                className={`text-slate-400 dark:text-gray-400 transition-transform ${
+                  modeDropdownOpen ? 'rotate-180' : ''
+                }`}
+              />
             </button>
           )}
 
@@ -266,8 +272,12 @@ export default function Header() {
                 /* Vendor Subscription Tier Options */
                 <>
                   <div className="px-3 py-2 border-b border-slate-100 dark:border-gray-800">
-                    <p className="text-xs font-bold text-slate-800 dark:text-gray-300 uppercase tracking-wider">Vendor Access Tiers &amp; Quotas</p>
-                    <p className="text-[11px] text-slate-500 dark:text-gray-400">Controls direct RFQ downloads and marketplace listing</p>
+                    <p className="text-xs font-bold text-slate-800 dark:text-gray-300 uppercase tracking-wider">
+                      Vendor Access Tiers &amp; Quotas
+                    </p>
+                    <p className="text-[11px] text-slate-500 dark:text-gray-400">
+                      Controls direct RFQ downloads and marketplace listing
+                    </p>
                   </div>
                   <div className="mt-1 space-y-1">
                     <button
@@ -278,10 +288,15 @@ export default function Header() {
                           : 'hover:bg-slate-50 dark:hover:bg-gray-800/60 text-slate-700 dark:text-gray-300 border border-transparent'
                       }`}
                     >
-                      <CheckCircle2 size={16} className={vendorSubscription === 'premium' ? 'text-emerald-600' : 'text-slate-300'} />
+                      <CheckCircle2
+                        size={16}
+                        className={vendorSubscription === 'premium' ? 'text-emerald-600' : 'text-slate-300'}
+                      />
                       <div>
                         <div className="font-bold text-xs">Premium Model (Client Uploaded)</div>
-                        <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">Free for uploaded vendors • Unlimited direct buyer RFQ access</div>
+                        <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
+                          Free for uploaded vendors • Unlimited direct buyer RFQ access
+                        </div>
                       </div>
                     </button>
 
@@ -293,10 +308,15 @@ export default function Header() {
                           : 'hover:bg-slate-50 dark:hover:bg-gray-800/60 text-slate-700 dark:text-gray-300 border border-transparent'
                       }`}
                     >
-                      <CheckCircle2 size={16} className={vendorSubscription === 'connect' ? 'text-emerald-600' : 'text-slate-300'} />
+                      <CheckCircle2
+                        size={16}
+                        className={vendorSubscription === 'connect' ? 'text-emerald-600' : 'text-slate-300'}
+                      />
                       <div>
                         <div className="font-bold text-xs">Connect Model ($149 / 3 Months)</div>
-                        <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">50 RFQ downloads in 3 months ({vendorRfqDownloadsUsed}/50 used) • $0 Self-Evaluation Fee</div>
+                        <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
+                          50 RFQ downloads in 3 months ({vendorRfqDownloadsUsed}/50 used) • $0 Self-Evaluation Fee
+                        </div>
                       </div>
                     </button>
 
@@ -308,10 +328,15 @@ export default function Header() {
                           : 'hover:bg-slate-50 dark:hover:bg-gray-800/60 text-slate-700 dark:text-gray-300 border border-transparent'
                       }`}
                     >
-                      <CheckCircle2 size={16} className={vendorSubscription === 'select' ? 'text-emerald-600' : 'text-slate-300'} />
+                      <CheckCircle2
+                        size={16}
+                        className={vendorSubscription === 'select' ? 'text-emerald-600' : 'text-slate-300'}
+                      />
                       <div>
                         <div className="font-bold text-xs">Select Model ($349 / 3 Months)</div>
-                        <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">Item Catalogue (Max 100 SKUs) + 100 RFQs • $0 Self-Evaluation Fee</div>
+                        <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
+                          Item Catalogue (Max 100 SKUs) + 100 RFQs • $0 Self-Evaluation Fee
+                        </div>
                       </div>
                     </button>
                   </div>
@@ -320,8 +345,12 @@ export default function Header() {
                 /* Buyer / CM Sourcing Mode Options */
                 <>
                   <div className="px-3 py-2 border-b border-slate-100 dark:border-gray-800">
-                    <p className="text-xs font-semibold text-slate-800 dark:text-gray-300 uppercase tracking-wider">Select Sourcing Mode</p>
-                    <p className="text-[11px] text-slate-500 dark:text-gray-400">Controls automated vendor pool dispatch logic</p>
+                    <p className="text-xs font-semibold text-slate-800 dark:text-gray-300 uppercase tracking-wider">
+                      Select Sourcing Mode
+                    </p>
+                    <p className="text-[11px] text-slate-500 dark:text-gray-400">
+                      Controls automated vendor pool dispatch logic
+                    </p>
                   </div>
                   <div className="mt-1 space-y-1">
                     {SOURCING_MODES.map((mode) => (
@@ -343,7 +372,9 @@ export default function Header() {
                         </div>
                         <div>
                           <div className="font-semibold text-xs text-slate-900 dark:text-gray-100">{mode.name}</div>
-                          <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5 leading-relaxed">{mode.description}</div>
+                          <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5 leading-relaxed">
+                            {mode.description}
+                          </div>
                         </div>
                       </button>
                     ))}
@@ -391,7 +422,9 @@ export default function Header() {
               title="Signed-in account details"
             >
               {/* Dynamic Avatar with Active Indicator */}
-              <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${chrome.avatarGradient} flex items-center justify-center text-xs font-black shadow-sm shrink-0 relative`}>
+              <div
+                className={`w-9 h-9 rounded-xl bg-gradient-to-br ${chrome.avatarGradient} flex items-center justify-center text-xs font-black shadow-sm shrink-0 relative`}
+              >
                 {initials}
                 <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-white dark:border-gray-900" />
               </div>
@@ -406,7 +439,12 @@ export default function Header() {
                 </p>
               </div>
 
-              <ChevronDown size={14} className={`text-slate-400 group-hover:text-slate-600 dark:group-hover:text-gray-200 transition-transform ${userProfileDropdownOpen ? 'rotate-180' : ''}`} />
+              <ChevronDown
+                size={14}
+                className={`text-slate-400 group-hover:text-slate-600 dark:group-hover:text-gray-200 transition-transform ${
+                  userProfileDropdownOpen ? 'rotate-180' : ''
+                }`}
+              />
             </button>
 
             {/* Corner Box Popover: User Details & Role Persona Switcher */}
@@ -416,17 +454,25 @@ export default function Header() {
                 <div className="p-3.5 rounded-2xl bg-gradient-to-br from-slate-50 to-indigo-50/50 dark:from-gray-800/80 dark:to-indigo-950/40 border border-indigo-100 dark:border-indigo-900/60 space-y-2.5">
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex items-center gap-3">
-                      <div className={`w-11 h-11 rounded-2xl bg-gradient-to-br ${chrome.avatarGradient} flex items-center justify-center text-sm font-black shadow-md shrink-0`}>
+                      <div
+                        className={`w-11 h-11 rounded-2xl bg-gradient-to-br ${chrome.avatarGradient} flex items-center justify-center text-sm font-black shadow-md shrink-0`}
+                      >
                         {initials}
                       </div>
                       <div>
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <h4 className="text-xs font-black text-slate-900 dark:text-white">{sessionName || sessionEmail}</h4>
-                          <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded-full border ${chrome.badgeClass}`}>
+                          <h4 className="text-xs font-black text-slate-900 dark:text-white">
+                            {sessionName || sessionEmail}
+                          </h4>
+                          <span
+                            className={`text-[9px] font-extrabold px-2 py-0.5 rounded-full border ${chrome.badgeClass}`}
+                          >
                             {chrome.badge}
                           </span>
                         </div>
-                        <p className="text-[11px] font-semibold text-slate-600 dark:text-gray-300 mt-0.5">{chrome.designation}</p>
+                        <p className="text-[11px] font-semibold text-slate-600 dark:text-gray-300 mt-0.5">
+                          {chrome.designation}
+                        </p>
                       </div>
                     </div>
                   </div>
@@ -439,7 +485,9 @@ export default function Header() {
                     </div>
                     <div className="flex items-center justify-between text-slate-500 dark:text-gray-400 text-[10px]">
                       <span>User Name (Login ID):</span>
-                      <strong className="mono font-bold text-indigo-600 dark:text-indigo-400">{sessionEmail}</strong>
+                      <strong className="mono font-bold text-indigo-600 dark:text-indigo-400">
+                        {sessionEmail}
+                      </strong>
                     </div>
                     <div className="flex items-center justify-between text-slate-500 dark:text-gray-400 text-[10px] pt-1 border-t border-slate-100 dark:border-gray-800/80">
                       <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold">
@@ -460,10 +508,6 @@ export default function Header() {
                 </div>
                 {/* Session Actions Footer */}
                 <div className="pt-2 border-t border-slate-100 dark:border-gray-800 flex items-center justify-between gap-2 text-xs">
-                  {/* Buyers manage this on their profile page (Section 4), so the */}
-                  {/* overlay is only offered to the roles that have no profile    */}
-                  {/* screen of their own. `justify-between` still puts Logout on   */}
-                  {/* the right when this button is absent.                         */}
                   {currentRole !== 'buyer' && (
                     <button
                       type="button"
@@ -498,14 +542,18 @@ export default function Header() {
             {/* Modal Header */}
             <div className="p-5 border-b border-slate-100 dark:border-gray-800 flex items-center justify-between bg-slate-50/50 dark:bg-gray-950/40">
               <div className="flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-2xl bg-gradient-to-br ${chrome.avatarGradient} flex items-center justify-center font-black text-sm`}>
+                <div
+                  className={`w-10 h-10 rounded-2xl bg-gradient-to-br ${chrome.avatarGradient} flex items-center justify-center font-black text-sm`}
+                >
                   {initials}
                 </div>
                 <div>
                   <h3 className="text-base font-extrabold text-slate-900 dark:text-white">
                     {UI_STRINGS.accountSecurity.panelTitle}
                   </h3>
-                  <p className="text-xs text-slate-500 dark:text-gray-400">{sessionEmail} • {currentOrgName}</p>
+                  <p className="text-xs text-slate-500 dark:text-gray-400">
+                    {sessionEmail} • {currentOrgName}
+                  </p>
                 </div>
               </div>
               <button
@@ -516,8 +564,7 @@ export default function Header() {
               </button>
             </div>
 
-            {/* Modal Body: the forms themselves are shared with the buyer
-                profile page, so this overlay only supplies the chrome. */}
+            {/* Modal Body */}
             <div className="p-6 max-h-[75vh] overflow-y-auto">
               <AccountSecurityPanel />
             </div>
