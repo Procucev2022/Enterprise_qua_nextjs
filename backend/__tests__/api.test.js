@@ -280,10 +280,16 @@ describe('API Route Endpoints', () => {
     // to the same real buyerAccountId (getBuyerAccountByEmail) rather than
     // some created before the account existed and some after.
     beforeAll(async () => {
-      await request(app).post('/api/buyer-accounts').set(authHeader('buyer')).send({
+      const acc = await request(app).post('/api/buyer-accounts').set(authHeader('buyer')).send({
         organizationName: 'Test Buyer Org',
         corporateEmail: TEST_USERS.buyer.email,
       });
+      // A fresh account defaults to the free_trial plan (mode_1 only, 5 RFQs)
+      // — granted the top tier directly here so this whole describe block's
+      // many mode_2 RFQs and repeated creations aren't gated by the new
+      // server-side subscription entitlement check. That check has its own
+      // dedicated tests elsewhere.
+      storeService.updateBuyerAccount(acc.body.data.id, { subscriptionPlan: 'version_3' });
     });
 
     test('GET /api/rfqs returns this buyer organisation\'s RFQs', async () => {
@@ -296,6 +302,101 @@ describe('API Route Endpoints', () => {
     test('GET /api/rfqs requires a session', async () => {
       const res = await request(app).get('/api/rfqs');
       expect(res.statusCode).toBe(401);
+    });
+
+    describe('buyer subscription entitlement (server-side re-validation)', () => {
+      const rfqPayload = (overrides = {}) => ({
+        title: 'Entitlement Test RFQ',
+        category: 'Engineering Spares - Mechanical',
+        budget: 100000,
+        targetDeliveryDate: '2026-09-30',
+        deadline: '2026-09-30',
+        sourcingMode: 'mode_1',
+        deliveryLocation: 'Plant A',
+        deliveryPincode: '400001',
+        ...overrides,
+      });
+
+      function customAuthHeaderFor(email) {
+        return { Authorization: `Bearer ${authService.generateSessionToken({ id: `usr-${email}`, email, name: 'N', role: 'buyer', orgId: 'o', orgName: 'O' })}` };
+      }
+
+      test('a free_trial buyer can raise a mode_1 RFQ and it decrements remainingFreeRFQs', async () => {
+        const email = 'entitlement-trial@ex.com';
+        const acc = await request(app).post('/api/buyer-accounts').set(customAuthHeaderFor(email)).send({
+          organizationName: 'Entitlement Trial Buyer',
+          corporateEmail: email,
+        });
+        expect(storeService.getBuyerAccountByEmail(email)).toMatchObject({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 5 });
+
+        const res = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload());
+
+        expect(res.statusCode).toBe(201);
+        expect(storeService.getBuyerAccountByEmail(email).remainingFreeRFQs).toBe(4);
+        void acc;
+      });
+
+      test('a free_trial buyer is rejected with 403 once remainingFreeRFQs is exhausted', async () => {
+        const email = 'entitlement-exhausted@ex.com';
+        await request(app).post('/api/buyer-accounts').set(customAuthHeaderFor(email)).send({
+          organizationName: 'Entitlement Exhausted Buyer',
+          corporateEmail: email,
+        });
+        storeService.updateBuyerAccount(storeService.getBuyerAccountByEmail(email).id, { remainingFreeRFQs: 0 });
+
+        const res = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload());
+
+        expect(res.statusCode).toBe(403);
+        expect(res.body.error).toMatch(/free trial/i);
+      });
+
+      test('a free_trial (and version_1) buyer is rejected with 403 for mode_2/mode_3', async () => {
+        const email = 'entitlement-mode-gate@ex.com';
+        await request(app).post('/api/buyer-accounts').set(customAuthHeaderFor(email)).send({
+          organizationName: 'Entitlement Mode Gate Buyer',
+          corporateEmail: email,
+        });
+
+        const res = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({ sourcingMode: 'mode_2' }));
+
+        expect(res.statusCode).toBe(403);
+        expect(res.body.error).toMatch(/does not include mode_2/i);
+      });
+
+      test('a version_2 buyer may raise mode_1/mode_2 but not mode_3', async () => {
+        const email = 'entitlement-version2@ex.com';
+        const acc = await request(app).post('/api/buyer-accounts').set(customAuthHeaderFor(email)).send({
+          organizationName: 'Entitlement Version2 Buyer',
+          corporateEmail: email,
+        });
+        storeService.updateBuyerAccount(acc.body.data.id, { subscriptionPlan: 'version_2' });
+
+        const mode2Res = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({ sourcingMode: 'mode_2' }));
+        expect(mode2Res.statusCode).toBe(201);
+
+        const mode3Res = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({ sourcingMode: 'mode_3' }));
+        expect(mode3Res.statusCode).toBe(403);
+
+        // A paid plan has no numeric quota to decrement.
+        expect(storeService.getBuyerAccountByEmail(email).remainingFreeRFQs).toBe(5);
+      });
+
+      test('a version_3 buyer may raise mode_3', async () => {
+        const email = 'entitlement-version3@ex.com';
+        const acc = await request(app).post('/api/buyer-accounts').set(customAuthHeaderFor(email)).send({
+          organizationName: 'Entitlement Version3 Buyer',
+          corporateEmail: email,
+        });
+        storeService.updateBuyerAccount(acc.body.data.id, { subscriptionPlan: 'version_3' });
+
+        const res = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({ sourcingMode: 'mode_3' }));
+        expect(res.statusCode).toBe(201);
+      });
+
+      test('the entitlement check is skipped entirely when the caller has no resolved buyer account', async () => {
+        const res = await request(app).post('/api/rfqs').set(authHeader('admin')).send(rfqPayload({ sourcingMode: 'mode_3' }));
+        expect(res.statusCode).toBe(201);
+      });
     });
 
     test('POST /api/rfqs creates new RFQ and returns 201', async () => {
@@ -925,6 +1026,9 @@ describe('RFQ edit and delete (/api/rfqs/:id)', () => {
       corporateEmail: TEST_USERS.buyer.email,
     });
     ownAccountId = res.body.data.id;
+    // Same reasoning as the earlier block: grant the top tier so this block's
+    // repeated mode_2 RFQ creations aren't gated by the new entitlement check.
+    storeService.updateBuyerAccount(ownAccountId, { subscriptionPlan: 'version_3' });
   });
 
   /** One RFQ owned by the real test buyer account, created via the real API. */

@@ -982,20 +982,24 @@ export function VendorSurveyModal({ isOpen, onClose }: SurveyModalProps) {
 interface SubscriptionPaymentModalProps {
   isOpen: boolean;
   onClose: () => void;
-  planId: 'connect' | 'select';
+  planId: string;
   planName: string;
   price: string;
+  /** Creates a real Zoho payment link for `planId` and resolves its redirect URL, or null on failure (a toast is already shown by the caller). */
+  createPaymentLink: (planId: string) => Promise<string | null>;
 }
 
 /**
- * Real Zoho Payments checkout. This app never collects card details itself —
- * on confirm it asks the backend to create a Zoho payment link, then redirects
- * the browser to Zoho's own hosted payment page. The subscription is granted
- * server-side once Zoho's webhook (or the reconciliation poller) confirms the
- * payment, not by this modal.
+ * Real Zoho Payments checkout, shared by both the vendor and buyer
+ * subscription screens (each passes its own `createPaymentLink` — vendor's
+ * `createVendorPaymentLink` or buyer's `createBuyerPaymentLink` from
+ * `useApp()`). This app never collects card details itself — on confirm it
+ * asks the backend to create a Zoho payment link, then redirects the browser
+ * to Zoho's own hosted payment page. The subscription is granted server-side
+ * once Zoho's webhook (or the reconciliation poller) confirms the payment,
+ * not by this modal.
  */
-export function VendorSubscriptionPaymentModal({ isOpen, onClose, planId, planName, price }: SubscriptionPaymentModalProps) {
-  const { createVendorPaymentLink } = useApp();
+export function SubscriptionPaymentModal({ isOpen, onClose, planId, planName, price, createPaymentLink }: SubscriptionPaymentModalProps) {
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1004,7 +1008,7 @@ export function VendorSubscriptionPaymentModal({ isOpen, onClose, planId, planNa
   const handlePay = async () => {
     setProcessing(true);
     setError(null);
-    const paymentUrl = await createVendorPaymentLink(planId);
+    const paymentUrl = await createPaymentLink(planId);
     if (!paymentUrl) {
       setProcessing(false);
       setError('Could not start checkout. Please try again.');

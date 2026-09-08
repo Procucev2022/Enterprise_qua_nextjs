@@ -661,6 +661,22 @@ function computeZohoPlanAmount(planId) {
   return Math.round(base * (1 + ZOHO_CONFIG.GST_RATE) * 100) / 100;
 }
 
+// Same gap on the buyer side: BUYER_SUBSCRIPTION_PLANS above only carries a
+// display price ('$199' etc.). 'free_trial' is free/instant and never reaches
+// this table — only the three paid tiers are real Zoho charges.
+const ZOHO_BUYER_SUBSCRIPTION_PRICING = {
+  version_1: 16000,
+  version_2: 40000,
+  version_3: 80000,
+};
+
+/** GST-inclusive amount Zoho actually charges for a buyer plan, 2dp, or null if the plan isn't payable. */
+function computeZohoBuyerPlanAmount(planId) {
+  const base = ZOHO_BUYER_SUBSCRIPTION_PRICING[planId];
+  if (!Number.isFinite(base)) return null;
+  return Math.round(base * (1 + ZOHO_CONFIG.GST_RATE) * 100) / 100;
+}
+
 // ==============================================================================
 // AUTONOMOUS EMAIL INGESTION GATEWAY
 // ==============================================================================
@@ -960,6 +976,8 @@ module.exports = {
   ZOHO_CONFIG,
   ZOHO_SUBSCRIPTION_PRICING,
   computeZohoPlanAmount,
+  ZOHO_BUYER_SUBSCRIPTION_PRICING,
+  computeZohoBuyerPlanAmount,
   EMAIL_REGEX,
   GSTIN_REGEX,
   GSTIN_MESSAGE,

@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { useApp } from '@/lib/store';
-import { VendorSubscriptionPaymentModal } from '@/app/components/Modals';
+import { SubscriptionPaymentModal } from '@/app/components/Modals';
 import { Sparkles, ShieldCheck, Check, Zap, Layers, AlertCircle, RefreshCw, Download, Package, ArrowRight } from 'lucide-react';
 
 export default function VendorSubscriptionCenter() {
@@ -16,6 +16,7 @@ export default function VendorSubscriptionCenter() {
     vendorCatalogue,
     currentUserSession,
     refreshFromDB,
+    createVendorPaymentLink,
   } = useApp();
 
   // Zoho redirects the vendor back here with ?payment=success|cancelled after
@@ -359,12 +360,13 @@ export default function VendorSubscriptionCenter() {
         })}
       </div>
 
-      <VendorSubscriptionPaymentModal
+      <SubscriptionPaymentModal
         isOpen={!!pendingPayment}
         onClose={() => setPendingPayment(null)}
         planId={pendingPayment?.planId || 'connect'}
         planName={pendingPayment?.planName || ''}
         price={pendingPayment?.price || ''}
+        createPaymentLink={createVendorPaymentLink}
       />
     </div>
   );

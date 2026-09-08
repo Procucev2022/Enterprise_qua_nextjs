@@ -1,4 +1,4 @@
-import { createPaymentLink } from '@/lib/subscriptionPaymentClient';
+import { createPaymentLink, createBuyerPaymentLink } from '@/lib/subscriptionPaymentClient';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 
@@ -122,6 +122,122 @@ describe('subscriptionPaymentClient.createPaymentLink', () => {
     global.fetch = reply(200, { success: true, data: {} });
 
     const res = await createPaymentLink('v-1', 'connect');
+
+    expect(res.success === false && res.reason).toBe('SERVER');
+  });
+});
+
+describe('subscriptionPaymentClient.createBuyerPaymentLink', () => {
+  const originalFetch = global.fetch;
+
+  const reply = (status: number, body: unknown) =>
+    jest.fn().mockResolvedValue({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+    });
+
+  const unreadable = (status: number) =>
+    jest.fn().mockResolvedValue({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => {
+        throw new Error('not json');
+      },
+    });
+
+  const signIn = () =>
+    authClient.setSession({ id: 'u1', email: 'b@x.com', name: 'B', role: 'buyer', orgId: 'o1', orgName: 'O' }, 'jwt-token');
+
+  const lastInit = () => (global.fetch as jest.Mock).mock.calls[0][1];
+  const lastPath = () => (global.fetch as jest.Mock).mock.calls[0][0];
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    authClient.setSession(null, null);
+    jest.restoreAllMocks();
+  });
+
+  test('posts the plan to the buyer-accounts endpoint and returns the redirect URL', async () => {
+    global.fetch = reply(200, { success: true, data: { paymentUrl: 'https://payments.zoho.in/buyer', paymentLinkId: 'pl-b1', status: 'CREATED' } });
+
+    const res = await createBuyerPaymentLink('buyer-1', 'version_2');
+
+    expect(res).toEqual({ success: true, paymentUrl: 'https://payments.zoho.in/buyer', paymentLinkId: 'pl-b1', status: 'CREATED' });
+    expect(lastPath()).toBe('/api/buyer-accounts/buyer-1/subscription-payment');
+    expect(lastInit().method).toBe('POST');
+    expect(JSON.parse(lastInit().body)).toEqual({ plan: 'version_2' });
+  });
+
+  test('attaches the session token when one is held', async () => {
+    signIn();
+    global.fetch = reply(200, { success: true, data: { paymentUrl: 'https://payments.zoho.in/buyer' } });
+
+    await createBuyerPaymentLink('buyer-1', 'version_1');
+
+    expect(lastInit().headers).toEqual({ 'Content-Type': 'application/json', Authorization: 'Bearer jwt-token' });
+  });
+
+  test('sends no Authorization header when there is no session', async () => {
+    global.fetch = reply(200, { success: true, data: { paymentUrl: 'https://payments.zoho.in/buyer' } });
+
+    await createBuyerPaymentLink('buyer-1', 'version_1');
+
+    expect(lastInit().headers).toEqual({ 'Content-Type': 'application/json' });
+  });
+
+  test('reports an unreachable API', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error('offline'));
+
+    const res = await createBuyerPaymentLink('buyer-1', 'version_1');
+
+    expect(res).toEqual({ success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable });
+  });
+
+  test('names the status when the reply cannot be read', async () => {
+    global.fetch = unreadable(500);
+
+    const res = await createBuyerPaymentLink('buyer-1', 'version_1');
+
+    expect(res.success === false && res.error).toBe(formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: 500 }));
+  });
+
+  test('reports UNAUTHORIZED on a 403', async () => {
+    global.fetch = reply(403, { error: 'Forbidden.' });
+
+    const res = await createBuyerPaymentLink('buyer-1', 'version_1');
+
+    expect(res).toEqual({ success: false, reason: 'UNAUTHORIZED', error: 'Forbidden.' });
+  });
+
+  test('falls back to the session message on an unexplained 401', async () => {
+    global.fetch = reply(401, {});
+
+    const res = await createBuyerPaymentLink('buyer-1', 'version_1');
+
+    expect(res.success === false && res.error).toBe(UI_STRINGS.auth.sessionExpired);
+  });
+
+  test('reports VALIDATION on a 400 (e.g. free_trial)', async () => {
+    global.fetch = reply(400, { error: 'plan must be one of: version_1, version_2, version_3.' });
+
+    const res = await createBuyerPaymentLink('buyer-1', 'free_trial');
+
+    expect(res).toEqual({ success: false, reason: 'VALIDATION', error: 'plan must be one of: version_1, version_2, version_3.' });
+  });
+
+  test('reports SERVER on a 404 for an unknown buyer account', async () => {
+    global.fetch = reply(404, { error: 'Buyer account not found.' });
+
+    const res = await createBuyerPaymentLink('does-not-exist', 'version_1');
+
+    expect(res).toEqual({ success: false, reason: 'SERVER', error: 'Buyer account not found.' });
+  });
+
+  test('reports a server fault when the body carries no paymentUrl', async () => {
+    global.fetch = reply(200, { success: true, data: {} });
+
+    const res = await createBuyerPaymentLink('buyer-1', 'version_1');
 
     expect(res.success === false && res.reason).toBe('SERVER');
   });

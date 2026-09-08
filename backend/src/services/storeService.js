@@ -494,11 +494,24 @@ class StoreService {
     return this.paymentLinks.filter((l) => statuses.includes(l.status));
   }
 
-  createPaymentLinkRecord({ id, zohoPaymentLinkId, vendorId, planId, amount, paymentUrl, status, rawResponse }) {
+  createPaymentLinkRecord({
+    id,
+    zohoPaymentLinkId,
+    vendorId,
+    buyerAccountId,
+    payerType = 'vendor',
+    planId,
+    amount,
+    paymentUrl,
+    status,
+    rawResponse,
+  }) {
     const link = {
       id,
       zohoPaymentLinkId,
-      vendorId,
+      vendorId: vendorId || null,
+      buyerAccountId: buyerAccountId || null,
+      payerType,
       planId,
       amount,
       paymentUrl,
@@ -544,6 +557,35 @@ class StoreService {
     this.addAuditLog({
       userEmail: SYSTEM_ACTOR_EMAIL,
       action: `Activated ${link.planId} subscription for vendor ${vendor.name || vendor.email} via Zoho payment ${link.zohoPaymentLinkId}`,
+    });
+
+    return updatedLink;
+  }
+
+  /**
+   * Grant a buyer the plan they just paid for.
+   *
+   * Mirrors activateVendorSubscriptionFromPayment. `remainingFreeRFQs` is only
+   * reset for `free_trial` — the three paid tiers gate by sourcing mode, not a
+   * numeric RFQ quota, so there is nothing to reset for them.
+   */
+  activateBuyerSubscriptionFromPayment(paymentLinkId) {
+    const link = this.paymentLinks.find((l) => l.id === paymentLinkId);
+    if (!link || link.activated) return null;
+
+    const buyer = this.buyerAccounts.find((a) => a.id === link.buyerAccountId);
+    if (!buyer) return null;
+
+    const updates = { subscriptionPlan: link.planId };
+    if (link.planId === 'free_trial') {
+      updates.remainingFreeRFQs = 5;
+    }
+    this.updateBuyerAccount(buyer.id, updates);
+    const updatedLink = this.updatePaymentLinkRecord(link.id, { activated: true });
+
+    this.addAuditLog({
+      userEmail: SYSTEM_ACTOR_EMAIL,
+      action: `Activated ${link.planId} subscription for buyer ${buyer.organizationName || buyer.corporateEmail} via Zoho payment ${link.zohoPaymentLinkId}`,
     });
 
     return updatedLink;

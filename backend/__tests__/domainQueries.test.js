@@ -616,17 +616,27 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       const [sql, params] = pool.pool.query.mock.calls[0];
       expect(sql).toContain('INSERT INTO payment_links');
       expect(sql).toContain('ON CONFLICT (id) DO UPDATE');
-      expect(params).toEqual(['pl-1', 'zoho-1', 'v-1', 'CREATED', JSON.stringify(link)]);
+      expect(params).toEqual(['pl-1', 'zoho-1', 'v-1', null, 'vendor', 'CREATED', JSON.stringify(link)]);
     });
 
-    test('upsertPaymentLinkInDB falls back missing nullable fields to null', async () => {
+    test('upsertPaymentLinkInDB serializes a buyer link with payerType/buyerAccountId', async () => {
+      const link = { id: 'pl-buyer-1', zohoPaymentLinkId: 'zoho-b1', buyerAccountId: 'buyer-1', payerType: 'buyer', status: 'CREATED' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: link }] }) };
+
+      await domainQueries.upsertPaymentLinkInDB(link);
+
+      const [, params] = pool.pool.query.mock.calls[0];
+      expect(params).toEqual(['pl-buyer-1', 'zoho-b1', null, 'buyer-1', 'buyer', 'CREATED', JSON.stringify(link)]);
+    });
+
+    test('upsertPaymentLinkInDB falls back missing nullable fields to null and payerType to vendor', async () => {
       const link = { id: 'pl-2' };
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: link }] }) };
 
       await domainQueries.upsertPaymentLinkInDB(link);
 
       const [, params] = pool.pool.query.mock.calls[0];
-      expect(params).toEqual(['pl-2', null, null, null, JSON.stringify(link)]);
+      expect(params).toEqual(['pl-2', null, null, null, 'vendor', null, JSON.stringify(link)]);
     });
 
     test('upsertPaymentLinkInDB returns null when nothing came back', async () => {

@@ -100,6 +100,33 @@ describe('zohoPaymentService', () => {
       await expect(zohoPaymentService.getValidAccessToken()).rejects.toThrow(/Zoho OAuth token refresh failed \(401\): invalid_client/);
     });
 
+    test('retries once and succeeds after a raw "fetch failed" network error', async () => {
+      domainQueries.getZohoOAuthTokenFromDB.mockResolvedValue(null);
+      global.fetch = jest
+        .fn()
+        .mockRejectedValueOnce(new TypeError('fetch failed'))
+        .mockResolvedValueOnce(jsonResponse(200, { access_token: 'recovered-token', expires_in: 3600 }));
+
+      await expect(zohoPaymentService.getValidAccessToken()).resolves.toBe('recovered-token');
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    test('does not retry and rethrows a TypeError unrelated to "fetch failed"', async () => {
+      domainQueries.getZohoOAuthTokenFromDB.mockResolvedValue(null);
+      global.fetch = jest.fn().mockRejectedValue(new TypeError('Invalid URL'));
+
+      await expect(zohoPaymentService.getValidAccessToken()).rejects.toThrow('Invalid URL');
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    test('does not retry and rethrows a second consecutive "fetch failed" error', async () => {
+      domainQueries.getZohoOAuthTokenFromDB.mockResolvedValue(null);
+      global.fetch = jest.fn().mockRejectedValue(new TypeError('fetch failed'));
+
+      await expect(zohoPaymentService.getValidAccessToken()).rejects.toThrow('fetch failed');
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+    });
+
     test('throws a generic message when the failure body is unreadable', async () => {
       domainQueries.getZohoOAuthTokenFromDB.mockResolvedValue(null);
       global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 500, json: async () => { throw new Error('bad json'); } });

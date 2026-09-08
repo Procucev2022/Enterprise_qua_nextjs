@@ -12,6 +12,33 @@
 const crypto = require('crypto');
 const { ZOHO_CONFIG } = require('../config/constants');
 const domainQueries = require('../db/domainQueries');
+const { logger } = require('./loggerService');
+
+/**
+ * `fetch`, retried once on a raw network-level failure.
+ *
+ * Node's global fetch (undici) keeps a persistent keep-alive connection pool
+ * per origin for the life of the process. Observed live against the real
+ * accounts.zoho.in/payments.zoho.in hosts: once that pool's connection to a
+ * given origin goes bad (the remote end silently closes it, a NAT/proxy
+ * resets it, etc.), every subsequent call in this long-running server process
+ * fails with an opaque `TypeError: fetch failed` — while a fresh, short-lived
+ * process (its own clean connection pool) succeeds immediately against the
+ * identical request. A one-shot retry recovers from this because undici
+ * discards the dead connection and opens a new one on the next attempt,
+ * without needing to reach into undici's connection-pool internals directly.
+ */
+async function fetchWithRetry(url, init) {
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    if (!(err instanceof TypeError) || !/fetch failed/i.test(err.message || '')) {
+      throw err;
+    }
+    logger.warn('Zoho fetch failed once, retrying with a fresh connection', { url }, 'ZOHO_PAYMENT_SERVICE');
+    return fetch(url, init);
+  }
+}
 
 /**
  * Fetch (and cache in Postgres) a valid Zoho OAuth access token.
@@ -43,7 +70,7 @@ async function getValidAccessToken() {
     refresh_token: ZOHO_CONFIG.REFRESH_TOKEN,
   });
 
-  const res = await fetch(ZOHO_CONFIG.OAUTH_TOKEN_URL, {
+  const res = await fetchWithRetry(ZOHO_CONFIG.OAUTH_TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
@@ -89,7 +116,7 @@ async function createPaymentLink({ planId, planLabel, amountInr, email, phone, r
   };
 
   const url = `${ZOHO_CONFIG.PAYMENTS_BASE_URL}/paymentlinks?account_id=${encodeURIComponent(ZOHO_CONFIG.ACCOUNT_ID)}`;
-  const res = await fetch(url, {
+  const res = await fetchWithRetry(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeader },
     body: JSON.stringify(requestBody),
@@ -111,7 +138,7 @@ async function createPaymentLink({ planId, planLabel, amountInr, email, phone, r
 async function getPaymentLinkStatus(zohoPaymentLinkId) {
   const authHeader = await zohoAuthHeader();
   const url = `${ZOHO_CONFIG.PAYMENTS_BASE_URL}/paymentlinks/${encodeURIComponent(zohoPaymentLinkId)}?account_id=${encodeURIComponent(ZOHO_CONFIG.ACCOUNT_ID)}`;
-  const res = await fetch(url, { method: 'GET', headers: { Accept: 'application/json', ...authHeader } });
+  const res = await fetchWithRetry(url, { method: 'GET', headers: { Accept: 'application/json', ...authHeader } });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.payment_links) {
     throw new Error(`Zoho payment-link status fetch failed (${res.status}): ${data.message || 'unknown error'}`);

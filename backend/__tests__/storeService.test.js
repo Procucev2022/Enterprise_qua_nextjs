@@ -946,6 +946,92 @@ describe('Store Service & Business Operations', () => {
 
       expect(storeService.activateVendorSubscriptionFromPayment(link.id)).toBeNull();
     });
+
+    test('activateBuyerSubscriptionFromPayment grants a paid plan, marks the link activated, and audits it', () => {
+      const buyer = storeService.addBuyerAccount({ organizationName: 'Payment Flow Buyer Co', corporateEmail: 'paymentflowbuyer@ex.com' });
+      const link = storeService.createPaymentLinkRecord({
+        id: 'pl-buyer-activate-1',
+        zohoPaymentLinkId: 'zoho-buyer-activate-1',
+        buyerAccountId: buyer.id,
+        payerType: 'buyer',
+        planId: 'version_2',
+        amount: 47200,
+        paymentUrl: '',
+        status: 'PAID',
+      });
+      const auditBefore = storeService.getAuditLogs().length;
+
+      const result = storeService.activateBuyerSubscriptionFromPayment(link.id);
+
+      expect(result.activated).toBe(true);
+      expect(storeService.getBuyerAccountByEmail('paymentflowbuyer@ex.com')).toMatchObject({ subscriptionPlan: 'version_2' });
+      expect(storeService.getAuditLogs().length).toBeGreaterThan(auditBefore);
+      expect(storeService.getAuditLogs()[0].action).toContain('version_2');
+    });
+
+    test('activateBuyerSubscriptionFromPayment resets remainingFreeRFQs to 5 only when the plan is free_trial', () => {
+      const buyer = storeService.addBuyerAccount({
+        organizationName: 'Trial Reset Buyer Co',
+        corporateEmail: 'trialresetbuyer@ex.com',
+        remainingFreeRFQs: 0,
+      });
+      const link = storeService.createPaymentLinkRecord({
+        id: 'pl-buyer-activate-2',
+        zohoPaymentLinkId: 'zoho-buyer-activate-2',
+        buyerAccountId: buyer.id,
+        payerType: 'buyer',
+        planId: 'free_trial',
+        amount: 0,
+        paymentUrl: '',
+        status: 'PAID',
+      });
+
+      storeService.activateBuyerSubscriptionFromPayment(link.id);
+
+      expect(storeService.getBuyerAccountByEmail('trialresetbuyer@ex.com')).toMatchObject({
+        subscriptionPlan: 'free_trial',
+        remainingFreeRFQs: 5,
+      });
+    });
+
+    test('activateBuyerSubscriptionFromPayment is idempotent — a second call is a no-op', () => {
+      const buyer = storeService.addBuyerAccount({ organizationName: 'Idempotent Buyer Co', corporateEmail: 'idempotentbuyer@ex.com' });
+      const link = storeService.createPaymentLinkRecord({
+        id: 'pl-buyer-activate-3',
+        zohoPaymentLinkId: 'zoho-buyer-activate-3',
+        buyerAccountId: buyer.id,
+        payerType: 'buyer',
+        planId: 'version_1',
+        amount: 18880,
+        paymentUrl: '',
+        status: 'PAID',
+      });
+
+      storeService.activateBuyerSubscriptionFromPayment(link.id);
+      const auditAfterFirst = storeService.getAuditLogs().length;
+
+      expect(storeService.activateBuyerSubscriptionFromPayment(link.id)).toBeNull();
+      expect(storeService.getAuditLogs().length).toBe(auditAfterFirst);
+    });
+
+    test('activateBuyerSubscriptionFromPayment returns null for an unknown payment link id', () => {
+      expect(storeService.activateBuyerSubscriptionFromPayment('pl-does-not-exist')).toBeNull();
+    });
+
+    test('activateBuyerSubscriptionFromPayment returns null when the linked buyer account no longer exists', () => {
+      const link = storeService.createPaymentLinkRecord({
+        id: 'pl-buyer-activate-4',
+        zohoPaymentLinkId: 'zoho-buyer-activate-4',
+        buyerAccountId: 'buyer-does-not-exist',
+        payerType: 'buyer',
+        planId: 'version_1',
+        amount: 18880,
+        paymentUrl: '',
+        status: 'PAID',
+      });
+
+      expect(storeService.activateBuyerSubscriptionFromPayment(link.id)).toBeNull();
+    });
   });
 
   describe('Evaluations & Config', () => {

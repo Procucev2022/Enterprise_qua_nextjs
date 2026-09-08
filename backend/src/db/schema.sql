@@ -399,14 +399,28 @@ CREATE TABLE IF NOT EXISTS zoho_oauth_token (
   last_updated TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- vendor_id/buyer_account_id are both nullable: a link is one or the other,
+-- never both, distinguished by payer_type. Kept as two columns rather than one
+-- polymorphic "payer_id" so each still gets its own indexed, typed lookup.
 CREATE TABLE IF NOT EXISTS payment_links (
   id VARCHAR(64) PRIMARY KEY,
   zoho_payment_link_id VARCHAR(128) UNIQUE,
-  vendor_id VARCHAR(64) NOT NULL,
+  vendor_id VARCHAR(64),
+  buyer_account_id VARCHAR(64),
+  payer_type VARCHAR(10) NOT NULL DEFAULT 'vendor',
   status VARCHAR(40) NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   raw JSONB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_payment_links_vendor_id ON payment_links (vendor_id);
+CREATE INDEX IF NOT EXISTS idx_payment_links_buyer_account_id ON payment_links (buyer_account_id);
 CREATE INDEX IF NOT EXISTS idx_payment_links_status ON payment_links (status);
+-- NOTE: `payment_links` shipped earlier today as vendor-only (vendor_id NOT
+-- NULL, no payer_type/buyer_account_id). schema.sql only ever CREATEs — it is
+-- applied automatically against the live DB, so it must never ALTER or DROP.
+-- The already-created table on every environment that ran the earlier version
+-- was brought up to this shape with a one-off manual ALTER (same convention as
+-- backend/scripts/transfer-neon.js — a real structural change applied by hand,
+-- once, outside the automatic migrate flow). A brand new environment gets this
+-- shape for free from the CREATE TABLE above; nothing further is needed there.
