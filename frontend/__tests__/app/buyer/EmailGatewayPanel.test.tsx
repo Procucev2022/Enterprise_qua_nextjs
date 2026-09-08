@@ -67,7 +67,7 @@ describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
 
     await screen.findByTestId('gateway-panel');
     expect(screen.getByDisplayValue('buyer.lead@lt-heavy.com')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('navinchaudhary.dev@gmail.com')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('RFQ@procucev.com')).toBeInTheDocument();
 
     const subjectInput = screen.getByPlaceholderText(/e\.g\. URGENT: Requisition/i);
     const bodyInput = screen.getByPlaceholderText(/Paste or write line items/i);

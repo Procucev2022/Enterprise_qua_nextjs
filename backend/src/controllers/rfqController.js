@@ -172,9 +172,9 @@ async function createRFQ(req, res, next) {
     const requestingBuyerAccount = req.user ? storeService.getBuyerAccountByEmail(req.user.email) : null;
     const created = storeService.createRFQ({ ...body, extractedEntities: lineItems, aiSummary }, requestingBuyerAccount);
 
-    // Dispatch real email notification to target gateway address (e.g. navinchaudhary.dev@gmail.com)
+    // Dispatch real email notification to target gateway address (e.g. RFQ@procucev.com)
     if (body.source === 'email_gateway' || body.targetGatewayEmail) {
-      const recipientEmail = body.targetGatewayEmail || 'navinchaudhary.dev@gmail.com';
+      const recipientEmail = body.targetGatewayEmail || 'RFQ@procucev.com';
       void mailerService.sendRequisitionNotificationEmail(
         recipientEmail,
         created,
