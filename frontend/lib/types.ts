@@ -327,6 +327,15 @@ export type RFQDeleteResult =
   | { success: true; rfqNumber: string }
   | { success: false; reason: RFQTransportFailure; error: string };
 
+/**
+ * Outcome of creating a Zoho payment link for a vendor subscription upgrade.
+ * On success the browser is redirected to `paymentUrl` — Zoho hosts the actual
+ * payment page, this app never collects card details itself.
+ */
+export type PaymentLinkCreateResult =
+  | { success: true; paymentUrl: string; paymentLinkId: string; status: string }
+  | { success: false; reason: RFQTransportFailure; error: string };
+
 export interface RFQCreatePayload {
   title: string;
   category: string;

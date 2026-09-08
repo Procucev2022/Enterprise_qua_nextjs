@@ -14,7 +14,19 @@ const app = express();
 
 // Security & Parsing Middlewares
 app.use(cors());
-app.use(express.json({ limit: '50mb' }));
+// `verify` captures the exact request bytes onto req.rawBody alongside the
+// parsed body express.json() already produces — needed only by the Zoho
+// webhook route, whose signature covers the raw wire bytes, not a
+// re-serialization of the parsed object (which can reorder keys/whitespace and
+// silently break verification).
+app.use(
+  express.json({
+    limit: '50mb',
+    verify: (req, res, buf) => {
+      req.rawBody = buf.toString('utf8');
+    },
+  })
+);
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(requestLogger);
 

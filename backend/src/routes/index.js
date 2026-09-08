@@ -18,6 +18,7 @@ const logsRoutes = require('./logs');
 const graphqlRoutes = require('./graphql');
 const cryptoRoutes = require('./crypto');
 const authRoutes = require('./auth');
+const zohoRoutes = require('./zoho');
 
 // Mount sub-routers
 router.use('/auth', authRoutes);
@@ -37,6 +38,7 @@ router.use('/catalogue', catalogueRoutes);
 router.use('/logs', logsRoutes);
 router.use('/graphql', graphqlRoutes);
 router.use('/crypto', cryptoRoutes);
+router.use('/zoho', zohoRoutes);
 
 module.exports = router;
 

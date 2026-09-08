@@ -42,6 +42,7 @@ class StoreService {
     this.aiFeed = [];
     this.notifications = [];
     this.vendorCatalogue = [];
+    this.paymentLinks = [];
     this.systemConfig = JSON.parse(JSON.stringify(INITIAL_SYSTEM_CONFIG));
     this.azureHealth = JSON.parse(JSON.stringify(INITIAL_AZURE_HEALTH));
     this.isHydratedFromDB = false;
@@ -75,7 +76,7 @@ class StoreService {
     }
 
     try {
-      const [vendors, rfqs, evaluations, vendorCatalogue, buyerAccountsResult, aiFeed, auditLogs, notifications] =
+      const [vendors, rfqs, evaluations, vendorCatalogue, buyerAccountsResult, aiFeed, auditLogs, notifications, paymentLinks] =
         await Promise.all([
           domainQueries.getVendorsFromDB(),
           domainQueries.getRFQsFromDB(),
@@ -85,6 +86,7 @@ class StoreService {
           domainQueries.getAIFeedFromDB(),
           domainQueries.getAuditLogsFromDB(),
           domainQueries.getNotificationsFromDB(),
+          domainQueries.getPaymentLinksFromDB(),
         ]);
 
       this.vendors = vendors;
@@ -92,6 +94,7 @@ class StoreService {
       this.evaluations = evaluations;
       this.vendorCatalogue = vendorCatalogue;
       this.notifications = notifications;
+      this.paymentLinks = paymentLinks;
       this.buyerAccounts = buyerAccountsResult.accounts;
       // activeBuyerAccount must stay a reference into this.buyerAccounts (the
       // same invariant every mutator keeps), not a separately-hydrated duplicate.
@@ -117,6 +120,7 @@ class StoreService {
           aiFeed: aiFeed.length,
           auditLogs: auditLogs.length,
           notifications: notifications.length,
+          paymentLinks: paymentLinks.length,
         },
         'STORE_SERVICE'
       );
@@ -136,6 +140,12 @@ class StoreService {
 
   _removeVendor(id) {
     domainQueries.deleteVendorInDB(id).catch((err) => logger.error('Failed to delete persisted vendor', err, 'STORE_SERVICE'));
+  }
+
+  _persistPaymentLink(link) {
+    domainQueries
+      .upsertPaymentLinkInDB(link)
+      .catch((err) => logger.error('Failed to persist payment link', err, 'STORE_SERVICE'));
   }
 
   _persistRFQ(rfq) {
@@ -470,6 +480,73 @@ class StoreService {
       return true;
     }
     return false;
+  }
+
+  // ==========================================
+  // ZOHO PAYMENT LINKS
+  // ==========================================
+
+  getPaymentLinkByZohoId(zohoPaymentLinkId) {
+    return this.paymentLinks.find((l) => l.zohoPaymentLinkId === zohoPaymentLinkId);
+  }
+
+  getPaymentLinksByStatusIn(statuses) {
+    return this.paymentLinks.filter((l) => statuses.includes(l.status));
+  }
+
+  createPaymentLinkRecord({ id, zohoPaymentLinkId, vendorId, planId, amount, paymentUrl, status, rawResponse }) {
+    const link = {
+      id,
+      zohoPaymentLinkId,
+      vendorId,
+      planId,
+      amount,
+      paymentUrl,
+      status,
+      rawResponse: rawResponse || null,
+      activated: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    this.paymentLinks.unshift(link);
+    this._persistPaymentLink(link);
+    return link;
+  }
+
+  updatePaymentLinkRecord(id, updates) {
+    const idx = this.paymentLinks.findIndex((l) => l.id === id);
+    if (idx === -1) return null;
+    const updated = { ...this.paymentLinks[idx], ...updates, updatedAt: new Date().toISOString() };
+    this.paymentLinks[idx] = updated;
+    this._persistPaymentLink(updated);
+    return updated;
+  }
+
+  /**
+   * Grant a vendor the plan they just paid for.
+   *
+   * Mirrors the reference app's PaymentLink activation: flips the vendor's
+   * subscriptionPlan and resets their download quota. Idempotent — a link
+   * already marked `activated` is a no-op, so both the webhook and the
+   * reconciliation poller can safely call this for the same paid link without
+   * double-granting.
+   */
+  activateVendorSubscriptionFromPayment(paymentLinkId) {
+    const link = this.paymentLinks.find((l) => l.id === paymentLinkId);
+    if (!link || link.activated) return null;
+
+    const vendor = this.getVendorById(link.vendorId);
+    if (!vendor) return null;
+
+    this.updateVendor(vendor.id, { subscriptionPlan: link.planId, rfqDownloadsUsed: 0 });
+    const updatedLink = this.updatePaymentLinkRecord(link.id, { activated: true });
+
+    this.addAuditLog({
+      userEmail: SYSTEM_ACTOR_EMAIL,
+      action: `Activated ${link.planId} subscription for vendor ${vendor.name || vendor.email} via Zoho payment ${link.zohoPaymentLinkId}`,
+    });
+
+    return updatedLink;
   }
 
   reviseVendorRating(vendorId, ratingData) {

@@ -28,6 +28,7 @@ import {
   MajorMinorCategory,
 } from './types';
 import { authClient } from './authClient';
+import { createPaymentLink } from './subscriptionPaymentClient';
 import { fetchCategoryTaxonomy } from './buyerProfileClient';
 import { setCategoryTaxonomy, clearCategoryTaxonomy } from './categoryTaxonomy';
 import { UI_STRINGS, formatString } from './uiStrings';
@@ -271,6 +272,8 @@ interface AppContextType {
   vendorSubscription: VendorSubscriptionPlan;
   setVendorSubscription: React.Dispatch<React.SetStateAction<VendorSubscriptionPlan>>;
   updateVendorSubscription: (plan: 'premium' | 'connect' | 'select') => Promise<boolean>;
+  /** Real Zoho payment-link creation for the caller's own vendor profile. Returns the URL to redirect to, or null on failure (a toast is already shown). */
+  createVendorPaymentLink: (plan: 'connect' | 'select') => Promise<string | null>;
   vendorRfqDownloadsUsed: number;
   setVendorRfqDownloadsUsed: React.Dispatch<React.SetStateAction<number>>;
   vendorCatalogue: any[];
@@ -372,6 +375,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setVendorRfqDownloadsUsed(data.data.rfqDownloadsUsed || 0);
     setBuyerVendors((prev) => prev.map((v) => (v.id === myVendor.id ? { ...v, ...data.data } : v)));
     return true;
+  };
+
+  const createVendorPaymentLink = async (plan: 'connect' | 'select'): Promise<string | null> => {
+    const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
+    const myVendor = buyerVendors.find((v) => v.email?.toLowerCase() === sessionEmail);
+    if (!myVendor) {
+      showToast('Payment Failed', 'Could not find your vendor profile.', 'warning');
+      return null;
+    }
+
+    const result = await createPaymentLink(myVendor.id, plan);
+    if (!result.success) {
+      showToast('Payment Failed', result.error, 'warning');
+      return null;
+    }
+    return result.paymentUrl;
   };
 
   const toggleTheme = () => {
@@ -2208,6 +2227,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         vendorSubscription,
         setVendorSubscription,
         updateVendorSubscription,
+        createVendorPaymentLink,
         vendorRfqDownloadsUsed,
         setVendorRfqDownloadsUsed,
         vendorCatalogue,

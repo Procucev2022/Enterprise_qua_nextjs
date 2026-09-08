@@ -252,3 +252,47 @@ describe('bootstrapServer email gateway hook', () => {
     server.close();
   });
 });
+
+// ==============================================================================
+// ZOHO RECONCILIATION STARTUP HOOK
+// ==============================================================================
+describe('bootstrapServer Zoho reconciliation hook', () => {
+  const zohoReconciliationService = require('../src/services/zohoReconciliationService');
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('reports the reason when reconciliation does not start', async () => {
+    jest
+      .spyOn(zohoReconciliationService, 'startPolling')
+      .mockReturnValue({ started: false, reason: 'ZOHO_RECONCILIATION_ENABLED is not true.' });
+    const info = jest.spyOn(logger, 'info');
+
+    const server = await bootstrapServer(0);
+    try {
+      expect(info).toHaveBeenCalledWith(
+        expect.stringContaining('ZOHO_RECONCILIATION_ENABLED is not true.'),
+        expect.anything(),
+        'SERVER'
+      );
+    } finally {
+      server.close();
+    }
+  });
+
+  test('stays quiet when reconciliation starts', async () => {
+    jest.spyOn(zohoReconciliationService, 'startPolling').mockReturnValue({ started: true, intervalMs: 600000 });
+    const info = jest.spyOn(logger, 'info');
+
+    const server = await bootstrapServer(0);
+    try {
+      const notStartedLogs = info.mock.calls.filter(([message]) =>
+        String(message).includes('Zoho payment-link reconciliation not started')
+      );
+      expect(notStartedLogs).toHaveLength(0);
+    } finally {
+      server.close();
+    }
+  });
+});

@@ -854,6 +854,100 @@ describe('Store Service & Business Operations', () => {
     });
   });
 
+  describe('Zoho payment links (createPaymentLinkRecord / activateVendorSubscriptionFromPayment)', () => {
+    test('createPaymentLinkRecord persists a new CREATED-status link', () => {
+      const link = storeService.createPaymentLinkRecord({
+        id: 'pl-test-1',
+        zohoPaymentLinkId: 'zoho-test-1',
+        vendorId: 'v-x',
+        planId: 'connect',
+        amount: 14160,
+        paymentUrl: 'https://payments.zoho.in/x',
+        status: 'CREATED',
+        rawResponse: { some: 'thing' },
+      });
+
+      expect(link).toMatchObject({ id: 'pl-test-1', zohoPaymentLinkId: 'zoho-test-1', status: 'CREATED', activated: false });
+      expect(storeService.getPaymentLinkByZohoId('zoho-test-1')).toMatchObject({ id: 'pl-test-1' });
+    });
+
+    test('getPaymentLinksByStatusIn filters by the given statuses', () => {
+      storeService.createPaymentLinkRecord({ id: 'pl-status-a', zohoPaymentLinkId: 'zoho-status-a', vendorId: 'v-x', planId: 'connect', amount: 1, paymentUrl: '', status: 'CREATED' });
+      storeService.createPaymentLinkRecord({ id: 'pl-status-b', zohoPaymentLinkId: 'zoho-status-b', vendorId: 'v-x', planId: 'connect', amount: 1, paymentUrl: '', status: 'PAID' });
+
+      const pending = storeService.getPaymentLinksByStatusIn(['CREATED', 'pending']);
+      expect(pending.some((l) => l.id === 'pl-status-a')).toBe(true);
+      expect(pending.some((l) => l.id === 'pl-status-b')).toBe(false);
+    });
+
+    test('updatePaymentLinkRecord merges updates and returns null for an unknown id', () => {
+      storeService.createPaymentLinkRecord({ id: 'pl-update-1', zohoPaymentLinkId: 'zoho-update-1', vendorId: 'v-x', planId: 'connect', amount: 1, paymentUrl: '', status: 'CREATED' });
+
+      const updated = storeService.updatePaymentLinkRecord('pl-update-1', { status: 'PAID' });
+      expect(updated.status).toBe('PAID');
+      expect(storeService.updatePaymentLinkRecord('pl-does-not-exist', { status: 'PAID' })).toBeNull();
+    });
+
+    test('activateVendorSubscriptionFromPayment grants the plan, resets quota, marks the link activated, and audits it', () => {
+      const vendor = storeService.addVendor({ name: 'Payment Flow Vendor', email: 'paymentflow@ex.com', majorCategory: 'Payment-Cat' });
+      storeService.updateVendor(vendor.id, { rfqDownloadsUsed: 7 });
+      const link = storeService.createPaymentLinkRecord({
+        id: 'pl-activate-1',
+        zohoPaymentLinkId: 'zoho-activate-1',
+        vendorId: vendor.id,
+        planId: 'select',
+        amount: 33040,
+        paymentUrl: '',
+        status: 'PAID',
+      });
+      const auditBefore = storeService.getAuditLogs().length;
+
+      const result = storeService.activateVendorSubscriptionFromPayment(link.id);
+
+      expect(result.activated).toBe(true);
+      expect(storeService.getVendorById(vendor.id)).toMatchObject({ subscriptionPlan: 'select', rfqDownloadsUsed: 0 });
+      expect(storeService.getAuditLogs().length).toBeGreaterThan(auditBefore);
+      expect(storeService.getAuditLogs()[0].action).toContain('select');
+    });
+
+    test('activateVendorSubscriptionFromPayment is idempotent — a second call is a no-op', () => {
+      const vendor = storeService.addVendor({ name: 'Idempotent Vendor', email: 'idempotent@ex.com', majorCategory: 'Payment-Cat' });
+      const link = storeService.createPaymentLinkRecord({
+        id: 'pl-activate-2',
+        zohoPaymentLinkId: 'zoho-activate-2',
+        vendorId: vendor.id,
+        planId: 'connect',
+        amount: 14160,
+        paymentUrl: '',
+        status: 'PAID',
+      });
+
+      storeService.activateVendorSubscriptionFromPayment(link.id);
+      const auditAfterFirst = storeService.getAuditLogs().length;
+
+      expect(storeService.activateVendorSubscriptionFromPayment(link.id)).toBeNull();
+      expect(storeService.getAuditLogs().length).toBe(auditAfterFirst);
+    });
+
+    test('activateVendorSubscriptionFromPayment returns null for an unknown payment link id', () => {
+      expect(storeService.activateVendorSubscriptionFromPayment('pl-does-not-exist')).toBeNull();
+    });
+
+    test('activateVendorSubscriptionFromPayment returns null when the linked vendor no longer exists', () => {
+      const link = storeService.createPaymentLinkRecord({
+        id: 'pl-activate-3',
+        zohoPaymentLinkId: 'zoho-activate-3',
+        vendorId: 'v-does-not-exist',
+        planId: 'connect',
+        amount: 14160,
+        paymentUrl: '',
+        status: 'PAID',
+      });
+
+      expect(storeService.activateVendorSubscriptionFromPayment(link.id)).toBeNull();
+    });
+  });
+
   describe('Evaluations & Config', () => {
     test('createEvaluation adds 360 audit record', () => {
       const ev = storeService.createEvaluation({

@@ -982,30 +982,35 @@ export function VendorSurveyModal({ isOpen, onClose }: SurveyModalProps) {
 interface SubscriptionPaymentModalProps {
   isOpen: boolean;
   onClose: () => void;
+  planId: 'connect' | 'select';
   planName: string;
   price: string;
-  onPaymentSuccess: () => void;
 }
 
 /**
- * Simulated checkout for the paid vendor subscription tiers. This app has no
- * real payment processor integration anywhere — this modal exists so the
- * plan switch isn't a bare, instant, unexplained state flip on a screen that
- * advertises real dollar prices; it's still just a demo/dummy gateway.
+ * Real Zoho Payments checkout. This app never collects card details itself —
+ * on confirm it asks the backend to create a Zoho payment link, then redirects
+ * the browser to Zoho's own hosted payment page. The subscription is granted
+ * server-side once Zoho's webhook (or the reconciliation poller) confirms the
+ * payment, not by this modal.
  */
-export function VendorSubscriptionPaymentModal({ isOpen, onClose, planName, price, onPaymentSuccess }: SubscriptionPaymentModalProps) {
+export function VendorSubscriptionPaymentModal({ isOpen, onClose, planId, planName, price }: SubscriptionPaymentModalProps) {
+  const { createVendorPaymentLink } = useApp();
   const [processing, setProcessing] = useState(false);
-  const [cardNumber, setCardNumber] = useState('4242 4242 4242 4242');
+  const [error, setError] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
-  const handlePay = () => {
+  const handlePay = async () => {
     setProcessing(true);
-    setTimeout(() => {
+    setError(null);
+    const paymentUrl = await createVendorPaymentLink(planId);
+    if (!paymentUrl) {
       setProcessing(false);
-      onPaymentSuccess();
-      onClose();
-    }, 1200);
+      setError('Could not start checkout. Please try again.');
+      return;
+    }
+    window.location.href = paymentUrl;
   };
 
   return (
@@ -1017,8 +1022,8 @@ export function VendorSubscriptionPaymentModal({ isOpen, onClose, planName, pric
               <CreditCard size={18} />
             </div>
             <div>
-              <h3 className="text-base font-bold text-slate-900 dark:text-white">Dummy Payment Gateway</h3>
-              <p className="text-xs text-slate-500 dark:text-gray-400">Simulated checkout — no real payment is processed</p>
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">Secure Payment</h3>
+              <p className="text-xs text-slate-500 dark:text-gray-400">You&apos;ll complete payment on Zoho&apos;s secure checkout page</p>
             </div>
           </div>
           <button
@@ -1039,29 +1044,15 @@ export function VendorSubscriptionPaymentModal({ isOpen, onClose, planName, pric
             <span className="text-slate-500 dark:text-gray-400">Amount Due</span>
             <span className="font-black text-lg text-indigo-600 dark:text-indigo-400">{price}</span>
           </div>
-          <div>
-            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-              Card Number (dummy — not validated)
-            </label>
-            <input
-              type="text"
-              value={cardNumber}
-              onChange={(e) => setCardNumber(e.target.value)}
-              disabled={processing}
-              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
-            />
-          </div>
-          <p className="text-[10px] text-slate-400 italic">
-            Demo checkout for testing — no real charge is made and no payment processor is contacted.
-          </p>
+          {error && <p className="text-[11px] text-rose-600 dark:text-rose-400">{error}</p>}
         </div>
 
         <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200 dark:border-gray-800">
           <button onClick={onClose} disabled={processing} className="btn btn-ghost btn-sm">
             Cancel
           </button>
-          <button onClick={handlePay} disabled={processing} className="btn btn-primary">
-            <CreditCard size={14} /> {processing ? 'Processing Payment...' : `Pay ${price} (Dummy Gateway)`}
+          <button onClick={() => void handlePay()} disabled={processing} className="btn btn-primary">
+            <CreditCard size={14} /> {processing ? 'Redirecting to secure payment…' : `Pay ${price}`}
           </button>
         </div>
       </div>

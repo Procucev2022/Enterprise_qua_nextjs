@@ -385,3 +385,28 @@ CREATE TABLE IF NOT EXISTS email_ingestion_log (
 );
 CREATE INDEX IF NOT EXISTS idx_email_ingestion_log_processed_at ON email_ingestion_log (processed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_email_ingestion_log_status ON email_ingestion_log (status);
+
+-- Real Zoho Payments integration for vendor subscription upgrades, ported from
+-- the reference p2pservices Java app's zoho_oauth_token/payment_links tables.
+
+-- Single-row cache of the current OAuth access token (refreshed from the one
+-- long-lived refresh token in ZOHO_CONFIG, not stored here). Typed rather than
+-- JSONB — this is infrastructure state, not a domain record.
+CREATE TABLE IF NOT EXISTS zoho_oauth_token (
+  id VARCHAR(32) PRIMARY KEY DEFAULT 'default',
+  access_token TEXT,
+  expiry_time TIMESTAMPTZ,
+  last_updated TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS payment_links (
+  id VARCHAR(64) PRIMARY KEY,
+  zoho_payment_link_id VARCHAR(128) UNIQUE,
+  vendor_id VARCHAR(64) NOT NULL,
+  status VARCHAR(40) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  raw JSONB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_payment_links_vendor_id ON payment_links (vendor_id);
+CREATE INDEX IF NOT EXISTS idx_payment_links_status ON payment_links (status);

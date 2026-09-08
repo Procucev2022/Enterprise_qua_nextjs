@@ -174,6 +174,7 @@ describe('Store Service — remaining branch coverage', () => {
         getAIFeedFromDB: jest.fn().mockResolvedValue([]),
         getAuditLogsFromDB: jest.fn().mockResolvedValue([]),
         getNotificationsFromDB: jest.fn().mockResolvedValue([]),
+        getPaymentLinksFromDB: jest.fn().mockResolvedValue([]),
         ...overrides,
       };
     }

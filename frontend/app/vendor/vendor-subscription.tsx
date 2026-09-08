@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { VendorSubscriptionPaymentModal } from '@/app/components/Modals';
 import { Sparkles, ShieldCheck, Check, Zap, Layers, AlertCircle, RefreshCw, Download, Package, ArrowRight } from 'lucide-react';
@@ -15,7 +15,37 @@ export default function VendorSubscriptionCenter() {
     addAuditLog,
     vendorCatalogue,
     currentUserSession,
+    refreshFromDB,
   } = useApp();
+
+  // Zoho redirects the vendor back here with ?payment=success|cancelled after
+  // checkout. Activation itself already happened server-side (the webhook, or
+  // the reconciliation poller if that's delayed) — this just re-syncs the
+  // vendor's real subscriptionPlan and tells them what happened.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const outcome = params.get('payment');
+    if (!outcome) return;
+
+    if (outcome === 'success') {
+      showToast(
+        'Payment Received',
+        'Your subscription is being activated — this can take a few moments to reflect here.',
+        'success'
+      );
+      void refreshFromDB();
+    } else if (outcome === 'cancelled') {
+      showToast('Payment Cancelled', 'No changes were made to your subscription.', 'info');
+    }
+
+    // Drop the query param so a refresh doesn't re-show the toast.
+    params.delete('payment');
+    const next = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}`;
+    window.history.replaceState(null, '', next);
+    // Deliberately runs once on mount only — re-syncing on every render would
+    // re-trigger the toast/history rewrite in a loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [pendingPayment, setPendingPayment] = useState<{ planId: 'connect' | 'select'; planName: string; price: string } | null>(null);
   const [isUpdatingPlan, setIsUpdatingPlan] = useState(false);
@@ -332,11 +362,9 @@ export default function VendorSubscriptionCenter() {
       <VendorSubscriptionPaymentModal
         isOpen={!!pendingPayment}
         onClose={() => setPendingPayment(null)}
+        planId={pendingPayment?.planId || 'connect'}
         planName={pendingPayment?.planName || ''}
         price={pendingPayment?.price || ''}
-        onPaymentSuccess={() => {
-          if (pendingPayment) handleSubscribe(pendingPayment.planId);
-        }}
       />
     </div>
   );

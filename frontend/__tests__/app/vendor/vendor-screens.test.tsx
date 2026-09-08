@@ -13,6 +13,27 @@ function renderWithProvider(ui: React.ReactElement) {
   return render(<AppProvider>{ui}</AppProvider>);
 }
 
+/** The provider exposes the toast in context but does not render it. */
+function ToastProbe() {
+  const { toastMessage } = useApp();
+  if (!toastMessage) return null;
+  return (
+    <div data-testid="toast">
+      <span>{toastMessage.title}</span>
+      <span>{toastMessage.description}</span>
+    </div>
+  );
+}
+
+function renderWithToast(ui: React.ReactElement) {
+  return render(
+    <AppProvider>
+      <ToastProbe />
+      {ui}
+    </AppProvider>
+  );
+}
+
 // These screens now call real backend endpoints (vendor profile, catalogue,
 // quotes, RFQ download, PO approval) instead of only touching local state.
 // A generic success-shaped mock keeps these smoke tests focused on UI
@@ -43,6 +64,16 @@ function mockFetchImpl(url: string, options: any = {}) {
     return Promise.resolve({
       ok: true,
       json: async () => ({ success: true, data: { id: 'v-mock-apex', subscriptionPlan: body.plan, rfqDownloadsUsed: 0 } }),
+    });
+  }
+  if (/\/api\/vendors\/v-mock-apex\/payment-link$/.test(url) && method === 'POST') {
+    const body = options.body ? JSON.parse(options.body) : {};
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({
+        success: true,
+        data: { paymentUrl: `https://payments.zoho.in/mock/${body.plan}`, paymentLinkId: `pl-${body.plan}`, status: 'CREATED' },
+      }),
     });
   }
   if (/\/api\/catalogue/.test(url) && method === 'GET') {
@@ -345,7 +376,7 @@ describe('Vendor Screens Comprehensive Suite', () => {
   });
 
   describe('VendorSubscriptionCenter Screen', () => {
-    test('renders all subscription plans, allows switching between models (via dummy payment gateway) and resetting quota', async () => {
+    test('renders all subscription plans, starts a real Zoho checkout for a paid plan, and resets quota', async () => {
       // Plan switches now call the real PUT /api/vendors/:id/subscription and
       // only take effect once the backend confirms — that lookup is by the
       // signed-in vendor's own email, so a matching session + vendor record
@@ -371,45 +402,231 @@ describe('Vendor Screens Comprehensive Suite', () => {
       expect(screen.getAllByText(/Connect Model/i)[0]).toBeInTheDocument();
       expect(screen.getAllByText(/Select Model/i)[0]).toBeInTheDocument();
 
-      jest.useFakeTimers();
-
-      // Connect/Select are paid tiers — clicking now opens the dummy payment
-      // gateway modal rather than switching instantly (BUGS.md #44).
+      // Connect/Select are paid tiers — clicking opens the real Zoho checkout
+      // modal rather than switching instantly. Paying now creates a real
+      // payment link and redirects to Zoho; the plan itself only flips once
+      // the backend's webhook (or reconciliation poller) confirms payment, so
+      // this UI no longer flips it client-side.
       const connectBtn = screen.getByRole('button', { name: /Switch to Connect Model/i });
       fireEvent.click(connectBtn);
-      expect(screen.getByText(/Dummy Payment Gateway/i)).toBeInTheDocument();
+      expect(screen.getByText(/Secure Payment/i)).toBeInTheDocument();
 
       const payBtn = screen.getByRole('button', { name: /Pay \$149/i });
-      fireEvent.click(payBtn);
       await act(async () => {
-        await jest.advanceTimersByTimeAsync(1300);
+        fireEvent.click(payBtn);
+        await Promise.resolve();
       });
-      expect(screen.queryByText(/Dummy Payment Gateway/i)).not.toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Switch to Select Model/i })).toBeInTheDocument();
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/vendors/v-mock-apex/payment-link',
+        expect.objectContaining({ method: 'POST', body: JSON.stringify({ plan: 'connect' }) })
+      );
 
-      // Now on Connect — Select is a further upgrade, still paid
-      const selectBtn = screen.getByRole('button', { name: /Switch to Select Model/i });
-      fireEvent.click(selectBtn);
-      expect(screen.getByText(/Dummy Payment Gateway/i)).toBeInTheDocument();
-      const payBtn2 = screen.getByRole('button', { name: /Pay \$349/i });
-      fireEvent.click(payBtn2);
+      // Reset Quota Counter — unrelated to payment, still switches instantly.
+      const resetBtn = screen.getByRole('button', { name: /Reset Quota Counter/i });
+      fireEvent.click(resetBtn);
+      authClient.setSession(null);
+    });
+
+    test('switches to Premium (free) instantly, no checkout, and closes the modal via Cancel', async () => {
+      authClient.setSession({
+        id: 'u-vendor-1',
+        email: 'sales@apexsupplies.com',
+        name: 'Test Vendor',
+        role: 'vendor',
+        orgId: 'org-vendor-1',
+        orgName: 'Apex Supplies Ltd.',
+      });
+      const connectPlanImpl = (url: string, options: any = {}) => {
+        if (/\/api\/bootstrap/.test(url)) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              success: true,
+              data: {
+                vendors: [
+                  {
+                    id: 'v-mock-apex',
+                    name: 'Apex Supplies Ltd.',
+                    email: 'sales@apexsupplies.com',
+                    majorCategory: 'Heavy Industrial Fluid Dynamics & Valves',
+                    rating: 4.8,
+                    subscriptionPlan: 'connect',
+                  },
+                ],
+              },
+            }),
+          });
+        }
+        return mockFetchImpl(url, options);
+      };
+      global.fetch = jest.fn(connectPlanImpl) as any;
+
+      renderWithToast(<VendorSubscriptionCenter />);
       await act(async () => {
-        await jest.advanceTimersByTimeAsync(1300);
+        await Promise.resolve();
       });
-      expect(screen.queryByText(/Dummy Payment Gateway/i)).not.toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Switch to Premium Model/i })).toBeInTheDocument();
 
-      // Switch back to Premium — free tier, switches instantly, no gateway
-      const premBtn = screen.getByRole('button', { name: /Switch to Premium Model/i });
+      const premBtn = await screen.findByRole('button', { name: /Switch to Premium Model/i });
       await act(async () => {
         fireEvent.click(premBtn);
       });
-      expect(screen.queryByText(/Dummy Payment Gateway/i)).not.toBeInTheDocument();
+      expect(screen.getByText(/Vendor Subscription Updated!/i)).toBeInTheDocument();
 
-      // Reset Quota Counter
-      const resetBtn = screen.getByRole('button', { name: /Reset Quota Counter/i });
-      fireEvent.click(resetBtn);
-      jest.useRealTimers();
+      // Cancel also closes the (Connect/Select) checkout modal without paying.
+      const connectBtn = await screen.findByRole('button', { name: /Switch to Connect Model/i });
+      fireEvent.click(connectBtn);
+      expect(screen.getByText(/Secure Payment/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
+      expect(screen.queryByText(/Secure Payment/i)).not.toBeInTheDocument();
+
+      authClient.setSession(null);
+    });
+
+    test('renders the Select-tier status banner and quota bar (near/over quota styling)', async () => {
+      authClient.setSession({
+        id: 'u-vendor-1',
+        email: 'sales@apexsupplies.com',
+        name: 'Test Vendor',
+        role: 'vendor',
+        orgId: 'org-vendor-1',
+        orgName: 'Apex Supplies Ltd.',
+      });
+      const selectPlanImpl = (url: string, options: any = {}) => {
+        if (/\/api\/bootstrap/.test(url)) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              success: true,
+              data: {
+                vendors: [
+                  {
+                    id: 'v-mock-apex',
+                    name: 'Apex Supplies Ltd.',
+                    email: 'sales@apexsupplies.com',
+                    majorCategory: 'Heavy Industrial Fluid Dynamics & Valves',
+                    rating: 4.8,
+                    subscriptionPlan: 'select',
+                    rfqDownloadsUsed: 100,
+                  },
+                ],
+              },
+            }),
+          });
+        }
+        return mockFetchImpl(url, options);
+      };
+      global.fetch = jest.fn(selectPlanImpl) as any;
+
+      renderWithProvider(<VendorSubscriptionCenter />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      await waitFor(() => expect(screen.getAllByText('Select Model').length).toBeGreaterThan(0));
+      expect(screen.getByText(/Full tier active: Item Catalogue unlocked/i)).toBeInTheDocument();
+
+      authClient.setSession(null);
+    });
+
+    test('shows a toast and re-syncs on a successful Zoho redirect back, then strips the query param', async () => {
+      const originalLocation = window.location.href;
+      window.history.pushState({}, '', '/vendor/vendor-subscription?payment=success');
+
+      try {
+        renderWithToast(<VendorSubscriptionCenter />);
+        await act(async () => {
+          await Promise.resolve();
+        });
+
+        expect(screen.getByText(/Payment Received/i)).toBeInTheDocument();
+        expect(window.location.search).toBe('');
+      } finally {
+        window.history.pushState({}, '', originalLocation);
+      }
+    });
+
+    test('shows a toast on a cancelled Zoho redirect back, preserving any other query params', async () => {
+      const originalLocation = window.location.href;
+      window.history.pushState({}, '', '/vendor/vendor-subscription?ref=email&payment=cancelled');
+
+      try {
+        renderWithToast(<VendorSubscriptionCenter />);
+        await act(async () => {
+          await Promise.resolve();
+        });
+
+        expect(screen.getByText(/Payment Cancelled/i)).toBeInTheDocument();
+        expect(window.location.search).toBe('?ref=email');
+      } finally {
+        window.history.pushState({}, '', originalLocation);
+      }
+    });
+
+    test('does nothing when there is no payment query param', async () => {
+      renderWithProvider(<VendorSubscriptionCenter />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.queryByText(/Payment Received/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Payment Cancelled/i)).not.toBeInTheDocument();
+    });
+
+    test('createVendorPaymentLink toasts a warning and does not redirect when the caller has no matching vendor profile', async () => {
+      authClient.setSession({
+        id: 'u-no-vendor',
+        email: 'nobody@nowhere.test',
+        name: 'No Vendor',
+        role: 'vendor',
+        orgId: 'org-x',
+        orgName: 'X',
+      });
+
+      renderWithToast(<VendorSubscriptionCenter />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Switch to Connect Model/i }));
+      const payBtn = screen.getByRole('button', { name: /Pay \$149/i });
+      await act(async () => {
+        fireEvent.click(payBtn);
+        await Promise.resolve();
+      });
+
+      expect(screen.getByText(/Could not find your vendor profile/i)).toBeInTheDocument();
+      authClient.setSession(null);
+    });
+
+    test('createVendorPaymentLink toasts the server error when payment-link creation fails', async () => {
+      authClient.setSession({
+        id: 'u-vendor-1',
+        email: 'sales@apexsupplies.com',
+        name: 'Test Vendor',
+        role: 'vendor',
+        orgId: 'org-vendor-1',
+        orgName: 'Apex Supplies Ltd.',
+      });
+      const failingImpl = (url: string, options: any = {}) => {
+        if (/\/api\/vendors\/v-mock-apex\/payment-link$/.test(url)) {
+          return Promise.resolve({ ok: false, status: 502, json: async () => ({ success: false, error: 'Zoho is unreachable.' }) });
+        }
+        return mockFetchImpl(url, options);
+      };
+      global.fetch = jest.fn(failingImpl) as any;
+
+      renderWithProvider(<VendorSubscriptionCenter />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Switch to Connect Model/i }));
+      const payBtn = screen.getByRole('button', { name: /Pay \$149/i });
+      await act(async () => {
+        fireEvent.click(payBtn);
+        await Promise.resolve();
+      });
+
+      expect(screen.getByText(/Could not start checkout/i)).toBeInTheDocument();
       authClient.setSession(null);
     });
   });

@@ -528,4 +528,110 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       expect(params).toEqual(['vendor', 'v-1']);
     });
   });
+
+  describe('Zoho OAuth token (single-row cache)', () => {
+    test('not configured: getZohoOAuthTokenFromDB returns null', async () => {
+      pool.pool = null;
+      await expect(domainQueries.getZohoOAuthTokenFromDB()).resolves.toBeNull();
+    });
+
+    test('not configured: upsertZohoOAuthTokenInDB returns null', async () => {
+      pool.pool = null;
+      await expect(domainQueries.upsertZohoOAuthTokenInDB({ accessToken: 'x', expiryTime: 'y' })).resolves.toBeNull();
+    });
+
+    test('getZohoOAuthTokenFromDB reads the single default row', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ access_token: 'tok', expiry_time: '2026-01-01T00:00:00Z' }] }) };
+
+      await expect(domainQueries.getZohoOAuthTokenFromDB()).resolves.toEqual({
+        access_token: 'tok',
+        expiry_time: '2026-01-01T00:00:00Z',
+      });
+      const [sql] = pool.pool.query.mock.calls[0];
+      expect(sql).toContain("id = 'default'");
+    });
+
+    test('getZohoOAuthTokenFromDB returns null when no row exists yet', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      await expect(domainQueries.getZohoOAuthTokenFromDB()).resolves.toBeNull();
+    });
+
+    test('upsertZohoOAuthTokenInDB upserts the single row and falls back nullable fields to null', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ access_token: 'tok', expiry_time: null }] }) };
+
+      const result = await domainQueries.upsertZohoOAuthTokenInDB({ accessToken: 'tok' });
+
+      expect(result).toEqual({ access_token: 'tok', expiry_time: null });
+      const [sql, params] = pool.pool.query.mock.calls[0];
+      expect(sql).toContain('INSERT INTO zoho_oauth_token');
+      expect(sql).toContain('ON CONFLICT (id) DO UPDATE');
+      expect(params).toEqual(['tok', null]);
+    });
+  });
+
+  describe('Zoho payment links', () => {
+    test('not configured: getPaymentLinksFromDB returns an empty array', async () => {
+      pool.pool = null;
+      await expect(domainQueries.getPaymentLinksFromDB()).resolves.toEqual([]);
+    });
+
+    test('not configured: getPaymentLinkByZohoIdFromDB returns null', async () => {
+      pool.pool = null;
+      await expect(domainQueries.getPaymentLinkByZohoIdFromDB('zoho-1')).resolves.toBeNull();
+    });
+
+    test('not configured: upsertPaymentLinkInDB returns null', async () => {
+      pool.pool = null;
+      await expect(domainQueries.upsertPaymentLinkInDB({ id: 'pl-1' })).resolves.toBeNull();
+    });
+
+    test('getPaymentLinksFromDB maps rows to their raw objects, newest first', async () => {
+      const link = { id: 'pl-1', status: 'CREATED' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: link }] }) };
+
+      await expect(domainQueries.getPaymentLinksFromDB()).resolves.toEqual([link]);
+      expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('ORDER BY created_at DESC'), []);
+    });
+
+    test('getPaymentLinkByZohoIdFromDB looks up by the Zoho id and returns its raw object', async () => {
+      const link = { id: 'pl-1', zohoPaymentLinkId: 'zoho-1' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: link }] }) };
+
+      await expect(domainQueries.getPaymentLinkByZohoIdFromDB('zoho-1')).resolves.toEqual(link);
+      expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('WHERE zoho_payment_link_id = $1'), ['zoho-1']);
+    });
+
+    test('getPaymentLinkByZohoIdFromDB returns null when nothing matched', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      await expect(domainQueries.getPaymentLinkByZohoIdFromDB('zoho-x')).resolves.toBeNull();
+    });
+
+    test('upsertPaymentLinkInDB serializes the link and returns the stored raw row', async () => {
+      const link = { id: 'pl-1', zohoPaymentLinkId: 'zoho-1', vendorId: 'v-1', status: 'CREATED' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: link }] }) };
+
+      const result = await domainQueries.upsertPaymentLinkInDB(link);
+
+      expect(result).toEqual(link);
+      const [sql, params] = pool.pool.query.mock.calls[0];
+      expect(sql).toContain('INSERT INTO payment_links');
+      expect(sql).toContain('ON CONFLICT (id) DO UPDATE');
+      expect(params).toEqual(['pl-1', 'zoho-1', 'v-1', 'CREATED', JSON.stringify(link)]);
+    });
+
+    test('upsertPaymentLinkInDB falls back missing nullable fields to null', async () => {
+      const link = { id: 'pl-2' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: link }] }) };
+
+      await domainQueries.upsertPaymentLinkInDB(link);
+
+      const [, params] = pool.pool.query.mock.calls[0];
+      expect(params).toEqual(['pl-2', null, null, null, JSON.stringify(link)]);
+    });
+
+    test('upsertPaymentLinkInDB returns null when nothing came back', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      await expect(domainQueries.upsertPaymentLinkInDB({ id: 'pl-3' })).resolves.toBeNull();
+    });
+  });
 });
