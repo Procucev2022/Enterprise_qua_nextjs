@@ -701,10 +701,13 @@ describe('RFQ ingestion & summary HTTP routes', () => {
         .send({ name: 'Scoping Test Vendor', majorCategory: 'Vendor-Scope-Cat' });
       vendorId = vendorRes.body.data.id;
 
-      await request(app).post('/api/buyer-accounts').set(authHeader('buyer')).send({
+      const buyerRes = await request(app).post('/api/buyer-accounts').set(authHeader('buyer')).send({
         organizationName: 'Scoping Test Buyer',
         corporateEmail: 'buyer@procucev.com',
       });
+      // A fresh account defaults to free_trial (mode_1 only) — granted the top
+      // tier so this block's mode_2 RFQs aren't gated by the new entitlement check.
+      storeService.updateBuyerAccount(buyerRes.body.data.id, { subscriptionPlan: 'version_3' });
 
       const inCat = await request(app).post('/api/rfqs').set(authHeader('buyer')).send({
         title: 'Vendor-visible scoped enquiry',

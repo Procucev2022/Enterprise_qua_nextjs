@@ -12,5 +12,6 @@ router.post('/historical-data', authenticate, buyerAccountController.ingestHisto
 router.put('/:id', authenticate, buyerAccountController.updateBuyerAccount);
 router.delete('/:id', authenticate, buyerAccountController.deleteBuyerAccount);
 router.post('/:id/activate', authenticate, buyerAccountController.setActiveAccount);
+router.post('/:id/subscription-payment', authenticate, buyerAccountController.createSubscriptionPaymentLink);
 
 module.exports = router;

@@ -4,7 +4,7 @@ import React from 'react';
 import { useApp } from '@/lib/store';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import { authClient } from '@/lib/authClient';
-import { VendorSubscriptionPaymentModal } from '@/app/components/Modals';
+import { SubscriptionPaymentModal } from '@/app/components/Modals';
 import { VendorOpportunity } from '@/lib/types';
 import {
   Truck,
@@ -50,6 +50,7 @@ export default function OpportunityFeed({
     buyerVendors,
     currentUserSession,
     refreshFromDB,
+    createVendorPaymentLink,
   } = useApp();
   const vendorLabel = currentUserSession?.orgName || currentUserSession?.name || 'Vendor';
 
@@ -1118,12 +1119,13 @@ export default function OpportunityFeed({
         </div>
       )}
 
-      <VendorSubscriptionPaymentModal
+      <SubscriptionPaymentModal
         isOpen={!!pendingPayment}
         onClose={() => setPendingPayment(null)}
         planId={pendingPayment?.planId || 'connect'}
         planName={pendingPayment?.planName || ''}
         price={pendingPayment?.price || ''}
+        createPaymentLink={createVendorPaymentLink}
       />
     </div>
   );

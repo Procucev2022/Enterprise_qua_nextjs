@@ -1,37 +1,91 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '@/lib/store';
+import { SubscriptionPaymentModal } from '@/app/components/Modals';
+import { authClient } from '@/lib/authClient';
 import { Sparkles, ShieldCheck, Check, Zap, Layers, AlertCircle, RefreshCw } from 'lucide-react';
+
+const PLAN_LABEL: Record<string, string> = {
+  version_1: 'Version 1: Client Roster Plan',
+  version_2: 'Version 2: Hybrid Sourcing Plan',
+  version_3: 'Version 3: Autonomous AI Sourcing Plan',
+};
+
+const PLAN_PRICE: Record<string, string> = {
+  version_1: '$199',
+  version_2: '$499',
+  version_3: '$999',
+};
 
 export default function SubscriptionCenter() {
   const {
     activeSubscription,
-    setActiveSubscription,
     remainingFreeRFQs,
-    setRemainingFreeRFQs,
     showToast,
+    activeBuyerAccount,
+    refreshActiveBuyerAccount,
+    createBuyerPaymentLink,
   } = useApp();
 
-  const handleSubscribe = (plan: 'version_1' | 'version_2' | 'version_3') => {
-    setActiveSubscription(plan);
-    const planName =
-      plan === 'version_1'
-        ? 'Version 1: Client Roster Plan'
-        : plan === 'version_2'
-        ? 'Version 2: Hybrid Sourcing Plan'
-        : 'Version 3: Autonomous AI Sourcing Plan';
+  const [pendingPayment, setPendingPayment] = useState<{ planId: 'version_1' | 'version_2' | 'version_3' } | null>(null);
 
-    showToast(
-      'Subscription Activated!',
-      `Successfully subscribed to ${planName}. All associated features are now unlocked.`,
-      'success'
-    );
+  // Zoho redirects the buyer back here with ?payment=success|cancelled after
+  // checkout. Activation itself already happened server-side (the webhook, or
+  // the reconciliation poller if that's delayed) — this just re-syncs the
+  // buyer's real subscriptionPlan and tells them what happened. Mirrors
+  // vendor-subscription.tsx's identical return-flow handling.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const outcome = params.get('payment');
+    if (!outcome) return;
+
+    if (outcome === 'success') {
+      showToast(
+        'Payment Received',
+        'Your subscription is being activated — this can take a few moments to reflect here.',
+        'success'
+      );
+      void refreshActiveBuyerAccount();
+    } else if (outcome === 'cancelled') {
+      showToast('Payment Cancelled', 'No changes were made to your subscription.', 'info');
+    }
+
+    params.delete('payment');
+    const next = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}`;
+    window.history.replaceState(null, '', next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleSubscribe = (plan: 'version_1' | 'version_2' | 'version_3') => {
+    setPendingPayment({ planId: plan });
   };
 
-  const handleResetTrial = () => {
-    setActiveSubscription('free_trial');
-    setRemainingFreeRFQs(5);
+  const handleResetTrial = async () => {
+    if (!activeBuyerAccount?.id) {
+      showToast('Reset Failed', 'Could not find your buyer account.', 'warning');
+      return;
+    }
+    try {
+      const token = authClient.getToken();
+      const res = await fetch(`/api/buyer-accounts/${encodeURIComponent(activeBuyerAccount.id)}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 5 }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        showToast('Reset Failed', json?.error || 'Could not reset your account. Please try again.', 'warning');
+        return;
+      }
+    } catch {
+      showToast('Reset Failed', 'Could not reach the server. Please try again.', 'warning');
+      return;
+    }
+    void refreshActiveBuyerAccount();
     showToast(
       'Free Account Restored',
       'Free starter account reset: 5 Free RFQs available across Version 1, Version 2, and Version 3.',
@@ -238,6 +292,15 @@ export default function SubscriptionCenter() {
           );
         })}
       </div>
+
+      <SubscriptionPaymentModal
+        isOpen={!!pendingPayment}
+        onClose={() => setPendingPayment(null)}
+        planId={pendingPayment?.planId || 'version_1'}
+        planName={pendingPayment ? PLAN_LABEL[pendingPayment.planId] : ''}
+        price={pendingPayment ? PLAN_PRICE[pendingPayment.planId] : ''}
+        createPaymentLink={createBuyerPaymentLink}
+      />
     </div>
   );
 }

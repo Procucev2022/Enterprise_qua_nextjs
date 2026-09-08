@@ -18,6 +18,7 @@
 
 const buyerProfileQueries = require('../db/buyerProfileQueries');
 const pool = require('../db/pool');
+const storeService = require('./storeService');
 const { logger } = require('./loggerService');
 const { BUYER_ACCOUNT_RESOLUTION } = require('../config/constants');
 
@@ -32,6 +33,15 @@ const LOG_CATEGORY = 'BUYER_ACCOUNT';
  * caller, or left at zero when nothing has been raised.
  */
 function mapProfileToBuyerAccount(profile, extras = {}) {
+  // The identity DB (user/organization) has no subscription columns at all —
+  // that state lives on the legacy storeService.buyerAccounts record instead
+  // (created at registration, updated on a real Zoho payment). Matched by
+  // login email since that's the one identifier both sides share. An account
+  // that predates this — or was never registered through the app's own
+  // buyer-account creation flow — has no such record, so it defaults to the
+  // same free_trial/5 a brand new account starts with, rather than reporting
+  // nothing at all.
+  const legacyAccount = storeService.getBuyerAccountByEmail(profile.contactEmail);
   return {
     id: profile.organizationId,
     organizationId: profile.organizationId,
@@ -64,6 +74,8 @@ function mapProfileToBuyerAccount(profile, extras = {}) {
     // Counted from real RFQ rows by the caller. Zero until something is raised.
     totalRFQsCreated: extras.totalRFQsCreated || 0,
     totalSpend: extras.totalSpend || 0,
+    subscriptionPlan: legacyAccount?.subscriptionPlan || 'free_trial',
+    remainingFreeRFQs: legacyAccount?.remainingFreeRFQs !== undefined ? legacyAccount.remainingFreeRFQs : 5,
   };
 }
 

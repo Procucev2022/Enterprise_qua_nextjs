@@ -30,7 +30,11 @@ async function reconcileOnce() {
       const result = await zohoPaymentService.getPaymentLinkStatus(link.zohoPaymentLinkId);
       storeService.updatePaymentLinkRecord(link.id, { status: result.status, rawResponse: result.rawResponse });
       if (result.status === 'PAID') {
-        storeService.activateVendorSubscriptionFromPayment(link.id);
+        if (link.payerType === 'buyer') {
+          storeService.activateBuyerSubscriptionFromPayment(link.id);
+        } else {
+          storeService.activateVendorSubscriptionFromPayment(link.id);
+        }
       }
     } catch (err) {
       logger.error(`Zoho reconciliation failed for payment link ${link.id}`, err, 'ZOHO_RECONCILIATION');

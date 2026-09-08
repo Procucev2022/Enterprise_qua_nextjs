@@ -28,7 +28,7 @@ import {
   MajorMinorCategory,
 } from './types';
 import { authClient } from './authClient';
-import { createPaymentLink } from './subscriptionPaymentClient';
+import { createPaymentLink, createBuyerPaymentLink as createBuyerPaymentLinkRequest } from './subscriptionPaymentClient';
 import { fetchCategoryTaxonomy } from './buyerProfileClient';
 import { setCategoryTaxonomy, clearCategoryTaxonomy } from './categoryTaxonomy';
 import { UI_STRINGS, formatString } from './uiStrings';
@@ -122,6 +122,7 @@ interface AppContextType {
   dbConnected: boolean;
   refreshFromDB: () => Promise<void>;
   refreshAIFeed: () => Promise<void>;
+  refreshActiveBuyerAccount: () => Promise<void>;
 
   // Procurement category master, read from the database. Empty until loaded —
   // there is no bundled copy to fall back to, so a screen shows "no categories
@@ -134,6 +135,8 @@ interface AppContextType {
   // Integrated Buyer Accounts & Public System Database
   buyerAccounts: BuyerAccount[];
   activeBuyerAccount: BuyerAccount | null;
+  /** Real Zoho payment-link creation for the caller's own buyer account. Returns the URL to redirect to, or null on failure (a toast is already shown). */
+  createBuyerPaymentLink: (plan: string) => Promise<string | null>;
   addBuyerAccount: (account: Omit<BuyerAccount, 'id' | 'syncTimestamp' | 'createdDate'>) => BuyerAccount;
   updateBuyerAccount: (id: string, updates: Partial<BuyerAccount>) => void;
   deleteBuyerAccount: (id: string) => void;
@@ -274,7 +277,7 @@ interface AppContextType {
   setVendorSubscription: React.Dispatch<React.SetStateAction<VendorSubscriptionPlan>>;
   updateVendorSubscription: (plan: 'premium' | 'connect' | 'select') => Promise<boolean>;
   /** Real Zoho payment-link creation for the caller's own vendor profile. Returns the URL to redirect to, or null on failure (a toast is already shown). */
-  createVendorPaymentLink: (plan: 'connect' | 'select') => Promise<string | null>;
+  createVendorPaymentLink: (plan: string) => Promise<string | null>;
   vendorRfqDownloadsUsed: number;
   setVendorRfqDownloadsUsed: React.Dispatch<React.SetStateAction<number>>;
   vendorCatalogue: any[];
@@ -378,7 +381,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return true;
   };
 
-  const createVendorPaymentLink = async (plan: 'connect' | 'select'): Promise<string | null> => {
+  const createVendorPaymentLink = async (plan: string): Promise<string | null> => {
     const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
     const myVendor = buyerVendors.find((v) => v.email?.toLowerCase() === sessionEmail);
     if (!myVendor) {
@@ -387,6 +390,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     const result = await createPaymentLink(myVendor.id, plan);
+    if (!result.success) {
+      showToast('Payment Failed', result.error, 'warning');
+      return null;
+    }
+    return result.paymentUrl;
+  };
+
+  const createBuyerPaymentLink = async (plan: string): Promise<string | null> => {
+    if (!activeBuyerAccount?.id) {
+      showToast('Payment Failed', 'Could not find your buyer account.', 'warning');
+      return null;
+    }
+
+    const result = await createBuyerPaymentLinkRequest(activeBuyerAccount.id, plan);
     if (!result.success) {
       showToast('Payment Failed', result.error, 'warning');
       return null;
@@ -651,6 +668,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on identity,
     // not on the callbacks, which are recreated every render.
   }, [isLoggedIn, currentUserSession?.id, activeBuyerAccount?.id]);
+
+  // activeSubscription/remainingFreeRFQs used to be pure local state, defaulted
+  // to free_trial/5 and never read back from anywhere real — a page refresh or
+  // a real Zoho-purchased upgrade was invisible here. GET /api/buyer-accounts/active
+  // now actually carries both fields (buyerAccountResolver merges them in from
+  // the real buyer_accounts record), so this mirrors the same sync
+  // refreshFromDB already does for vendorSubscription/vendorRfqDownloadsUsed.
+  useEffect(() => {
+    if (!activeBuyerAccount) return;
+    if (activeBuyerAccount.subscriptionPlan) {
+      setActiveSubscription(activeBuyerAccount.subscriptionPlan);
+    }
+    if (activeBuyerAccount.remainingFreeRFQs !== undefined) {
+      setRemainingFreeRFQs(activeBuyerAccount.remainingFreeRFQs);
+    }
+  }, [activeBuyerAccount]);
 
   // Integrated Buyer Accounts Management & Public Database Sync
   const addBuyerAccount = (account: Omit<BuyerAccount, 'id' | 'syncTimestamp' | 'createdDate'>): BuyerAccount => {
@@ -2264,6 +2297,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setVendorCatalogue,
         buyerAccounts,
         activeBuyerAccount,
+        refreshActiveBuyerAccount,
+        createBuyerPaymentLink,
         addBuyerAccount,
         updateBuyerAccount,
         deleteBuyerAccount,

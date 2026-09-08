@@ -38,6 +38,16 @@ describe('zohoReconciliationService', () => {
       expect(storeService.activateVendorSubscriptionFromPayment).toHaveBeenCalledWith('pl-2');
     });
 
+    test('activates a buyer subscription (not a vendor one) for a link with payerType buyer', async () => {
+      storeService.getPaymentLinksByStatusIn.mockReturnValue([{ id: 'pl-buyer-1', zohoPaymentLinkId: 'zoho-buyer-1', payerType: 'buyer' }]);
+      zohoPaymentService.getPaymentLinkStatus.mockResolvedValueOnce({ status: 'PAID', rawResponse: {} });
+
+      await zohoReconciliationService.reconcileOnce();
+
+      expect(storeService.activateBuyerSubscriptionFromPayment).toHaveBeenCalledWith('pl-buyer-1');
+      expect(storeService.activateVendorSubscriptionFromPayment).not.toHaveBeenCalled();
+    });
+
     test('logs and continues when one link fails to reconcile', async () => {
       storeService.getPaymentLinksByStatusIn.mockReturnValue([
         { id: 'pl-1', zohoPaymentLinkId: 'zoho-1' },

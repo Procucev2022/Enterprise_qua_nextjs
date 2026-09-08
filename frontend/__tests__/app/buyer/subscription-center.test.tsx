@@ -1,26 +1,39 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import SubscriptionCenter from '@/app/buyer/subscription-center';
 import { useApp } from '@/lib/store';
+import { authClient } from '@/lib/authClient';
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
 }));
 
 describe('app/buyer/subscription-center.tsx', () => {
-  const mockSetActiveSubscription = jest.fn();
-  const mockSetRemainingFreeRFQs = jest.fn();
   const mockShowToast = jest.fn();
+  const mockRefreshActiveBuyerAccount = jest.fn();
+  const mockCreateBuyerPaymentLink = jest.fn();
+  const originalFetch = global.fetch;
+
+  function mockStore(overrides: Record<string, unknown> = {}) {
+    (useApp as jest.Mock).mockReturnValue({
+      activeSubscription: 'free_trial',
+      remainingFreeRFQs: 4,
+      showToast: mockShowToast,
+      activeBuyerAccount: { id: 'buyer-1', subscriptionPlan: 'free_trial', remainingFreeRFQs: 4 },
+      refreshActiveBuyerAccount: mockRefreshActiveBuyerAccount,
+      createBuyerPaymentLink: mockCreateBuyerPaymentLink,
+      ...overrides,
+    });
+  }
 
   beforeEach(() => {
     jest.clearAllMocks();
-    (useApp as jest.Mock).mockReturnValue({
-      activeSubscription: 'free_trial',
-      setActiveSubscription: mockSetActiveSubscription,
-      remainingFreeRFQs: 4,
-      setRemainingFreeRFQs: mockSetRemainingFreeRFQs,
-      showToast: mockShowToast,
-    });
+    mockStore();
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ success: true, data: {} }) });
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
   });
 
   it('renders free trial header, quota progress bar, and all 3 subscription plans', () => {
@@ -34,69 +47,184 @@ describe('app/buyer/subscription-center.tsx', () => {
     expect(screen.getByText('Version 3 Plan')).toBeInTheDocument();
   });
 
-  it('handles resetting trial account to default 5 free RFQs', () => {
+  it('resets the trial account via a real PUT request and re-syncs from the backend', async () => {
     render(<SubscriptionCenter />);
 
-    fireEvent.click(screen.getByText(/Reset to Free Account/i));
-    expect(mockSetActiveSubscription).toHaveBeenCalledWith('free_trial');
-    expect(mockSetRemainingFreeRFQs).toHaveBeenCalledWith(5);
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Reset to Free Account/i));
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/buyer-accounts/buyer-1',
+      expect.objectContaining({ method: 'PUT', body: JSON.stringify({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 5 }) })
+    );
+    expect(mockRefreshActiveBuyerAccount).toHaveBeenCalled();
     expect(mockShowToast).toHaveBeenCalledWith('Free Account Restored', expect.any(String), 'info');
   });
 
-  it('subscribes to Version 1, Version 2, and Version 3 plans', () => {
-    const { rerender } = render(<SubscriptionCenter />);
+  it('shows a warning and skips the request when there is no active buyer account', async () => {
+    mockStore({ activeBuyerAccount: null });
+    render(<SubscriptionCenter />);
 
-    // Subscribe to Version 2
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Reset to Free Account/i));
+    });
+
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(mockShowToast).toHaveBeenCalledWith('Reset Failed', expect.any(String), 'warning');
+  });
+
+  it('shows a warning when the reset request fails server-side', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, json: async () => ({ success: false, error: 'Nope.' }) });
+    render(<SubscriptionCenter />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Reset to Free Account/i));
+    });
+
+    expect(mockShowToast).toHaveBeenCalledWith('Reset Failed', 'Nope.', 'warning');
+    expect(mockRefreshActiveBuyerAccount).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a default message when the failed reset response has no error text', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, json: async () => null });
+    render(<SubscriptionCenter />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Reset to Free Account/i));
+    });
+
+    expect(mockShowToast).toHaveBeenCalledWith('Reset Failed', 'Could not reset your account. Please try again.', 'warning');
+  });
+
+  it('attaches the session token to the reset request when one is held', async () => {
+    const originalGetToken = authClient.getToken;
+    authClient.getToken = jest.fn().mockReturnValue('jwt-token');
+    render(<SubscriptionCenter />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Reset to Free Account/i));
+    });
+
+    const [, init] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(init.headers).toEqual({ 'Content-Type': 'application/json', Authorization: 'Bearer jwt-token' });
+    authClient.getToken = originalGetToken;
+  });
+
+  it('falls back to a default message when the reset response body cannot be read', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, json: async () => { throw new Error('not json'); } });
+    render(<SubscriptionCenter />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Reset to Free Account/i));
+    });
+
+    expect(mockShowToast).toHaveBeenCalledWith('Reset Failed', 'Could not reset your account. Please try again.', 'warning');
+  });
+
+  it('shows a warning when the reset request throws (network failure)', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error('offline'));
+    render(<SubscriptionCenter />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Reset to Free Account/i));
+    });
+
+    expect(mockShowToast).toHaveBeenCalledWith('Reset Failed', expect.any(String), 'warning');
+  });
+
+  it('clicking a paid plan opens the real Zoho checkout modal, not an instant local flip', async () => {
+    render(<SubscriptionCenter />);
+
     fireEvent.click(screen.getByText('Subscribe to Version 2'));
-    expect(mockSetActiveSubscription).toHaveBeenCalledWith('version_2');
-    expect(mockShowToast).toHaveBeenCalledWith('Subscription Activated!', expect.stringContaining('Version 2: Hybrid Sourcing Plan'), 'success');
+    expect(screen.getByText(/Secure Payment/i)).toBeInTheDocument();
+    expect(screen.getByText('Version 2: Hybrid Sourcing Plan')).toBeInTheDocument();
 
-    // Subscribe to Version 3
+    const payBtn = screen.getByRole('button', { name: /Pay \$499/i });
+    mockCreateBuyerPaymentLink.mockResolvedValue('https://payments.zoho.in/buyer-mock');
+    await act(async () => {
+      fireEvent.click(payBtn);
+      await Promise.resolve();
+    });
+    expect(mockCreateBuyerPaymentLink).toHaveBeenCalledWith('version_2');
+  });
+
+  it('closes the checkout modal via Cancel without paying', () => {
+    render(<SubscriptionCenter />);
+
     fireEvent.click(screen.getByText('Subscribe to Version 3'));
-    expect(mockSetActiveSubscription).toHaveBeenCalledWith('version_3');
-    expect(mockShowToast).toHaveBeenCalledWith('Subscription Activated!', expect.stringContaining('Version 3: Autonomous AI Sourcing Plan'), 'success');
+    expect(screen.getByText(/Secure Payment/i)).toBeInTheDocument();
 
-    // When activeSubscription is not free_trial, render premium banner for version_1, version_2, version_3
-    (useApp as jest.Mock).mockReturnValue({
-      activeSubscription: 'version_1',
-      setActiveSubscription: mockSetActiveSubscription,
-      remainingFreeRFQs: 0,
-      setRemainingFreeRFQs: mockSetRemainingFreeRFQs,
-      showToast: mockShowToast,
-    });
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
+    expect(screen.queryByText(/Secure Payment/i)).not.toBeInTheDocument();
+    expect(mockCreateBuyerPaymentLink).not.toHaveBeenCalled();
+  });
 
-    rerender(<SubscriptionCenter />);
+  it('renders the active-plan banner and disables the button for the currently active paid plan', () => {
+    mockStore({ activeSubscription: 'version_1', remainingFreeRFQs: 0, activeBuyerAccount: { id: 'buyer-1', subscriptionPlan: 'version_1', remainingFreeRFQs: 0 } });
+    render(<SubscriptionCenter />);
+
     expect(screen.getByText(/Active Premium Plan: Version 1/i)).toBeInTheDocument();
+    expect(screen.getByText('Active Subscription')).toBeInTheDocument();
+  });
 
-    // Now test version_1 subscription trigger
-    fireEvent.click(screen.getByText('Subscribe to Version 2')); // Subscribe to V2 when V1 is active
-    expect(mockSetActiveSubscription).toHaveBeenCalledWith('version_2');
+  it('shows a toast and re-syncs on a successful Zoho redirect back, then strips the query param', async () => {
+    const originalLocation = window.location.href;
+    window.history.pushState({}, '', '/buyer/subscription-center?payment=success');
 
-    // Test version_2 active banner
-    (useApp as jest.Mock).mockReturnValue({
-      activeSubscription: 'version_2',
-      setActiveSubscription: mockSetActiveSubscription,
-      remainingFreeRFQs: 0,
-      setRemainingFreeRFQs: mockSetRemainingFreeRFQs,
-      showToast: mockShowToast,
+    try {
+      render(<SubscriptionCenter />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(mockShowToast).toHaveBeenCalledWith('Payment Received', expect.any(String), 'success');
+      expect(mockRefreshActiveBuyerAccount).toHaveBeenCalled();
+      expect(window.location.search).toBe('');
+    } finally {
+      window.history.pushState({}, '', originalLocation);
+    }
+  });
+
+  it('shows a toast on a cancelled Zoho redirect back, preserving any other query params', async () => {
+    const originalLocation = window.location.href;
+    window.history.pushState({}, '', '/buyer/subscription-center?ref=email&payment=cancelled');
+
+    try {
+      render(<SubscriptionCenter />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(mockShowToast).toHaveBeenCalledWith('Payment Cancelled', expect.any(String), 'info');
+      expect(window.location.search).toBe('?ref=email');
+    } finally {
+      window.history.pushState({}, '', originalLocation);
+    }
+  });
+
+  it('shows a toast on a plain cancelled redirect with no other query params', async () => {
+    const originalLocation = window.location.href;
+    window.history.pushState({}, '', '/buyer/subscription-center?payment=cancelled');
+
+    try {
+      render(<SubscriptionCenter />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(mockShowToast).toHaveBeenCalledWith('Payment Cancelled', expect.any(String), 'info');
+    } finally {
+      window.history.pushState({}, '', originalLocation);
+    }
+  });
+
+  it('does nothing on mount when there is no payment query param', async () => {
+    render(<SubscriptionCenter />);
+    await act(async () => {
+      await Promise.resolve();
     });
-    rerender(<SubscriptionCenter />);
-    expect(screen.getByText(/Active Premium Plan: Version 2/i)).toBeInTheDocument();
-
-    // Test version_3 active banner
-    (useApp as jest.Mock).mockReturnValue({
-      activeSubscription: 'version_3',
-      setActiveSubscription: mockSetActiveSubscription,
-      remainingFreeRFQs: 0,
-      setRemainingFreeRFQs: mockSetRemainingFreeRFQs,
-      showToast: mockShowToast,
-    });
-    rerender(<SubscriptionCenter />);
-    expect(screen.getByText(/Active Premium Plan: Version 3/i)).toBeInTheDocument();
-
-    // Test version_1 handleSubscribe toast
-    fireEvent.click(screen.getByText('Subscribe to Version 1'));
-    expect(mockSetActiveSubscription).toHaveBeenCalledWith('version_1');
-    expect(mockShowToast).toHaveBeenCalledWith('Subscription Activated!', expect.stringContaining('Version 1: Client Roster Plan'), 'success');
+    expect(mockShowToast).not.toHaveBeenCalled();
+    expect(mockRefreshActiveBuyerAccount).not.toHaveBeenCalled();
   });
 });

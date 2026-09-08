@@ -49,7 +49,11 @@ async function handleWebhook(req, res) {
   switch (event.event_type) {
     case 'payment_link.paid':
       storeService.updatePaymentLinkRecord(link.id, { status: 'PAID', rawResponse: event });
-      storeService.activateVendorSubscriptionFromPayment(link.id);
+      if (link.payerType === 'buyer') {
+        storeService.activateBuyerSubscriptionFromPayment(link.id);
+      } else {
+        storeService.activateVendorSubscriptionFromPayment(link.id);
+      }
       break;
     case 'payment_link.canceled':
       storeService.updatePaymentLinkRecord(link.id, { status: 'CANCELED', rawResponse: event });

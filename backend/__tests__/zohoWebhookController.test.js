@@ -93,6 +93,24 @@ describe('zohoWebhookController.handleWebhook', () => {
     expect(res.json).toHaveBeenCalledWith({ success: true });
   });
 
+  test('activates the buyer subscription (not a vendor one) for a link with payerType buyer', async () => {
+    const link = { id: 'pl-buyer-1', zohoPaymentLinkId: 'zoho-buyer-1', payerType: 'buyer' };
+    storeService.getPaymentLinkByZohoId.mockReturnValue(link);
+    const event = {
+      account_id: 'acct-1',
+      event_id: 10,
+      event_type: 'payment_link.paid',
+      event_object: { payment_link_id: 'zoho-buyer-1' },
+    };
+    const req = { get: () => 'sig', rawBody: JSON.stringify(event), body: event };
+    const res = mockRes();
+
+    await zohoWebhookController.handleWebhook(req, res);
+
+    expect(storeService.activateBuyerSubscriptionFromPayment).toHaveBeenCalledWith('pl-buyer-1');
+    expect(storeService.activateVendorSubscriptionFromPayment).not.toHaveBeenCalled();
+  });
+
   test('marks the link canceled on payment_link.canceled without activating anything', async () => {
     const link = { id: 'pl-2', zohoPaymentLinkId: 'zoho-2' };
     storeService.getPaymentLinkByZohoId.mockReturnValue(link);

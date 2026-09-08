@@ -19,6 +19,16 @@ const {
 // A newly created RFQ is awaiting vendor quotations.
 const RFQ_DEFAULT_STATUS = 'Quotes Pending';
 
+// Which sourcing modes each buyer subscription plan includes. Cumulative —
+// each paid tier adds one mode on top of the last, matching store.tsx's
+// existing client-side gate (addNewRFQ) that this mirrors server-side.
+const SUBSCRIPTION_MODE_ENTITLEMENTS = {
+  free_trial: ['mode_1'],
+  version_1: ['mode_1'],
+  version_2: ['mode_1', 'mode_2'],
+  version_3: ['mode_1', 'mode_2', 'mode_3'],
+};
+
 /** Buyer-facing reason for each attachment rejection. */
 const ATTACHMENT_ERRORS = {
   NO_CONTENT: 'That file appears to be empty. Choose a file with content and try again.',
@@ -257,7 +267,48 @@ async function createRFQ(req, res, next) {
     // the request body, so the RFQ is attributed to whoever is actually
     // logged in rather than a client-supplied or globally-shared value.
     const requestingBuyerAccount = req.user ? storeService.getBuyerAccountByEmail(req.user.email) : null;
+
+    // Server-side re-validation of the buyer's subscription entitlement —
+    // mirrors the vendor download-quota check below (generateEmailPreview).
+    // The frontend already gates on the same rules (store.tsx's addNewRFQ) for
+    // a fast, friendly error; this is what actually stops a buyer who calls
+    // this endpoint directly from bypassing the trial limit or a mode their
+    // plan doesn't include. Skipped entirely when the caller has no resolved
+    // buyer-account record at all (e.g. admin/CM-raised RFQs) — there is no
+    // subscription to enforce against.
+    if (requestingBuyerAccount) {
+      const plan = requestingBuyerAccount.subscriptionPlan || 'free_trial';
+      const entitledModes = SUBSCRIPTION_MODE_ENTITLEMENTS[plan] || SUBSCRIPTION_MODE_ENTITLEMENTS.free_trial;
+      const requestedMode = body.sourcingMode || 'mode_1';
+
+      if (!entitledModes.includes(requestedMode)) {
+        logger.warn(
+          `Rejected RFQ creation: ${plan} plan does not include ${requestedMode}`,
+          { plan, requestedMode },
+          'RFQ_CONTROLLER'
+        );
+        return res.status(403).json({
+          success: false,
+          error: `Your ${plan} subscription does not include ${requestedMode}. Upgrade to unlock it.`,
+        });
+      }
+
+      if (plan === 'free_trial' && (requestingBuyerAccount.remainingFreeRFQs || 0) <= 0) {
+        logger.warn('Rejected RFQ creation: free trial exhausted', { buyerAccountId: requestingBuyerAccount.id }, 'RFQ_CONTROLLER');
+        return res.status(403).json({
+          success: false,
+          error: 'Your free trial RFQs are used up. Upgrade to a paid plan to raise more.',
+        });
+      }
+    }
+
     const created = storeService.createRFQ({ ...body, extractedEntities: lineItems, aiSummary }, requestingBuyerAccount);
+
+    if (requestingBuyerAccount && (requestingBuyerAccount.subscriptionPlan || 'free_trial') === 'free_trial') {
+      storeService.updateBuyerAccount(requestingBuyerAccount.id, {
+        remainingFreeRFQs: Math.max(0, (requestingBuyerAccount.remainingFreeRFQs || 0) - 1),
+      });
+    }
 
     // Dispatch real email notification to target gateway address (e.g. RFQ@procucev.com)
     if (body.source === 'email_gateway' || body.targetGatewayEmail) {

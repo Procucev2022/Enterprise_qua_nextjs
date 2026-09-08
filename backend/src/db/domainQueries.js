@@ -387,18 +387,20 @@ async function getPaymentLinkByZohoIdFromDB(zohoPaymentLinkId) {
 
 async function upsertPaymentLinkInDB(link) {
   if (!pool.pool) return null;
-  const { id, zohoPaymentLinkId, vendorId, status } = link;
+  const { id, zohoPaymentLinkId, vendorId, buyerAccountId, payerType, status } = link;
   const result = await pool.query(
-    `INSERT INTO payment_links (id, zoho_payment_link_id, vendor_id, status, raw, updated_at)
-     VALUES ($1, $2, $3, $4, $5, now())
+    `INSERT INTO payment_links (id, zoho_payment_link_id, vendor_id, buyer_account_id, payer_type, status, raw, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
      ON CONFLICT (id) DO UPDATE SET
        zoho_payment_link_id = EXCLUDED.zoho_payment_link_id,
        vendor_id = EXCLUDED.vendor_id,
+       buyer_account_id = EXCLUDED.buyer_account_id,
+       payer_type = EXCLUDED.payer_type,
        status = EXCLUDED.status,
        raw = EXCLUDED.raw,
        updated_at = now()
      RETURNING raw`,
-    [id, zohoPaymentLinkId || null, vendorId || null, status || null, JSON.stringify(link)]
+    [id, zohoPaymentLinkId || null, vendorId || null, buyerAccountId || null, payerType || 'vendor', status || null, JSON.stringify(link)]
   );
   return result.rows[0]?.raw || null;
 }
