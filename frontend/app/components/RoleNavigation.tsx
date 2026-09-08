@@ -160,7 +160,7 @@ export default function RoleNavigation({ onLogout }: RoleNavigationProps) {
                     key={item.id}
                     href={item.route}
                     onClick={() => setMobileOpen(false)}
-                    aria-label={`${item.screenTag}: ${item.label}`}
+                    aria-label={item.screenTag ? `${item.screenTag}: ${item.label}` : item.label}
                     aria-current={isActive ? 'page' : undefined}
                     title={item.description}
                     className={`group w-full flex items-center gap-2.5 px-2 py-2 rounded-xl border transition-all text-left ${
@@ -182,15 +182,17 @@ export default function RoleNavigation({ onLogout }: RoleNavigationProps) {
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-1.5">
                         <span className="truncate text-[11.5px] font-bold">{item.label}</span>
-                        <span
-                          className={`mono shrink-0 px-1 py-px rounded text-[8.5px] font-black ${
-                            isActive
-                              ? 'bg-white/20 text-white'
-                              : 'bg-slate-100 dark:bg-gray-800 text-slate-500 dark:text-gray-500'
-                          }`}
-                        >
-                          {item.shortTag}
-                        </span>
+                        {item.shortTag && (
+                          <span
+                            className={`mono shrink-0 px-1 py-px rounded text-[8.5px] font-black ${
+                              isActive
+                                ? 'bg-white/20 text-white'
+                                : 'bg-slate-100 dark:bg-gray-800 text-slate-500 dark:text-gray-500'
+                            }`}
+                          >
+                            {item.shortTag}
+                          </span>
+                        )}
                       </span>
                       <span
                         className={`block truncate text-[9.5px] leading-snug mt-0.5 ${

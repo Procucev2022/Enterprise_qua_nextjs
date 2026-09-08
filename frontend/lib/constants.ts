@@ -184,7 +184,6 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
     {
       id: 'command_center',
       screenTag: 'Screen 1.1',
-      shortTag: '1.1',
       label: NAV_ITEMS.commandCenter.label,
       description: NAV_ITEMS.commandCenter.description,
       icon: 'Layers',
@@ -194,7 +193,6 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
     {
       id: 'ingestion_wizard',
       screenTag: 'Screen 1.2',
-      shortTag: '1.2',
       label: NAV_ITEMS.ingestionWizard.label,
       description: NAV_ITEMS.ingestionWizard.description,
       icon: 'FileSpreadsheet',
@@ -204,7 +202,6 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
     {
       id: 'rfq_summary',
       screenTag: 'Screen 1.3',
-      shortTag: '1.3',
       label: NAV_ITEMS.rfqSummary.label,
       description: NAV_ITEMS.rfqSummary.description,
       icon: 'ClipboardList',
@@ -214,7 +211,6 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
     {
       id: 'vendor_evaluation_summary',
       screenTag: 'Screen 1.4',
-      shortTag: '1.4',
       label: NAV_ITEMS.buyerEvaluationSummary.label,
       description: NAV_ITEMS.buyerEvaluationSummary.description,
       icon: 'FileCheck',
@@ -224,7 +220,6 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
     {
       id: 'vendor_summary',
       screenTag: 'Screen 1.5',
-      shortTag: '1.5',
       label: NAV_ITEMS.vendorDirectory.label,
       description: NAV_ITEMS.vendorDirectory.description,
       icon: 'Building2',
@@ -234,7 +229,6 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
     {
       id: 'subscription_center',
       screenTag: 'Screen 1.6',
-      shortTag: '1.6',
       label: NAV_ITEMS.sourcingSubscriptions.label,
       description: NAV_ITEMS.sourcingSubscriptions.description,
       icon: 'Sparkles',
@@ -244,23 +238,24 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
     {
       id: 'buyer_profile',
       screenTag: 'Screen 1.7',
-      shortTag: '1.7',
       label: NAV_ITEMS.buyerProfile.label,
       description: NAV_ITEMS.buyerProfile.description,
       icon: 'Building2',
       group: NAV_GROUPS.buyerAccount,
       route: '/buyer/profile',
     },
+    // Temporarily hidden: Buyer DB Sync
+    /*
     {
       id: 'buyer_directory',
       screenTag: 'Screen 1.8',
-      shortTag: '1.8',
       label: NAV_ITEMS.buyerDbSync.label,
       description: NAV_ITEMS.buyerDbSync.description,
       icon: 'Database',
       group: NAV_GROUPS.buyerAccount,
       route: '/buyer/buyer-directory',
     },
+    */
   ],
   category_manager: [
     {
