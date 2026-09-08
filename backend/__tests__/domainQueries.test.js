@@ -97,6 +97,14 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
     test('upsertAuditLogInDB returns null', async () => {
       await expect(domainQueries.upsertAuditLogInDB({ id: 'log-1' })).resolves.toBeNull();
     });
+
+    test('notification helpers no-op', async () => {
+      await expect(domainQueries.getNotificationsFromDB()).resolves.toEqual([]);
+      await expect(domainQueries.insertNotificationInDB({ id: 'ntf-1' })).resolves.toBeNull();
+      await expect(domainQueries.bulkInsertNotificationsInDB([{ id: 'ntf-1' }])).resolves.toEqual([]);
+      await expect(domainQueries.markNotificationReadInDB('ntf-1')).resolves.toBe(false);
+      await expect(domainQueries.markAllNotificationsReadInDB('vendor', 'v-1')).resolves.toBe(0);
+    });
   });
 
   describe('vendors', () => {
@@ -429,6 +437,95 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
     test('upsertAuditLogInDB returns null when nothing came back', async () => {
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
       await expect(domainQueries.upsertAuditLogInDB({ id: 'log-2' })).resolves.toBeNull();
+    });
+  });
+
+  describe('notifications', () => {
+    const NTF = {
+      id: 'ntf-1',
+      recipientType: 'vendor',
+      recipientId: 'v-1',
+      kind: 'rfq_category_match',
+      rfqId: 'rfq-1',
+      read: false,
+      title: 'New RFQ',
+    };
+
+    test('getNotificationsFromDB maps rows to raw objects in sequence order', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: NTF }] }) };
+
+      await expect(domainQueries.getNotificationsFromDB()).resolves.toEqual([NTF]);
+      expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('ORDER BY sequence DESC'), []);
+    });
+
+    test('insertNotificationInDB serializes the row and passes the typed columns', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: NTF }] }) };
+
+      const result = await domainQueries.insertNotificationInDB(NTF);
+
+      expect(result).toEqual(NTF);
+      const [sql, params] = pool.pool.query.mock.calls[0];
+      expect(sql).toContain('INSERT INTO notifications');
+      expect(params).toEqual(['ntf-1', 'vendor', 'v-1', 'rfq_category_match', 'rfq-1', false, JSON.stringify(NTF)]);
+    });
+
+    test('insertNotificationInDB tolerates a missing rfqId and returns null on no row', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+
+      const result = await domainQueries.insertNotificationInDB({
+        id: 'ntf-2',
+        recipientType: 'buyer',
+        recipientId: 'b-1',
+        kind: 'quote_received',
+      });
+
+      expect(result).toBeNull();
+      expect(pool.pool.query.mock.calls[0][1][4]).toBeNull();
+    });
+
+    test('bulkInsertNotificationsInDB writes one multi-row INSERT and returns the ids that landed', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ id: 'ntf-1' }, { id: 'ntf-2' }] }) };
+
+      const result = await domainQueries.bulkInsertNotificationsInDB([
+        { ...NTF, id: 'ntf-1' },
+        { ...NTF, id: 'ntf-2', rfqId: null },
+      ]);
+
+      expect(result).toEqual(['ntf-1', 'ntf-2']);
+      const [sql, params] = pool.pool.query.mock.calls[0];
+      expect(sql).toContain('INSERT INTO notifications');
+      expect(sql).toContain('ON CONFLICT (id) DO NOTHING');
+      expect(params).toHaveLength(14);
+    });
+
+    test('bulkInsertNotificationsInDB no-ops on an empty list', async () => {
+      pool.pool = { query: jest.fn() };
+      await expect(domainQueries.bulkInsertNotificationsInDB([])).resolves.toEqual([]);
+      expect(pool.pool.query).not.toHaveBeenCalled();
+    });
+
+    test('markNotificationReadInDB flips the column and the raw flag', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rowCount: 1 }) };
+
+      await expect(domainQueries.markNotificationReadInDB('ntf-1')).resolves.toBe(true);
+      const [sql, params] = pool.pool.query.mock.calls[0];
+      expect(sql).toContain('UPDATE notifications');
+      expect(sql).toContain("jsonb_set(raw, '{read}', 'true'::jsonb)");
+      expect(params).toEqual(['ntf-1']);
+    });
+
+    test('markNotificationReadInDB returns false when no row matched', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rowCount: 0 }) };
+      await expect(domainQueries.markNotificationReadInDB('ntf-x')).resolves.toBe(false);
+    });
+
+    test('markAllNotificationsReadInDB returns the number of rows changed', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rowCount: 3 }) };
+
+      await expect(domainQueries.markAllNotificationsReadInDB('vendor', 'v-1')).resolves.toBe(3);
+      const [sql, params] = pool.pool.query.mock.calls[0];
+      expect(sql).toContain('recipient_type = $1 AND recipient_id = $2 AND is_read = false');
+      expect(params).toEqual(['vendor', 'v-1']);
     });
   });
 });

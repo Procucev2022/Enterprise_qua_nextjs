@@ -55,9 +55,20 @@ async function requireRfqReadScope(context) {
   const user = await requireAuth(context);
   if (user.role === 'buyer') {
     const account = storeService.getBuyerAccountByEmail(user.email);
-    return { user, restricted: true, buyerAccountId: account ? account.id : null };
+    return { user, role: user.role, restricted: true, buyerAccountId: account ? account.id : null };
   }
-  return { user, restricted: false, buyerAccountId: null };
+  if (user.role === 'vendor') {
+    const vendor = storeService.getVendorById(user.email);
+    return { user, role: user.role, restricted: true, vendor: vendor || null };
+  }
+  return { user, role: user.role, restricted: false, buyerAccountId: null };
+}
+
+/** Whether one RFQ is in a resolved read scope. */
+function rfqInScope(scope, rfq) {
+  if (!scope.restricted) return true;
+  if (scope.role === 'vendor') return storeService.vendorCoversRFQ(scope.vendor, rfq);
+  return rfq.buyerAccountId === scope.buyerAccountId;
 }
 
 /**
@@ -68,9 +79,7 @@ const rootResolvers = {
   rfqs: async (args = {}, context) => {
     const scope = await requireRfqReadScope(context);
     const { category, sourcingMode, status, limit = 50, offset = 0 } = args;
-    let result = scope.restricted
-      ? storeService.getRFQs().filter((rfq) => rfq.buyerAccountId === scope.buyerAccountId)
-      : storeService.getRFQs();
+    let result = storeService.getRFQs().filter((rfq) => rfqInScope(scope, rfq));
     if (category) {
       result = result.filter((r) => r.category && r.category.toLowerCase().includes(category.toLowerCase()));
     }
@@ -89,7 +98,7 @@ const rootResolvers = {
     if (!key) return null;
     const rfq = storeService.getRFQById(key);
     if (!rfq) return null;
-    if (scope.restricted && rfq.buyerAccountId !== scope.buyerAccountId) return null;
+    if (!rfqInScope(scope, rfq)) return null;
     return rfq;
   },
 
@@ -222,7 +231,7 @@ const rootResolvers = {
   updateRFQ: async ({ id, input }, context) => {
     const scope = await requireRfqReadScope(context);
     const existing = storeService.getRFQById(id);
-    if (!existing || (scope.restricted && existing.buyerAccountId !== scope.buyerAccountId)) {
+    if (!existing || !rfqInScope(scope, existing)) {
       return null;
     }
     logger.info(`GraphQL Mutation: updateRFQ ${id}`, { id, input }, 'GRAPHQL_MUTATION');

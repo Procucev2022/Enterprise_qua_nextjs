@@ -12,13 +12,22 @@ jest.mock('next/navigation', () => ({
 }));
 
 jest.mock('@/lib/authClient', () => ({
-  // changePassword is reached through the Account & Security panel the header
-  // renders in its overlay. No test here submits that form, but the module has to
-  // expose it so the panel can import it.
+  // getToken is reached through NotificationBell/notificationClient (exercised in
+  // NotificationBell.test.tsx; here it only needs a quiet transport so Header
+  // renders). changePassword is reached through the Account & Security panel the
+  // header renders in its overlay — no test here submits that form, but the
+  // module has to expose it so the panel can import it.
   authClient: {
     logout: jest.fn().mockResolvedValue(undefined),
+    getToken: jest.fn().mockReturnValue(null),
     changePassword: jest.fn().mockResolvedValue({ success: true }),
   },
+}));
+
+jest.mock('@/lib/notificationClient', () => ({
+  fetchNotifications: jest.fn().mockResolvedValue({ success: true, notifications: [], unreadCount: 0 }),
+  markNotificationRead: jest.fn().mockResolvedValue(true),
+  markAllNotificationsRead: jest.fn().mockResolvedValue(true),
 }));
 
 const mockToggleThemeSignedOut = jest.fn();
@@ -178,16 +187,15 @@ describe('Header', () => {
     expect(mockSetVendorSubscription).toHaveBeenCalledWith('connect');
   });
 
-  it('opens and closes notifications dropdown', () => {
+  it('renders the notification bell, opening the buyer notification inbox', async () => {
     render(<Header />);
 
-    const bellBtn = screen.getByTitle('Real-time AI Chaser Alerts');
+    const bellBtn = screen.getByRole('button', { name: 'Notifications' });
     fireEvent.click(bellBtn);
 
-    expect(screen.getByText('Vendor Follow Up Status')).toBeInTheDocument();
-    expect(screen.getByText('Auto Chaser Alert')).toBeInTheDocument();
-    expect(screen.getByText('Voice SIP Call')).toBeInTheDocument();
-    expect(screen.getByText('SMS Notice')).toBeInTheDocument();
+    // A buyer sees their real notification inbox (empty in this mock), not the
+    // AI chaser feed.
+    expect(await screen.findByText('You have no notifications yet.')).toBeInTheDocument();
   });
 
   it('shows only the signed-in account details, with no demo persona switcher', () => {

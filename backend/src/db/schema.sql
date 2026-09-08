@@ -328,6 +328,30 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 
 CREATE INDEX IF NOT EXISTS idx_audit_logs_sequence ON audit_logs (sequence);
 
+-- In-app notifications. One row per (recipient, event): a vendor is notified
+-- when an RFQ is raised in a category they cover; the RFQ's owning buyer is
+-- notified when a vendor submits a quote against it. `recipient_type` +
+-- `recipient_id` is what the authenticated GET /api/notifications scopes by —
+-- recipient_id is a vendors.id for a vendor recipient and a buyer_accounts.id
+-- for a buyer recipient (the Neon buyer-account id, NOT the identity-schema
+-- organisation id). `sequence` gives a stable newest-first order the same way
+-- ai_feed/audit_logs do; created_at alone risks same-instant ties on the fan-out
+-- insert that raises one notification per matched vendor.
+CREATE TABLE IF NOT EXISTS notifications (
+  id VARCHAR(64) PRIMARY KEY,
+  recipient_type VARCHAR(16) NOT NULL,
+  recipient_id VARCHAR(64) NOT NULL,
+  kind VARCHAR(32) NOT NULL,
+  rfq_id VARCHAR(64),
+  is_read BOOLEAN NOT NULL DEFAULT false,
+  sequence BIGSERIAL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  raw JSONB NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_recipient ON notifications (recipient_type, recipient_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_sequence ON notifications (sequence);
+
 -- ==============================================================================
 -- EMAIL INGESTION GATEWAY LOG
 -- ==============================================================================

@@ -554,10 +554,16 @@ describe('API Route Endpoints', () => {
     test('POST /api/rfqs/:id/quotes adds quote and recalculates matrix', async () => {
       // A quote's vendor identity is resolved server-side from the caller's
       // own vendor record now, so one must exist before a vendor can bid.
-      await request(app).post('/api/vendors').set(authHeader('vendor')).send({
+      const vendorRes = await request(app).post('/api/vendors').set(authHeader('vendor')).send({
         name: 'Apex Industrial Dynamics Pvt Ltd',
         majorCategory: 'Engineering Spares - Mechanical',
       });
+      // Category match alone no longer grants access — a CM must invite this
+      // vendor before they can quote this RFQ.
+      await request(app)
+        .post(`/api/rfqs/${testRfqId}/invite-vendors`)
+        .set(authHeader('category_manager'))
+        .send({ vendorIds: [vendorRes.body.data.id] });
       const quote = {
         unitPrice: 5200,
         totalPrice: 52000,
@@ -585,6 +591,9 @@ describe('API Route Endpoints', () => {
         .put(`/api/vendors/${encodeURIComponent('vendor@apexsupplies.com')}/subscription`)
         .set(authHeader('vendor'))
         .send({ plan: 'connect' });
+      // Category match alone no longer grants access — this vendor was already
+      // invited to testRfqId in the quotes test above, so this just re-confirms
+      // that access before exercising the download-quota path.
       const res = await request(app).get(`/api/rfqs/${testRfqId}/email-preview`).set(authHeader('vendor'));
       expect(res.statusCode).toBe(200);
       expect(res.body.data).toHaveProperty('htmlBody');
@@ -597,10 +606,16 @@ describe('API Route Endpoints', () => {
         name: 'Free Tier Vendor',
         role: 'vendor',
       });
-      await request(app).post('/api/vendors').set(header).send({
+      const freeVendorRes = await request(app).post('/api/vendors').set(header).send({
         name: 'Free Tier Supplier Co',
         majorCategory: 'Engineering Spares - Mechanical',
       });
+      // Invite this vendor so the 403 asserted below is the quota gate, not
+      // the (separately-tested) invite gate.
+      await request(app)
+        .post(`/api/rfqs/${testRfqId}/invite-vendors`)
+        .set(authHeader('category_manager'))
+        .send({ vendorIds: [freeVendorRes.body.data.id] });
       // Left on the default 'premium' (free, client-uploaded-only) plan —
       // this RFQ was never raised by a buyer who added this vendor, so it's
       // a marketplace download outside what that plan grants.
@@ -622,6 +637,10 @@ describe('API Route Endpoints', () => {
       });
       await request(app).put(`/api/vendors/${created.body.data.id}/subscription`).set(header).send({ plan: 'connect' });
       storeService.updateVendor(created.body.data.id, { rfqDownloadsUsed: 50 });
+      await request(app)
+        .post(`/api/rfqs/${testRfqId}/invite-vendors`)
+        .set(authHeader('category_manager'))
+        .send({ vendorIds: [created.body.data.id] });
 
       const res = await request(app).get(`/api/rfqs/${testRfqId}/email-preview`).set(header);
       expect(res.statusCode).toBe(403);

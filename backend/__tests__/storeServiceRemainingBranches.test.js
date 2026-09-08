@@ -158,8 +158,8 @@ describe('Store Service — remaining branch coverage', () => {
   });
 
   describe('hydrateFromDB', () => {
-    // All 7 getters are called unconditionally inside one Promise.all, so
-    // every domainQueries mock needs all 7 present or an unmocked one being
+    // All 8 getters are called unconditionally inside one Promise.all, so
+    // every domainQueries mock needs all 8 present or an unmocked one being
     // called as `undefined()` throws synchronously before Promise.all ever
     // wraps the other (already-pending) promises, orphaning them as unhandled
     // rejections. This fills in safe "empty" defaults; each test only
@@ -173,6 +173,7 @@ describe('Store Service — remaining branch coverage', () => {
         getBuyerAccountsFromDB: jest.fn().mockResolvedValue({ accounts: [], activeId: null }),
         getAIFeedFromDB: jest.fn().mockResolvedValue([]),
         getAuditLogsFromDB: jest.fn().mockResolvedValue([]),
+        getNotificationsFromDB: jest.fn().mockResolvedValue([]),
         ...overrides,
       };
     }
@@ -360,6 +361,11 @@ describe('Store Service — remaining branch coverage', () => {
         upsertAIFeedItemInDB: jest.fn().mockResolvedValue(null),
         getAuditLogsFromDB: jest.fn().mockResolvedValue([]),
         upsertAuditLogInDB: jest.fn().mockResolvedValue(null),
+        getNotificationsFromDB: jest.fn().mockResolvedValue([]),
+        insertNotificationInDB: jest.fn().mockResolvedValue(null),
+        bulkInsertNotificationsInDB: jest.fn().mockResolvedValue([]),
+        markNotificationReadInDB: jest.fn().mockResolvedValue(false),
+        markAllNotificationsReadInDB: jest.fn().mockResolvedValue(0),
         ...overrides,
       };
     }
@@ -532,6 +538,71 @@ describe('Store Service — remaining branch coverage', () => {
       await flush();
 
       expect(errorSpy).toHaveBeenCalledWith('Failed to persist audit log entry', expect.any(Error), 'STORE_SERVICE');
+    });
+
+    test('_persistNotificationBatch logs when the RFQ→vendor fan-out write rejects', async () => {
+      const { freshStore, errorSpy } = freshStoreWithFailingWrite({
+        bulkInsertNotificationsInDB: jest.fn().mockRejectedValue(new Error('boom')),
+      });
+
+      // notifyVendorsOfNewRFQ (the batched fan-out) only fires at creation for
+      // vendors with immediate access — an addedByBuyerCompany match, since
+      // category match alone no longer grants vendorCoversRFQ.
+      freshStore.addVendor({
+        name: 'Fanout Co',
+        email: 'fanout@x.com',
+        majorCategory: 'Fanout-Cat',
+        addedByBuyerCompany: 'Fanout Buyer',
+      });
+      freshStore.createRFQ(
+        { rfqNumber: 'RFQ-NTF-1', category: 'Fanout-Cat' },
+        { organizationName: 'Fanout Buyer' }
+      );
+      await flush();
+
+      expect(errorSpy).toHaveBeenCalledWith('Failed to persist notification batch', expect.any(Error), 'STORE_SERVICE');
+    });
+
+    test('_persistNotification logs when the quote→buyer write rejects', async () => {
+      const { freshStore, errorSpy } = freshStoreWithFailingWrite({
+        insertNotificationInDB: jest.fn().mockRejectedValue(new Error('boom')),
+      });
+
+      const buyer = freshStore.addBuyerAccount({ corporateEmail: 'ntf-buyer@x.com', organizationName: 'Ntf Buyer' });
+      const rfq = freshStore.createRFQ({ rfqNumber: 'RFQ-NTF-2', category: 'X' }, buyer);
+      freshStore.addQuoteToRFQ(rfq.id, { vendorId: 'v-1', vendorName: 'B', unitPrice: 1 });
+      await flush();
+
+      expect(errorSpy).toHaveBeenCalledWith('Failed to persist notification', expect.any(Error), 'STORE_SERVICE');
+    });
+
+    test('markNotificationRead logs when the read write-through rejects', async () => {
+      const { freshStore, errorSpy } = freshStoreWithFailingWrite({
+        markNotificationReadInDB: jest.fn().mockRejectedValue(new Error('boom')),
+      });
+
+      const vendor = freshStore.addVendor({ name: 'Read Co', email: 'read@x.com', majorCategory: 'Read-Cat' });
+      const rfq = freshStore.createRFQ({ rfqNumber: 'RFQ-NTF-3', category: 'Read-Cat' });
+      freshStore.inviteVendorsToRFQ(rfq.id, [vendor.id], 'cm@x.com');
+      const [n] = freshStore.getNotificationsFor('vendor', vendor.id);
+      freshStore.markNotificationRead(n.id, 'vendor', vendor.id);
+      await flush();
+
+      expect(errorSpy).toHaveBeenCalledWith('Failed to persist notification read', expect.any(Error), 'STORE_SERVICE');
+    });
+
+    test('markAllNotificationsRead logs when the bulk read write-through rejects', async () => {
+      const { freshStore, errorSpy } = freshStoreWithFailingWrite({
+        markAllNotificationsReadInDB: jest.fn().mockRejectedValue(new Error('boom')),
+      });
+
+      const vendor = freshStore.addVendor({ name: 'BulkRead Co', email: 'bulkread@x.com', majorCategory: 'Bulk-Cat' });
+      const rfq = freshStore.createRFQ({ rfqNumber: 'RFQ-NTF-4', category: 'Bulk-Cat' });
+      freshStore.inviteVendorsToRFQ(rfq.id, [vendor.id], 'cm@x.com');
+      freshStore.markAllNotificationsRead('vendor', vendor.id);
+      await flush();
+
+      expect(errorSpy).toHaveBeenCalledWith('Failed to persist bulk notification read', expect.any(Error), 'STORE_SERVICE');
     });
   });
 
