@@ -637,7 +637,7 @@ const EMAIL_GATEWAY_CONFIG = {
   INGESTED_SOURCING_MODE: 'mode_1',
   // Emails have no file name; this stands in wherever one is recorded.
   SYNTHETIC_FILE_NAME: 'inbound-email.eml',
-  DEFAULT_GATEWAY_ADDRESS: 'navinchaudhary.dev@gmail.com',
+  DEFAULT_GATEWAY_ADDRESS: 'RFQ@procucev.com',
 };
 
 /** Connection state reported to the gateway panel. */

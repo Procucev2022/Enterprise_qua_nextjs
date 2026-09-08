@@ -733,9 +733,20 @@ describe('API Route Endpoints', () => {
         message: 'Notification pushed to supplier.',
       });
       expect(postRes.statusCode).toBe(201);
+      expect(postRes.body.data).toHaveProperty('buyerAccountId');
 
       const failRes = await request(app).post('/api/ai-feed').set(authHeader('buyer')).send({});
       expect(failRes.statusCode).toBe(400);
+
+      // Scoped query by buyerAccountId
+      const scopedRes = await request(app).get(`/api/ai-feed?buyerAccountId=${postRes.body.data.buyerAccountId}`);
+      expect(scopedRes.statusCode).toBe(200);
+      expect(scopedRes.body.data.some((item) => item.id === postRes.body.data.id)).toBe(true);
+
+      // Other buyer query does not see this buyer's feed item
+      const otherBuyerRes = await request(app).get('/api/ai-feed?buyerAccountId=other-nonexistent-buyer');
+      expect(otherBuyerRes.statusCode).toBe(200);
+      expect(otherBuyerRes.body.data.some((item) => item.id === postRes.body.data.id)).toBe(false);
     });
 
     test('GET /api/db/metrics is admin-only', async () => {

@@ -23,7 +23,7 @@ export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelPro
 
   // Email composer state - defaults empty for subject and body as requested
   const [emailSender, setEmailSender] = useState<string>('project.procurement@lt-heavy.com');
-  const [emailGatewayTo, setEmailGatewayTo] = useState<string>('navinchaudhary.dev@gmail.com');
+  const [emailGatewayTo, setEmailGatewayTo] = useState<string>('RFQ@procucev.com');
   const [emailSubject, setEmailSubject] = useState<string>('');
   const [emailBody, setEmailBody] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
