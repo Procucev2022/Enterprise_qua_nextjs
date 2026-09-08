@@ -563,16 +563,16 @@ describe('IngestionWizard: Step 1 intake controls', () => {
 
   const dropZone = () => screen.getByText(/Click to Browse or Drag & Drop/i).closest('div') as HTMLElement;
 
-  it('offers document upload only, with no email-file sub-tab', () => {
+  it('offers document upload, including a forwarded .eml/.msg requisition', () => {
     renderWizard();
 
     expect(screen.getByText(EXTRACTION.dropZoneHeading)).toBeInTheDocument();
-    // An emailed requisition is picked up by the gateway, so no email container is
-    // accepted here and the picker must not advertise one.
+    // No separate email-file sub-tab: a forwarded requisition is just another
+    // file the same picker accepts, routed server-side by extension.
     expect(screen.queryByRole('button', { name: /Upload Email File/i })).not.toBeInTheDocument();
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
-    expect(input.accept).not.toContain('.eml');
-    expect(input.accept).not.toContain('.msg');
+    expect(input.accept).toContain('.eml');
+    expect(input.accept).toContain('.msg');
   });
 
   it('accepts a dropped document and shows the selected file', async () => {

@@ -754,7 +754,7 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                 type="file"
                 ref={fileInputRef}
                 className="hidden"
-                accept=".xlsx,.xls,.csv,.pdf,.docx,.doc,.txt"
+                accept=".xlsx,.xls,.csv,.pdf,.docx,.doc,.txt,.eml,.msg"
                 onChange={(e) => {
                   const file = e.target.files?.[0];
                   if (file) handleRealFileUpload(file);

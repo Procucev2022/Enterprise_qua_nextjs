@@ -14,9 +14,11 @@ router.get('/summary', authenticate, rfqController.getRFQSummary);
 router.get('/all', authenticate, requireRole('category_manager', 'admin'), rfqController.getAllRFQs);
 router.post('/', authenticate, rfqController.createRFQ);
 router.post('/ingest', authenticate, rfqController.ingestRFQ);
+// Also handles an uploaded .eml/.msg (an emailed requisition, saved and
+// uploaded by the buyer): extractRFQFromDocument detects the file type and
+// routes it through emailIngestionService's real MIME parsing before the same
+// Gemini extraction and classification every other document goes through.
 router.post('/extract', authenticate, rfqController.extractRFQFromDocument);
-// An emailed requisition (.eml). Parsed server-side, then run through the same
-// extraction and classification as /extract.
 // Autonomous mailbox gateway. Registered before '/:id' so neither path segment is
 // read as an RFQ identifier. Status is diagnostic; the manual check exists so a
 // buyer can pull the mailbox now instead of waiting for the next interval.
