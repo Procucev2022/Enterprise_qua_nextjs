@@ -6,6 +6,9 @@ import {
   createRFQ,
   fetchRFQById,
   fetchRFQList,
+  fetchAllRFQs,
+  fetchVendorCandidates,
+  inviteVendorsToRFQ,
   updateRFQ,
   deleteRFQ,
 } from '@/lib/rfqClient';
@@ -938,6 +941,272 @@ describe('rfqClient RFQ persistence', () => {
       const res = await fetchRFQList();
 
       expect(res.success === false && res.error).toBe('Not available.');
+    });
+  });
+
+  describe('fetchAllRFQs', () => {
+    test('reads the cross-buyer oversight list', async () => {
+      global.fetch = reply(200, { success: true, data: [RFQ] });
+
+      const res = await fetchAllRFQs();
+
+      expect(res.success && res.rfqs).toEqual([RFQ]);
+      expect(lastPath()).toBe('/api/rfqs/all');
+    });
+
+    test('attaches the session token when one is held', async () => {
+      signIn();
+      global.fetch = reply(200, { success: true, data: [] });
+
+      await fetchAllRFQs();
+
+      expect(lastInit().headers).toEqual({ Authorization: 'Bearer jwt-token' });
+    });
+
+    test('sends no headers when there is no session', async () => {
+      global.fetch = reply(200, { success: true, data: [] });
+
+      await fetchAllRFQs();
+
+      expect(lastInit().headers).toEqual({});
+    });
+
+    test('reports an unreachable API', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('offline'));
+
+      const res = await fetchAllRFQs();
+
+      expect(res).toEqual({ success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable });
+    });
+
+    test('names the status when the reply cannot be read', async () => {
+      global.fetch = unreadable(500);
+
+      const res = await fetchAllRFQs();
+
+      expect(res.success === false && res.error).toBe(
+        formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: 500 })
+      );
+    });
+
+    test('reports UNAUTHORIZED when a buyer or vendor token is rejected with 403', async () => {
+      global.fetch = reply(403, { error: 'Forbidden.' });
+
+      const res = await fetchAllRFQs();
+
+      expect(res).toEqual({ success: false, reason: 'UNAUTHORIZED', error: 'Forbidden.' });
+    });
+
+    test('falls back to the session message on an unexplained 401', async () => {
+      global.fetch = reply(401, {});
+
+      const res = await fetchAllRFQs();
+
+      expect(res.success === false && res.error).toBe(UI_STRINGS.auth.sessionExpired);
+    });
+
+    test('reports a server fault on a 500', async () => {
+      global.fetch = reply(500, { error: 'Query failed.' });
+
+      const res = await fetchAllRFQs();
+
+      expect(res).toEqual({ success: false, reason: 'SERVER', error: 'Query failed.' });
+    });
+
+    test('rejects a body whose data is not an array', async () => {
+      global.fetch = reply(200, { success: true, data: null });
+
+      const res = await fetchAllRFQs();
+
+      expect(res.success === false && res.reason).toBe('SERVER');
+      expect(res.success === false && res.error).toBe(UI_STRINGS.rfqDetails.loadFailed);
+    });
+  });
+
+  describe('fetchVendorCandidates', () => {
+    test('reads the category-matched candidate pool for an RFQ', async () => {
+      global.fetch = reply(200, { success: true, data: [{ id: 'v-1', alreadyInvited: false }] });
+
+      const res = await fetchVendorCandidates('rfq-1');
+
+      expect(res).toEqual({ success: true, candidates: [{ id: 'v-1', alreadyInvited: false }] });
+      expect(lastPath()).toBe('/api/rfqs/rfq-1/vendor-candidates');
+    });
+
+    test('attaches the session token when one is held', async () => {
+      signIn();
+      global.fetch = reply(200, { success: true, data: [] });
+
+      await fetchVendorCandidates('rfq-1');
+
+      expect(lastInit().headers).toEqual({ Authorization: 'Bearer jwt-token' });
+    });
+
+    test('sends no headers when there is no session', async () => {
+      global.fetch = reply(200, { success: true, data: [] });
+
+      await fetchVendorCandidates('rfq-1');
+
+      expect(lastInit().headers).toEqual({});
+    });
+
+    test('reports an unreachable API', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('offline'));
+
+      const res = await fetchVendorCandidates('rfq-1');
+
+      expect(res).toEqual({ success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable });
+    });
+
+    test('names the status when the reply cannot be read', async () => {
+      global.fetch = unreadable(500);
+
+      const res = await fetchVendorCandidates('rfq-1');
+
+      expect(res.success === false && res.error).toBe(
+        formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: 500 })
+      );
+    });
+
+    test('reports UNAUTHORIZED for a buyer/vendor token rejected with 403', async () => {
+      global.fetch = reply(403, { error: 'Forbidden.' });
+
+      const res = await fetchVendorCandidates('rfq-1');
+
+      expect(res).toEqual({ success: false, reason: 'UNAUTHORIZED', error: 'Forbidden.' });
+    });
+
+    test('falls back to the session message on an unexplained 401', async () => {
+      global.fetch = reply(401, {});
+
+      const res = await fetchVendorCandidates('rfq-1');
+
+      expect(res.success === false && res.error).toBe(UI_STRINGS.auth.sessionExpired);
+    });
+
+    test('reports a server fault on a 500', async () => {
+      global.fetch = reply(500, { error: 'Query failed.' });
+
+      const res = await fetchVendorCandidates('rfq-1');
+
+      expect(res).toEqual({ success: false, reason: 'SERVER', error: 'Query failed.' });
+    });
+
+    test('rejects a body whose data is not an array', async () => {
+      global.fetch = reply(200, { success: true, data: null });
+
+      const res = await fetchVendorCandidates('rfq-1');
+
+      expect(res.success === false && res.reason).toBe('SERVER');
+      expect(res.success === false && res.error).toBe(UI_STRINGS.rfqDetails.loadFailed);
+    });
+
+    test('reports a 404 for an unknown RFQ as a server fault', async () => {
+      global.fetch = reply(404, { error: 'RFQ not found.' });
+
+      const res = await fetchVendorCandidates('does-not-exist');
+
+      expect(res).toEqual({ success: false, reason: 'SERVER', error: 'RFQ not found.' });
+    });
+  });
+
+  describe('inviteVendorsToRFQ', () => {
+    test('posts the selected vendor ids and returns the updated RFQ', async () => {
+      global.fetch = reply(200, { success: true, data: RFQ, invitedCount: 2 });
+
+      const res = await inviteVendorsToRFQ('rfq-1', ['v-1', 'v-2']);
+
+      expect(res).toEqual({ success: true, rfq: RFQ, invitedCount: 2 });
+      expect(lastPath()).toBe('/api/rfqs/rfq-1/invite-vendors');
+      const init = lastInit();
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(init.body as string)).toEqual({ vendorIds: ['v-1', 'v-2'] });
+    });
+
+    test('defaults invitedCount to 0 when the server omits it', async () => {
+      global.fetch = reply(200, { success: true, data: RFQ });
+
+      const res = await inviteVendorsToRFQ('rfq-1', ['v-1']);
+
+      expect(res.success && res.invitedCount).toBe(0);
+    });
+
+    test('attaches the session token and JSON content type', async () => {
+      signIn();
+      global.fetch = reply(200, { success: true, data: RFQ, invitedCount: 1 });
+
+      await inviteVendorsToRFQ('rfq-1', ['v-1']);
+
+      expect(lastInit().headers).toEqual({
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer jwt-token',
+      });
+    });
+
+    test('sends no Authorization header when there is no session', async () => {
+      global.fetch = reply(200, { success: true, data: RFQ, invitedCount: 1 });
+
+      await inviteVendorsToRFQ('rfq-1', ['v-1']);
+
+      expect(lastInit().headers).toEqual({ 'Content-Type': 'application/json' });
+    });
+
+    test('reports an unreachable API', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('offline'));
+
+      const res = await inviteVendorsToRFQ('rfq-1', ['v-1']);
+
+      expect(res).toEqual({ success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable });
+    });
+
+    test('names the status when the reply cannot be read', async () => {
+      global.fetch = unreadable(500);
+
+      const res = await inviteVendorsToRFQ('rfq-1', ['v-1']);
+
+      expect(res.success === false && res.error).toBe(
+        formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: 500 })
+      );
+    });
+
+    test('reports UNAUTHORIZED for a buyer/vendor token rejected with 403', async () => {
+      global.fetch = reply(403, { error: 'Forbidden.' });
+
+      const res = await inviteVendorsToRFQ('rfq-1', ['v-1']);
+
+      expect(res).toEqual({ success: false, reason: 'UNAUTHORIZED', error: 'Forbidden.' });
+    });
+
+    test('falls back to the session message on an unexplained 401', async () => {
+      global.fetch = reply(401, {});
+
+      const res = await inviteVendorsToRFQ('rfq-1', ['v-1']);
+
+      expect(res.success === false && res.error).toBe(UI_STRINGS.auth.sessionExpired);
+    });
+
+    test('reports VALIDATION on a 400 (e.g. an empty vendorIds array)', async () => {
+      global.fetch = reply(400, { error: 'vendorIds must be a non-empty array.' });
+
+      const res = await inviteVendorsToRFQ('rfq-1', []);
+
+      expect(res).toEqual({ success: false, reason: 'VALIDATION', error: 'vendorIds must be a non-empty array.' });
+    });
+
+    test('reports SERVER on a 404 for an unknown RFQ', async () => {
+      global.fetch = reply(404, { error: 'RFQ not found.' });
+
+      const res = await inviteVendorsToRFQ('does-not-exist', ['v-1']);
+
+      expect(res).toEqual({ success: false, reason: 'SERVER', error: 'RFQ not found.' });
+    });
+
+    test('reports a server fault when the body carries no RFQ', async () => {
+      global.fetch = reply(200, { success: true, data: null, invitedCount: 0 });
+
+      const res = await inviteVendorsToRFQ('rfq-1', ['v-1']);
+
+      expect(res.success === false && res.reason).toBe('SERVER');
     });
   });
 });

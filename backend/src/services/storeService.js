@@ -10,6 +10,10 @@ const domainQueries = require('../db/domainQueries');
 const { createAuditEntry, verifyAuditTrail } = require('./auditService');
 const { evaluateQuotes, calculate360Evaluation, calculateRevisedRating } = require('./evaluationService');
 const { simulateChaserOutreach } = require('./aiChaserService');
+// Called through the namespace so tests can stub the senders without rewiring
+// storeService; every send is fire-and-forget and no-ops under test / when SMTP
+// is unconfigured.
+const mailerService = require('./mailerService');
 const { logger } = require('./loggerService');
 
 class StoreService {
@@ -36,6 +40,7 @@ class StoreService {
     this.evaluations = [];
     this.auditLogs = [];
     this.aiFeed = [];
+    this.notifications = [];
     this.vendorCatalogue = [];
     this.systemConfig = JSON.parse(JSON.stringify(INITIAL_SYSTEM_CONFIG));
     this.azureHealth = JSON.parse(JSON.stringify(INITIAL_AZURE_HEALTH));
@@ -70,20 +75,23 @@ class StoreService {
     }
 
     try {
-      const [vendors, rfqs, evaluations, vendorCatalogue, buyerAccountsResult, aiFeed, auditLogs] = await Promise.all([
-        domainQueries.getVendorsFromDB(),
-        domainQueries.getRFQsFromDB(),
-        domainQueries.getEvaluationsFromDB(),
-        domainQueries.getVendorCatalogueFromDB(),
-        domainQueries.getBuyerAccountsFromDB(),
-        domainQueries.getAIFeedFromDB(),
-        domainQueries.getAuditLogsFromDB(),
-      ]);
+      const [vendors, rfqs, evaluations, vendorCatalogue, buyerAccountsResult, aiFeed, auditLogs, notifications] =
+        await Promise.all([
+          domainQueries.getVendorsFromDB(),
+          domainQueries.getRFQsFromDB(),
+          domainQueries.getEvaluationsFromDB(),
+          domainQueries.getVendorCatalogueFromDB(),
+          domainQueries.getBuyerAccountsFromDB(),
+          domainQueries.getAIFeedFromDB(),
+          domainQueries.getAuditLogsFromDB(),
+          domainQueries.getNotificationsFromDB(),
+        ]);
 
       this.vendors = vendors;
       this.rfqs = rfqs;
       this.evaluations = evaluations;
       this.vendorCatalogue = vendorCatalogue;
+      this.notifications = notifications;
       this.buyerAccounts = buyerAccountsResult.accounts;
       // activeBuyerAccount must stay a reference into this.buyerAccounts (the
       // same invariant every mutator keeps), not a separately-hydrated duplicate.
@@ -108,6 +116,7 @@ class StoreService {
           buyerAccounts: this.buyerAccounts.length,
           aiFeed: aiFeed.length,
           auditLogs: auditLogs.length,
+          notifications: notifications.length,
         },
         'STORE_SERVICE'
       );
@@ -183,6 +192,18 @@ class StoreService {
     domainQueries
       .upsertAuditLogInDB(entry)
       .catch((err) => logger.error('Failed to persist audit log entry', err, 'STORE_SERVICE'));
+  }
+
+  _persistNotification(notification) {
+    domainQueries
+      .insertNotificationInDB(notification)
+      .catch((err) => logger.error('Failed to persist notification', err, 'STORE_SERVICE'));
+  }
+
+  _persistNotificationBatch(notifications) {
+    domainQueries
+      .bulkInsertNotificationsInDB(notifications)
+      .catch((err) => logger.error('Failed to persist notification batch', err, 'STORE_SERVICE'));
   }
 
   // ==========================================
@@ -637,6 +658,11 @@ class StoreService {
       });
     }
 
+    // In-app alert to every vendor whose category covers this RFQ, and an email
+    // to the top matched vendors (same category, ranked by pincode + tier).
+    this.notifyVendorsOfNewRFQ(newRFQ);
+    this.emailRFQToMatchedVendors(newRFQ);
+
     return newRFQ;
   }
 
@@ -668,7 +694,16 @@ class StoreService {
     const quotes = quote.vendorId
       ? [...existingQuotes.filter((q) => q.vendorId !== quote.vendorId), quote]
       : [...existingQuotes, quote];
-    return this.updateRFQ(rfq.id, { quotes });
+    const updated = this.updateRFQ(rfq.id, { quotes });
+
+    // Tell the RFQ's owning buyer a quote has landed — in-app and by email.
+    // `rfq` was just resolved by id above, so updateRFQ always finds it — no
+    // need to re-guard on `updated`. The pre-update `rfq` carries the identity
+    // fields, which updateRFQ preserves.
+    this.notifyBuyerOfQuote(rfq, quote);
+    this.emailQuoteToBuyer(rfq, quote);
+
+    return updated;
   }
 
   deleteRFQ(id) {
@@ -683,6 +718,370 @@ class StoreService {
   // lives in rfqSummaryService.buildPortfolioSummary, which is handed one
   // organisation's rows rather than reducing over a single global array, and
   // which no longer invents follow-up channel statistics.
+
+  // ==========================================
+  // 3b. NOTIFICATIONS
+  // ==========================================
+  // In-app alerts, persisted to Neon like every other domain collection. Two
+  // producers today: a category-matched RFQ fan-out to vendors (createRFQ) and
+  // a "quote received" alert to the RFQ's owning buyer (addQuoteToRFQ). Reads
+  // are always scoped to one recipient — the controller resolves the caller's
+  // vendor row or buyer account from the session and passes its id here.
+
+  /** Every notification addressed to one recipient, newest first. */
+  getNotificationsFor(recipientType, recipientId) {
+    if (!recipientId) return [];
+    return this.notifications.filter(
+      (n) => n.recipientType === recipientType && n.recipientId === recipientId
+    );
+  }
+
+  /** Count of that recipient's unread notifications. */
+  getUnreadNotificationCountFor(recipientType, recipientId) {
+    return this.getNotificationsFor(recipientType, recipientId).filter((n) => !n.read).length;
+  }
+
+  // Both producers pass a real RFQ and a meta object; keep it that way so this
+  // has no defensive branches to leave uncovered.
+  _buildNotification({ recipientType, recipientId, kind, rfq, title, message, meta }) {
+    return {
+      id: `ntf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      recipientType,
+      recipientId,
+      kind,
+      rfqId: rfq.id,
+      rfqNumber: rfq.rfqNumber,
+      title,
+      message,
+      meta,
+      read: false,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Mark one notification read, but only if it belongs to the caller — a
+   * recipient must not be able to flip another recipient's notification by id.
+   * Returns the updated notification, or null when it is not theirs / not found.
+   */
+  markNotificationRead(id, recipientType, recipientId) {
+    const notification = this.notifications.find(
+      (n) => n.id === id && n.recipientType === recipientType && n.recipientId === recipientId
+    );
+    if (!notification) return null;
+    if (!notification.read) {
+      notification.read = true;
+      domainQueries
+        .markNotificationReadInDB(id)
+        .catch((err) => logger.error('Failed to persist notification read', err, 'STORE_SERVICE'));
+    }
+    return notification;
+  }
+
+  /** Mark all of one recipient's notifications read. Returns how many changed. */
+  markAllNotificationsRead(recipientType, recipientId) {
+    let changed = 0;
+    for (const n of this.notifications) {
+      if (n.recipientType === recipientType && n.recipientId === recipientId && !n.read) {
+        n.read = true;
+        changed += 1;
+      }
+    }
+    if (changed > 0) {
+      domainQueries
+        .markAllNotificationsReadInDB(recipientType, recipientId)
+        .catch((err) => logger.error('Failed to persist bulk notification read', err, 'STORE_SERVICE'));
+    }
+    return changed;
+  }
+
+  /**
+   * Whether a vendor covers an RFQ's category.
+   *
+   * The RFQ carries one `category` string (major or minor). A vendor covers it
+   * when it equals their `majorCategory` or appears in `minorCategories` /
+   * `vendorSelectedCategories` / `clientMappedCategories`. Compared
+   * case-insensitively and trimmed, because the taxonomy master and the vendor
+   * upload sheets disagree on casing.
+   */
+  vendorCoversCategory(vendor, category) {
+    if (!category) return false;
+    const target = String(category).trim().toLowerCase();
+    if (!target) return false;
+    const pools = [
+      vendor.majorCategory,
+      ...(Array.isArray(vendor.minorCategories) ? vendor.minorCategories : []),
+      ...(Array.isArray(vendor.vendorSelectedCategories) ? vendor.vendorSelectedCategories : []),
+      ...(Array.isArray(vendor.clientMappedCategories) ? vendor.clientMappedCategories : []),
+    ];
+    return pools.some((c) => String(c || '').trim().toLowerCase() === target);
+  }
+
+  /**
+   * Every category string an RFQ carries — its own `category` plus each
+   * confirmed line item's major/minor/category. An RFQ raised from a BOQ often
+   * only tags the line items, not the RFQ header, so matching on the header
+   * alone would route nothing.
+   */
+  _rfqCategorySignals(rfq) {
+    const signals = [];
+    if (rfq.category) signals.push(rfq.category);
+    for (const ent of Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : []) {
+      if (ent.majorCategory) signals.push(ent.majorCategory);
+      if (ent.minorCategory) signals.push(ent.minorCategory);
+      if (ent.category) signals.push(ent.category);
+    }
+    return signals;
+  }
+
+  /**
+   * Whether an RFQ should reach a given vendor.
+   *
+   * True when the vendor was explicitly added by the RFQ's buyer
+   * (`addedByBuyerCompany`) or is on the RFQ's `assignedVendors` invite list —
+   * that's it. Category coverage alone is deliberately NOT enough: it used to
+   * grant access directly, but a category manager now has to review the
+   * category-matched pool (`candidateVendorsForRFQ`) and explicitly invite
+   * from it (`inviteVendorsToRFQ`) before a vendor can see, be notified about,
+   * be emailed about, or quote an RFQ.
+   */
+  vendorCoversRFQ(vendor, rfq) {
+    if (!vendor || !rfq) return false;
+
+    if (
+      vendor.addedByBuyerCompany &&
+      rfq.buyerAccountName &&
+      vendor.addedByBuyerCompany.trim().toLowerCase() === rfq.buyerAccountName.trim().toLowerCase()
+    ) {
+      return true;
+    }
+
+    return this._isInvitedVendor(vendor, rfq);
+  }
+
+  /** Whether a vendor is on the RFQ's assignedVendors invite list. */
+  _isInvitedVendor(vendor, rfq) {
+    const invited = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
+    return invited.some(
+      (v) =>
+        v &&
+        ((v.id && v.id === vendor.id) ||
+          (v.email && vendor.email && v.email.toLowerCase() === vendor.email.toLowerCase()) ||
+          (v.name && vendor.name && v.name.toLowerCase() === vendor.name.toLowerCase()))
+    );
+  }
+
+  /**
+   * Every vendor whose category covers this RFQ — the candidate pool a
+   * category manager picks invitees from. Grants no access by itself; only
+   * `inviteVendorsToRFQ` (via `assignedVendors`) does that. Flags which
+   * candidates are already invited so a picker UI can show that state.
+   */
+  candidateVendorsForRFQ(rfq) {
+    const signals = this._rfqCategorySignals(rfq);
+    return this.vendors
+      .filter((v) => signals.some((c) => this.vendorCoversCategory(v, c)))
+      .map((v) => ({ ...v, alreadyInvited: this._isInvitedVendor(v, rfq) }));
+  }
+
+  /**
+   * A category manager invites specific vendors to an RFQ.
+   *
+   * Merges the given vendor ids into `assignedVendors` (dedup'd against
+   * whoever's already on it), then — for each vendor newly added — fires the
+   * same simulated multi-channel chaser outreach `createRFQ` fires for an
+   * RFQ's initial assignedVendors, a real in-app notification, and a real
+   * RFQ-invite email. Unknown vendor ids are silently skipped rather than
+   * failing the whole batch.
+   */
+  inviteVendorsToRFQ(rfqId, vendorIds, actorEmail) {
+    const rfq = this.getRFQById(rfqId);
+    if (!rfq) return null;
+
+    const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
+    const newlyInvited = [];
+    for (const id of Array.isArray(vendorIds) ? vendorIds : []) {
+      const vendor = this.getVendorById(id);
+      if (!vendor) continue;
+      if (this._isInvitedVendor(vendor, rfq)) continue;
+      newlyInvited.push(vendor);
+    }
+    if (newlyInvited.length === 0) return { updatedRFQ: rfq, invitedCount: 0 };
+
+    const entries = newlyInvited.map((v) => ({
+      id: v.id,
+      name: v.name,
+      email: v.email || null,
+      contactPerson: v.contactPerson || null,
+      phone: v.phone || null,
+    }));
+    const updatedRFQ = this.updateRFQ(rfq.id, { assignedVendors: [...existing, ...entries] });
+
+    this.addAuditLog({
+      userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
+      action: `Invited ${newlyInvited.length} vendor(s) to ${rfq.rfqNumber}`,
+      rfqNumber: rfq.rfqNumber,
+    });
+
+    for (const vendor of newlyInvited) {
+      // Simulated multi-channel chaser outreach — same mechanism createRFQ
+      // already fires for anyone on assignedVendors.
+      const chaserLogs = simulateChaserOutreach(updatedRFQ, vendor);
+      chaserLogs.forEach((log) => this.addAIFeedItem(log));
+
+      // Real in-app notification, same shape notifyVendorsOfNewRFQ builds.
+      const categoryLabel = updatedRFQ.category || this._rfqCategorySignals(updatedRFQ)[0] || 'your categories';
+      const notification = this._buildNotification({
+        recipientType: 'vendor',
+        recipientId: vendor.id,
+        kind: 'rfq_category_match',
+        rfq: updatedRFQ,
+        title: `New RFQ in ${categoryLabel}`,
+        message: `${updatedRFQ.buyerAccountName || 'A buyer'} invited you to ${updatedRFQ.rfqNumber} — ${updatedRFQ.title}.`,
+        meta: { category: categoryLabel, buyerAccountName: updatedRFQ.buyerAccountName || null },
+      });
+      this.notifications.unshift(notification);
+      this._persistNotification(notification);
+
+      // Real invite email, if the vendor has an address.
+      if (vendor.email) {
+        mailerService
+          .sendRfqInviteEmail(vendor.email, { rfq: updatedRFQ, recipientName: vendor.contactPerson || vendor.name })
+          .catch((err) => logger.error('Failed to email RFQ invite to vendor', err, 'STORE_SERVICE'));
+      }
+    }
+
+    return { updatedRFQ, invitedCount: newlyInvited.length };
+  }
+
+  /** The RFQs one vendor may see, in the store's current (newest-first) order. */
+  getRFQsForVendor(vendorIdOrEmail) {
+    const vendor = this.getVendorById(vendorIdOrEmail);
+    if (!vendor) return [];
+    return this.rfqs.filter((rfq) => this.vendorCoversRFQ(vendor, rfq));
+  }
+
+  /**
+   * Raise a notification for every vendor an RFQ should reach.
+   *
+   * Fired from createRFQ. Uses the exact same `vendorCoversRFQ` rule the
+   * opportunity feed and RFQ reads are scoped by, so a vendor is notified about
+   * precisely the RFQs they can actually see. The whole fan-out is one batched
+   * insert.
+   */
+  notifyVendorsOfNewRFQ(rfq) {
+    const matches = this.vendors.filter((v) => this.vendorCoversRFQ(v, rfq));
+    if (matches.length === 0) return [];
+
+    const categoryLabel = rfq.category || this._rfqCategorySignals(rfq)[0] || 'your categories';
+
+    const created = matches.map((vendor) =>
+      this._buildNotification({
+        recipientType: 'vendor',
+        recipientId: vendor.id,
+        kind: 'rfq_category_match',
+        rfq,
+        title: `New RFQ in ${categoryLabel}`,
+        message: `${rfq.buyerAccountName || 'A buyer'} raised ${rfq.rfqNumber} — ${rfq.title}.`,
+        meta: { category: categoryLabel, buyerAccountName: rfq.buyerAccountName || null },
+      })
+    );
+
+    this.notifications.unshift(...created);
+    this._persistNotificationBatch(created);
+    return created;
+  }
+
+  /**
+   * Tell an RFQ's owning buyer that a vendor has quoted.
+   *
+   * Fired from addQuoteToRFQ. The buyer is resolved from the RFQ's
+   * `buyerAccountId` (the Neon buyer-account id stamped at creation), so a
+   * quote against an RFQ with no owner attributed raises nothing.
+   */
+  notifyBuyerOfQuote(rfq, quote) {
+    // Only reached from addQuoteToRFQ, which has already resolved a real RFQ and
+    // built the quote — the one thing that can be missing is an owning buyer.
+    if (!rfq.buyerAccountId) return null;
+    const notification = this._buildNotification({
+      recipientType: 'buyer',
+      recipientId: rfq.buyerAccountId,
+      kind: 'quote_received',
+      rfq,
+      title: `New quote on ${rfq.rfqNumber}`,
+      message: `${quote.vendorName || 'A vendor'} submitted a quote on ${rfq.rfqNumber} — ${rfq.title}.`,
+      meta: {
+        vendorId: quote.vendorId || null,
+        vendorName: quote.vendorName || null,
+        totalPrice: quote.totalPrice ?? null,
+        unitPrice: quote.unitPrice ?? null,
+      },
+    });
+    this.notifications.unshift(notification);
+    this._persistNotification(notification);
+    return notification;
+  }
+
+  // ==========================================
+  // 3c. TRANSACTIONAL EMAIL (RFQ fan-out + quote-received)
+  // ==========================================
+  // Every send is fire-and-forget: mailerService no-ops under test and when
+  // SMTP is unconfigured, and a real per-recipient failure is logged, never
+  // thrown, so one bad address can't stop the rest of a fan-out.
+
+  /** Subscription-tier priority for RFQ-email ranking. Unknown/free → 0. */
+  _vendorTierRank(plan) {
+    if (plan === 'select') return 3;
+    if (plan === 'connect') return 2;
+    if (plan === 'premium' || plan === 'premium_network') return 1;
+    return 0;
+  }
+
+  /**
+   * Up to `limit` vendors to email a new RFQ to.
+   *
+   * Starts from the vendors the RFQ actually reaches (`vendorCoversRFQ` — same
+   * category rule as the opportunity feed), keeps only those with an email
+   * address, then ranks by subscription tier, a delivery-pincode match, and
+   * rating so the enquiry lands with the best-matched suppliers first.
+   */
+  selectVendorsForRFQEmail(rfq, limit = 10) {
+    const pincode = rfq.deliveryPincode ? String(rfq.deliveryPincode).trim() : null;
+    return this.vendors
+      .filter((v) => v.email && this.vendorCoversRFQ(v, rfq))
+      .map((v) => ({
+        vendor: v,
+        score:
+          this._vendorTierRank(v.subscriptionPlan) * 1000 +
+          (pincode && v.pincode && String(v.pincode).trim() === pincode ? 100 : 0) +
+          (Number(v.rating) || 0),
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map((x) => x.vendor);
+  }
+
+  /** Email a newly-created RFQ to its top matched vendors. Fired from createRFQ. */
+  emailRFQToMatchedVendors(rfq) {
+    const recipients = this.selectVendorsForRFQEmail(rfq);
+    for (const vendor of recipients) {
+      mailerService
+        .sendRfqInviteEmail(vendor.email, { rfq, recipientName: vendor.contactPerson || vendor.name })
+        .catch((err) => logger.error('Failed to email RFQ invite to vendor', err, 'STORE_SERVICE'));
+    }
+    return recipients.length;
+  }
+
+  /** Email a submitted quote to the RFQ's owning buyer. Fired from addQuoteToRFQ. */
+  emailQuoteToBuyer(rfq, quote) {
+    if (!rfq.buyerAccountId) return false;
+    const buyer = this.buyerAccounts.find((a) => a.id === rfq.buyerAccountId);
+    if (!buyer || !buyer.corporateEmail) return false;
+    mailerService
+      .sendQuoteReceivedEmail(buyer.corporateEmail, { rfq, quote, recipientName: buyer.organizationName })
+      .catch((err) => logger.error('Failed to email quote to buyer', err, 'STORE_SERVICE'));
+    return true;
+  }
 
   // ==========================================
   // 4. EVALUATIONS

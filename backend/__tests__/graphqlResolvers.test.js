@@ -98,6 +98,37 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
     );
   });
 
+  test('rfq resolvers scope a vendor to RFQs they were invited to — category match alone is not enough', async () => {
+    // A vendor covering the fixture RFQ's category doesn't see it until a
+    // category manager invites them onto it.
+    const coveringVendor = storeService.addVendor({
+      name: 'Covering Resolver Vendor',
+      email: TEST_USERS.vendor.email,
+      majorCategory: 'Engineering Spares - Mechanical',
+    });
+    const coveringCtx = contextFor('vendor');
+    expect(await rootResolvers.rfqs({}, coveringCtx)).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: seededRfq.id })])
+    );
+    expect(await rootResolvers.rfq({ rfqNumber: seededRfq.rfqNumber }, coveringCtx)).toBeNull();
+
+    storeService.inviteVendorsToRFQ(seededRfq.id, [coveringVendor.id], TEST_USERS.category_manager.email);
+    expect(await rootResolvers.rfqs({}, coveringCtx)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: seededRfq.id })])
+    );
+    expect((await rootResolvers.rfq({ rfqNumber: seededRfq.rfqNumber }, coveringCtx))?.id).toEqual(seededRfq.id);
+
+    const orphanVendorToken = require('../src/services/authService').generateSessionToken({
+      id: 'usr-orphan-resolver-vendor',
+      email: 'orphan-resolver-vendor@nowhere.test',
+      name: 'Orphan',
+      role: 'vendor',
+    });
+    const orphanCtx = { req: { headers: { authorization: `Bearer ${orphanVendorToken}` } } };
+    expect(await rootResolvers.rfqs({}, orphanCtx)).toEqual([]);
+    expect(await rootResolvers.rfq({ rfqNumber: seededRfq.rfqNumber }, orphanCtx)).toBeNull();
+  });
+
   test('vendors resolver filters by majorCategory, source, search and pagination', () => {
     // Registered here because nothing is seeded: the roster is empty until a
     // vendor is actually created.

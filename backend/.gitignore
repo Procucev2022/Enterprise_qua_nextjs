@@ -34,6 +34,9 @@ temp/
 scratch/
 .cache/
 
+# One-off / throwaway operational scripts (not project deliverables)
+scripts/transfer-neon.js
+
 # OS & Editor Files
 .DS_Store
 Thumbs.db

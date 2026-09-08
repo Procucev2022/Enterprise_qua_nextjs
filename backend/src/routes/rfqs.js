@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const rfqController = require('../controllers/rfqController');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, requireRole } = require('../middleware/auth');
 
 // Every RFQ read is authenticated and scoped to the caller's buyer organisation.
 // These three used to be anonymous and returned the entire global RFQ list,
@@ -9,6 +9,9 @@ const { authenticate } = require('../middleware/auth');
 router.get('/', authenticate, rfqController.getRFQs);
 // Registered before '/:id' so 'summary' is not swallowed as an RFQ identifier.
 router.get('/summary', authenticate, rfqController.getRFQSummary);
+// Category-manager "All RFQs" console: the full cross-buyer list. Gated to the
+// oversight roles — a buyer or vendor hitting this gets 403, not a scoped list.
+router.get('/all', authenticate, requireRole('category_manager', 'admin'), rfqController.getAllRFQs);
 router.post('/', authenticate, rfqController.createRFQ);
 router.post('/ingest', authenticate, rfqController.ingestRFQ);
 router.post('/extract', authenticate, rfqController.extractRFQFromDocument);
@@ -32,5 +35,20 @@ router.post('/:id/batch-chaser', authenticate, rfqController.triggerBatchChaser)
 router.post('/:id/approve-po', authenticate, rfqController.approvePO);
 // The preview embeds the RFQ's commercial detail, so it cannot be anonymous.
 router.get('/:id/email-preview', authenticate, rfqController.generateEmailPreview);
+// Category-manager vendor-invite flow: the category-matched candidate pool, and
+// inviting specific vendors from it. Gated the same way '/all' is — only an
+// invite grants a vendor visibility (see storeService.vendorCoversRFQ).
+router.get(
+  '/:id/vendor-candidates',
+  authenticate,
+  requireRole('category_manager', 'admin'),
+  rfqController.getVendorCandidates
+);
+router.post(
+  '/:id/invite-vendors',
+  authenticate,
+  requireRole('category_manager', 'admin'),
+  rfqController.inviteVendors
+);
 
 module.exports = router;

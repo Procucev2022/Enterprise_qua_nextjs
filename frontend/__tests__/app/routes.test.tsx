@@ -122,6 +122,9 @@ jest.mock('@/app/category-manager/buyer-console', () =>
 );
 jest.mock('@/app/category-manager/vendor-console', () => stub('vendor-console', ['onNavigateToMatrix']));
 jest.mock('@/app/category-manager/category-summary-dashboard', () => stub('category-summary'));
+jest.mock('@/app/category-manager/all-rfqs', () =>
+  stub('all-rfqs', ['onNavigateToMatrix', 'onViewDetails'], { id: 'rfq-1', rfqNumber: 'RFQ-1' })
+);
 
 // ── Vendor screens ───────────────────────────────────────────────────────────
 jest.mock('@/app/vendor/opportunity-feed', () =>
@@ -157,6 +160,8 @@ const CmEvaluationSummaryPage = require('@/app/category-manager/vendor-evaluatio
 const CmVendorConsolePage = require('@/app/category-manager/vendor-console/page').default;
 const CmCategorySummaryPage = require('@/app/category-manager/category-summary/page').default;
 const CmQuoteMatrixPage = require('@/app/category-manager/quote-matrix/page').default;
+const CmAllRFQsPage = require('@/app/category-manager/all-rfqs/page').default;
+const CmRFQDetailsPage = require('@/app/category-manager/rfq-details/page').default;
 
 const VendorFeedPage = require('@/app/vendor/opportunity-feed/page').default;
 const VendorQuotationFormPage = require('@/app/vendor/quotation-form/page').default;
@@ -484,6 +489,75 @@ describe('Role screen routes', () => {
     it('renders the category summary screen', () => {
       render(<CmCategorySummaryPage />);
       expect(screen.getByTestId('category-summary')).toBeInTheDocument();
+    });
+
+    it('all RFQs console opens the matrix and the detail view addressed by RFQ number', () => {
+      render(<CmAllRFQsPage />);
+
+      clickCallback('all-rfqs:onNavigateToMatrix');
+      expect(setSelectedRFQForMatrix).toHaveBeenCalledWith({ id: 'rfq-1', rfqNumber: 'RFQ-1' });
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/quote-matrix');
+
+      clickCallback('all-rfqs:onViewDetails');
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/rfq-details?rfq=RFQ-1');
+    });
+
+    it('CM rfq details fetches the RFQ named in the query string and returns to the console', async () => {
+      mockSearchParams.set('rfq', 'RFQ-1');
+      mockFetchRFQById.mockResolvedValue({ success: true, rfq: RFQ });
+
+      render(<CmRFQDetailsPage />);
+
+      await waitFor(() => expect(screen.getByTestId('rfq-details')).toBeInTheDocument());
+      expect(mockFetchRFQById).toHaveBeenCalledWith('RFQ-1');
+
+      clickCallback('rfq-details:onBack');
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/all-rfqs');
+      mockSearchParams.delete('rfq');
+    });
+
+    it('CM rfq details asks for no RFQ when the query string carries no number', () => {
+      render(<CmRFQDetailsPage />);
+      expect(screen.getByText(UI_STRINGS.rfqDetails.missingReferenceTitle)).toBeInTheDocument();
+      expect(mockFetchRFQById).not.toHaveBeenCalled();
+    });
+
+    it('CM rfq details reports a miss without offering a retry', async () => {
+      mockSearchParams.set('rfq', 'RFQ-GONE');
+      mockFetchRFQById.mockResolvedValue({ success: false, reason: 'NOT_FOUND', error: 'not found' });
+
+      render(<CmRFQDetailsPage />);
+
+      await waitFor(() =>
+        expect(screen.getByText(UI_STRINGS.rfqDetails.notFoundTitle)).toBeInTheDocument()
+      );
+      expect(
+        screen.queryByRole('button', { name: UI_STRINGS.rfqDetails.retryAction })
+      ).not.toBeInTheDocument();
+      mockSearchParams.delete('rfq');
+    });
+
+    it('CM rfq details offers a retry after a transport failure', async () => {
+      mockSearchParams.set('rfq', 'RFQ-1');
+      mockFetchRFQById
+        .mockResolvedValueOnce({ success: false, reason: 'NETWORK', error: 'unreachable' })
+        .mockResolvedValueOnce({ success: true, rfq: RFQ });
+
+      render(<CmRFQDetailsPage />);
+
+      await waitFor(() =>
+        expect(screen.getByText(UI_STRINGS.rfqDetails.loadFailedTitle)).toBeInTheDocument()
+      );
+      fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.rfqDetails.retryAction }));
+
+      await waitFor(() => expect(screen.getByTestId('rfq-details')).toBeInTheDocument());
+      mockSearchParams.delete('rfq');
+    });
+
+    it('CM rfq details returns to the console from the missing-reference panel', () => {
+      render(<CmRFQDetailsPage />);
+      fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.rfqDetails.backAction }));
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/all-rfqs');
     });
   });
 

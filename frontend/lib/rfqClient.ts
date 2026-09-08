@@ -10,10 +10,13 @@ import type {
   RFQExtractionResult,
   RFQFetchResult,
   RFQIngestionResponse,
+  RFQInviteVendorsResult,
   RFQItem,
   RFQListResult,
   RFQMutationResult,
   RFQUpdatePayload,
+  RFQVendorCandidate,
+  RFQVendorCandidatesResult,
 } from './types';
 
 /**
@@ -345,6 +348,136 @@ export async function fetchRFQList(): Promise<RFQListResult> {
   }
 
   return { success: true, rfqs: body.data };
+}
+
+/**
+ * List every RFQ in the system, for the category manager's "All RFQs" console.
+ *
+ * Backed by `GET /api/rfqs/all`, which the server gates to the category_manager
+ * and admin roles. A buyer or vendor token gets a 403 here — this is not a
+ * wider view of the buyer-scoped `fetchRFQList`, it is a separate oversight
+ * endpoint. The rows come back newest first.
+ */
+export async function fetchAllRFQs(): Promise<RFQListResult> {
+  const token = authClient.getToken();
+
+  let res: Response;
+  try {
+    res = await fetch('/api/rfqs/all', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  } catch {
+    return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
+  }
+
+  let body: { success?: boolean; data?: RFQItem[]; error?: string } = {};
+  try {
+    body = await res.json();
+  } catch {
+    return {
+      success: false,
+      reason: 'NETWORK',
+      error: formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: res.status }),
+    };
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
+  }
+  if (!res.ok || !body.success || !Array.isArray(body.data)) {
+    return { success: false, reason: 'SERVER', error: body.error || UI_STRINGS.rfqDetails.loadFailed };
+  }
+
+  return { success: true, rfqs: body.data };
+}
+
+/**
+ * The category-matched vendor pool a category manager can invite to an RFQ.
+ *
+ * Backed by `GET /api/rfqs/:id/vendor-candidates`, gated to category_manager/
+ * admin. Being in this list grants no visibility by itself — only actually
+ * inviting a vendor (inviteVendorsToRFQ) does.
+ */
+export async function fetchVendorCandidates(rfqId: string): Promise<RFQVendorCandidatesResult> {
+  const token = authClient.getToken();
+
+  let res: Response;
+  try {
+    res = await fetch(`/api/rfqs/${encodeURIComponent(rfqId)}/vendor-candidates`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  } catch {
+    return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
+  }
+
+  let body: { success?: boolean; data?: RFQVendorCandidate[]; error?: string } = {};
+  try {
+    body = await res.json();
+  } catch {
+    return {
+      success: false,
+      reason: 'NETWORK',
+      error: formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: res.status }),
+    };
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
+  }
+  if (!res.ok || !body.success || !Array.isArray(body.data)) {
+    return { success: false, reason: 'SERVER', error: body.error || UI_STRINGS.rfqDetails.loadFailed };
+  }
+
+  return { success: true, candidates: body.data };
+}
+
+/**
+ * A category manager invites specific vendors to an RFQ.
+ *
+ * Backed by `POST /api/rfqs/:id/invite-vendors`, gated to category_manager/
+ * admin. Newly-invited vendors get a real in-app notification, a real email,
+ * and simulated multi-channel chaser outreach.
+ */
+export async function inviteVendorsToRFQ(rfqId: string, vendorIds: string[]): Promise<RFQInviteVendorsResult> {
+  const token = authClient.getToken();
+
+  let res: Response;
+  try {
+    res = await fetch(`/api/rfqs/${encodeURIComponent(rfqId)}/invite-vendors`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ vendorIds }),
+    });
+  } catch {
+    return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
+  }
+
+  let body: { success?: boolean; data?: RFQItem; invitedCount?: number; error?: string } = {};
+  try {
+    body = await res.json();
+  } catch {
+    return {
+      success: false,
+      reason: 'NETWORK',
+      error: formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: res.status }),
+    };
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
+  }
+  if (!res.ok || !body.success || !body.data) {
+    return {
+      success: false,
+      reason: res.status === 400 ? 'VALIDATION' : 'SERVER',
+      error: body.error || UI_STRINGS.rfqDetails.loadFailed,
+    };
+  }
+
+  return { success: true, rfq: body.data, invitedCount: body.invitedCount || 0 };
 }
 
 /**

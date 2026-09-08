@@ -621,6 +621,226 @@ describe('RFQ ingestion & summary HTTP routes', () => {
     });
   });
 
+  describe('GET /api/rfqs/all (category-manager All RFQs console)', () => {
+    test('returns the full cross-buyer list to a category manager', async () => {
+      const res = await request(app).get('/api/rfqs/all').set(authHeader('category_manager'));
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(Array.isArray(res.body.data)).toBe(true);
+      expect(res.body.data.length).toBe(storeService.getRFQs().length);
+    });
+
+    test('is also open to an admin', async () => {
+      const res = await request(app).get('/api/rfqs/all').set(authHeader('admin'));
+      expect(res.statusCode).toBe(200);
+    });
+
+    test('orders the list newest first', async () => {
+      const spy = jest.spyOn(storeService, 'getRFQs').mockReturnValue([
+        { id: 'a', createdAt: '2026-01-01T00:00:00Z' },
+        { id: 'b', createdAt: '2026-03-01T00:00:00Z' },
+        { id: 'c', createdAt: '2026-02-01T00:00:00Z' },
+      ]);
+      try {
+        const res = await request(app).get('/api/rfqs/all').set(authHeader('admin'));
+        expect(res.body.data.map((r) => r.id)).toEqual(['b', 'c', 'a']);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    test('rejects a buyer with 403', async () => {
+      const res = await request(app).get('/api/rfqs/all').set(authHeader('buyer'));
+      expect(res.statusCode).toBe(403);
+    });
+
+    test('rejects a vendor with 403', async () => {
+      const res = await request(app).get('/api/rfqs/all').set(authHeader('vendor'));
+      expect(res.statusCode).toBe(403);
+    });
+
+    test('requires a session', async () => {
+      const res = await request(app).get('/api/rfqs/all');
+      expect(res.statusCode).toBe(401);
+    });
+
+    test('is not shadowed by the RFQ-by-id route', async () => {
+      const res = await request(app).get('/api/rfqs/all').set(authHeader('category_manager'));
+      expect(res.body.success).toBe(true);
+      expect(res.body.error).toBeUndefined();
+    });
+
+    test('surfaces an unexpected failure through the error handler', async () => {
+      const spy = jest.spyOn(storeService, 'getRFQs').mockImplementation(() => {
+        throw new Error('boom');
+      });
+      try {
+        const res = await request(app).get('/api/rfqs/all').set(authHeader('admin'));
+        expect(res.statusCode).toBeGreaterThanOrEqual(500);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
+  describe('GET /api/rfqs — vendor visibility requires a CM invite', () => {
+    // The default test vendor (vendor@apexsupplies.com) gets a category profile
+    // and two RFQs, one in its category and one not — category alone no longer
+    // grants visibility, so `inCat` is explicitly invited via the CM endpoint and
+    // `outCat` is left uninvited throughout.
+    let inCatId;
+    let inCatNumber;
+    let outCatId;
+    let outCatNumber;
+    let vendorId;
+
+    beforeAll(async () => {
+      const vendorRes = await request(app)
+        .post('/api/vendors')
+        .set(authHeader('vendor'))
+        .send({ name: 'Scoping Test Vendor', majorCategory: 'Vendor-Scope-Cat' });
+      vendorId = vendorRes.body.data.id;
+
+      await request(app).post('/api/buyer-accounts').set(authHeader('buyer')).send({
+        organizationName: 'Scoping Test Buyer',
+        corporateEmail: 'buyer@procucev.com',
+      });
+
+      const inCat = await request(app).post('/api/rfqs').set(authHeader('buyer')).send({
+        title: 'Vendor-visible scoped enquiry',
+        category: 'Vendor-Scope-Cat',
+        budget: 1000,
+        targetDeliveryDate: '2026-12-01',
+        deadline: '2026-12-01',
+        sourcingMode: 'mode_2',
+        deliveryLocation: 'Plant A',
+        deliveryPincode: '400001',
+      });
+      inCatId = inCat.body.data.id;
+      inCatNumber = inCat.body.data.rfqNumber;
+
+      const outCat = await request(app).post('/api/rfqs').set(authHeader('buyer')).send({
+        title: 'Vendor-hidden scoped enquiry',
+        category: 'Some-Other-Scope-Cat',
+        budget: 1000,
+        targetDeliveryDate: '2026-12-01',
+        deadline: '2026-12-01',
+        sourcingMode: 'mode_2',
+        deliveryLocation: 'Plant A',
+        deliveryPincode: '400001',
+      });
+      outCatId = outCat.body.data.id;
+      outCatNumber = outCat.body.data.rfqNumber;
+    });
+
+    test('before any invite, the vendor sees neither RFQ', async () => {
+      const res = await request(app).get('/api/rfqs').set(authHeader('vendor'));
+      expect(res.statusCode).toBe(200);
+      const numbers = res.body.data.map((r) => r.rfqNumber);
+      expect(numbers).not.toContain(inCatNumber);
+      expect(numbers).not.toContain(outCatNumber);
+    });
+
+    test('GET /api/rfqs/:id/vendor-candidates lists the category-matched vendor, rejects buyer/vendor callers', async () => {
+      const cmRes = await request(app).get(`/api/rfqs/${inCatId}/vendor-candidates`).set(authHeader('category_manager'));
+      expect(cmRes.statusCode).toBe(200);
+      const candidate = cmRes.body.data.find((c) => c.id === vendorId);
+      expect(candidate).toMatchObject({ alreadyInvited: false });
+
+      expect((await request(app).get(`/api/rfqs/${inCatId}/vendor-candidates`).set(authHeader('buyer'))).statusCode).toBe(403);
+      expect((await request(app).get(`/api/rfqs/${inCatId}/vendor-candidates`).set(authHeader('vendor'))).statusCode).toBe(403);
+    });
+
+    test('POST /api/rfqs/:id/invite-vendors rejects non-CM/admin callers and a bad body', async () => {
+      expect(
+        (await request(app).post(`/api/rfqs/${inCatId}/invite-vendors`).set(authHeader('buyer')).send({ vendorIds: [vendorId] }))
+          .statusCode
+      ).toBe(403);
+      expect(
+        (await request(app).post(`/api/rfqs/${inCatId}/invite-vendors`).set(authHeader('vendor')).send({ vendorIds: [vendorId] }))
+          .statusCode
+      ).toBe(403);
+      const badBody = await request(app)
+        .post(`/api/rfqs/${inCatId}/invite-vendors`)
+        .set(authHeader('category_manager'))
+        .send({ vendorIds: [] });
+      expect(badBody.statusCode).toBe(400);
+    });
+
+    test('CM invites the vendor to inCat only — vendor now sees inCat, still not outCat', async () => {
+      const invite = await request(app)
+        .post(`/api/rfqs/${inCatId}/invite-vendors`)
+        .set(authHeader('category_manager'))
+        .send({ vendorIds: [vendorId] });
+      expect(invite.statusCode).toBe(200);
+      expect(invite.body.invitedCount).toBe(1);
+
+      const res = await request(app).get('/api/rfqs').set(authHeader('vendor'));
+      const numbers = res.body.data.map((r) => r.rfqNumber);
+      expect(numbers).toContain(inCatNumber);
+      expect(numbers).not.toContain(outCatNumber);
+    });
+
+    test('a vendor whose email has no vendor record sees nothing', async () => {
+      const orphanToken = require('../src/services/authService').generateSessionToken({
+        id: 'usr-orphan-vendor',
+        email: 'orphan-vendor@nowhere.test',
+        name: 'Orphan',
+        role: 'vendor',
+        orgId: 'o',
+        orgName: 'O',
+      });
+      const res = await request(app).get('/api/rfqs').set({ Authorization: `Bearer ${orphanToken}` });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data).toEqual([]);
+    });
+
+    test('GET /api/rfqs/:id 404s a vendor for the never-invited RFQ', async () => {
+      const res = await request(app).get(`/api/rfqs/${outCatNumber}`).set(authHeader('vendor'));
+      expect(res.statusCode).toBe(404);
+    });
+
+    test('POST /api/rfqs/:id/quotes 404s a vendor for the never-invited RFQ', async () => {
+      const res = await request(app)
+        .post(`/api/rfqs/${outCatNumber}/quotes`)
+        .set(authHeader('vendor'))
+        .send({ unitPrice: 100 });
+      expect(res.statusCode).toBe(404);
+    });
+
+    test('a vendor can read and quote the RFQ they were invited to', async () => {
+      const read = await request(app).get(`/api/rfqs/${inCatNumber}`).set(authHeader('vendor'));
+      expect(read.statusCode).toBe(200);
+      const quote = await request(app)
+        .post(`/api/rfqs/${inCatNumber}/quotes`)
+        .set(authHeader('vendor'))
+        .send({ unitPrice: 100, totalPrice: 100 });
+      expect(quote.statusCode).toBe(200);
+    });
+
+    test('GET /api/rfqs/:id/vendor-candidates 404s for an unknown RFQ', async () => {
+      const res = await request(app).get('/api/rfqs/does-not-exist/vendor-candidates').set(authHeader('category_manager'));
+      expect(res.statusCode).toBe(404);
+    });
+
+    test('POST /api/rfqs/:id/invite-vendors 404s for an unknown RFQ', async () => {
+      const res = await request(app)
+        .post('/api/rfqs/does-not-exist/invite-vendors')
+        .set(authHeader('category_manager'))
+        .send({ vendorIds: [vendorId] });
+      expect(res.statusCode).toBe(404);
+    });
+
+    test('re-inviting the same vendor is a no-op (invitedCount 0)', async () => {
+      const res = await request(app)
+        .post(`/api/rfqs/${inCatId}/invite-vendors`)
+        .set(authHeader('category_manager'))
+        .send({ vendorIds: [vendorId] });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.invitedCount).toBe(0);
+    });
+  });
+
   // The roll-up moved off storeService, which reduced over a single global array,
   // and onto rfqSummaryService, which is handed one organisation's rows.
   describe('rfqSummaryService.buildPortfolioSummary', () => {

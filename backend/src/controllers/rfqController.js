@@ -34,35 +34,47 @@ const ATTACHMENT_ERRORS = {
  * Which RFQs a caller may see.
  *
  * Buyers are scoped to their own buyerAccountId, resolved server-side from
- * the authenticated session — never trusted from the client, the same
- * pattern createRFQ already uses. Category managers and admins see the full
- * cross-buyer list (quote-matrix.tsx's own CM route already depends on
- * this). Vendors also see the full list at the listing level: the
- * marketplace opportunity feed is deliberately cross-buyer, and visibility
- * is gated downstream instead, by isOwnBuyerRfq and the subscription quota
- * in generateEmailPreview — locking the listing itself to one buyer would
- * break the vendor opportunity feed outright.
+ * the authenticated session — never trusted from the client. Vendors are
+ * scoped to the RFQs their category profile covers (plus RFQs their buyer
+ * added them to, or invited them onto) — the same `vendorCoversRFQ` rule the
+ * opportunity feed relies on, so an enquiry only ever reaches a relevant
+ * supplier. Category managers and admins see the full cross-buyer list
+ * (quote-matrix.tsx's own CM route depends on this).
  */
 function resolveRfqReadScope(req) {
-  if (req.user && req.user.role === 'buyer') {
+  const role = req.user && req.user.role;
+  if (role === 'buyer') {
     const account = storeService.getBuyerAccountByEmail(req.user.email);
-    return { restricted: true, buyerAccountId: account ? account.id : null };
+    return { role, restricted: true, buyerAccountId: account ? account.id : null };
   }
-  return { restricted: false, buyerAccountId: null };
+  if (role === 'vendor') {
+    const vendor = storeService.getVendorById(req.user.email);
+    return { role, restricted: true, vendor: vendor || null };
+  }
+  return { role, restricted: false };
 }
 
 /**
- * Whether a buyer caller may read or write this specific RFQ.
+ * Whether the caller may read or write this specific RFQ.
  *
- * Non-buyer roles are never restricted here (see resolveRfqReadScope). A
- * buyer requesting an RFQ outside their own account gets the same 404 as an
- * id that doesn't exist — "not found" covers both, so a caller can't
- * enumerate other buyers' RFQ ids.
+ * A buyer requesting an RFQ outside their own account, or a vendor requesting
+ * one outside their category, gets the same 404 as an id that doesn't exist —
+ * "not found" covers both, so a caller can't enumerate other parties' RFQ ids.
+ * CM/admin are unrestricted.
  */
 function canAccessRfq(req, rfq) {
   const scope = resolveRfqReadScope(req);
   if (!scope.restricted) return true;
+  if (scope.role === 'vendor') return storeService.vendorCoversRFQ(scope.vendor, rfq);
   return !!scope.buyerAccountId && rfq.buyerAccountId === scope.buyerAccountId;
+}
+
+/** Apply a read scope to the full RFQ list. */
+function scopedRfqList(scope) {
+  const all = storeService.getRFQs();
+  if (!scope.restricted) return all;
+  if (scope.role === 'vendor') return all.filter((rfq) => storeService.vendorCoversRFQ(scope.vendor, rfq));
+  return all.filter((rfq) => !!scope.buyerAccountId && rfq.buyerAccountId === scope.buyerAccountId);
 }
 
 // Fields a buyer's own edit may touch. Deliberately a whitelist: id,
@@ -104,12 +116,87 @@ function pickUpdatableRfqFields(body) {
 function getRFQs(req, res, next) {
   try {
     const scope = resolveRfqReadScope(req);
-    const all = storeService.getRFQs();
-    const rfqs = scope.restricted ? all.filter((rfq) => rfq.buyerAccountId === scope.buyerAccountId) : all;
-    logger.info('Fetching RFQs list', { restricted: scope.restricted, count: rfqs.length }, 'RFQ_CONTROLLER');
+    const rfqs = scopedRfqList(scope);
+    logger.info('Fetching RFQs list', { role: scope.role, restricted: scope.restricted, count: rfqs.length }, 'RFQ_CONTROLLER');
     res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: rfqs });
   } catch (err) {
     logger.error('Error fetching RFQs list', err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
+/**
+ * Every RFQ in the system, for the category manager's "All RFQs" console.
+ *
+ * Deliberately a separate endpoint from getRFQs rather than a query flag on
+ * it: getRFQs' scoping rules are about who owns which RFQ and are expected to
+ * keep evolving, whereas this view has one fixed contract — the whole
+ * cross-buyer list, newest first, for a role that oversees all sourcing. The
+ * route is gated to category_manager/admin, so the "no scope" here can never
+ * be reached by a buyer or vendor.
+ */
+function getAllRFQs(req, res, next) {
+  try {
+    const rfqs = storeService
+      .getRFQs()
+      .slice()
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    logger.info('Fetching all RFQs for CM console', { count: rfqs.length }, 'RFQ_CONTROLLER');
+    res.json({
+      success: true,
+      source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory',
+      data: rfqs,
+    });
+  } catch (err) {
+    logger.error('Error fetching all RFQs', err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
+/**
+ * The category-matched vendor pool a category manager can invite from.
+ *
+ * Grants no access by itself — see storeService.candidateVendorsForRFQ. Route
+ * is gated to category_manager/admin.
+ */
+function getVendorCandidates(req, res, next) {
+  try {
+    const { id } = req.params;
+    const rfq = storeService.getRFQById(id);
+    if (!rfq) {
+      return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+    }
+    const candidates = storeService.candidateVendorsForRFQ(rfq);
+    res.json({ success: true, data: candidates });
+  } catch (err) {
+    logger.error(`Error fetching vendor candidates for RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
+/**
+ * A category manager invites specific vendors to an RFQ.
+ *
+ * Only invited vendors (plus any the buyer directly added) can see, be
+ * notified about, be emailed about, or quote this RFQ afterward — see
+ * storeService.vendorCoversRFQ. Route is gated to category_manager/admin.
+ */
+function inviteVendors(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { vendorIds } = req.body || {};
+    if (!Array.isArray(vendorIds) || vendorIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'vendorIds must be a non-empty array.' });
+    }
+    const rfq = storeService.getRFQById(id);
+    if (!rfq) {
+      return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+    }
+    const result = storeService.inviteVendorsToRFQ(id, vendorIds, req.user && req.user.email);
+    logger.info(`Invited vendors to RFQ ${id}`, { id, invitedCount: result.invitedCount }, 'RFQ_CONTROLLER');
+    res.json({ success: true, data: result.updatedRFQ, invitedCount: result.invitedCount });
+  } catch (err) {
+    logger.error(`Error inviting vendors to RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
     next(err);
   }
 }
@@ -363,9 +450,8 @@ async function extractRFQFromDocument(req, res, next) {
 function getRFQSummary(req, res, next) {
   try {
     const scope = resolveRfqReadScope(req);
-    const all = storeService.getRFQs();
-    const rfqs = scope.restricted ? all.filter((rfq) => rfq.buyerAccountId === scope.buyerAccountId) : all;
-    logger.info('Building RFQ portfolio summary', { restricted: scope.restricted, count: rfqs.length }, 'RFQ_CONTROLLER');
+    const rfqs = scopedRfqList(scope);
+    logger.info('Building RFQ portfolio summary', { role: scope.role, restricted: scope.restricted, count: rfqs.length }, 'RFQ_CONTROLLER');
     res.json({ success: true, data: rfqSummaryService.buildPortfolioSummary(rfqs) });
   } catch (err) {
     logger.error('Error building RFQ summary', err, 'RFQ_CONTROLLER');
@@ -534,6 +620,14 @@ function addQuote(req, res, next) {
       logger.warn(`Failed to add quote to RFQ ${id}: Missing unitPrice`, { id }, 'RFQ_CONTROLLER');
       return res.status(400).json({ success: false, error: 'unitPrice is required.' });
     }
+    // A vendor can only quote an RFQ they were actually eligible to see. An
+    // enquiry outside their category (and not one they were invited onto)
+    // reports the same 404 as an unknown id — they had no way to reach it.
+    const targetRfq = storeService.getRFQById(id);
+    if (!targetRfq || !canAccessRfq(req, targetRfq)) {
+      logger.warn(`RFQ not found or out of scope for quote submission: ${id}`, { id }, 'RFQ_CONTROLLER');
+      return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+    }
     const quote = {
       vendorId: vendorRecord.id,
       vendorName: vendorRecord.name,
@@ -668,6 +762,9 @@ function approvePO(req, res, next) {
 
 module.exports = {
   getRFQs,
+  getAllRFQs,
+  getVendorCandidates,
+  inviteVendors,
   getRFQById,
   getRFQSummary,
   createRFQ,
