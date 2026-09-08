@@ -1,7 +1,9 @@
 const storeService = require('../services/storeService');
 const { generateVendorOnboardingEmail } = require('../services/emailService');
+const zohoPaymentService = require('../services/zohoPaymentService');
 const { logger } = require('../services/loggerService');
 const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
+const { ZOHO_CONFIG, computeZohoPlanAmount, VENDOR_SUBSCRIPTION_PLANS } = require('../config/constants');
 
 /**
  * A vendor profile may only be created/edited by the vendor it belongs to
@@ -240,6 +242,61 @@ function updateSubscription(req, res, next) {
   }
 }
 
+// 'premium' is free/auto-granted (see updateSubscription above) and never
+// reaches Zoho — only connect/select are real, paid plans.
+const ZOHO_PAYABLE_PLANS = ['connect', 'select'];
+
+async function createSubscriptionPaymentLink(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { plan } = req.body;
+    const existing = storeService.getVendorById(id);
+    if (!existing) {
+      return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
+    }
+    if (!assertVendorOwnership(req, res, existing.email)) return;
+    if (!ZOHO_PAYABLE_PLANS.includes(plan)) {
+      return res.status(400).json({ success: false, error: `plan must be one of: ${ZOHO_PAYABLE_PLANS.join(', ')}.` });
+    }
+    if (!existing.email) {
+      return res.status(400).json({ success: false, error: 'Vendor has no email on file to create a payment link for.' });
+    }
+
+    // Not re-checked for null here: ZOHO_PAYABLE_PLANS above is exactly the set
+    // of plans ZOHO_SUBSCRIPTION_PRICING (computeZohoPlanAmount's source) prices,
+    // so this can never actually be null for a plan that passed that gate.
+    const amount = computeZohoPlanAmount(plan);
+    const planLabel = (VENDOR_SUBSCRIPTION_PLANS.find((p) => p.id === plan) || {}).name || plan;
+    const returnUrl = `${ZOHO_CONFIG.RETURN_URL_BASE}/vendor/vendor-subscription?payment=success`;
+
+    const result = await zohoPaymentService.createPaymentLink({
+      planId: plan,
+      planLabel,
+      amountInr: amount,
+      email: existing.email,
+      phone: existing.phone || '',
+      returnUrl,
+    });
+
+    const link = storeService.createPaymentLinkRecord({
+      id: `pl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      zohoPaymentLinkId: result.zohoPaymentLinkId,
+      vendorId: existing.id,
+      planId: plan,
+      amount,
+      paymentUrl: result.paymentUrl,
+      status: result.status || 'CREATED',
+      rawResponse: result.rawResponse,
+    });
+
+    logger.info(`Created Zoho payment link for vendor ${id} (${plan})`, { id, plan, zohoPaymentLinkId: link.zohoPaymentLinkId }, 'VENDOR_CONTROLLER');
+    res.json({ success: true, data: { paymentUrl: link.paymentUrl, paymentLinkId: link.id, status: link.status } });
+  } catch (err) {
+    logger.error(`Error creating Zoho payment link for vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
+    res.status(502).json({ success: false, error: 'Unable to create a payment link right now. Please try again shortly.' });
+  }
+}
+
 function updateCategories(req, res, next) {
   try {
     const { id } = req.params;
@@ -335,5 +392,6 @@ module.exports = {
   generateOnboardingEmailPreview,
   updateCategories,
   updateSubscription,
+  createSubscriptionPaymentLink,
   bulkImportVendors,
 };

@@ -2,6 +2,7 @@ const app = require('./app');
 const pool = require('./db/pool');
 const storeService = require('./services/storeService');
 const emailGatewayService = require('./services/emailGatewayService');
+const zohoReconciliationService = require('./services/zohoReconciliationService');
 const { logger } = require('./services/loggerService');
 
 const PORT = process.env.PORT || 4000;
@@ -73,6 +74,10 @@ async function bootstrapServer(port = PORT) {
   const gateway = emailGatewayService.startPolling();
   if (!gateway.started) {
     logger.info(`Email ingestion gateway not started: ${gateway.reason}`, {}, 'SERVER');
+  }
+  const zohoReconciliation = zohoReconciliationService.startPolling();
+  if (!zohoReconciliation.started) {
+    logger.info(`Zoho payment-link reconciliation not started: ${zohoReconciliation.reason}`, {}, 'SERVER');
   }
   return server;
 }

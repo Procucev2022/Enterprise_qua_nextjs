@@ -278,6 +278,17 @@ function Harness({
 async function renderFeed(props: HarnessProps = {}) {
   const baseImpl = (global.fetch as jest.Mock).getMockImplementation()!;
   (global.fetch as jest.Mock).mockImplementation((url: string, init?: unknown) => {
+    if (typeof url === 'string' && /\/api\/vendors\/v-self\/payment-link$/.test(url)) {
+      const body = init && (init as RequestInit).body ? JSON.parse(String((init as RequestInit).body)) : {};
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          data: { paymentUrl: `https://payments.zoho.in/mock/${body.plan}`, paymentLinkId: `pl-${body.plan}`, status: 'CREATED' },
+        }),
+      });
+    }
     if (typeof url === 'string' && /\/api\/bootstrap/.test(url)) {
       return Promise.resolve({
         ok: true,
@@ -757,42 +768,40 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     expect(screen.getAllByText('Open Network')).toHaveLength(3);
   });
 
-  test('switches to each plan from the upgrade modal', async () => {
-    // Connect/Select are paid plans and route through the dummy payment
-    // gateway (real gate — see handleUpgradeClick); only Premium is free and
-    // switches instantly. Each plan is exercised from its own fresh render:
-    // once subscribed to Connect or Select nothing in the card list is
-    // locked any more (isLocked only checks connect/select), so there is no
-    // in-UI way to chain straight on to the next plan within one render.
-    // Fake timers are only switched on around each payment step — renderFeed's
-    // own waitFor polls on real timers and hangs if fake ones are active.
+  test('starts a real Zoho checkout for each paid plan from the upgrade modal', async () => {
+    // Connect/Select are paid plans and route through the real Zoho checkout
+    // modal (real gate — see handleUpgradeClick); only Premium is free and
+    // switches instantly. Paying now creates a real payment link and redirects
+    // to Zoho — the plan itself only flips once the backend's webhook (or
+    // reconciliation poller) confirms payment, so this UI no longer flips it
+    // client-side, and there is nothing left to chain the next plan onto
+    // within one render — each is exercised from its own fresh render.
     const r1 = await renderFeed({ subscription: 'premium' });
     fireEvent.click(screen.getAllByRole('button', { name: /🔒 Upgrade/i })[0]);
     // Connect is the first actionable row while Premium is active.
     fireEvent.click(screen.getAllByRole('button', { name: 'Upgrade' })[0]);
-    jest.useFakeTimers();
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /Pay \$149/i }));
-      jest.advanceTimersByTime(1300);
       await Promise.resolve();
     });
-    jest.useRealTimers();
-    expect(screen.getByText('CONNECT Plan Activated!')).toBeInTheDocument();
-    expect(screen.queryByText(/Upgrade to Premium Sourcing Plan/i)).not.toBeInTheDocument();
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/vendors/v-self/payment-link',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ plan: 'connect' }) })
+    );
     r1.unmount();
 
     const r2 = await renderFeed({ subscription: 'premium' });
     fireEvent.click(screen.getAllByRole('button', { name: /🔒 Upgrade/i })[0]);
     // Connect then Select are the two actionable "Upgrade" rows while Premium is active.
     fireEvent.click(screen.getAllByRole('button', { name: 'Upgrade' })[1]);
-    jest.useFakeTimers();
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /Pay \$349/i }));
-      jest.advanceTimersByTime(1300);
       await Promise.resolve();
     });
-    jest.useRealTimers();
-    expect(screen.getByText('SELECT Plan Activated!')).toBeInTheDocument();
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/vendors/v-self/payment-link',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ plan: 'select' }) })
+    );
     r2.unmount();
 
     await renderFeed({ subscription: 'connect', downloadsUsed: 50 });
@@ -850,8 +859,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     expect(screen.getByTestId('toast')).toHaveTextContent('Download Failed');
   });
 
-  test('completes a full Connect-plan upgrade through the dummy payment gateway', async () => {
-    jest.useFakeTimers();
+  test('starts a real Zoho checkout for a Connect-plan upgrade', async () => {
     await renderFeed({ subscription: 'premium' });
 
     // Reliable trigger: the locked-RFQ card's own "🔒 Upgrade" button always
@@ -862,19 +870,18 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
 
     // Both Connect and Select plan buttons are labeled "Upgrade" — Connect is first
     const connectBtn = screen.getAllByRole('button', { name: /^Upgrade$/i })[0];
-    fireEvent.click(connectBtn); // Connect plan — opens the dummy payment gateway
-    expect(screen.getByText(/Dummy Payment Gateway/i)).toBeInTheDocument();
+    fireEvent.click(connectBtn); // Connect plan — opens the real Zoho checkout modal
+    expect(screen.getByText(/Secure Payment/i)).toBeInTheDocument();
 
     const payBtn = screen.getByRole('button', { name: /Pay \$149/i });
     await act(async () => {
       fireEvent.click(payBtn);
-      jest.advanceTimersByTime(1300);
       await Promise.resolve();
     });
-    // onPaymentSuccess fired handleUpgradePlan('connect') — modal closes
-    expect(screen.queryByText(/Dummy Payment Gateway/i)).not.toBeInTheDocument();
-
-    jest.useRealTimers();
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/vendors/v-self/payment-link',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ plan: 'connect' }) })
+    );
   });
 
   test('switches directly to Premium (free) from the locked-RFQ upgrade modal', async () => {

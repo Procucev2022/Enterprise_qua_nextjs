@@ -346,6 +346,63 @@ async function markAllNotificationsReadInDB(recipientType, recipientId) {
   return result.rowCount;
 }
 
+// ── Zoho OAuth token (single-row cache) ────────────────────────────────────────
+
+async function getZohoOAuthTokenFromDB() {
+  if (!pool.pool) return null;
+  const result = await pool.query(
+    "SELECT access_token, expiry_time FROM zoho_oauth_token WHERE id = 'default'"
+  );
+  return result.rows[0] || null;
+}
+
+async function upsertZohoOAuthTokenInDB({ accessToken, expiryTime }) {
+  if (!pool.pool) return null;
+  const result = await pool.query(
+    `INSERT INTO zoho_oauth_token (id, access_token, expiry_time, last_updated)
+     VALUES ('default', $1, $2, now())
+     ON CONFLICT (id) DO UPDATE SET
+       access_token = EXCLUDED.access_token,
+       expiry_time = EXCLUDED.expiry_time,
+       last_updated = now()
+     RETURNING access_token, expiry_time`,
+    [accessToken || null, expiryTime || null]
+  );
+  return result.rows[0] || null;
+}
+
+// ── Zoho payment links ──────────────────────────────────────────────────────────
+
+async function getPaymentLinksFromDB() {
+  if (!pool.pool) return [];
+  const result = await pool.query('SELECT raw FROM payment_links ORDER BY created_at DESC');
+  return result.rows.map((row) => row.raw);
+}
+
+async function getPaymentLinkByZohoIdFromDB(zohoPaymentLinkId) {
+  if (!pool.pool) return null;
+  const result = await pool.query('SELECT raw FROM payment_links WHERE zoho_payment_link_id = $1', [zohoPaymentLinkId]);
+  return result.rows[0]?.raw || null;
+}
+
+async function upsertPaymentLinkInDB(link) {
+  if (!pool.pool) return null;
+  const { id, zohoPaymentLinkId, vendorId, status } = link;
+  const result = await pool.query(
+    `INSERT INTO payment_links (id, zoho_payment_link_id, vendor_id, status, raw, updated_at)
+     VALUES ($1, $2, $3, $4, $5, now())
+     ON CONFLICT (id) DO UPDATE SET
+       zoho_payment_link_id = EXCLUDED.zoho_payment_link_id,
+       vendor_id = EXCLUDED.vendor_id,
+       status = EXCLUDED.status,
+       raw = EXCLUDED.raw,
+       updated_at = now()
+     RETURNING raw`,
+    [id, zohoPaymentLinkId || null, vendorId || null, status || null, JSON.stringify(link)]
+  );
+  return result.rows[0]?.raw || null;
+}
+
 module.exports = {
   getVendorsFromDB,
   upsertVendorInDB,
@@ -372,4 +429,9 @@ module.exports = {
   bulkInsertNotificationsInDB,
   markNotificationReadInDB,
   markAllNotificationsReadInDB,
+  getZohoOAuthTokenFromDB,
+  upsertZohoOAuthTokenInDB,
+  getPaymentLinksFromDB,
+  getPaymentLinkByZohoIdFromDB,
+  upsertPaymentLinkInDB,
 };

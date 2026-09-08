@@ -617,6 +617,51 @@ const EMAIL_INGESTION_CONFIG = {
 };
 
 // ==============================================================================
+// ZOHO PAYMENTS
+// ==============================================================================
+// Ported from the reference p2pservices Java app's ZohoOAuthService/ZohoApiClient/
+// PaymentLinkService/ZohoWebhookController. Real secrets (CLIENT_SECRET,
+// REFRESH_TOKEN) live only in backend/.env, never hardcoded — same rule as
+// DATABASE_URL and EMAIL_GATEWAY_*.
+const ZOHO_CONFIG = {
+  CLIENT_ID: process.env.ZOHO_CLIENT_ID || '',
+  CLIENT_SECRET: process.env.ZOHO_CLIENT_SECRET || '',
+  REFRESH_TOKEN: process.env.ZOHO_REFRESH_TOKEN || '',
+  OAUTH_TOKEN_URL: process.env.ZOHO_OAUTH_TOKEN_URL || 'https://accounts.zoho.in/oauth/v2/token',
+  PAYMENTS_BASE_URL: process.env.ZOHO_PAYMENTS_BASE_URL || 'https://payments.zoho.in/api/v1',
+  ACCOUNT_ID: process.env.ZOHO_PAYMENTS_ACCOUNT_ID || '',
+  WEBHOOK_SIGNING_KEY: process.env.ZOHO_WEBHOOK_SIGNING_KEY || '',
+  // Base URL the vendor is sent back to after paying, and (in a real deployment)
+  // the base Zoho's webhook would need to reach. No public URL exists yet for
+  // this app, so this defaults to localhost until one is supplied.
+  RETURN_URL_BASE: process.env.ZOHO_PAYMENTS_RETURN_URL_BASE || 'http://localhost:3000',
+  RECONCILIATION_ENABLED: String(process.env.ZOHO_RECONCILIATION_ENABLED || '').toLowerCase() === 'true',
+  // 10 minutes, matching the reference app's `0 */10 * * * *` cron.
+  RECONCILIATION_INTERVAL_MS: Number(process.env.ZOHO_RECONCILIATION_INTERVAL_MS || 10 * 60 * 1000),
+  // Refresh the cached access token this many ms before it actually expires, so
+  // a request never races a token that's about to go stale mid-flight.
+  TOKEN_REFRESH_BUFFER_MS: 60 * 1000,
+  GST_RATE: 0.18,
+};
+
+// The app's three vendor subscription plans (VENDOR_SUBSCRIPTION_PLANS above)
+// only carry a display price ('$149' etc.) — no numeric, currency-specific
+// amount a payment request can actually charge. 'premium' is free/auto-granted
+// and never reaches this table. INR chosen to match Zoho's `currency=INR`
+// paymentlinks contract the reference app uses.
+const ZOHO_SUBSCRIPTION_PRICING = {
+  connect: 12000,
+  select: 28000,
+};
+
+/** GST-inclusive amount Zoho actually charges for a plan, 2dp, or null if the plan isn't payable. */
+function computeZohoPlanAmount(planId) {
+  const base = ZOHO_SUBSCRIPTION_PRICING[planId];
+  if (!Number.isFinite(base)) return null;
+  return Math.round(base * (1 + ZOHO_CONFIG.GST_RATE) * 100) / 100;
+}
+
+// ==============================================================================
 // AUTONOMOUS EMAIL INGESTION GATEWAY
 // ==============================================================================
 // The mailbox poller. See services/emailGatewayService.js for why an ingested RFQ
@@ -912,6 +957,9 @@ module.exports = {
   EMAIL_GATEWAY_MESSAGES,
   EMAIL_GATEWAY_STATE,
   EMAIL_GATEWAY_SMTP_PORTS,
+  ZOHO_CONFIG,
+  ZOHO_SUBSCRIPTION_PRICING,
+  computeZohoPlanAmount,
   EMAIL_REGEX,
   GSTIN_REGEX,
   GSTIN_MESSAGE,

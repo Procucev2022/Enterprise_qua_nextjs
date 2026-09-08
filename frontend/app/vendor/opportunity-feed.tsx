@@ -1121,11 +1121,9 @@ export default function OpportunityFeed({
       <VendorSubscriptionPaymentModal
         isOpen={!!pendingPayment}
         onClose={() => setPendingPayment(null)}
+        planId={pendingPayment?.planId || 'connect'}
         planName={pendingPayment?.planName || ''}
         price={pendingPayment?.price || ''}
-        onPaymentSuccess={() => {
-          if (pendingPayment) handleUpgradePlan(pendingPayment.planId);
-        }}
       />
     </div>
   );
