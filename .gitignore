@@ -17,6 +17,8 @@ coverage/
 # Next.js Build Outputs
 .next/
 .next-qc/
+.next-build/
+.next-export/
 out/
 build/
 dist/
@@ -72,12 +74,18 @@ Thumbs.db
 # IDE & Editor Directories
 .idea/
 .vscode/
+.history/
 *.swp
 *.swo
 *.sublime-project
 *.sublime-workspace
 
+# Cloudflare Wrangler CLI cache
+.wrangler/
+*/.wrangler/
+
 # Personal local MySQL identity-DB replica (schema/seed for safe testing
 # without touching the shared Azure identity DB) — never meant to be shared.
 backend/scripts/local_identity_schema.sql
 backend/scripts/local_identity_seed.sql
+

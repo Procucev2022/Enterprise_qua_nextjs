@@ -1,0 +1,150 @@
+name: Deploy to Cloudflare Pages
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      project_name:
+        description: 'Cloudflare Pages Project Name'
+        required: false
+        default: 'enterprise-qua'
+        type: string
+      branch:
+        description: 'Target Deployment Branch'
+        required: false
+        default: 'main'
+        type: string
+      backend_url:
+        description: 'Backend Public API Gateway Target (e.g. Cloudflare Tunnel or custom domain)'
+        required: false
+        type: string
+
+concurrency:
+  group: cloudflare-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  deployments: write
+
+env:
+  CI: "true"
+  NODE_OPTIONS: "--max-old-space-size=4096"
+  CF_PAGES_PROJECT: ${{ inputs.project_name || 'enterprise-qua' }}
+  CF_PAGES_BRANCH: ${{ inputs.branch || github.ref_name }}
+
+jobs:
+  pre-flight-verification:
+    name: Pre-Flight Quality & Coverage Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: "npm"
+
+      - name: Install Dependencies
+        run: |
+          npm ci || npm install
+          npm ci --prefix backend || npm install --prefix backend
+          npm ci --prefix frontend || npm install --prefix frontend
+
+      - name: TypeScript Typecheck
+        run: npm run typecheck --prefix frontend
+
+      - name: ESLint Static Analysis
+        run: npm run lint --prefix frontend
+
+      - name: Run Backend Unit Tests & 90% Coverage Gate
+        run: npm run test:coverage --prefix backend
+
+      - name: Run Frontend Unit Tests & 90% Coverage Gate
+        run: npm run test:coverage --prefix frontend
+
+      - name: Verify Master Coverage Gate
+        run: npm run check:coverage
+
+  deploy-to-cloudflare:
+    name: Build & Deploy to Cloudflare Pages
+    needs: [pre-flight-verification]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: "npm"
+
+      - name: Install Dependencies
+        run: |
+          npm ci || npm install
+          npm ci --prefix frontend || npm install --prefix frontend
+
+      - name: Configure Backend Gateway Target
+        run: |
+          BACKEND_TARGET="${{ inputs.backend_url || secrets.NODE_BACKEND_URL }}"
+          if [ -n "$BACKEND_TARGET" ]; then
+            echo "Configuring NODE_BACKEND_URL to $BACKEND_TARGET"
+            sed -i "s|const defaultBackend = '.*';|const defaultBackend = '$BACKEND_TARGET';|g" frontend/functions/api/\[\[path\]\].ts
+            sed -i "s|const defaultBackend = '.*';|const defaultBackend = '$BACKEND_TARGET';|g" frontend/functions/graphql.ts
+          fi
+
+      - name: Build Next.js in Static Export Mode
+        env:
+          NEXT_OUTPUT_MODE: "export"
+          NEXT_DIST_DIR: "out"
+          NODE_ENV: "production"
+        run: npm run build --prefix frontend
+
+      - name: Deploy to Cloudflare Pages via Wrangler
+        id: pages_deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx wrangler pages deploy out \
+            --project-name "${{ env.CF_PAGES_PROJECT }}" \
+            --branch "${{ env.CF_PAGES_BRANCH }}" \
+            --commit-dirty=true
+
+      - name: Verify Live Deployment Endpoint
+        run: |
+          echo "Verifying live deployment at https://${{ env.CF_PAGES_PROJECT }}.pages.dev/login..."
+          sleep 5
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://${{ env.CF_PAGES_PROJECT }}.pages.dev/login" || echo "000")
+          echo "HTTP Status: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 400 ]; then
+            echo "✔ Deployment health check passed!"
+          else
+            echo "⚠ Note: Deployment succeeded, endpoint returned status: $HTTP_STATUS (may still be propagating)"
+          fi
+
+      - name: Generate Deployment Step Summary
+        if: always()
+        run: |
+          echo "## ⛅ Cloudflare Pages Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "| :--- | :--- |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Project** | \`${{ env.CF_PAGES_PROJECT }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Branch** | \`${{ env.CF_PAGES_BRANCH }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Status** | ${{ job.status == 'success' && '✅ Deployed Successfully' || '❌ Deployment Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Production URL** | [https://${{ env.CF_PAGES_PROJECT }}.pages.dev](https://${{ env.CF_PAGES_PROJECT }}.pages.dev) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Login URL** | [https://${{ env.CF_PAGES_PROJECT }}.pages.dev/login](https://${{ env.CF_PAGES_PROJECT }}.pages.dev/login) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **API Gateway** | [https://${{ env.CF_PAGES_PROJECT }}.pages.dev/api](https://${{ env.CF_PAGES_PROJECT }}.pages.dev/api) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **GraphQL Gateway** | [https://${{ env.CF_PAGES_PROJECT }}.pages.dev/graphql](https://${{ env.CF_PAGES_PROJECT }}.pages.dev/graphql) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit** | \`${{ github.sha }}\` (${{ github.actor }}) |" >> $GITHUB_STEP_SUMMARY

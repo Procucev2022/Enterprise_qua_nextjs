@@ -11,7 +11,8 @@
     "test": "jest --maxWorkers=2",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage --maxWorkers=2 && node scripts/verify-coverage.js",
-    "check:coverage": "node scripts/verify-coverage.js"
+    "check:coverage": "node scripts/verify-coverage.js",
+    "deploy:cloudflare": "wrangler pages deploy out --project-name enterprise-qua"
   },
   "dependencies": {
     "lucide-react": "^0.453.0",
