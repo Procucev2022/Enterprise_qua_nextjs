@@ -12,7 +12,6 @@ import {
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { extractLineItemsFromDocument, classifyLineItems, uploadRFQAttachment } from '@/lib/rfqClient';
 import ManualRFQModal from '@/app/buyer/ManualRFQModal';
-import EmailGatewayPanel from '@/app/buyer/EmailGatewayPanel';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
 import type {
   SourcingMode,
@@ -34,10 +33,8 @@ import {
   Layers,
   Trash2,
   Plus,
-  Mail,
   FileText,
   Users,
-  Globe,
   AlertCircle,
   Zap,
   Lock,
@@ -68,9 +65,6 @@ function withCurrentValue(options: string[], current: string | undefined): strin
   if (!current || options.includes(current)) return options;
   return [current, ...options];
 }
-
-/** How the buyer is supplying the requirement on Step 1. */
-type IngestionMethod = 'upload' | 'email' | 'manual';
 
 interface IngestionWizardProps {
   onComplete: () => void;
@@ -121,8 +115,12 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
   const [activeStep, setActiveStep] = useState<number>(1);
   const [isProcessingDoc, setIsProcessingDoc] = useState(false);
   const [isCategorizing, setIsCategorizing] = useState(false);
+  // Guards handleDispatch against being re-entered while its own request is
+  // still in flight — without it, a double-click (or a slow network leaving
+  // the button clickable for a couple of seconds) fired the whole async
+  // create-RFQ chain more than once, each one a genuine, separate RFQ row.
+  const [isDispatching, setIsDispatching] = useState(false);
   const [uploadedFileName, setUploadedFileName] = useState<string>('');
-  const [ingestionMethod, setIngestionMethod] = useState<IngestionMethod>('upload');
   // Manual entry has no extraction to complete, so Step 1 needs its own signal
   // that the buyer has chosen to proceed. Without it the step strip would stay
   // locked and there would be no way to reach the line-item table.
@@ -537,73 +535,90 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
   };
 
   const handleDispatch = async () => {
-    // Line-item completeness is not re-checked here: `unlockedStep` locks Step 3
-    // the moment a row loses its description, so this screen cannot be reached
-    // with an unquotable list.
-    //
-    // The budget is deliberately not gated. A document can price nothing at all,
-    // and requiring a figure only made buyers invent a ceiling that vendors would
-    // then quote against.
-    //
-    // The delivery destination is not re-checked here either, for the same reason:
-    // both fields only render on Step 2, so they cannot be cleared while this
-    // screen is showing, and `unlockedStep` drops back to 2 the moment one is
-    // emptied, which re-locks the strip before dispatch can be reached.
-    setCurrentMode(selectedMode);
-    // No fallback needed: `hasCompleteLineItems` requires a major category on
-    // every row before Step 3 unlocks, so the leading item always carries one.
-    const mainMajor = entities[0].majorCategory;
-    const vendorsToDispatch: VendorEntry[] = [];
-    // Awaited before the RFQ is posted, because the attachment metadata has to
-    // travel with the create payload. Any failure is held back and reported after
-    // the RFQ exists.
-    const { attachments: sourceAttachments, failure: attachmentFailure } = await storeSourceDocument();
+    // Re-entrancy guard: without it, a double-click — or just a slow network
+    // leaving the button clickable for the second or two this whole async
+    // chain takes — fired handleDispatch more than once, each call running
+    // the full create-RFQ request independently. Every extra call was a real,
+    // separate RFQ row, not a UI artifact: confirmed live (3 RFQs from one
+    // click sequence, then 2 from another).
+    if (isDispatching) return;
+    setIsDispatching(true);
+    try {
+      // Line-item completeness is not re-checked here: `unlockedStep` locks Step 3
+      // the moment a row loses its description, so this screen cannot be reached
+      // with an unquotable list.
+      //
+      // The budget is deliberately not gated. A document can price nothing at all,
+      // and requiring a figure only made buyers invent a ceiling that vendors would
+      // then quote against.
+      //
+      // The delivery destination is not re-checked here either, for the same reason:
+      // both fields only render on Step 2, so they cannot be cleared while this
+      // screen is showing, and `unlockedStep` drops back to 2 the moment one is
+      // emptied, which re-locks the strip before dispatch can be reached.
+      setCurrentMode(selectedMode);
+      // No fallback needed: `hasCompleteLineItems` requires a major category on
+      // every row before Step 3 unlocks, so the leading item always carries one.
+      const mainMajor = entities[0].majorCategory;
+      const vendorsToDispatch: VendorEntry[] = [];
+      // Awaited before the RFQ is posted, because the attachment metadata has to
+      // travel with the create payload. Any failure is held back and reported after
+      // the RFQ exists.
+      const { attachments: sourceAttachments, failure: attachmentFailure } = await storeSourceDocument();
 
-    // No rfqNumber is sent: the server allocates it under the same scheme the Java
-    // p2pservices app uses. This screen used to mint one with Math.random(), which
-    // could collide and, worse, did not match what was actually saved — so the
-    // details page fetched a number the database had never seen.
-    const saved = await addNewRFQ(
-      {
-        // Extraction supplies a document title, but manual entry has none and the
-        // API requires one, so it falls back to the leading line item the way
-        // rfqIngestionService.deriveTitle does on the server.
-        title: rfqTitle.trim() || entities[0].itemName.trim(),
-        category: mainMajor,
-        sourcingMode: selectedMode,
-        targetDeliveryDate: entities[0].targetDate || defaultTargetDate(),
-        budget,
-        deliveryLocation: trimmedDeliveryLocation,
-        deliveryPincode: trimmedDeliveryPincode,
-        // The document this RFQ was extracted from, so the details screen can
-        // list it and the buyer can reopen what they actually uploaded.
-        attachments: sourceAttachments,
-        extractedEntities: entities,
-        aiScore: selectedMode === 'mode_3' ? 95 : 88,
-        // This wizard raises portal and manual RFQs only. `email_gateway` is
-        // stamped by the autonomous gateway service, which creates its RFQs
-        // server-side without going through here.
-        source: ingestionMethod === 'manual' ? 'manual_entry' : 'web_portal',
-        sourceFileName: uploadedFileName,
-        autoCirculated: false,
-      },
-      vendorsToDispatch
-    );
-
-    // The attachment warning takes precedence over the success toast when both
-    // apply: the buyer already knows the RFQ was raised (the wizard closes and the
-    // record appears), whereas a document that silently failed to store is the
-    // part they would otherwise never find out about. The message says both.
-    if (attachmentFailure) {
-      showToast(EXTRACTION.attachmentStoreFailedTitle, attachmentFailure, 'warning');
-    } else {
-      showToast(
-        EXTRACTION.manualCreatedTitle,
-        formatString(EXTRACTION.manualCreatedMessage, { rfqNumber: saved.rfqNumber }),
-        'success'
+      // No rfqNumber is sent: the server allocates it under the same scheme the Java
+      // p2pservices app uses. This screen used to mint one with Math.random(), which
+      // could collide and, worse, did not match what was actually saved — so the
+      // details page fetched a number the database had never seen.
+      const saved = await addNewRFQ(
+        {
+          // Extraction supplies a document title, but manual entry has none and the
+          // API requires one, so it falls back to the leading line item the way
+          // rfqIngestionService.deriveTitle does on the server.
+          title: rfqTitle.trim() || entities[0].itemName.trim(),
+          category: mainMajor,
+          sourcingMode: selectedMode,
+          targetDeliveryDate: entities[0].targetDate || defaultTargetDate(),
+          budget,
+          deliveryLocation: trimmedDeliveryLocation,
+          deliveryPincode: trimmedDeliveryPincode,
+          // The document this RFQ was extracted from, so the details screen can
+          // list it and the buyer can reopen what they actually uploaded.
+          attachments: sourceAttachments,
+          extractedEntities: entities,
+          aiScore: selectedMode === 'mode_3' ? 95 : 88,
+          // The manual dialog creates its RFQ independently (handleManualRFQCreated)
+          // and never reaches this submission path, so every RFQ built here is a
+          // real document/email upload. `email_gateway` is stamped by the
+          // autonomous mailbox poller, which creates its RFQs server-side without
+          // going through here at all.
+          source: 'web_portal',
+          sourceFileName: uploadedFileName,
+          autoCirculated: false,
+        },
+        vendorsToDispatch
       );
+
+      // The attachment warning takes precedence over the success toast when both
+      // apply: the buyer already knows the RFQ was raised (the wizard closes and the
+      // record appears), whereas a document that silently failed to store is the
+      // part they would otherwise never find out about. The message says both.
+      if (attachmentFailure) {
+        showToast(EXTRACTION.attachmentStoreFailedTitle, attachmentFailure, 'warning');
+      } else {
+        showToast(
+          EXTRACTION.manualCreatedTitle,
+          formatString(EXTRACTION.manualCreatedMessage, { rfqNumber: saved.rfqNumber }),
+          'success'
+        );
+      }
+      onComplete();
+    } finally {
+      // Reached on a thrown error only — the success path calls onComplete(),
+      // which closes the wizard, so there is no stuck-disabled button to fix
+      // up on the path where this flag would otherwise matter.
+      setIsDispatching(false);
     }
-    onComplete();
   };
 
   return (
@@ -673,147 +688,79 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
       </div>
 
       {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* STEP 1: INGESTION (PORTAL UPLOAD OR EMAIL GATEWAY) */}
+      {/* STEP 1: INGESTION — a single drop zone, no method tabs. Email
+          (.eml/.msg) and BOQ documents (xlsx/csv/pdf/docx/txt) both land here;
+          the backend tells them apart by file type (see
+          rfqController.extractRFQFromDocument). Manual entry stays reachable
+          as a small secondary link, not a tab, since it bypasses extraction
+          entirely via its own modal. */}
       {/* ═══════════════════════════════════════════════════════════════ */}
       {activeStep === 1 && (
         <div className="glass-panel p-6 rounded-2xl space-y-5 animate-fade-in border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <div>
-              <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <UploadCloud size={18} className="text-indigo-600 dark:text-indigo-400" />
-                STEP 1: INGESTION SOURCE (EMAIL GATEWAY OR AI RFQ CREATE)
-              </h2>
-              <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                Choose incoming intake source: Autonomous Email Ingestion Gateway or interactive AI RFQ Creation.
+          <div>
+            <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <UploadCloud size={18} className="text-indigo-600 dark:text-indigo-400" />
+              STEP 1: INGESTION SOURCE
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+              Drop a BOQ document or a forwarded requisition email — AI reads it and stages the line items for review.
+            </p>
+          </div>
+
+          <div className="space-y-4">
+            {/* Hidden file input */}
+            <input
+              type="file"
+              ref={fileInputRef}
+              className="hidden"
+              accept=".xlsx,.xls,.csv,.pdf,.docx,.doc,.txt,.eml,.msg"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleRealFileUpload(file);
+              }}
+            />
+
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setIsDraggingDoc(true);
+              }}
+              onDragLeave={() => setIsDraggingDoc(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setIsDraggingDoc(false);
+                const file = e.dataTransfer.files?.[0];
+                if (file) handleRealFileUpload(file);
+              }}
+              className={`border-2 border-dashed rounded-2xl p-8 text-center transition-all cursor-pointer group ${
+                isDraggingDoc
+                  ? 'border-indigo-600 bg-indigo-100/70 dark:bg-indigo-900/50 scale-[1.01]'
+                  : 'border-indigo-300 dark:border-indigo-500/40 hover:border-indigo-500 bg-indigo-50/40 dark:bg-gray-900/40 hover:bg-indigo-50/80 dark:hover:bg-gray-900/70'
+              }`}
+            >
+              <div className="w-14 h-14 rounded-2xl bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-300 dark:border-indigo-500/40 flex items-center justify-center mx-auto text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
+                <FileSpreadsheet size={28} />
+              </div>
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white mt-3">
+                {isProcessingDoc ? EXTRACTION.processingDocumentLabel : EXTRACTION.dropZoneHeading}
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-gray-400 mt-1 max-w-md mx-auto">
+                {EXTRACTION.dropZoneHint}
               </p>
-            </div>
-            <div className="flex items-center gap-1 bg-slate-100 dark:bg-gray-900 p-1 rounded-xl border border-slate-200 dark:border-gray-800 text-xs">
-              <button
-                onClick={() => setIngestionMethod('email')}
-                className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
-                  ingestionMethod === 'email'
-                    ? 'bg-amber-600 text-white shadow-sm'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                <Mail size={13} /> 📧 Email Ingestion Gateway (Autonomous)
-              </button>
-              <button
-                onClick={() => setIngestionMethod('upload')}
-                className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
-                  ingestionMethod === 'upload'
-                    ? 'bg-indigo-600 text-white shadow-sm'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                <Globe size={13} /> 🌐 AI RFQ Create
-              </button>
-              <button
-                data-testid="intake-manual"
-                onClick={() => {
-                  setIngestionMethod('manual');
-                  // Opens straight away: the manual path has nothing to configure
-                  // on this screen before keying, so a second click to get going
-                  // was a step with no purpose.
-                  setIsManualModalOpen(true);
-                }}
-                className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
-                  ingestionMethod === 'manual'
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                <Pencil size={13} /> {EXTRACTION.manualMethodLabel}
-              </button>
+              {/* Only shown once a real file is staged; nothing is pre-filled. */}
+              {uploadedFileName && (
+                <div className="mt-4 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white dark:bg-gray-800 text-xs text-slate-700 dark:text-gray-300 border border-slate-200 dark:border-gray-700 shadow-sm">
+                  <span>Selected File:</span>
+                  <span className="font-semibold text-indigo-600 dark:text-indigo-300 mono">
+                    {uploadedFileName}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 
-          {ingestionMethod === 'manual' ? (
-            <div className="space-y-4">
-              <div className="p-6 rounded-xl border border-dashed border-slate-300 dark:border-gray-700 text-center space-y-3">
-                <Pencil size={26} className="mx-auto text-slate-300 dark:text-gray-700" />
-                <h4 className="text-sm font-bold text-slate-800 dark:text-white">
-                  {EXTRACTION.manualPanelTitle}
-                </h4>
-                <p className="text-xs text-slate-500 dark:text-gray-400 max-w-md mx-auto">
-                  {EXTRACTION.manualPanelMessage}
-                </p>
-                <button
-                  onClick={() => setIsManualModalOpen(true)}
-                  className="btn btn-primary font-bold inline-flex items-center gap-2"
-                >
-                  <Pencil size={14} /> <span>{EXTRACTION.manualStartAction}</span> <ArrowRight size={15} />
-                </button>
-              </div>
-            </div>
-          ) : ingestionMethod === 'upload' ? (
-            <div className="space-y-4">
-
-              {/* Hidden file input */}
-              <input
-                type="file"
-                ref={fileInputRef}
-                className="hidden"
-                accept=".xlsx,.xls,.csv,.pdf,.docx,.doc,.txt"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) handleRealFileUpload(file);
-                }}
-              />
-
-              <div
-                onClick={() => fileInputRef.current?.click()}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setIsDraggingDoc(true);
-                }}
-                onDragLeave={() => setIsDraggingDoc(false)}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setIsDraggingDoc(false);
-                  const file = e.dataTransfer.files?.[0];
-                  if (file) handleRealFileUpload(file);
-                }}
-                className={`border-2 border-dashed rounded-2xl p-8 text-center transition-all cursor-pointer group ${
-                  isDraggingDoc
-                    ? 'border-indigo-600 bg-indigo-100/70 dark:bg-indigo-900/50 scale-[1.01]'
-                    : 'border-indigo-300 dark:border-indigo-500/40 hover:border-indigo-500 bg-indigo-50/40 dark:bg-gray-900/40 hover:bg-indigo-50/80 dark:hover:bg-gray-900/70'
-                }`}
-              >
-                <div className="w-14 h-14 rounded-2xl bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-300 dark:border-indigo-500/40 flex items-center justify-center mx-auto text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
-                  <FileSpreadsheet size={28} />
-                </div>
-                <h3 className="text-sm font-bold text-slate-900 dark:text-white mt-3">
-                  {isProcessingDoc ? EXTRACTION.processingDocumentLabel : EXTRACTION.dropZoneHeading}
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-gray-400 mt-1 max-w-md mx-auto">
-                  {EXTRACTION.dropZoneHint}
-                </p>
-                {/* Only shown once a real file is staged; nothing is pre-filled. */}
-                {uploadedFileName && (
-                  <div className="mt-4 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white dark:bg-gray-800 text-xs text-slate-700 dark:text-gray-300 border border-slate-200 dark:border-gray-700 shadow-sm">
-                    <span>Selected File:</span>
-                    <span className="font-semibold text-indigo-600 dark:text-indigo-300 mono">
-                      {uploadedFileName}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            /* Autonomous gateway. No extract action here: the gateway raises
-               RFQs on its own and parks them for review, so there is nothing
-               for the buyer to submit on this tab. */
-            <EmailGatewayPanel />
-          )}
-
-          {/* The extract footer belongs to the document upload path only. Manual
-              entry carries its own continue action, and the gateway tab has no
-              submit at all — it reports a background process rather than taking
-              input, so an "Extract Line Items with AI" button beside either would
-              imply a document had been supplied. */}
-          {ingestionMethod === 'upload' &&
-            (isProcessingDoc ? (
+          {isProcessingDoc ? (
             <div className="p-4 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-500/40 text-center space-y-2">
               <div className="flex items-center justify-center gap-2 text-indigo-700 dark:text-indigo-300 font-bold text-xs">
                 <Sparkles size={16} className="animate-spin" />
@@ -826,7 +773,13 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
             </div>
           ) : (
             <div className="flex items-center justify-between flex-wrap gap-2 pt-2 border-t border-slate-100 dark:border-gray-800">
-              <div className="text-[11px] text-slate-400">{EXTRACTION.extractFooterHint}</div>
+              <button
+                data-testid="intake-manual"
+                onClick={() => setIsManualModalOpen(true)}
+                className="text-[11px] font-semibold text-slate-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-1.5"
+              >
+                <Pencil size={12} /> {EXTRACTION.manualMethodLabel}
+              </button>
               <div className="flex items-center gap-2">
                 <button
                   onClick={handleExtractDocument}
@@ -836,7 +789,7 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                 </button>
               </div>
             </div>
-            ))}
+          )}
         </div>
       )}
 
@@ -1377,8 +1330,12 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
             <button onClick={() => setActiveStep(2)} className="btn btn-secondary btn-sm">
               Back to Review
             </button>
-            <button onClick={handleDispatch} className="btn btn-primary btn-lg font-bold shadow-lg shadow-indigo-600/20 flex items-center gap-2">
-              <Send size={16} /> {EXTRACTION.dispatchAction}
+            <button
+              onClick={handleDispatch}
+              disabled={isDispatching}
+              className="btn btn-primary btn-lg font-bold shadow-lg shadow-indigo-600/20 flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              <Send size={16} /> {isDispatching ? 'Saving…' : EXTRACTION.dispatchAction}
             </button>
           </div>
         </div>

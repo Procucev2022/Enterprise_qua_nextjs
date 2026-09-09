@@ -17,34 +17,6 @@ jest.mock('@/lib/rfqClient', () => ({
   classifyLineItems: jest.fn(),
   uploadRFQAttachment: jest.fn(),
 }));
-// The gateway tab renders EmailGatewayPanel, which reads status on mount. Doubled
-// here so this suite stays about the wizard; the panel has its own suite.
-jest.mock('@/lib/emailGatewayClient', () => ({
-  fetchEmailGatewayStatus: jest.fn().mockResolvedValue({
-    success: true,
-    data: {
-      enabled: false,
-      configured: false,
-      watching: false,
-      mailboxUser: null,
-      mailbox: 'INBOX',
-      host: null,
-      pollIntervalMs: 120000,
-      allowedSenders: [],
-      allowedDomains: [],
-      lastPollAt: null,
-      lastPollDurationMs: null,
-      lastConnectedAt: null,
-      lastError: null,
-      isPolling: false,
-      counts: {},
-      recent: [],
-      ingestedStatus: 'Parsing',
-    },
-  }),
-  pollEmailGateway: jest.fn().mockResolvedValue({ success: true, data: { considered: 0, ingested: 0, pending: 0 } }),
-}));
-
 // The wizard flattens a workbook with header:1, so the mock returns row arrays.
 jest.mock('xlsx', () => ({
   read: jest.fn(() => ({ SheetNames: ['Sheet1'], Sheets: { Sheet1: {} } })),
@@ -491,6 +463,56 @@ describe('IngestionWizard: Step 3 sourcing mode only', () => {
     expect(JSON.parse(createCall![1].body).attachments).toEqual([stored]);
   });
 
+  // A real, confirmed bug: with no re-entrancy guard, a fast double-click (or
+  // just a slow network leaving the button clickable during the async chain)
+  // fired handleDispatch's full create-RFQ request more than once, each one a
+  // genuinely separate RFQ row — not a UI artifact.
+  it('creates exactly one RFQ even when the save button is clicked twice in a row', async () => {
+    mockAttach.mockResolvedValue({
+      success: true,
+      data: { id: 'att-1', fileName: 'BOQ.xlsx', mimeType: 'application/octet-stream', size: 10, uploadedAt: 'x' },
+    });
+    mockExtract.mockResolvedValue(successResult());
+    renderWizard({ forceSubscription: 'version_3' });
+    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
+    clickExtract();
+    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
+    proceedToSourcing();
+
+    const dispatchButton = screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') });
+    fireEvent.click(dispatchButton);
+    fireEvent.click(dispatchButton);
+    fireEvent.click(dispatchButton);
+
+    await waitFor(() => expect(mockAttach).toHaveBeenCalled());
+    const createCalls = (global.fetch as jest.Mock).mock.calls.filter(
+      ([url, init]) => /\/api\/rfqs(\?|$)/.test(String(url)) && init?.method === 'POST'
+    );
+    expect(createCalls).toHaveLength(1);
+    expect(mockAttach).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables the save button and shows a saving label while dispatch is in flight', async () => {
+    let resolveAttach: (r: unknown) => void = () => {};
+    mockAttach.mockImplementation(() => new Promise((resolve) => { resolveAttach = resolve; }));
+    mockExtract.mockResolvedValue(successResult());
+    renderWizard({ forceSubscription: 'version_3' });
+    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
+    clickExtract();
+    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
+    proceedToSourcing();
+
+    const dispatchButton = screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') });
+    fireEvent.click(dispatchButton);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Saving/i })).toBeDisabled());
+
+    resolveAttach({
+      success: true,
+      data: { id: 'att-1', fileName: 'BOQ.xlsx', mimeType: 'application/octet-stream', size: 10, uploadedAt: 'x' },
+    });
+  });
+
   it('still raises the RFQ when the document cannot be stored, and says what is missing', async () => {
     // The RFQ is what the buyer came to create. Refusing it because a copy of the
     // source document could not be kept would be the wrong trade-off, so the
@@ -537,23 +559,10 @@ describe('IngestionWizard: Step 3 sourcing mode only', () => {
     expect(toastTitles).not.toContain(EXTRACTION.manualCreatedTitle);
   });
 
-  it('offers no extract action on the gateway tab', async () => {
-    renderWizard({ forceSubscription: 'version_3' });
-
-    fireEvent.click(screen.getByRole('button', { name: /Email Ingestion Gateway/i }));
-
-    expect(await screen.findByTestId('gateway-panel')).toBeInTheDocument();
-    // The gateway raises RFQs on its own; there is nothing for the buyer to submit.
-    expect(
-      screen.queryByRole('button', { name: new RegExp(EXTRACTION.extractAction, 'i') })
-    ).not.toBeInTheDocument();
-    expect(mockExtract).not.toHaveBeenCalled();
-    expect(mockAttach).not.toHaveBeenCalled();
-  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Step 1 intake controls: tabs, drag-and-drop, and the email gateway simulator
+// Step 1 intake controls: a single drop zone, no method tabs
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('IngestionWizard: Step 1 intake controls', () => {
   beforeEach(() => {
@@ -563,16 +572,16 @@ describe('IngestionWizard: Step 1 intake controls', () => {
 
   const dropZone = () => screen.getByText(/Click to Browse or Drag & Drop/i).closest('div') as HTMLElement;
 
-  it('offers document upload only, with no email-file sub-tab', () => {
+  it('offers document upload, including a forwarded .eml/.msg requisition', () => {
     renderWizard();
 
     expect(screen.getByText(EXTRACTION.dropZoneHeading)).toBeInTheDocument();
-    // An emailed requisition is picked up by the gateway, so no email container is
-    // accepted here and the picker must not advertise one.
+    // No separate email-file sub-tab: a forwarded requisition is just another
+    // file the same picker accepts, routed server-side by extension.
     expect(screen.queryByRole('button', { name: /Upload Email File/i })).not.toBeInTheDocument();
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
-    expect(input.accept).not.toContain('.eml');
-    expect(input.accept).not.toContain('.msg');
+    expect(input.accept).toContain('.eml');
+    expect(input.accept).toContain('.msg');
   });
 
   it('accepts a dropped document and shows the selected file', async () => {
@@ -597,15 +606,6 @@ describe('IngestionWizard: Step 1 intake controls', () => {
   it('shows no selected-file chip until a document is chosen', () => {
     renderWizard();
     expect(screen.queryByText(/Selected File:/i)).not.toBeInTheDocument();
-  });
-
-  it('returns to the web portal method from the email gateway', async () => {
-    renderWizard();
-    fireEvent.click(screen.getByRole('button', { name: /Email Ingestion Gateway/i }));
-    expect(await screen.findByTestId('gateway-panel')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /AI RFQ Create/i }));
-    expect(screen.getByText(EXTRACTION.dropZoneHeading)).toBeInTheDocument();
   });
 
   it('exits the wizard through the header control', () => {
@@ -1158,12 +1158,10 @@ describe('IngestionWizard: manual entry and delivery details', () => {
     renderWizard();
     fireEvent.click(screen.getByTestId('intake-manual'));
 
-    // The manual panel is what replaces the upload and email panels.
-    expect(screen.getByRole('button', { name: new RegExp(EXTRACTION.manualStartAction, 'i') })).toBeInTheDocument();
-    // No document is involved, so the AI extract action must not be offered.
-    expect(
-      screen.queryByRole('button', { name: new RegExp(EXTRACTION.extractAction, 'i') })
-    ).not.toBeInTheDocument();
+    // Manual entry is a modal overlay now, not a panel that replaces the drop
+    // zone, so it opens directly without going through document extraction.
+    expect(screen.getByTestId('manual-rfq-modal')).toBeInTheDocument();
+    expect(mockExtract).not.toHaveBeenCalled();
   });
 
   // The budget is optional now: a document that prices nothing must still save.
@@ -1381,24 +1379,25 @@ describe('IngestionWizard: manual entry dialog', () => {
     expect(screen.getByTestId('wizard-step-2').getAttribute('aria-disabled')).toBe('true');
   });
 
-  it('reopens the dialog from the panel action', () => {
+  it('reopens the dialog from the same link after closing it', () => {
     renderWizard();
     fireEvent.click(screen.getByTestId('intake-manual'));
     fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.manualRfqModal.closeAria }));
 
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.manualStartAction, 'i') }));
+    fireEvent.click(screen.getByTestId('intake-manual'));
 
     expect(screen.getByTestId('manual-rfq-modal')).toBeInTheDocument();
   });
 
-  // No document is involved, so the AI extract action must not be offered.
-  it('offers no extract action on the manual panel', () => {
+  // The drop zone stays underneath the manual dialog rather than being
+  // replaced by it, so the extract action is still offered once it closes.
+  it('leaves the extract action available once the manual dialog closes', () => {
     renderWizard();
     fireEvent.click(screen.getByTestId('intake-manual'));
     fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.manualRfqModal.closeAria }));
 
     expect(
-      screen.queryByRole('button', { name: new RegExp(EXTRACTION.extractAction, 'i') })
-    ).not.toBeInTheDocument();
+      screen.getByRole('button', { name: new RegExp(EXTRACTION.extractAction, 'i') })
+    ).toBeInTheDocument();
   });
 });

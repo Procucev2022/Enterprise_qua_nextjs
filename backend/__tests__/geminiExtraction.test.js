@@ -1,8 +1,9 @@
 const request = require('supertest');
 const app = require('../src/app');
 const gemini = require('../src/services/geminiService');
-const { GEMINI_CONFIG, EXTRACTION_REASON_MESSAGES } = require('../src/config/constants');
+const { GEMINI_CONFIG, EXTRACTION_REASON_MESSAGES, EMAIL_INGESTION_STATUS } = require('../src/config/constants');
 const { authHeader } = require('./testHelpers');
+const { PLAIN_REQUISITION_EML, EMPTY_BODY_EML, toBase64 } = require('./fixtures/sampleRequisitionEmail');
 
 const { EXTRACTION_STATUS } = gemini;
 
@@ -574,6 +575,113 @@ describe('POST /api/rfqs/extract', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.body.classification.needsReview).toBe(1);
+  });
+
+  // A buyer uploading their own .eml/.msg goes through emailIngestionService's
+  // real MIME parsing first, then the same Gemini extraction/classification as
+  // every other document — see rfqController.extractRFQFromDocument.
+  describe('uploading a raw .eml/.msg', () => {
+    test('parses the email, extracts line items, and records the sender as sourceEmail', async () => {
+      GEMINI_CONFIG.API_KEY = 'test-key';
+      global.fetch = jest.fn().mockResolvedValue(
+        geminiReply(
+          JSON.stringify({
+            documentTitle: 'Requisition - Centrifugal Pumps for Hazira Expansion',
+            items: [
+              { itemDescription: 'Centrifugal Pump 150 m3/hr', quantity: 4, unit: 'Nos' },
+              { itemDescription: 'Gate Valve 200mm', quantity: 12, unit: 'Nos' },
+            ],
+          })
+        )
+      );
+
+      const res = await request(app)
+        .post('/api/rfqs/extract')
+        .set(authHeader('buyer'))
+        .send({ fileName: 'original_msg.eml', inlineData: toBase64(PLAIN_REQUISITION_EML), mimeType: 'message/rfc822' });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.extractedEntities).toHaveLength(2);
+      expect(res.body.data.sourceEmail).toBe('project.procurement@lt-heavy.com');
+      // The parsed email's own text (not the raw base64) reached the extractor.
+      const [, init] = global.fetch.mock.calls[0];
+      expect(String(init.body)).toContain('Centrifugal Pump, 150 m3/hr, 40m head, CI casing - 4 Nos');
+    });
+
+    test('returns 422 NO_CONTENT for an email with no readable body or attachment', async () => {
+      const res = await request(app)
+        .post('/api/rfqs/extract')
+        .set(authHeader('buyer'))
+        .send({ fileName: 'empty.eml', inlineData: toBase64(EMPTY_BODY_EML), mimeType: 'message/rfc822' });
+
+      expect(res.statusCode).toBe(422);
+      expect(res.body.reason).toBe(EMAIL_INGESTION_STATUS.NO_CONTENT);
+      expect(res.body.error).toBe(EXTRACTION_REASON_MESSAGES.NO_CONTENT);
+    });
+
+    test('returns 422 NO_CONTENT for a .eml upload with an empty body', async () => {
+      const res = await request(app)
+        .post('/api/rfqs/extract')
+        .set(authHeader('buyer'))
+        .send({ fileName: 'blank.eml', inlineData: '', mimeType: 'message/rfc822' });
+
+      expect(res.statusCode).toBe(422);
+      expect(res.body.reason).toBe(EMAIL_INGESTION_STATUS.NO_CONTENT);
+    });
+
+    test('returns 422 UNREADABLE when the message cannot be parsed', async () => {
+      const emailIngestionService = require('../src/services/emailIngestionService');
+      const spy = jest.spyOn(emailIngestionService, 'parseEmailMessage').mockRejectedValue(new Error('bad mime'));
+
+      const res = await request(app)
+        .post('/api/rfqs/extract')
+        .set(authHeader('buyer'))
+        .send({ fileName: 'broken.eml', inlineData: toBase64(PLAIN_REQUISITION_EML), mimeType: 'message/rfc822' });
+
+      expect(res.statusCode).toBe(422);
+      expect(res.body.reason).toBe(EMAIL_INGESTION_STATUS.UNREADABLE);
+      expect(res.body.error).toBe(EXTRACTION_REASON_MESSAGES.UNREADABLE);
+      spy.mockRestore();
+    });
+
+    test('returns 422 TOO_LARGE for an oversized .eml', async () => {
+      const { EMAIL_INGESTION_CONFIG } = require('../src/config/constants');
+      const huge = Buffer.alloc(EMAIL_INGESTION_CONFIG.MAX_BYTES + 1, 'a').toString('base64');
+
+      const res = await request(app)
+        .post('/api/rfqs/extract')
+        .set(authHeader('buyer'))
+        .send({ fileName: 'huge.eml', inlineData: huge, mimeType: 'message/rfc822' });
+
+      expect(res.statusCode).toBe(422);
+      expect(res.body.reason).toBe(EMAIL_INGESTION_STATUS.TOO_LARGE);
+      expect(res.body.error).toBe(EXTRACTION_REASON_MESSAGES.TOO_LARGE);
+    });
+
+    test('returns 422 OUTLOOK_MSG_UNSUPPORTED for a .msg upload', async () => {
+      const res = await request(app)
+        .post('/api/rfqs/extract')
+        .set(authHeader('buyer'))
+        .send({ fileName: 'requisition.msg', inlineData: toBase64('not really rfc822'), mimeType: 'application/vnd.ms-outlook' });
+
+      expect(res.statusCode).toBe(422);
+      expect(res.body.reason).toBe(EMAIL_INGESTION_STATUS.OUTLOOK_MSG_UNSUPPORTED);
+      expect(res.body.error).toBe(EXTRACTION_REASON_MESSAGES.OUTLOOK_MSG_UNSUPPORTED);
+    });
+
+    test('a non-.eml, non-.msg upload is unaffected (regression check)', async () => {
+      GEMINI_CONFIG.API_KEY = 'test-key';
+      global.fetch = jest.fn().mockResolvedValue(geminiReply('{"items":[{"itemDescription":"Pump","quantity":1}]}'));
+
+      const res = await request(app)
+        .post('/api/rfqs/extract')
+        .set(authHeader('buyer'))
+        .send({ fileName: 'BOQ.xlsx', documentText: 'Pump | 1' });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data.sourceEmail).toBeUndefined();
+    });
   });
 });
 

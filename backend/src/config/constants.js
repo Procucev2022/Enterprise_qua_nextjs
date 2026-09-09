@@ -810,6 +810,16 @@ const EXTRACTION_REASON_MESSAGES = {
     'AI extraction could not read this document. Add the line items manually to continue.',
   NO_ITEMS_FOUND:
     'No procurement line items could be identified in this document. Add the line items manually to continue.',
+  // Shared with emailIngestionService's EMAIL_INGESTION_STATUS — a buyer
+  // uploading a raw .eml goes through the same status set as the IMAP gateway.
+  NOT_AN_EMAIL:
+    'That file could not be read as an email. Upload the original .eml file, or add the line items manually.',
+  OUTLOOK_MSG_UNSUPPORTED:
+    'Outlook .msg files are not supported yet — save the email as .eml and upload that instead, or add the line items manually.',
+  UNREADABLE:
+    'This email could not be read. Add the line items manually to continue.',
+  TOO_LARGE:
+    'This email is too large for AI extraction. Add the line items manually to continue.',
 };
 
 // MIME types Gemini can read natively as inline data. Spreadsheets are flattened

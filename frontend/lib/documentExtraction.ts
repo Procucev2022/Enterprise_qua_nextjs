@@ -21,6 +21,11 @@ export function isSpreadsheet(name: string): boolean {
   return /\.(xlsx|xls|csv|tsv)$/i.test(name);
 }
 
+/** A raw forwarded email — parsed server-side by emailIngestionService, not Gemini directly. */
+export function isEmailFile(name: string): boolean {
+  return /\.eml$/i.test(name);
+}
+
 /**
  * Turn a workbook into the " | "-delimited text layout the extraction prompt
  * describes, preserving row structure so quantities stay aligned with the item
@@ -69,6 +74,12 @@ export function readAsArrayBuffer(file: File): Promise<ArrayBuffer> {
 export async function buildExtractionRequest(file: File): Promise<RFQExtractionRequest> {
   if (isSpreadsheet(file.name)) {
     return { fileName: file.name, documentText: flattenWorkbook(await readAsArrayBuffer(file)) };
+  }
+  if (isEmailFile(file.name)) {
+    // Raw RFC822 bytes, base64 — the backend detects the .eml extension and
+    // routes this through emailIngestionService instead of Gemini's inline
+    // MIME allow-list (which doesn't include message/rfc822).
+    return { fileName: file.name, inlineData: await readAsBase64(file), mimeType: 'message/rfc822' };
   }
   return {
     fileName: file.name,
