@@ -115,6 +115,11 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
   const [activeStep, setActiveStep] = useState<number>(1);
   const [isProcessingDoc, setIsProcessingDoc] = useState(false);
   const [isCategorizing, setIsCategorizing] = useState(false);
+  // Guards handleDispatch against being re-entered while its own request is
+  // still in flight — without it, a double-click (or a slow network leaving
+  // the button clickable for a couple of seconds) fired the whole async
+  // create-RFQ chain more than once, each one a genuine, separate RFQ row.
+  const [isDispatching, setIsDispatching] = useState(false);
   const [uploadedFileName, setUploadedFileName] = useState<string>('');
   // Manual entry has no extraction to complete, so Step 1 needs its own signal
   // that the buyer has chosen to proceed. Without it the step strip would stay
@@ -530,75 +535,90 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
   };
 
   const handleDispatch = async () => {
-    // Line-item completeness is not re-checked here: `unlockedStep` locks Step 3
-    // the moment a row loses its description, so this screen cannot be reached
-    // with an unquotable list.
-    //
-    // The budget is deliberately not gated. A document can price nothing at all,
-    // and requiring a figure only made buyers invent a ceiling that vendors would
-    // then quote against.
-    //
-    // The delivery destination is not re-checked here either, for the same reason:
-    // both fields only render on Step 2, so they cannot be cleared while this
-    // screen is showing, and `unlockedStep` drops back to 2 the moment one is
-    // emptied, which re-locks the strip before dispatch can be reached.
-    setCurrentMode(selectedMode);
-    // No fallback needed: `hasCompleteLineItems` requires a major category on
-    // every row before Step 3 unlocks, so the leading item always carries one.
-    const mainMajor = entities[0].majorCategory;
-    const vendorsToDispatch: VendorEntry[] = [];
-    // Awaited before the RFQ is posted, because the attachment metadata has to
-    // travel with the create payload. Any failure is held back and reported after
-    // the RFQ exists.
-    const { attachments: sourceAttachments, failure: attachmentFailure } = await storeSourceDocument();
+    // Re-entrancy guard: without it, a double-click — or just a slow network
+    // leaving the button clickable for the second or two this whole async
+    // chain takes — fired handleDispatch more than once, each call running
+    // the full create-RFQ request independently. Every extra call was a real,
+    // separate RFQ row, not a UI artifact: confirmed live (3 RFQs from one
+    // click sequence, then 2 from another).
+    if (isDispatching) return;
+    setIsDispatching(true);
+    try {
+      // Line-item completeness is not re-checked here: `unlockedStep` locks Step 3
+      // the moment a row loses its description, so this screen cannot be reached
+      // with an unquotable list.
+      //
+      // The budget is deliberately not gated. A document can price nothing at all,
+      // and requiring a figure only made buyers invent a ceiling that vendors would
+      // then quote against.
+      //
+      // The delivery destination is not re-checked here either, for the same reason:
+      // both fields only render on Step 2, so they cannot be cleared while this
+      // screen is showing, and `unlockedStep` drops back to 2 the moment one is
+      // emptied, which re-locks the strip before dispatch can be reached.
+      setCurrentMode(selectedMode);
+      // No fallback needed: `hasCompleteLineItems` requires a major category on
+      // every row before Step 3 unlocks, so the leading item always carries one.
+      const mainMajor = entities[0].majorCategory;
+      const vendorsToDispatch: VendorEntry[] = [];
+      // Awaited before the RFQ is posted, because the attachment metadata has to
+      // travel with the create payload. Any failure is held back and reported after
+      // the RFQ exists.
+      const { attachments: sourceAttachments, failure: attachmentFailure } = await storeSourceDocument();
 
-    // No rfqNumber is sent: the server allocates it under the same scheme the Java
-    // p2pservices app uses. This screen used to mint one with Math.random(), which
-    // could collide and, worse, did not match what was actually saved — so the
-    // details page fetched a number the database had never seen.
-    const saved = await addNewRFQ(
-      {
-        // Extraction supplies a document title, but manual entry has none and the
-        // API requires one, so it falls back to the leading line item the way
-        // rfqIngestionService.deriveTitle does on the server.
-        title: rfqTitle.trim() || entities[0].itemName.trim(),
-        category: mainMajor,
-        sourcingMode: selectedMode,
-        targetDeliveryDate: entities[0].targetDate || defaultTargetDate(),
-        budget,
-        deliveryLocation: trimmedDeliveryLocation,
-        deliveryPincode: trimmedDeliveryPincode,
-        // The document this RFQ was extracted from, so the details screen can
-        // list it and the buyer can reopen what they actually uploaded.
-        attachments: sourceAttachments,
-        extractedEntities: entities,
-        aiScore: selectedMode === 'mode_3' ? 95 : 88,
-        // The manual dialog creates its RFQ independently (handleManualRFQCreated)
-        // and never reaches this submission path, so every RFQ built here is a
-        // real document/email upload. `email_gateway` is stamped by the
-        // autonomous mailbox poller, which creates its RFQs server-side without
-        // going through here at all.
-        source: 'web_portal',
-        sourceFileName: uploadedFileName,
-        autoCirculated: false,
-      },
-      vendorsToDispatch
-    );
-
-    // The attachment warning takes precedence over the success toast when both
-    // apply: the buyer already knows the RFQ was raised (the wizard closes and the
-    // record appears), whereas a document that silently failed to store is the
-    // part they would otherwise never find out about. The message says both.
-    if (attachmentFailure) {
-      showToast(EXTRACTION.attachmentStoreFailedTitle, attachmentFailure, 'warning');
-    } else {
-      showToast(
-        EXTRACTION.manualCreatedTitle,
-        formatString(EXTRACTION.manualCreatedMessage, { rfqNumber: saved.rfqNumber }),
-        'success'
+      // No rfqNumber is sent: the server allocates it under the same scheme the Java
+      // p2pservices app uses. This screen used to mint one with Math.random(), which
+      // could collide and, worse, did not match what was actually saved — so the
+      // details page fetched a number the database had never seen.
+      const saved = await addNewRFQ(
+        {
+          // Extraction supplies a document title, but manual entry has none and the
+          // API requires one, so it falls back to the leading line item the way
+          // rfqIngestionService.deriveTitle does on the server.
+          title: rfqTitle.trim() || entities[0].itemName.trim(),
+          category: mainMajor,
+          sourcingMode: selectedMode,
+          targetDeliveryDate: entities[0].targetDate || defaultTargetDate(),
+          budget,
+          deliveryLocation: trimmedDeliveryLocation,
+          deliveryPincode: trimmedDeliveryPincode,
+          // The document this RFQ was extracted from, so the details screen can
+          // list it and the buyer can reopen what they actually uploaded.
+          attachments: sourceAttachments,
+          extractedEntities: entities,
+          aiScore: selectedMode === 'mode_3' ? 95 : 88,
+          // The manual dialog creates its RFQ independently (handleManualRFQCreated)
+          // and never reaches this submission path, so every RFQ built here is a
+          // real document/email upload. `email_gateway` is stamped by the
+          // autonomous mailbox poller, which creates its RFQs server-side without
+          // going through here at all.
+          source: 'web_portal',
+          sourceFileName: uploadedFileName,
+          autoCirculated: false,
+        },
+        vendorsToDispatch
       );
+
+      // The attachment warning takes precedence over the success toast when both
+      // apply: the buyer already knows the RFQ was raised (the wizard closes and the
+      // record appears), whereas a document that silently failed to store is the
+      // part they would otherwise never find out about. The message says both.
+      if (attachmentFailure) {
+        showToast(EXTRACTION.attachmentStoreFailedTitle, attachmentFailure, 'warning');
+      } else {
+        showToast(
+          EXTRACTION.manualCreatedTitle,
+          formatString(EXTRACTION.manualCreatedMessage, { rfqNumber: saved.rfqNumber }),
+          'success'
+        );
+      }
+      onComplete();
+    } finally {
+      // Reached on a thrown error only — the success path calls onComplete(),
+      // which closes the wizard, so there is no stuck-disabled button to fix
+      // up on the path where this flag would otherwise matter.
+      setIsDispatching(false);
     }
-    onComplete();
   };
 
   return (
@@ -1310,8 +1330,12 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
             <button onClick={() => setActiveStep(2)} className="btn btn-secondary btn-sm">
               Back to Review
             </button>
-            <button onClick={handleDispatch} className="btn btn-primary btn-lg font-bold shadow-lg shadow-indigo-600/20 flex items-center gap-2">
-              <Send size={16} /> {EXTRACTION.dispatchAction}
+            <button
+              onClick={handleDispatch}
+              disabled={isDispatching}
+              className="btn btn-primary btn-lg font-bold shadow-lg shadow-indigo-600/20 flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              <Send size={16} /> {isDispatching ? 'Saving…' : EXTRACTION.dispatchAction}
             </button>
           </div>
         </div>

@@ -463,6 +463,56 @@ describe('IngestionWizard: Step 3 sourcing mode only', () => {
     expect(JSON.parse(createCall![1].body).attachments).toEqual([stored]);
   });
 
+  // A real, confirmed bug: with no re-entrancy guard, a fast double-click (or
+  // just a slow network leaving the button clickable during the async chain)
+  // fired handleDispatch's full create-RFQ request more than once, each one a
+  // genuinely separate RFQ row — not a UI artifact.
+  it('creates exactly one RFQ even when the save button is clicked twice in a row', async () => {
+    mockAttach.mockResolvedValue({
+      success: true,
+      data: { id: 'att-1', fileName: 'BOQ.xlsx', mimeType: 'application/octet-stream', size: 10, uploadedAt: 'x' },
+    });
+    mockExtract.mockResolvedValue(successResult());
+    renderWizard({ forceSubscription: 'version_3' });
+    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
+    clickExtract();
+    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
+    proceedToSourcing();
+
+    const dispatchButton = screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') });
+    fireEvent.click(dispatchButton);
+    fireEvent.click(dispatchButton);
+    fireEvent.click(dispatchButton);
+
+    await waitFor(() => expect(mockAttach).toHaveBeenCalled());
+    const createCalls = (global.fetch as jest.Mock).mock.calls.filter(
+      ([url, init]) => /\/api\/rfqs(\?|$)/.test(String(url)) && init?.method === 'POST'
+    );
+    expect(createCalls).toHaveLength(1);
+    expect(mockAttach).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables the save button and shows a saving label while dispatch is in flight', async () => {
+    let resolveAttach: (r: unknown) => void = () => {};
+    mockAttach.mockImplementation(() => new Promise((resolve) => { resolveAttach = resolve; }));
+    mockExtract.mockResolvedValue(successResult());
+    renderWizard({ forceSubscription: 'version_3' });
+    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
+    clickExtract();
+    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
+    proceedToSourcing();
+
+    const dispatchButton = screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') });
+    fireEvent.click(dispatchButton);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Saving/i })).toBeDisabled());
+
+    resolveAttach({
+      success: true,
+      data: { id: 'att-1', fileName: 'BOQ.xlsx', mimeType: 'application/octet-stream', size: 10, uploadedAt: 'x' },
+    });
+  });
+
   it('still raises the RFQ when the document cannot be stored, and says what is missing', async () => {
     // The RFQ is what the buyer came to create. Refusing it because a copy of the
     // source document could not be kept would be the wrong trade-off, so the
