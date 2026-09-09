@@ -372,7 +372,8 @@ export const UI_STRINGS = {
     boqTabLabel: 'BOQ Spreadsheet / Drawing (.xlsx, .pdf, .docx)',
     processingDocumentLabel: 'Processing Document & Extracting Line-Items with AI OCR...',
     dropZoneHeading: 'Click to Browse or Drag & Drop RFQ Document / BOQ Spreadsheet',
-    dropZoneHint: 'Supports Excel (.xlsx, .xls), PDF drawings, CSV, and Word specifications (.docx).',
+    dropZoneHint:
+      'Supports Excel (.xlsx, .xls), PDF drawings, CSV, Word specifications (.docx), or a forwarded requisition email (.eml).',
     extractFooterHint: 'Your document is read by Gemini AI, then you confirm the line items in Step 2.',
     attachmentStoreFailedMessage:
       'The RFQ was created, but {fileName} could not be stored with it, so it will not appear under Supporting Documents. {reason} You can attach it again from the RFQ details screen.',

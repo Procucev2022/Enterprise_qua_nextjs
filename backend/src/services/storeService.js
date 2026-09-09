@@ -663,9 +663,33 @@ class StoreService {
       : rfq;
   }
 
+  /**
+   * A fresh `RFQ-2026-NNNN` not already held by any RFQ currently in memory.
+   *
+   * Previously `this.rfqs.length + 893` — the current in-memory count, not a
+   * persistent counter. Any RFQ deleted directly (a cleanup script, a raw SQL
+   * delete) shrinks that count, so the next creation could regenerate a
+   * number an older, still-present Neon row already holds. Because
+   * `_persistRFQ` is fire-and-forget, that collision against the DB's
+   * `rfqs_rfq_number_key` UNIQUE constraint failed silently: the API still
+   * returned 200 with a full RFQ object, but the row never actually reached
+   * Neon — confirmed live (RFQ-2026-0918 was generated and "created" five
+   * separate times across this engagement's sessions). Deduping against the
+   * real in-memory set (accurate for the life of a process, since hydration
+   * loads every persisted row at boot and every creation appends here) makes
+   * a repeat astronomically unlikely instead of routine.
+   */
+  generateRFQNumber() {
+    const existing = new Set(this.rfqs.map((r) => r.rfqNumber));
+    let candidate;
+    do {
+      candidate = `RFQ-2026-${Math.floor(1000 + Math.random() * 9000)}`;
+    } while (existing.has(candidate));
+    return candidate;
+  }
+
   createRFQ(rfqData, requestingBuyerAccount = null) {
-    const nextNum = this.rfqs.length + 893;
-    const rfqNumber = rfqData.rfqNumber || `RFQ-2026-0${nextNum}`;
+    const rfqNumber = rfqData.rfqNumber || this.generateRFQNumber();
     const id = rfqData.id || `rfq-${Date.now()}`;
 
     const newRFQ = {
