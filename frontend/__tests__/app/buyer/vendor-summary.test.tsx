@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import VendorSummary, { isBuyerUploaded, isProcucevVendor } from '@/app/buyer/vendor-summary';
 import { useApp } from '@/lib/store';
 
@@ -850,9 +850,10 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       fireEvent.click(screen.getByText(/Submit Revision & Dispatch Email/i));
 
-      await screen.findByText('Vendor Directory & Summary');
-      expect(mockReviseVendorRating).toHaveBeenCalled();
-      expect(screen.queryByText('Revise Supplier Performance Rating')).not.toBeInTheDocument();
+      await waitFor(() => expect(mockReviseVendorRating).toHaveBeenCalled());
+      await waitFor(() =>
+        expect(screen.queryByText('Revise Supplier Performance Rating')).not.toBeInTheDocument()
+      );
     });
 
     it('covers all vendor-origin badge classification branches', () => {

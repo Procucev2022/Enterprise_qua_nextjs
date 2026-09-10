@@ -16,6 +16,19 @@ jest.mock('@/lib/rfqClient', () => ({
   extractLineItemsFromDocument: jest.fn(),
 }));
 
+// The modal reads buyerVendors from useApp() inside a try/catch, since it can
+// render outside an AppProvider in some contexts. Defaults to throwing (the
+// historical, un-provided case every other test in this file relies on);
+// individual Mode 1 roster tests override this to return a real value.
+jest.mock('@/lib/store', () => ({
+  useApp: jest.fn(() => {
+    throw new Error('useApp must be used within an AppProvider');
+  }),
+}));
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { useApp } = require('@/lib/store');
+
 // Reading a File is jsdom's business, not this dialog's: the request builder is
 // exercised directly in documentExtraction.test.ts.
 jest.mock('@/lib/documentExtraction', () => ({
@@ -723,5 +736,89 @@ describe('ManualRFQModal: extraction from an attached document', () => {
     const payload = rfqClient.createRFQ.mock.calls[0][0];
     expect(payload.extractedEntities).toHaveLength(1);
     expect(payload.extractedEntities[0].itemName).toBe('Centrifugal Water Pump 500 GPM');
+  });
+});
+
+describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
+  it('shows the empty-roster state and omits assignedVendors when the buyer has no uploaded vendors', async () => {
+    (useApp as jest.Mock).mockReturnValue({ buyerVendors: [] });
+    renderModal();
+
+    expect(screen.getByText('No Private Vendors Uploaded Yet')).toBeInTheDocument();
+    expect(screen.getByText('0 Suppliers Found')).toBeInTheDocument();
+
+    fillRow();
+    fillDelivery();
+    clickSave();
+
+    await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
+    expect(rfqClient.createRFQ.mock.calls[0][0].assignedVendors).toEqual([]);
+  });
+
+  it('lists the buyer-uploaded vendors and dispatches strictly to them on save', async () => {
+    (useApp as jest.Mock).mockReturnValue({
+      buyerVendors: [
+        {
+          id: 'v-hist-1',
+          name: 'Apex Industrial Dynamics',
+          contactPerson: 'Rajesh Nair',
+          email: 'rajesh@apex.in',
+          phone: '+91 98200 11111',
+          source: 'historical_purchase_dump',
+        },
+        // No name/email/phone/contactPerson: exercises every fallback.
+        { id: 'v-hist-2', source: 'historical_purchase_dump' },
+        // Not buyer-uploaded: must be excluded from both the preview and the payload.
+        { id: 'v-cm-1', name: 'Category Manager Vendor', source: 'category_manager_upload' },
+      ],
+    });
+    renderModal();
+
+    expect(screen.getByText('2 Suppliers Found')).toBeInTheDocument();
+    expect(screen.getByText(/1\. Apex Industrial Dynamics/)).toBeInTheDocument();
+    expect(screen.getByText('Rajesh Nair')).toBeInTheDocument();
+    expect(screen.getByText('rajesh@apex.in')).toBeInTheDocument();
+    expect(screen.getByText('2.')).toBeInTheDocument();
+    expect(screen.queryByText('Category Manager Vendor')).not.toBeInTheDocument();
+
+    fillRow();
+    fillDelivery();
+    clickSave();
+
+    await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
+    const assignedVendors = rfqClient.createRFQ.mock.calls[0][0].assignedVendors;
+    expect(assignedVendors).toEqual([
+      {
+        id: 'v-hist-1',
+        name: 'Apex Industrial Dynamics',
+        email: 'rajesh@apex.in',
+        contactPerson: 'Rajesh Nair',
+        phone: '+91 98200 11111',
+      },
+      {
+        id: 'v-hist-2',
+        name: 'Enterprise Vendor',
+        email: null,
+        contactPerson: null,
+        phone: null,
+      },
+    ]);
+  });
+
+  it('does not attach assignedVendors when the selected mode is not Mode 1', async () => {
+    (useApp as jest.Mock).mockReturnValue({
+      buyerVendors: [{ id: 'v-hist-1', name: 'Apex Industrial Dynamics', source: 'historical_purchase_dump' }],
+    });
+    renderModal();
+
+    const modes = screen.getAllByRole('radio');
+    fireEvent.click(modes[2]);
+
+    fillRow();
+    fillDelivery();
+    clickSave();
+
+    await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
+    expect(rfqClient.createRFQ.mock.calls[0][0].assignedVendors).toEqual([]);
   });
 });
