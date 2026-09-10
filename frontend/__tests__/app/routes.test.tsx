@@ -182,6 +182,7 @@ describe('Role screen routes', () => {
   const setSelectedRFQForMatrix = jest.fn();
   const setSelectedVendorOpportunity = jest.fn();
   const setActiveEvaluationRecord = jest.fn();
+  const setInitialSetupModalOpen = jest.fn();
   const storeUpdateRFQ = jest.fn();
   const storeDeleteRFQ = jest.fn();
 
@@ -190,6 +191,7 @@ describe('Role screen routes', () => {
       setSelectedRFQForMatrix,
       setSelectedVendorOpportunity,
       setActiveEvaluationRecord,
+      setInitialSetupModalOpen,
       activeEvaluationRecord: EVALUATION,
       updateRFQ: storeUpdateRFQ,
       deleteRFQ: storeDeleteRFQ,
@@ -429,7 +431,7 @@ describe('Role screen routes', () => {
       expect(mockPush).toHaveBeenCalledWith('/buyer/vendor-evaluation-summary');
 
       clickCallback('vendor-summary:onNavigateToWizard');
-      expect(mockPush).toHaveBeenCalledWith('/buyer/ingestion-wizard');
+      expect(setInitialSetupModalOpen).toHaveBeenCalledWith(true);
     });
 
     it.each<[string, React.ComponentType, string]>([

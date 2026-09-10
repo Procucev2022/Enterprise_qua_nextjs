@@ -1,28 +1,37 @@
 'use client';
 
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useCallback } from 'react';
 import { useApp } from '@/lib/store';
 import {
   SOURCING_MODES,
   CURRENCY,
-  MANUAL_LINE_ITEM_DEFAULTS,
-  PINCODE_PATTERN,
   formatFileSize,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { extractLineItemsFromDocument, classifyLineItems, uploadRFQAttachment } from '@/lib/rfqClient';
-import ManualRFQModal from '@/app/buyer/ManualRFQModal';
+import {
+  createRFQ,
+  extractLineItemsFromDocument,
+  classifyLineItems,
+  uploadRFQAttachment,
+} from '@/lib/rfqClient';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
-import type {
-  SourcingMode,
-  ExtractedEntity,
-  VendorEntry,
-  RFQAttachment,
-  RFQExtractionRequest,
-  RFQExtractionResult,
-  RFQItem,
-} from '@/lib/types';
+import {
+  addManualRFQLineItem,
+  createEmptyManualRFQForm,
+  removeManualRFQLineItem,
+  toRFQCreatePayload,
+  fromExtractedEntity,
+  updateManualRFQLineItem,
+  validateManualRFQForm,
+} from '@/lib/manualRfqModel';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
+import type {
+  ManualRFQForm,
+  ManualRFQLineItem,
+  RFQAttachment,
+  RFQExtractionResult,
+  SourcingMode,
+} from '@/lib/types';
 import {
   UploadCloud,
   FileSpreadsheet,
@@ -30,40 +39,26 @@ import {
   Sparkles,
   ArrowRight,
   Send,
-  Layers,
   Trash2,
   Plus,
   FileText,
-  Users,
   AlertCircle,
-  Zap,
-  Lock,
-  Pencil,
-  MapPin,
   Paperclip,
+  Loader2,
+  Mail,
+  FileCheck,
+  RotateCcw,
 } from 'lucide-react';
 
-
 const EXTRACTION = UI_STRINGS.rfqExtraction;
-const WIZARD_STEPS = EXTRACTION.steps;
-// Read at render time from the taxonomy registry the store populates from the
-// database, rather than captured at module scope from a bundled JSON file.
+const MODAL = UI_STRINGS.manualRfqModal;
+
 function taxonomyMajors(): string[] {
   return getMajorCategories();
 }
-/** Mirrors RFQ_ATTACHMENT_CONFIG.MAX_PER_RFQ on the server. */
-const MAX_ATTACHMENTS = 10;
 
-/**
- * Option list for a taxonomy dropdown that must be able to display whatever the
- * line item currently holds.
- *
- * A select whose value is not among its options shows the wrong entry, so a
- * category the taxonomy does not contain is prepended rather than hidden.
- */
-function withCurrentValue(options: string[], current: string | undefined): string[] {
-  if (!current || options.includes(current)) return options;
-  return [current, ...options];
+function minorsFor(major: string): string[] {
+  return getMinorCategories(major);
 }
 
 interface IngestionWizardProps {
@@ -72,31 +67,9 @@ interface IngestionWizardProps {
   forceSubscription?: 'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none';
 }
 
-export interface RecommendedProcucevVendor {
-  id: string;
-  name: string;
-  brandName: string;
-  majorCategory: string;
-  minorCategories: string[];
-  location: string;
-  rating: number;
-  ratingCount?: number;
-  matchScore: number;
-  proximity: string;
-  contactPerson: string;
-  email: string;
-  phone: string;
-  gstin: string;
-  panNumber: string;
-  establishedYear: number;
-  annualTurnover: string;
-  plantCapacity: string;
-  certifications: string[];
-  keyMachinery: string[];
-  otifRate: string;
-  qualityPpm: string;
-  recommendationReason: string;
-  isUnratedRecommendation?: boolean;
+function FieldError({ message }: { message?: string }) {
+  if (!message) return null;
+  return <p className="text-[10px] text-rose-600 dark:text-rose-400 mt-1 font-medium">{message}</p>;
 }
 
 export default function IngestionWizard({ onComplete, onCancel, forceSubscription }: IngestionWizardProps) {
@@ -106,525 +79,249 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
     currentMode,
     setCurrentMode,
     showToast,
-    remainingFreeRFQs,
     activeSubscription: storeSubscription,
   } = useApp();
 
-  const activeSubscription = forceSubscription || storeSubscription;
+  const [form, setForm] = useState<ManualRFQForm>(() => ({
+    ...createEmptyManualRFQForm(),
+    sourcingMode: currentMode || 'mode_2',
+  }));
 
-  const [activeStep, setActiveStep] = useState<number>(1);
-  const [isProcessingDoc, setIsProcessingDoc] = useState(false);
-  const [isCategorizing, setIsCategorizing] = useState(false);
-  // Guards handleDispatch against being re-entered while its own request is
-  // still in flight — without it, a double-click (or a slow network leaving
-  // the button clickable for a couple of seconds) fired the whole async
-  // create-RFQ chain more than once, each one a genuine, separate RFQ row.
+  const [submitAttempted, setSubmitAttempted] = useState(false);
   const [isDispatching, setIsDispatching] = useState(false);
-  const [uploadedFileName, setUploadedFileName] = useState<string>('');
-  // Manual entry has no extraction to complete, so Step 1 needs its own signal
-  // that the buyer has chosen to proceed. Without it the step strip would stay
-  // locked and there would be no way to reach the line-item table.
-  /** Whether the manual RFQ entry dialog is showing. */
-  const [isManualModalOpen, setIsManualModalOpen] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
-
+  // Document Upload & AI Extraction State
+  const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
   const [isDraggingDoc, setIsDraggingDoc] = useState(false);
-
-  // The staged document plus the outcome of the last AI extraction attempt.
-  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [isCategorizing, setIsCategorizing] = useState(false);
   const [extractionError, setExtractionError] = useState<string | null>(null);
   const [extractionSummary, setExtractionSummary] = useState<{
     model: string;
     accepted: number;
     needsReview: number;
+    fileName: string;
   } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const validation = useMemo(() => validateManualRFQForm(form), [form]);
+  const formErrors = submitAttempted ? validation.formErrors : {};
+  const lineItemErrors = submitAttempted ? validation.lineItemErrors : {};
 
-  // Filled from the AI-derived document title, or keyed by the buyer on Step 2.
-  const [rfqTitle, setRfqTitle] = useState('');
-  const [rfqNumber] = useState(`RFQ-2026-00${Math.floor(430 + Math.random() * 50)}`);
-  const [selectedMode, setSelectedMode] = useState<SourcingMode>(currentMode);
+  const patchForm = useCallback(<K extends keyof ManualRFQForm>(key: K, value: ManualRFQForm[K]) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  }, []);
 
-  // Read off the uploaded document, not seeded: a placeholder figure here would be
-  // dispatched to vendors as though the buyer had approved it.
-  const [budget, setBudget] = useState(0);
-  const [budgetFromDocument, setBudgetFromDocument] = useState(false);
+  const patchItem = useCallback((id: string, patch: Partial<ManualRFQLineItem>) => {
+    setForm((prev) => updateManualRFQLineItem(prev, id, patch));
+  }, []);
 
-  // Delivery details the buyer supplies; vendors price freight against them.
-  const [deliveryLocation, setDeliveryLocation] = useState('');
-  const [deliveryPincode, setDeliveryPincode] = useState('');
+  /** Handles file selection via picker or drag-and-drop */
+  const handleFilesSelected = (files: FileList | null | File[]) => {
+    if (!files) return;
+    const fileList = Array.from(files);
+    if (fileList.length === 0) return;
 
-  /**
-   * Whether the buyer has tried to leave Step 2 yet.
-   *
-   * Both delivery fields start empty, so validating them on first render greeted
-   * the buyer with two red errors against fields they had not reached. The blank
-   * warnings are held back until Proceed is pressed, which is the first moment the
-   * omission actually matters.
-   */
-  const [sourcingAttempted, setSourcingAttempted] = useState(false);
-
-
-  // Line item entities state
-  // Populated only by AI extraction or by the buyer adding rows on Step 2.
-  const [entities, setEntities] = useState<ExtractedEntity[]>([]);
-
-  /**
-   * Record the chosen document. Nothing is parsed here: extraction happens when
-   * the buyer continues to Step 2, so the file is only staged at this point.
-   */
-  const handleRealFileUpload = (file: File) => {
-    if (!file) return;
-    setUploadedFile(file);
-    setUploadedFileName(file.name);
+    setUploadedFiles((prev) => [...prev, ...fileList]);
     setExtractionError(null);
-    setExtractionSummary(null);
   };
 
-  /**
-   * Apply an extraction outcome and move to the review step.
-   *
-   * A failed extraction still advances to Step 2 by design: the buyer is shown why
-   * the document could not be read and can key the line items there instead of
-   * being stranded on the upload screen.
-   */
-  const applyExtraction = (result: RFQExtractionResult, fileName: string) => {
-    if (result.success && result.data) {
-      setEntities(result.data.extractedEntities);
-      if (result.data.title) setRfqTitle(result.data.title);
-
-      // A document that priced nothing leaves the field at zero for the buyer to
-      // fill, rather than carrying over a figure from an earlier upload.
-      const documentBudget = result.data.estimatedBudget;
-      setBudget(documentBudget ?? 0);
-      setBudgetFromDocument(Boolean(documentBudget));
-
-      setExtractionError(null);
-      setExtractionSummary({
-        model: result.extraction?.model || '',
-        accepted: result.classification?.accepted ?? result.data.extractedEntities.length,
-        needsReview: result.classification?.needsReview ?? 0,
-      });
-      showToast(
-        EXTRACTION.successTitle,
-        formatString(EXTRACTION.successToast, {
-          accepted: result.classification?.accepted ?? result.data.extractedEntities.length,
-          fileName,
-        }),
-        'success'
-      );
-    } else {
-      setEntities([]);
-      setBudget(0);
-      setBudgetFromDocument(false);
-      setExtractionSummary(null);
-      setExtractionError(result.error || EXTRACTION.unreadableResponse);
-      showToast(EXTRACTION.fallbackTitle, result.error || EXTRACTION.unreadableResponse, 'warning');
-    }
-    setActiveStep(2);
+  const handleRemoveFile = (index: number) => {
+    setUploadedFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
-
-
-  /**
-   * Step 1 manual path: skip extraction entirely and open the review step with
-   * one empty row ready to type into.
-   *
-   * Nothing is pre-filled beyond the structural defaults, and no extraction
-   * banner is shown, because there was no document and therefore no AI outcome to
-   * report. The rest of the wizard is unchanged: the same categorisation, the
-   * same sourcing-mode gate and the same dispatch.
-   */
-  /**
-   * The manual dialog has saved an RFQ.
-   *
-   * The record handed back is the server's, so it carries the allocated RFQ
-   * number, the row id and the generated summary. It is adopted into the store as
-   * given rather than reconstructed locally, and the wizard then closes.
-   */
-  const handleManualRFQCreated = (rfq: RFQItem) => {
-    adoptCreatedRFQ(rfq);
-    showToast(
-      EXTRACTION.manualCreatedTitle,
-      formatString(EXTRACTION.manualCreatedMessage, { rfqNumber: rfq.rfqNumber }),
-      'success'
-    );
-    setIsManualModalOpen(false);
-    onComplete();
-  };
-
-  /** Step 1 primary action: extract line items from the staged document. */
-  const handleExtractDocument = async () => {
-    if (!uploadedFile) {
-      showToast(EXTRACTION.noFileTitle, EXTRACTION.noFileMessage, 'warning');
+  /** AI Extraction: processes uploaded document (.eml, .msg, .xlsx, .pdf, .docx, .csv) into form */
+  const handleExtractFromFiles = async () => {
+    if (uploadedFiles.length === 0) {
+      showToast(EXTRACTION.noFileTitle, 'Please select or drop a BOQ document or requisition email first.', 'warning');
       return;
     }
 
-    setIsProcessingDoc(true);
+    setIsExtracting(true);
+    setExtractionError(null);
+    setExtractionSummary(null);
+
+    const primaryFile = uploadedFiles[0];
     try {
-      const payload = await buildExtractionRequest(uploadedFile);
-      applyExtraction(await extractLineItemsFromDocument(payload), uploadedFile.name);
-    } catch {
-      applyExtraction(
-        { success: false, reason: 'NO_CONTENT', error: EXTRACTION.unreadableResponse },
-        uploadedFile.name
-      );
+      const payload = await buildExtractionRequest(primaryFile);
+      const result: RFQExtractionResult = await extractLineItemsFromDocument(payload);
+
+      if (result.success && result.data) {
+        const extracted = result.data.extractedEntities.map(fromExtractedEntity);
+        const derivedTitle = result.data.title || '';
+        const derivedBudget = result.data.estimatedBudget ?? null;
+        const derivedMajor = extracted[0]?.majorCategory || '';
+
+        setForm((prev) => ({
+          ...prev,
+          title: prev.title || derivedTitle,
+          estimatedBudget: prev.estimatedBudget ?? derivedBudget,
+          majorCategory: prev.majorCategory || derivedMajor,
+          lineItems: extracted.length > 0 ? extracted : prev.lineItems,
+        }));
+
+        setExtractionSummary({
+          model: result.extraction?.model || 'Gemini 2.5 AI',
+          accepted: result.classification?.accepted ?? extracted.length,
+          needsReview: result.classification?.needsReview ?? 0,
+          fileName: primaryFile.name,
+        });
+
+        showToast(
+          EXTRACTION.successTitle,
+          `Extracted ${extracted.length} line items successfully from "${primaryFile.name}".`,
+          'success'
+        );
+      } else {
+        setExtractionError(result.error || EXTRACTION.unreadableResponse);
+        showToast(EXTRACTION.fallbackTitle, result.error || EXTRACTION.unreadableResponse, 'warning');
+      }
+    } catch (err: any) {
+      const msg = err?.message || EXTRACTION.unreadableResponse;
+      setExtractionError(msg);
+      showToast(EXTRACTION.fallbackTitle, msg, 'warning');
     } finally {
-      setIsProcessingDoc(false);
+      setIsExtracting(false);
     }
   };
 
-
-
-  const handleEntityChange = (id: string, field: keyof ExtractedEntity, value: any) => {
-    setEntities((prev) =>
-      prev.map((item) => {
-        if (item.id !== id) return item;
-        const updated = { ...item, [field]: value };
-        if (field === 'majorCategory') {
-          // The minor category belongs to the major, so changing one invalidates
-          // the other. Falls back to '' rather than undefined so a row with no
-          // major reads as unset and the Step 3 gate can see it.
-          const validMinors = getMinorCategories(value);
-          updated.minorCategory = validMinors[0] ?? '';
-          updated.category = value;
-        }
-        return updated;
-      })
-    );
-  };
-
-  /**
-   * Re-classify every line item against the shared major/minor taxonomy.
-   *
-   * This used to run a four-outcome keyword lookup in the browser and stamp 99%
-   * confidence on the result, which meant an item the server had already placed
-   * correctly could be silently moved to a default category, sometimes to a minor
-   * category that is not even in the taxonomy dropdown. The server owns the full
-   * taxonomy and the documented precedence rules, so it does the work now and
-   * reports the real confidence for each row.
-   *
-   * The main use for it is after a failed extraction: rows keyed by hand start on
-   * the first taxonomy entry, and this maps them properly in one action.
-   */
+  /** Auto-categorize all line items with AI */
   const handleAutoCategorizeAll = async () => {
-    const quotable = entities.filter((e) => e.itemName.trim() !== '');
-    if (quotable.length === 0) {
-      showToast(EXTRACTION.classifyEmptyTitle, EXTRACTION.classifyEmptyMessage, 'warning');
+    const quotableEntities = form.lineItems.map((item) => ({
+      id: item.id,
+      itemName: item.itemName,
+      technicalSpecs: item.technicalSpecs,
+      quantity: Number(item.quantity) || 0,
+      unit: item.unit,
+      targetDate: item.targetDate,
+      category: item.minorCategory,
+      majorCategory: item.majorCategory,
+      minorCategory: item.minorCategory,
+      confidence: 0,
+    })).filter((e) => e.itemName.trim() !== '');
+
+    if (quotableEntities.length === 0) {
+      showToast(EXTRACTION.classifyEmptyTitle, 'Please enter at least one item name to categorize.', 'warning');
       return;
     }
 
     setIsCategorizing(true);
     try {
-      const result = await classifyLineItems(quotable);
+      const result = await classifyLineItems(quotableEntities);
       if (!result.success || !result.data) {
         showToast(EXTRACTION.fallbackTitle, result.error || EXTRACTION.classifyFailed, 'warning');
         return;
       }
 
-      // Merged by id rather than replaced wholesale: the server drops rows with no
-      // description, so a blank row the buyer has not filled in yet would
-      // otherwise disappear from the table. Order is preserved too.
       const classified = new Map(result.data.extractedEntities.map((e) => [e.id, e]));
-      setEntities((prev) => prev.map((item) => classified.get(item.id) ?? item));
+      setForm((prev) => ({
+        ...prev,
+        lineItems: prev.lineItems.map((item) => {
+          const matched = classified.get(item.id);
+          if (!matched) return item;
+          return {
+            ...item,
+            majorCategory: matched.majorCategory || item.majorCategory,
+            minorCategory: matched.minorCategory || item.minorCategory,
+          };
+        }),
+      }));
 
       showToast(
         EXTRACTION.classifySuccessTitle,
-        formatString(EXTRACTION.classifySuccessMessage, {
-          accepted: result.classification?.accepted ?? result.data.extractedEntities.length,
-          needsReview: result.classification?.needsReview ?? 0,
-        }),
+        `Auto-classified ${result.data.extractedEntities.length} items across standardized categories.`,
         'success'
       );
+    } catch {
+      showToast(EXTRACTION.fallbackTitle, 'Category classification service unavailable.', 'warning');
     } finally {
       setIsCategorizing(false);
     }
   };
 
-  /** ISO date the configured number of days out, matching the backend default. */
-  const defaultTargetDate = (): string => {
-    const due = new Date();
-    due.setDate(due.getDate() + MANUAL_LINE_ITEM_DEFAULTS.TARGET_DATE_OFFSET_DAYS);
-    return due.toISOString().slice(0, 10);
+  /** Store uploaded files as RFQ attachments before creating the RFQ */
+  const uploadAttachments = async (): Promise<RFQAttachment[]> => {
+    if (uploadedFiles.length === 0) return [];
+    const attachments: RFQAttachment[] = [];
+
+    for (const file of uploadedFiles) {
+      try {
+        const res = await uploadRFQAttachment(file);
+        if (res.success && res.data) {
+          attachments.push(res.data);
+        }
+      } catch {
+        // Continue with other attachments
+      }
+    }
+    return attachments;
   };
 
-  /**
-   * Append an empty row for the buyer to key.
-   *
-   * Description and specification start blank on purpose. Pre-filling them with
-   * example text meant a buyer who skipped a field dispatched that example to
-   * vendors as a real requirement. Only the structural fields carry defaults, and
-   * the category dropdowns start on the first taxonomy entry so the row is always
-   * classified against something the buyer can see and change.
-   */
-  /**
-   * A row the buyer adds by hand, with every field genuinely empty.
-   *
-   * Defaults used to be pre-filled here — quantity 1, unit Nos, a target date and
-   * the first taxonomy pair — which read as answers the buyer had given when they
-   * had not. A quantity of 1 and a category of "Civil Works" are exactly the kind
-   * of values that get dispatched to vendors unnoticed. The Step 3 gate requires
-   * each of these instead, so nothing can be quoted against a guess.
-   */
-  const blankLineItem = (): ExtractedEntity => ({
-    id: `ent-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    itemName: '',
-    quantity: 0,
-    unit: '',
-    targetDate: '',
-    technicalSpecs: '',
-    // Nothing was inferred, so there is no AI confidence to report.
-    confidence: 0,
-    category: '',
-    majorCategory: '',
-    minorCategory: '',
-  });
+  /** Form Submission / RFQ Dispatch */
+  const handleSubmit = async () => {
+    setSubmitAttempted(true);
+    setSubmitError(null);
 
-  const handleAddEntity = () => {
-    setEntities([...entities, blankLineItem()]);
-  };
-
-  // ─── Step progression ──────────────────────────────────────────────────────
-  //
-  // The wizard is strictly sequential: a step opens only once the one before it
-  // has produced what the next one needs. Steps 2 and 3 used to be reachable from
-  // the strip at any time, which let a buyer land on an empty review table or
-  // pick a sourcing mode for an RFQ that had no line items.
-
-  /**
-   * Step 1 is done once an extraction has been attempted, whether it succeeded or
-   * failed. A failure still counts: the buyer is then expected to key the line
-   * items on Step 2, so keeping them on the upload screen would be a dead end.
-   */
-  const isExtractionAttempted =
-    extractionSummary !== null || extractionError !== null;
-
-  /**
-   * Step 2 is done once every row can actually be quoted against.
-   *
-   * An extracted row always satisfies this — the server normalises the quantity
-   * and unit and classifies the categories — so in practice this only holds back
-   * rows keyed by hand, which now start empty.
-   */
-  const isLineItemComplete = (e: ExtractedEntity) =>
-    e.itemName.trim() !== '' &&
-    e.quantity > 0 &&
-    e.unit.trim() !== '' &&
-    e.majorCategory.trim() !== '' &&
-    e.minorCategory.trim() !== '';
-
-  const hasCompleteLineItems = entities.length > 0 && entities.every(isLineItemComplete);
-
-  /**
-   * Delivery destination, mandatory before sourcing.
-   *
-   * Unlike the budget, this cannot be left blank: vendors rate freight on the
-   * location and its pincode, so a quote raised without them is not comparable
-   * against one that has them. Extraction never supplies these, so they are
-   * always keyed by the buyer on Step 2.
-   */
-  const trimmedDeliveryLocation = deliveryLocation.trim();
-  const trimmedDeliveryPincode = deliveryPincode.trim();
-  const isDeliveryLocationMissing = trimmedDeliveryLocation === '';
-  const isDeliveryPincodeMissing = trimmedDeliveryPincode === '';
-  const isDeliveryPincodeMalformed =
-    !isDeliveryPincodeMissing && !PINCODE_PATTERN.test(trimmedDeliveryPincode);
-  const hasDeliveryDestination =
-    !isDeliveryLocationMissing && !isDeliveryPincodeMissing && !isDeliveryPincodeMalformed;
-
-  // A blank field is only worth flagging once the buyer has tried to move on. A
-  // malformed pincode is flagged immediately: it can only exist because something
-  // was typed, so the buyer is already looking at the field.
-  const showDeliveryLocationRequired = sourcingAttempted && isDeliveryLocationMissing;
-  const showDeliveryPincodeRequired = sourcingAttempted && isDeliveryPincodeMissing;
-
-  /** Highest step the buyer has earned access to. */
-  const unlockedStep = !isExtractionAttempted ? 1 : hasCompleteLineItems && hasDeliveryDestination ? 3 : 2;
-
-  /**
-   * Strip navigation. Going back is always allowed; jumping ahead explains which
-   * step is unfinished instead of silently doing nothing.
-   */
-  const goToStep = (step: number) => {
-    if (step > unlockedStep) {
-      showToast(
-        EXTRACTION.stepLockedTitle,
-        unlockedStep === 1 ? EXTRACTION.stepLockedExtractMessage : EXTRACTION.stepLockedReviewMessage,
-        'warning'
-      );
+    if (!validateManualRFQForm(form).isValid) {
+      showToast('Validation Error', 'Please complete all required fields and line items before dispatching.', 'warning');
       return;
     }
-    setActiveStep(step);
-  };
 
-  /**
-   * Gate Step 2 -> Step 3. Every line item needs a description, whether it came
-   * from AI extraction or was keyed after a failed extraction, otherwise vendors
-   * would be asked to quote against a blank row. The delivery destination is
-   * checked separately so the toast names the actual blocker rather than
-   * reporting a line-item problem for a missing pincode.
-   */
-  const handleProceedToSourcing = () => {
-    setSourcingAttempted(true);
-    if (!hasCompleteLineItems) {
-      showToast(EXTRACTION.incompleteItemsTitle, EXTRACTION.incompleteItemsMessage, 'warning');
-      return;
-    }
-    if (!hasDeliveryDestination) {
-      showToast(EXTRACTION.deliveryIncompleteTitle, EXTRACTION.deliveryIncompleteMessage, 'warning');
-      return;
-    }
-    setActiveStep(3);
-  };
-
-  const handleDeleteEntity = (id: string) => {
-    setEntities(entities.filter((e) => e.id !== id));
-  };
-
-  /**
-   * Save the RFQ against the chosen sourcing mode.
-   *
-   * Vendor matching and standard-email dispatch are Coming Soon, so the RFQ is
-   * persisted with an explicitly empty vendor list. Passing `[]` (rather than
-   * omitting the argument) is deliberate: it stops the store falling back to
-   * automatic matching and firing chaser sequences at suppliers who have not been
-   * selected yet.
-   */
-  /**
-   * Store the document this RFQ was extracted from, so it is retrievable later.
-   *
-   * The wizard used to send `attachments: []` unconditionally and keep only the
-   * file *name*, which meant the BOQ or specification a buyer uploaded was read
-   * for extraction and then thrown away. The RFQ details screen had nothing to
-   * list, so its attachments panel was permanently empty for every RFQ raised
-   * through this flow — only the manual dialog, which has its own picker, ever
-   * produced one.
-   *
-   * Uploaded at dispatch rather than at extraction time: a wizard session that is
-   * abandoned part way would otherwise leave an object in storage with no RFQ
-   * referencing it.
-   *
-   * A failed upload does not block dispatch. The RFQ itself is the thing the
-   * buyer is trying to raise, and refusing to create it because a copy of the
-   * source document could not be stored would be the wrong trade — so it warns
-   * and continues, and the panel reports the RFQ as having no attachment rather
-   * than implying one is there.
-   */
-  const storeSourceDocument = async (): Promise<{ attachments: RFQAttachment[]; failure: string | null }> => {
-    // Only the upload paths have a document. Email ingestion has a pasted body,
-    // and manual entry posts its own RFQ from the dialog.
-    if (!uploadedFile) return { attachments: [], failure: null };
-
-    const result = await uploadRFQAttachment(uploadedFile);
-    if (result?.success && result.data) return { attachments: [result.data], failure: null };
-
-    // Returned rather than announced here. The upload has to finish before the RFQ
-    // is posted, so a toast raised at this point is immediately replaced by the
-    // dispatch confirmation and the buyer never reads it. The caller reports it
-    // once the RFQ has actually been created, which is also when the message
-    // ("the RFQ was created, but...") becomes true.
-    return {
-      attachments: [],
-      failure: formatString(EXTRACTION.attachmentStoreFailedMessage, {
-        fileName: uploadedFile.name,
-        reason: result?.error || '',
-      }),
-    };
-  };
-
-  const handleDispatch = async () => {
-    // Re-entrancy guard: without it, a double-click — or just a slow network
-    // leaving the button clickable for the second or two this whole async
-    // chain takes — fired handleDispatch more than once, each call running
-    // the full create-RFQ request independently. Every extra call was a real,
-    // separate RFQ row, not a UI artifact: confirmed live (3 RFQs from one
-    // click sequence, then 2 from another).
     if (isDispatching) return;
     setIsDispatching(true);
+
     try {
-      // Line-item completeness is not re-checked here: `unlockedStep` locks Step 3
-      // the moment a row loses its description, so this screen cannot be reached
-      // with an unquotable list.
-      //
-      // The budget is deliberately not gated. A document can price nothing at all,
-      // and requiring a figure only made buyers invent a ceiling that vendors would
-      // then quote against.
-      //
-      // The delivery destination is not re-checked here either, for the same reason:
-      // both fields only render on Step 2, so they cannot be cleared while this
-      // screen is showing, and `unlockedStep` drops back to 2 the moment one is
-      // emptied, which re-locks the strip before dispatch can be reached.
-      setCurrentMode(selectedMode);
-      // No fallback needed: `hasCompleteLineItems` requires a major category on
-      // every row before Step 3 unlocks, so the leading item always carries one.
-      const mainMajor = entities[0].majorCategory;
-      const vendorsToDispatch: VendorEntry[] = [];
-      // Awaited before the RFQ is posted, because the attachment metadata has to
-      // travel with the create payload. Any failure is held back and reported after
-      // the RFQ exists.
-      const { attachments: sourceAttachments, failure: attachmentFailure } = await storeSourceDocument();
+      setCurrentMode(form.sourcingMode);
 
-      // No rfqNumber is sent: the server allocates it under the same scheme the Java
-      // p2pservices app uses. This screen used to mint one with Math.random(), which
-      // could collide and, worse, did not match what was actually saved — so the
-      // details page fetched a number the database had never seen.
-      const saved = await addNewRFQ(
-        {
-          // Extraction supplies a document title, but manual entry has none and the
-          // API requires one, so it falls back to the leading line item the way
-          // rfqIngestionService.deriveTitle does on the server.
-          title: rfqTitle.trim() || entities[0].itemName.trim(),
-          category: mainMajor,
-          sourcingMode: selectedMode,
-          targetDeliveryDate: entities[0].targetDate || defaultTargetDate(),
-          budget,
-          deliveryLocation: trimmedDeliveryLocation,
-          deliveryPincode: trimmedDeliveryPincode,
-          // The document this RFQ was extracted from, so the details screen can
-          // list it and the buyer can reopen what they actually uploaded.
-          attachments: sourceAttachments,
-          extractedEntities: entities,
-          aiScore: selectedMode === 'mode_3' ? 95 : 88,
-          // The manual dialog creates its RFQ independently (handleManualRFQCreated)
-          // and never reaches this submission path, so every RFQ built here is a
-          // real document/email upload. `email_gateway` is stamped by the
-          // autonomous mailbox poller, which creates its RFQs server-side without
-          // going through here at all.
-          source: 'web_portal',
-          sourceFileName: uploadedFileName,
-          autoCirculated: false,
-        },
-        vendorsToDispatch
-      );
+      // Upload any staged files as attachments
+      const storedAttachments = await uploadAttachments();
+      const updatedForm: ManualRFQForm = {
+        ...form,
+        attachments: [...form.attachments, ...storedAttachments],
+      };
 
-      // The attachment warning takes precedence over the success toast when both
-      // apply: the buyer already knows the RFQ was raised (the wizard closes and the
-      // record appears), whereas a document that silently failed to store is the
-      // part they would otherwise never find out about. The message says both.
-      if (attachmentFailure) {
-        showToast(EXTRACTION.attachmentStoreFailedTitle, attachmentFailure, 'warning');
-      } else {
-        showToast(
-          EXTRACTION.manualCreatedTitle,
-          formatString(EXTRACTION.manualCreatedMessage, { rfqNumber: saved.rfqNumber }),
-          'success'
-        );
+      const payload = toRFQCreatePayload(updatedForm);
+      const result = await createRFQ(payload);
+
+      if (!result.success) {
+        setSubmitError(result.error || 'Failed to create RFQ.');
+        showToast('Creation Failed', result.error || 'Failed to create RFQ.', 'warning');
+        return;
       }
+
+      adoptCreatedRFQ(result.rfq);
+      showToast(
+        'RFQ Dispatched',
+        `RFQ ${result.rfq.rfqNumber} has been created and dispatched in ${form.sourcingMode.toUpperCase()} mode.`,
+        'success'
+      );
       onComplete();
+    } catch (err: any) {
+      setSubmitError(err?.message || 'Failed to dispatch RFQ.');
     } finally {
-      // Reached on a thrown error only — the success path calls onComplete(),
-      // which closes the wizard, so there is no stuck-disabled button to fix
-      // up on the path where this flag would otherwise matter.
       setIsDispatching(false);
     }
   };
 
+  /** Clears all form fields, line items, and uploaded documents */
+  const handleClearForm = () => {
+    setForm({
+      ...createEmptyManualRFQForm(),
+      sourcingMode: currentMode || 'mode_2',
+    });
+    setUploadedFiles([]);
+    setExtractionSummary(null);
+    setExtractionError(null);
+    setSubmitAttempted(false);
+    setSubmitError(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    showToast('Form Cleared', 'All fields, line items, and uploaded files have been reset.', 'info');
+  };
+
   return (
-    // Widened from max-w-5xl: the Step 2 line-item table carries eight columns
-    // plus two category dropdowns and was scrolling horizontally at 1024px.
-    <div className="max-w-7xl mx-auto space-y-6 animate-fade-in pb-10">
+    <div className="max-w-7xl mx-auto space-y-6 animate-fade-in pb-12">
       {/* Header */}
       <div className="flex items-center justify-between pb-4 border-b border-slate-200 dark:border-slate-800">
         <div>
@@ -635,523 +332,450 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
             <span className="badge badge-purple">Screen 1.2</span>
           </div>
           <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
-            Automated minor category classification, multi-tier vendor matching, and standard RFQ email transmission.
+            Create RFQ directly, upload BOQ documents or forwarded requisition emails, extract line items with AI, and dispatch to verified suppliers.
           </p>
         </div>
-        <button onClick={onCancel} className="btn btn-secondary btn-sm">
-          Exit Wizard
-        </button>
-      </div>
-
-      {/* Step Progress Indicator */}
-      <div className="grid grid-cols-3 gap-3">
-        {WIZARD_STEPS.map((step) => {
-          const isActive = activeStep === step.number;
-          const isDone = activeStep > step.number;
-          const isLocked = step.number > unlockedStep;
-
-          return (
-            <div
-              key={step.number}
-              data-testid={`wizard-step-${step.number}`}
-              onClick={() => goToStep(step.number)}
-              aria-disabled={isLocked}
-              className={`p-3.5 rounded-xl border transition-all ${
-                isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
-              } ${
-                isActive
-                  ? 'bg-indigo-50 dark:bg-indigo-600/20 border-indigo-500 text-indigo-950 dark:text-white shadow-sm'
-                  : isDone
-                  ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-500/40 text-slate-700 dark:text-gray-300'
-                  : 'bg-white dark:bg-gray-900/60 border-slate-200 dark:border-gray-800 text-slate-400 dark:text-gray-500'
-              }`}
-            >
-              <div className="flex items-center justify-between text-xs font-bold">
-                <span className="flex items-center gap-1.5">
-                  {isDone ? (
-                    <CheckCircle2 size={14} className="text-emerald-600 dark:text-emerald-400" />
-                  ) : isLocked ? (
-                    <Lock size={12} className="text-slate-400 dark:text-gray-500" />
-                  ) : (
-                    `${step.number}.`
-                  )}
-                  {step.label}
-                </span>
-                <span className="text-[10px] mono text-slate-400 dark:text-gray-400">
-                  {isLocked ? EXTRACTION.stepLockedHint : step.tag}
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-1">{step.hint}</p>
-            </div>
-          );
-        })}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleClearForm}
+            type="button"
+            className="btn btn-secondary btn-sm font-semibold inline-flex items-center gap-1.5 text-slate-600 hover:text-rose-600 dark:text-gray-300 dark:hover:text-rose-400 cursor-pointer"
+          >
+            <RotateCcw size={13} />
+            <span>Clear Form</span>
+          </button>
+          <button onClick={onCancel} className="btn btn-secondary btn-sm font-semibold cursor-pointer">
+            Exit Wizard
+          </button>
+        </div>
       </div>
 
       {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* STEP 1: INGESTION — a single drop zone, no method tabs. Email
-          (.eml/.msg) and BOQ documents (xlsx/csv/pdf/docx/txt) both land here;
-          the backend tells them apart by file type (see
-          rfqController.extractRFQFromDocument). Manual entry stays reachable
-          as a small secondary link, not a tab, since it bypasses extraction
-          entirely via its own modal. */}
+      {/* TOP: DOCUMENT & REQUISITION EMAIL UPLOAD & AI EXTRACTION      */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      {activeStep === 1 && (
-        <div className="glass-panel p-6 rounded-2xl space-y-5 animate-fade-in border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80">
+      <section className="glass-panel p-6 rounded-2xl space-y-4 border border-indigo-100 dark:border-indigo-950 bg-gradient-to-br from-indigo-50/50 via-white to-sky-50/30 dark:from-gray-900/90 dark:via-gray-900/80 dark:to-indigo-950/20 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-100/60 dark:border-gray-800 pb-3">
           <div>
-            <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
               <UploadCloud size={18} className="text-indigo-600 dark:text-indigo-400" />
-              STEP 1: INGESTION SOURCE
+              Upload Source Documents & Forwarded Emails
             </h2>
             <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-              Drop a BOQ document or a forwarded requisition email — AI reads it and stages the line items for review.
+              Upload BOQ files (<span className="font-semibold text-slate-700 dark:text-slate-300">.xlsx, .xls, .csv, .pdf, .docx, .txt</span>) or Forwarded Requisition Emails (<span className="font-semibold text-indigo-600 dark:text-indigo-400">.eml, .msg</span>).
             </p>
           </div>
 
-          <div className="space-y-4">
-            {/* Hidden file input */}
-            <input
-              type="file"
-              ref={fileInputRef}
-              className="hidden"
-              accept=".xlsx,.xls,.csv,.pdf,.docx,.doc,.txt,.eml,.msg"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) handleRealFileUpload(file);
-              }}
-            />
-
-            <div
+          <div className="flex items-center gap-2">
+            <button
               onClick={() => fileInputRef.current?.click()}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setIsDraggingDoc(true);
-              }}
-              onDragLeave={() => setIsDraggingDoc(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setIsDraggingDoc(false);
-                const file = e.dataTransfer.files?.[0];
-                if (file) handleRealFileUpload(file);
-              }}
-              className={`border-2 border-dashed rounded-2xl p-8 text-center transition-all cursor-pointer group ${
-                isDraggingDoc
-                  ? 'border-indigo-600 bg-indigo-100/70 dark:bg-indigo-900/50 scale-[1.01]'
-                  : 'border-indigo-300 dark:border-indigo-500/40 hover:border-indigo-500 bg-indigo-50/40 dark:bg-gray-900/40 hover:bg-indigo-50/80 dark:hover:bg-gray-900/70'
-              }`}
+              disabled={isExtracting}
+              className="btn btn-secondary btn-sm font-semibold inline-flex items-center gap-1.5"
             >
-              <div className="w-14 h-14 rounded-2xl bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-300 dark:border-indigo-500/40 flex items-center justify-center mx-auto text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
-                <FileSpreadsheet size={28} />
-              </div>
-              <h3 className="text-sm font-bold text-slate-900 dark:text-white mt-3">
-                {isProcessingDoc ? EXTRACTION.processingDocumentLabel : EXTRACTION.dropZoneHeading}
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-gray-400 mt-1 max-w-md mx-auto">
-                {EXTRACTION.dropZoneHint}
-              </p>
-              {/* Only shown once a real file is staged; nothing is pre-filled. */}
-              {uploadedFileName && (
-                <div className="mt-4 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white dark:bg-gray-800 text-xs text-slate-700 dark:text-gray-300 border border-slate-200 dark:border-gray-700 shadow-sm">
-                  <span>Selected File:</span>
-                  <span className="font-semibold text-indigo-600 dark:text-indigo-300 mono">
-                    {uploadedFileName}
-                  </span>
-                </div>
-              )}
-            </div>
+              <Paperclip size={13} /> Select Files
+            </button>
+            <button
+              onClick={handleExtractFromFiles}
+              disabled={isExtracting || uploadedFiles.length === 0}
+              className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50 shadow-sm"
+            >
+              {isExtracting ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+              {isExtracting ? 'Extracting with AI...' : 'Extract Line Items with AI'}
+            </button>
           </div>
-
-          {isProcessingDoc ? (
-            <div className="p-4 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-500/40 text-center space-y-2">
-              <div className="flex items-center justify-center gap-2 text-indigo-700 dark:text-indigo-300 font-bold text-xs">
-                <Sparkles size={16} className="animate-spin" />
-                {EXTRACTION.extractingLabel}
-              </div>
-              <p className="text-[11px] text-slate-500 dark:text-gray-400">{EXTRACTION.extractingHint}</p>
-              <div className="w-full bg-slate-200 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden max-w-md mx-auto">
-                <div className="bg-indigo-600 h-full w-3/4 animate-pulse" />
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-center justify-between flex-wrap gap-2 pt-2 border-t border-slate-100 dark:border-gray-800">
-              <button
-                data-testid="intake-manual"
-                onClick={() => setIsManualModalOpen(true)}
-                className="text-[11px] font-semibold text-slate-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-1.5"
-              >
-                <Pencil size={12} /> {EXTRACTION.manualMethodLabel}
-              </button>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleExtractDocument}
-                  className="btn btn-primary font-bold flex items-center gap-2"
-                >
-                  <Sparkles size={14} /> <span>{EXTRACTION.extractAction}</span> <ArrowRight size={15} />
-                </button>
-              </div>
-            </div>
-          )}
         </div>
-      )}
 
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* STEP 2: REVIEW ENTITIES & MINOR CATEGORIZATION */}
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {activeStep === 2 && (
-        <div className="glass-panel p-6 rounded-2xl space-y-5 animate-fade-in border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-gray-800 pb-3">
-            <div>
-              <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <Sparkles size={18} className="text-indigo-600 dark:text-indigo-400" />
-                STEP 2: REVIEW ENTITIES & MINOR CATEGORY CLASSIFICATION
-              </h2>
-              <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                Every extracted item is categorized into its standardized <strong>Major Category</strong> and <strong>Minor Category</strong> from the Excel taxonomy.
-              </p>
+        {/* Hidden File Input */}
+        <input
+          type="file"
+          ref={fileInputRef}
+          multiple
+          className="hidden"
+          accept=".xlsx,.xls,.csv,.pdf,.docx,.doc,.txt,.eml,.msg"
+          onChange={(e) => {
+            handleFilesSelected(e.target.files);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+          }}
+        />
 
+        {/* Drag & Drop Zone */}
+        <div
+          onClick={() => fileInputRef.current?.click()}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setIsDraggingDoc(true);
+          }}
+          onDragLeave={() => setIsDraggingDoc(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setIsDraggingDoc(false);
+            if (e.dataTransfer.files) handleFilesSelected(e.dataTransfer.files);
+          }}
+          className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all cursor-pointer group ${
+            isDraggingDoc
+              ? 'border-indigo-600 bg-indigo-100/70 dark:bg-indigo-900/50 scale-[1.01]'
+              : 'border-indigo-300/80 dark:border-indigo-500/30 hover:border-indigo-500 bg-white/70 dark:bg-gray-900/40 hover:bg-indigo-50/50'
+          }`}
+        >
+          <div className="flex items-center justify-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-200 dark:border-indigo-500/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
+              <FileSpreadsheet size={20} />
             </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleAutoCategorizeAll}
-                disabled={isCategorizing}
-                className="btn btn-secondary btn-sm text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800 flex items-center gap-1 font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Sparkles size={13} />
-                {isCategorizing ? EXTRACTION.classifyingLabel : EXTRACTION.classifyAction}
-              </button>
-              <button onClick={handleAddEntity} className="btn btn-secondary btn-sm flex items-center gap-1">
-                <Plus size={13} /> Add Line Item
-              </button>
+            <div className="w-10 h-10 rounded-xl bg-sky-100 dark:bg-sky-600/20 border border-sky-200 dark:border-sky-500/30 flex items-center justify-center text-sky-600 dark:text-sky-400 group-hover:scale-110 transition-transform">
+              <Mail size={20} />
             </div>
           </div>
+          <h3 className="text-xs font-bold text-slate-800 dark:text-white mt-2">
+            {isExtracting ? 'Gemini AI is parsing document contents...' : 'Drag and drop BOQ spreadsheets or .eml / .msg emails here'}
+          </h3>
+          <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
+            Supports Excel (.xlsx, .xls), CSV, PDF specs, Word (.docx), and Outlook/MIME Email (.eml, .msg).
+          </p>
+        </div>
 
-
-          {/* AI extraction outcome: either what was read, or why it could not be. */}
-          {extractionSummary && (
-            <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 text-xs">
-              <div className="font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
-                <Sparkles size={14} /> {EXTRACTION.successTitle}
-              </div>
-              <p className="text-[11px] text-emerald-900/80 dark:text-emerald-200 mt-0.5">
-                {formatString(EXTRACTION.successSummary, {
-                  accepted: extractionSummary.accepted,
-                  model: extractionSummary.model,
-                  needsReview: extractionSummary.needsReview,
-                })}
-              </p>
+        {/* Uploaded Files List */}
+        {uploadedFiles.length > 0 && (
+          <div className="space-y-2 pt-1">
+            <div className="flex items-center justify-between text-xs font-semibold text-slate-700 dark:text-gray-300">
+              <span className="flex items-center gap-1.5">
+                <FileCheck size={14} className="text-emerald-600 dark:text-emerald-400" />
+                Uploaded Documents ({uploadedFiles.length})
+              </span>
+              <span className="text-[10px] text-slate-400">Click &quot;Extract Line Items with AI&quot; to auto-fill form</span>
             </div>
-          )}
-
-          {extractionError && (
-            <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-700/60 text-xs space-y-1">
-              <div className="font-bold text-amber-900 dark:text-amber-300 flex items-center gap-1.5">
-                <AlertCircle size={14} /> {EXTRACTION.fallbackTitle}
-              </div>
-              <p className="text-[11px] text-amber-900/90 dark:text-amber-200">{extractionError}</p>
-              <p className="text-[11px] text-amber-800/80 dark:text-amber-300 font-semibold">
-                {EXTRACTION.fallbackHint}
-              </p>
-            </div>
-          )}
-
-          {/* RFQ Meta Inputs */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 text-xs">
-            <div>
-              <label className="block text-slate-600 dark:text-gray-400 font-semibold mb-1">Generated RFQ Number</label>
-              <input type="text" value={rfqNumber} readOnly className="mono opacity-80 font-bold" />
-            </div>
-            <div>
-              <label
-                htmlFor="rfq-project-title"
-                className="block text-slate-600 dark:text-gray-400 font-semibold mb-1"
-              >
-                Procurement Project Title
-              </label>
-              <input
-                id="rfq-project-title"
-                type="text"
-                value={rfqTitle}
-                onChange={(e) => setRfqTitle(e.target.value)}
-                className="font-medium"
-              />
-            </div>
-            <div>
-              <label
-                htmlFor="rfq-estimated-budget"
-                className="block text-slate-600 dark:text-gray-400 font-semibold mb-1"
-              >
-                {formatString(EXTRACTION.budgetLabel, { symbol: CURRENCY.SYMBOL })}{' '}
-                <span className="text-[9px] font-bold uppercase tracking-wide text-slate-400 dark:text-gray-500">
-                  ({EXTRACTION.budgetOptionalTag})
-                </span>
-              </label>
-              <input
-                id="rfq-estimated-budget"
-                type="number"
-                min={0}
-                value={budget}
-                onChange={(e) => {
-                  setBudget(Number(e.target.value));
-                  // Once the buyer overrides it, the figure is theirs, not the document's.
-                  setBudgetFromDocument(false);
-                }}
-                className="mono font-semibold"
-              />
-              {budgetFromDocument ? (
-                <p className="text-[10px] text-emerald-700 dark:text-emerald-400 mt-1">
-                  {formatString(EXTRACTION.budgetFromDocumentHint, { fileName: uploadedFileName })}
-                </p>
-              ) : (
-                budget <= 0 && (
-                  <p className="text-[10px] text-slate-500 dark:text-gray-500 mt-1">
-                    {EXTRACTION.budgetMissingHint}
-                  </p>
-                )
-              )}
-            </div>
-
-            <div>
-              <label
-                htmlFor="rfq-delivery-location"
-                className="block text-slate-600 dark:text-gray-400 font-semibold mb-1 flex items-center gap-1"
-              >
-                <MapPin size={11} /> {EXTRACTION.deliveryLocationLabel}
-                <span className="text-rose-600 dark:text-rose-400 font-bold" aria-hidden="true">
-                  {EXTRACTION.deliveryRequiredMarker}
-                </span>
-              </label>
-              <input
-                id="rfq-delivery-location"
-                type="text"
-                required
-                aria-required
-                aria-invalid={showDeliveryLocationRequired}
-                value={deliveryLocation}
-                onChange={(e) => setDeliveryLocation(e.target.value)}
-                placeholder={EXTRACTION.deliveryLocationPlaceholder}
-                maxLength={200}
-                className="font-medium"
-              />
-              {showDeliveryLocationRequired && (
-                <p className="text-[10px] text-rose-700 dark:text-rose-400 mt-1">
-                  {EXTRACTION.deliveryLocationRequiredMessage}
-                </p>
-              )}
-            </div>
-
-            <div>
-              <label
-                htmlFor="rfq-delivery-pincode"
-                className="block text-slate-600 dark:text-gray-400 font-semibold mb-1"
-              >
-                {EXTRACTION.deliveryPincodeLabel}
-                <span className="text-rose-600 dark:text-rose-400 font-bold" aria-hidden="true">
-                  {EXTRACTION.deliveryRequiredMarker}
-                </span>
-              </label>
-              <input
-                id="rfq-delivery-pincode"
-                type="text"
-                required
-                aria-required
-                aria-invalid={showDeliveryPincodeRequired || isDeliveryPincodeMalformed}
-                value={deliveryPincode}
-                onChange={(e) => setDeliveryPincode(e.target.value)}
-                placeholder={EXTRACTION.deliveryPincodePlaceholder}
-                maxLength={10}
-                className="mono font-semibold"
-              />
-              {/* Blank and malformed are reported separately: telling a buyer who
-                  has typed nothing that the format is wrong sends them looking for
-                  a typo that is not there. Both are flagged inline as well as on
-                  save, so the problem surfaces while the field is still in view. */}
-              {showDeliveryPincodeRequired && (
-                <p className="text-[10px] text-rose-700 dark:text-rose-400 mt-1">
-                  {EXTRACTION.deliveryPincodeRequiredMessage}
-                </p>
-              )}
-              {isDeliveryPincodeMalformed && (
-                <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-1">
-                  {EXTRACTION.deliveryPincodeInvalidMessage}
-                </p>
-              )}
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+              {uploadedFiles.map((file, idx) => (
+                <div
+                  key={`${file.name}-${idx}`}
+                  className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-white dark:bg-gray-800 border border-slate-200 dark:border-gray-700 shadow-xs"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    {file.name.endsWith('.eml') || file.name.endsWith('.msg') ? (
+                      <Mail size={16} className="text-sky-600 dark:text-sky-400 shrink-0" />
+                    ) : (
+                      <FileText size={16} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-slate-800 dark:text-gray-200 truncate">{file.name}</p>
+                      <p className="text-[10px] text-slate-400">{formatFileSize(file.size)}</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleRemoveFile(idx)}
+                    className="p-1 rounded hover:bg-rose-50 dark:hover:bg-rose-950/40 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 transition-colors"
+                    title="Remove file"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
             </div>
           </div>
+        )}
 
-          {/* Nothing to review yet: guide the buyer straight into keying a row. */}
-          {entities.length === 0 ? (
-            <div className="p-10 rounded-xl border border-dashed border-slate-300 dark:border-gray-700 text-center space-y-3">
-              <FileSpreadsheet size={30} className="mx-auto text-slate-300 dark:text-gray-700" />
-              <h3 className="text-sm font-bold text-slate-800 dark:text-white">{EXTRACTION.emptyTitle}</h3>
-              <p className="text-xs text-slate-500 dark:text-gray-400 max-w-md mx-auto">{EXTRACTION.emptyMessage}</p>
-              <button onClick={handleAddEntity} className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5">
-                <Plus size={14} /> {EXTRACTION.addFirstItemAction}
-              </button>
+        {/* AI Extraction Outcome Banners */}
+        {extractionSummary && (
+          <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 text-xs">
+            <div className="font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+              <Sparkles size={14} /> Extraction Complete
             </div>
-          ) : (
-          /* Line Items Table with Major & Minor Category Dropdowns */
-          <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-gray-800 shadow-sm">
-            <table className="w-full text-left text-xs min-w-[1080px]">
-              <thead className="bg-slate-100 dark:bg-gray-950 text-slate-700 dark:text-gray-300 text-[10px] uppercase tracking-wider font-bold border-b border-slate-200 dark:border-gray-800">
+            <p className="text-[11px] text-emerald-900/80 dark:text-emerald-200 mt-0.5">
+              Successfully extracted <strong>{extractionSummary.accepted} line items</strong> from &ldquo;{extractionSummary.fileName}&rdquo; using {extractionSummary.model}. Review and adjust details below.
+            </p>
+          </div>
+        )}
+
+        {extractionError && (
+          <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-700/60 text-xs space-y-1">
+            <div className="font-bold text-amber-900 dark:text-amber-300 flex items-center gap-1.5">
+              <AlertCircle size={14} /> Document Parsing Notice
+            </div>
+            <p className="text-[11px] text-amber-900/90 dark:text-amber-200">{extractionError}</p>
+            <p className="text-[11px] text-amber-800/80 dark:text-amber-300 font-semibold">
+              You can key line items directly in the table below.
+            </p>
+          </div>
+        )}
+      </section>
+
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {/* SECTION 1: RFQ DETAILS & DELIVERY SPECIFICATIONS              */}
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      <section className="glass-panel p-6 rounded-2xl space-y-5 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs">
+        <div className="border-b border-slate-100 dark:border-gray-800 pb-3">
+          <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <FileText size={18} className="text-indigo-600 dark:text-indigo-400" />
+            1. RFQ Details & Delivery Terms
+          </h2>
+          <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+            Specify the procurement title, target location, and financial parameters for this requirement.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 text-xs">
+          {/* RFQ Title */}
+          <div className="xl:col-span-2">
+            <label htmlFor="rfq-title" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+              {MODAL.titleLabel}
+            </label>
+            <input
+              id="rfq-title"
+              type="text"
+              value={form.title}
+              onChange={(e) => patchForm('title', e.target.value)}
+              placeholder={MODAL.titlePlaceholder}
+              maxLength={200}
+              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-indigo-500"
+            />
+            <FieldError message={formErrors.title} />
+          </div>
+
+          {/* Estimated Budget */}
+          <div>
+            <label htmlFor="rfq-budget" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+              {formatString(MODAL.budgetLabel, { symbol: CURRENCY.SYMBOL })}{' '}
+              <span className="text-[9px] font-bold uppercase tracking-wide text-slate-400">({MODAL.optionalTag})</span>
+            </label>
+            <input
+              id="rfq-budget"
+              type="number"
+              min={0}
+              value={form.estimatedBudget ?? ''}
+              onChange={(e) => patchForm('estimatedBudget', e.target.value === '' ? null : Number(e.target.value))}
+              placeholder="e.g. 500000"
+              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white mono font-semibold focus:ring-2 focus:ring-indigo-500"
+            />
+            <FieldError message={formErrors.estimatedBudget} />
+          </div>
+
+          {/* Delivery Location */}
+          <div>
+            <label htmlFor="rfq-location" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+              {MODAL.deliveryLocationLabel}
+              <span className="text-rose-600 dark:text-rose-400 font-bold ml-0.5">*</span>
+            </label>
+            <input
+              id="rfq-location"
+              type="text"
+              required
+              value={form.deliveryLocation}
+              onChange={(e) => patchForm('deliveryLocation', e.target.value)}
+              placeholder={MODAL.deliveryLocationPlaceholder}
+              maxLength={200}
+              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-indigo-500"
+            />
+            <FieldError message={formErrors.deliveryLocation} />
+          </div>
+
+          {/* Delivery Pincode */}
+          <div>
+            <label htmlFor="rfq-pincode" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+              {MODAL.deliveryPincodeLabel}
+              <span className="text-rose-600 dark:text-rose-400 font-bold ml-0.5">*</span>
+            </label>
+            <input
+              id="rfq-pincode"
+              type="text"
+              required
+              value={form.deliveryPincode}
+              onChange={(e) => patchForm('deliveryPincode', e.target.value)}
+              placeholder={MODAL.deliveryPincodePlaceholder}
+              maxLength={10}
+              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white mono font-semibold focus:ring-2 focus:ring-indigo-500"
+            />
+            <FieldError message={formErrors.deliveryPincode} />
+          </div>
+
+          {/* Target Delivery Date */}
+          <div>
+            <label htmlFor="rfq-date" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+              {MODAL.targetDateLabel}
+            </label>
+            <input
+              id="rfq-date"
+              type="date"
+              value={form.targetDeliveryDate}
+              onChange={(e) => patchForm('targetDeliveryDate', e.target.value)}
+              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {/* SECTION 2: LINE ITEMS & TAXONOMY CATEGORIZATION TABLE         */}
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      <section className="glass-panel p-6 rounded-2xl space-y-4 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-gray-800 pb-3">
+          <div>
+            <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Sparkles size={18} className="text-indigo-600 dark:text-indigo-400" />
+              2. Line Items Specification ({form.lineItems.length})
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+              Classify each item into its standardized <strong>Major Category</strong> and <strong>Minor Category</strong> from the verified taxonomy.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleAutoCategorizeAll}
+              disabled={isCategorizing || form.lineItems.length === 0}
+              className="btn btn-secondary btn-sm text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800 flex items-center gap-1 font-semibold disabled:opacity-50"
+            >
+              {isCategorizing ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+              {isCategorizing ? 'Classifying...' : 'Auto-Categorize All (AI)'}
+            </button>
+            <button
+              onClick={() => setForm(addManualRFQLineItem(form))}
+              className="btn btn-primary btn-sm font-bold flex items-center gap-1 shadow-xs"
+            >
+              <Plus size={14} /> Add Line Item
+            </button>
+          </div>
+        </div>
+
+        <FieldError message={formErrors.lineItems} />
+
+        {form.lineItems.length === 0 ? (
+          <div className="p-8 text-center rounded-2xl border-2 border-dashed border-slate-300 dark:border-gray-700 bg-slate-50/50 dark:bg-gray-900/40 space-y-3">
+            <p className="text-sm font-medium text-slate-600 dark:text-gray-300">No line items added yet.</p>
+            <button
+              onClick={() => setForm(addManualRFQLineItem(form))}
+              className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5"
+            >
+              <Plus size={14} /> Add First Line Item
+            </button>
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-gray-800">
+            <table className="w-full text-left min-w-[1080px] text-xs">
+              <thead className="bg-slate-50 dark:bg-gray-950/60 text-[10px] uppercase tracking-wide text-slate-500 dark:text-gray-400 border-b border-slate-200 dark:border-gray-800">
                 <tr>
-                  <th className="p-3 w-[22%] min-w-[210px]">Item Description &amp; Specs</th>
-                  <th className="p-3 w-[16%] min-w-[160px]">Major Category</th>
-                  <th className="p-3 w-[18%] min-w-[180px]">Minor Category (Taxonomy)</th>
-                  <th className="p-3 w-[10%] min-w-[90px] text-center">QTY</th>
-                  <th className="p-3 w-[14%] min-w-[125px] text-center">UOM / UNIT</th>
-                  <th className="p-3 w-[13%] min-w-[140px]">Target Date</th>
-                  <th className="p-3 w-[8%] min-w-[85px] text-center">Confidence</th>
-                  <th className="p-3 w-[4%] min-w-[45px] text-center">Action</th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colItem}</th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colSpecs}</th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colMajor}</th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colMinor}</th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colQty}</th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colUnit}</th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colTargetDate}</th>
+                  <th className="px-3 py-2.5 text-center font-bold">Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-200 dark:divide-gray-800 text-slate-800 dark:text-gray-200">
-                {entities.map((item) => {
-                  const currentMajor = item.majorCategory;
-                  const taxonomyMinors =
-                    getMinorCategories(currentMajor);
-
-                  // The classifier's documented fallback pair sits outside the Excel
-                  // taxonomy, so the value actually held in state is always offered as
-                  // an option. Without it the select would render a different category
-                  // from the one the RFQ carries, and the minor list would be empty.
-                  const majorOptions = withCurrentValue(taxonomyMajors(), currentMajor);
-                  const availableMinors = withCurrentValue(taxonomyMinors, item.minorCategory);
-
+              <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                {form.lineItems.map((item) => {
+                  const errors = lineItemErrors[item.id] || {};
                   return (
-                    <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition-colors">
-                      <td className="p-3 align-top min-w-[210px]">
+                    <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-gray-800/40 transition-colors">
+                      {/* Item Name */}
+                      <td className="px-3 py-2.5 align-top">
                         <input
                           type="text"
+                          aria-label={MODAL.colItem}
                           value={item.itemName}
-                          placeholder={EXTRACTION.itemNamePlaceholder}
-                          onChange={(e) => handleEntityChange(item.id, 'itemName', e.target.value)}
-                          className="font-bold text-xs w-full mb-1 !py-1.5 !px-2.5 rounded-lg border border-slate-200 dark:border-gray-800"
+                          onChange={(e) => patchItem(item.id, { itemName: e.target.value })}
+                          placeholder={MODAL.itemPlaceholder}
+                          className="w-56 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium focus:ring-2 focus:ring-indigo-500"
                         />
-                        <textarea
-                          rows={2}
+                        <FieldError message={errors.itemName} />
+                      </td>
+
+                      {/* Specs */}
+                      <td className="px-3 py-2.5 align-top">
+                        <input
+                          type="text"
+                          aria-label={MODAL.colSpecs}
                           value={item.technicalSpecs}
-                          placeholder={EXTRACTION.itemSpecsPlaceholder}
-                          onChange={(e) => handleEntityChange(item.id, 'technicalSpecs', e.target.value)}
-                          className="text-[11px] w-full resize-none text-slate-500 dark:text-gray-400 !py-1.5 !px-2.5 rounded-lg border border-slate-200 dark:border-gray-800"
+                          onChange={(e) => patchItem(item.id, { technicalSpecs: e.target.value })}
+                          placeholder={MODAL.specsPlaceholder}
+                          className="w-48 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-indigo-500"
                         />
                       </td>
 
-                      {/* Major Category Dropdown */}
-                      <td className="p-3 align-top min-w-[160px]">
+                      {/* Major Category */}
+                      <td className="px-3 py-2.5 align-top">
                         <select
-                          value={currentMajor}
-                          onChange={(e) => handleEntityChange(item.id, 'majorCategory', e.target.value)}
-                          className="text-[11px] font-semibold w-full rounded-lg bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 !py-2 !px-2 shadow-xs"
+                          aria-label={MODAL.colMajor}
+                          value={item.majorCategory}
+                          onChange={(e) => patchItem(item.id, { majorCategory: e.target.value })}
+                          className="w-44 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium focus:ring-2 focus:ring-indigo-500"
                         >
-                          {/* Without an option matching the empty value a browser
-                              displays the first real category, which would look
-                              like a choice the buyer had made. */}
-                          <option value="" disabled>
-                            {EXTRACTION.categoryPlaceholder}
-                          </option>
-                          {majorOptions.map((major) => (
+                          <option value="">{MODAL.selectPlaceholder}</option>
+                          {taxonomyMajors().map((major) => (
                             <option key={major} value={major}>
                               {major}
                             </option>
                           ))}
                         </select>
+                        <FieldError message={errors.majorCategory} />
                       </td>
 
-                      {/* Minor Category Dropdown */}
-                      <td className="p-3 align-top min-w-[180px]">
+                      {/* Minor Category */}
+                      <td className="px-3 py-2.5 align-top">
                         <select
+                          aria-label={MODAL.colMinor}
                           value={item.minorCategory}
-                          onChange={(e) => handleEntityChange(item.id, 'minorCategory', e.target.value)}
-                          className="text-[11px] font-bold w-full rounded-lg bg-indigo-50/50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 !py-2 !px-2 shadow-xs"
+                          disabled={!item.majorCategory}
+                          onChange={(e) => patchItem(item.id, { minorCategory: e.target.value })}
+                          className="w-44 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium disabled:opacity-40 focus:ring-2 focus:ring-indigo-500"
                         >
-                          <option value="" disabled>
-                            {EXTRACTION.minorCategoryPlaceholder}
-                          </option>
-                          {availableMinors.map((minor) => (
+                          <option value="">{MODAL.selectPlaceholder}</option>
+                          {minorsFor(item.majorCategory).map((minor) => (
                             <option key={minor} value={minor}>
                               {minor}
                             </option>
                           ))}
                         </select>
-                        {availableMinors.length > 0 && (
-                          <span className="text-[9px] text-slate-400 mt-1 block">
-                            Mapped from {availableMinors.length} minor items
-                          </span>
-                        )}
+                        <FieldError message={errors.minorCategory} />
                       </td>
 
                       {/* Quantity */}
-                      <td className="p-3 align-top text-center min-w-[90px]">
+                      <td className="px-3 py-2.5 align-top">
                         <input
                           type="number"
-                          // Zero means "not stated" and shows as blank rather than
-                          // as a quantity of 0. The old handler clamped every entry
-                          // up to 1, so the field could never be cleared.
-                          value={item.quantity > 0 ? item.quantity : ''}
                           min={1}
-                          placeholder={EXTRACTION.itemQtyPlaceholder}
+                          aria-label={MODAL.colQty}
+                          value={item.quantity ?? ''}
                           onChange={(e) =>
-                            handleEntityChange(item.id, 'quantity', Math.max(0, Number(e.target.value) || 0))
+                            patchItem(item.id, {
+                              quantity: e.target.value === '' ? null : Number(e.target.value),
+                            })
                           }
-                          className="mono text-xs text-center font-bold w-full min-w-[75px] rounded-lg bg-white dark:bg-gray-950 border border-slate-200 dark:border-gray-800 !py-2 !px-2 shadow-inner focus:ring-2 focus:ring-indigo-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                          placeholder={MODAL.qtyPlaceholder}
+                          className="w-24 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 mono font-semibold focus:ring-2 focus:ring-indigo-500"
                         />
+                        <FieldError message={errors.quantity} />
                       </td>
 
-                      {/* Unit of Measurement (UOM) */}
-                      <td className="p-3 align-top text-center min-w-[125px]">
+                      {/* Unit */}
+                      <td className="px-3 py-2.5 align-top">
                         <input
                           type="text"
-                          list={`uom-options-${item.id}`}
+                          aria-label={MODAL.colUnit}
                           value={item.unit}
-                          placeholder={EXTRACTION.itemUnitPlaceholder}
-                          onChange={(e) => handleEntityChange(item.id, 'unit', e.target.value)}
-                          className="text-xs text-center font-semibold w-full min-w-[110px] rounded-lg bg-white dark:bg-gray-950 border border-slate-200 dark:border-gray-800 !py-2 !px-2.5 shadow-inner focus:ring-2 focus:ring-indigo-500"
+                          onChange={(e) => patchItem(item.id, { unit: e.target.value })}
+                          placeholder={MODAL.unitPlaceholder}
+                          className="w-24 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium focus:ring-2 focus:ring-indigo-500"
                         />
-                        <datalist id={`uom-options-${item.id}`}>
-                          <option value="Units" />
-                          <option value="Nos" />
-                          <option value="Meters" />
-                          <option value="Metric Tons" />
-                          <option value="Kg" />
-                          <option value="Sets" />
-                          <option value="Liters" />
-                          <option value="Pairs" />
-                          <option value="Boxes" />
-                          <option value="Hours" />
-                          <option value="Lots" />
-                        </datalist>
+                        <FieldError message={errors.unit} />
                       </td>
 
                       {/* Target Date */}
-                      <td className="p-3 align-top min-w-[140px]">
+                      <td className="px-3 py-2.5 align-top">
                         <input
                           type="date"
+                          aria-label={MODAL.colTargetDate}
                           value={item.targetDate}
-                          onChange={(e) => handleEntityChange(item.id, 'targetDate', e.target.value)}
-                          className="text-xs w-full min-w-[130px] !py-2 !px-2 rounded-lg border border-slate-200 dark:border-gray-800"
+                          onChange={(e) => patchItem(item.id, { targetDate: e.target.value })}
+                          className="w-36 px-2 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-indigo-500"
                         />
                       </td>
 
-                      {/* Confidence Badge */}
-                      <td className="p-3 align-top text-center min-w-[85px]">
-                        {/* A keyed row has no AI confidence, so a green 0% badge
-                            would report a score that was never computed. */}
-                        {item.confidence > 0 ? (
-                          <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/30 inline-block mt-1">
-                            {item.confidence}%
-                          </span>
-                        ) : (
-                          <span className="text-[11px] text-slate-400 dark:text-gray-500 inline-block mt-1">
-                            {EXTRACTION.confidenceUnset}
-                          </span>
-                        )}
-                      </td>
-
                       {/* Delete */}
-                      <td className="p-3 align-top text-center min-w-[45px]">
+                      <td className="px-3 py-2.5 align-top text-center">
                         <button
-                          onClick={() => handleDeleteEntity(item.id)}
-                          className="text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 p-2 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
-                          title="Delete item"
+                          onClick={() => setForm(removeManualRFQLineItem(form, item.id))}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                          title="Remove line item"
                         >
                           <Trash2 size={15} />
                         </button>
@@ -1162,194 +786,176 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
               </tbody>
             </table>
           </div>
-          )}
+        )}
+      </section>
 
-          <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-gray-800">
-            <button onClick={() => setActiveStep(1)} className="btn btn-secondary btn-sm">
-              Back to Ingestion
-            </button>
-            <button
-              onClick={handleProceedToSourcing}
-              className="btn btn-primary font-bold flex items-center gap-2"
-            >
-              <span>Proceed to Sourcing Mode</span> <ArrowRight size={15} />
-            </button>
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {/* SECTION 3: SOURCING MODE SELECTION CARDS                      */}
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      <section className="glass-panel p-6 rounded-2xl space-y-4 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs">
+        <div className="border-b border-slate-100 dark:border-gray-800 pb-3">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <CheckCircle2 size={18} className="text-indigo-600 dark:text-indigo-400" />
+              3. Select Sourcing Mode
+            </h2>
+            <span className="text-xs font-semibold text-slate-500 dark:text-gray-400">
+              Choose how suppliers are matched and invited
+            </span>
           </div>
         </div>
-      )}
 
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* STEP 3: SOURCING MODE, VENDOR MATCHING & STANDARD RFQ EMAIL */}
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {activeStep === 3 && (
-        <div className="glass-panel p-6 rounded-2xl space-y-6 animate-fade-in border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-gray-800 pb-3">
-            <div>
-              <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <Layers size={18} className="text-indigo-600 dark:text-indigo-400" />
-                STEP 3: SOURCING MODE SELECTION & STANDARD RFQ EMAIL DISPATCH
-              </h2>
-              <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                Select your sourcing mode. The system matches suitable categorized vendors and transmits standard RFQ emails.
-              </p>
-            </div>
-          </div>
+        <div role="radiogroup" aria-label="Sourcing Mode" className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {SOURCING_MODES.map((mode, index) => {
+            const isSelected = form.sourcingMode === mode.id;
+            const modeConfig = [
+              {
+                icon: '🎯',
+                badge: 'STARTER',
+                badgeStyle: 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-300 border-blue-200 dark:border-blue-800',
+                activeBorder: 'border-blue-500 ring-2 ring-blue-500/20 bg-blue-50/40 dark:bg-blue-950/30',
+              },
+              {
+                icon: '⚡',
+                badge: 'RECOMMENDED',
+                badgeStyle: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800',
+                activeBorder: 'border-emerald-500 ring-2 ring-emerald-500/20 bg-emerald-50/40 dark:bg-emerald-950/30',
+              },
+              {
+                icon: '🚀',
+                badge: 'FULL REACH',
+                badgeStyle: 'bg-purple-100 text-purple-700 dark:bg-purple-900/60 dark:text-purple-300 border-purple-200 dark:border-purple-800',
+                activeBorder: 'border-purple-500 ring-2 ring-purple-500/20 bg-purple-50/40 dark:bg-purple-950/30',
+              },
+            ][index];
 
-          {/* Free Account Quota Banner */}
-          {activeSubscription === 'free_trial' && (
-            <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/10 via-indigo-500/10 to-emerald-500/10 border border-amber-300 dark:border-amber-700/50 text-xs flex items-center justify-between gap-3 flex-wrap shadow-xs">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
-                  <Sparkles size={16} />
-                </div>
+            return (
+              <button
+                key={mode.id}
+                type="button"
+                role="radio"
+                aria-checked={isSelected}
+                data-testid={`mode-${mode.id}`}
+                onClick={() => patchForm('sourcingMode', mode.id as SourcingMode)}
+                className={`group relative text-left rounded-2xl border p-5 transition-all duration-200 cursor-pointer flex flex-col justify-between ${
+                  isSelected
+                    ? `${modeConfig.activeBorder} shadow-sm`
+                    : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/60 dark:border-gray-800 dark:bg-gray-900 dark:hover:border-gray-700'
+                }`}
+              >
                 <div>
-                  <span className="font-bold text-slate-900 dark:text-white">
-                    Free Starter Account: {remainingFreeRFQs} of 5 Free RFQs Available
-                  </span>
-                  <p className="text-[11px] text-slate-600 dark:text-gray-300 mt-0.5">
-                    You can select and dispatch in <strong>ANY version (Version 1, Version 2, or Version 3)</strong> for this free RFQ.
+                  {/* Top Header: Icon + Badges + Radio */}
+                  <div className="flex items-center justify-between gap-2 mb-3">
+                    <div
+                      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-lg shadow-2xs ${
+                        isSelected ? 'bg-white dark:bg-gray-800' : 'bg-slate-100 dark:bg-gray-800'
+                      }`}
+                    >
+                      {modeConfig.icon}
+                    </div>
+
+                    <div className="flex items-center gap-2.5">
+                      <span
+                        className={`rounded-full px-2.5 py-0.5 text-[9px] font-extrabold tracking-wider uppercase border ${modeConfig.badgeStyle}`}
+                      >
+                        {modeConfig.badge}
+                      </span>
+                      <span
+                        className={`flex h-4.5 w-4.5 items-center justify-center rounded-full border-2 transition-all ${
+                          isSelected
+                            ? 'border-indigo-600 bg-indigo-600 text-white'
+                            : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-900'
+                        }`}
+                      >
+                        {isSelected && <span className="h-1.5 w-1.5 rounded-full bg-white" />}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Title & Description */}
+                  <h4
+                    className={`text-sm font-black tracking-tight ${
+                      isSelected ? 'text-slate-900 dark:text-white' : 'text-slate-800 dark:text-gray-100'
+                    }`}
+                  >
+                    {mode.shortLabel}
+                  </h4>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-gray-400">
+                    {mode.description}
                   </p>
                 </div>
-              </div>
-              <span className="badge badge-amber font-bold mono">
-                All 3 Versions Unlocked
-              </span>
-            </div>
-          )}
 
-          {/* Sourcing Mode Selectors (Version 1, 2, 3) */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {SOURCING_MODES.map((mode) => {
-              const isSelected = selectedMode === mode.id;
-              const isAllowed = 
-                activeSubscription === 'version_3' ||
-                (activeSubscription === 'version_2' && mode.id !== 'mode_3') ||
-                (activeSubscription === 'version_1' && mode.id === 'mode_1') ||
-                activeSubscription === 'free_trial';
-
-              const handleModeClick = () => {
-                if (!isAllowed) {
-                  showToast(
-                    'Upgrade Required',
-                    mode.id === 'mode_3'
-                      ? 'Version 3 (Mode 3: Autonomous AI) requires an active Version 3 Plan. Upgrade in Subscription Center.'
-                      : 'Version 2 (Mode 2: Hybrid Sourcing) requires a Version 2 or Version 3 Plan.',
-                    'warning'
-                  );
-                  return;
-                }
-                setSelectedMode(mode.id);
-              };
-
-              return (
+                {/* Bottom Feature Pill */}
                 <div
-                  key={mode.id}
-                  data-testid={`mode-card-${mode.id}`}
-                  onClick={handleModeClick}
-                  className={`p-5 rounded-2xl border-2 transition-all flex flex-col justify-between relative group ${
-                    !isAllowed
-                      ? 'opacity-65 bg-slate-50 dark:bg-gray-900/40 border-slate-200 dark:border-gray-800 cursor-not-allowed'
-                      : isSelected
-                      ? 'bg-indigo-50/70 dark:bg-indigo-950/40 border-indigo-600 dark:border-indigo-500 shadow-md cursor-pointer'
-                      : 'bg-white dark:bg-gray-900/60 border-slate-200 dark:border-gray-800 hover:border-slate-300 dark:hover:border-gray-700 cursor-pointer'
+                  className={`mt-4 rounded-xl p-2.5 border transition-all ${
+                    isSelected
+                      ? 'bg-white/95 dark:bg-gray-800/90 border-indigo-200/80 dark:border-indigo-900/60 shadow-2xs'
+                      : 'bg-slate-50 dark:bg-gray-950/60 border-slate-200/60 dark:border-gray-800'
                   }`}
                 >
-                  {isSelected && (
-                    <div className="absolute top-3 right-3 p-1 rounded-full bg-indigo-600 text-white">
-                      <CheckCircle2 size={14} />
-                    </div>
-                  )}
-
-                  {!isAllowed && (
-                    <div className="absolute top-3 right-3 px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 text-[9px] font-bold border border-amber-300">
-                      🔒 Upgrade Required
-                    </div>
-                  )}
-
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      {/* badgeColor is a Tailwind class string; passing it to
-                          style={{ backgroundColor }} produced invalid CSS the
-                          browser dropped, leaving the badge unstyled. */}
-                      <span
-                        className={`px-2 py-0.5 rounded border text-[10px] font-bold uppercase tracking-wider inline-block ${mode.badgeColor}`}
-                      >
-                        {mode.code}
-                      </span>
-                      {isAllowed && (
-                        <span className="text-[9px] font-bold text-emerald-600 dark:text-emerald-400">
-                          ✓ Included
-                        </span>
-                      )}
-                    </div>
-                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">{mode.shortLabel}</h3>
-                    <p className="text-xs text-slate-600 dark:text-gray-400 mt-2 leading-relaxed">{mode.description}</p>
-                  </div>
-
-                  <div className="mt-4 pt-3 border-t border-slate-100 dark:border-gray-800 text-[11px] font-medium text-slate-600 dark:text-gray-300">
-                    • {mode.id === 'mode_1' ? 'Private buyer roster only (Features of Version 1)' : mode.id === 'mode_2' ? 'Buyer roster + Procucev Hybrid pool (Features of Version 1 & 2)' : 'Autonomous AI + 360° Qualification (Features of Version 1, 2 & 3)'}
+                  <div className="flex items-start gap-2">
+                    <CheckCircle2
+                      size={14}
+                      className={`mt-0.5 shrink-0 ${
+                        isSelected ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400 dark:text-gray-500'
+                      }`}
+                    />
+                    <span className="text-[11px] font-semibold text-slate-700 dark:text-gray-300 leading-snug">
+                      {mode.featureSummary}
+                    </span>
                   </div>
                 </div>
-              );
-            })}
-          </div>
-
-          {/* Vendor matching & dispatch are being rebuilt; the RFQ still records its mode. */}
-          <div className="p-5 rounded-2xl bg-slate-50 dark:bg-gray-950 border border-dashed border-slate-300 dark:border-gray-700 space-y-2">
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <h3 className="text-sm font-bold text-slate-800 dark:text-gray-200 flex items-center gap-2">
-                <Users size={16} className="text-slate-400" />
-                {EXTRACTION.vendorComingSoonTitle}
-              </h3>
-              <span className="badge badge-amber font-bold">{EXTRACTION.vendorComingSoonBadge}</span>
-            </div>
-            <p className="text-xs text-slate-500 dark:text-gray-400 leading-relaxed max-w-3xl">
-              {EXTRACTION.vendorComingSoonMessage}
-            </p>
-          </div>
-
-          {/* Dispatch Summary Box */}
-          <div className="p-4 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 text-xs space-y-2">
-            <div className="flex items-center justify-between font-semibold flex-wrap gap-2">
-              <span className="text-slate-700 dark:text-gray-300">{EXTRACTION.dispatchAction}</span>
-              <span className="mono text-indigo-700 dark:text-indigo-300 font-bold">
-                {formatString(EXTRACTION.dispatchSummary, {
-                  rfqNumber,
-                  itemCount: entities.length,
-                  modeCode: SOURCING_MODES.find((m) => m.id === selectedMode)?.code || selectedMode,
-                })}
-              </span>
-            </div>
-            <p className="text-slate-500 dark:text-gray-400 text-[11px]">
-              Upon dispatch, official Standard RFQ Emails with itemized BOQ specifications and SHA-256 digital seals will be transmitted to all chosen suppliers. Suppliers submit quotations by replying directly to the email without changing the subject line for automated AI ingestion.
-            </p>
-          </div>
-
-          {/* Actions */}
-          <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-gray-800">
-            <button onClick={() => setActiveStep(2)} className="btn btn-secondary btn-sm">
-              Back to Review
-            </button>
-            <button
-              onClick={handleDispatch}
-              disabled={isDispatching}
-              className="btn btn-primary btn-lg font-bold shadow-lg shadow-indigo-600/20 flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              <Send size={16} /> {isDispatching ? 'Saving…' : EXTRACTION.dispatchAction}
-            </button>
-          </div>
+              </button>
+            );
+          })}
         </div>
+      </section>
+
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {/* FOOTER ACTIONS & SUBMISSION                                   */}
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {submitError && (
+        <p role="alert" className="flex items-start gap-2 p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 text-rose-800 dark:text-rose-300 text-xs">
+          <AlertCircle size={15} className="mt-0.5 shrink-0" />
+          <span>{submitError}</span>
+        </p>
       )}
 
-      {/* Manual entry runs entirely in this dialog. It posts to the API itself and
-          hands back the saved record, so it does not pass through the extraction
-          steps above — there is no document to read and nothing to review. */}
-      <ManualRFQModal
-        isOpen={isManualModalOpen}
-        onClose={() => setIsManualModalOpen(false)}
-        onCreated={handleManualRFQCreated}
-      />
+      <div className="flex items-center justify-between gap-4 pt-5 pb-6 border-t border-slate-200 dark:border-slate-800">
+        <div className="flex items-center gap-2.5">
+          <button onClick={onCancel} disabled={isDispatching} type="button" className="btn btn-secondary font-semibold cursor-pointer">
+            Cancel
+          </button>
+          <button
+            onClick={handleClearForm}
+            disabled={isDispatching}
+            type="button"
+            className="btn btn-secondary font-semibold inline-flex items-center gap-1.5 text-slate-600 hover:text-rose-600 dark:text-gray-300 dark:hover:text-rose-400 cursor-pointer"
+          >
+            <RotateCcw size={14} />
+            <span>Clear Form</span>
+          </button>
+        </div>
+
+        <button
+          onClick={handleSubmit}
+          disabled={isDispatching}
+          className="btn btn-primary font-black flex items-center gap-2 px-6 py-2.5 shadow-md hover:shadow-lg disabled:opacity-50 cursor-pointer"
+        >
+          {isDispatching ? (
+            <>
+              <Loader2 size={16} className="animate-spin" />
+              <span>Creating & Dispatching RFQ...</span>
+            </>
+          ) : (
+            <>
+              <Send size={16} />
+              <span>Create & Dispatch RFQ</span>
+              <ArrowRight size={16} />
+            </>
+          )}
+        </button>
+      </div>
     </div>
   );
 }
-

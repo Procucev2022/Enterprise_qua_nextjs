@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import { useApp } from '@/lib/store';
 import { formatCurrency } from '@/lib/constants';
@@ -35,9 +36,11 @@ import {
   SlidersHorizontal,
   Check,
   Database,
+  Pencil,
 } from 'lucide-react';
 
 export default function InitialSetupModal() {
+  const router = useRouter();
   const {
     initialSetupModalOpen,
     setInitialSetupModalOpen,
@@ -52,12 +55,13 @@ export default function InitialSetupModal() {
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1);
   const [selectedPeriod, setSelectedPeriod] = useState<'1_year' | '2_years' | '3_years'>(historicalPurchaseDataPeriod || '2_years');
 
-  // Separate Upload States & File Handlers
+  // Separate Upload States & File Handlers (Default selection removed)
   const [storedVendors, setStoredVendors] = useState<VendorMasterUploadRecord[]>([]);
-  const [vendorMasterUploaded, setVendorMasterUploaded] = useState(true);
-  const [vendorFileName, setVendorFileName] = useState<string>('Vendor_Master_Database.xlsx');
+  const [vendorMasterUploaded, setVendorMasterUploaded] = useState(false);
+  const [vendorFileName, setVendorFileName] = useState<string>('');
   const [isDraggingVendor, setIsDraggingVendor] = useState<boolean>(false);
   const [isParsingVendor, setIsParsingVendor] = useState<boolean>(false);
+  const [isEditingVendorTable, setIsEditingVendorTable] = useState<boolean>(false);
 
   const [poLineItems, setPoLineItems] = useState<PurchaseOrderLineItemRecord[]>([]);
   const [poDataUploaded, setPoDataUploaded] = useState(false);
@@ -65,32 +69,24 @@ export default function InitialSetupModal() {
   const [isDraggingPo, setIsDraggingPo] = useState<boolean>(false);
   const [isParsingPo, setIsParsingPo] = useState<boolean>(false);
 
-  // Hydrate storedVendors from live PostgreSQL database
-  React.useEffect(() => {
-    if (buyerVendors && buyerVendors.length > 0) {
-      setStoredVendors((prev) => {
-        if (prev.length > 0 && vendorFileName !== 'Vendor_Master_Database.xlsx') return prev;
-        return buyerVendors.map((v, i) => ({
-          id: v.id || `vm-${i + 1}`,
-          vendorCode: (v as any).vendorCode || `VND-${1000 + i + 1}`,
-          companyName: v.name,
-          contactPerson: v.contactPerson || 'Procurement Lead',
-          email: v.email,
-          phone: v.phone || '+91 98000 00000',
-          address: v.location || 'Industrial Area, India',
-          gstNumber: (v as any).gstNumber || (v as any).gstin || '27AAACA0000A1Z0',
-          vendorRatingScore: (v as any).vendorRatingScore || (v.score ? Math.round(v.score) : v.rating ? Math.round(v.rating * 20) : undefined),
-        }));
-      });
-    }
-  }, [buyerVendors, vendorFileName]);
-
   const vendorFileInputRef = useRef<HTMLInputElement>(null);
   const poFileInputRef = useRef<HTMLInputElement>(null);
 
   const [isProcessingPOJoin, setIsProcessingPOJoin] = useState(false);
   const [isConfirmingIngestion, setIsConfirmingIngestion] = useState(false);
   const [activeReviewTab, setActiveReviewTab] = useState<'all' | 'mapped' | 'unmapped'>('all');
+  const [apiJoinedVendors, setApiJoinedVendors] = useState<HistoricalPurchaseVendorRecord[] | null>(null);
+
+  const authFetchHeaders = (): Record<string, string> => {
+    const token =
+      typeof window !== 'undefined'
+        ? localStorage.getItem('procucev_auth_token') || sessionStorage.getItem('procucev_auth_token')
+        : null;
+    return {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
+  };
 
   if (!initialSetupModalOpen) return null;
 
@@ -130,8 +126,22 @@ export default function InitialSetupModal() {
         const parsedVendors: VendorMasterUploadRecord[] = rawJson.map((row, idx) => {
           const keys = Object.keys(row);
           const getVal = (possibleKeys: string[]): string => {
+            // 1. Exact normalized match
             for (const pk of possibleKeys) {
-              const matchedKey = keys.find((k) => k.toLowerCase().trim().replace(/[^a-z0-9]/g, '') === pk.toLowerCase().replace(/[^a-z0-9]/g, ''));
+              const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
+              const matchedKey = keys.find((k) => k.toLowerCase().trim().replace(/[^a-z0-9]/g, '') === pkClean);
+              if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
+                return String(row[matchedKey]).trim();
+              }
+            }
+            // 2. Contains / substring match
+            for (const pk of possibleKeys) {
+              const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
+              if (!pkClean) continue;
+              const matchedKey = keys.find((k) => {
+                const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+                return kClean.includes(pkClean) || pkClean.includes(kClean);
+              });
               if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
                 return String(row[matchedKey]).trim();
               }
@@ -166,6 +176,7 @@ export default function InitialSetupModal() {
         setStoredVendors(parsedVendors);
         setVendorMasterUploaded(true);
         setVendorFileName(file.name);
+        setIsEditingVendorTable(false);
         showToast('Vendor Master Uploaded', `Successfully parsed & loaded ${parsedVendors.length} vendors from ${file.name}.`, 'success');
       } catch (err: any) {
         console.error('Vendor Master Parse Error:', err);
@@ -210,8 +221,22 @@ export default function InitialSetupModal() {
         const parsedPOs: PurchaseOrderLineItemRecord[] = rawJson.map((row, idx) => {
           const keys = Object.keys(row);
           const getVal = (possibleKeys: string[]): string => {
+            // 1. Exact normalized match
             for (const pk of possibleKeys) {
-              const matchedKey = keys.find((k) => k.toLowerCase().trim().replace(/[^a-z0-9]/g, '') === pk.toLowerCase().replace(/[^a-z0-9]/g, ''));
+              const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
+              const matchedKey = keys.find((k) => k.toLowerCase().trim().replace(/[^a-z0-9]/g, '') === pkClean);
+              if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
+                return String(row[matchedKey]).trim();
+              }
+            }
+            // 2. Contains / substring match
+            for (const pk of possibleKeys) {
+              const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
+              if (!pkClean) continue;
+              const matchedKey = keys.find((k) => {
+                const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+                return kClean.includes(pkClean) || pkClean.includes(kClean);
+              });
               if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
                 return String(row[matchedKey]).trim();
               }
@@ -219,30 +244,36 @@ export default function InitialSetupModal() {
             return '';
           };
 
-          const poNumber = getVal(['ponumber', 'po number', 'po #', 'po no', 'order id', 'order number']) || `PO-2025-${(1000 + idx).toString()}`;
+          const poNumber = getVal(['ponumber', 'po number', 'po #', 'po no', 'pono', 'order id', 'order number', 'order no']) || `PO-2025-${(1000 + idx).toString()}`;
           const poDate = getVal(['podate', 'po date', 'date', 'order date', 'creation date']) || '2025-06-15';
-          const vendorIdentifier = getVal(['vendoridentifier', 'vendor', 'vendor name', 'supplier', 'company name', 'vendor code']) || 'Apex Supplies Ltd.';
-          const itemName = getVal(['itemname', 'item description', 'description', 'item', 'material', 'product name']) || 'Industrial Mechanical Spares';
-          const specs = getVal(['specs', 'specification', 'technical specs', 'details', 'item specs', 'grade']) || 'Standard Plant Specifications';
+          const vendorIdentifier = getVal(['vendor name', 'vendor identifier', 'vendor', 'supplier name', 'supplier', 'company name', 'vendor code', 'vendor id']) || 'Apex Supplies Ltd.';
+          const itemName = getVal(['line item description', 'line item', 'item description', 'description', 'item name', 'product description', 'product name', 'material description', 'material', 'service description', 'service', 'item']) || 'Industrial Mechanical Spares';
+          const specs = getVal(['specs', 'specification', 'technical specs', 'specifications', 'details', 'item specs', 'grade']);
           
-          const qtyRaw = getVal(['quantity', 'qty', 'units', 'count', 'ordered qty']);
-          const quantity = qtyRaw && !isNaN(Number(qtyRaw)) ? Math.max(1, Math.round(Number(qtyRaw))) : 10;
+          const qtyRaw = getVal(['quantity', 'qty', 'units', 'count', 'ordered qty', 'volume']);
+          const quantity = qtyRaw && !isNaN(Number(String(qtyRaw).replace(/[^0-9.]/g, ''))) ? Math.max(1, Math.round(Number(String(qtyRaw).replace(/[^0-9.]/g, '')))) : 1;
           
-          const unit = getVal(['unit', 'uom', 'unit of measure']) || 'Units';
+          const unit = getVal(['unit', 'uom', 'unit of measure', 'units']) || 'Units';
 
-          const unitPriceRaw = getVal(['unitprice', 'unit price', 'rate', 'price', 'item price']);
-          const totalSpendRaw = getVal(['totalspend', 'total spend', 'total amount', 'spend', 'amount', 'total value', 'po amount']);
+          const unitPriceRaw = getVal(['unit price inr', 'unit price', 'unit rate', 'rate inr', 'rate', 'price inr', 'price', 'item price']);
+          const totalSpendRaw = getVal(['total spend inr', 'total spend (inr)', 'total spend rs', 'total spend', 'total amount inr', 'total amount (inr)', 'total amount', 'total inr', 'total (inr)', 'spend inr', 'spend', 'amount inr', 'amount', 'total value', 'po amount', 'total']);
 
-          let unitPrice = unitPriceRaw && !isNaN(Number(unitPriceRaw.replace(/[^0-9.]/g, ''))) ? Number(unitPriceRaw.replace(/[^0-9.]/g, '')) : 500;
-          let totalSpend = totalSpendRaw && !isNaN(Number(totalSpendRaw.replace(/[^0-9.]/g, ''))) ? Number(totalSpendRaw.replace(/[^0-9.]/g, '')) : unitPrice * quantity;
+          const parsedUnitPrice = unitPriceRaw && !isNaN(Number(unitPriceRaw.replace(/[^0-9.]/g, ''))) ? Number(unitPriceRaw.replace(/[^0-9.]/g, '')) : 0;
+          const parsedTotalSpend = totalSpendRaw && !isNaN(Number(totalSpendRaw.replace(/[^0-9.]/g, ''))) ? Number(totalSpendRaw.replace(/[^0-9.]/g, '')) : 0;
 
-          if (totalSpend === 0 && unitPrice > 0) {
-            totalSpend = unitPrice * quantity;
-          } else if (unitPrice === 0 && totalSpend > 0 && quantity > 0) {
+          let totalSpend = parsedTotalSpend;
+          let unitPrice = parsedUnitPrice;
+
+          if (totalSpend > 0 && unitPrice === 0 && quantity > 0) {
             unitPrice = Math.round(totalSpend / quantity);
+          } else if (totalSpend === 0 && unitPrice > 0) {
+            totalSpend = unitPrice * quantity;
+          } else if (totalSpend === 0 && unitPrice === 0) {
+            unitPrice = 500;
+            totalSpend = unitPrice * quantity;
           }
 
-          const department = getVal(['department', 'dept', 'cost center', 'plant', 'division', 'category']) || 'Maintenance & Utilities';
+          const department = getVal(['department', 'dept', 'cost center', 'plant', 'division', 'category', 'function']) || 'General';
 
           return {
             id: `po-upload-${Date.now()}-${idx}`,
@@ -279,34 +310,30 @@ export default function InitialSetupModal() {
     reader.readAsArrayBuffer(file);
   };
 
-  const resetToSampleVendorData = () => {
-    if (buyerVendors && buyerVendors.length > 0) {
-      setStoredVendors(
-        buyerVendors.map((v, i) => ({
-          id: v.id || `vm-${i + 1}`,
-          vendorCode: (v as any).vendorCode || `VND-${1000 + i + 1}`,
-          companyName: v.name,
-          contactPerson: v.contactPerson || 'Procurement Lead',
-          email: v.email,
-          phone: v.phone || '+91 98000 00000',
-          address: v.location || 'Industrial Area, India',
-          gstNumber: (v as any).gstNumber || (v as any).gstin || '27AAACA0000A1Z0',
-          vendorRatingScore: (v as any).vendorRatingScore || (v.score ? Math.round(v.score) : v.rating ? Math.round(v.rating * 20) : undefined),
-        }))
-      );
+  const clearVendorMasterData = () => {
+    setStoredVendors([]);
+    setApiJoinedVendors(null);
+    setVendorMasterUploaded(false);
+    setVendorFileName('');
+    setIsEditingVendorTable(false);
+    if (vendorFileInputRef.current) {
+      vendorFileInputRef.current.value = '';
     }
-    setVendorFileName('Vendor_Master_Database.xlsx');
-    showToast('Reset Complete', 'Vendor Master reset to live database records.', 'info');
+    showToast('Selection Cleared', 'Vendor Master selection has been removed. Please upload a file.', 'info');
   };
 
   const resetToSamplePoData = () => {
     setPoLineItems([]);
+    setApiJoinedVendors(null);
     setPoFileName(`PO_Purchase_Dump_${selectedPeriod}.xlsx`);
     setPoDataUploaded(false);
+    if (poFileInputRef.current) {
+      poFileInputRef.current.value = '';
+    }
     showToast('Reset Complete', 'PO Dump line items cleared. Please upload your spreadsheet.', 'info');
   };
 
-  // Correlate and Join PO line items against stored Vendor Master
+  // Compute Joined Records between Vendor Master & PO Line Items
   const computeJoinedRecords = (): HistoricalPurchaseVendorRecord[] => {
     return storedVendors.map((v) => {
       // Find matching POs
@@ -325,9 +352,39 @@ export default function InitialSetupModal() {
       let secondSetMinors: string[] = [];
 
       if (hasMatchingPOs) {
-        // AI Category mapping based on purchased items
-        const itemText = items.join(' ').toLowerCase();
-        if (itemText.includes('pump') || itemText.includes('valve') || itemText.includes('hose') || itemText.includes('compressor')) {
+        // AI Category mapping based on purchased items & vendor names
+        const itemText = (items.join(' ') + ' ' + v.companyName).toLowerCase();
+        if (
+          itemText.includes('microsoft') ||
+          itemText.includes('google') ||
+          itemText.includes('azure') ||
+          itemText.includes('workspace') ||
+          itemText.includes('cloud') ||
+          itemText.includes('license') ||
+          itemText.includes('software') ||
+          itemText.includes('power bi') ||
+          itemText.includes('bigquery') ||
+          itemText.includes('gcp') ||
+          itemText.includes('saas') ||
+          itemText.includes('datacenter')
+        ) {
+          firstSetMajor = 'Information Technology (IT) & Software';
+          if (itemText.includes('cloud') || itemText.includes('azure') || itemText.includes('gcp') || itemText.includes('storage') || itemText.includes('compute') || itemText.includes('credits')) {
+            secondSetMinors.push('Cloud Infrastructure & Storage');
+          }
+          if (itemText.includes('license') || itemText.includes('subscription') || itemText.includes('renewal') || itemText.includes('365') || itemText.includes('workspace') || itemText.includes('teams') || itemText.includes('windows server')) {
+            secondSetMinors.push('Enterprise Software & Licenses');
+          }
+          if (itemText.includes('bigquery') || itemText.includes('power bi') || itemText.includes('analytics') || itemText.includes('data')) {
+            secondSetMinors.push('Data & Analytics Platforms');
+          }
+          if (itemText.includes('datacenter') || itemText.includes('infrastructure') || itemText.includes('server')) {
+            secondSetMinors.push('IT Infrastructure');
+          }
+          if (secondSetMinors.length === 0) {
+            secondSetMinors.push('Enterprise Software & Licenses');
+          }
+        } else if (itemText.includes('pump') || itemText.includes('valve') || itemText.includes('hose') || itemText.includes('compressor')) {
           firstSetMajor = 'Engineering Spares - Mechanical';
           if (itemText.includes('pump')) secondSetMinors.push('Pumps & Accessories');
           if (itemText.includes('valve') || itemText.includes('gate') || itemText.includes('globe')) secondSetMinors.push('Hoses, Valves & Fittings');
@@ -376,7 +433,42 @@ export default function InitialSetupModal() {
     });
   };
 
-  const joinedVendors = computeJoinedRecords();
+  // Editable Vendor Master Table Handlers
+  const handleUpdateVendorField = (id: string, field: keyof VendorMasterUploadRecord, value: any) => {
+    setStoredVendors((prev) =>
+      prev.map((v) => (v.id === id ? { ...v, [field]: value } : v))
+    );
+  };
+
+  const handleDeleteVendorRow = (id: string) => {
+    setStoredVendors((prev) => {
+      const updated = prev.filter((v) => v.id !== id);
+      if (updated.length === 0) {
+        setVendorMasterUploaded(false);
+      }
+      return updated;
+    });
+  };
+
+  const handleAddVendorRow = () => {
+    const newVendor: VendorMasterUploadRecord = {
+      id: `vm-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      vendorCode: '',
+      companyName: '',
+      contactPerson: '',
+      email: '',
+      phone: '',
+      address: '',
+      gstNumber: '',
+      vendorRatingScore: undefined,
+    };
+    setStoredVendors((prev) => [...prev, newVendor]);
+    setVendorMasterUploaded(true);
+    setIsEditingVendorTable(true);
+  };
+
+  const fallbackJoined = computeJoinedRecords();
+  const joinedVendors = apiJoinedVendors || fallbackJoined;
   const mappedVendors = joinedVendors.filter((v) => v.categoriesMappedByBuyer);
   const unmappedVendors = joinedVendors.filter((v) => !v.categoriesMappedByBuyer);
 
@@ -418,15 +510,40 @@ export default function InitialSetupModal() {
 
   const handleSimulatePOJoin = () => {
     setIsProcessingPOJoin(true);
+    let apiData: HistoricalPurchaseVendorRecord[] | null = null;
+
+    fetch('/api/buyer-accounts/ai-cross-match', {
+      method: 'POST',
+      headers: authFetchHeaders(),
+      body: JSON.stringify({
+        vendors: storedVendors,
+        poLineItems,
+      }),
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (json && json.success && Array.isArray(json.data)) {
+          apiData = json.data;
+          setApiJoinedVendors(json.data);
+        }
+      })
+      .catch((err) => {
+        console.warn('Backend AI cross-match API error:', err);
+      });
+
     setTimeout(() => {
       setIsProcessingPOJoin(false);
+      const dataToSet = apiData || computeJoinedRecords();
+      setApiJoinedVendors(dataToSet);
       setStep(4);
+      const mappedCount = dataToSet.filter((v: any) => v.categoriesMappedByBuyer).length;
+      const unmappedCount = dataToSet.length - mappedCount;
       showToast(
         'Cross-Match Complete',
-        `Matched PO data against ${storedVendors.length} stored vendors. ${mappedVendors.length} categorized, ${unmappedVendors.length} flagged for self-mapping.`,
+        `Matched PO data against ${storedVendors.length} stored vendors. ${mappedCount} categorized, ${unmappedCount} flagged for self-mapping.`,
         'success'
       );
-    }, 800);
+    }, 600);
   };
 
   const handleConfirmFinalIngestion = async () => {
@@ -460,14 +577,16 @@ export default function InitialSetupModal() {
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setInitialSetupModalOpen(false)}
-            className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-gray-800 transition-colors"
-            title="Dismiss setup (you can resume from the blinking corner badge)"
-          >
-            <X size={20} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setInitialSetupModalOpen(false)}
+              className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-gray-800 transition-colors"
+              title="Dismiss setup (you can resume from the blinking corner badge)"
+            >
+              <X size={20} />
+            </button>
+          </div>
         </div>
 
         {/* Informative Why This is Required Box */}
@@ -620,13 +739,15 @@ export default function InitialSetupModal() {
                 >
                   <Download size={12} /> Download CSV Template
                 </button>
-                <button
-                  type="button"
-                  onClick={resetToSampleVendorData}
-                  className="text-[11px] text-slate-500 hover:text-slate-700 dark:text-gray-400 dark:hover:text-gray-200 underline font-medium"
-                >
-                  Reset Template
-                </button>
+                {storedVendors.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearVendorMasterData}
+                    className="text-[11px] text-rose-600 hover:text-rose-700 dark:text-rose-400 underline font-medium"
+                  >
+                    Clear Selection
+                  </button>
+                )}
               </div>
             </div>
 
@@ -647,6 +768,8 @@ export default function InitialSetupModal() {
               className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all cursor-pointer group ${
                 isDraggingVendor
                   ? 'border-indigo-600 bg-indigo-100/70 dark:bg-indigo-900/50 scale-[1.01]'
+                  : storedVendors.length > 0
+                  ? 'border-emerald-300 dark:border-emerald-600/50 bg-emerald-50/40 dark:bg-emerald-950/20'
                   : 'border-indigo-300 dark:border-indigo-500/50 hover:border-indigo-600 bg-indigo-50/40 dark:bg-indigo-950/20 hover:bg-indigo-50/80'
               }`}
             >
@@ -656,83 +779,279 @@ export default function InitialSetupModal() {
               <h4 className="text-sm font-black text-slate-800 dark:text-white mt-2">
                 {isParsingVendor
                   ? 'Reading and Parsing Vendor Records...'
+                  : storedVendors.length > 0
+                  ? `Vendor Master File Loaded (${storedVendors.length} Suppliers)`
                   : `Click to Browse or Drag & Drop Vendor Master (.xlsx, .csv, .xls)`}
               </h4>
               <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-1 max-w-md mx-auto">
-                Upload your ERP vendor master sheet or use our sample template with {storedVendors.length} loaded records.
+                {storedVendors.length > 0
+                  ? `Active File: ${vendorFileName}. Click below to change or upload another vendor master file.`
+                  : 'Upload your ERP vendor master sheet containing vendor codes, company names, contact details, GSTIN, and ratings.'}
               </p>
 
               <div className="mt-3 flex items-center justify-center gap-2 flex-wrap">
-                <div className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-700 dark:text-indigo-300 px-3 py-1 rounded-full bg-white dark:bg-gray-800 border border-indigo-200 dark:border-indigo-800 shadow-sm">
-                  <Database size={12} className="text-indigo-500" />
-                  <span>Active File:</span>
-                  <span className="font-mono text-indigo-600 dark:text-indigo-400">{vendorFileName}</span>
-                  <span className="text-slate-400">({storedVendors.length} Suppliers)</span>
+                {storedVendors.length > 0 ? (
+                  <>
+                    <div className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-700 dark:text-indigo-300 px-3 py-1 rounded-full bg-white dark:bg-gray-800 border border-indigo-200 dark:border-indigo-800 shadow-sm">
+                      <Database size={12} className="text-indigo-500" />
+                      <span>Active File:</span>
+                      <span className="font-mono text-indigo-600 dark:text-indigo-400">{vendorFileName}</span>
+                      <span className="text-slate-400">({storedVendors.length} Suppliers)</span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        vendorFileInputRef.current?.click();
+                      }}
+                      className="btn btn-primary btn-xs font-bold text-[11px] flex items-center gap-1"
+                    >
+                      <UploadCloud size={12} /> Choose Another File
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        clearVendorMasterData();
+                      }}
+                      className="btn btn-secondary btn-xs font-bold text-[11px] text-rose-600 hover:text-rose-700 flex items-center gap-1"
+                    >
+                      <Trash2 size={12} /> Clear Selection
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      vendorFileInputRef.current?.click();
+                    }}
+                    className="btn btn-primary btn-xs font-bold text-[11px] flex items-center gap-1"
+                  >
+                    <UploadCloud size={12} /> Browse File
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Table of Stored Vendor Master or Empty State */}
+            {storedVendors.length > 0 ? (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                      {isEditingVendorTable ? 'Editing Vendor Master Records' : 'Stored Vendor Master Records'} ({storedVendors.length} Suppliers):
+                    </span>
+                    {isEditingVendorTable && (
+                      <span className="text-[10px] font-semibold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/70 border border-amber-200 dark:border-amber-800/50 px-2 py-0.5 rounded-full flex items-center gap-1">
+                        <Sparkles size={10} /> Edit Mode Active
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {isEditingVendorTable ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleAddVendorRow}
+                          className="btn btn-secondary btn-xs font-bold text-[10px] flex items-center gap-1"
+                        >
+                          <Plus size={11} /> Add Vendor Row
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIsEditingVendorTable(false)}
+                          className="btn btn-primary btn-xs font-bold text-[10px] flex items-center gap-1 shadow-xs"
+                        >
+                          <Check size={11} /> Done Editing
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setIsEditingVendorTable(true)}
+                          className="btn btn-secondary btn-xs font-bold text-[10px] flex items-center gap-1 shadow-xs border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50"
+                        >
+                          <Pencil size={11} /> Edit Data
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
 
+                {isEditingVendorTable ? (
+                  /* EDITABLE MODE TABLE */
+                  <div className="border border-indigo-200 dark:border-indigo-800 rounded-xl overflow-hidden max-h-96 overflow-y-auto text-xs bg-white dark:bg-gray-900 shadow-inner ring-1 ring-indigo-500/20">
+                    <table className="w-full text-left border-collapse">
+                      <thead className="bg-indigo-50/70 dark:bg-gray-800 text-[10px] uppercase font-bold text-indigo-900 dark:text-gray-300 sticky top-0 z-10">
+                        <tr>
+                          <th className="p-2 w-24">Code</th>
+                          <th className="p-2 min-w-[140px]">Company Name</th>
+                          <th className="p-2 min-w-[150px]">Email &amp; Contact</th>
+                          <th className="p-2 min-w-[150px]">GSTIN &amp; Location</th>
+                          <th className="p-2 w-24">Rating</th>
+                          <th className="p-2 w-10 text-center">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                        {storedVendors.map((v) => (
+                          <tr key={v.id} className="hover:bg-indigo-50/30 dark:hover:bg-gray-800/50 group transition-colors">
+                            <td className="p-1.5 align-top">
+                              <input
+                                type="text"
+                                value={v.vendorCode || ''}
+                                onChange={(e) => handleUpdateVendorField(v.id, 'vendorCode', e.target.value)}
+                                placeholder="VND-CODE"
+                                className="w-full font-mono text-[10px] font-bold px-1.5 py-1 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-700 dark:text-gray-300 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
+                              />
+                            </td>
+                            <td className="p-1.5 align-top">
+                              <input
+                                type="text"
+                                value={v.companyName || ''}
+                                onChange={(e) => handleUpdateVendorField(v.id, 'companyName', e.target.value)}
+                                placeholder="Company name"
+                                className="w-full font-bold text-xs px-1.5 py-1 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-900 dark:text-white focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
+                              />
+                            </td>
+                            <td className="p-1.5 align-top space-y-1">
+                              <input
+                                type="email"
+                                value={v.email || ''}
+                                onChange={(e) => handleUpdateVendorField(v.id, 'email', e.target.value)}
+                                placeholder="email@domain.com"
+                                className="w-full font-mono text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-indigo-600 dark:text-indigo-400 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
+                              />
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="text"
+                                  value={v.contactPerson || ''}
+                                  onChange={(e) => handleUpdateVendorField(v.id, 'contactPerson', e.target.value)}
+                                  placeholder="Contact Name"
+                                  className="w-1/2 text-[10px] px-1.5 py-0.5 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-600 dark:text-gray-300 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
+                                />
+                                <input
+                                  type="text"
+                                  value={v.phone || ''}
+                                  onChange={(e) => handleUpdateVendorField(v.id, 'phone', e.target.value)}
+                                  placeholder="+91 Phone"
+                                  className="w-1/2 text-[10px] px-1.5 py-0.5 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-500 dark:text-gray-400 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
+                                />
+                              </div>
+                            </td>
+                            <td className="p-1.5 align-top space-y-1">
+                              <input
+                                type="text"
+                                value={v.gstNumber || ''}
+                                onChange={(e) => handleUpdateVendorField(v.id, 'gstNumber', e.target.value.toUpperCase())}
+                                placeholder="GSTIN"
+                                className="w-full font-mono text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-700 dark:text-gray-200 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
+                              />
+                              <input
+                                type="text"
+                                value={v.address || ''}
+                                onChange={(e) => handleUpdateVendorField(v.id, 'address', e.target.value)}
+                                placeholder="City, State / Address"
+                                className="w-full text-[10px] px-1.5 py-0.5 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-500 dark:text-gray-400 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
+                              />
+                            </td>
+                            <td className="p-1.5 align-top">
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="100"
+                                  value={v.vendorRatingScore !== undefined ? v.vendorRatingScore : ''}
+                                  onChange={(e) =>
+                                    handleUpdateVendorField(
+                                      v.id,
+                                      'vendorRatingScore',
+                                      e.target.value === '' ? undefined : Math.min(100, Math.max(0, Number(e.target.value)))
+                                    )
+                                  }
+                                  placeholder="0-100"
+                                  className="w-14 text-center font-bold text-xs px-1 py-1 rounded bg-amber-50/80 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-400 focus:border-amber-500 focus:outline-none transition-all"
+                                />
+                                <span className="text-[10px] text-slate-400 font-bold">/100</span>
+                              </div>
+                            </td>
+                            <td className="p-1.5 align-top text-center">
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteVendorRow(v.id)}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-all opacity-70 group-hover:opacity-100"
+                                title={`Delete ${v.companyName || 'Row'}`}
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  /* DEFAULT READ-ONLY TABLE */
+                  <div className="border border-slate-200 dark:border-gray-800 rounded-xl overflow-hidden max-h-96 overflow-y-auto text-xs bg-white dark:bg-gray-900/60 shadow-xs">
+                    <table className="w-full text-left">
+                      <thead className="bg-slate-100 dark:bg-gray-800 text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 sticky top-0 z-10">
+                        <tr>
+                          <th className="p-2.5">Code</th>
+                          <th className="p-2.5">Company Name</th>
+                          <th className="p-2.5">Email &amp; Phone</th>
+                          <th className="p-2.5">GSTIN / Address</th>
+                          <th className="p-2.5">Rating (0-100)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                        {storedVendors.map((v) => (
+                          <tr key={v.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/40">
+                            <td className="p-2.5 font-mono text-[10px] text-slate-500">{v.vendorCode || 'VND-AUTO'}</td>
+                            <td className="p-2.5 font-bold text-slate-800 dark:text-white">{v.companyName || '—'}</td>
+                            <td className="p-2.5">
+                              <span className="font-mono text-indigo-600 dark:text-indigo-400 font-semibold block">{v.email || '—'}</span>
+                              <span className="text-slate-400 text-[10px]">{v.phone || ''}</span>
+                            </td>
+                            <td className="p-2.5">
+                              <span className="mono text-[10px] text-slate-600 dark:text-gray-300 font-bold block">{v.gstNumber || '—'}</span>
+                              <span className="text-slate-400 text-[10px] truncate max-w-[140px] block">{v.address || ''}</span>
+                            </td>
+                            <td className="p-2.5 font-bold">
+                              {v.vendorRatingScore !== undefined && v.vendorRatingScore !== null ? (
+                                <span className="text-amber-600 dark:text-amber-400 flex items-center gap-0.5">
+                                  <Star size={11} fill="currentColor" /> {v.vendorRatingScore}/100
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 text-[10px]">Optional (N/A)</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="p-6 text-center text-slate-500 border border-dashed border-slate-200 dark:border-gray-800 rounded-xl bg-slate-50/50 dark:bg-gray-950/40 space-y-2">
+                <FileSpreadsheet className="mx-auto text-slate-400" size={24} />
+                <p className="text-xs font-semibold text-slate-700 dark:text-gray-300">
+                  No Vendor Master file selected
+                </p>
+                <p className="text-[11px] text-slate-400 max-w-sm mx-auto">
+                  Upload your vendor master spreadsheet (.xlsx, .csv, .xls) or manually add suppliers to the table.
+                </p>
                 <button
                   type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    vendorFileInputRef.current?.click();
-                  }}
-                  className="btn btn-primary btn-xs font-bold text-[11px] flex items-center gap-1"
+                  onClick={handleAddVendorRow}
+                  className="btn btn-secondary btn-xs font-bold text-[11px] inline-flex items-center gap-1 mt-1"
                 >
-                  <UploadCloud size={12} /> Choose Another File
+                  <Plus size={12} /> Add Vendor Manually
                 </button>
               </div>
-            </div>
-
-            {/* Table of Stored Vendor Master */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] uppercase font-bold text-slate-400 block">
-                  Stored Vendor Master Records ({storedVendors.length} Suppliers):
-                </span>
-                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
-                  <CheckCircle2 size={11} /> Ready for PO Cross-Referencing
-                </span>
-              </div>
-
-              <div className="border border-slate-200 dark:border-gray-800 rounded-xl overflow-hidden max-h-48 overflow-y-auto text-xs">
-                <table className="w-full text-left">
-                  <thead className="bg-slate-100 dark:bg-gray-800 text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 sticky top-0">
-                    <tr>
-                      <th className="p-2.5">Code</th>
-                      <th className="p-2.5">Company Name</th>
-                      <th className="p-2.5">Email & Phone</th>
-                      <th className="p-2.5">GSTIN / Address</th>
-                      <th className="p-2.5">Rating (0-100)</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-gray-800 bg-white dark:bg-gray-900/60">
-                    {storedVendors.map((v) => (
-                      <tr key={v.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/40">
-                        <td className="p-2.5 font-mono text-[10px] text-slate-500">{v.vendorCode || 'VND-AUTO'}</td>
-                        <td className="p-2.5 font-bold text-slate-800 dark:text-white">{v.companyName}</td>
-                        <td className="p-2.5">
-                          <span className="font-mono text-indigo-600 dark:text-indigo-400 font-semibold block">{v.email}</span>
-                          <span className="text-slate-400 text-[10px]">{v.phone}</span>
-                        </td>
-                        <td className="p-2.5">
-                          <span className="mono text-[10px] text-slate-600 dark:text-gray-300 font-bold block">{v.gstNumber}</span>
-                          <span className="text-slate-400 text-[10px] truncate max-w-[120px] block">{v.address}</span>
-                        </td>
-                        <td className="p-2.5 font-bold">
-                          {v.vendorRatingScore ? (
-                            <span className="text-amber-600 dark:text-amber-400 flex items-center gap-0.5">
-                              <Star size={11} fill="currentColor" /> {v.vendorRatingScore}/100
-                            </span>
-                          ) : (
-                            <span className="text-slate-400 text-[10px]">Optional (N/A)</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            )}
 
             <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-gray-800">
               <button type="button" onClick={() => setStep(1)} className="btn btn-secondary btn-sm">
@@ -740,7 +1059,17 @@ export default function InitialSetupModal() {
               </button>
               <button
                 type="button"
-                onClick={() => setStep(3)}
+                onClick={() => {
+                  if (storedVendors.length === 0) {
+                    showToast(
+                      'Vendor Master Required',
+                      'Please upload a Vendor Master file (.xlsx, .csv, .xls) before proceeding to the PO Dump.',
+                      'warning'
+                    );
+                    return;
+                  }
+                  setStep(3);
+                }}
                 className="btn btn-primary font-bold text-xs py-2.5 px-5 flex items-center gap-1.5"
               >
                 Proceed to File 2: PO Dump <ArrowRight size={14} />

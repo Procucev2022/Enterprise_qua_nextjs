@@ -19,12 +19,14 @@ const graphqlRoutes = require('./graphql');
 const cryptoRoutes = require('./crypto');
 const authRoutes = require('./auth');
 const zohoRoutes = require('./zoho');
+const vendorIngestionRoutes = require('./vendorIngestion');
 
 // Mount sub-routers
 router.use('/auth', authRoutes);
 router.use('/bootstrap', bootstrapRoutes);
 router.use('/rfqs', rfqRoutes);
 router.use('/vendors', vendorRoutes);
+router.use('/vendor-ingestion', vendorIngestionRoutes);
 router.use('/buyer-accounts', buyerAccountRoutes);
 router.use('/buyer-profile', buyerProfileRoutes);
 router.use('/evaluations', evaluationRoutes);

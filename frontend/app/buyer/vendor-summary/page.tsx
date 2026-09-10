@@ -8,7 +8,7 @@ import VendorSummary from '@/app/buyer/vendor-summary';
 
 export default function BuyerVendorSummaryPage() {
   const router = useRouter();
-  const { setActiveEvaluationRecord } = useApp();
+  const { setActiveEvaluationRecord, setInitialSetupModalOpen } = useApp();
 
   return (
     <VendorSummary
@@ -16,7 +16,7 @@ export default function BuyerVendorSummaryPage() {
         setActiveEvaluationRecord(record);
         router.push('/buyer/vendor-evaluation-summary');
       }}
-      onNavigateToWizard={() => router.push('/buyer/ingestion-wizard')}
+      onNavigateToWizard={() => setInitialSetupModalOpen(true)}
     />
   );
 }

@@ -35,6 +35,20 @@ const OTP_CODE_MESSAGE = 'Enter the 6-digit verification code sent to your regis
 const PASSWORD_MIN_LENGTH = 8;
 
 // ------------------------------------------------------------------------------
+// VENDOR MASTER & PO DATA INGESTION
+// ------------------------------------------------------------------------------
+// Calendar date in YYYY-MM-DD. Every date crossing this boundary — the selected
+// time horizon and each PO date — is normalised to this one format by the
+// client's spreadsheet reader before it is submitted, so the server never has to
+// guess between DD/MM/YYYY and MM/DD/YYYY. Guessing is exactly how a PO ends up
+// filtered into the wrong horizon and a supplier classified from the wrong spend.
+const ISO_DATE_REGEX = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/;
+const ISO_DATE_MESSAGE = 'Date must be a calendar date in YYYY-MM-DD format, for example 2024-04-01.';
+const TIME_HORIZON_TYPES = ['LAST_1_YEAR', 'LAST_2_YEARS', 'LAST_3_YEARS', 'CUSTOM'];
+const CATEGORY_REVIEW_ACTIONS = ['APPROVE', 'EDIT', 'REJECT'];
+const DISPATCH_TEMPLATES = ['CATEGORY_MAPPED', 'SELF_MAP_REQUIRED', 'GENERAL_ONBOARDING'];
+
+// ------------------------------------------------------------------------------
 // STATUTORY IDENTIFIERS (buyer organisation profile)
 // ------------------------------------------------------------------------------
 // The Java p2pservices app validates none of these — PAN, CIN and website were
@@ -376,6 +390,104 @@ const VALIDATION_SCHEMAS = {
     // report which cap was exceeded.
     categories: { type: 'array', required: false },
   },
+
+  // ----------------------------------------------------------------------------
+  // VENDOR MASTER & PO DATA INGESTION (buyer module)
+  // ----------------------------------------------------------------------------
+  // The time horizon the buyer selects before uploading anything. It decides
+  // which PO rows the AI categoriser is allowed to see, so it is validated at
+  // the boundary rather than trusted: a bad range would silently change which
+  // spend history a supplier is classified from.
+  //
+  // startDate/endDate are only required for CUSTOM — the service resolves the
+  // concrete range for the three predefined options itself, so a client cannot
+  // claim "last 1 year" while supplying a five-year window.
+  vendorIngestionTimeHorizon: {
+    horizonType: {
+      type: 'string',
+      required: true,
+      enum: TIME_HORIZON_TYPES,
+      message: 'Select a time horizon of Last 1 Year, Last 2 Years, Last 3 Years or a custom date range.',
+    },
+    startDate: { type: 'string', required: false, pattern: ISO_DATE_REGEX, message: ISO_DATE_MESSAGE },
+    endDate: { type: 'string', required: false, pattern: ISO_DATE_REGEX, message: ISO_DATE_MESSAGE },
+  },
+
+  // One Vendor Master row. Vendor Code and Company Name are the identity of the
+  // supplier and are both required — a row missing either cannot be matched to
+  // PO history or emailed, and is reported as invalid rather than defaulted.
+  // Email is required because every mapped supplier is eventually mailed.
+  vendorMasterRow: {
+    vendorCode: { type: 'string', required: true, minLength: 1, maxLength: 120, message: 'Vendor Code is required.' },
+    companyName: { type: 'string', required: true, minLength: 2, maxLength: 512, message: 'Company Name is required.' },
+    email: { type: 'string', required: true, pattern: EMAIL_REGEX, message: 'A valid Email is required.' },
+    contactPerson: { type: 'string', required: false, maxLength: 255 },
+    phone: { type: 'string', required: false, pattern: PHONE_REGEX, message: 'Phone is not a valid contact number.' },
+    address: { type: 'string', required: false, maxLength: 1024 },
+    gstin: { type: 'string', required: false, pattern: GSTIN_REGEX, message: GSTIN_MESSAGE },
+    // Optional 0-100 supplier score from the buyer's own ERP. Out-of-range
+    // values are rejected, never clamped, so a mis-scaled column (a 0-5 rating
+    // pasted into a 0-100 field) surfaces instead of being silently rewritten.
+    rating: { type: 'number', required: false, min: 0, max: 100 },
+  },
+
+  // One historical PO line item. The description is the single most important
+  // field in the whole module — it is the evidence the categoriser reads — so a
+  // line with no description is invalid rather than merely unhelpful.
+  poLineItemRow: {
+    poNumber: { type: 'string', required: true, minLength: 1, maxLength: 120, message: 'PO Number is required.' },
+    poDate: { type: 'string', required: true, pattern: ISO_DATE_REGEX, message: ISO_DATE_MESSAGE },
+    itemDescription: {
+      type: 'string',
+      required: true,
+      minLength: 2,
+      maxLength: 4000,
+      message: 'Line Item Description is required — it is the evidence the categoriser reads.',
+    },
+    quantity: { type: 'number', required: true, min: 0, message: 'Quantity is required.' },
+    uom: { type: 'string', required: true, minLength: 1, maxLength: 64, message: 'UOM is required.' },
+    spend: { type: 'number', required: true, min: 0, message: 'Spend / Amount is required.' },
+    department: { type: 'string', required: true, minLength: 1, maxLength: 255, message: 'Department is required.' },
+    // Either identifier is enough to join to the vendor master; the service
+    // rejects a row that supplies neither, because it cannot be attributed.
+    vendorCode: { type: 'string', required: false, maxLength: 120 },
+    vendorName: { type: 'string', required: false, maxLength: 512 },
+    vendorGstin: { type: 'string', required: false, pattern: GSTIN_REGEX, message: GSTIN_MESSAGE },
+    specification: { type: 'string', required: false, maxLength: 4000 },
+    materialCode: { type: 'string', required: false, maxLength: 120 },
+    existingCategory: { type: 'string', required: false, maxLength: 255 },
+    existingSubcategory: { type: 'string', required: false, maxLength: 255 },
+    currency: { type: 'string', required: false, maxLength: 8 },
+  },
+
+  // A buyer's decision on one AI suggestion. The AI columns are never part of
+  // this payload — approving or editing must not be able to rewrite what the
+  // model proposed, which is the whole basis of the audit trail.
+  vendorCategoryReview: {
+    action: {
+      type: 'string',
+      required: true,
+      enum: CATEGORY_REVIEW_ACTIONS,
+      message: 'Review action must be APPROVE, EDIT or REJECT.',
+    },
+    majorCategory: { type: 'string', required: false, maxLength: 255 },
+    minorCategories: { type: 'array', required: false },
+  },
+
+  // A dispatch request. Recipients are identified by their vendor-master record
+  // id and re-resolved server-side — the email address is never taken from the
+  // request, so a tampered payload cannot redirect a campaign to an outside
+  // address.
+  vendorIngestionDispatch: {
+    template: {
+      type: 'string',
+      required: true,
+      enum: DISPATCH_TEMPLATES,
+      message: 'Select a CATEGORY_MAPPED, SELF_MAP_REQUIRED or GENERAL_ONBOARDING email template.',
+    },
+    majorCategory: { type: 'string', required: false, maxLength: 255 },
+    vendorRecordIds: { type: 'array', required: false },
+  },
 };
 
 
@@ -475,6 +587,11 @@ module.exports = {
   INDIAN_PINCODE_REGEX,
   INDIAN_PINCODE_MESSAGE,
   ORGANIZATION_TYPES,
+  ISO_DATE_REGEX,
+  ISO_DATE_MESSAGE,
+  TIME_HORIZON_TYPES,
+  CATEGORY_REVIEW_ACTIONS,
+  DISPATCH_TEMPLATES,
   VALIDATION_SCHEMAS,
   validatePayload,
 };
