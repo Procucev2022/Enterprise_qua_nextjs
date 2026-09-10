@@ -14,7 +14,7 @@
 
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
-import { isBuyerUploaded } from './vendor-summary';
+import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import {
   Plus,
   Trash2,
@@ -31,6 +31,7 @@ import {
   Phone,
   Users,
   Star,
+  ShieldCheck,
 } from 'lucide-react';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { CURRENCY, SOURCING_MODES } from '@/lib/constants';
@@ -900,6 +901,126 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                         </div>
                       ))}
                     </div>
+                  );
+                })()}
+              </div>
+            )}
+
+            {/* ── Mode 2: Hybrid Sourcing Pool (Private Roster + Procucev Marketplace) ── */}
+            {form.sourcingMode === 'mode_2' && (
+              <div className="mt-4 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-4 space-y-3 animate-fade-in shadow-2xs">
+                {(() => {
+                  const myVendors = buyerVendors.filter(isBuyerUploaded);
+                  const procucevVendors = buyerVendors.filter(isProcucevVendor);
+
+                  return (
+                    <>
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-emerald-100 dark:border-emerald-900/40 pb-2.5">
+                        <div className="flex items-center gap-2">
+                          <div className="p-1 rounded-lg bg-emerald-600 text-white shadow-2xs">
+                            <Sparkles size={14} />
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                              <span>Mode 2: Hybrid Sourcing Pool</span>
+                              <span className="badge badge-emerald text-[9px] font-bold">
+                                {myVendors.length + procucevVendors.length} Suppliers Matched
+                              </span>
+                            </h4>
+                            <p className="text-[10px] text-slate-500 dark:text-gray-400">
+                              Dispatches to your approved roster + top verified Procucev marketplace suppliers.
+                            </p>
+                          </div>
+                        </div>
+                        <span className="text-[9px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-100/70 dark:bg-emerald-900/50 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800 shrink-0">
+                          ⚡ Hybrid Active
+                        </span>
+                      </div>
+
+                      {/* Procucev AI-Matched Verified Vendors Preview */}
+                      {procucevVendors.length === 0 ? (
+                        <p className="text-[10px] text-slate-500 text-center py-2">No Procucev marketplace vendors registered in database yet.</p>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-52 overflow-y-auto pr-1">
+                          {procucevVendors.slice(0, 6).map((v, i) => (
+                            <div
+                              key={v.id || i}
+                              className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-emerald-200/70 dark:border-emerald-900/50 space-y-1 shadow-2xs"
+                            >
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="text-[11px] font-bold text-slate-900 dark:text-white truncate" title={v.name}>{v.name}</span>
+                                <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200/40 shrink-0">
+                                  {v.score ? `${v.score}%` : 'Verified'}
+                                </span>
+                              </div>
+                              <div className="text-[9px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
+                                <span className="truncate">{v.majorCategory || 'General Industrial'}</span>
+                                <span className="truncate">{v.city || v.state || v.location || 'India'}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+            )}
+
+            {/* ── Mode 3: Autonomous Sourcing & Double-Blind Verification Protocol ── */}
+            {form.sourcingMode === 'mode_3' && (
+              <div className="mt-4 rounded-xl border border-purple-200 dark:border-purple-900/60 bg-purple-50/40 dark:bg-purple-950/20 p-4 space-y-3 animate-fade-in shadow-2xs">
+                {(() => {
+                  const procucevVendors = buyerVendors.filter(isProcucevVendor);
+
+                  return (
+                    <>
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-purple-100 dark:border-purple-900/40 pb-2.5">
+                        <div className="flex items-center gap-2">
+                          <div className="p-1 rounded-lg bg-purple-600 text-white shadow-2xs">
+                            <ShieldCheck size={14} />
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                              <span>Mode 3: Double-Blind Anonymous Verification</span>
+                              <span className="badge badge-purple text-[9px] font-bold">
+                                {procucevVendors.length} Database Suppliers Queued
+                              </span>
+                            </h4>
+                            <p className="text-[10px] text-slate-500 dark:text-gray-400">
+                              Suppliers receive anonymous evaluation invites. Your identity is withheld until qualification.
+                            </p>
+                          </div>
+                        </div>
+                        <span className="text-[9px] font-bold text-purple-700 dark:text-purple-300 bg-purple-100/70 dark:bg-purple-900/50 px-2 py-0.5 rounded-full border border-purple-200 dark:border-purple-800 shrink-0">
+                          🛡️ Double-Blind Active
+                        </span>
+                      </div>
+
+                      {procucevVendors.length === 0 ? (
+                        <p className="text-[10px] text-slate-500 text-center py-2">No Procucev database vendors available for evaluation.</p>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-52 overflow-y-auto pr-1">
+                          {procucevVendors.slice(0, 6).map((v, i) => (
+                            <div
+                              key={v.id || i}
+                              className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-purple-200/70 dark:border-purple-900/50 space-y-1 shadow-2xs"
+                            >
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="text-[11px] font-bold text-slate-900 dark:text-white truncate" title={v.name}>{v.name}</span>
+                                <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border border-purple-200/40 shrink-0">
+                                  {v.score ? `${v.score}%` : 'Verified'}
+                                </span>
+                              </div>
+                              <div className="text-[9px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
+                                <span className="truncate">{v.majorCategory || 'General Industrial'}</span>
+                                <span className="text-purple-600 dark:text-purple-400 font-semibold">🔒 Double-Blind</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
                   );
                 })()}
               </div>
