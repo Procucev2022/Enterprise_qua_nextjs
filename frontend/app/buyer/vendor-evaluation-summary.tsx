@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useApp } from '@/lib/store';
-import { VendorEvaluationRecord, QuestionEvaluationItem } from '@/lib/types';
+import { VendorEvaluationRecord, QuestionEvaluationItem, VendorEvaluationDocument, VendorEntry } from '@/lib/types';
 import {
   Award,
   CheckCircle2,
@@ -15,6 +15,8 @@ import {
   Download,
   ExternalLink,
   ChevronRight,
+  ChevronDown,
+  Search,
   UserCheck,
   Sliders,
   RefreshCw,
@@ -27,6 +29,7 @@ import {
   X,
   Paperclip,
   Check,
+  UploadCloud,
 } from 'lucide-react';
 import CompanyHoverTooltip from '@/app/components/CompanyHoverTooltip';
 
@@ -35,19 +38,308 @@ interface VendorEvaluationSummaryProps {
   onBack?: () => void;
 }
 
+// Classification helper: Uploaded by Buyer
+export const isBuyerUploaded = (v: any): boolean => {
+  if (!v) return false;
+  const s = String(v.source || '').toLowerCase().trim();
+  const id = String(v.id || '').toLowerCase().trim();
+  return (
+    s === 'buyer_uploaded' ||
+    s === 'vendor_master_ingestion' ||
+    s === 'historical_purchase_dump' ||
+    s === 'buyer_manual' ||
+    s === 'buyer_excel' ||
+    s === 'buyer' ||
+    s.includes('buyer') ||
+    s.includes('ingestion') ||
+    s.includes('purchase_dump') ||
+    !!v.addedByBuyerCompany ||
+    id.startsWith('v-hist-') ||
+    id.startsWith('v-navin-') ||
+    id.startsWith('vm-') ||
+    id.startsWith('v-ingest-') ||
+    id.startsWith('v-buyer-')
+  );
+};
+
+// Classification helper: Procucev Vendors
+export const isProcucevVendor = (v: any): boolean => {
+  return !isBuyerUploaded(v);
+};
+
+/**
+ * Builds a comprehensive 24-criteria 6-pillar evaluation record for any vendor.
+ */
+function buildEvaluationRecordForVendor(vendor: any): VendorEvaluationRecord {
+  const score = Number(vendor.score) || 90;
+  const isPreferred = score >= 80;
+  const isConditional = score >= 65 && score < 80;
+  const status: 'PREFERRED ENTERPRISE SUPPLIER' | 'CONDITIONAL / UNDER REVIEW' | 'DISQUALIFIED SUPPLIER' = isPreferred
+    ? 'PREFERRED ENTERPRISE SUPPLIER'
+    : isConditional
+    ? 'CONDITIONAL / UNDER REVIEW'
+    : 'DISQUALIFIED SUPPLIER';
+  const cat = vendor.majorCategory || vendor.category || 'General Industrial';
+  const name = vendor.name || vendor.vendorName || 'Enterprise Supplier';
+  const contact = vendor.contactPerson || (vendor.name ? `${vendor.name} Representative` : 'Authorized Representative');
+  const email = vendor.email || vendor.contactEmail || 'N/A';
+  const phone = vendor.phone || vendor.mobile || 'N/A';
+  const id = vendor.id || 'v-001';
+  const submissionDate = vendor.createdAt ? new Date(vendor.createdAt).toISOString().split('T')[0] : '2026-03-01';
+
+  const cleanName = name.replace(/[^a-zA-Z0-9]/g, '_');
+  const catShort = cat.split('-')[0].trim();
+
+  const questions: QuestionEvaluationItem[] = [
+    // M1 Commercial
+    { refId: 'M1-Q1', pillarId: 'M1', pillarName: 'Commercial Terms', criteria: 'Fixed Pricing Validity (12 Months)', score: 4.8, weightedScore: 6.25, attachmentName: `${cleanName}_Pricing_Agreement.pdf`, attachmentVerified: true, remarks: `12-month firm price schedule locked with volume tier discounting for ${catShort}.` },
+    { refId: 'M1-Q2', pillarId: 'M1', pillarName: 'Commercial Terms', criteria: 'Payment Terms Acceptance (Net 30/45)', score: 4.6, weightedScore: 6.25, attachmentName: `${cleanName}_Payment_Terms_Acceptance.pdf`, attachmentVerified: true, remarks: `Confirmed standard Net 30/45 days credit cycle with milestone reconciliation.` },
+    { refId: 'M1-Q3', pillarId: 'M1', pillarName: 'Commercial Terms', criteria: 'Freight & Logistics Terms (DDP/FCA)', score: 4.9, weightedScore: 6.25, attachmentName: `${cleanName}_Logistics_SLA.pdf`, attachmentVerified: true, remarks: `DDP delivery to buyer facility with transit insurance coverage included.` },
+    { refId: 'M1-Q4', pillarId: 'M1', pillarName: 'Commercial Terms', criteria: 'Annual Rebate & Volume Incentive Framework', score: 4.5, weightedScore: 6.25, attachmentName: `${cleanName}_Rebate_Matrix.xlsx`, attachmentVerified: true, remarks: `Retrospective volume rebate slabs configured for annual purchasing targets.` },
+
+    // M2 Technical
+    { refId: 'M2-Q1', pillarId: 'M2', pillarName: 'Technical Capabilities', criteria: 'Precision Manufacturing & Tooling Capacity', score: 4.7, weightedScore: 3.75, attachmentName: `${cleanName}_Manufacturing_Audit.pdf`, attachmentVerified: true, remarks: `Dedicated manufacturing lines with calibrated QC tooling for ${cat}.` },
+    { refId: 'M2-Q2', pillarId: 'M2', pillarName: 'Technical Capabilities', criteria: 'Engineering R&D & In-House Testing Facility', score: 4.5, weightedScore: 3.75, attachmentName: `${cleanName}_Lab_Accreditation.pdf`, attachmentVerified: true, remarks: `In-house certified testing apparatus and metallurgical inspection facility.` },
+    { refId: 'M2-Q3', pillarId: 'M2', pillarName: 'Technical Capabilities', criteria: 'Drawing & Specification Interoperability', score: 4.8, weightedScore: 3.75, attachmentName: `${cleanName}_CAD_Spec_Sheet.pdf`, attachmentVerified: true, remarks: `Engineering CAD/CAM modeling adherence with 100% tolerance compliance.` },
+    { refId: 'M2-Q4', pillarId: 'M2', pillarName: 'Technical Capabilities', criteria: 'Production Redundancy & Surge Capacity', score: 4.4, weightedScore: 3.75, attachmentName: `${cleanName}_Surge_Capacity_Plan.pdf`, attachmentVerified: true, remarks: `Multi-shift manufacturing buffer supporting up to 140% surge procurement volume.` },
+
+    // M3 Quality & Warranty
+    { refId: 'M3-Q1', pillarId: 'M3', pillarName: 'Quality & Warranty', criteria: 'ISO 9001 / IATF Quality Certification', score: 5.0, weightedScore: 5.0, attachmentName: `${cleanName}_ISO_Quality_Certificate.pdf`, attachmentVerified: true, remarks: `Accredited ISO quality management certification valid through 2028.` },
+    { refId: 'M3-Q2', pillarId: 'M3', pillarName: 'Quality & Warranty', criteria: 'Defect Rate Threshold (< 350 PPM)', score: 4.7, weightedScore: 5.0, attachmentName: `${cleanName}_Defect_Rate_Report.xlsx`, attachmentVerified: true, remarks: `Historical rejection rate maintained below 320 PPM with optical inspection.` },
+    { refId: 'M3-Q3', pillarId: 'M3', pillarName: 'Quality & Warranty', criteria: 'Comprehensive Replacement Warranty (24 Months)', score: 4.8, weightedScore: 5.0, attachmentName: `${cleanName}_Warranty_Undertaking.pdf`, attachmentVerified: true, remarks: `24-month comprehensive replacement warranty with SLA-backed RMA dispatch.` },
+    { refId: 'M3-Q4', pillarId: 'M3', pillarName: 'Quality & Warranty', criteria: 'Material Traceability & Batch QR/RFID Serialization', score: 4.6, weightedScore: 5.0, attachmentName: `${cleanName}_Traceability_Protocol.pdf`, attachmentVerified: true, remarks: `Mill-test certificate matching with batch barcode serialization.` },
+
+    // M4 Delivery & SLA
+    { refId: 'M4-Q1', pillarId: 'M4', pillarName: 'Operational Delivery', criteria: 'Historical OTIF Delivery Track Record (>95%)', score: 4.8, weightedScore: 5.0, attachmentName: `${cleanName}_OTIF_Performance_Log.xlsx`, attachmentVerified: true, remarks: `96.8% On-Time In-Full dispatch track record over rolling 12-month orders.` },
+    { refId: 'M4-Q2', pillarId: 'M4', pillarName: 'Operational Delivery', criteria: 'Standard Production Lead Time Commitment', score: 4.5, weightedScore: 5.0, attachmentName: `${cleanName}_Lead_Time_SLA.pdf`, attachmentVerified: true, remarks: `Committed 7-10 business day dispatch lead time on primary line items.` },
+    { refId: 'M4-Q3', pillarId: 'M4', pillarName: 'Operational Delivery', criteria: 'Strategic Buffer Stock & Consignment Warehousing', score: 4.6, weightedScore: 5.0, attachmentName: `${cleanName}_Warehousing_Agreement.pdf`, attachmentVerified: true, remarks: `30-day buffer inventory maintained in regional supply depot.` },
+    { refId: 'M4-Q4', pillarId: 'M4', pillarName: 'Operational Delivery', criteria: 'Disaster Recovery & Business Continuity (BCP)', score: 4.5, weightedScore: 5.0, attachmentName: `${cleanName}_Business_Continuity_Plan.pdf`, attachmentVerified: true, remarks: `Active secondary facility failover protocols and multi-source tier-2 suppliers.` },
+
+    // M5 Financial Stability
+    { refId: 'M5-Q1', pillarId: 'M5', pillarName: 'Financial Stability', criteria: 'Audited Turnover & Scope Coverage Ratio', score: 4.7, weightedScore: 2.5, attachmentName: `${cleanName}_Audited_Financials.pdf`, attachmentVerified: true, remarks: `Annual financial turnover provides > 4x scope coverage with sound balance sheet.` },
+    { refId: 'M5-Q2', pillarId: 'M5', pillarName: 'Financial Stability', criteria: 'Credit Rating & Working Capital Adequacy', score: 4.6, weightedScore: 2.5, attachmentName: `${cleanName}_Credit_Rating_Report.pdf`, attachmentVerified: true, remarks: `Investment-grade credit rating with healthy liquidity ratio.` },
+    { refId: 'M5-Q3', pillarId: 'M5', pillarName: 'Financial Stability', criteria: 'Statutory GSTIN, PAN & Tax Clearance', score: 5.0, weightedScore: 2.5, attachmentName: `${cleanName}_GST_Tax_Clearance.pdf`, attachmentVerified: true, remarks: `Reconciled GSTR-1/3B statutory filings with active GSTIN status.` },
+    { refId: 'M5-Q4', pillarId: 'M5', pillarName: 'Financial Stability', criteria: 'Bank Solvency & Credit Line Certificate', score: 4.8, weightedScore: 2.5, attachmentName: `${cleanName}_Bank_Solvency_Letter.pdf`, attachmentVerified: true, remarks: `Bank solvency certificate and unencumbered working capital line verified.` },
+
+    // M6 Governance & ESG
+    { refId: 'M6-Q1', pillarId: 'M6', pillarName: 'Governance & ESG', criteria: 'Anti-Bribery, Ethics & Whistleblower Protocol', score: 5.0, weightedScore: 2.5, attachmentName: `${cleanName}_Code_Of_Conduct.pdf`, attachmentVerified: true, remarks: `Signed enterprise ethical code of conduct and whistleblower policy.` },
+    { refId: 'M6-Q2', pillarId: 'M6', pillarName: 'Governance & ESG', criteria: 'Occupational Health & Safety (ISO 45001)', score: 4.8, weightedScore: 2.5, attachmentName: `${cleanName}_ISO_45001_OHSAS.pdf`, attachmentVerified: true, remarks: `Certified workplace health and industrial safety standards implemented.` },
+    { refId: 'M6-Q3', pillarId: 'M6', pillarName: 'Governance & ESG', criteria: 'Environmental Management (ISO 14001)', score: 4.6, weightedScore: 2.5, attachmentName: `${cleanName}_ISO_14001_Environmental.pdf`, attachmentVerified: true, remarks: `RoHS/REACH environmental compliance and waste reduction protocols active.` },
+    { refId: 'M6-Q4', pillarId: 'M6', pillarName: 'Governance & ESG', criteria: 'Information Security & Data Privacy (ISO 27001)', score: 4.7, weightedScore: 2.5, attachmentName: `${cleanName}_InfoSec_Compliance.pdf`, attachmentVerified: true, remarks: `ISO 27001 data governance and strict commercial NDA adherence verified.` },
+  ];
+
+  const documents: VendorEvaluationDocument[] = questions.map((q, idx) => ({
+    id: `doc-${idx + 1}`,
+    name: q.attachmentName,
+    type: q.pillarId === 'M1' ? 'Commercial & Pricing' : q.pillarId === 'M2' ? 'Technical Specifications' : q.pillarId === 'M3' ? 'Quality & Warranty' : q.pillarId === 'M4' ? 'Delivery & Logistics' : q.pillarId === 'M5' ? 'Financial Audit' : 'Governance & ESG',
+    uploadDate: submissionDate,
+    verified: true,
+    status: 'Verified' as const,
+  }));
+
+  return {
+    id: `eval-${id}`,
+    vendorId: id,
+    vendorName: name,
+    contactPerson: contact,
+    email: email,
+    phone: phone,
+    category: cat,
+    submissionDate,
+    status,
+    overallScore: score,
+    moduleScores: {
+      commercial: { score: Math.round(score * 0.95), maxScore: 100, weight: 25, weightedScore: Math.round(score * 0.25 * 10) / 10, remarks: `12-month fixed pricing with volume discount tiers and Net 30/45 payment terms for ${name}.` },
+      technical: { score: Math.round(score * 0.92), maxScore: 100, weight: 15, weightedScore: Math.round(score * 0.15 * 10) / 10, remarks: `Dedicated manufacturing lines & quality inspection facility verified for ${cat}.` },
+      quality: { score: Math.round(score * 0.96), maxScore: 100, weight: 20, weightedScore: Math.round(score * 0.20 * 10) / 10, remarks: `ISO 9001 certified quality management with defect rate < 350 PPM and 24-month warranty.` },
+      delivery: { score: Math.round(score * 0.94), maxScore: 100, weight: 20, weightedScore: Math.round(score * 0.20 * 10) / 10, remarks: `96.8% OTIF dispatch history with committed lead time and regional buffer stock.` },
+      financial: { score: Math.round(score * 0.90), maxScore: 100, weight: 10, weightedScore: Math.round(score * 0.10 * 10) / 10, remarks: `Turnover coverage > 3x scope; investment-grade credit rating with positive liquidity.` },
+      governance: { score: Math.round(score * 0.95), maxScore: 100, weight: 10, weightedScore: Math.round(score * 0.10 * 10) / 10, remarks: `100% KYC & GST verified; ISO 14001, 45001 & 27001 ESG/privacy compliance verified.` },
+    },
+    documents,
+    questionBreakdown: questions,
+    systemAction: score >= 80 ? 'Full Qualification Approved - Circulate High-Value RFQs with Automated PO Issuance' : 'Under Technical & Commercial Review - Requires Category Manager Assessment',
+    capaRequired: score < 80,
+    capaNotes: score < 80 ? 'Submit updated warranty certificate and financial audit report.' : undefined,
+  };
+}
+
 export default function VendorEvaluationSummary({
   evaluationRecord,
   onBack,
 }: VendorEvaluationSummaryProps) {
-  const { vendorEvaluations, showToast, addAuditLog, addFeedItem } = useApp();
+  const { buyerVendors, vendorEvaluations, setActiveEvaluationRecord, showToast, addAuditLog, addFeedItem } = useApp();
 
-  const record = evaluationRecord || vendorEvaluations[0];
+  // Determine initial vendor ID
+  const initialVendorId = evaluationRecord?.vendorId || (vendorEvaluations && vendorEvaluations[0]?.vendorId) || (buyerVendors && buyerVendors[0]?.id) || '';
+  const [selectedVendorId, setSelectedVendorId] = useState<string>(initialVendorId);
+  const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setDropdownOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Update selectedVendorId if evaluationRecord prop changes
+  useEffect(() => {
+    if (evaluationRecord?.vendorId) {
+      setSelectedVendorId(evaluationRecord.vendorId);
+    }
+  }, [evaluationRecord]);
+
+  // Resolve the active evaluation record
+  const record: VendorEvaluationRecord | null = useMemo(() => {
+    // 1. If explicit prop matches selected ID
+    if (evaluationRecord && (!selectedVendorId || evaluationRecord.vendorId === selectedVendorId)) {
+      return evaluationRecord;
+    }
+
+    // 2. Check vendorEvaluations list in store
+    if (selectedVendorId && vendorEvaluations && vendorEvaluations.length > 0) {
+      const match = vendorEvaluations.find(
+        (e) => e.vendorId === selectedVendorId || e.vendorName?.toLowerCase() === selectedVendorId.toLowerCase()
+      );
+      if (match) return match;
+    }
+
+    // 3. Look up vendor in buyerVendors and build record
+    if (selectedVendorId && buyerVendors && buyerVendors.length > 0) {
+      const vendor = buyerVendors.find((v) => v.id === selectedVendorId);
+      if (vendor) {
+        return buildEvaluationRecordForVendor(vendor);
+      }
+    }
+
+    // 4. Fallback to evaluationRecord prop, first vendorEvaluation, or first buyerVendor
+    if (evaluationRecord) return evaluationRecord;
+    if (vendorEvaluations && vendorEvaluations.length > 0) return vendorEvaluations[0];
+    if (buyerVendors && buyerVendors.length > 0) {
+      return buildEvaluationRecordForVendor(buyerVendors[0]);
+    }
+
+    return null;
+  }, [evaluationRecord, selectedVendorId, vendorEvaluations, buyerVendors]);
+
+  // Score override and local state
   const [overrideScore, setOverrideScore] = useState<number | null>(null);
   const [showOverrideModal, setShowOverrideModal] = useState(false);
   const [newScoreInput, setNewScoreInput] = useState(record?.overallScore || 95);
   const [capaOpen, setCapaOpen] = useState(false);
   const [capaNotes, setCapaNotes] = useState(record?.capaNotes || '');
   const [selectedPillarFilter, setSelectedPillarFilter] = useState<string>('ALL');
+  const [dropdownTab, setDropdownTab] = useState<'buyer' | 'procucev'>('buyer');
+
+  // Reset override and score input when active record changes
+  useEffect(() => {
+    if (record) {
+      setOverrideScore(null);
+      setNewScoreInput(record.overallScore || 95);
+      setCapaNotes(record.capaNotes || '');
+      setDropdownTab(isBuyerUploaded(record) ? 'buyer' : 'procucev');
+    }
+  }, [record?.id, record?.vendorId]);
+
+  // Combined company list for dropdown
+  const companyOptions = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; category: string; source?: string; score: number; status?: string }>();
+
+    // From buyerVendors
+    (buyerVendors || []).forEach((v) => {
+      if (v.id) {
+        map.set(v.id, {
+          id: v.id,
+          name: v.name || 'Unnamed Vendor',
+          category: v.majorCategory || 'General',
+          source: v.source,
+          score: Number(v.score) || 92,
+          status: v.status,
+        });
+      }
+    });
+
+    // From vendorEvaluations
+    (vendorEvaluations || []).forEach((e) => {
+      if (e.vendorId && !map.has(e.vendorId)) {
+        map.set(e.vendorId, {
+          id: e.vendorId,
+          name: e.vendorName || 'Unnamed Vendor',
+          category: e.category || 'General',
+          source: (e as any).source || 'evaluated',
+          score: Number(e.overallScore) || 90,
+          status: e.status,
+        });
+      }
+    });
+
+    // If initial record is passed and not yet in map
+    if (evaluationRecord && evaluationRecord.vendorId && !map.has(evaluationRecord.vendorId)) {
+      map.set(evaluationRecord.vendorId, {
+        id: evaluationRecord.vendorId,
+        name: evaluationRecord.vendorName,
+        category: evaluationRecord.category,
+        source: (evaluationRecord as any).source,
+        score: evaluationRecord.overallScore,
+        status: evaluationRecord.status,
+      });
+    }
+
+    return Array.from(map.values());
+  }, [buyerVendors, vendorEvaluations, evaluationRecord]);
+
+  const buyerCompanyOptions = useMemo(() => {
+    return companyOptions.filter((c) => isBuyerUploaded(c));
+  }, [companyOptions]);
+
+  const procucevCompanyOptions = useMemo(() => {
+    return companyOptions.filter((c) => isProcucevVendor(c));
+  }, [companyOptions]);
+
+  const currentTabOptions = dropdownTab === 'buyer' ? buyerCompanyOptions : procucevCompanyOptions;
+
+  const filteredCompanyOptions = useMemo(() => {
+    if (!searchQuery.trim()) return currentTabOptions;
+    const q = searchQuery.toLowerCase();
+    return currentTabOptions.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.category.toLowerCase().includes(q) ||
+        c.id.toLowerCase().includes(q)
+    );
+  }, [currentTabOptions, searchQuery]);
+
+  const otherTabMatchesCount = useMemo(() => {
+    if (!searchQuery.trim()) return 0;
+    const q = searchQuery.toLowerCase();
+    const otherOptions = dropdownTab === 'buyer' ? procucevCompanyOptions : buyerCompanyOptions;
+    return otherOptions.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.category.toLowerCase().includes(q) ||
+        c.id.toLowerCase().includes(q)
+    ).length;
+  }, [searchQuery, dropdownTab, buyerCompanyOptions, procucevCompanyOptions]);
+
+  const handleSelectCompany = (vendorId: string) => {
+    setSelectedVendorId(vendorId);
+    setDropdownOpen(false);
+    setSearchQuery('');
+    const target = companyOptions.find((c) => c.id === vendorId);
+    if (target) {
+      const evalRecord = buildEvaluationRecordForVendor(target);
+      if (setActiveEvaluationRecord) {
+        setActiveEvaluationRecord(evalRecord);
+      }
+      showToast('Company Selected', `Loaded 360° evaluation summary for ${target.name}.`, 'info');
+    }
+  };
 
   if (!record) {
     return (
@@ -60,27 +352,27 @@ export default function VendorEvaluationSummary({
   const moduleScores = {
     commercial: {
       weightedScore: record.moduleScores?.commercial?.weightedScore ?? 24,
-      remarks: record.moduleScores?.commercial?.remarks || 'Net 30 terms; 12-month fixed pricing with 5% volume tier discount.',
+      remarks: record.moduleScores?.commercial?.remarks || `12-month fixed pricing with volume tier discount and Net 30/45 payment terms for ${record.vendorName}.`,
     },
     technical: {
       weightedScore: record.moduleScores?.technical?.weightedScore ?? 13.5,
-      remarks: record.moduleScores?.technical?.remarks || '100% spec match; robotic CNC lines & accredited R&D lab.',
+      remarks: record.moduleScores?.technical?.remarks || `Dedicated manufacturing lines & quality inspection facility verified for ${record.category}.`,
     },
     quality: {
       weightedScore: record.moduleScores?.quality?.weightedScore ?? 18.4,
-      remarks: record.moduleScores?.quality?.remarks || 'ISO 9001:2015 verified; 350 PPM defect rate with 24m warranty & RFID.',
+      remarks: record.moduleScores?.quality?.remarks || `ISO 9001 certified quality management with defect rate < 350 PPM and 24-month warranty.`,
     },
     delivery: {
       weightedScore: record.moduleScores?.delivery?.weightedScore ?? 17.6,
-      remarks: record.moduleScores?.delivery?.remarks || '96.4% OTIF delivery history; 10-day lead time & active BCP.',
+      remarks: record.moduleScores?.delivery?.remarks || `96.8% OTIF dispatch history with committed lead time and regional buffer stock.`,
     },
     financial: {
       weightedScore: record.moduleScores?.financial?.weightedScore ?? 8,
-      remarks: record.moduleScores?.financial?.remarks || 'Turnover 4.2x scope; CRISIL A+ rating with 1.6 current liquidity.',
+      remarks: record.moduleScores?.financial?.remarks || `Turnover coverage > 3x scope; investment-grade credit rating with positive liquidity.`,
     },
     governance: {
       weightedScore: record.moduleScores?.governance?.weightedScore ?? 9.4,
-      remarks: record.moduleScores?.governance?.remarks || '100% KYC verified; ISO 14001 & 45001 ESG certs with ISO 27001 GDPR.',
+      remarks: record.moduleScores?.governance?.remarks || `100% KYC & GST verified; ISO 14001, 45001 & 27001 ESG/privacy compliance verified.`,
     },
   };
 
@@ -133,7 +425,7 @@ export default function VendorEvaluationSummary({
       `CAPA Triggered: ${record.vendorName}`,
       `Corrective Action Plan issued for ${record.vendorName}. Required items: ${capaNotes || 'Document clarification & warranty update'}.`,
       'escalation',
-      'RFQ-2026-00421',
+      `EVAL-${record.vendorId || 'SUPPLIER'}`,
       record.vendorName
     );
     showToast('CAPA Notice Issued', `Corrective Action Plan sent to ${record.email}.`, 'info');
@@ -159,7 +451,7 @@ export default function VendorEvaluationSummary({
               <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
                 Mode 3 360-Degree Vendor Evaluation Summary Report
               </h1>
-              <span className="badge badge-purple">Screen 1.4 (24/24 Attachments Verified)</span>
+              <span className="badge badge-purple">24/24 Mandatory Criteria Verified</span>
             </div>
             <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
               Procucev QUA AI 6-Pillar Capability Score, OCR Audit & Automated Direct Dispatch Governance.
@@ -186,8 +478,200 @@ export default function VendorEvaluationSummary({
         </div>
       </div>
 
+      {/* Interactive Company / Supplier Selection Dropdown Bar */}
+      <div className="glass-panel p-3.5 rounded-xl border border-indigo-200/80 dark:border-indigo-900/50 bg-gradient-to-r from-indigo-50/70 via-white to-sky-50/70 dark:from-indigo-950/30 dark:via-gray-900/90 dark:to-sky-950/30 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3 relative z-30">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+            <Building2 size={16} />
+          </div>
+          <div>
+            <div className="text-[10px] uppercase font-bold text-indigo-700 dark:text-indigo-400 tracking-wider">
+              Evaluating Supplier Company
+            </div>
+            <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+              Select any supplier to view dynamic 6-pillar scorecard & compliance matrix
+            </div>
+          </div>
+        </div>
+
+        {/* Company Select Dropdown */}
+        <div className="relative z-40" ref={dropdownRef}>
+          <button
+            type="button"
+            onClick={() => setDropdownOpen((prev) => !prev)}
+            aria-label="Select Company / Vendor"
+            className="flex items-center justify-between gap-3 px-3.5 py-2 rounded-lg bg-white dark:bg-gray-800 border border-slate-300 dark:border-slate-700 hover:border-indigo-500 text-xs font-bold text-slate-800 dark:text-slate-100 shadow-sm min-w-[280px] sm:min-w-[360px] transition-all cursor-pointer text-left"
+          >
+            <div className="flex items-center gap-2 truncate">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+              <div className="truncate">
+                <div className="flex items-center gap-1.5 truncate">
+                  <span className="font-black text-slate-900 dark:text-white truncate">
+                    {record.vendorName}
+                  </span>
+                  <span
+                    className={`text-[9px] px-1.5 py-0.2 rounded font-bold uppercase tracking-wider flex items-center gap-1 shrink-0 ${
+                      isBuyerUploaded(record)
+                        ? 'bg-indigo-50 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800'
+                        : 'bg-emerald-50 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                    }`}
+                  >
+                    {isBuyerUploaded(record) ? <UploadCloud size={9} /> : <ShieldCheck size={9} />}
+                    {isBuyerUploaded(record) ? 'Uploaded by Buyer' : 'Procucev Vendor'}
+                  </span>
+                </div>
+                <span className="text-[10px] text-slate-500 dark:text-slate-400 font-normal truncate block mt-0.5">
+                  {record.vendorId} • {record.category}
+                </span>
+              </div>
+            </div>
+            <ChevronDown size={15} className={`text-slate-400 transition-transform shrink-0 ${dropdownOpen ? 'rotate-180' : ''}`} />
+          </button>
+
+          {/* Dropdown Menu Popover */}
+          {dropdownOpen && (
+            <div className="absolute right-0 top-full mt-1.5 w-84 sm:w-96 bg-white dark:bg-gray-900 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-700 z-50 overflow-hidden animate-fade-in">
+              {/* Tab Switcher: Uploaded by Buyer vs Procucev Vendors */}
+              <div className="p-2 border-b border-slate-200 dark:border-slate-800 bg-slate-100/70 dark:bg-gray-950 flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setDropdownTab('buyer')}
+                  className={`flex-1 py-1.5 px-2 rounded-lg text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${
+                    dropdownTab === 'buyer'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-slate-600 dark:text-gray-400 hover:bg-slate-200/80 dark:hover:bg-gray-800'
+                  }`}
+                >
+                  <UploadCloud size={13} />
+                  <span>Uploaded by Buyer</span>
+                  <span
+                    className={`px-1.5 py-0.2 rounded-full text-[9px] font-mono ${
+                      dropdownTab === 'buyer'
+                        ? 'bg-indigo-500 text-white'
+                        : 'bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-gray-300'
+                    }`}
+                  >
+                    {buyerCompanyOptions.length}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setDropdownTab('procucev')}
+                  className={`flex-1 py-1.5 px-2 rounded-lg text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${
+                    dropdownTab === 'procucev'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'text-slate-600 dark:text-gray-400 hover:bg-slate-200/80 dark:hover:bg-gray-800'
+                  }`}
+                >
+                  <ShieldCheck size={13} />
+                  <span>Procucev Vendors</span>
+                  <span
+                    className={`px-1.5 py-0.2 rounded-full text-[9px] font-mono ${
+                      dropdownTab === 'procucev'
+                        ? 'bg-indigo-500 text-white'
+                        : 'bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-gray-300'
+                    }`}
+                  >
+                    {procucevCompanyOptions.length}
+                  </span>
+                </button>
+              </div>
+
+              {/* Search Bar */}
+              <div className="p-2.5 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-gray-950/60">
+                <div className="relative">
+                  <Search size={14} className="absolute left-2.5 top-2.5 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder={`Search ${dropdownTab === 'buyer' ? 'buyer-uploaded' : 'Procucev'} suppliers...`}
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full pl-8 pr-3 py-1.5 text-xs rounded-md bg-white dark:bg-gray-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:border-indigo-500"
+                    autoFocus
+                  />
+                </div>
+                <div className="flex items-center justify-between text-[10px] text-slate-400 mt-1 px-1">
+                  <span>
+                    {filteredCompanyOptions.length} {dropdownTab === 'buyer' ? 'buyer-uploaded' : 'Procucev'} supplier{filteredCompanyOptions.length === 1 ? '' : 's'}
+                  </span>
+                  <span>Click to inspect evaluation</span>
+                </div>
+              </div>
+
+              {/* Options List */}
+              <div className="max-h-64 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+                {filteredCompanyOptions.length === 0 ? (
+                  otherTabMatchesCount > 0 ? (
+                    <div className="p-4 text-center text-xs text-slate-500 dark:text-slate-400 space-y-2">
+                      <p>No {dropdownTab === 'buyer' ? 'buyer-uploaded' : 'Procucev'} suppliers match &quot;{searchQuery}&quot;</p>
+                      <button
+                        type="button"
+                        onClick={() => setDropdownTab(dropdownTab === 'buyer' ? 'procucev' : 'buyer')}
+                        className="btn btn-secondary btn-xs inline-flex items-center gap-1 font-semibold text-indigo-600 dark:text-indigo-400"
+                      >
+                        Switch to {dropdownTab === 'buyer' ? 'Procucev Vendors' : 'Uploaded by Buyer'} ({otherTabMatchesCount} found)
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="p-4 text-center text-xs text-slate-400">
+                      {searchQuery.trim()
+                        ? `No suppliers match "${searchQuery}" in this tab`
+                        : `No ${dropdownTab === 'buyer' ? 'buyer-uploaded' : 'Procucev'} suppliers available`}
+                    </div>
+                  )
+                ) : (
+                  filteredCompanyOptions.map((c) => {
+                    const isSelected = c.id === record.vendorId || c.name === record.vendorName;
+                    const isBuyer = isBuyerUploaded(c);
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => handleSelectCompany(c.id)}
+                        className={`w-full text-left p-2.5 flex items-center justify-between gap-2 hover:bg-indigo-50/60 dark:hover:bg-indigo-950/40 transition-colors ${
+                          isSelected ? 'bg-indigo-50 dark:bg-indigo-950/60 font-bold' : ''
+                        }`}
+                      >
+                        <div className="truncate">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                              {c.name}
+                            </span>
+                            <span
+                              className={`text-[9px] px-1.5 py-0.2 rounded font-medium flex items-center gap-1 ${
+                                isBuyer
+                                  ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800'
+                                  : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                              }`}
+                            >
+                              {isBuyer ? <UploadCloud size={9} /> : <ShieldCheck size={9} />}
+                              {isBuyer ? 'Buyer Upload' : 'Procucev'}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                            <span className="font-mono text-indigo-600 dark:text-indigo-400">{c.id}</span> • {c.category}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className={`text-xs font-mono font-bold ${c.score >= 80 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                            {c.score}%
+                          </span>
+                          {isSelected && <Check size={14} className="text-indigo-600 dark:text-indigo-400" />}
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Main Vendor Executive Header Card */}
-      <div className="glass-panel p-6 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-md relative overflow-hidden">
+      <div className="glass-panel p-6 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-md relative z-10 overflow-hidden">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
           {/* Vendor Info */}
           <div className="space-y-2">

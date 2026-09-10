@@ -4,7 +4,18 @@ const { logger } = require('../services/loggerService');
 async function getBootstrap(req, res, next) {
   try {
     logger.info('Fetching application bootstrap data payload', {}, 'BOOTSTRAP_CONTROLLER');
-    const data = storeService.getBootstrapData();
+    const user = req.user;
+    let buyerId = null;
+    if (user && user.role === 'buyer') {
+      const buyerAccount = storeService.getBuyerAccountByEmail(user.email);
+      buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
+    } else if (req.query && req.query.buyerId) {
+      buyerId = req.query.buyerId;
+    }
+    if (req.query && req.query.refresh === 'true') {
+      await storeService.hydrateFromDB();
+    }
+    const data = storeService.getBootstrapData(buyerId);
     res.json({
       success: true,
       source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory',

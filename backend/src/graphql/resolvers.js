@@ -102,9 +102,17 @@ const rootResolvers = {
     return rfq;
   },
 
-  vendors: (args = {}) => {
+  vendors: (args = {}, context = {}) => {
     const { majorCategory, source, search, limit = 50, offset = 0 } = args;
-    let result = storeService.getVendors();
+    const user = context && context.req ? context.req.user : null;
+    let buyerId = null;
+    if (user && user.role === 'buyer') {
+      const buyerAccount = storeService.getBuyerAccountByEmail(user.email);
+      buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
+    } else if (args.buyerId) {
+      buyerId = args.buyerId;
+    }
+    let result = storeService.getVendors(buyerId);
     if (majorCategory) {
       result = result.filter((v) => v.majorCategory && v.majorCategory.toLowerCase().includes(majorCategory.toLowerCase()));
     }
@@ -118,12 +126,20 @@ const rootResolvers = {
     return result.slice(offset, offset + limit);
   },
 
-  vendor: (args = {}) => {
+  vendor: (args = {}, context = {}) => {
+    const user = context && context.req ? context.req.user : null;
+    let buyerId = null;
+    if (user && user.role === 'buyer') {
+      const buyerAccount = storeService.getBuyerAccountByEmail(user.email);
+      buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
+    } else if (args.buyerId) {
+      buyerId = args.buyerId;
+    }
     if (args.id) {
-      return storeService.getVendorById(args.id) || null;
+      return storeService.getVendorById(args.id, buyerId) || null;
     }
     if (args.email) {
-      return storeService.getVendors().find((v) => v.email && v.email.toLowerCase() === args.email.toLowerCase()) || null;
+      return storeService.getVendors(buyerId).find((v) => v.email && v.email.toLowerCase() === args.email.toLowerCase()) || null;
     }
     return null;
   },

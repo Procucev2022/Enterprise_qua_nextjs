@@ -7,6 +7,7 @@ const {
 } = require('../config/constants');
 const pool = require('../db/pool');
 const domainQueries = require('../db/domainQueries');
+const identityQueries = require('../db/identityQueries');
 const { createAuditEntry, verifyAuditTrail } = require('./auditService');
 const { evaluateQuotes, calculate360Evaluation, calculateRevisedRating } = require('./evaluationService');
 const { simulateChaserOutreach } = require('./aiChaserService');
@@ -134,6 +135,15 @@ class StoreService {
 
   // Fire-and-forget write-through helpers — never awaited by callers, mirroring
   // the pattern already used for identity-DB writes elsewhere in this backend.
+  _generateTempPassword() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%';
+    let password = '';
+    for (let i = 0; i < 12; i++) {
+      password += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return password;
+  }
+
   _persistVendor(vendor) {
     domainQueries.upsertVendorInDB(vendor).catch((err) => logger.error('Failed to persist vendor', err, 'STORE_SERVICE'));
   }
@@ -302,15 +312,43 @@ class StoreService {
   // ==========================================
   // 2. VENDORS
   // ==========================================
-  getVendors() {
-    return this.vendors;
+  getVendors(scopedBuyerId = null) {
+    if (scopedBuyerId === 'all') {
+      return this.vendors;
+    }
+    return this.vendors.filter((v) => {
+      // Platform / network vendors with no buyerId are public
+      if (!v.buyerId && !v.buyerAccountId) {
+        return true;
+      }
+      // Buyer-uploaded vendors are only visible if scopedBuyerId matches
+      if (!scopedBuyerId) {
+        return false;
+      }
+      const sId = String(scopedBuyerId).toLowerCase();
+      return (
+        (v.buyerId && String(v.buyerId).toLowerCase() === sId) ||
+        (v.buyerAccountId && String(v.buyerAccountId).toLowerCase() === sId) ||
+        (v.buyerEmail && String(v.buyerEmail).toLowerCase() === sId)
+      );
+    });
   }
 
-  getVendorById(id) {
-    return this.vendors.find((v) => v.id === id || v.email === id);
+  getVendorById(id, scopedBuyerId = null) {
+    const vendor = this.vendors.find((v) => v.id === id || v.email === id);
+    if (!vendor) return undefined;
+    if (scopedBuyerId === 'all') return vendor;
+    if (!vendor.buyerId && !vendor.buyerAccountId) return vendor;
+    if (!scopedBuyerId) return undefined;
+    const sId = String(scopedBuyerId).toLowerCase();
+    const matches =
+      (vendor.buyerId && String(vendor.buyerId).toLowerCase() === sId) ||
+      (vendor.buyerAccountId && String(vendor.buyerAccountId).toLowerCase() === sId) ||
+      (vendor.buyerEmail && String(vendor.buyerEmail).toLowerCase() === sId);
+    return matches ? vendor : undefined;
   }
 
-  addVendor(vendorData, actorEmail = null) {
+  addVendor(vendorData, actorEmail = null, buyerId = null) {
     // A client-supplied id was previously trusted as-is (never checked for
     // uniqueness) and the auto-generated fallback was only the last 4 digits
     // of Date.now() — collision-prone within the same ~10s window, and a
@@ -320,9 +358,12 @@ class StoreService {
     // server-side; nothing in the app currently has a legitimate reason to
     // request a specific vendor id.
     const { id: _ignoredClientId, ...safeVendorData } = vendorData;
+    const resolvedBuyerId = buyerId || vendorData.buyerId || vendorData.buyerAccountId || null;
     const newVendor = {
       ...safeVendorData,
       id: `v-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      buyerId: resolvedBuyerId,
+      buyerAccountId: resolvedBuyerId,
       rating: vendorData.rating || 4.5,
       score: vendorData.score || 85.0,
       source: vendorData.source || 'buyer_manual',
@@ -591,8 +632,8 @@ class StoreService {
     return updatedLink;
   }
 
-  reviseVendorRating(vendorId, ratingData) {
-    const vendor = this.getVendorById(vendorId);
+  reviseVendorRating(vendorId, ratingData, scopedBuyerId = null) {
+    const vendor = this.getVendorById(vendorId, scopedBuyerId);
     if (!vendor) return null;
 
     // Nothing here is defaulted to an invented buyer. A revision is a record of
@@ -636,6 +677,37 @@ class StoreService {
       latestRatingRevision: revisionRecord,
       ratingRevisionHistory: history,
     });
+
+    // Send rating revision email to the vendor
+    if (vendor.email) {
+      const emailPayload = mailerService.buildRatingRevisionEmail({
+        to: vendor.email,
+        recipientName: vendor.contactPerson || vendor.name,
+        vendorName: vendor.name,
+        buyerCompany: buyerCompany || 'A buyer on Procucev',
+        buyerName: buyerName || '',
+        previousRating: vendor.rating || 4.5,
+        newRating: newRating,
+        previousScore: vendor.score || 85,
+        newScore: newCompositeScore,
+        remarks: remarks || 'Periodic Buyer Rating Assessment',
+        qualityScore,
+        costScore,
+        deliveryScore,
+      });
+      
+      mailerService.sendVendorIngestionEmail(emailPayload, 'rating-revision')
+        .then((delivery) => {
+          if (delivery.sent) {
+            logger.info(`Rating revision email sent to ${vendor.email}`, { vendorId: vendor.id }, 'STORE_SERVICE');
+          } else {
+            logger.warn(`Failed to send rating revision email to ${vendor.email}`, { reason: delivery.reason }, 'STORE_SERVICE');
+          }
+        })
+        .catch((err) => {
+          logger.error(`Error sending rating revision email to ${vendor.email}`, err, 'STORE_SERVICE');
+        });
+    }
 
     this.addAuditLog({
       userEmail: buyerEmail || SYSTEM_ACTOR_EMAIL,
@@ -1165,6 +1237,25 @@ class StoreService {
     return notification;
   }
 
+  notifyBuyer(emailOrId, { kind, title, message, meta } = {}) {
+    if (!emailOrId) return null;
+    let buyerAccount = this.buyerAccounts.find(
+      (a) => a.id === emailOrId || (a.corporateEmail && a.corporateEmail.toLowerCase() === String(emailOrId).toLowerCase())
+    );
+    const recipientId = buyerAccount ? buyerAccount.id : emailOrId;
+    const notification = this._buildNotification({
+      recipientType: 'buyer',
+      recipientId,
+      kind: kind || 'system_alert',
+      title: title || 'System Update',
+      message: message || '',
+      meta: meta || {},
+    });
+    this.notifications.unshift(notification);
+    this._persistNotification(notification);
+    return notification;
+  }
+
   // ==========================================
   // 3c. TRANSACTIONAL EMAIL (RFQ fan-out + quote-received)
   // ==========================================
@@ -1416,6 +1507,9 @@ class StoreService {
   processHistoricalPurchaseData(period, vendorRecords = [], requestingBuyerAccount = null) {
     let importedCount = 0;
     const skipped = [];
+    const attributedAccount = requestingBuyerAccount || this.activeBuyerAccount;
+    const buyerId = attributedAccount ? attributedAccount.id : null;
+    const buyerEmail = attributedAccount ? attributedAccount.corporateEmail : null;
 
     vendorRecords.forEach((rec, idx) => {
       const name = (rec.companyName || rec.name || '').trim();
@@ -1433,15 +1527,21 @@ class StoreService {
         return;
       }
 
+      // Check duplicates only within this buyer's scope (not global platform)
+      // Require both email AND name to match for a duplicate
       const existing = this.vendors.find(
-        (v) => (v.email && v.email.toLowerCase() === email.toLowerCase()) ||
-               (v.name && v.name.toLowerCase() === name.toLowerCase())
+        (v) => v.buyerId === buyerId &&
+               v.email && v.email.toLowerCase() === email.toLowerCase() &&
+               v.name && v.name.toLowerCase() === name.toLowerCase()
       );
       if (existing) return;
 
       const minorCategories = Array.isArray(rec.minorCategories) ? rec.minorCategories : [];
       const newVendor = {
         id: `v-hist-${Date.now()}-${idx}`,
+        buyerId: buyerId || null,
+        buyerAccountId: buyerId || null,
+        buyerEmail: buyerEmail || null,
         name,
         email,
         contactPerson: (rec.contactPerson || '').trim() || null,
@@ -1467,11 +1567,56 @@ class StoreService {
       this.vendors.push(newVendor);
       this._persistVendor(newVendor);
       importedCount++;
+
+      // Create identity database account for the vendor so they can log in
+      if (newVendor.email) {
+        const tempPassword = this._generateTempPassword();
+        
+        // Create vendor account in identity database
+        identityQueries.insertVendorAccount({
+          email: newVendor.email,
+          password: tempPassword,
+          phone: newVendor.phone || null,
+          fullName: newVendor.contactPerson || newVendor.name,
+          organizationName: newVendor.name,
+          createdBy: 'vendor-ingestion',
+        }).then((result) => {
+          if (result.created) {
+            logger.info(`Vendor identity account created for ${newVendor.email}`, { vendorId: newVendor.id }, 'STORE_SERVICE');
+          } else {
+            logger.warn(`Vendor identity account already exists for ${newVendor.email}`, { vendorId: newVendor.id, reason: result.reason }, 'STORE_SERVICE');
+          }
+        }).catch((err) => {
+          logger.error(`Failed to create vendor identity account for ${newVendor.email}`, err, 'STORE_SERVICE');
+        });
+
+        // Send onboarding email to the vendor
+        const emailPayload = mailerService.buildVendorOnboardingEmail({
+          to: newVendor.email,
+          recipientName: newVendor.contactPerson || newVendor.name,
+          buyerOrganizationName: attributedAccount ? attributedAccount.organizationName : 'Procucev Enterprise',
+          vendorCode: newVendor.id,
+          tempPassword: tempPassword,
+          contactPhone: newVendor.phone,
+        });
+        
+        mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding')
+          .then((delivery) => {
+            if (delivery.sent) {
+              this.updateVendor(newVendor.id, { onboardingEmailStatus: 'sent', tempPassword });
+              logger.info(`Onboarding email sent to ${newVendor.email}`, { vendorId: newVendor.id }, 'STORE_SERVICE');
+            } else {
+              logger.warn(`Failed to send onboarding email to ${newVendor.email}`, { reason: delivery.reason }, 'STORE_SERVICE');
+            }
+          })
+          .catch((err) => {
+            logger.error(`Error sending onboarding email to ${newVendor.email}`, err, 'STORE_SERVICE');
+          });
+      }
     });
 
     // Attributed to the requesting buyer's own account when the controller
     // resolved one from the session (same convention as createRFQ).
-    const attributedAccount = requestingBuyerAccount || this.activeBuyerAccount;
     this.addAuditLog({
       userEmail: attributedAccount ? attributedAccount.corporateEmail : SYSTEM_ACTOR_EMAIL,
       action: `Processed ${period.replace('_', ' ')} historical purchase dump: ${importedCount} supplier(s) empanelled, ${skipped.length} row(s) rejected as unidentifiable.`,
@@ -1485,6 +1630,66 @@ class StoreService {
       period,
       totalVendors: this.vendors.length,
     };
+  }
+
+  /**
+   * Empanel a supplier whose category mapping the buyer has just approved.
+   *
+   * Deliberately separate from addVendor, which defaults `rating` to 4.5,
+   * `score` to 85.0 and `status` to "PREFERRED ENTERPRISE SUPPLIER". Those
+   * defaults are wrong for this path: a supplier arriving from a vendor-master
+   * and PO ingestion has had its categories established from real purchasing
+   * evidence, but nobody has evaluated it. Carrying an invented score would let
+   * the RFQ engine rank it against suppliers that were actually assessed.
+   *
+   * So the only things stored are the things the ingestion established. Absent
+   * stays absent: rating, score and evaluated are null/false until a real
+   * evaluation produces them.
+   */
+  empanelIngestedVendor(vendorData, actorEmail = null) {
+    const minorCategories = Array.isArray(vendorData.minorCategories) ? vendorData.minorCategories : [];
+    const newVendor = {
+      id: `v-ingest-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      name: vendorData.name,
+      email: vendorData.email,
+      contactPerson: vendorData.contactPerson || null,
+      phone: vendorData.phone || null,
+      location: vendorData.location || null,
+      gstin: vendorData.gstin || null,
+      vendorCode: vendorData.vendorCode || null,
+      majorCategory: vendorData.majorCategory || null,
+      minorCategories,
+      // The buyer mapped these from PO history; the vendor has not confirmed
+      // them yet, so there is nothing to align against.
+      clientMappedCategories: Array.isArray(vendorData.clientMappedCategories)
+        ? vendorData.clientMappedCategories
+        : minorCategories,
+      vendorSelectedCategories: [],
+      isCategoryAligned: false,
+      rating: null,
+      score: null,
+      evaluated: false,
+      hasRecord: true,
+      isExistingInDatabase: true,
+      status: 'REGISTERED / NOT EVALUATED',
+      source: 'vendor_master_ingestion',
+      onboardingEmailStatus: 'pending',
+      profileCompletionStatus: 'pending',
+      addedByBuyerCompany: vendorData.addedByBuyerCompany || null,
+      subscriptionPlan: 'premium',
+      rfqDownloadsUsed: 0,
+    };
+
+    this.vendors.unshift(newVendor);
+    this._persistVendor(newVendor);
+    this.addAuditLog({
+      userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
+      action: `Empanelled ${newVendor.name} from vendor master ingestion in category ${
+        newVendor.majorCategory || 'unassigned'
+      }`,
+    });
+
+    return newVendor;
   }
 
   // ==========================================
@@ -1719,11 +1924,11 @@ class StoreService {
    * dashboard. RFQs are fetched from GET /api/rfqs and follow-up alerts from
    * GET /api/ai-feed, which are both authenticated and org-scoped.
    */
-  getBootstrapData() {
+  getBootstrapData(scopedBuyerId = null) {
     return {
       buyerAccounts: this.buyerAccounts,
       activeBuyerAccount: this.activeBuyerAccount,
-      vendors: this.vendors,
+      vendors: this.getVendors(scopedBuyerId),
       evaluations: this.evaluations,
       auditLogs: this.auditLogs,
       aiFeed: [],
