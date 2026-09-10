@@ -35,6 +35,7 @@ import CompanyHoverTooltip from '@/app/components/CompanyHoverTooltip';
 
 interface VendorEvaluationSummaryProps {
   evaluationRecord?: VendorEvaluationRecord | null;
+  vendorEvaluation?: VendorEvaluationRecord | null;
   onBack?: () => void;
 }
 
@@ -166,12 +167,14 @@ function buildEvaluationRecordForVendor(vendor: any): VendorEvaluationRecord {
 
 export default function VendorEvaluationSummary({
   evaluationRecord,
+  vendorEvaluation,
   onBack,
 }: VendorEvaluationSummaryProps) {
   const { buyerVendors, vendorEvaluations, setActiveEvaluationRecord, showToast, addAuditLog, addFeedItem } = useApp();
 
+  const activeRecord = evaluationRecord || vendorEvaluation;
   // Determine initial vendor ID
-  const initialVendorId = evaluationRecord?.vendorId || (vendorEvaluations && vendorEvaluations[0]?.vendorId) || (buyerVendors && buyerVendors[0]?.id) || '';
+  const initialVendorId = activeRecord?.vendorId || (vendorEvaluations && vendorEvaluations[0]?.vendorId) || (buyerVendors && buyerVendors[0]?.id) || '';
   const [selectedVendorId, setSelectedVendorId] = useState<string>(initialVendorId);
   const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -983,8 +986,8 @@ export default function VendorEvaluationSummary({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-gray-800/80">
-              {filteredQuestions.map((q) => (
-                <tr key={q.refId} className="hover:bg-slate-50/80 dark:hover:bg-gray-800/40 transition-colors">
+              {filteredQuestions.map((q, idx) => (
+                <tr key={q.refId ? `${q.refId}-${idx}` : `q-${idx}`} className="hover:bg-slate-50/80 dark:hover:bg-gray-800/40 transition-colors">
                   <td className="py-3 px-3">
                     <span className="font-mono font-bold text-[11px] px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
                       {q.refId}
@@ -1003,10 +1006,10 @@ export default function VendorEvaluationSummary({
                     </div>
                   </td>
                   <td className="py-3 px-3 text-center font-bold text-slate-800 dark:text-gray-200 mono">
-                    {q.score.toFixed(1)} / 5.0
+                    {(q.score ?? 0).toFixed(1)} / 5.0
                   </td>
                   <td className="py-3 px-3 text-right font-bold text-indigo-600 dark:text-indigo-400 mono">
-                    +{q.weightedScore.toFixed(2)}%
+                    +{(q.weightedScore ?? 0).toFixed(2)}%
                   </td>
                   <td className="py-3 px-3 text-[11px] text-slate-600 dark:text-gray-300 italic max-w-md">
                     &quot;{q.remarks}&quot;

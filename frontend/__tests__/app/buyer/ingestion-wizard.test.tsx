@@ -302,4 +302,142 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     expect(titleInput).toHaveValue('');
     expect(locationInput).toHaveValue('');
   });
+
+  it('handles file input triggers and file additions', () => {
+    renderWizard();
+
+    // Clicking Select Files button triggers file input
+    const selectFilesBtn = screen.getByRole('button', { name: /Select Files/i });
+    fireEvent.click(selectFilesBtn);
+
+    // Add document file
+    const docFile = new File(['specs content'], 'specification.docx', {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    });
+    uploadFile(docFile);
+    expect(screen.getByText('specification.docx')).toBeInTheDocument();
+  });
+
+  it('handles extraction error and extraction without files gracefully', async () => {
+    renderWizard();
+
+    // Extract without files
+    clickExtract();
+
+    // Upload file and simulate failure response
+    const badFile = new File(['dummy'], 'corrupt.xlsx', { type: 'application/vnd.ms-excel' });
+    uploadFile(badFile);
+
+    mockExtract.mockResolvedValueOnce({
+      success: false,
+      error: 'Corrupt file structure',
+    });
+    clickExtract();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Corrupt file structure/i)).toBeInTheDocument();
+    });
+
+    // Simulate extraction throwing exception
+    mockExtract.mockRejectedValueOnce(new Error('Network failure parsing document'));
+    clickExtract();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Network failure parsing document/i)).toBeInTheDocument();
+    });
+  });
+
+  it('handles auto-categorization errors and empty line items', async () => {
+    renderWizard();
+
+    // Line item with empty name should trigger warning when categorizing
+    const classifyBtn = screen.getByRole('button', { name: /Auto-Categorize All \(AI\)/i });
+    fireEvent.click(classifyBtn);
+
+    // Add item with name
+    const itemInput = screen.getByPlaceholderText(MODAL.itemPlaceholder);
+    fireEvent.change(itemInput, { target: { value: 'High Pressure Valve' } });
+
+    // Mock classify failure
+    mockClassify.mockResolvedValueOnce({
+      success: false,
+      error: 'AI Classifier quota exceeded',
+    });
+    fireEvent.click(classifyBtn);
+    await waitFor(() => expect(mockClassify).toHaveBeenCalled());
+
+    // Mock classify throwing exception
+    mockClassify.mockRejectedValueOnce(new Error('Classification connection timeout'));
+    fireEvent.click(classifyBtn);
+    await waitFor(() => expect(mockClassify).toHaveBeenCalled());
+  });
+
+  it('allows updating general RFQ fields and line item details', () => {
+    renderWizard();
+
+    // Update title, major category, delivery date, budget
+    const titleInput = screen.getByPlaceholderText(MODAL.titlePlaceholder);
+    fireEvent.change(titleInput, { target: { value: 'Annual Maintenance Spares' } });
+
+    const budgetInput = screen.getByPlaceholderText('e.g. 500000');
+    fireEvent.change(budgetInput, { target: { value: '750000' } });
+
+    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
+    // Change technical specs
+    const specsInput = within(row).getByPlaceholderText(MODAL.specsPlaceholder);
+    fireEvent.change(specsInput, { target: { value: 'Class 300 Flanged' } });
+    expect(specsInput).toHaveValue('Class 300 Flanged');
+  });
+
+  it('handles RFQ creation submission failures and errors', async () => {
+    renderWizard();
+
+    // Fill minimum required fields
+    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
+      target: { value: 'Dahej Port Complex' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder), {
+      target: { value: '392130' },
+    });
+
+    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.itemPlaceholder), {
+      target: { value: 'TMT Rebars Fe550D' },
+    });
+    const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
+    fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
+    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), {
+      target: { value: '50' },
+    });
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), {
+      target: { value: 'MT' },
+    });
+
+    // Upload attachment that fails upload
+    mockAttach.mockRejectedValueOnce(new Error('Storage S3 upload timeout'));
+    uploadFile(new File(['file'], 'specs.pdf', { type: 'application/pdf' }));
+
+    // Mock createRFQ failure
+    mockCreateRFQ.mockResolvedValueOnce({
+      success: false,
+      error: 'Database constraint violation during RFQ creation',
+    });
+
+    const submitBtn = screen.getByRole('button', { name: /Create & Dispatch RFQ/i });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Database constraint violation during RFQ creation/i)).toBeInTheDocument();
+    });
+
+    // Mock createRFQ exception
+    mockCreateRFQ.mockRejectedValueOnce(new Error('Network error during dispatch'));
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Network error during dispatch/i)).toBeInTheDocument();
+    });
+  });
 });
+

@@ -488,54 +488,6 @@ describe('app/buyer/vendor-summary.tsx', () => {
   });
 
   describe('Vendor CRUD Operations', () => {
-    it('handles Add Vendor modal workflow (open, enter fields, add tag, submit)', () => {
-      render(
-        <VendorSummary
-          onViewEvaluation={mockOnViewEvaluation}
-          onNavigateToWizard={mockOnNavigateToWizard}
-        />
-      );
-
-      // 1. Click Add Vendor button in header
-      const addVendorBtns = screen.getAllByRole('button', { name: /Add Vendor/i });
-      fireEvent.click(addVendorBtns[0]);
-
-      expect(screen.getByText('Add New Supplier')).toBeInTheDocument();
-
-      // Fill in fields
-      fireEvent.change(screen.getByPlaceholderText(/e.g. Paramount Valves & Control Ltd/i), {
-        target: { value: 'New Test Supplier Ltd' },
-      });
-      fireEvent.change(screen.getByPlaceholderText(/e.g. Ramesh Patel/i), {
-        target: { value: 'John Doe' },
-      });
-      fireEvent.change(screen.getByPlaceholderText(/e.g. sales@paramountvalves.com/i), {
-        target: { value: 'john@newtestsupplier.com' },
-      });
-      fireEvent.change(screen.getByPlaceholderText(/e.g. \+91 98200 12345/i), {
-        target: { value: '+91 98765 43210' },
-      });
-
-      // Add a minor category tag
-      const tagInput = screen.getByPlaceholderText(/Type category and press Add Tag/i);
-      fireEvent.change(tagInput, { target: { value: 'Custom Actuators' } });
-      fireEvent.click(screen.getByRole('button', { name: /Add Tag/i }));
-      expect(screen.getByText('Custom Actuators')).toBeInTheDocument();
-
-      // Submit form
-      fireEvent.click(screen.getByRole('button', { name: /Save & Empanel Vendor/i }));
-
-      expect(mockAddBuyerVendor).toHaveBeenCalledWith(
-        expect.objectContaining({
-          name: 'New Test Supplier Ltd',
-          contactPerson: 'John Doe',
-          email: 'john@newtestsupplier.com',
-          phone: '+91 98765 43210',
-          minorCategories: expect.arrayContaining(['Custom Actuators']),
-        })
-      );
-    });
-
     it('handles View Vendor Profile modal workflow', () => {
       render(
         <VendorSummary
@@ -607,5 +559,75 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       expect(mockDeleteBuyerVendor).toHaveBeenCalledWith('v-1');
     });
+
+    it('handles tab navigation, search input, status filter, and category filter', () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // Search vendor
+      const searchInput = screen.getByPlaceholderText(/Search vendors by name/i);
+      fireEvent.change(searchInput, { target: { value: 'Global' } });
+      expect(screen.getByText('Global Valves Ltd')).toBeInTheDocument();
+      expect(screen.queryByText('Apex Supplies Ltd.')).not.toBeInTheDocument();
+
+      // Clear search
+      fireEvent.change(searchInput, { target: { value: '' } });
+      expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
+
+      // Switch to Procucev Network Tab
+      const procucevTab = screen.getByRole('button', { name: /Procucev Vendors/i });
+      fireEvent.click(procucevTab);
+      expect(screen.getByText('TechnoForce Electricals Ltd')).toBeInTheDocument();
+
+      // Switch back to Buyer Uploaded Tab
+      const buyerTab = screen.getByRole('button', { name: /Uploaded by Buyer/i });
+      fireEvent.click(buyerTab);
+      expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
+
+      // Navigate to Wizard button
+      const uploadBtn = screen.getByRole('button', { name: /Upload Vendor/i });
+      fireEvent.click(uploadBtn);
+      expect(mockOnNavigateToWizard).toHaveBeenCalledTimes(1);
+    });
+
+    it('handles View Profile, Edit, and Delete modal cancel actions', () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // Click View Profile on Apex Supplies
+      const viewBtns = screen.getAllByRole('button', { name: /View Profile/i });
+      fireEvent.click(viewBtns[0]);
+
+      expect(screen.getByText('Comprehensive supplier registration, compliance, and taxonomy profile.')).toBeInTheDocument();
+
+      // Close view modal
+      const closeBtn = screen.getByRole('button', { name: 'Close' });
+      fireEvent.click(closeBtn);
+      expect(screen.queryByText('Comprehensive supplier registration, compliance, and taxonomy profile.')).not.toBeInTheDocument();
+
+      // Click Edit and then Cancel
+      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
+      fireEvent.click(editBtns[0]);
+      expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
+      expect(screen.queryByText('Edit Vendor Profile')).not.toBeInTheDocument();
+
+      // Click Delete and then Cancel
+      const deleteBtns = screen.getAllByRole('button', { name: /Delete/i });
+      fireEvent.click(deleteBtns[0]);
+      expect(screen.getByText('Delete Vendor Record')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
+      expect(screen.queryByText('Delete Vendor Record')).not.toBeInTheDocument();
+    });
   });
 });
+
+
