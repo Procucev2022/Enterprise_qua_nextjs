@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import { authClient } from '@/lib/authClient';
+import { rfqAttachmentUrl } from '@/lib/rfqClient';
 import { SubscriptionPaymentModal } from '@/app/components/Modals';
 import { VendorOpportunity } from '@/lib/types';
 import {
@@ -156,21 +157,62 @@ export default function OpportunityFeed({
     // download quota server-side too — the checks above are just UX, not
     // the actual gate. Refreshes from the DB afterward so the quota shown
     // reflects what the server actually counted, not a local guess.
+    const authHeaders = {
+      'Content-Type': 'application/json',
+      ...(authClient.getToken() ? { Authorization: `Bearer ${authClient.getToken()}` } : {}),
+    };
     try {
       const res = await fetch(`/api/rfqs/${encodeURIComponent(opp.rfqNumber)}/email-preview`, {
-        headers: {
-          'Content-Type': 'application/json',
-          ...(authClient.getToken() ? { Authorization: `Bearer ${authClient.getToken()}` } : {}),
-        },
+        headers: authHeaders,
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Could not generate the RFQ specification.');
       }
+
+      // The RFQ text info as a real downloaded file, not just a toast
+      // claiming an email was sent — a vendor without inbox access to that
+      // address previously had no way to actually see it.
+      const htmlBody: string = data.data?.htmlBody || '';
+      const specUrl = URL.createObjectURL(new Blob([htmlBody], { type: 'text/html' }));
+      const specLink = document.createElement('a');
+      specLink.href = specUrl;
+      specLink.download = `${opp.rfqNumber}-specification.html`;
+      document.body.appendChild(specLink);
+      specLink.click();
+      specLink.remove();
+      URL.revokeObjectURL(specUrl);
+
+      // Supporting documents the buyer attached, scoped server-side the
+      // same way as the vendor RFQ details page (canAccessRfq /
+      // vendorCoversRFQ), so this only returns attachments this vendor can
+      // already see.
+      try {
+        const rfqRes = await fetch(`/api/rfqs/${encodeURIComponent(opp.rfqNumber)}`, { headers: authHeaders });
+        const rfqData = await rfqRes.json();
+        const attachments = rfqRes.ok && rfqData.success ? rfqData.data?.attachments || [] : [];
+        for (const file of attachments) {
+          const fileRes = await fetch(rfqAttachmentUrl(file.id), { headers: authHeaders });
+          if (!fileRes.ok) continue;
+          const blob = await fileRes.blob();
+          const fileUrl = URL.createObjectURL(blob);
+          const fileLink = document.createElement('a');
+          fileLink.href = fileUrl;
+          fileLink.download = file.fileName || `${opp.rfqNumber}-attachment`;
+          document.body.appendChild(fileLink);
+          fileLink.click();
+          fileLink.remove();
+          URL.revokeObjectURL(fileUrl);
+        }
+      } catch {
+        // The specification itself already downloaded; a failure fetching
+        // attachments is surfaced by their absence, not a blocking error.
+      }
+
       if (!isDirect) {
         await refreshFromDB();
       }
-      showToast('Spreadsheet Sent to Registered Email', `Downloaded BOQ Excel spreadsheet for ${opp.rfqNumber}.`, 'success');
+      showToast('RFQ Downloaded', `Downloaded RFQ specification for ${opp.rfqNumber}.`, 'success');
       addAuditLog(`${vendorLabel} downloaded RFQ specifications for ${opp.rfqNumber}`, opp.rfqNumber, currentUserSession?.email);
     } catch (err: any) {
       showToast('Download Failed', err?.message || 'Could not download the RFQ specification.', 'warning');

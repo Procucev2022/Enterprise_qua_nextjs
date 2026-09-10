@@ -745,6 +745,119 @@ describe("QuotationForm Comprehensive Suite", () => {
     ).toBeInTheDocument();
   });
 
+  test("downloading an RFQ also downloads its real attachments, skipping any that fail to fetch", async () => {
+    const onBack = jest.fn();
+    const rfqSpecific = jest.fn((url: string, options: any = {}) => {
+      if (/\/api\/rfqs\/RFQ-2026-00421$/.test(url)) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              attachments: [
+                { id: "att-1", fileName: "boq.pdf" },
+                { id: "att-2", fileName: "specs.xlsx" },
+              ],
+            },
+          }),
+        });
+      }
+      if (/\/api\/rfqs\/attachments\/att-1$/.test(url)) {
+        return Promise.resolve({ ok: true, blob: async () => new Blob(["pdf"]) });
+      }
+      if (/\/api\/rfqs\/attachments\/att-2$/.test(url)) {
+        return Promise.resolve({ ok: false });
+      }
+      return defaultMockFetchImpl(url, options);
+    });
+    (global.fetch as jest.Mock).mockImplementation(rfqSpecific);
+
+    renderWithProvider(
+      <QuotationFormCustomWrapper onBack={onBack} withSession customSubscription="select" />,
+    );
+
+    const downloadBtns = await waitFor(() => {
+      const btns = screen.getAllByRole("button", { name: /Download RFQ/i });
+      expect(btns.length).toBeGreaterThan(0);
+      return btns;
+    });
+    await act(async () => {
+      fireEvent.click(downloadBtns[0]);
+    });
+
+    await waitFor(() =>
+      expect(rfqSpecific).toHaveBeenCalledWith(
+        expect.stringContaining("/api/rfqs/attachments/att-1"),
+        expect.anything(),
+      ),
+    );
+    expect(rfqSpecific).toHaveBeenCalledWith(
+      expect.stringContaining("/api/rfqs/attachments/att-2"),
+      expect.anything(),
+    );
+  });
+
+  test("downloads nothing extra when the RFQ lookup responds but with no success flag", async () => {
+    const onBack = jest.fn();
+    (global.fetch as jest.Mock).mockImplementation((url: string, options: any = {}) => {
+      if (/\/api\/rfqs\/RFQ-2026-00421$/.test(url)) {
+        return Promise.resolve({ ok: true, json: async () => ({ success: false }) });
+      }
+      return defaultMockFetchImpl(url, options);
+    });
+
+    renderWithProvider(
+      <QuotationFormCustomWrapper onBack={onBack} withSession customSubscription="select" />,
+    );
+
+    const downloadBtns = await waitFor(() => {
+      const btns = screen.getAllByRole("button", { name: /Download RFQ/i });
+      expect(btns.length).toBeGreaterThan(0);
+      return btns;
+    });
+    await act(async () => {
+      fireEvent.click(downloadBtns[0]);
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Sourcing Enquiries & Quotation Tracking/i),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  test("gracefully continues past a failed attachment-listing fetch after the specification already downloaded", async () => {
+    const onBack = jest.fn();
+    (global.fetch as jest.Mock).mockImplementation((url: string, options: any = {}) => {
+      if (/\/api\/rfqs\/RFQ-2026-00421$/.test(url)) {
+        return Promise.reject(new Error("network down"));
+      }
+      return defaultMockFetchImpl(url, options);
+    });
+
+    renderWithProvider(
+      <QuotationFormCustomWrapper onBack={onBack} withSession customSubscription="select" />,
+    );
+
+    const downloadBtns = await waitFor(() => {
+      const btns = screen.getAllByRole("button", { name: /Download RFQ/i });
+      expect(btns.length).toBeGreaterThan(0);
+      return btns;
+    });
+    await act(async () => {
+      fireEvent.click(downloadBtns[0]);
+    });
+
+    // The RFQ text info already downloaded before the attachment-listing
+    // fetch rejected; the screen stays intact rather than crashing or
+    // surfacing a blocking error over an already-successful download.
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Sourcing Enquiries & Quotation Tracking/i),
+      ).toBeInTheDocument(),
+    );
+  });
+
   test("auto-opens the bid modal for a deep-linked opportunity that is unlocked and not yet quoted", async () => {
     const onBack = jest.fn();
     const opportunity = {
@@ -917,7 +1030,7 @@ describe("QuotationForm Comprehensive Suite", () => {
 
     // "Submit Quote" is replaced by the real PO Generated status for this RFQ
     expect(await screen.findByText("PO Generated")).toBeInTheDocument();
-    expect(screen.getByText("Under Evaluation")).toBeInTheDocument();
+    expect(screen.getByText("Quote Submitted")).toBeInTheDocument();
     expect(screen.getAllByText("Portal Submission").length).toBe(2);
   });
 

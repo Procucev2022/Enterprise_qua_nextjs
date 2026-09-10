@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { AlertCircle, Loader2, RefreshCw } from 'lucide-react';
 import { fetchRFQById } from '@/lib/rfqClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
+import { useApp } from '@/lib/store';
 import RFQDetails from '@/app/buyer/rfq-details';
 import type { RFQItem } from '@/lib/types';
 
@@ -52,28 +53,57 @@ function StatusPanel({
  * the same 404-for-out-of-scope behaviour as the buyer/CM routes, so this
  * page cannot be used to browse another vendor's RFQs.
  *
+ * The RFQ record itself still carries every vendor's quote (the buyer/CM need
+ * that), so before handing it to the shared RFQDetails component the quotes
+ * list is narrowed to this vendor's own submission only — otherwise a vendor
+ * would see every competitor's price, lead time and terms on the same RFQ.
+ *
  * Addressable by RFQ number so the page survives a reload and can be linked to.
  */
 function VendorRFQDetailsView() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const rfqNumber = searchParams.get(RFQ_PARAM);
+  const { currentUserSession } = useApp();
 
   const [state, setState] = useState<LoadState>({ status: 'idle' });
 
-  const load = useCallback(async (identifier: string) => {
-    setState({ status: 'loading' });
-    const result = await fetchRFQById(identifier);
-    if (result.success) {
-      setState({ status: 'loaded', rfq: result.rfq });
-      return;
-    }
-    setState({
-      status: 'error',
-      message: result.error,
-      canRetry: result.reason !== 'NOT_FOUND',
-    });
-  }, []);
+  const load = useCallback(
+    async (identifier: string) => {
+      setState({ status: 'loading' });
+      const result = await fetchRFQById(identifier);
+      if (!result.success) {
+        setState({
+          status: 'error',
+          message: result.error,
+          canRetry: result.reason !== 'NOT_FOUND',
+        });
+        return;
+      }
+
+      let myVendorId: string | null = null;
+      const email = currentUserSession?.email;
+      if (email) {
+        try {
+          const res = await fetch(`/api/vendors/${encodeURIComponent(email)}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.success && data.data) myVendorId = data.data.id;
+          }
+        } catch {
+          // No vendor record resolved: fall through and show zero quotes
+          // rather than every vendor's, which is the safe default.
+        }
+      }
+
+      const scopedRfq: RFQItem = {
+        ...result.rfq,
+        quotes: (result.rfq.quotes || []).filter((quote) => quote.vendorId === myVendorId),
+      };
+      setState({ status: 'loaded', rfq: scopedRfq });
+    },
+    [currentUserSession?.email]
+  );
 
   useEffect(() => {
     if (!rfqNumber) {

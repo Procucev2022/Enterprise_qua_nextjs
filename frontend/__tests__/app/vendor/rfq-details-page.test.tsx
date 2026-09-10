@@ -44,17 +44,33 @@ const BASE_RFQ: RFQItem = {
       technicalSpecs: 'IS 3177 Grade A',
     } as any,
   ],
-  quotes: [],
+  quotes: [
+    { vendorId: 'v-me', vendorName: 'My Vendor Co', unitPrice: 22000, totalPrice: 11000000 } as any,
+    { vendorId: 'v-other', vendorName: 'Competitor Supplies', unitPrice: 19000, totalPrice: 9500000 } as any,
+  ],
   chasingActive: false,
   buyerAccountId: 'buyer-1',
   buyerAccountName: 'Manav Buyer Enterprise',
 };
 
+const realFetch = global.fetch;
+
 describe('Vendor RFQ Details page', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockSearchParamsValue = 'RFQ-2026-1902';
-    (useApp as jest.Mock).mockReturnValue({ showToast: jest.fn() });
+    (useApp as jest.Mock).mockReturnValue({
+      showToast: jest.fn(),
+      currentUserSession: { email: 'me@vendor.com' },
+    });
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true, data: { id: 'v-me' } }),
+    }) as any;
+  });
+
+  afterEach(() => {
+    global.fetch = realFetch;
   });
 
   test('loads and renders the RFQ, reusing the shared RFQDetails component', async () => {
@@ -67,6 +83,58 @@ describe('Vendor RFQ Details page', () => {
     );
     expect(mockedFetchRFQById).toHaveBeenCalledWith('RFQ-2026-1902');
     expect(screen.getAllByText('Steel Bottle').length).toBeGreaterThan(0);
+  });
+
+  test('shows only this vendor\'s own quote, never a competitor\'s', async () => {
+    mockedFetchRFQById.mockResolvedValue({ success: true, rfq: BASE_RFQ });
+
+    render(<VendorRFQDetailsPage />);
+
+    await waitFor(() =>
+      expect(screen.getByText('Steel Bottle RFQ Requirement')).toBeInTheDocument(),
+    );
+    expect(screen.getAllByText('My Vendor Co').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Competitor Supplies')).not.toBeInTheDocument();
+    expect(screen.queryByText('19000')).not.toBeInTheDocument();
+  });
+
+  test('shows zero quotes when this vendor has no record resolved', async () => {
+    mockedFetchRFQById.mockResolvedValue({ success: true, rfq: BASE_RFQ });
+    global.fetch = jest.fn().mockResolvedValue({ ok: false }) as any;
+
+    render(<VendorRFQDetailsPage />);
+
+    await waitFor(() =>
+      expect(screen.getByText('Steel Bottle RFQ Requirement')).toBeInTheDocument(),
+    );
+    expect(screen.queryByText('My Vendor Co')).not.toBeInTheDocument();
+    expect(screen.queryByText('Competitor Supplies')).not.toBeInTheDocument();
+  });
+
+  test('shows zero quotes when the vendor lookup request throws', async () => {
+    mockedFetchRFQById.mockResolvedValue({ success: true, rfq: BASE_RFQ });
+    global.fetch = jest.fn().mockRejectedValue(new Error('network down')) as any;
+
+    render(<VendorRFQDetailsPage />);
+
+    await waitFor(() =>
+      expect(screen.getByText('Steel Bottle RFQ Requirement')).toBeInTheDocument(),
+    );
+    expect(screen.queryByText('My Vendor Co')).not.toBeInTheDocument();
+    expect(screen.queryByText('Competitor Supplies')).not.toBeInTheDocument();
+  });
+
+  test('shows zero quotes when there is no signed-in session to resolve a vendor from', async () => {
+    (useApp as jest.Mock).mockReturnValue({ showToast: jest.fn(), currentUserSession: null });
+    mockedFetchRFQById.mockResolvedValue({ success: true, rfq: BASE_RFQ });
+
+    render(<VendorRFQDetailsPage />);
+
+    await waitFor(() =>
+      expect(screen.getByText('Steel Bottle RFQ Requirement')).toBeInTheDocument(),
+    );
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(screen.queryByText('My Vendor Co')).not.toBeInTheDocument();
   });
 
   test('navigates back to the vendor Bid Quotes screen', async () => {
