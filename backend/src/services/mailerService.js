@@ -119,8 +119,9 @@ async function deliver(message, label) {
     return { sent: false, reason: 'SMTP not configured' };
   }
 
+  logger.info(`Dispatching ${label} to ${message.to}`, { subject: message.subject }, 'MAILER_SERVICE');
   const info = await activeTransporter.sendMail(message);
-  logger.info(`${label} sent to ${message.to}`, { messageId: info.messageId }, 'MAILER_SERVICE');
+  logger.info(`${label} sent successfully to ${message.to}`, { messageId: info.messageId }, 'MAILER_SERVICE');
   return { sent: true, messageId: info.messageId };
 }
 
