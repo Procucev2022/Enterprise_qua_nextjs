@@ -192,7 +192,7 @@ async function resolveMasterUuid(table, column, value, extraActiveFilter = false
   }
   const activeClause = extraActiveFilter ? ' and is_active = true' : '';
   const result = await pool.rows(
-    `select uuid from "${table}" where ${column} = $1${activeClause} limit 1`,
+    `select uuid from "${table}" where lower(${column}) = lower($1)${activeClause} limit 1`,
     [value]
   );
   return result[0] ? result[0].uuid : null;
@@ -379,7 +379,16 @@ async function insertVendorAccount({
 
   const existing = await findUserByEmail(normalizedEmail);
   if (existing) {
-    return { created: false, reason: 'ALREADY_EXISTS', user: existing };
+    if (password) {
+      await updateUserPasswordByUuid(existing.id, password, createdBy);
+      if (phone) {
+        await pool.query(
+          'update "user" set phone = $1, last_modified_by = $2, last_modified_ts = now() where uuid = $3',
+          [normalizedPhone, createdBy, existing.id]
+        );
+      }
+    }
+    return { created: false, reason: 'ALREADY_EXISTS', user: { ...existing, mobile: normalizedPhone, password } };
   }
 
   const [roleUuid, orgTypeUuid, statusUuid] = await Promise.all([
