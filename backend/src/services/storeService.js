@@ -1236,6 +1236,17 @@ class StoreService {
   createEvaluation(evalData) {
     const { moduleScores, overallScore, status, systemAction } = calculate360Evaluation(evalData.moduleScores || {});
 
+    const mergedModuleScores = { ...moduleScores };
+    if (evalData.moduleScores && typeof evalData.moduleScores === 'object') {
+      for (const [key, val] of Object.entries(evalData.moduleScores)) {
+        if (mergedModuleScores[key] && typeof val === 'object') {
+          mergedModuleScores[key] = { ...mergedModuleScores[key], ...val };
+        } else if (val) {
+          mergedModuleScores[key] = val;
+        }
+      }
+    }
+
     const newEval = {
       id: evalData.id || `eval-${Date.now()}`,
       vendorId: evalData.vendorId || `v-${Date.now()}`,
@@ -1252,7 +1263,7 @@ class StoreService {
       status: evalData.status || status,
       overallScore: evalData.overallScore || overallScore,
       systemAction: evalData.systemAction || systemAction,
-      moduleScores: evalData.moduleScores || moduleScores,
+      moduleScores: mergedModuleScores,
       documents: evalData.documents || [],
       // The per-question detail was previously silently dropped here even
       // though the client always sent it — only the rolled-up moduleScores
