@@ -25,6 +25,7 @@ import {
   validateManualRFQForm,
 } from '@/lib/manualRfqModel';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
+import { isBuyerUploaded } from './vendor-summary';
 import type {
   ManualRFQForm,
   ManualRFQLineItem,
@@ -48,6 +49,12 @@ import {
   Mail,
   FileCheck,
   RotateCcw,
+  Building2,
+  Phone,
+  Star,
+  Users,
+  ShieldCheck,
+  Tag,
 } from 'lucide-react';
 
 const EXTRACTION = UI_STRINGS.rfqExtraction;
@@ -80,6 +87,7 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
     setCurrentMode,
     showToast,
     activeSubscription: storeSubscription,
+    buyerVendors,
   } = useApp();
 
   const [form, setForm] = useState<ManualRFQForm>(() => ({
@@ -282,7 +290,29 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
         attachments: [...form.attachments, ...storedAttachments],
       };
 
-      const payload = toRFQCreatePayload(updatedForm);
+      // In Mode 1 (Private Roster), assign strictly the vendors uploaded by this buyer
+      let mode1AssignedVendors: Array<{
+        id?: string;
+        name: string;
+        email?: string | null;
+        contactPerson?: string | null;
+        phone?: string | null;
+      }> | undefined = undefined;
+
+      if (form.sourcingMode === 'mode_1' && Array.isArray(buyerVendors)) {
+        const myUploadedVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+        if (myUploadedVendors.length > 0) {
+          mode1AssignedVendors = myUploadedVendors.map((v) => ({
+            id: v.id,
+            name: v.name || 'Enterprise Vendor',
+            email: v.email || null,
+            contactPerson: v.contactPerson || v.name || null,
+            phone: v.phone || null,
+          }));
+        }
+      }
+
+      const payload = toRFQCreatePayload(updatedForm, mode1AssignedVendors);
       const result = await createRFQ(payload);
 
       if (!result.success) {
@@ -909,6 +939,106 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
             );
           })}
         </div>
+
+        {/* ── Mode 1: Private Approved Vendor Roster Preview ── */}
+        {form.sourcingMode === 'mode_1' && (
+          <div className="mt-5 rounded-2xl border border-blue-200 dark:border-blue-900/60 bg-blue-50/40 dark:bg-blue-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-blue-100 dark:border-blue-900/40 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 rounded-lg bg-blue-600 text-white shadow-xs">
+                  <Building2 size={16} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <span>Mode 1: Buyer&apos;s Approved Vendor Roster</span>
+                    <span className="badge badge-blue text-[10px] font-bold">
+                      {buyerVendors.filter((v) => isBuyerUploaded(v)).length} Suppliers Found
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
+                    This RFQ will strictly be dispatched to your private, pre-approved supplier network below.
+                  </p>
+                </div>
+              </div>
+              <span className="text-[10px] font-bold text-blue-700 dark:text-blue-300 bg-blue-100/70 dark:bg-blue-900/50 px-2.5 py-1 rounded-full border border-blue-200 dark:border-blue-800 shrink-0">
+                🔒 Private Roster Only
+              </span>
+            </div>
+
+            {(() => {
+              const myVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+              if (myVendors.length === 0) {
+                return (
+                  <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-2">
+                    <Users size={28} className="mx-auto text-slate-400 opacity-60" />
+                    <p className="text-xs font-bold text-slate-700 dark:text-gray-300">No Private Vendors Uploaded Yet</p>
+                    <p className="text-[11px] text-slate-500 dark:text-gray-400 max-w-md mx-auto">
+                      Please ingest your 1–3 Year Purchase Orders or add approved vendors in the Vendor Directory to auto-dispatch in Mode 1.
+                    </p>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-72 overflow-y-auto pr-1">
+                  {myVendors.map((vendor, idx) => (
+                    <div
+                      key={vendor.id || idx}
+                      className="rounded-xl border border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 p-3.5 space-y-2 shadow-2xs hover:border-blue-300 dark:hover:border-blue-700 transition-all"
+                    >
+                      <div className="flex items-start justify-between gap-1.5">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 text-xs font-bold font-mono">
+                            {idx + 1}
+                          </span>
+                          <span className="text-xs font-bold text-slate-900 dark:text-white truncate" title={vendor.name}>
+                            {vendor.name}
+                          </span>
+                        </div>
+                        <span className="badge badge-emerald text-[9px] font-bold shrink-0">
+                          Preferred
+                        </span>
+                      </div>
+
+                      <div className="space-y-1 text-[11px] text-slate-600 dark:text-gray-300">
+                        {vendor.contactPerson && (
+                          <div className="flex items-center gap-1.5 text-slate-700 dark:text-gray-300">
+                            <Users size={11} className="text-slate-400 shrink-0" />
+                            <span className="truncate">{vendor.contactPerson}</span>
+                          </div>
+                        )}
+                        {vendor.email && (
+                          <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
+                            <Mail size={11} className="text-blue-500 shrink-0" />
+                            <span className="font-mono text-[10px] truncate">{vendor.email}</span>
+                          </div>
+                        )}
+                        {vendor.phone && (
+                          <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
+                            <Phone size={11} className="text-emerald-500 shrink-0" />
+                            <span className="font-mono text-[10px]">{vendor.phone}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {vendor.majorCategory && (
+                        <div className="pt-1.5 border-t border-slate-100 dark:border-gray-800/80 flex items-center justify-between gap-1 text-[10px]">
+                          <span className="text-slate-400 truncate max-w-[150px]">
+                            {vendor.majorCategory}
+                          </span>
+                          <span className="text-amber-500 font-bold flex items-center gap-0.5 shrink-0">
+                            <Star size={10} className="fill-amber-400 text-amber-400" />
+                            <span>{vendor.rating || 4.5}</span>
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+        )}
       </section>
 
       {/* ═══════════════════════════════════════════════════════════════ */}
