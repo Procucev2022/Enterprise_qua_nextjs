@@ -250,4 +250,57 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
     rerender(<VendorEvaluationSummary evaluationRecord={disqualifiedRecord} />);
     expect(screen.getByText('DISQUALIFIED SUPPLIER')).toBeInTheDocument();
   });
+
+  it('renders gracefully with default moduleScores, documents, and remarks when record is partial', () => {
+    const minimalRecord: any = {
+      id: 'eval-min',
+      vendorId: 'VN-MIN-001',
+      vendorName: 'Minimal Vendor',
+      contactPerson: 'Manager',
+      email: 'min@vendor.com',
+      phone: '+91 99999 00000',
+      category: 'General',
+      submissionDate: '2026-03-01',
+      status: 'PREFERRED ENTERPRISE SUPPLIER',
+      systemAction: 'Auto Direct Dispatch',
+      // moduleScores completely undefined
+    };
+
+    const { rerender } = render(<VendorEvaluationSummary evaluationRecord={minimalRecord} />);
+    expect(screen.getByText('Minimal Vendor')).toBeInTheDocument();
+    expect(screen.getByText('24 / 25 pts')).toBeInTheDocument();
+    expect(screen.getByText('13.5 / 15 pts')).toBeInTheDocument();
+    expect(screen.getByText('18.4 / 20 pts')).toBeInTheDocument();
+    expect(screen.getByText('17.6 / 20 pts')).toBeInTheDocument();
+    expect(screen.getByText('8 / 10 pts')).toBeInTheDocument();
+    expect(screen.getByText('9.4 / 10 pts')).toBeInTheDocument();
+
+    // Trigger CAPA with empty notes to cover capaNotes fallback branch
+    fireEvent.click(screen.getByText(/Trigger CAPA Action/i));
+    expect(mockAddFeedItem).toHaveBeenCalledWith(
+      expect.stringContaining('CAPA Triggered: Minimal Vendor'),
+      expect.stringContaining('Document clarification & warranty update'),
+      'escalation',
+      'RFQ-2026-00421',
+      'Minimal Vendor'
+    );
+
+    // Test record with empty moduleScore objects (no weightedScore, no remarks)
+    const emptySubscoresRecord: any = {
+      ...minimalRecord,
+      moduleScores: {
+        commercial: {},
+        technical: {},
+        quality: {},
+        delivery: {},
+        financial: {},
+        governance: {},
+      },
+      documents: [{ id: 'doc-1', name: 'Doc 1', type: 'Cert', uploadDate: '2026-03-01', status: 'VERIFIED' }],
+    };
+
+    rerender(<VendorEvaluationSummary evaluationRecord={emptySubscoresRecord} />);
+    expect(screen.getByText('Net 30 terms; 12-month fixed pricing with 5% volume tier discount.')).toBeInTheDocument();
+    expect(screen.getByText('100% spec match; robotic CNC lines & accredited R&D lab.')).toBeInTheDocument();
+  });
 });
