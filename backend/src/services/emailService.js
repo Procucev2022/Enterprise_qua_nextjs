@@ -7,17 +7,29 @@ function generateStandardRFQEmail(rfq, vendor) {
   const contactPerson = vendor ? vendor.contactPerson : 'Procurement Team';
   const vendorEmail = (vendor && vendor.email) || 'navinchaudhary.dev@gmail.com';
   const rfqNumber = rfq.rfqNumber || 'RFQ-2026';
-  const deadline = rfq.deadline || '2026-09-15';
+  const deadline = rfq.deadline || 'To be confirmed';
   const category = rfq.category || 'Industrial Equipment & Spares';
+  const budget = Number(rfq.budget) || 0;
+  const attachments = Array.isArray(rfq.attachments) ? rfq.attachments : [];
 
-  const lineItemsList = (rfq.lineItems || [])
-    .map(
-      (item, idx) =>
-        `<tr>
+  const lineItemsList = (rfq.extractedEntities || rfq.lineItems || [])
+    .map((item, idx) => {
+      const specParts = [item.technicalSpecs, item.minorCategory].filter(Boolean);
+      const confidence =
+        typeof item.confidence === 'number' ? ` (AI confidence: ${Math.round(item.confidence * 100)}%)` : '';
+      const specs = (specParts.join(' — ') || 'Standard Enterprise Specification') + confidence;
+      return `<tr>
           <td style="padding: 8px 12px; border: 1px solid #e2e8f0; font-weight: 500;">${idx + 1}. ${item.itemName || item.description || 'Item'}</td>
           <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: center;">${item.quantity || 1} ${item.unit || 'Units'}</td>
-          <td style="padding: 8px 12px; border: 1px solid #e2e8f0;">${item.technicalSpecs || 'Standard Enterprise Specification'}</td>
-        </tr>`
+          <td style="padding: 8px 12px; border: 1px solid #e2e8f0;">${specs}</td>
+        </tr>`;
+    })
+    .join('');
+
+  const attachmentsList = attachments
+    .map(
+      (file) =>
+        `<li style="margin-bottom: 4px;">${file.fileName || file.name || 'Attachment'}</li>`
     )
     .join('');
 
@@ -51,6 +63,14 @@ function generateStandardRFQEmail(rfq, vendor) {
             <td style="padding: 8px 12px; font-weight: bold;">Submission Deadline:</td>
             <td style="padding: 8px 12px; color: #dc2626; font-weight: bold;">${deadline} (23:59 IST)</td>
           </tr>
+          ${
+            budget > 0
+              ? `<tr>
+            <td style="padding: 8px 12px; font-weight: bold;">Indicative Budget:</td>
+            <td style="padding: 8px 12px;">₹${budget.toLocaleString('en-IN')}</td>
+          </tr>`
+              : ''
+          }
         </table>
 
         <h4 style="margin: 16px 0 8px 0; color: #0f172a;">Requested Bill of Quantities (BOQ):</h4>
@@ -66,6 +86,13 @@ function generateStandardRFQEmail(rfq, vendor) {
             ${lineItemsList || '<tr><td colspan="3" style="padding: 8px 12px; border: 1px solid #e2e8f0;">See attached procurement specifications document.</td></tr>'}
           </tbody>
         </table>
+
+        ${
+          attachmentsList
+            ? `<h4 style="margin: 16px 0 8px 0; color: #0f172a;">Supporting Documents:</h4>
+        <ul style="margin: 0 0 20px 0; padding-left: 20px; font-size: 13px;">${attachmentsList}</ul>`
+            : ''
+        }
 
         <div style="background: #eff6ff; border-left: 4px solid #3b82f6; padding: 12px 16px; margin: 20px 0; border-radius: 0 4px 4px 0;">
           <p style="margin: 0; font-size: 13px; color: #1e40af;">

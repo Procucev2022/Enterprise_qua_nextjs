@@ -1,8 +1,10 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
+import { rfqAttachmentUrl } from '@/lib/rfqClient';
 import { VendorOpportunity } from '@/lib/types';
 import {
   ArrowLeft,
@@ -65,6 +67,7 @@ const BUYER_CONTACTS_MAP: Record<string, Omit<BuyerContactInfo, 'source'>> = {
 };
 
 export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: QuotationFormProps) {
+  const router = useRouter();
   const { rfqs, vendorOpportunities, showToast, addAuditLog, vendorSubscription, currentUserSession, refreshFromDB } = useApp();
   const [selectedBuyerModal, setSelectedBuyerModal] = useState<(BuyerContactInfo & { rfqNumber: string }) | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
@@ -136,7 +139,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         rfqNumber: rfq.rfqNumber,
         title: rfq.title,
         submittedDate: myQuote?.submittedAt ? new Date(myQuote.submittedAt).toLocaleString() : '-',
-        status: rfq.status === 'PO Generated' ? 'PO Generated' : 'Under Evaluation',
+        status: rfq.status === 'PO Generated' ? 'PO Generated' : 'Quote Submitted',
         submissionMethod: 'Portal Submission',
       };
     });
@@ -257,6 +260,18 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   };
 
   // ─── Real RFQ document download ────────────────────────────────────────
+  /** Saves a blob to disk via a throwaway object URL and anchor click. */
+  const triggerBlobDownload = (blob: Blob, fileName: string) => {
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(objectUrl);
+  };
+
   const handleDownloadRfq = async (opp: VendorOpportunity) => {
     try {
       const params = myVendorId ? `?vendorId=${encodeURIComponent(myVendorId)}` : '';
@@ -270,12 +285,38 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Could not generate the RFQ specification.');
       }
+
+      // The RFQ text info (BOQ, deadline, budget etc.) as a real file, not
+      // just a toast claiming an email was sent — a vendor without inbox
+      // access to that address previously had no way to actually see it.
+      const htmlBody: string = data.data?.htmlBody || '';
+      triggerBlobDownload(new Blob([htmlBody], { type: 'text/html' }), `${opp.rfqNumber}-specification.html`);
+
+      // Supporting documents the buyer attached. GET /api/rfqs/:id is scoped
+      // server-side the same way as the details page (canAccessRfq /
+      // vendorCoversRFQ), so this only ever returns attachments for an RFQ
+      // this vendor can already see.
+      try {
+        const rfqRes = await fetch(`/api/rfqs/${encodeURIComponent(opp.rfqNumber)}`, { headers: authHeaders() });
+        const rfqData = await rfqRes.json();
+        const attachments = rfqRes.ok && rfqData.success ? rfqData.data?.attachments || [] : [];
+        for (const file of attachments) {
+          const fileRes = await fetch(rfqAttachmentUrl(file.id), { headers: authHeaders() });
+          if (!fileRes.ok) continue;
+          const blob = await fileRes.blob();
+          triggerBlobDownload(blob, file.fileName || `${opp.rfqNumber}-attachment`);
+        }
+      } catch {
+        // The specification itself already downloaded; a failure fetching
+        // attachments is surfaced by their absence, not a blocking error.
+      }
+
       addAuditLog(
         `${myVendorName || currentUserSession?.name || 'Vendor'} downloaded RFQ specification for ${opp.rfqNumber}`,
         opp.rfqNumber,
         currentUserSession?.email
       );
-      showToast('RFQ Downloaded', `📨 RFQ specification for ${opp.rfqNumber} sent to ${currentUserSession?.email || 'your registered email'}.`, 'success');
+      showToast('RFQ Downloaded', `RFQ specification for ${opp.rfqNumber} has been downloaded.`, 'success');
     } catch (err: any) {
       showToast('Download Failed', err?.message || 'Could not download the RFQ specification.', 'warning');
     }
@@ -432,20 +473,30 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                     
                     {/* Download RFQ */}
                     <td className="py-3 text-center">
-                      <button
-                        onClick={() => {
-                          if (isLocked) {
-                            showToast('Premium Locked', 'Please upgrade your subscription to download specifications for this external buyer.', 'warning');
-                          } else {
-                            handleDownloadRfq(opp);
-                          }
-                        }}
-                        className="btn btn-secondary btn-xs py-1 px-2.5 flex items-center justify-center gap-1 text-[9px] font-bold mx-auto border border-slate-200"
-                        title="Download RFQ Specification"
-                      >
-                        <Download size={11} className="text-indigo-655" />
-                        <span>Download RFQ</span>
-                      </button>
+                      <div className="flex items-center justify-center gap-1.5">
+                        <button
+                          onClick={() => router.push(`/vendor/rfq-details?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
+                          className="btn btn-secondary btn-xs py-1 px-2.5 flex items-center justify-center gap-1 text-[9px] font-bold border border-slate-200"
+                          title="View RFQ Details"
+                        >
+                          <FileText size={11} className="text-indigo-655" />
+                          <span>View Details</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (isLocked) {
+                              showToast('Premium Locked', 'Please upgrade your subscription to download specifications for this external buyer.', 'warning');
+                            } else {
+                              handleDownloadRfq(opp);
+                            }
+                          }}
+                          className="btn btn-secondary btn-xs py-1 px-2.5 flex items-center justify-center gap-1 text-[9px] font-bold border border-slate-200"
+                          title="Download RFQ Specification"
+                        >
+                          <Download size={11} className="text-indigo-655" />
+                          <span>Download RFQ</span>
+                        </button>
+                      </div>
                     </td>
 
                     {/* Submission Method */}

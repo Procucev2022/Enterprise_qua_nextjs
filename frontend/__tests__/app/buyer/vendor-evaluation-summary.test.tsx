@@ -1,12 +1,29 @@
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
-import VendorEvaluationSummary from '@/app/buyer/vendor-evaluation-summary';
+import VendorEvaluationSummary, { isBuyerUploaded, isProcucevVendor } from '@/app/buyer/vendor-evaluation-summary';
 import { useApp } from '@/lib/store';
 import { VendorEvaluationRecord } from '@/lib/types';
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
 }));
+
+describe('isBuyerUploaded / isProcucevVendor helpers', () => {
+  it('returns false for null/undefined input', () => {
+    expect(isBuyerUploaded(null)).toBe(false);
+    expect(isBuyerUploaded(undefined)).toBe(false);
+    expect(isProcucevVendor(null)).toBe(true);
+  });
+
+  it('classifies via id prefixes when source is absent', () => {
+    expect(isBuyerUploaded({ id: 'v-hist-001' })).toBe(true);
+    expect(isBuyerUploaded({ id: 'v-navin-002' })).toBe(true);
+    expect(isBuyerUploaded({ id: 'vm-003' })).toBe(true);
+    expect(isBuyerUploaded({ id: 'v-ingest-004' })).toBe(true);
+    expect(isBuyerUploaded({ id: 'v-buyer-005' })).toBe(true);
+    expect(isBuyerUploaded({ id: 'proc-006' })).toBe(false);
+  });
+});
 
 describe('app/buyer/vendor-evaluation-summary.tsx', () => {
   const mockShowToast = jest.fn();
@@ -347,5 +364,172 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
     expect(screen.getByText('76%')).toBeInTheDocument();
     expect(screen.getByText('CONDITIONAL / UNDER REVIEW')).toBeInTheDocument();
     expect(mockShowToast).toHaveBeenCalledWith('Company Selected', expect.stringContaining('Beta Polymer Systems'), 'info');
+  });
+
+  it('builds a default-fallback evaluation record for a vendor missing name/category/dates', () => {
+    const mockVendors = [
+      // No name/vendorName, no majorCategory/category, no contactPerson, no
+      // email/phone, but a real createdAt — exercises every default branch
+      // in buildEvaluationRecordForVendor at once, including the non-fallback
+      // createdAt path.
+      { id: 'v-201', score: 91, source: 'buyer_manual', createdAt: '2026-01-15T10:00:00Z' },
+      { id: 'v-202', name: 'Gamma Fabrication', majorCategory: 'Fabrication', score: 60, source: 'buyer_manual' },
+      { id: 'v-203', name: 'Delta Analytics', category: 'Software', score: 88, source: 'procucev_network' },
+    ];
+
+    (useApp as jest.Mock).mockReturnValue({
+      buyerVendors: mockVendors,
+      vendorEvaluations: [],
+      showToast: mockShowToast,
+      addAuditLog: mockAddAuditLog,
+      addFeedItem: mockAddFeedItem,
+      setActiveEvaluationRecord: jest.fn(),
+    });
+
+    render(<VendorEvaluationSummary evaluationRecord={null} />);
+
+    // Defaults: "Enterprise Supplier" name, "General Industrial" category.
+    expect(screen.getAllByText('Enterprise Supplier').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/General Industrial/i).length).toBeGreaterThanOrEqual(1);
+
+    // Open the dropdown and select each other vendor to exercise more of the
+    // list (multiple options in the same tab => isSelected true/false both
+    // occur), plus a second call into buildEvaluationRecordForVendor via
+    // handleSelectCompany (which uses the mapped companyOptions object).
+    // Which tab starts active isn't asserted here, so switch explicitly.
+    fireEvent.click(screen.getByLabelText('Select Company / Vendor'));
+    fireEvent.click(screen.getByRole('button', { name: /Uploaded by Buyer/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Gamma Fabrication/i }));
+    expect(screen.getAllByText('Gamma Fabrication').length).toBeGreaterThanOrEqual(1);
+    // score 60 => DISQUALIFIED SUPPLIER, amber score styling branch.
+    expect(screen.getByText('DISQUALIFIED SUPPLIER')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText('Select Company / Vendor'));
+    fireEvent.click(screen.getByRole('button', { name: /Procucev Vendors/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Delta Analytics/i }));
+    expect(screen.getAllByText('Delta Analytics').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('searches the dropdown, finds a match only in the other tab, then finds no match in either', () => {
+    const mockVendors = [
+      { id: 'v-301', name: 'Buyer Uploaded Metals', majorCategory: 'Metals', score: 90, source: 'buyer_manual' },
+      { id: 'v-302', name: 'Procucev Textiles', majorCategory: 'Textiles', score: 85, source: 'procucev_network' },
+    ];
+
+    (useApp as jest.Mock).mockReturnValue({
+      buyerVendors: mockVendors,
+      vendorEvaluations: [],
+      showToast: mockShowToast,
+      addAuditLog: mockAddAuditLog,
+      addFeedItem: mockAddFeedItem,
+      setActiveEvaluationRecord: jest.fn(),
+    });
+
+    render(<VendorEvaluationSummary evaluationRecord={null} />);
+    fireEvent.click(screen.getByLabelText('Select Company / Vendor'));
+    // Ensure we're on the "Uploaded by Buyer" tab regardless of which one
+    // started active, then search for a term that only exists in the
+    // Procucev tab — hits the "switch to other tab" suggestion branch.
+    fireEvent.click(screen.getByRole('button', { name: /Uploaded by Buyer/i }));
+
+    const searchInput = screen.getByPlaceholderText(/Search.*suppliers/i);
+    fireEvent.change(searchInput, { target: { value: 'Textiles' } });
+    const switchBtn = screen.getByRole('button', { name: /Switch to Procucev Vendors/i });
+    expect(switchBtn).toBeInTheDocument();
+    fireEvent.click(switchBtn);
+    expect(screen.getByRole('button', { name: /Procucev Textiles/i })).toBeInTheDocument();
+
+    // Now search for something that matches nothing in either tab.
+    fireEvent.change(searchInput, { target: { value: 'Nonexistent Corp' } });
+    expect(screen.getByText(/No suppliers match "Nonexistent Corp" in this tab/i)).toBeInTheDocument();
+  });
+
+  it('renders "SUPPLIER" fallback and un-mapped question fallbacks when the record omits ids/scores', () => {
+    const sparseRecord: any = {
+      ...mockEvaluationRecord,
+      id: 'eval-sparse',
+      vendorId: '',
+      questionBreakdown: [
+        { criteria: 'Unlabeled criteria row', pillarId: 'M1', remarks: 'No ref, no score, no weighted score.' },
+      ],
+    };
+
+    // vendorEvaluations/buyerVendors must be empty, otherwise the resolver's
+    // fallback steps (which run because a falsy vendorId fails the direct
+    // prop-match check) would pick a different record instead of this one.
+    (useApp as jest.Mock).mockReturnValue({
+      vendorEvaluations: [],
+      buyerVendors: [],
+      showToast: mockShowToast,
+      addAuditLog: mockAddAuditLog,
+      addFeedItem: mockAddFeedItem,
+    });
+
+    render(<VendorEvaluationSummary evaluationRecord={sparseRecord} />);
+
+    fireEvent.click(screen.getByText(/Trigger CAPA Action/i));
+    expect(mockAddFeedItem).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      'escalation',
+      'EVAL-SUPPLIER',
+      expect.any(String)
+    );
+
+    expect(screen.getByText('Unlabeled criteria row')).toBeInTheDocument();
+    expect(screen.getByText('0.0 / 5.0')).toBeInTheDocument();
+    expect(screen.getByText('+0.00%')).toBeInTheDocument();
+  });
+
+  it('closes the dropdown on an outside mousedown click', () => {
+    render(<VendorEvaluationSummary evaluationRecord={mockEvaluationRecord} />);
+
+    fireEvent.click(screen.getByLabelText('Select Company / Vendor'));
+    expect(screen.getByRole('button', { name: /Uploaded by Buyer/i })).toBeInTheDocument();
+
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByRole('button', { name: /Uploaded by Buyer/i })).not.toBeInTheDocument();
+  });
+
+  it('resolves the active record from the vendorEvaluations store list by id when no prop is passed', () => {
+    const storeRecord: any = {
+      ...mockEvaluationRecord,
+      id: 'eval-store-1',
+      vendorId: 'EVAL-STORE-1',
+      vendorName: 'Store Resolved Vendor',
+    };
+
+    (useApp as jest.Mock).mockReturnValue({
+      vendorEvaluations: [storeRecord],
+      buyerVendors: [],
+      showToast: mockShowToast,
+      addAuditLog: mockAddAuditLog,
+      addFeedItem: mockAddFeedItem,
+    });
+
+    render(<VendorEvaluationSummary evaluationRecord={null} />);
+    expect(screen.getAllByText('Store Resolved Vendor').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('falls back to the first buyerVendor record when the selected id matches nothing else', () => {
+    const initialRecord: any = { ...mockEvaluationRecord, id: 'eval-initial', vendorId: 'EVAL-INITIAL' };
+    const fallbackVendor = { id: 'v-fallback-1', name: 'Fallback Vendor Co', majorCategory: 'General', score: 82 };
+
+    (useApp as jest.Mock).mockReturnValue({
+      vendorEvaluations: [],
+      buyerVendors: [fallbackVendor],
+      showToast: mockShowToast,
+      addAuditLog: mockAddAuditLog,
+      addFeedItem: mockAddFeedItem,
+    });
+
+    const { rerender } = render(<VendorEvaluationSummary evaluationRecord={initialRecord} />);
+    expect(screen.getAllByText('Apex Supplies Ltd.').length).toBeGreaterThanOrEqual(1);
+
+    // Dropping the prop leaves selectedVendorId pinned to 'EVAL-INITIAL',
+    // which matches neither vendorEvaluations (empty) nor buyerVendors (only
+    // 'v-fallback-1') — forcing the final buyerVendors[0] fallback branch.
+    rerender(<VendorEvaluationSummary evaluationRecord={null} />);
+    expect(screen.getAllByText('Fallback Vendor Co').length).toBeGreaterThanOrEqual(1);
   });
 });
