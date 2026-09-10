@@ -695,7 +695,7 @@ class StoreService {
         costScore,
         deliveryScore,
       });
-      
+
       mailerService.sendVendorIngestionEmail(emailPayload, 'rating-revision')
         .then((delivery) => {
           if (delivery.sent) {
@@ -729,9 +729,9 @@ class StoreService {
     if (!rfq) return undefined;
     return rfq.quotes
       ? {
-          ...rfq,
-          quotes: evaluateQuotes(rfq.quotes),
-        }
+        ...rfq,
+        quotes: evaluateQuotes(rfq.quotes),
+      }
       : rfq;
   }
 
@@ -836,20 +836,20 @@ class StoreService {
       // deterministic fallback when there's nothing to summarise or the model
       // call fails, never fabricated content.
       aiSummary: rfqData.aiSummary || null,
-      assignedVendors: rfqData.assignedVendors || [],
+      assignedVendors: Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : [],
       // Counters start at zero and are driven up by real outreach. They used to be
       // seeded with a channel total of 3 and 3 messages already "delivered" on
       // every RFQ — including RFQs with no vendors assigned at all — so the
       // follow-up panel reported delivery for messages that were never sent.
       followUpData: rfqData.followUpData || {
         rfqNumber,
-        totalInvited: (rfqData.assignedVendors || []).length,
+        totalInvited: (Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : []).length,
         respondedCount: 0,
         callStats: { total: 0, connected: 0, avgDuration: '0s' },
         whatsappStats: { total: 0, delivered: 0, read: 0, replied: 0 },
         smsStats: { total: 0, delivered: 0, clicked: 0 },
         autoChasingEnabled: true,
-        vendors: [],
+        vendors: Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : [],
       },
     };
 
@@ -1295,15 +1295,31 @@ class StoreService {
       .map((x) => x.vendor);
   }
 
-  /** Email a newly-created RFQ to its top matched vendors. Fired from createRFQ. */
+  /** Email a newly-created RFQ to its top matched vendors and assigned vendors. Fired from createRFQ. */
   emailRFQToMatchedVendors(rfq) {
     const recipients = this.selectVendorsForRFQEmail(rfq);
+    const assigned = (Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : []).filter((v) => v && v.email);
+    const allEmails = new Set();
+
     for (const vendor of recipients) {
-      mailerService
-        .sendRfqInviteEmail(vendor.email, { rfq, recipientName: vendor.contactPerson || vendor.name })
-        .catch((err) => logger.error('Failed to email RFQ invite to vendor', err, 'STORE_SERVICE'));
+      if (vendor.email && !allEmails.has(vendor.email.toLowerCase())) {
+        allEmails.add(vendor.email.toLowerCase());
+        mailerService
+          .sendRfqInviteEmail(vendor.email, { rfq, recipientName: vendor.contactPerson || vendor.name })
+          .catch((err) => logger.error('Failed to email RFQ invite to matched vendor', err, 'STORE_SERVICE'));
+      }
     }
-    return recipients.length;
+
+    for (const vendor of assigned) {
+      if (vendor.email && !allEmails.has(vendor.email.toLowerCase())) {
+        allEmails.add(vendor.email.toLowerCase());
+        mailerService
+          .sendRfqInviteEmail(vendor.email, { rfq, recipientName: vendor.contactPerson || vendor.name })
+          .catch((err) => logger.error('Failed to email RFQ invite to assigned vendor', err, 'STORE_SERVICE'));
+      }
+    }
+
+    return allEmails.size;
   }
 
   /** Email a submitted quote to the RFQ's owning buyer. Fired from addQuoteToRFQ. */
@@ -1531,8 +1547,8 @@ class StoreService {
       // Require both email AND name to match for a duplicate
       const existing = this.vendors.find(
         (v) => v.buyerId === buyerId &&
-               v.email && v.email.toLowerCase() === email.toLowerCase() &&
-               v.name && v.name.toLowerCase() === name.toLowerCase()
+          v.email && v.email.toLowerCase() === email.toLowerCase() &&
+          v.name && v.name.toLowerCase() === name.toLowerCase()
       );
       if (existing) return;
 
@@ -1571,7 +1587,7 @@ class StoreService {
       // Create identity database account for the vendor so they can log in
       if (newVendor.email) {
         const tempPassword = this._generateTempPassword();
-        
+
         // Create vendor account in identity database
         identityQueries.insertVendorAccount({
           email: newVendor.email,
@@ -1599,7 +1615,7 @@ class StoreService {
           tempPassword: tempPassword,
           contactPhone: newVendor.phone,
         });
-        
+
         mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding')
           .then((delivery) => {
             if (delivery.sent) {
@@ -1684,9 +1700,8 @@ class StoreService {
     this._persistVendor(newVendor);
     this.addAuditLog({
       userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
-      action: `Empanelled ${newVendor.name} from vendor master ingestion in category ${
-        newVendor.majorCategory || 'unassigned'
-      }`,
+      action: `Empanelled ${newVendor.name} from vendor master ingestion in category ${newVendor.majorCategory || 'unassigned'
+        }`,
     });
 
     return newVendor;

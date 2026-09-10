@@ -235,7 +235,16 @@ export function toExtractedEntity(item: ManualRFQLineItem): ExtractedEntity {
  * Call only on a form that has passed validateManualRFQForm; the non-null
  * assumptions below are what that validation guarantees.
  */
-export function toRFQCreatePayload(form: ManualRFQForm): RFQCreatePayload {
+export function toRFQCreatePayload(
+  form: ManualRFQForm,
+  assignedVendors?: Array<{
+    id?: string;
+    name: string;
+    email?: string | null;
+    contactPerson?: string | null;
+    phone?: string | null;
+  }>
+): RFQCreatePayload {
   const items = form.lineItems.map(toExtractedEntity);
   const leading = items[0];
 
@@ -258,6 +267,7 @@ export function toRFQCreatePayload(form: ManualRFQForm): RFQCreatePayload {
     deliveryPincode: clean(form.deliveryPincode),
     extractedEntities: items,
     attachments: form.attachments,
+    assignedVendors: assignedVendors || [],
   };
 }
 
