@@ -362,6 +362,13 @@ export interface RFQCreatePayload {
   deliveryPincode: string;
   extractedEntities: ExtractedEntity[];
   attachments: RFQAttachment[];
+  assignedVendors?: Array<{
+    id?: string;
+    name: string;
+    email?: string | null;
+    contactPerson?: string | null;
+    phone?: string | null;
+  }>;
 }
 
 /**
