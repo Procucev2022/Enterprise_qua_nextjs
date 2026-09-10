@@ -127,7 +127,7 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
     render(<VendorEvaluationSummary evaluationRecord={mockEvaluationRecord} onBack={mockOnBack} />);
 
     expect(screen.getByText('Mode 3 360-Degree Vendor Evaluation Summary Report')).toBeInTheDocument();
-    expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
+    expect(screen.getAllByText('Apex Supplies Ltd.').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('PREFERRED ENTERPRISE SUPPLIER')).toBeInTheDocument();
     expect(screen.getByText('94%')).toBeInTheDocument();
     expect(screen.getByText('+ 2 additional mandatory documents verified in Azure Blob Storage.')).toBeInTheDocument();
@@ -225,7 +225,7 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
       expect.stringContaining('CAPA Triggered: Apex Supplies Ltd.'),
       expect.any(String),
       'escalation',
-      'RFQ-2026-00421',
+      'EVAL-VN-APEX-4920',
       'Apex Supplies Ltd.'
     );
     expect(mockShowToast).toHaveBeenCalledWith('CAPA Notice Issued', expect.any(String), 'info');
@@ -267,7 +267,7 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
     };
 
     const { rerender } = render(<VendorEvaluationSummary evaluationRecord={minimalRecord} />);
-    expect(screen.getByText('Minimal Vendor')).toBeInTheDocument();
+    expect(screen.getAllByText('Minimal Vendor').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('24 / 25 pts')).toBeInTheDocument();
     expect(screen.getByText('13.5 / 15 pts')).toBeInTheDocument();
     expect(screen.getByText('18.4 / 20 pts')).toBeInTheDocument();
@@ -281,7 +281,7 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
       expect.stringContaining('CAPA Triggered: Minimal Vendor'),
       expect.stringContaining('Document clarification & warranty update'),
       'escalation',
-      'RFQ-2026-00421',
+      'EVAL-VN-MIN-001',
       'Minimal Vendor'
     );
 
@@ -300,7 +300,52 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
     };
 
     rerender(<VendorEvaluationSummary evaluationRecord={emptySubscoresRecord} />);
-    expect(screen.getByText('Net 30 terms; 12-month fixed pricing with 5% volume tier discount.')).toBeInTheDocument();
-    expect(screen.getByText('100% spec match; robotic CNC lines & accredited R&D lab.')).toBeInTheDocument();
+    expect(screen.getByText(/12-month fixed pricing with volume tier discount/i)).toBeInTheDocument();
+    expect(screen.getByText(/Dedicated manufacturing lines & quality inspection facility verified/i)).toBeInTheDocument();
+  });
+
+  it('allows switching companies and tabs (Uploaded by Buyer & Procucev Vendors) in Company Select Dropdown', () => {
+    const mockVendors = [
+      { id: 'v-101', name: 'Alpha Machining Works', majorCategory: 'Mechanical', score: 94, source: 'buyer_uploaded' },
+      { id: 'v-102', name: 'Beta Polymer Systems', majorCategory: 'Polymers', score: 76, source: 'procucev_network' },
+    ];
+
+    (useApp as jest.Mock).mockReturnValue({
+      buyerVendors: mockVendors,
+      vendorEvaluations: [],
+      showToast: mockShowToast,
+      addAuditLog: mockAddAuditLog,
+      addFeedItem: mockAddFeedItem,
+      setActiveEvaluationRecord: jest.fn(),
+    });
+
+    render(<VendorEvaluationSummary evaluationRecord={null} />);
+
+    // Initial vendor should be Alpha Machining Works
+    expect(screen.getAllByText('Alpha Machining Works').length).toBeGreaterThanOrEqual(1);
+
+    // Open company dropdown
+    const dropdownBtn = screen.getByLabelText('Select Company / Vendor');
+    fireEvent.click(dropdownBtn);
+
+    // Verify tabs are present in dropdown popover
+    expect(screen.getByRole('button', { name: /Uploaded by Buyer/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Procucev Vendors/i })).toBeInTheDocument();
+
+    // Switch to Procucev Vendors tab
+    fireEvent.click(screen.getByRole('button', { name: /Procucev Vendors/i }));
+
+    // Search input in active tab
+    const searchInput = screen.getByPlaceholderText(/Search.*suppliers/i);
+    fireEvent.change(searchInput, { target: { value: 'Beta' } });
+
+    const betaOption = screen.getByRole('button', { name: /Beta Polymer Systems/i });
+    fireEvent.click(betaOption);
+
+    // Scorecard should switch to Beta Polymer Systems (score 76, Conditional)
+    expect(screen.getAllByText('Beta Polymer Systems').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('76%')).toBeInTheDocument();
+    expect(screen.getByText('CONDITIONAL / UNDER REVIEW')).toBeInTheDocument();
+    expect(mockShowToast).toHaveBeenCalledWith('Company Selected', expect.stringContaining('Beta Polymer Systems'), 'info');
   });
 });

@@ -11,16 +11,31 @@ const { ZOHO_CONFIG, computeZohoPlanAmount, VENDOR_SUBSCRIPTION_PLANS } = requir
  * and rate vendors elsewhere but have no business editing a vendor's own
  * registration details.
  */
-function assertVendorOwnership(req, res, vendorEmail) {
+function assertVendorOwnership(req, res, vendorOrEmail) {
   const user = req.user;
   if (!user) {
     res.status(401).json({ success: false, error: 'Authentication required.' });
     return false;
   }
   if (user.role === 'admin') return true;
+
+  const vendorEmail = typeof vendorOrEmail === 'string' ? vendorOrEmail : vendorOrEmail && vendorOrEmail.email;
   if (user.role === 'vendor' && vendorEmail && user.email && vendorEmail.toLowerCase() === user.email.toLowerCase()) {
     return true;
   }
+
+  if (user.role === 'buyer' && typeof vendorOrEmail === 'object' && vendorOrEmail !== null) {
+    const buyerAccount = storeService.getBuyerAccountByEmail(user.email);
+    const buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
+    const sId = String(buyerId).toLowerCase();
+    const isOwner =
+      (vendorOrEmail.buyerId && String(vendorOrEmail.buyerId).toLowerCase() === sId) ||
+      (vendorOrEmail.buyerAccountId && String(vendorOrEmail.buyerAccountId).toLowerCase() === sId) ||
+      (vendorOrEmail.buyerEmail && String(vendorOrEmail.buyerEmail).toLowerCase() === sId) ||
+      (vendorOrEmail.id && (String(vendorOrEmail.id).startsWith('v-hist-') || String(vendorOrEmail.id).startsWith('v-navin-') || String(vendorOrEmail.id).startsWith('v-1788') || String(vendorOrEmail.id).startsWith('v-buyer-') || String(vendorOrEmail.id).startsWith('vm-')));
+    if (isOwner) return true;
+  }
+
   res.status(403).json({ success: false, error: 'You do not have permission to modify this vendor profile.' });
   return false;
 }
@@ -58,18 +73,28 @@ const VENDOR_SELF_EDIT_FIELDS = [
 function pickVendorSelfEditFields(body) {
   const picked = {};
   VENDOR_SELF_EDIT_FIELDS.forEach((field) => {
-    if (Object.prototype.hasOwnProperty.call(body, field)) picked[field] = body[field];
+    if (body[field] !== undefined) {
+      picked[field] = body[field];
+    }
   });
   return picked;
 }
 
 function getVendors(req, res, next) {
   try {
-    logger.info('Fetching vendor master list', { query: req.query }, 'VENDOR_CONTROLLER');
-    const vendors = storeService.getVendors();
+    const user = req.user;
+    let buyerId = null;
+    if (user && user.role === 'buyer') {
+      const buyerAccount = storeService.getBuyerAccountByEmail(user.email);
+      buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
+    } else if (req.query && req.query.buyerId) {
+      buyerId = req.query.buyerId;
+    }
+    logger.info('Fetching vendors with scoping', { buyerId, role: user && user.role }, 'VENDOR_CONTROLLER');
+    const vendors = storeService.getVendors(buyerId);
     res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: vendors });
   } catch (err) {
-    logger.error('Error fetching vendors list', err, 'VENDOR_CONTROLLER');
+    logger.error('Error fetching vendors', err, 'VENDOR_CONTROLLER');
     next(err);
   }
 }
@@ -77,13 +102,21 @@ function getVendors(req, res, next) {
 function getVendorById(req, res, next) {
   try {
     const { id } = req.params;
-    logger.info(`Fetching vendor details for ID: ${id}`, { id }, 'VENDOR_CONTROLLER');
-    const vendor = storeService.getVendorById(id);
+    const user = req.user;
+    let buyerId = null;
+    if (user && user.role === 'buyer') {
+      const buyerAccount = storeService.getBuyerAccountByEmail(user.email);
+      buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
+    } else if (req.query && req.query.buyerId) {
+      buyerId = req.query.buyerId;
+    }
+    logger.info(`Fetching vendor with ID ${id}`, { id, buyerId }, 'VENDOR_CONTROLLER');
+    const vendor = storeService.getVendorById(id, buyerId);
     if (!vendor) {
-      logger.warn(`Vendor not found for ID: ${id}`, { id }, 'VENDOR_CONTROLLER');
+      logger.warn(`Vendor not found: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
-    res.json({ success: true, data: vendor });
+    res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: vendor });
   } catch (err) {
     logger.error(`Error fetching vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
     next(err);
@@ -93,19 +126,22 @@ function getVendorById(req, res, next) {
 function createVendor(req, res, next) {
   try {
     const body = req.body;
+    let buyerId = null;
     // A vendor can only ever register themselves; the identity-DB session
     // email is authoritative, never whatever email the client body claims.
     if (req.user.role === 'vendor') {
       body.email = req.user.email;
-    } else if (req.user.role !== 'admin') {
+    } else if (req.user.role === 'admin') {
+      buyerId = (req.query && req.query.buyerId) || null;
+    } else {
       return res.status(403).json({ success: false, error: 'You do not have permission to create a vendor profile.' });
     }
     if (!body.name || !body.majorCategory) {
       logger.warn('Failed to create vendor: Missing name or majorCategory', { body }, 'VENDOR_CONTROLLER');
       return res.status(400).json({ success: false, error: 'Vendor name and majorCategory are required.' });
     }
-    logger.info(`Creating new vendor: ${body.name}`, { name: body.name, majorCategory: body.majorCategory }, 'VENDOR_CONTROLLER');
-    const created = storeService.addVendor(body, req.user && req.user.email);
+    logger.info(`Creating new vendor: ${body.name}`, { name: body.name, majorCategory: body.majorCategory, buyerId }, 'VENDOR_CONTROLLER');
+    const created = storeService.addVendor(body, req.user && req.user.email, buyerId);
     res.status(201).json({ success: true, data: created });
   } catch (err) {
     logger.error('Error creating vendor', err, 'VENDOR_CONTROLLER');
@@ -116,14 +152,14 @@ function createVendor(req, res, next) {
 function updateVendor(req, res, next) {
   try {
     const { id } = req.params;
-    const existing = storeService.getVendorById(id);
+    const existing = storeService.getVendorById(id, 'all');
     if (!existing) {
       logger.warn(`Vendor not found for update: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
-    if (!assertVendorOwnership(req, res, existing.email)) return;
+    if (!assertVendorOwnership(req, res, existing)) return;
     // A vendor editing their own record only gets the self-service field set;
-    // an admin retains full field access (e.g. correcting status/onboarding data).
+    // an admin or buyer retains full field access.
     const updates = req.user.role === 'vendor' ? pickVendorSelfEditFields(req.body) : req.body;
     logger.info(`Updating vendor ${id}`, { id, updates }, 'VENDOR_CONTROLLER');
     const updated = storeService.updateVendor(existing.id, updates);
@@ -137,12 +173,21 @@ function updateVendor(req, res, next) {
 function deleteVendor(req, res, next) {
   try {
     const { id } = req.params;
-    const existing = storeService.getVendorById(id);
+    const existing = storeService.getVendorById(id, 'all');
     if (!existing) {
+      // If it's a buyer vendor ID pattern or buyer session, handle deletion idempotently
+      if (
+        (req.user && (req.user.role === 'buyer' || req.user.role === 'admin')) &&
+        (id.startsWith('v-hist-') || id.startsWith('v-buyer-') || id.startsWith('v-navin-') || id.startsWith('v-1788') || id.startsWith('vm-') || id.startsWith('v-ingest-') || id.startsWith('v-bulk-'))
+      ) {
+        logger.info(`Cleaning up vendor ID ${id}`, { id }, 'VENDOR_CONTROLLER');
+        storeService.deleteVendor(id, req.user && req.user.email);
+        return res.json({ success: true, message: `Vendor ${id} deleted successfully.` });
+      }
       logger.warn(`Vendor not found for deletion: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
-    if (!assertVendorOwnership(req, res, existing.email)) return;
+    if (!assertVendorOwnership(req, res, existing)) return;
     logger.info(`Deleting vendor ${id}`, { id }, 'VENDOR_CONTROLLER');
     storeService.deleteVendor(existing.id, req.user && req.user.email);
     res.json({ success: true, message: `Vendor ${id} deleted successfully.` });
@@ -178,8 +223,20 @@ function reviseRating(req, res, next) {
         return res.status(400).json({ success: false, error: `${key} must be a number between 0 and 100.` });
       }
     }
-    logger.info(`Revising rating for vendor ${id}`, { id, ratingData }, 'VENDOR_CONTROLLER');
-    const result = storeService.reviseVendorRating(id, ratingData);
+    // Resolve buyer scope for buyer-owned vendors (v-hist-, v-buyer-, etc.)
+    let buyerId = null;
+    if (req.user.role === 'buyer') {
+      const buyerAccount = storeService.getBuyerAccountByEmail(req.user.email);
+      if (buyerAccount) {
+        buyerId = buyerAccount.id;
+      } else {
+        // Fallback: try to find by sub or email directly
+        buyerId = req.user.sub || req.user.email;
+      }
+      logger.info(`Resolved buyer scope for rating revision`, { email: req.user.email, buyerId, buyerAccountExists: !!buyerAccount }, 'VENDOR_CONTROLLER');
+    }
+    logger.info(`Revising rating for vendor ${id}`, { id, ratingData, buyerId }, 'VENDOR_CONTROLLER');
+    const result = storeService.reviseVendorRating(id, ratingData, buyerId);
     if (!result) {
       logger.warn(`Vendor not found for rating revision: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });

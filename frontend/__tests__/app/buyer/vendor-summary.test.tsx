@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
-import VendorSummary from '@/app/buyer/vendor-summary';
+import VendorSummary, { isBuyerUploaded, isProcucevVendor } from '@/app/buyer/vendor-summary';
 import { useApp } from '@/lib/store';
 
 jest.mock('@/lib/store', () => ({
@@ -13,6 +13,9 @@ describe('app/buyer/vendor-summary.tsx', () => {
   const mockShowToast = jest.fn();
   const mockReviseVendorRating = jest.fn();
   const mockOpenRatingRevisionEmailModal = jest.fn();
+  const mockAddBuyerVendor = jest.fn();
+  const mockUpdateBuyerVendor = jest.fn();
+  const mockDeleteBuyerVendor = jest.fn();
 
   const mockBuyerVendors: any[] = [
     {
@@ -146,10 +149,84 @@ describe('app/buyer/vendor-summary.tsx', () => {
       rfqs: mockRFQs,
       showToast: mockShowToast,
       buyerVendors: mockBuyerVendors,
+      addBuyerVendor: mockAddBuyerVendor,
+      updateBuyerVendor: mockUpdateBuyerVendor,
+      deleteBuyerVendor: mockDeleteBuyerVendor,
+      categoryTaxonomy: [
+        { majorCategory: 'Mechanical', minorCategories: ['Valves', 'Pumps'] },
+        { majorCategory: 'Electrical', minorCategories: ['Cables', 'Transformers'] },
+      ],
       reviseVendorRating: mockReviseVendorRating,
       openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
       activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
     });
+  });
+
+  describe('helper classification functions', () => {
+    it('correctly classifies buyer-uploaded vendors', () => {
+      expect(isBuyerUploaded({ source: 'buyer_uploaded' })).toBe(true);
+      expect(isBuyerUploaded({ source: 'vendor_master_ingestion' })).toBe(true);
+      expect(isBuyerUploaded({ source: 'historical_purchase_dump' })).toBe(true);
+      expect(isBuyerUploaded({ source: 'buyer_manual' })).toBe(true);
+      expect(isBuyerUploaded({ source: 'buyer_excel' })).toBe(true);
+      expect(isBuyerUploaded({ id: 'v-ingest-123', source: 'any' })).toBe(true);
+      expect(isBuyerUploaded({ id: 'v-hist-123', source: 'any' })).toBe(true);
+    });
+
+    it('correctly classifies Procucev vendors', () => {
+      expect(isProcucevVendor({ source: 'excel', id: 'cm-123' })).toBe(true);
+      expect(isProcucevVendor({ source: 'category_manager_upload', id: 'cm-456' })).toBe(true);
+      expect(isProcucevVendor({ source: 'procucev_network', id: 'net-789' })).toBe(true);
+      expect(isProcucevVendor({ source: 'self_onboarded', id: 'self-123' })).toBe(true);
+    });
+  });
+
+  it('renders two tabs: Uploaded by Buyer and Procucev Vendors', () => {
+    render(
+      <VendorSummary
+        onViewEvaluation={mockOnViewEvaluation}
+        onNavigateToWizard={mockOnNavigateToWizard}
+      />
+    );
+
+    expect(screen.getByText('Vendor Directory & Summary')).toBeInTheDocument();
+
+    // Verify tab buttons
+    const buyerTabBtn = screen.getByRole('button', { name: /Uploaded by Buyer/i });
+    expect(buyerTabBtn).toBeInTheDocument();
+
+    const procucevTabBtn = screen.getByRole('button', { name: /Procucev Vendors/i });
+    expect(procucevTabBtn).toBeInTheDocument();
+
+    // In default BUYER_UPLOADED tab:
+    expect(screen.getByText(/Vendors added through Buyer Initial Setup/i)).toBeInTheDocument();
+  });
+
+  it('handles tab switches between Uploaded by Buyer and Procucev Vendors', () => {
+    render(
+      <VendorSummary
+        onViewEvaluation={mockOnViewEvaluation}
+        onNavigateToWizard={mockOnNavigateToWizard}
+      />
+    );
+
+    // Initial BUYER_UPLOADED state: buyer vendors present
+    expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
+    expect(screen.queryByText('TechnoForce Electricals Ltd')).not.toBeInTheDocument();
+
+    // Click "Procucev Vendors" tab button
+    const procucevTabBtn = screen.getByRole('button', { name: /Procucev Vendors/i });
+    fireEvent.click(procucevTabBtn);
+
+    expect(screen.queryByText('Apex Supplies Ltd.')).not.toBeInTheDocument();
+    expect(screen.getByText('TechnoForce Electricals Ltd')).toBeInTheDocument();
+
+    // Click "Uploaded by Buyer" tab button
+    const buyerTabBtn = screen.getByRole('button', { name: /Uploaded by Buyer/i });
+    fireEvent.click(buyerTabBtn);
+
+    expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
+    expect(screen.queryByText('TechnoForce Electricals Ltd')).not.toBeInTheDocument();
   });
 
   it('renders stats counters, vendor cards, and handles search & filters', () => {
@@ -160,13 +237,13 @@ describe('app/buyer/vendor-summary.tsx', () => {
       />
     );
 
-    expect(screen.getByText('Evaluated Vendor Directory & Summary')).toBeInTheDocument();
+    expect(screen.getByText('Vendor Directory & Summary')).toBeInTheDocument();
     expect(screen.getByText('Total Registered')).toBeInTheDocument();
     expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
     expect(screen.getByText('Global Valves Ltd')).toBeInTheDocument();
 
-    // Click Add New Vendor button
-    fireEvent.click(screen.getByText(/Add New Vendor \/ Ingestion/i));
+    // Click Upload Vendor button
+    fireEvent.click(screen.getByText(/Upload Vendor/i));
     expect(mockOnNavigateToWizard).toHaveBeenCalled();
 
     // Search filter
@@ -190,9 +267,13 @@ describe('app/buyer/vendor-summary.tsx', () => {
     fireEvent.change(selects[1], { target: { value: 'EVALUATED' } });
     expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
 
-    // Status filter: NOT_EVALUATED
+    // Switch to Procucev Vendors tab to test NOT_EVALUATED
+    fireEvent.click(screen.getByRole('button', { name: /Procucev Vendors/i }));
     fireEvent.change(selects[1], { target: { value: 'NOT_EVALUATED' } });
     expect(screen.getByText('TechnoForce Electricals Ltd')).toBeInTheDocument();
+
+    // Switch back to Uploaded by Buyer tab
+    fireEvent.click(screen.getByRole('button', { name: /Uploaded by Buyer/i }));
 
     // Status filter: PREFERRED
     fireEvent.change(selects[1], { target: { value: 'PREFERRED' } });
@@ -204,7 +285,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
     // Search with no results
     fireEvent.change(searchInput, { target: { value: 'nonexistent-query-12345' } });
-    expect(screen.getByText('No vendors found matching query filters.')).toBeInTheDocument();
+    expect(screen.getByText(/No buyer-uploaded vendors match the selected filters/i)).toBeInTheDocument();
   });
 
   it('handles viewing 360° evaluation report and triggering AI evaluation request', () => {
@@ -222,7 +303,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect.objectContaining({ vendorName: 'Apex Supplies Ltd.' })
     );
 
-    // Trigger evaluation on non-evaluated vendor in Mode 3
+    // Trigger evaluation on non-evaluated vendor in Mode 3 (in Procucev Vendors tab)
+    fireEvent.click(screen.getByRole('button', { name: /Procucev Vendors/i }));
     const triggerBtns = screen.getAllByText(/Trigger Evaluation/i);
     fireEvent.click(triggerBtns[0]);
     expect(mockShowToast).toHaveBeenCalledWith(
@@ -272,12 +354,15 @@ describe('app/buyer/vendor-summary.tsx', () => {
     );
 
     // 2. Click Revise Rating for Global Valves (v-2, no prior revision, score < 90, empanelled vendor without RFQ)
-    fireEvent.click(reviseBtns[1]);
+    const buyerReviseBtns = screen.getAllByText(/Revise Rating/i);
+    fireEvent.click(buyerReviseBtns[1]);
     expect(screen.getByText('Revise Supplier Performance Rating')).toBeInTheDocument();
     fireEvent.click(screen.getByText('Cancel'));
 
-    // 3. Click Revise Rating for HydraFlow Systems (net-5, network vendor active in RFQ, not uploaded)
-    fireEvent.click(reviseBtns[2]);
+    // 3. Click Revise Rating for HydraFlow Systems (net-5, network vendor active in RFQ, in Procucev tab)
+    fireEvent.click(screen.getByRole('button', { name: /Procucev Vendors/i }));
+    const procucevReviseBtns = screen.getAllByText(/Revise Rating/i);
+    fireEvent.click(procucevReviseBtns[0]);
     expect(screen.getByText('Revise Supplier Performance Rating')).toBeInTheDocument();
 
     // Test X close button
@@ -285,7 +370,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
     if (xBtn) fireEvent.click(xBtn);
     expect(screen.queryByText('Revise Supplier Performance Rating')).not.toBeInTheDocument();
 
-    // Click View Dispatched Email Notice
+    // Click View Dispatched Email Notice (switch to buyer tab where Apex is)
+    fireEvent.click(screen.getByRole('button', { name: /Uploaded by Buyer/i }));
     fireEvent.click(screen.getByText(/View Dispatched Email Notice/i));
     expect(mockOpenRatingRevisionEmailModal).toHaveBeenCalled();
   });
@@ -298,6 +384,9 @@ describe('app/buyer/vendor-summary.tsx', () => {
       />
     );
 
+    // Switch to Procucev tab to find locked vendor net-4
+    fireEvent.click(screen.getByRole('button', { name: /Procucev Vendors/i }));
+
     // Click locked rating button on unengaged vendor (net-4)
     const lockedBtn = screen.getByText(/Rating Locked/i);
     fireEvent.click(lockedBtn);
@@ -307,7 +396,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
       'warning'
     );
 
-    // Open revision on engaged vendor and try submitting with empty remarks
+    // Switch back to buyer tab, open revision on engaged vendor and try submitting with empty remarks
+    fireEvent.click(screen.getByRole('button', { name: /Uploaded by Buyer/i }));
     const reviseBtns = screen.getAllByText(/Revise Rating/i);
     fireEvent.click(reviseBtns[0]);
 
@@ -340,6 +430,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         onNavigateToWizard={mockOnNavigateToWizard}
       />
     );
+    fireEvent.click(screen.getByRole('button', { name: /Procucev Vendors/i }));
     expect(screen.getAllByText('UNAVAILABLE IN V1')[0]).toBeInTheDocument();
 
     // Mode 2: Hybrid Sourcing with quote lock on network partners
@@ -360,7 +451,11 @@ describe('app/buyer/vendor-summary.tsx', () => {
         onNavigateToWizard={mockOnNavigateToWizard}
       />
     );
+    // Already in Procucev Vendors tab from previous step:
     expect(screen.getAllByText('LOCKED (PENDING BID)')[0]).toBeInTheDocument();
+
+    // Switch to Uploaded by Buyer tab:
+    fireEvent.click(screen.getByRole('button', { name: /Uploaded by Buyer/i }));
     expect(screen.getAllByText('BUYER ROSTER (NO EVAL)')[0]).toBeInTheDocument();
 
     // Mode 2: When network partner HAS submitted quote
@@ -388,6 +483,151 @@ describe('app/buyer/vendor-summary.tsx', () => {
         onNavigateToWizard={mockOnNavigateToWizard}
       />
     );
+    fireEvent.click(screen.getByRole('button', { name: /Procucev Vendors/i }));
     expect(screen.getAllByText(/Trigger Evaluation/i)[0]).toBeInTheDocument();
   });
+
+  describe('Vendor CRUD Operations', () => {
+    it('handles View Vendor Profile modal workflow', () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // Click View Profile on Apex Supplies
+      const viewProfileBtns = screen.getAllByRole('button', { name: /View Profile/i });
+      fireEvent.click(viewProfileBtns[0]);
+
+      expect(screen.getByText('Comprehensive supplier registration, compliance, and taxonomy profile.')).toBeInTheDocument();
+      expect(screen.getByText(/Procurement Taxonomy & Products/i)).toBeInTheDocument();
+      expect(screen.getByText(/Statutory & Financial Registration/i)).toBeInTheDocument();
+
+      // Close modal
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+      expect(screen.queryByText('Comprehensive supplier registration, compliance, and taxonomy profile.')).not.toBeInTheDocument();
+    });
+
+    it('handles Edit Vendor modal workflow (open, update fields, save changes)', () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // Click Edit on Apex Supplies
+      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
+      fireEvent.click(editBtns[0]);
+
+      expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
+
+      // Modify Contact Person
+      const contactInput = screen.getByDisplayValue('Rajesh Nair');
+      fireEvent.change(contactInput, { target: { value: 'Rajesh Nair Updated' } });
+
+      // Save changes
+      fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+
+      expect(mockUpdateBuyerVendor).toHaveBeenCalledWith(
+        'v-1',
+        expect.objectContaining({
+          contactPerson: 'Rajesh Nair Updated',
+        })
+      );
+    });
+
+    it('handles Delete Vendor modal workflow (open, confirm deletion)', () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // Click Delete on Apex Supplies
+      const deleteBtns = screen.getAllByRole('button', { name: /Delete/i });
+      fireEvent.click(deleteBtns[0]);
+
+      expect(screen.getByText('Delete Vendor Record')).toBeInTheDocument();
+      expect(screen.getByText(/Are you sure you want to delete/i)).toBeInTheDocument();
+
+      // Confirm delete
+      const confirmDeleteBtn = screen.getByRole('button', { name: /Delete Vendor/i });
+      fireEvent.click(confirmDeleteBtn);
+
+      expect(mockDeleteBuyerVendor).toHaveBeenCalledWith('v-1');
+    });
+
+    it('handles tab navigation, search input, status filter, and category filter', () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // Search vendor
+      const searchInput = screen.getByPlaceholderText(/Search vendors by name/i);
+      fireEvent.change(searchInput, { target: { value: 'Global' } });
+      expect(screen.getByText('Global Valves Ltd')).toBeInTheDocument();
+      expect(screen.queryByText('Apex Supplies Ltd.')).not.toBeInTheDocument();
+
+      // Clear search
+      fireEvent.change(searchInput, { target: { value: '' } });
+      expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
+
+      // Switch to Procucev Network Tab
+      const procucevTab = screen.getByRole('button', { name: /Procucev Vendors/i });
+      fireEvent.click(procucevTab);
+      expect(screen.getByText('TechnoForce Electricals Ltd')).toBeInTheDocument();
+
+      // Switch back to Buyer Uploaded Tab
+      const buyerTab = screen.getByRole('button', { name: /Uploaded by Buyer/i });
+      fireEvent.click(buyerTab);
+      expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
+
+      // Navigate to Wizard button
+      const uploadBtn = screen.getByRole('button', { name: /Upload Vendor/i });
+      fireEvent.click(uploadBtn);
+      expect(mockOnNavigateToWizard).toHaveBeenCalledTimes(1);
+    });
+
+    it('handles View Profile, Edit, and Delete modal cancel actions', () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // Click View Profile on Apex Supplies
+      const viewBtns = screen.getAllByRole('button', { name: /View Profile/i });
+      fireEvent.click(viewBtns[0]);
+
+      expect(screen.getByText('Comprehensive supplier registration, compliance, and taxonomy profile.')).toBeInTheDocument();
+
+      // Close view modal
+      const closeBtn = screen.getByRole('button', { name: 'Close' });
+      fireEvent.click(closeBtn);
+      expect(screen.queryByText('Comprehensive supplier registration, compliance, and taxonomy profile.')).not.toBeInTheDocument();
+
+      // Click Edit and then Cancel
+      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
+      fireEvent.click(editBtns[0]);
+      expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
+      expect(screen.queryByText('Edit Vendor Profile')).not.toBeInTheDocument();
+
+      // Click Delete and then Cancel
+      const deleteBtns = screen.getAllByRole('button', { name: /Delete/i });
+      fireEvent.click(deleteBtns[0]);
+      expect(screen.getByText('Delete Vendor Record')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
+      expect(screen.queryByText('Delete Vendor Record')).not.toBeInTheDocument();
+    });
+  });
 });
+
+

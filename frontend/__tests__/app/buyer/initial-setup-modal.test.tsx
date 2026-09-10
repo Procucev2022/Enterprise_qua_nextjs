@@ -8,6 +8,13 @@ jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
 }));
 
+const mockPush = jest.fn();
+jest.mock('next/navigation', () => ({
+  useRouter: () => ({
+    push: mockPush,
+  }),
+}));
+
 // Mock FileReader for synchronous, reliable Excel file parsing
 class MockFileReader {
   onload: ((e: any) => void) | null = null;
@@ -128,7 +135,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       showToast: mockShowToast,
     });
 
-    render(<InitialSetupModal />);
+    const { container } = render(<InitialSetupModal />);
 
     // STEP 1: Select Period
     expect(screen.getByText(/Step 1: Choose Historical Purchase Period/i)).toBeInTheDocument();
@@ -142,13 +149,53 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
     expect(screen.getByText(/Step 2: Upload File 1/i)).toBeInTheDocument();
 
+    // Step 2 starts empty (default selection removed)
+    expect(screen.getByText(/No Vendor Master file selected/i)).toBeInTheDocument();
+
+    // Verify warning if trying to proceed without uploading vendor master
+    fireEvent.click(screen.getByText(/Proceed to File 2: PO Dump/i));
+    expect(mockShowToast).toHaveBeenCalledWith('Vendor Master Required', expect.any(String), 'warning');
+
     // Download CSV template
     fireEvent.click(screen.getByText(/Download CSV Template/i));
     expect(mockShowToast).toHaveBeenCalledWith('Template Downloaded', expect.any(String), 'success');
 
-    // Reset Template in Step 2
-    fireEvent.click(screen.getByText('Reset Template'));
-    expect(mockShowToast).toHaveBeenCalledWith('Reset Complete', expect.any(String), 'info');
+    // Upload a Vendor Master file
+    const wsVendors = XLSX.utils.json_to_sheet([
+      {
+        'Vendor Code': 'V-101',
+        'Company Name': 'Apex Supplies Ltd.',
+        'Contact Person': 'Aarav Patel',
+        Email: 'aarav@apex.in',
+        Phone: '+91 98000 11111',
+        Address: 'Pune Hub, MH',
+        GSTIN: '27AAACG1234A1Z1',
+        Rating: 92,
+      },
+    ]);
+    const wbVendors = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wbVendors, wsVendors, 'Vendors');
+    const vendorBuffer = XLSX.write(wbVendors, { type: 'array', bookType: 'xlsx' });
+    const vendorFile: any = new File([vendorBuffer], 'vendor_master.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    vendorFile.__buffer = vendorBuffer;
+
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      fireEvent.change(fileInput, { target: { files: [vendorFile] } });
+    }
+    expect(mockShowToast).toHaveBeenCalledWith('Vendor Master Uploaded', expect.any(String), 'success');
+
+    // Clear Selection in Step 2
+    const clearBtns = screen.getAllByText('Clear Selection');
+    fireEvent.click(clearBtns[0]);
+    expect(mockShowToast).toHaveBeenCalledWith('Selection Cleared', expect.any(String), 'info');
+
+    // Upload again to continue flow
+    if (fileInput) {
+      fireEvent.change(fileInput, { target: { files: [vendorFile] } });
+    }
 
     // Continue to STEP 3 using Proceed to File 2: PO Dump button
     fireEvent.click(screen.getByText(/Proceed to File 2: PO Dump/i));
@@ -511,5 +558,80 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     fireEvent.click(screen.getByText('4. AI Category Join'));
     fireEvent.click(screen.getByText(/Review Email Dispatch & Finalize/i));
     expect(screen.getByText(/Step 5: Confirm Ingestion/i)).toBeInTheDocument();
+  });
+
+  it('supports read-only default table and toggling Edit Data mode', () => {
+    render(<InitialSetupModal />);
+    // Navigate to Step 2
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    expect(screen.getByText(/No Vendor Master file selected/i)).toBeInTheDocument();
+
+    // Add Vendor Manually button in empty state (automatically enables edit mode)
+    fireEvent.click(screen.getByText(/Add Vendor Manually/i));
+    expect(screen.getByText(/Editing Vendor Master Records \(1 Suppliers\)/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Done Editing/i })).toBeInTheDocument();
+
+    // Edit company name
+    const companyInput = screen.getByPlaceholderText('Company name');
+    fireEvent.change(companyInput, { target: { value: 'Custom Supplier Private Limited' } });
+    expect(companyInput).toHaveValue('Custom Supplier Private Limited');
+
+    // Edit code
+    const codeInput = screen.getByPlaceholderText('VND-CODE');
+    fireEvent.change(codeInput, { target: { value: 'VND-9999' } });
+    expect(codeInput).toHaveValue('VND-9999');
+
+    // Edit email, contact, and phone
+    const emailInput = screen.getByPlaceholderText('email@domain.com');
+    fireEvent.change(emailInput, { target: { value: 'custom@supplier.in' } });
+    expect(emailInput).toHaveValue('custom@supplier.in');
+
+    const contactInput = screen.getByPlaceholderText('Contact Name');
+    fireEvent.change(contactInput, { target: { value: 'Nitin Patel' } });
+    expect(contactInput).toHaveValue('Nitin Patel');
+
+    const phoneInput = screen.getByPlaceholderText('+91 Phone');
+    fireEvent.change(phoneInput, { target: { value: '+91 99887 66554' } });
+    expect(phoneInput).toHaveValue('+91 99887 66554');
+
+    // Edit GSTIN & Address
+    const gstinInput = screen.getByPlaceholderText('GSTIN');
+    fireEvent.change(gstinInput, { target: { value: '24abcde1234f1z5' } });
+    expect(gstinInput).toHaveValue('24ABCDE1234F1Z5');
+
+    const addressInput = screen.getByPlaceholderText('City, State / Address');
+    fireEvent.change(addressInput, { target: { value: 'Ahmedabad, Gujarat' } });
+    expect(addressInput).toHaveValue('Ahmedabad, Gujarat');
+
+    // Edit rating
+    const ratingInput = screen.getByPlaceholderText('0-100');
+    fireEvent.change(ratingInput, { target: { value: '92' } });
+    expect(ratingInput).toHaveValue(92);
+
+    // Click "Done Editing" to lock/switch to read-only view
+    fireEvent.click(screen.getByRole('button', { name: /Done Editing/i }));
+    expect(screen.getByText(/Stored Vendor Master Records \(1 Suppliers\)/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Edit Data/i })).toBeInTheDocument();
+    expect(screen.getByText('Custom Supplier Private Limited')).toBeInTheDocument();
+    expect(screen.getByText('VND-9999')).toBeInTheDocument();
+
+    // Click "Edit Data" button to re-enter edit mode
+    fireEvent.click(screen.getByRole('button', { name: /Edit Data/i }));
+    expect(screen.getByText(/Editing Vendor Master Records \(1 Suppliers\)/i)).toBeInTheDocument();
+
+    // Add a second vendor row via top button
+    fireEvent.click(screen.getByRole('button', { name: /Add Vendor Row/i }));
+    expect(screen.getByText(/Editing Vendor Master Records \(2 Suppliers\)/i)).toBeInTheDocument();
+
+    // Delete a vendor row
+    const deleteButtons = screen.getAllByTitle(/Delete/i);
+    expect(deleteButtons.length).toBe(2);
+    fireEvent.click(deleteButtons[1]);
+    expect(screen.getByText(/Editing Vendor Master Records \(1 Suppliers\)/i)).toBeInTheDocument();
+
+    // Delete remaining row to return to empty state
+    const remainingDeleteButtons = screen.getAllByTitle(/Delete/i);
+    fireEvent.click(remainingDeleteButtons[0]);
+    expect(screen.getByText(/No Vendor Master file selected/i)).toBeInTheDocument();
   });
 });

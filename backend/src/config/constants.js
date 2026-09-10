@@ -329,6 +329,9 @@ const IDENTITY_MASTER_DATA = {
   BUYER_ROLE_NAME: 'ClientInitiator',
   BUYER_ORG_TYPE: 'CLIENT',
   BUYER_STATUS: 'CLIENT_NEW',
+  VENDOR_ROLE_NAME: 'VendorPartner',
+  VENDOR_ORG_TYPE: 'VENDOR',
+  VENDOR_STATUS: 'VENDOR_NEW',
   DEFAULT_GMT_PLAN: 'GMT Basic',
   DEFAULT_BFS_PLAN: 'BFS PRO',
   SOURCE_TYPE_WEB: 'W',
@@ -945,11 +948,285 @@ const {
   INDIAN_PINCODE_MESSAGE,
   ORGANIZATION_TYPES,
   PASSWORD_MIN_LENGTH,
+  ISO_DATE_REGEX,
+  ISO_DATE_MESSAGE,
+  TIME_HORIZON_TYPES,
+  CATEGORY_REVIEW_ACTIONS,
+  DISPATCH_TEMPLATES,
   VALIDATION_SCHEMAS,
   validatePayload,
 } = require('./validationSchemas');
 
+// ==============================================================================
+// VENDOR MASTER & PO DATA INGESTION (buyer module)
+// ==============================================================================
+// A buyer uploads their Vendor Master, then their historical PO purchase dump,
+// and the PO purchasing history — not the company name — is what a supplier is
+// categorised from. These are the string enums, caps and user-facing messages
+// that flow drives. Nothing below is declared inline at a use site.
+
+/** Lifecycle of one ingestion run. Ordered: each value implies the previous. */
+const VENDOR_INGESTION_SESSION_STATUS = {
+  DRAFT: 'DRAFT',
+  VENDOR_MASTER_STORED: 'VENDOR_MASTER_STORED',
+  PO_STORED: 'PO_STORED',
+  JOINED: 'JOINED',
+  AI_COMPLETED: 'AI_COMPLETED',
+  DISPATCHED: 'DISPATCHED',
+};
+
+/** Step number each status unlocks, so a forward jump can be refused. */
+const VENDOR_INGESTION_STEP = {
+  TIME_HORIZON: 1,
+  VENDOR_MASTER: 2,
+  PO_DUMP: 3,
+  AI_CATEGORY_JOIN: 4,
+  DISPATCH: 5,
+};
+
+/** Time horizon options. CUSTOM is the only one that reads the client's dates. */
+const VENDOR_INGESTION_HORIZON = {
+  LAST_1_YEAR: 'LAST_1_YEAR',
+  LAST_2_YEARS: 'LAST_2_YEARS',
+  LAST_3_YEARS: 'LAST_3_YEARS',
+  CUSTOM: 'CUSTOM',
+};
+
+/** Months back from today for each predefined horizon. */
+const VENDOR_INGESTION_HORIZON_MONTHS = {
+  LAST_1_YEAR: 12,
+  LAST_2_YEARS: 24,
+  LAST_3_YEARS: 36,
+};
+
+/**
+ * Category mapping status.
+ *
+ * SELF_MAP_REQUIRED is load-bearing: a supplier in the vendor master with no PO
+ * history inside the selected horizon has no purchasing evidence, so it is never
+ * sent to the categoriser and never carries an AI category. It is asked to map
+ * itself instead.
+ */
+const VENDOR_MAPPING_STATUS = {
+  PENDING_REVIEW: 'PENDING_REVIEW',
+  AI_MAPPED: 'AI_MAPPED',
+  BUYER_APPROVED: 'BUYER_APPROVED',
+  SELF_MAP_REQUIRED: 'SELF_MAP_REQUIRED',
+  SELF_MAPPED: 'SELF_MAPPED',
+  REJECTED: 'REJECTED',
+  NEW_CATEGORY_SUGGESTION: 'NEW_CATEGORY_SUGGESTION',
+  FAILED: 'FAILED',
+};
+
+/** Who decided the stored category. */
+const VENDOR_MAPPING_SOURCE = {
+  AI: 'AI',
+  BUYER: 'BUYER',
+  SELF_MAPPED: 'SELF_MAPPED',
+};
+
+/** Per-vendor AI job state, persisted so a partial failure is retryable. */
+const VENDOR_AI_PROCESSING_STATUS = {
+  QUEUED: 'QUEUED',
+  PROCESSING: 'PROCESSING',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
+};
+
+/** Session-level AI job state. IDLE means categorisation has not been run. */
+const VENDOR_INGESTION_AI_STATUS = {
+  IDLE: 'IDLE',
+  QUEUED: 'QUEUED',
+  PROCESSING: 'PROCESSING',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
+};
+
+/** How a PO line was attributed to a vendor-master row. */
+const VENDOR_MATCH_STRATEGY = {
+  VENDOR_CODE: 'VENDOR_CODE',
+  GSTIN: 'GSTIN',
+  NORMALIZED_NAME: 'NORMALIZED_NAME',
+  UNMATCHED: 'UNMATCHED',
+};
+
+const VENDOR_DISPATCH_TEMPLATE = {
+  CATEGORY_MAPPED: 'CATEGORY_MAPPED',
+  SELF_MAP_REQUIRED: 'SELF_MAP_REQUIRED',
+  GENERAL_ONBOARDING: 'GENERAL_ONBOARDING',
+};
+
+/**
+ * Per-recipient email state.
+ *
+ * DELIVERED and BOUNCED are declared but only ever set by a provider callback.
+ * Nodemailer over SMTP reports acceptance, not delivery, so this module stops at
+ * SENT rather than claiming a delivery it cannot observe.
+ */
+const VENDOR_EMAIL_STATUS = {
+  PENDING: 'PENDING',
+  QUEUED: 'QUEUED',
+  SENT: 'SENT',
+  FAILED: 'FAILED',
+  DELIVERED: 'DELIVERED',
+  BOUNCED: 'BOUNCED',
+};
+
+const VENDOR_DISPATCH_STATUS = {
+  QUEUED: 'QUEUED',
+  COMPLETED: 'COMPLETED',
+  PARTIAL: 'PARTIAL',
+  FAILED: 'FAILED',
+};
+
+/** Audit actions. Every state change in the module writes exactly one of these. */
+const VENDOR_INGESTION_AUDIT_ACTION = {
+  SESSION_CREATED: 'SESSION_CREATED',
+  TIME_HORIZON_SELECTED: 'TIME_HORIZON_SELECTED',
+  VENDOR_MASTER_UPLOADED: 'VENDOR_MASTER_UPLOADED',
+  VENDOR_MASTER_VALIDATED: 'VENDOR_MASTER_VALIDATED',
+  PO_DUMP_UPLOADED: 'PO_DUMP_UPLOADED',
+  PO_DATA_VALIDATED: 'PO_DATA_VALIDATED',
+  VENDOR_MATCHING_COMPLETED: 'VENDOR_MATCHING_COMPLETED',
+  AI_CATEGORIZATION_STARTED: 'AI_CATEGORIZATION_STARTED',
+  AI_CATEGORIZATION_COMPLETED: 'AI_CATEGORIZATION_COMPLETED',
+  AI_RECOMMENDATION: 'AI_RECOMMENDATION',
+  AI_RE_RUN: 'AI_RE_RUN',
+  BUYER_APPROVAL: 'BUYER_APPROVAL',
+  BUYER_EDIT: 'BUYER_EDIT',
+  BUYER_REJECTION: 'BUYER_REJECTION',
+  SELF_MAP_EMAIL_SENT: 'SELF_MAP_EMAIL_SENT',
+  CATEGORY_EMAIL_SENT: 'CATEGORY_EMAIL_SENT',
+  EMAIL_FAILED: 'EMAIL_FAILED',
+  EMAIL_RETRIED: 'EMAIL_RETRIED',
+  EMAIL_SKIPPED_DUPLICATE: 'EMAIL_SKIPPED_DUPLICATE',
+};
+
+/**
+ * Confidence bands.
+ *
+ * Anything below REVIEW_THRESHOLD is held at PENDING_REVIEW regardless of what
+ * the model returned — a low-confidence guess must not reach a live vendor
+ * category without a person agreeing to it.
+ */
+const VENDOR_CONFIDENCE_BANDS = {
+  HIGH_MIN: 90,
+  MEDIUM_MIN: 70,
+  REVIEW_THRESHOLD: 70,
+};
+
+/** Operational caps. All enforced server-side, not just in the browser. */
+const VENDOR_INGESTION_CONFIG = {
+  // One upload request carries at most this many rows; the client chunks a
+  // larger file. Matches MAX_BULK_IMPORT_ROWS_PER_REQUEST in vendorController so
+  // both spreadsheet upload paths behave identically.
+  MAX_ROWS_PER_REQUEST: 1000,
+  MAX_VENDOR_MASTER_ROWS: 20000,
+  MAX_PO_ROWS: 200000,
+  // Vendors classified per AI batch. The job is chunked so a large run reports
+  // progress and can be resumed, rather than holding one long request open.
+  AI_BATCH_SIZE: 8,
+  // A model reply that is not valid JSON of the expected shape is retried this
+  // many times in total before the vendor is marked FAILED. Retrying is safe:
+  // classification writes no category until a reply validates.
+  AI_MAX_ATTEMPTS: 2,
+  // PO lines summarised into one vendor's purchasing profile. Enough to
+  // characterise what a supplier sells without sending an entire spend history,
+  // which is what makes this one call per vendor rather than one per PO row.
+  AI_MAX_PO_LINES_PER_VENDOR: 60,
+  AI_MAX_DESCRIPTION_CHARS: 240,
+  MAX_MINOR_CATEGORIES_PER_VENDOR: 10,
+  // Recipients per dispatch request, so one campaign cannot hold the event loop
+  // on a few thousand sequential SMTP sends.
+  MAX_RECIPIENTS_PER_DISPATCH: 500,
+  // Legal-entity suffixes stripped before a vendor name is used as a fallback
+  // match key, so "Apex Supplies Ltd." and "Apex Supplies Limited" collapse to
+  // the same key. Vendor Code remains the preferred identifier; this is the last
+  // resort, only reached when neither a code nor a GSTIN matched.
+  NAME_NORMALIZATION_SUFFIXES: [
+    'private limited',
+    'pvt limited',
+    'pvt ltd',
+    'private ltd',
+    'limited',
+    'ltd',
+    'llp',
+    'inc',
+    'incorporated',
+    'corporation',
+    'corp',
+    'company',
+    'co',
+    'industries',
+    'enterprises',
+    'enterprise',
+  ],
+};
+
+/** User-facing messages. `{param}` placeholders are filled by formatMessage. */
+const VENDOR_INGESTION_MESSAGES = {
+  NOT_A_BUYER: 'Only a buyer can ingest vendor master and purchase order data.',
+  SESSION_MISSING_USER: 'Your session does not identify a user. Please sign in again.',
+  ORGANIZATION_NOT_LINKED: 'Your account is not linked to an organisation, so vendor data cannot be scoped to it.',
+  SESSION_NOT_FOUND: 'That ingestion session does not exist for your organisation.',
+  SESSION_REQUIRED: 'Start an ingestion session before uploading a file.',
+  HORIZON_REQUIRED: 'Select a time horizon before uploading the purchase order dump.',
+  HORIZON_CUSTOM_DATES_REQUIRED: 'A custom time horizon needs both a start date and an end date.',
+  HORIZON_START_AFTER_END: 'The time horizon start date must fall on or before its end date.',
+  HORIZON_END_IN_FUTURE: 'The time horizon end date cannot be in the future.',
+  VENDOR_MASTER_REQUIRED_FIRST: 'Upload and confirm your Vendor Master before uploading the PO dump.',
+  VENDOR_MASTER_EMPTY: 'No valid vendor rows were supplied, so nothing was stored.',
+  PO_DUMP_EMPTY: 'No valid purchase order rows were supplied, so nothing was stored.',
+  PO_DUMP_REQUIRED_FIRST: 'Upload and confirm your PO dump before running the category match.',
+  JOIN_REQUIRED_FIRST: 'Run the vendor and PO match before starting AI categorisation.',
+  TOO_MANY_ROWS: 'A single upload request may carry at most {max} rows. Large files are sent in chunks.',
+  VENDOR_MASTER_LIMIT: 'A Vendor Master may hold at most {max} suppliers.',
+  PO_LIMIT: 'A PO dump may hold at most {max} line items.',
+  MAPPING_NOT_FOUND: 'That vendor is not part of this ingestion session.',
+  MAPPING_NO_PO_HISTORY:
+    'This supplier has no purchase order history inside the selected period, so it cannot be categorised automatically. It is flagged for self-mapping.',
+  CATEGORY_MASTER_EMPTY:
+    'Your category master is empty, so there is nothing for the categoriser to choose from. Add categories to your organisation profile first.',
+  MAJOR_CATEGORY_UNKNOWN: '"{category}" is not a major category in your organisation\'s category master.',
+  MINOR_CATEGORY_UNKNOWN: '"{minor}" is not a sub-category of "{major}" in your category master.',
+  TOO_MANY_MINOR_CATEGORIES: 'A supplier may carry at most {max} minor categories.',
+  EDIT_REQUIRES_CATEGORY: 'Editing a mapping requires a primary major category.',
+  AI_NOT_CONFIGURED: 'AI categorisation is not configured on this server, so no suggestions could be generated.',
+  AI_ALREADY_RUNNING: 'AI categorisation is already running for this session.',
+  AI_INVALID_RESPONSE: 'The categoriser did not return a usable result for this supplier.',
+  DISPATCH_NO_RECIPIENTS: 'No eligible recipients were found for that template and category.',
+  DISPATCH_TOO_MANY: 'A single dispatch may address at most {max} recipients.',
+  DISPATCH_NOT_APPROVED:
+    'Only suppliers whose categories you have approved can be sent the category notification. Approve them first.',
+  DISPATCH_ALREADY_SENT:
+    '{count} of the selected suppliers have already received this email and will be skipped. Use Retry Failed to re-attempt only the failures.',
+  DISPATCH_NOTHING_TO_RETRY: 'There are no failed emails to retry for this session.',
+  SESSION_LOAD_FAILED: 'Could not load your ingestion session. Please try again.',
+  SESSION_SAVE_FAILED: 'Could not save your ingestion progress. Please try again.',
+};
+
 module.exports = {
+  VENDOR_INGESTION_SESSION_STATUS,
+  VENDOR_INGESTION_STEP,
+  VENDOR_INGESTION_HORIZON,
+  VENDOR_INGESTION_HORIZON_MONTHS,
+  VENDOR_MAPPING_STATUS,
+  VENDOR_MAPPING_SOURCE,
+  VENDOR_AI_PROCESSING_STATUS,
+  VENDOR_INGESTION_AI_STATUS,
+  VENDOR_MATCH_STRATEGY,
+  VENDOR_DISPATCH_TEMPLATE,
+  VENDOR_EMAIL_STATUS,
+  VENDOR_DISPATCH_STATUS,
+  VENDOR_INGESTION_AUDIT_ACTION,
+  VENDOR_CONFIDENCE_BANDS,
+  VENDOR_INGESTION_CONFIG,
+  VENDOR_INGESTION_MESSAGES,
+  ISO_DATE_REGEX,
+  ISO_DATE_MESSAGE,
+  TIME_HORIZON_TYPES,
+  CATEGORY_REVIEW_ACTIONS,
+  DISPATCH_TEMPLATES,
   RFQ_SUMMARY_CONFIG,
   BUYER_ACCOUNT_RESOLUTION,
   SOURCING_MODES,

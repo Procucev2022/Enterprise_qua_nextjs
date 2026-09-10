@@ -155,6 +155,7 @@ interface AppContextType {
   // Buyer Uploaded Vendors, Database Check & Automated Onboarding Emails
   buyerVendors: VendorEntry[];
   addBuyerVendor: (vendor: Omit<VendorEntry, 'id'>) => VendorEntry;
+  updateBuyerVendor: (vendorId: string, updates: Partial<VendorEntry>) => void;
   importBuyerVendors: (vendorsToImport: Omit<VendorEntry, 'id'>[]) => number;
   deleteBuyerVendor: (vendorId: string) => void;
   matchSuitableVendors: (entities: ExtractedEntity[], mode: SourcingMode, customList?: VendorEntry[]) => VendorEntry[];
@@ -518,7 +519,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const refreshFromDB = async () => {
     setIsLoadingDB(true);
     try {
-      const res = await fetch('/api/bootstrap');
+      const res = await fetch('/api/bootstrap', { headers: authFetchHeaders() });
       const json = await res.json();
       if (json.success && json.data) {
         const d = json.data;
@@ -1332,10 +1333,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const buyerCompany = activeBuyerAccount?.organizationName || 'Larsen & Toubro Limited';
     const buyerName = activeBuyerAccount?.contactPerson || 'Rajesh Sharma (CPO)';
     const nextDate = new Date(Date.now() + 3 * 86400000).toISOString().substring(0, 10) + ' (Day 3)';
+    const newId = `v-buyer-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
 
     const newV: VendorEntry = {
       ...vendor,
-      id: `v-${Date.now()}`,
+      id: newId,
       source: vendor.source || 'buyer_manual',
       isExistingInDatabase: isExisting,
       onboardingEmailStatus: 'sent',
@@ -1351,6 +1353,41 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
 
     setBuyerVendors((prev) => [newV, ...prev]);
+
+    // Asynchronously persist to backend database via buyer historical-data endpoint
+    fetch('/api/buyer-accounts/historical-data', {
+      method: 'POST',
+      headers: { ...authFetchHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        period: '1_year',
+        vendors: [
+          {
+            id: newId,
+            companyName: newV.name,
+            brandName: newV.brandName || newV.name,
+            contactPerson: newV.contactPerson,
+            designation: newV.contactDesignation || 'Authorized Representative',
+            email: newV.email,
+            phone: newV.phone,
+            location: newV.location,
+            city: newV.city || '',
+            state: newV.state || '',
+            country: newV.country || 'India',
+            pincode: newV.pincode || '',
+            gstin: newV.gst || newV.gstin || '',
+            pan: newV.pan || '',
+            msme: newV.msme || '',
+            annualTurnover: newV.annualTurnover || '',
+            majorCategory: newV.majorCategory,
+            minorCategories: newV.minorCategories || [newV.majorCategory],
+            rating: newV.rating || 4.5,
+            status: newV.status || 'PREFERRED ENTERPRISE SUPPLIER',
+          },
+        ],
+      }),
+    }).catch((err) => {
+      console.error('Failed to sync created vendor to backend:', err);
+    });
 
     // Dispatch Feed & Audit Log
     addFeedItem(
@@ -1439,8 +1476,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return created.length;
   };
 
+  const updateBuyerVendor = (vendorId: string, updates: Partial<VendorEntry>) => {
+    setBuyerVendors((prev) =>
+      prev.map((v) => (v.id === vendorId ? { ...v, ...updates } : v))
+    );
+
+    // Asynchronously persist updates to backend database
+    fetch(`/api/vendors/${encodeURIComponent(vendorId)}`, {
+      method: 'PUT',
+      headers: { ...authFetchHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    }).catch((err) => {
+      console.error('Failed to sync vendor update to backend:', err);
+    });
+
+    addAuditLog(`Updated vendor profile record for ID ${vendorId}.`);
+    showToast('Vendor Profile Updated', 'Vendor information saved successfully.', 'success');
+  };
+
   const deleteBuyerVendor = (vendorId: string) => {
     setBuyerVendors((prev) => prev.filter((v) => v.id !== vendorId));
+
+    // Asynchronously delete from backend database
+    fetch(`/api/vendors/${encodeURIComponent(vendorId)}`, {
+      method: 'DELETE',
+      headers: authFetchHeaders(),
+    }).catch((err) => {
+      console.error('Failed to sync vendor deletion to backend:', err);
+    });
+
     addAuditLog(`Removed vendor record ID ${vendorId} from buyer vendor master.`);
     showToast('Vendor Removed', 'Vendor deleted from directory.', 'info');
   };
@@ -2313,6 +2377,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         processHistoricalPurchaseData,
         buyerVendors,
         addBuyerVendor,
+        updateBuyerVendor,
         importBuyerVendors,
         deleteBuyerVendor,
         matchSuitableVendors,
