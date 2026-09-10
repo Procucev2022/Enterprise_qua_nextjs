@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { useApp } from '@/lib/store';
+import { rfqsInWindow, growthPercentFor, GrowthBadge } from './category-summary-dashboard';
 import {
   TrendingUp,
   Clock,
@@ -23,16 +24,50 @@ import {
   Users,
 } from 'lucide-react';
 
+const QUARTER_DAYS = 90;
+
 interface SpendDashboardProps {
   onBackToKanban: () => void;
+  onNavigateToAllRfqs?: () => void;
+  onNavigateToVendorConsole?: () => void;
+  onNavigateToKanban?: () => void;
 }
 
-export default function SpendDashboard({ onBackToKanban }: SpendDashboardProps) {
-  const { rfqs } = useApp();
+export default function SpendDashboard({
+  onBackToKanban,
+  onNavigateToAllRfqs,
+  onNavigateToVendorConsole,
+  onNavigateToKanban,
+}: SpendDashboardProps) {
+  const { rfqs, auditLogs } = useApp();
 
-  const totalRfqsRaised = 48;
-  const totalRfqsDownloaded = 312;
-  const avgDownloadsPerRfq = (totalRfqsDownloaded / totalRfqsRaised).toFixed(1);
+  // Real quarter-scoped RFQ count and quarter-over-quarter growth, reusing
+  // the same real-data helpers category-summary-dashboard.tsx already
+  // established — this card previously showed a hardcoded 48.
+  const totalRfqsRaised = rfqsInWindow(rfqs, QUARTER_DAYS, 0).length;
+  const rfqGrowth = growthPercentFor(rfqs, QUARTER_DAYS);
+  const avgRfqsPerDay = (totalRfqsRaised / QUARTER_DAYS).toFixed(1);
+
+  // Real download count, from the audit-log entries the vendor download
+  // actions already write (quotation-form.tsx / opportunity-feed.tsx) —
+  // previously a hardcoded 312.
+  const totalRfqsDownloaded = auditLogs.filter((l) => /downloaded RFQ specification/.test(l.action)).length;
+  const avgDownloadsPerDay = (totalRfqsDownloaded / QUARTER_DAYS).toFixed(1);
+  const avgDownloadsPerRfq = totalRfqsRaised > 0 ? (totalRfqsDownloaded / totalRfqsRaised).toFixed(1) : '0.0';
+
+  // Real average vendors invited per RFQ (assignedVendors is the only real
+  // "vendors associated with this RFQ" set) — previously a hardcoded 6.5.
+  const avgVendorsPerRfq =
+    rfqs.length > 0
+      ? (rfqs.reduce((sum, r) => sum + (r.assignedVendors?.length || 0), 0) / rfqs.length).toFixed(1)
+      : '0.0';
+
+  // Real vendor response rate, mirroring kanban-board.tsx's existing
+  // vendorsInvited/vendorsResponded computation from followUpData —
+  // previously a hardcoded "92.4%" claiming an unbacked "within 24h" window.
+  const vendorsInvited = rfqs.reduce((sum, r) => sum + (r.followUpData?.totalInvited || 0), 0);
+  const vendorsResponded = rfqs.reduce((sum, r) => sum + (r.followUpData?.respondedCount || 0), 0);
+  const vendorResponseRate = vendorsInvited > 0 ? ((vendorsResponded / vendorsInvited) * 100).toFixed(1) : '0.0';
 
   const modePerformance = [
     {
@@ -105,7 +140,12 @@ export default function SpendDashboard({ onBackToKanban }: SpendDashboardProps) 
       {/* Top KPI Metric Cards (Non-Spend) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* RFQs Received */}
-        <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm flex flex-col justify-between min-h-[115px]">
+        <button
+          type="button"
+          onClick={onNavigateToAllRfqs}
+          disabled={!onNavigateToAllRfqs}
+          className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm flex flex-col justify-between min-h-[115px] text-left transition-colors enabled:hover:border-indigo-300 dark:enabled:hover:border-indigo-700 enabled:cursor-pointer disabled:cursor-default"
+        >
           <div className="flex items-center justify-between text-slate-500 dark:text-gray-400 text-xs font-bold uppercase">
             <span>RFQs Received (Raised)</span>
             <FileText size={16} className="text-indigo-600 dark:text-indigo-400" />
@@ -113,16 +153,21 @@ export default function SpendDashboard({ onBackToKanban }: SpendDashboardProps) 
           <div className="flex items-baseline justify-between mt-2">
             <p className="text-3xl font-extrabold text-slate-900 dark:text-white mono">{totalRfqsRaised}</p>
             <span className="text-[11px] text-indigo-700 dark:text-indigo-300 font-extrabold bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-md border border-indigo-200 dark:border-indigo-800">
-              Avg 2.4 / day
+              Avg {avgRfqsPerDay} / day
             </span>
           </div>
-          <div className="mt-1 text-[11px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1 font-semibold">
-            <ArrowUpRight size={13} /> +14.2% vs previous quarter
+          <div className="mt-1 text-[11px] font-semibold">
+            <GrowthBadge value={rfqGrowth} /> <span className="text-slate-500 dark:text-gray-400">vs previous quarter</span>
           </div>
-        </div>
+        </button>
 
         {/* RFQs Downloaded */}
-        <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm flex flex-col justify-between min-h-[115px]">
+        <button
+          type="button"
+          onClick={onNavigateToAllRfqs}
+          disabled={!onNavigateToAllRfqs}
+          className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm flex flex-col justify-between min-h-[115px] text-left transition-colors enabled:hover:border-sky-300 dark:enabled:hover:border-sky-700 enabled:cursor-pointer disabled:cursor-default"
+        >
           <div className="flex items-center justify-between text-slate-500 dark:text-gray-400 text-xs font-bold uppercase">
             <span>RFQs Downloaded</span>
             <Download size={16} className="text-sky-600 dark:text-cyan-400" />
@@ -130,42 +175,52 @@ export default function SpendDashboard({ onBackToKanban }: SpendDashboardProps) 
           <div className="flex items-baseline justify-between mt-2">
             <p className="text-3xl font-extrabold text-slate-900 dark:text-white mono">{totalRfqsDownloaded}</p>
             <span className="text-[11px] text-sky-700 dark:text-cyan-300 font-extrabold bg-sky-50 dark:bg-cyan-950/60 px-2 py-0.5 rounded-md border border-sky-200 dark:border-sky-800">
-              Avg 15.6 / day
+              Avg {avgDownloadsPerDay} / day
             </span>
           </div>
           <div className="mt-1 text-[11px] text-slate-500 dark:text-gray-400 font-semibold">
             Avg {avgDownloadsPerRfq} downloads per RFQ
           </div>
-        </div>
+        </button>
 
-        {/* Avg Vendors Downloaded Per RFQ */}
-        <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm flex flex-col justify-between min-h-[115px]">
+        {/* Avg Vendors Invited Per RFQ */}
+        <button
+          type="button"
+          onClick={onNavigateToVendorConsole}
+          disabled={!onNavigateToVendorConsole}
+          className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm flex flex-col justify-between min-h-[115px] text-left transition-colors enabled:hover:border-purple-300 dark:enabled:hover:border-purple-700 enabled:cursor-pointer disabled:cursor-default"
+        >
           <div className="flex items-center justify-between text-slate-500 dark:text-gray-400 text-xs font-bold uppercase">
             <span>Avg Vendors / RFQ</span>
             <Users size={16} className="text-purple-600 dark:text-purple-400" />
           </div>
           <div className="flex items-baseline justify-between mt-2">
-            <p className="text-3xl font-extrabold text-slate-900 dark:text-white mono">6.5</p>
+            <p className="text-3xl font-extrabold text-slate-900 dark:text-white mono">{avgVendorsPerRfq}</p>
             <span className="text-[11px] text-purple-700 dark:text-purple-300 font-extrabold bg-purple-50 dark:bg-purple-950/60 px-2 py-0.5 rounded-md border border-purple-200 dark:border-purple-800">
               Vendors / RFQ
             </span>
           </div>
           <div className="mt-1 text-[11px] text-purple-600 dark:text-purple-400 font-semibold">
-            Average vendors downloading each RFQ
+            Average vendors invited per RFQ
           </div>
-        </div>
+        </button>
 
-        {/* Follow-Up Efficiency */}
-        <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm flex flex-col justify-between min-h-[115px]">
+        {/* Vendor Response Rate */}
+        <button
+          type="button"
+          onClick={onNavigateToKanban}
+          disabled={!onNavigateToKanban}
+          className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm flex flex-col justify-between min-h-[115px] text-left transition-colors enabled:hover:border-amber-300 dark:enabled:hover:border-amber-700 enabled:cursor-pointer disabled:cursor-default"
+        >
           <div className="flex items-center justify-between text-slate-500 dark:text-gray-400 text-xs font-bold uppercase">
-            <span>Follow-Up Efficiency</span>
+            <span>Vendor Response Rate</span>
             <Zap size={16} className="text-amber-500 dark:text-amber-400" />
           </div>
-          <p className="text-3xl font-extrabold text-amber-600 dark:text-amber-400 mono mt-2">92.4%</p>
+          <p className="text-3xl font-extrabold text-amber-600 dark:text-amber-400 mono mt-2">{vendorResponseRate}%</p>
           <div className="mt-1 text-[11px] text-slate-500 dark:text-gray-400">
-            Vendor response within 24h of chaser
+            Vendors who responded to outreach
           </div>
-        </div>
+        </button>
       </div>
 
       {/* ── Mode-by-Mode RFQ & Follow-Up Performance Matrix ── */}

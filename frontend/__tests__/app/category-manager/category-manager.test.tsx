@@ -370,6 +370,12 @@ describe('Category Manager Screens Suite', () => {
   });
 
   describe('SpendDashboard Screen', () => {
+    const originalFetch = global.fetch;
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
     test('renders Mode Performance & RFQ Analytics metrics and back button', () => {
       const onBack = jest.fn();
       renderWithProvider(<SpendDashboard onBackToKanban={onBack} />);
@@ -383,9 +389,194 @@ describe('Category Manager Screens Suite', () => {
       fireEvent.click(backBtn);
       expect(onBack).toHaveBeenCalled();
     });
+
+    // With no navigation callbacks supplied, the 4 KPI cards stay disabled
+    // rather than silently no-op-ing on click.
+    test('KPI cards render zeroed real metrics and stay disabled without navigation callbacks', () => {
+      renderWithProvider(<SpendDashboard onBackToKanban={jest.fn()} />);
+
+      expect(screen.getByText('RFQs Received (Raised)')).toBeInTheDocument();
+      expect(screen.getAllByText('RFQs Downloaded')[0]).toBeInTheDocument();
+      expect(screen.getByText('Avg Vendors / RFQ')).toBeInTheDocument();
+      expect(screen.getByText('Vendor Response Rate')).toBeInTheDocument();
+      // The default jest.setup.ts fixtures carry no recent createdAt/audit
+      // logs/assignedVendors/followUpData, so every real metric is 0.
+      expect(screen.getByText('0.0%')).toBeInTheDocument();
+
+      const raisedCard = screen.getByText('RFQs Received (Raised)').closest('button')!;
+      const downloadedCard = screen.getAllByText('RFQs Downloaded')[0].closest('button')!;
+      const vendorsCard = screen.getByText('Avg Vendors / RFQ').closest('button')!;
+      const responseCard = screen.getByText('Vendor Response Rate').closest('button')!;
+      [raisedCard, downloadedCard, vendorsCard, responseCard].forEach((card) => expect(card).toBeDisabled());
+    });
+
+    test('KPI cards compute real metrics from RFQs, audit logs, assignedVendors and followUpData, and navigate when clicked', async () => {
+      const onNavigateToAllRfqs = jest.fn();
+      const onNavigateToVendorConsole = jest.fn();
+      const onNavigateToKanban = jest.fn();
+
+      const baseImpl = (global.fetch as jest.Mock).getMockImplementation()!;
+      global.fetch = jest.fn().mockImplementation((url: string, init?: { method?: string }) => {
+        if (typeof url === 'string' && /\/api\/rfqs(\?|$)/.test(url) && (init?.method || 'GET') === 'GET') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: [
+                {
+                  id: 'rfq-real-1',
+                  rfqNumber: 'RFQ-REAL-1',
+                  title: 'Real Metrics RFQ',
+                  category: 'Civil Works',
+                  sourcingMode: 'mode_1',
+                  status: 'Quotes Pending',
+                  quotesCount: 0,
+                  targetDeliveryDate: '2026-10-01',
+                  budget: 10000,
+                  createdAt: new Date().toISOString(),
+                  extractedEntities: [],
+                  quotes: [],
+                  chasingActive: false,
+                  assignedVendors: [
+                    { id: 'v-1', name: 'Vendor One' },
+                    { id: 'v-2', name: 'Vendor Two' },
+                  ],
+                  followUpData: {
+                    rfqNumber: 'RFQ-REAL-1',
+                    totalInvited: 4,
+                    respondedCount: 2,
+                    callStats: { total: 0, connected: 0, avgDuration: '0m' },
+                    whatsappStats: { total: 0, delivered: 0, read: 0, replied: 0 },
+                    smsStats: { total: 0, delivered: 0, clicked: 0 },
+                    vendors: [],
+                  },
+                },
+                // No assignedVendors/followUpData at all — exercises the
+                // `?.length || 0` / `?.totalInvited || 0` / `?.respondedCount || 0`
+                // fallback branches for an RFQ lacking either field.
+                {
+                  id: 'rfq-real-2',
+                  rfqNumber: 'RFQ-REAL-2',
+                  title: 'RFQ With No Follow-Up Data',
+                  category: 'Civil Works',
+                  sourcingMode: 'mode_1',
+                  status: 'Quotes Pending',
+                  quotesCount: 0,
+                  targetDeliveryDate: '2026-10-01',
+                  budget: 5000,
+                  createdAt: new Date().toISOString(),
+                  extractedEntities: [],
+                  quotes: [],
+                  chasingActive: false,
+                },
+              ],
+            }),
+          });
+        }
+        if (typeof url === 'string' && /\/api\/bootstrap/.test(url)) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                buyerAccounts: [],
+                vendors: [],
+                evaluations: [],
+                auditLogs: [
+                  {
+                    id: 'audit-1',
+                    timestamp: new Date().toISOString(),
+                    user: 'vendor@test.com',
+                    action: 'Vendor One downloaded RFQ specification for RFQ-REAL-1',
+                    rfqNumber: 'RFQ-REAL-1',
+                    shaSignature: 'sig-1',
+                    status: 'VERIFIED',
+                    ipAddress: '127.0.0.1',
+                  },
+                  {
+                    id: 'audit-2',
+                    timestamp: new Date().toISOString(),
+                    user: 'vendor2@test.com',
+                    action: 'Vendor Two downloaded RFQ specifications for RFQ-REAL-1',
+                    rfqNumber: 'RFQ-REAL-1',
+                    shaSignature: 'sig-2',
+                    status: 'VERIFIED',
+                    ipAddress: '127.0.0.1',
+                  },
+                  {
+                    id: 'audit-3',
+                    timestamp: new Date().toISOString(),
+                    user: 'admin@test.com',
+                    action: 'Unrelated audit action, not a download',
+                    rfqNumber: 'RFQ-REAL-1',
+                    shaSignature: 'sig-3',
+                    status: 'VERIFIED',
+                    ipAddress: '127.0.0.1',
+                  },
+                ],
+                aiFeed: [],
+                systemConfig: {},
+              },
+            }),
+          });
+        }
+        return baseImpl(url, init);
+      });
+
+      renderWithProvider(
+        <SpendDashboard
+          onBackToKanban={jest.fn()}
+          onNavigateToAllRfqs={onNavigateToAllRfqs}
+          onNavigateToVendorConsole={onNavigateToVendorConsole}
+          onNavigateToKanban={onNavigateToKanban}
+        />
+      );
+
+      // 2 real RFQs (one with assignedVendors/followUpData, one without), 2
+      // matching download audit entries, (2 + 0) / 2 = 1.0 avg vendors/RFQ,
+      // and a 2/4 = 50% response rate.
+      await waitFor(() => expect(screen.getAllByText('2').length).toBeGreaterThan(0));
+      expect(screen.getByText('1.0')).toBeInTheDocument();
+      expect(screen.getByText('50.0%')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByText('RFQs Received (Raised)').closest('button')!);
+      expect(onNavigateToAllRfqs).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getAllByText('RFQs Downloaded')[0].closest('button')!);
+      expect(onNavigateToAllRfqs).toHaveBeenCalledTimes(2);
+
+      fireEvent.click(screen.getByText('Avg Vendors / RFQ').closest('button')!);
+      expect(onNavigateToVendorConsole).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByText('Vendor Response Rate').closest('button')!);
+      expect(onNavigateToKanban).toHaveBeenCalledTimes(1);
+    });
+
+    test('Avg Vendors / RFQ falls back to 0.0 for an RFQ with no assignedVendors, with an empty RFQ list', async () => {
+      const baseImpl = (global.fetch as jest.Mock).getMockImplementation()!;
+      global.fetch = jest.fn().mockImplementation((url: string, init?: { method?: string }) => {
+        if (typeof url === 'string' && /\/api\/rfqs(\?|$)/.test(url) && (init?.method || 'GET') === 'GET') {
+          return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, data: [] }) });
+        }
+        return baseImpl(url, init);
+      });
+
+      renderWithProvider(<SpendDashboard onBackToKanban={jest.fn()} />);
+
+      await waitFor(() => expect(screen.getByText('Avg Vendors / RFQ')).toBeInTheDocument());
+      expect(screen.getByText('0.0')).toBeInTheDocument();
+    });
   });
 
   describe('BuyerConsole Screen', () => {
+    const originalFetch = global.fetch;
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
     test('renders buyer console with dropdown filters, search, and drill-down expansion', async () => {
       const onMatrix = jest.fn();
       const onEval = jest.fn();
@@ -522,6 +713,98 @@ describe('Category Manager Screens Suite', () => {
 
       // This test's local /api/rfqs override must not leak into later tests.
       (global.fetch as jest.Mock).mockImplementation(baseImpl);
+    });
+
+    // Some real buyer accounts and RFQ rows have null/missing fields (e.g. a
+    // web-registration that never completed profile setup, or an RFQ that
+    // predates extractedEntities being reliably set) — these used to crash
+    // the whole screen unguarded. Also exercises the Parsing/In Evaluation
+    // status-badge branches, which the other BuyerConsole test's single
+    // 'AI Recommended' fixture never reaches.
+    test('handles buyer accounts and RFQs with missing fields without crashing, and covers every status badge branch', async () => {
+      const baseImpl = (global.fetch as jest.Mock).getMockImplementation()!;
+      global.fetch = jest.fn().mockImplementation((url: string, init?: { method?: string }) => {
+        if (typeof url === 'string' && /\/api\/bootstrap/.test(url)) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                buyerAccounts: [
+                  {
+                    id: 'buyer-acc-sparse',
+                    organizationName: null,
+                    corporateEmail: 'sparse@buyer.com',
+                    contactPerson: null,
+                    sourcingMode: 'mode_2',
+                  },
+                ],
+                vendors: [],
+                evaluations: [],
+                auditLogs: [],
+                aiFeed: [],
+                systemConfig: {},
+              },
+            }),
+          });
+        }
+        if (typeof url === 'string' && /\/api\/rfqs(\?|$)/.test(url) && (init?.method || 'GET') === 'GET') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: [
+                {
+                  id: 'rfq-sparse-1',
+                  rfqNumber: 'RFQ-SPARSE-1',
+                  title: 'Sparse RFQ Missing Line Items',
+                  category: 'Civil Works',
+                  sourcingMode: 'mode_2',
+                  status: 'Parsing',
+                  createdAt: '2026-09-01',
+                  targetDeliveryDate: '2026-09-20',
+                  buyerAccountId: 'buyer-acc-sparse',
+                  // No budget, quotesCount, or extractedEntities at all.
+                },
+                {
+                  id: 'rfq-sparse-2',
+                  rfqNumber: 'RFQ-SPARSE-2',
+                  title: 'Second Sparse RFQ',
+                  category: 'Civil Works',
+                  sourcingMode: 'mode_2',
+                  status: 'In Evaluation',
+                  createdAt: '2026-09-02',
+                  targetDeliveryDate: '2026-09-20',
+                  budget: 0,
+                  quotesCount: 0,
+                  buyerAccountId: 'buyer-acc-sparse',
+                },
+              ],
+            }),
+          });
+        }
+        return baseImpl(url, init);
+      });
+
+      renderWithProvider(<BuyerConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
+
+      await waitFor(() => expect(screen.getByText('Unnamed Contact')).toBeInTheDocument());
+      expect(screen.getAllByText(/Unnamed Organization/).length).toBeGreaterThan(0);
+
+      fireEvent.click(screen.getByText('Unnamed Contact'));
+      fireEvent.click(screen.getByRole('button', { name: /Review RFQ Details/i }));
+
+      expect(screen.getByText('Sparse RFQ Missing Line Items')).toBeInTheDocument();
+      expect(screen.getByText('Parsing')).toBeInTheDocument();
+      expect(screen.getByText('In Evaluation')).toBeInTheDocument();
+
+      // Expand the first sparse RFQ (no extractedEntities) to exercise the
+      // lineItems fallback rendering path (0 items, empty table body) without
+      // throwing.
+      expect(() => fireEvent.click(screen.getByText('Sparse RFQ Missing Line Items'))).not.toThrow();
+      expect(screen.getByText(/BOQ Specifications & Item Roster \(0 items\)/)).toBeInTheDocument();
     });
   });
 

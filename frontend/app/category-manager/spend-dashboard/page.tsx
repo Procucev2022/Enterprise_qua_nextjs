@@ -6,5 +6,12 @@ import SpendDashboard from '@/app/category-manager/spend-dashboard';
 
 export default function CategoryManagerSpendPage() {
   const router = useRouter();
-  return <SpendDashboard onBackToKanban={() => router.push('/category-manager/kanban-board')} />;
+  return (
+    <SpendDashboard
+      onBackToKanban={() => router.push('/category-manager/kanban-board')}
+      onNavigateToAllRfqs={() => router.push('/category-manager/all-rfqs')}
+      onNavigateToVendorConsole={() => router.push('/category-manager/vendor-console')}
+      onNavigateToKanban={() => router.push('/category-manager/kanban-board')}
+    />
+  );
 }

@@ -432,6 +432,51 @@ export async function fetchVendorCandidates(rfqId: string): Promise<RFQVendorCan
 }
 
 /**
+ * Every vendor in the system, unfiltered by category.
+ *
+ * Backed by `GET /api/vendors?buyerId=all`. Used by InviteVendorsModal's
+ * "All Vendors" mode, which lets a category manager invite someone the
+ * category-matched candidate pool (fetchVendorCandidates) wouldn't surface —
+ * inviteVendorsToRFQ never validates category match server-side, so any real
+ * vendor id already invites successfully.
+ */
+export async function fetchAllVendors(): Promise<RFQVendorCandidatesResult> {
+  const token = authClient.getToken();
+
+  let res: Response;
+  try {
+    res = await fetch('/api/vendors?buyerId=all', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  } catch {
+    return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
+  }
+
+  let body: { success?: boolean; data?: RFQVendorCandidate[]; error?: string } = {};
+  try {
+    body = await res.json();
+  } catch {
+    return {
+      success: false,
+      reason: 'NETWORK',
+      error: formatString(UI_STRINGS.rfqExtraction.apiUnavailable, { status: res.status }),
+    };
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
+  }
+  if (!res.ok || !body.success || !Array.isArray(body.data)) {
+    return { success: false, reason: 'SERVER', error: body.error || UI_STRINGS.rfqDetails.loadFailed };
+  }
+
+  // alreadyInvited isn't computed server-side for this endpoint (unlike
+  // vendor-candidates) — the caller derives it from the RFQ's own
+  // assignedVendors list.
+  return { success: true, candidates: body.data.map((v) => ({ ...v, alreadyInvited: false })) };
+}
+
+/**
  * A category manager invites specific vendors to an RFQ.
  *
  * Backed by `POST /api/rfqs/:id/invite-vendors`, gated to category_manager/
