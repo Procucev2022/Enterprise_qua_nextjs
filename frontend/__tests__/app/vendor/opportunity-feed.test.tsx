@@ -5,6 +5,13 @@ import { AppProvider, useApp } from '@/lib/store';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import type { QuoteComparison, RFQItem, VendorOpportunity, VendorSubscriptionPlan } from '@/lib/types';
 
+const mockRouterPush = jest.fn();
+jest.mock('next/navigation', () => ({
+  useRouter: () => ({
+    push: mockRouterPush,
+  }),
+}));
+
 /**
  * The feed is derived from `GET /api/rfqs`, so every test supplies the RFQs whose
  * projection it wants to assert on. Nothing is seeded any more: an empty API means
@@ -335,6 +342,7 @@ async function renderEmptyFeed(props: HarnessProps = {}) {
 }
 
 const downloadButtons = () => screen.getAllByTitle(/Download RFQ Technical BOQ/i);
+const viewDetailsButtons = () => screen.getAllByTitle(/View RFQ Details/i);
 
 /** The five filter selects, in DOM order. */
 function selects() {
@@ -689,6 +697,16 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     serveRFQs(ALL_FIXTURES);
+  });
+
+  test('View Details navigates to the vendor RFQ details route for the clicked card', async () => {
+    await renderFeed({ subscription: 'premium' });
+
+    fireEvent.click(viewDetailsButtons()[0]);
+
+    expect(mockRouterPush).toHaveBeenCalledWith(
+      `/vendor/rfq-details?rfq=${encodeURIComponent(DIRECT_OWN.rfqNumber as string)}`,
+    );
   });
 
   test('downloads an own-roster RFQ without prompting for an upgrade', async () => {

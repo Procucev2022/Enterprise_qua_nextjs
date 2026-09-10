@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import { authClient } from '@/lib/authClient';
@@ -36,6 +37,7 @@ export default function OpportunityFeed({
   onNavigateToEvaluation,
   onNavigateToSubscription,
 }: OpportunityFeedProps) {
+  const router = useRouter();
   const {
     vendorOpportunities,
     showToast,
@@ -648,6 +650,15 @@ export default function OpportunityFeed({
                       </span>
                       
                       <div className="flex gap-2">
+                        {/* View full RFQ details, same data the buyer/CM see */}
+                        <button
+                          onClick={() => router.push(`/vendor/rfq-details?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
+                          className="btn btn-secondary btn-xs p-1.5 flex items-center justify-center gap-1 border border-slate-200 text-slate-700 dark:text-gray-355 hover:border-slate-300"
+                          title="View RFQ Details"
+                        >
+                          <ExternalLink size={12} className="text-indigo-650 dark:text-indigo-400" />
+                          <span>View Details</span>
+                        </button>
                         {/* Download RFQ on Email */}
                         <button
                           onClick={() => handleDownloadRfq(opp)}
@@ -982,6 +993,15 @@ export default function OpportunityFeed({
                       </div>
 
                       <div className="flex gap-2">
+                        {/* View full RFQ details, same data the buyer/CM see */}
+                        <button
+                          onClick={() => router.push(`/vendor/rfq-details?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
+                          className="btn btn-secondary btn-xs p-1.5 flex items-center justify-center gap-1 border border-slate-200 text-slate-700 dark:text-gray-355 hover:border-slate-300"
+                          title="View RFQ Details"
+                        >
+                          <ExternalLink size={12} className="text-indigo-650 dark:text-indigo-400" />
+                          <span>View Details</span>
+                        </button>
                         {/* Download RFQ on Email */}
                         <button
                           onClick={() => handleDownloadRfq(opp)}

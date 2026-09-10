@@ -11,6 +11,13 @@ import QuotationForm from "@/app/vendor/quotation-form";
 import { AppProvider, useApp } from "@/lib/store";
 import { authClient } from "@/lib/authClient";
 
+const mockRouterPush = jest.fn();
+jest.mock("next/navigation", () => ({
+  useRouter: () => ({
+    push: mockRouterPush,
+  }),
+}));
+
 // Mock clipboard
 Object.assign(navigator, {
   clipboard: {
@@ -238,6 +245,27 @@ describe("QuotationForm Comprehensive Suite", () => {
     expect(onBack).toHaveBeenCalledTimes(1);
 
     unmount();
+  });
+
+  test("View Details navigates to the vendor RFQ details route for the clicked row", async () => {
+    serveVendorRFQs(["RFQ-2026-00421"]);
+    renderWithProvider(
+      <QuotationFormCustomWrapper onBack={jest.fn()} withSession />,
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("button", { name: /View Details/i }).length,
+      ).toBeGreaterThan(0),
+    );
+
+    fireEvent.click(
+      screen.getAllByRole("button", { name: /View Details/i })[0],
+    );
+
+    expect(mockRouterPush).toHaveBeenCalledWith(
+      "/vendor/rfq-details?rfq=RFQ-2026-00421",
+    );
   });
 
   test("Downloads RFQs across locked and unlocked tiers", async () => {

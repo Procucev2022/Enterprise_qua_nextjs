@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 import { VendorOpportunity } from '@/lib/types';
@@ -65,6 +66,7 @@ const BUYER_CONTACTS_MAP: Record<string, Omit<BuyerContactInfo, 'source'>> = {
 };
 
 export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: QuotationFormProps) {
+  const router = useRouter();
   const { rfqs, vendorOpportunities, showToast, addAuditLog, vendorSubscription, currentUserSession, refreshFromDB } = useApp();
   const [selectedBuyerModal, setSelectedBuyerModal] = useState<(BuyerContactInfo & { rfqNumber: string }) | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
@@ -432,20 +434,30 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                     
                     {/* Download RFQ */}
                     <td className="py-3 text-center">
-                      <button
-                        onClick={() => {
-                          if (isLocked) {
-                            showToast('Premium Locked', 'Please upgrade your subscription to download specifications for this external buyer.', 'warning');
-                          } else {
-                            handleDownloadRfq(opp);
-                          }
-                        }}
-                        className="btn btn-secondary btn-xs py-1 px-2.5 flex items-center justify-center gap-1 text-[9px] font-bold mx-auto border border-slate-200"
-                        title="Download RFQ Specification"
-                      >
-                        <Download size={11} className="text-indigo-655" />
-                        <span>Download RFQ</span>
-                      </button>
+                      <div className="flex items-center justify-center gap-1.5">
+                        <button
+                          onClick={() => router.push(`/vendor/rfq-details?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
+                          className="btn btn-secondary btn-xs py-1 px-2.5 flex items-center justify-center gap-1 text-[9px] font-bold border border-slate-200"
+                          title="View RFQ Details"
+                        >
+                          <FileText size={11} className="text-indigo-655" />
+                          <span>View Details</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (isLocked) {
+                              showToast('Premium Locked', 'Please upgrade your subscription to download specifications for this external buyer.', 'warning');
+                            } else {
+                              handleDownloadRfq(opp);
+                            }
+                          }}
+                          className="btn btn-secondary btn-xs py-1 px-2.5 flex items-center justify-center gap-1 text-[9px] font-bold border border-slate-200"
+                          title="Download RFQ Specification"
+                        >
+                          <Download size={11} className="text-indigo-655" />
+                          <span>Download RFQ</span>
+                        </button>
+                      </div>
                     </td>
 
                     {/* Submission Method */}

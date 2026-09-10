@@ -187,9 +187,11 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     }
     expect(mockShowToast).toHaveBeenCalledWith('Vendor Master Uploaded', expect.any(String), 'success');
 
-    // Clear Selection in Step 2
+    // Clear Selection in Step 2 — click the stopPropagation-wrapped instance
+    // inside the "already uploaded" summary panel (the last rendered one; a
+    // plain header-level button with the same label precedes it).
     const clearBtns = screen.getAllByText('Clear Selection');
-    fireEvent.click(clearBtns[0]);
+    fireEvent.click(clearBtns[clearBtns.length - 1]);
     expect(mockShowToast).toHaveBeenCalledWith('Selection Cleared', expect.any(String), 'info');
 
     // Upload again to continue flow
@@ -633,5 +635,170 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     const remainingDeleteButtons = screen.getAllByTitle(/Delete/i);
     fireEvent.click(remainingDeleteButtons[0]);
     expect(screen.getByText(/No Vendor Master file selected/i)).toBeInTheDocument();
+  });
+
+  it('clicks the empty-state Browse File button to trigger the hidden file input', () => {
+    const { container } = render(<InitialSetupModal />);
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    expect(screen.getByText(/No Vendor Master file selected/i)).toBeInTheDocument();
+
+    const browseBtn = screen.getByText('Browse File').closest('button')!;
+    const clickSpy = jest.spyOn(container.querySelector('input[type="file"]') as HTMLInputElement, 'click');
+    fireEvent.click(browseBtn);
+    expect(clickSpy).toHaveBeenCalled();
+  });
+
+  it('classifies IT/software purchases and falls back to General Spares for unmatched categories', () => {
+    const wsVendors = XLSX.utils.json_to_sheet([
+      // "SupplierVendorEmailAddress" isn't an exact normalized match for any
+      // known email alias, only a substring superset — forces the getVal
+      // substring-match fallback loop to actually resolve a value.
+      { 'Company Name': 'CloudTech Solutions', SupplierVendorEmailAddress: 'sales@cloudtech.com' },
+      { 'Company Name': 'Zenith Traders', Email: 'info@zenith.com' },
+      { 'Company Name': 'Plain Software House', Email: 'contact@plainsoftware.com' },
+    ]);
+    const wbVendor = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wbVendor, wsVendors, 'Vendors');
+    const vendorBuffer = XLSX.write(wbVendor, { type: 'array', bookType: 'xlsx' });
+    const vendorFile: any = new File([vendorBuffer], 'it_vendors.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    vendorFile.__buffer = vendorBuffer;
+
+    const wsPOs = XLSX.utils.json_to_sheet([
+      {
+        'PO Number': 'PO-7001',
+        'Vendor Name': 'CloudTech Solutions',
+        'Item Name': 'Microsoft 365 workspace license subscription renewal, Azure cloud storage credits, BigQuery analytics data platform, Datacenter infrastructure server',
+        Quantity: 1,
+        'Unit Price': 100000,
+        'Total Spend': 100000,
+      },
+      {
+        'PO Number': 'PO-7002',
+        'Vendor Name': 'Zenith Traders',
+        'Item Name': 'Office stationery and miscellaneous supplies',
+        Quantity: 5,
+        'Unit Price': 100,
+        'Total Spend': 500,
+      },
+      {
+        // "software" alone matches the IT branch but none of its more specific
+        // minor-category keywords (cloud/license/bigquery/datacenter/etc.),
+        // forcing the empty-secondSetMinors fallback.
+        'PO Number': 'PO-7003',
+        'Vendor Name': 'Plain Software House',
+        'Item Name': 'Generic software',
+        Quantity: 1,
+        'Unit Price': 1000,
+        'Total Spend': 1000,
+      },
+    ]);
+    const wbPO = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wbPO, wsPOs, 'POs');
+    const poBuffer = XLSX.write(wbPO, { type: 'array', bookType: 'xlsx' });
+    const poFile: any = new File([poBuffer], 'it_pos.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    poFile.__buffer = poBuffer;
+
+    jest.useFakeTimers();
+    render(<InitialSetupModal />);
+
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    const vInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(vInput, { target: { files: [vendorFile] } });
+
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const poInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(poInput, { target: { files: [poFile] } });
+
+    fireEvent.click(screen.getByText(/Run AI Category Cross-Match/i));
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+
+    expect(screen.getByText(/Step 4: AI Cross-Match/i)).toBeInTheDocument();
+    jest.useRealTimers();
+  });
+
+  it('applies the AI cross-match API result when the backend responds successfully', async () => {
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        success: true,
+        data: [
+          {
+            id: 'v-api-1',
+            vendorCode: 'VND-API-1',
+            companyName: 'Api Matched Vendor',
+            email: 'api@vendor.com',
+            contactPerson: 'API Contact',
+            phone: '+91 90000 00000',
+            address: 'API Address',
+            gstNumber: '27AAAAA0000A1Z0',
+            hasPoHistory: true,
+            categoriesMappedByBuyer: true,
+            itemsSupplied: ['API Item'],
+            pastPoSpend: '₹1,000 (1 POs)',
+            poCount: 1,
+            firstSetMajorCategory: 'General Spares & Consumables',
+            secondSetMinorCategories: ['Customised Parts'],
+          },
+        ],
+      }),
+    } as any);
+
+    jest.useFakeTimers();
+    render(<InitialSetupModal />);
+
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    fireEvent.click(screen.getByText(/Add Vendor Manually/i));
+    fireEvent.click(screen.getByRole('button', { name: /Done Editing/i }));
+
+    fireEvent.click(screen.getByText(/Proceed to File 2: PO Dump/i));
+    fireEvent.click(screen.getByText(/Run AI Category Cross-Match/i));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+
+    expect(screen.getByText(/Step 4: AI Cross-Match/i)).toBeInTheDocument();
+    jest.useRealTimers();
+    fetchSpy.mockRestore();
+  });
+
+  it('logs and continues locally when the AI cross-match API call rejects', async () => {
+    const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetchSpy = jest.spyOn(global, 'fetch').mockRejectedValue(new Error('network down'));
+
+    jest.useFakeTimers();
+    render(<InitialSetupModal />);
+
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    fireEvent.click(screen.getByText(/Add Vendor Manually/i));
+    fireEvent.click(screen.getByRole('button', { name: /Done Editing/i }));
+
+    fireEvent.click(screen.getByText(/Proceed to File 2: PO Dump/i));
+    fireEvent.click(screen.getByText(/Run AI Category Cross-Match/i));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+
+    expect(screen.getByText(/Step 4: AI Cross-Match/i)).toBeInTheDocument();
+    expect(consoleWarnSpy).toHaveBeenCalledWith('Backend AI cross-match API error:', expect.any(Error));
+
+    jest.useRealTimers();
+    fetchSpy.mockRestore();
+    consoleWarnSpy.mockRestore();
   });
 });
