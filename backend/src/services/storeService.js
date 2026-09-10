@@ -472,6 +472,42 @@ class StoreService {
       if (persisted) {
         this.vendors.unshift(vendor);
         results.push({ rowNumber, status: 'imported', email: vendor.email, vendor });
+
+        if (vendor.email) {
+          const tempPassword = this._generateTempPassword();
+          identityQueries.insertVendorAccount({
+            email: vendor.email,
+            password: tempPassword,
+            phone: vendor.phone || null,
+            fullName: vendor.contactPerson || vendor.name,
+            organizationName: vendor.name,
+            createdBy: 'vendor-bulk-import',
+          }).catch((err) => {
+            logger.error(`Failed to create vendor identity account for ${vendor.email}`, err, 'STORE_SERVICE');
+          });
+
+          const emailPayload = mailerService.buildVendorOnboardingEmail({
+            to: vendor.email,
+            recipientName: vendor.contactPerson || vendor.name,
+            buyerOrganizationName: 'Procucev Enterprise',
+            vendorCode: vendor.id,
+            tempPassword,
+            contactPhone: vendor.phone,
+          });
+
+          mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding')
+            .then((delivery) => {
+              if (delivery.sent) {
+                this.updateVendor(vendor.id, { onboardingEmailStatus: 'sent', tempPassword });
+                logger.info(`Onboarding email sent to ${vendor.email}`, { vendorId: vendor.id }, 'STORE_SERVICE');
+              } else {
+                logger.warn(`Failed to send onboarding email to ${vendor.email}`, { reason: delivery.reason }, 'STORE_SERVICE');
+              }
+            })
+            .catch((err) => {
+              logger.error(`Error sending onboarding email to ${vendor.email}`, err, 'STORE_SERVICE');
+            });
+        }
       } else {
         results.push({ rowNumber, status: 'duplicate', email: vendor.email, reason: 'A vendor with this email already exists.' });
       }
@@ -1550,7 +1586,30 @@ class StoreService {
           v.email && v.email.toLowerCase() === email.toLowerCase() &&
           v.name && v.name.toLowerCase() === name.toLowerCase()
       );
-      if (existing) return;
+      if (existing) {
+        if (existing.email && existing.onboardingEmailStatus !== 'sent') {
+          const tempPassword = existing.tempPassword || this._generateTempPassword();
+          const emailPayload = mailerService.buildVendorOnboardingEmail({
+            to: existing.email,
+            recipientName: existing.contactPerson || existing.name,
+            buyerOrganizationName: attributedAccount ? attributedAccount.organizationName : 'Procucev Enterprise',
+            vendorCode: existing.id,
+            tempPassword: tempPassword,
+            contactPhone: existing.phone,
+          });
+          mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding')
+            .then((delivery) => {
+              if (delivery.sent) {
+                this.updateVendor(existing.id, { onboardingEmailStatus: 'sent', tempPassword });
+                logger.info(`Onboarding email sent for existing vendor ${existing.email}`, { vendorId: existing.id }, 'STORE_SERVICE');
+              }
+            })
+            .catch((err) => {
+              logger.error(`Error sending onboarding email to ${existing.email}`, err, 'STORE_SERVICE');
+            });
+        }
+        return;
+      }
 
       const minorCategories = Array.isArray(rec.minorCategories) ? rec.minorCategories : [];
       const newVendor = {
