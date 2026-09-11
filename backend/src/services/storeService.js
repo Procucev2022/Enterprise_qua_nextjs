@@ -563,11 +563,50 @@ class StoreService {
   // ZOHO PAYMENT LINKS
   // ==========================================
 
-  getPaymentLinkByZohoId(zohoPaymentLinkId) {
-    return this.paymentLinks.find((l) => l.zohoPaymentLinkId === zohoPaymentLinkId);
+  /**
+   * Look up a payment link by Zoho's own id — the identifier the webhook and
+   * the reconciliation poller both key off.
+   *
+   * Falls back to Neon when the in-memory cache misses, rather than trusting
+   * only whatever this process happened to hydrate at boot. This matters
+   * concretely: the link may have been created by a *different* process
+   * instance than the one now receiving Zoho's webhook (a redeploy, a
+   * cold-started serverless/sleeping-dyno backend between checkout and the
+   * webhook firing, or simply two instances behind a load balancer) — that
+   * process's in-memory paymentLinks array never saw the link get created, so
+   * a memory-only lookup here silently reports "unknown payment link" and the
+   * subscription never activates, even though the row is sitting right there
+   * in Neon. A DB hit is hydrated into the in-memory cache so the immediately
+   * following updatePaymentLinkRecord/activate* calls (which are memory-only)
+   * still work.
+   */
+  async getPaymentLinkByZohoId(zohoPaymentLinkId) {
+    const cached = this.paymentLinks.find((l) => l.zohoPaymentLinkId === zohoPaymentLinkId);
+    if (cached) return cached;
+    if (!pool.pool) return null;
+    const fromDB = await domainQueries.getPaymentLinkByZohoIdFromDB(zohoPaymentLinkId);
+    if (!fromDB) return null;
+    if (!this.paymentLinks.some((l) => l.id === fromDB.id)) {
+      this.paymentLinks.unshift(fromDB);
+    }
+    return fromDB;
   }
 
-  getPaymentLinksByStatusIn(statuses) {
+  /**
+   * Payment links still in a reconcilable status, re-synced from Neon first —
+   * same cross-process reasoning as getPaymentLinkByZohoId: the reconciliation
+   * poller runs in whichever process happens to be alive at the 10-minute
+   * mark, which is not guaranteed to be the process that created the link.
+   */
+  async getPaymentLinksByStatusIn(statuses) {
+    if (pool.pool) {
+      const allFromDB = await domainQueries.getPaymentLinksFromDB();
+      const byId = new Map(this.paymentLinks.map((l) => [l.id, l]));
+      for (const link of allFromDB) {
+        byId.set(link.id, link);
+      }
+      this.paymentLinks = Array.from(byId.values());
+    }
     return this.paymentLinks.filter((l) => statuses.includes(l.status));
   }
 

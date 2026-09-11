@@ -24,7 +24,7 @@ const runtime = { timer: null };
 const RECONCILABLE_STATUSES = ['CREATED', 'pending'];
 
 async function reconcileOnce() {
-  const pending = storeService.getPaymentLinksByStatusIn(RECONCILABLE_STATUSES);
+  const pending = await storeService.getPaymentLinksByStatusIn(RECONCILABLE_STATUSES);
   for (const link of pending) {
     try {
       const result = await zohoPaymentService.getPaymentLinkStatus(link.zohoPaymentLinkId);

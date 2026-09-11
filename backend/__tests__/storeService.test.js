@@ -855,7 +855,7 @@ describe('Store Service & Business Operations', () => {
   });
 
   describe('Zoho payment links (createPaymentLinkRecord / activateVendorSubscriptionFromPayment)', () => {
-    test('createPaymentLinkRecord persists a new CREATED-status link', () => {
+    test('createPaymentLinkRecord persists a new CREATED-status link', async () => {
       const link = storeService.createPaymentLinkRecord({
         id: 'pl-test-1',
         zohoPaymentLinkId: 'zoho-test-1',
@@ -868,14 +868,76 @@ describe('Store Service & Business Operations', () => {
       });
 
       expect(link).toMatchObject({ id: 'pl-test-1', zohoPaymentLinkId: 'zoho-test-1', status: 'CREATED', activated: false });
-      expect(storeService.getPaymentLinkByZohoId('zoho-test-1')).toMatchObject({ id: 'pl-test-1' });
+      await expect(storeService.getPaymentLinkByZohoId('zoho-test-1')).resolves.toMatchObject({ id: 'pl-test-1' });
     });
 
-    test('getPaymentLinksByStatusIn filters by the given statuses', () => {
+    test('getPaymentLinkByZohoId falls back to Neon when the in-memory cache misses', async () => {
+      const dbLink = { id: 'pl-from-db-1', zohoPaymentLinkId: 'zoho-from-db-1', status: 'CREATED', activated: false };
+      const poolModule = require('../src/db/pool');
+      const domainQueries = require('../src/db/domainQueries');
+      const originalPool = poolModule.pool;
+      poolModule.pool = {};
+      const spy = jest.spyOn(domainQueries, 'getPaymentLinkByZohoIdFromDB').mockResolvedValueOnce(dbLink);
+      try {
+        const found = await storeService.getPaymentLinkByZohoId('zoho-from-db-1');
+        expect(found).toEqual(dbLink);
+        expect(spy).toHaveBeenCalledWith('zoho-from-db-1');
+        // Hydrated into memory: a second lookup must not hit the DB again.
+        const foundAgain = await storeService.getPaymentLinkByZohoId('zoho-from-db-1');
+        expect(foundAgain).toEqual(dbLink);
+        expect(spy).toHaveBeenCalledTimes(1);
+      } finally {
+        spy.mockRestore();
+        poolModule.pool = originalPool;
+      }
+    });
+
+    test('getPaymentLinkByZohoId returns null when unconfigured and nothing in memory', async () => {
+      const poolModule = require('../src/db/pool');
+      const originalPool = poolModule.pool;
+      poolModule.pool = null;
+      try {
+        await expect(storeService.getPaymentLinkByZohoId('zoho-does-not-exist')).resolves.toBeNull();
+      } finally {
+        poolModule.pool = originalPool;
+      }
+    });
+
+    test('getPaymentLinkByZohoId returns null when Neon is configured but has no matching row', async () => {
+      const poolModule = require('../src/db/pool');
+      const domainQueries = require('../src/db/domainQueries');
+      const originalPool = poolModule.pool;
+      poolModule.pool = {};
+      const spy = jest.spyOn(domainQueries, 'getPaymentLinkByZohoIdFromDB').mockResolvedValueOnce(null);
+      try {
+        await expect(storeService.getPaymentLinkByZohoId('zoho-truly-unknown')).resolves.toBeNull();
+      } finally {
+        spy.mockRestore();
+        poolModule.pool = originalPool;
+      }
+    });
+
+    test('getPaymentLinksByStatusIn re-syncs from Neon first when configured', async () => {
+      const poolModule = require('../src/db/pool');
+      const domainQueries = require('../src/db/domainQueries');
+      const originalPool = poolModule.pool;
+      poolModule.pool = {};
+      const dbOnlyLink = { id: 'pl-db-only-1', zohoPaymentLinkId: 'zoho-db-only-1', status: 'CREATED' };
+      const spy = jest.spyOn(domainQueries, 'getPaymentLinksFromDB').mockResolvedValueOnce([dbOnlyLink]);
+      try {
+        const pending = await storeService.getPaymentLinksByStatusIn(['CREATED', 'pending']);
+        expect(pending.some((l) => l.id === 'pl-db-only-1')).toBe(true);
+      } finally {
+        spy.mockRestore();
+        poolModule.pool = originalPool;
+      }
+    });
+
+    test('getPaymentLinksByStatusIn filters by the given statuses', async () => {
       storeService.createPaymentLinkRecord({ id: 'pl-status-a', zohoPaymentLinkId: 'zoho-status-a', vendorId: 'v-x', planId: 'connect', amount: 1, paymentUrl: '', status: 'CREATED' });
       storeService.createPaymentLinkRecord({ id: 'pl-status-b', zohoPaymentLinkId: 'zoho-status-b', vendorId: 'v-x', planId: 'connect', amount: 1, paymentUrl: '', status: 'PAID' });
 
-      const pending = storeService.getPaymentLinksByStatusIn(['CREATED', 'pending']);
+      const pending = await storeService.getPaymentLinksByStatusIn(['CREATED', 'pending']);
       expect(pending.some((l) => l.id === 'pl-status-a')).toBe(true);
       expect(pending.some((l) => l.id === 'pl-status-b')).toBe(false);
     });

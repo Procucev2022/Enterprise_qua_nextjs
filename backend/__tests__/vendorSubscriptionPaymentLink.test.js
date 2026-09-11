@@ -108,7 +108,7 @@ describe('POST /api/vendors/:id/payment-link', () => {
     expect(zohoPaymentService.createPaymentLink).toHaveBeenCalledWith(
       expect.objectContaining({ planId: 'connect', email: vendor.email, phone: '+919876543210' })
     );
-    expect(storeService.getPaymentLinkByZohoId('zoho-happy-1')).toMatchObject({ vendorId: vendor.id, planId: 'connect' });
+    await expect(storeService.getPaymentLinkByZohoId('zoho-happy-1')).resolves.toMatchObject({ vendorId: vendor.id, planId: 'connect' });
   });
 
   test('normalizes a bare-digit legacy phone to E.164 before calling Zoho', async () => {
