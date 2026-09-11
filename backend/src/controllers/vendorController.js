@@ -1,6 +1,7 @@
 const storeService = require('../services/storeService');
 const { generateVendorOnboardingEmail } = require('../services/emailService');
 const zohoPaymentService = require('../services/zohoPaymentService');
+const { normalizePhone } = require('../db/identityQueries');
 const { logger } = require('../services/loggerService');
 const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
 const { ZOHO_CONFIG, computeZohoPlanAmount, VENDOR_SUBSCRIPTION_PLANS } = require('../config/constants');
@@ -331,7 +332,7 @@ async function createSubscriptionPaymentLink(req, res, next) {
       planLabel,
       amountInr: amount,
       email: existing.email,
-      phone: existing.phone || '',
+      phone: normalizePhone(existing.phone),
       returnUrl,
     });
 

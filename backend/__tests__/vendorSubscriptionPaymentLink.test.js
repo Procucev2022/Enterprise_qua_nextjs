@@ -106,9 +106,42 @@ describe('POST /api/vendors/:id/payment-link', () => {
       data: { paymentUrl: 'https://payments.zoho.in/happy', paymentLinkId: expect.any(String), status: 'CREATED' },
     });
     expect(zohoPaymentService.createPaymentLink).toHaveBeenCalledWith(
-      expect.objectContaining({ planId: 'connect', email: vendor.email, phone: vendor.phone })
+      expect.objectContaining({ planId: 'connect', email: vendor.email, phone: '+919876543210' })
     );
     expect(storeService.getPaymentLinkByZohoId('zoho-happy-1')).toMatchObject({ vendorId: vendor.id, planId: 'connect' });
+  });
+
+  test('normalizes a bare-digit legacy phone to E.164 before calling Zoho', async () => {
+    const legacyVendor = storeService.addVendor({
+      name: 'Legacy Bulk Vendor',
+      email: 'legacy-vendor@example.com',
+      phone: '9974814444',
+      majorCategory: 'Payment-Link-Cat',
+    });
+    const token = require('../src/services/authService').generateSessionToken({
+      id: 'usr-legacy-vendor',
+      email: 'legacy-vendor@example.com',
+      name: 'Legacy Vendor',
+      role: 'vendor',
+      orgId: 'o',
+      orgName: 'O',
+    });
+    zohoPaymentService.createPaymentLink.mockResolvedValue({
+      zohoPaymentLinkId: 'zoho-legacy-1',
+      paymentUrl: 'https://payments.zoho.in/legacy',
+      status: 'CREATED',
+      rawResponse: { payment_links: {} },
+    });
+
+    const res = await request(app)
+      .post(`/api/vendors/${legacyVendor.id}/payment-link`)
+      .set({ Authorization: `Bearer ${token}` })
+      .send({ plan: 'connect' });
+
+    expect(res.statusCode).toBe(200);
+    expect(zohoPaymentService.createPaymentLink).toHaveBeenCalledWith(
+      expect.objectContaining({ phone: '+919974814444' })
+    );
   });
 
   test('returns 502 when Zoho payment-link creation throws', async () => {
