@@ -114,7 +114,7 @@ jest.mock('@/app/buyer/buyer-account-table', () => stub('buyer-account-table'));
 
 // ── Category manager screens ─────────────────────────────────────────────────
 jest.mock('@/app/category-manager/kanban-board', () =>
-  stub('kanban-board', ['onNavigateToMatrix', 'onNavigateToSpend'])
+  stub('kanban-board', ['onNavigateToMatrix', 'onNavigateToSpend', 'onNavigateToAllRfqs', 'onNavigateToVendorConsole'])
 );
 jest.mock('@/app/category-manager/spend-dashboard', () =>
   stub('spend-dashboard', ['onBackToKanban', 'onNavigateToAllRfqs', 'onNavigateToVendorConsole', 'onNavigateToKanban'])
@@ -455,6 +455,16 @@ describe('Role screen routes', () => {
 
       clickCallback('kanban-board:onNavigateToSpend');
       expect(mockPush).toHaveBeenCalledWith('/category-manager/spend-dashboard');
+    });
+
+    it('kanban board summary cards navigate to their real targets', () => {
+      render(<CmKanbanPage />);
+
+      clickCallback('kanban-board:onNavigateToAllRfqs');
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/all-rfqs');
+
+      clickCallback('kanban-board:onNavigateToVendorConsole');
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/vendor-console');
     });
 
     it('spend dashboard returns to the kanban board', () => {

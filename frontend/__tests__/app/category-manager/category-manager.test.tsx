@@ -367,6 +367,100 @@ describe('Category Manager Screens Suite', () => {
       const matrixBtn = screen.getByRole('button', { name: /View Comparative Quote Matrix/i });
       expect(() => fireEvent.click(matrixBtn)).not.toThrow();
     });
+
+    // Some real RFQ rows predate extractedEntities being reliably set, and a
+    // followUpData record can exist with no vendors array yet (chasing just
+    // started) — both used to throw unguarded and crash the whole board.
+    test('renders a scored RFQ missing extractedEntities, and opens a chaser for one with followUpData but no vendors, without throwing', async () => {
+      const baseImpl = (global.fetch as jest.Mock).getMockImplementation()!;
+      global.fetch = jest.fn().mockImplementation((url: string) => {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => {
+            if (typeof url === 'string' && /\/api\/rfqs(\?|$)/.test(url)) {
+              return {
+                success: true,
+                data: [
+                  {
+                    id: 'rfq-no-entities',
+                    rfqNumber: 'RFQ-2026-NOENT',
+                    title: 'Scored RFQ With No Line Items On File',
+                    category: 'Process Equipment',
+                    sourcingMode: 'mode_2',
+                    status: 'Parsing',
+                    createdAt: '2026-09-01',
+                    targetDeliveryDate: '2026-10-10',
+                    quotesCount: 1,
+                    budget: 0,
+                    chasingActive: true,
+                    // No extractedEntities key at all — exercises avgConfidence's
+                    // `|| []` fallback, only reached for Parsing-column cards.
+                    quotes: [
+                      {
+                        vendorId: 'v-x',
+                        vendorName: 'Test Vendor',
+                        vendorCategory: 'General',
+                        unitPrice: 1,
+                        totalPrice: 1,
+                        leadTimeDays: 1,
+                        aiMatchScore: 1,
+                        isBestPrice: false,
+                        isPreferred: false,
+                        warrantyYears: 1,
+                        complianceStatus: 'Compliant',
+                        paymentTerms: 'Net 30',
+                        remarks: '',
+                      },
+                    ],
+                    status2: 'Quotes Pending',
+                  },
+                  {
+                    id: 'rfq-pending-no-vendors',
+                    rfqNumber: 'RFQ-2026-NOVEND',
+                    title: 'Pending RFQ With Follow-Up Started But No Vendors Yet',
+                    category: 'Process Equipment',
+                    sourcingMode: 'mode_2',
+                    status: 'Quotes Pending',
+                    createdAt: '2026-09-01',
+                    targetDeliveryDate: '2026-10-10',
+                    quotesCount: 0,
+                    budget: 0,
+                    chasingActive: true,
+                    extractedEntities: [],
+                    quotes: [],
+                    followUpData: {
+                      rfqNumber: 'RFQ-2026-NOVEND',
+                      totalInvited: 0,
+                      respondedCount: 0,
+                      callStats: { total: 0, connected: 0, avgDuration: '0m' },
+                      whatsappStats: { total: 0, delivered: 0, read: 0, replied: 0 },
+                      smsStats: { total: 0, delivered: 0, clicked: 0 },
+                      // No vendors array at all.
+                    },
+                  },
+                ],
+              };
+            }
+            return { success: true, data: {} };
+          },
+          text: async () => '',
+          blob: async () => new Blob([]),
+        });
+      });
+
+      renderWithProvider(<KanbanBoard onNavigateToMatrix={jest.fn()} onNavigateToSpend={jest.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Scored RFQ With No Line Items On File')).toBeInTheDocument();
+      });
+      expect(screen.getByText('Pending RFQ With Follow-Up Started But No Vendors Yet')).toBeInTheDocument();
+
+      const callBtns = screen.getAllByRole('button', { name: /Call/i });
+      expect(() => fireEvent.click(callBtns[0])).not.toThrow();
+
+      global.fetch = baseImpl as unknown as typeof global.fetch;
+    });
   });
 
   describe('SpendDashboard Screen', () => {
