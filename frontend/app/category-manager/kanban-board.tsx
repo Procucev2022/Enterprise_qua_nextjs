@@ -25,6 +25,8 @@ const KANBAN = UI_STRINGS.categoryManagerKanban;
 interface KanbanBoardProps {
   onNavigateToMatrix?: (rfq: RFQItem) => void;
   onNavigateToSpend?: () => void;
+  onNavigateToAllRfqs?: () => void;
+  onNavigateToVendorConsole?: () => void;
 }
 
 /** Status → badge tone for the "AI Evaluation & Scored" column. */
@@ -34,7 +36,12 @@ const SCORED_STATUS_TONE: Record<string, string> = {
   'PO Generated': 'badge-purple',
 };
 
-export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: KanbanBoardProps) {
+export default function KanbanBoard({
+  onNavigateToMatrix,
+  onNavigateToSpend,
+  onNavigateToAllRfqs,
+  onNavigateToVendorConsole,
+}: KanbanBoardProps) {
   const {
     rfqs,
     triggerChannelChaser,
@@ -73,14 +80,17 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
   };
 
   const avgConfidence = (rfq: RFQItem): number | null => {
-    const entities = rfq.extractedEntities;
+    // Some real RFQ rows predate extractedEntities being reliably set —
+    // reading it unguarded here threw and crashed the whole board whenever
+    // one such RFQ reached the scored column.
+    const entities = rfq.extractedEntities || [];
     if (entities.length === 0) return null;
     const total = entities.reduce((sum, e) => sum + e.confidence, 0);
     return Math.round((total / entities.length) * 10) / 10;
   };
 
   const handleOpenChaser = (rfq: RFQItem, channel: 'call' | 'whatsapp' | 'sms' | 'email') => {
-    const primaryVendorName = rfq.followUpData?.vendors[0]?.vendorName || 'Vendor Pool';
+    const primaryVendorName = rfq.followUpData?.vendors?.[0]?.vendorName || 'Vendor Pool';
     setSelectedRfqForChaser(rfq.rfqNumber);
     setTargetVendor(primaryVendorName);
     setChaserInitialChannel(channel === 'email' ? 'whatsapp' : channel);
@@ -130,9 +140,14 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
   const quotesReceived = rfqs.reduce((sum, r) => sum + (r.quotesCount || 0), 0);
   const avgQuotesPerRFQ = totalRFQs === 0 ? 0 : Math.round((quotesReceived / totalRFQs) * 10) / 10;
   const awaitingQuotes = rfqs.filter((r) => (r.quotesCount || 0) === 0).length;
-  const vendorsInvited = rfqs.reduce((sum, r) => sum + (r.followUpData?.totalInvited || 0), 0);
-  const vendorsResponded = rfqs.reduce((sum, r) => sum + (r.followUpData?.respondedCount || 0), 0);
-  const responseRate = vendorsInvited > 0 ? Math.round((vendorsResponded / vendorsInvited) * 100) : null;
+  const chaserVendorsInvited = rfqs.reduce((sum, r) => sum + (r.followUpData?.totalInvited || 0), 0);
+  const chaserVendorsResponded = rfqs.reduce((sum, r) => sum + (r.followUpData?.respondedCount || 0), 0);
+  const responseRate = chaserVendorsInvited > 0 ? Math.round((chaserVendorsResponded / chaserVendorsInvited) * 100) : null;
+  // The real count of vendors a category manager has actually invited onto
+  // each RFQ (assignedVendors) — not the simulated AI chaser's outreach
+  // count above, which is a different, deliberately-unaudited feature.
+  const rfqsWithInvites = rfqs.filter((r) => (r.assignedVendors?.length || 0) > 0).length;
+  const totalVendorsInvited = rfqs.reduce((sum, r) => sum + (r.assignedVendors?.length || 0), 0);
 
   const summaryCards = [
     {
@@ -141,6 +156,7 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
       value: `${totalRFQs} Total`,
       hint: `${activeChasing} Actively Chasing`,
       tone: 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 border-indigo-200 dark:border-indigo-800',
+      onClick: onNavigateToAllRfqs,
     },
     {
       key: 'quotes',
@@ -148,6 +164,7 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
       value: `${quotesReceived} Total`,
       hint: `Avg ${avgQuotesPerRFQ} / RFQ`,
       tone: 'text-sky-600 dark:text-cyan-400 bg-sky-50 dark:bg-cyan-950/60 border-sky-200 dark:border-sky-800',
+      onClick: onNavigateToAllRfqs,
     },
     {
       key: 'response',
@@ -155,16 +172,19 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
       value: responseRate === null ? '—' : `${responseRate}%`,
       hint: responseRate === null ? 'No follow-ups sent yet' : '<24h Response',
       tone: 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800',
+      onClick: onNavigateToVendorConsole,
     },
     {
       key: 'vendors',
-      label: 'Vendors Invited',
-      value: `${vendorsInvited} Vendors`,
-      hint: `${vendorsResponded} Responded`,
+      label: 'Total Invites',
+      value: `${totalVendorsInvited} Vendors`,
+      hint: `${rfqsWithInvites} RFQs With Invites`,
       tone: 'text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/60 border-purple-200 dark:border-purple-800',
+      onClick: onNavigateToVendorConsole,
     },
     {
       key: 'awaiting',
+      onClick: onNavigateToAllRfqs,
       label: 'Awaiting Quotes',
       value: `${awaitingQuotes} Active`,
       hint: `${quotesReceived} Received So Far`,
@@ -198,16 +218,19 @@ export default function KanbanBoard({ onNavigateToMatrix, onNavigateToSpend }: K
       {/* Category Manager Top Executive Analytics Summary Strip — every figure derives from the live rfqs collection */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {summaryCards.map((card) => (
-          <div
+          <button
             key={card.key}
-            className="glass-panel p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs flex flex-col justify-between"
+            type="button"
+            onClick={card.onClick}
+            disabled={!card.onClick}
+            className="glass-panel p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs flex flex-col justify-between text-left transition-colors enabled:hover:border-indigo-300 dark:enabled:hover:border-indigo-700 enabled:cursor-pointer disabled:cursor-default"
           >
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">{card.label}</span>
             <div className="flex items-baseline justify-between mt-1 gap-2">
               <span className="text-xl font-black text-slate-900 dark:text-white mono">{card.value}</span>
               <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border shrink-0 ${card.tone}`}>{card.hint}</span>
             </div>
-          </div>
+          </button>
         ))}
       </div>
 

@@ -75,7 +75,7 @@ export function demandStatusFor(rfqsIn30d: number): CategoryMetric['demandStatus
   return 'Emerging';
 }
 
-function GrowthBadge({ value }: { value: number | null }) {
+export function GrowthBadge({ value }: { value: number | null }) {
   if (value === null) {
     return <span className="inline-flex items-center gap-0.5 text-xs font-black text-indigo-600 dark:text-indigo-400 mono">New</span>;
   }

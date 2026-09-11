@@ -6,6 +6,8 @@ import { AlertCircle, Loader2, RefreshCw } from 'lucide-react';
 import { fetchRFQById } from '@/lib/rfqClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import RFQDetails from '@/app/buyer/rfq-details';
+import { RFQDeleteDialog, RFQEditModal } from '@/app/buyer/RFQEditModal';
+import { useApp } from '@/lib/store';
 import type { RFQItem } from '@/lib/types';
 
 const DETAILS = UI_STRINGS.rfqDetails;
@@ -41,13 +43,16 @@ function StatusPanel({
 }
 
 /**
- * Category-manager read-only view of one RFQ, reached from the All RFQs console.
+ * Category-manager view of one RFQ, reached from the All RFQs console.
  *
- * Renders the same detail component the buyer sees, but without the edit and
- * delete affordances: a category manager oversees sourcing across every buyer
- * and is not the owner of any one RFQ. The RFQ is fetched by number through
- * `GET /api/rfqs/:id`, which returns the full cross-buyer record for the
- * category_manager role (it is only buyer callers that endpoint scopes).
+ * Renders the same detail component the buyer sees, with the same edit and
+ * delete affordances — `PUT`/`DELETE /api/rfqs/:id` have no buyer-only role
+ * gate (`canAccessRfq` treats category_manager/admin as unrestricted), so a
+ * category manager overseeing sourcing across every buyer can correct an
+ * RFQ's details the same way its own buyer could. The RFQ is fetched by
+ * number through `GET /api/rfqs/:id`, which returns the full cross-buyer
+ * record for the category_manager role (it is only buyer callers that
+ * endpoint scopes).
  *
  * Addressable by RFQ number so the page survives a reload and can be linked to.
  */
@@ -56,7 +61,10 @@ function CategoryManagerRFQDetailsView() {
   const searchParams = useSearchParams();
   const rfqNumber = searchParams.get(RFQ_PARAM);
 
+  const { updateRFQ, deleteRFQ } = useApp();
   const [state, setState] = useState<LoadState>({ status: 'idle' });
+  const [isEditing, setIsEditing] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const load = useCallback(async (identifier: string) => {
     setState({ status: 'loading' });
@@ -132,7 +140,44 @@ function CategoryManagerRFQDetailsView() {
     );
   }
 
-  return <RFQDetails rfq={state.rfq} onBack={onBack} />;
+  const { rfq } = state;
+
+  /**
+   * Adopt the saved record into this page's own state.
+   *
+   * The page fetched the RFQ itself rather than reading it from the store, so
+   * the store update alone would leave this screen showing the pre-edit
+   * terms until a reload.
+   */
+  const handleSave = async (identifier: string, changes: Parameters<typeof updateRFQ>[1]) => {
+    const saved = await updateRFQ(identifier, changes);
+    setState({ status: 'loaded', rfq: saved });
+    return saved;
+  };
+
+  // Back to the console afterwards: staying here would leave the CM looking
+  // at a record that no longer exists.
+  const handleDelete = async (identifier: string) => {
+    await deleteRFQ(identifier);
+    onBack();
+  };
+
+  return (
+    <>
+      <RFQDetails
+        rfq={rfq}
+        onBack={onBack}
+        onEdit={() => setIsEditing(true)}
+        onDelete={() => setIsDeleting(true)}
+      />
+      <RFQEditModal rfq={isEditing ? rfq : null} onClose={() => setIsEditing(false)} onSave={handleSave} />
+      <RFQDeleteDialog
+        rfq={isDeleting ? rfq : null}
+        onClose={() => setIsDeleting(false)}
+        onConfirm={handleDelete}
+      />
+    </>
+  );
 }
 
 export default function CategoryManagerRFQDetailsPage() {

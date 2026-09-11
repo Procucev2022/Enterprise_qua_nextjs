@@ -12,6 +12,7 @@ jest.mock('@/lib/store', () => ({
 
 jest.mock('@/lib/rfqClient', () => ({
   fetchVendorCandidates: jest.fn(),
+  fetchAllVendors: jest.fn(),
   inviteVendorsToRFQ: jest.fn(),
 }));
 
@@ -46,12 +47,14 @@ function candidate(overrides: Partial<RFQVendorCandidate> & { id: string }): RFQ
 }
 
 const mockFetchCandidates = rfqClient.fetchVendorCandidates as jest.Mock;
+const mockFetchAllVendors = rfqClient.fetchAllVendors as jest.Mock;
 const mockInvite = rfqClient.inviteVendorsToRFQ as jest.Mock;
 
 beforeEach(() => {
   jest.clearAllMocks();
   (useApp as jest.Mock).mockReturnValue({ showToast: mockShowToast });
   mockFetchCandidates.mockResolvedValue({ success: true, candidates: [] });
+  mockFetchAllVendors.mockResolvedValue({ success: true, candidates: [] });
 });
 
 describe('InviteVendorsModal', () => {
@@ -225,5 +228,166 @@ describe('InviteVendorsModal', () => {
     fireEvent.click(screen.getByRole('button', { name: formatString(S.inviteAction, { count: 1 }) }));
 
     await waitFor(() => expect(mockOnClose).toHaveBeenCalled());
+  });
+});
+
+describe('InviteVendorsModal — All Vendors tab', () => {
+  it('lazily fetches all vendors only on first switch to the All Vendors tab', async () => {
+    mockFetchAllVendors.mockResolvedValue({
+      success: true,
+      candidates: [candidate({ id: 'v-9', name: 'Bolt Supplies', majorCategory: 'Fasteners' })],
+    });
+
+    render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+    await waitFor(() => expect(screen.getByText(S.noCandidates)).toBeInTheDocument());
+    expect(mockFetchAllVendors).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('invite-tab-all'));
+
+    expect(screen.getByText(S.loading)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Bolt Supplies')).toBeInTheDocument());
+    expect(mockFetchAllVendors).toHaveBeenCalledTimes(1);
+
+    // Switching away and back does not refetch.
+    fireEvent.click(screen.getByTestId('invite-tab-category'));
+    fireEvent.click(screen.getByTestId('invite-tab-all'));
+    expect(mockFetchAllVendors).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows an error state when the all-vendors fetch fails, falling back to the default message', async () => {
+    mockFetchAllVendors.mockResolvedValue({ success: false, reason: 'SERVER', error: '' });
+
+    render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+    await waitFor(() => expect(screen.getByText(S.noCandidates)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('invite-tab-all'));
+
+    await waitFor(() => expect(screen.getByText(S.allVendorsLoadFailed)).toBeInTheDocument());
+  });
+
+  it('shows an empty state when there are no vendors found', async () => {
+    render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+    await waitFor(() => expect(screen.getByText(S.noCandidates)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('invite-tab-all'));
+
+    await waitFor(() => expect(screen.getByText(S.noVendorsFound)).toBeInTheDocument());
+  });
+
+  it('filters all-vendor rows by name/majorCategory/email/minorCategories substring match', async () => {
+    mockFetchAllVendors.mockResolvedValue({
+      success: true,
+      candidates: [
+        candidate({ id: 'v-1', name: 'Alpha Traders', majorCategory: 'Cables', email: 'a@x.com', minorCategories: ['Copper'] }),
+        candidate({ id: 'v-2', name: 'Bolt Supplies', majorCategory: 'Fasteners', email: 'b@y.com', minorCategories: ['Steel'] }),
+      ],
+    });
+
+    render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+    await waitFor(() => expect(screen.getByText(S.noCandidates)).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('invite-tab-all'));
+    await waitFor(() => expect(screen.getByText('Alpha Traders')).toBeInTheDocument());
+    expect(screen.getByText('Bolt Supplies')).toBeInTheDocument();
+
+    const search = screen.getByPlaceholderText(S.searchPlaceholder);
+
+    fireEvent.change(search, { target: { value: 'bolt' } });
+    expect(screen.queryByText('Alpha Traders')).not.toBeInTheDocument();
+    expect(screen.getByText('Bolt Supplies')).toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: 'copper' } });
+    expect(screen.getByText('Alpha Traders')).toBeInTheDocument();
+    expect(screen.queryByText('Bolt Supplies')).not.toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: 'y.com' } });
+    expect(screen.queryByText('Alpha Traders')).not.toBeInTheDocument();
+    expect(screen.getByText('Bolt Supplies')).toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: '' } });
+    expect(screen.getByText('Alpha Traders')).toBeInTheDocument();
+    expect(screen.getByText('Bolt Supplies')).toBeInTheDocument();
+  });
+
+  it('shows the outside-category badge only for all-vendor rows whose category does not match the RFQ signals, including extractedEntities-derived signals', async () => {
+    mockFetchAllVendors.mockResolvedValue({
+      success: true,
+      candidates: [
+        candidate({ id: 'v-1', name: 'Matches RFQ', majorCategory: 'Cables' }),
+        candidate({ id: 'v-2', name: 'No Match', majorCategory: 'Fasteners', minorCategories: ['Screws'] }),
+        candidate({ id: 'v-3', name: 'Matches Minor', majorCategory: 'Copper Wire' }),
+        candidate({ id: 'v-4', name: 'Matches Entity Category', majorCategory: 'Insulation' }),
+      ],
+    });
+    const rfqWithEntities: RFQItem = {
+      ...RFQ,
+      extractedEntities: [{ majorCategory: 'Electricals', minorCategory: 'Copper Wire', category: 'Insulation' } as any],
+    };
+
+    render(<InviteVendorsModal isOpen={true} rfq={rfqWithEntities} onClose={mockOnClose} onInvited={mockOnInvited} />);
+    await waitFor(() => expect(screen.getByText(S.noCandidates)).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('invite-tab-all'));
+    await waitFor(() => expect(screen.getByText('Matches RFQ')).toBeInTheDocument());
+
+    const badges = screen.getAllByTestId('outside-category-badge');
+    expect(badges).toHaveLength(1);
+    expect(screen.getByText('No Match').closest('label')).toContainElement(badges[0]);
+    expect(screen.getByText('Matches RFQ').closest('label')?.querySelector('[data-testid="outside-category-badge"]')).toBeNull();
+  });
+
+  it('derives alreadyInvited for all-vendor rows from the RFQ\'s own assignedVendors, hiding the outside-category badge for them', async () => {
+    mockFetchAllVendors.mockResolvedValue({
+      success: true,
+      candidates: [candidate({ id: 'v-1', name: 'Already In', majorCategory: 'Fasteners' })],
+    });
+    const rfqWithAssigned: RFQItem = { ...RFQ, assignedVendors: [{ id: 'v-1', name: 'Already In' } as any] };
+
+    render(<InviteVendorsModal isOpen={true} rfq={rfqWithAssigned} onClose={mockOnClose} onInvited={mockOnInvited} />);
+    await waitFor(() => expect(screen.getByText(S.noCandidates)).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('invite-tab-all'));
+    await waitFor(() => expect(screen.getByText('Already In')).toBeInTheDocument());
+
+    expect(screen.getByText(S.alreadyInvitedBadge)).toBeInTheDocument();
+    expect(screen.queryByTestId('outside-category-badge')).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox')).toBeDisabled();
+  });
+
+  it('selects and invites a vendor found only via the All Vendors tab', async () => {
+    mockFetchAllVendors.mockResolvedValue({
+      success: true,
+      candidates: [candidate({ id: 'v-9', name: 'Bolt Supplies', majorCategory: 'Fasteners' })],
+    });
+    mockInvite.mockResolvedValue({ success: true, rfq: RFQ, invitedCount: 1 });
+
+    render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+    await waitFor(() => expect(screen.getByText(S.noCandidates)).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('invite-tab-all'));
+    await waitFor(() => expect(screen.getByText('Bolt Supplies')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: formatString(S.inviteAction, { count: 1 }) }));
+
+    await waitFor(() => expect(mockInvite).toHaveBeenCalledWith('rfq-1', ['v-9']));
+  });
+
+  it('resets tab, search, and all-vendors state each time the modal is reopened', async () => {
+    mockFetchAllVendors.mockResolvedValue({
+      success: true,
+      candidates: [candidate({ id: 'v-9', name: 'Bolt Supplies', majorCategory: 'Fasteners' })],
+    });
+
+    const { rerender } = render(
+      <InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />
+    );
+    await waitFor(() => expect(screen.getByText(S.noCandidates)).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('invite-tab-all'));
+    await waitFor(() => expect(screen.getByText('Bolt Supplies')).toBeInTheDocument());
+    fireEvent.change(screen.getByPlaceholderText(S.searchPlaceholder), { target: { value: 'bolt' } });
+
+    rerender(<InviteVendorsModal isOpen={false} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+    rerender(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+
+    await waitFor(() => expect(screen.getByText(S.noCandidates)).toBeInTheDocument());
+    expect(screen.getByTestId('invite-tab-category')).toHaveClass('bg-indigo-600');
+    expect(mockFetchAllVendors).toHaveBeenCalledTimes(1);
   });
 });

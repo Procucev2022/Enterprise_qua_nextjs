@@ -754,42 +754,20 @@ function generateEmailPreview(req, res, next) {
 
     // This is the real "download RFQ" action both opportunity-feed.tsx and
     // quotation-form.tsx call. A vendor downloading a marketplace RFQ (one
-    // not raised by the buyer who added them) is subject to their
-    // subscription's download quota — previously enforced only client-side,
-    // so any vendor could bypass their plan's limit by calling this endpoint
-    // directly. Buyers/category managers/admins downloading their own RFQ's
-    // spec are never subject to this.
+    // not raised by the buyer who added them) is normally subject to their
+    // subscription's download quota (Connect/Select only) — temporarily
+    // disabled for every tier per explicit user request while testing the
+    // real-download feature, so free/premium vendors aren't blocked either.
+    // Usage is still tracked so the quota can be re-enabled later without
+    // losing the counters. To restore enforcement, reintroduce the
+    // quota/used check that used to 403 here (see git history on this file).
     if (req.user && req.user.role === 'vendor') {
       const requestingVendor = storeService.getVendorById(req.user.email);
       if (requestingVendor) {
         const isDirect =
           !!requestingVendor.addedByBuyerCompany && requestingVendor.addedByBuyerCompany === rfq.buyerAccountName;
         if (!isDirect) {
-          const plan = requestingVendor.subscriptionPlan || 'premium';
           const used = requestingVendor.rfqDownloadsUsed || 0;
-          const quota = plan === 'connect' ? 50 : plan === 'select' ? 100 : 0;
-          if (quota === 0) {
-            logger.warn(
-              `Rejected marketplace RFQ download: vendor ${requestingVendor.email} has no marketplace access (plan: ${plan})`,
-              { id, vendorEmail: requestingVendor.email },
-              'RFQ_CONTROLLER'
-            );
-            return res.status(403).json({
-              success: false,
-              error: 'Marketplace RFQs outside your client roster require a Connect or Select subscription.',
-            });
-          }
-          if (used >= quota) {
-            logger.warn(
-              `Rejected marketplace RFQ download: vendor ${requestingVendor.email} reached their ${plan} quota (${used}/${quota})`,
-              { id, vendorEmail: requestingVendor.email },
-              'RFQ_CONTROLLER'
-            );
-            return res.status(403).json({
-              success: false,
-              error: `You have reached your ${quota}-RFQ download quota for this period.`,
-            });
-          }
           storeService.updateVendor(requestingVendor.id, { rfqDownloadsUsed: used + 1 });
         }
       }
