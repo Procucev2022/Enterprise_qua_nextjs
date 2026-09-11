@@ -13,7 +13,7 @@ interface PagesFunctionContext {
 
 export const onRequest = async (context: PagesFunctionContext): Promise<Response> => {
   const url = new URL(context.request.url);
-  const defaultBackend = 'https://eggs-tag-referrals-proc.trycloudflare.com';
+  const defaultBackend = 'https://restored-ceremony-preference-gay.trycloudflare.com';
   const backendBase = context.env.NODE_BACKEND_URL || defaultBackend;
   if (!backendBase || backendBase.includes('localhost') || backendBase.includes('127.0.0.1')) {
     return new Response(
