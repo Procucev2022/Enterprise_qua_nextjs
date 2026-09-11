@@ -53,7 +53,7 @@ describe('Frontend GraphQLClient Unit Tests', () => {
     );
     global.fetch = mockFetch;
 
-    const client = new GraphQLClient('/api/graphql', 20);
+    const client = new GraphQLClient('/api/graphql', 200);
     const queryStr = 'query { activeBuyerAccount { id organizationName } }';
 
     // First call (cache miss -> set)
@@ -67,7 +67,7 @@ describe('Frontend GraphQLClient Unit Tests', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
 
     // Wait for TTL expiration
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await new Promise((resolve) => setTimeout(resolve, 250));
 
     // Third call after expiry (cache miss again)
     const res3 = await client.query(queryStr, {}, { useCache: true });

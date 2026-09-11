@@ -735,7 +735,27 @@ don't deploy this changes in main and git also just commit in this cloudflare br
 continue
 ```
 
+---
+
+### Prompt 31
+
+**Timestamp**: 2026-09-11T04:40:49Z
+
+```text
+i want the latest code deploy clouldflare the url those yesterday link didn't work
+```
+
+---
+
+### Prompt 32
+
+**Timestamp**: 2026-09-11T04:53:41Z
+
+```text
+Whenever you deploy these kinds of applications, please just any one backend related operation & one data base related operation & one file uploading operation
 
 
 
 
+Also, please setup CI/CD in github to automatically deploy these application in cloudflare    every 30 min i want to check in main branch and deploy in clouldflare
+```
