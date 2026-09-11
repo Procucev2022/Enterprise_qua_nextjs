@@ -9,6 +9,10 @@ import VendorSubscriptionCenter from '@/app/vendor/vendor-subscription';
 import { AppProvider, useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 
+jest.mock('next/navigation', () => ({
+  useRouter: () => ({ push: jest.fn() }),
+}));
+
 function renderWithProvider(ui: React.ReactElement) {
   return render(<AppProvider>{ui}</AppProvider>);
 }

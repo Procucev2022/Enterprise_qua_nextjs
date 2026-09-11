@@ -20,6 +20,8 @@ export default function CategoryManagerKanbanPage() {
         if (rfq) setSelectedRFQForMatrix(rfq);
         router.push('/category-manager/spend-dashboard');
       }}
+      onNavigateToAllRfqs={() => router.push('/category-manager/all-rfqs')}
+      onNavigateToVendorConsole={() => router.push('/category-manager/vendor-console')}
     />
   );
 }

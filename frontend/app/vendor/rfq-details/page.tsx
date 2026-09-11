@@ -5,9 +5,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { AlertCircle, Loader2, RefreshCw } from 'lucide-react';
 import { fetchRFQById } from '@/lib/rfqClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
-import RFQDetails from '@/app/buyer/rfq-details';
-import { RFQDeleteDialog, RFQEditModal } from '@/app/buyer/RFQEditModal';
 import { useApp } from '@/lib/store';
+import RFQDetails from '@/app/buyer/rfq-details';
 import type { RFQItem } from '@/lib/types';
 
 const DETAILS = UI_STRINGS.rfqDetails;
@@ -43,42 +42,68 @@ function StatusPanel({
 }
 
 /**
- * Category-manager view of one RFQ, reached from the All RFQs console.
+ * Vendor read-only view of one RFQ, reached from the Bid Quotes ("View
+ * Details") action.
  *
- * Renders the same detail component the buyer sees, with the same edit and
- * delete affordances — `PUT`/`DELETE /api/rfqs/:id` have no buyer-only role
- * gate (`canAccessRfq` treats category_manager/admin as unrestricted), so a
- * category manager overseeing sourcing across every buyer can correct an
- * RFQ's details the same way its own buyer could. The RFQ is fetched by
- * number through `GET /api/rfqs/:id`, which returns the full cross-buyer
- * record for the category_manager role (it is only buyer callers that
- * endpoint scopes).
+ * Renders the same detail component the buyer and category manager see, with
+ * no edit/delete affordances — a vendor is never the owner of an RFQ. The RFQ
+ * is fetched by number through `GET /api/rfqs/:id`, which for the vendor role
+ * is scoped server-side by `canAccessRfq`/`vendorCoversRFQ` (only RFQs the
+ * vendor was directly added for, or was invited to by a category manager) —
+ * the same 404-for-out-of-scope behaviour as the buyer/CM routes, so this
+ * page cannot be used to browse another vendor's RFQs.
+ *
+ * The RFQ record itself still carries every vendor's quote (the buyer/CM need
+ * that), so before handing it to the shared RFQDetails component the quotes
+ * list is narrowed to this vendor's own submission only — otherwise a vendor
+ * would see every competitor's price, lead time and terms on the same RFQ.
  *
  * Addressable by RFQ number so the page survives a reload and can be linked to.
  */
-function CategoryManagerRFQDetailsView() {
+function VendorRFQDetailsView() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const rfqNumber = searchParams.get(RFQ_PARAM);
+  const { currentUserSession } = useApp();
 
-  const { updateRFQ, deleteRFQ } = useApp();
   const [state, setState] = useState<LoadState>({ status: 'idle' });
-  const [isEditing, setIsEditing] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
 
-  const load = useCallback(async (identifier: string) => {
-    setState({ status: 'loading' });
-    const result = await fetchRFQById(identifier);
-    if (result.success) {
-      setState({ status: 'loaded', rfq: result.rfq });
-      return;
-    }
-    setState({
-      status: 'error',
-      message: result.error,
-      canRetry: result.reason !== 'NOT_FOUND',
-    });
-  }, []);
+  const load = useCallback(
+    async (identifier: string) => {
+      setState({ status: 'loading' });
+      const result = await fetchRFQById(identifier);
+      if (!result.success) {
+        setState({
+          status: 'error',
+          message: result.error,
+          canRetry: result.reason !== 'NOT_FOUND',
+        });
+        return;
+      }
+
+      let myVendorId: string | null = null;
+      const email = currentUserSession?.email;
+      if (email) {
+        try {
+          const res = await fetch(`/api/vendors/${encodeURIComponent(email)}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.success && data.data) myVendorId = data.data.id;
+          }
+        } catch {
+          // No vendor record resolved: fall through and show zero quotes
+          // rather than every vendor's, which is the safe default.
+        }
+      }
+
+      const scopedRfq: RFQItem = {
+        ...result.rfq,
+        quotes: (result.rfq.quotes || []).filter((quote) => quote.vendorId === myVendorId),
+      };
+      setState({ status: 'loaded', rfq: scopedRfq });
+    },
+    [currentUserSession?.email]
+  );
 
   useEffect(() => {
     if (!rfqNumber) {
@@ -88,7 +113,7 @@ function CategoryManagerRFQDetailsView() {
     void load(rfqNumber);
   }, [rfqNumber, load]);
 
-  const onBack = () => router.push('/category-manager/all-rfqs');
+  const onBack = () => router.push('/vendor/quotation-form');
 
   if (!rfqNumber) {
     return (
@@ -140,52 +165,15 @@ function CategoryManagerRFQDetailsView() {
     );
   }
 
-  const { rfq } = state;
-
-  /**
-   * Adopt the saved record into this page's own state.
-   *
-   * The page fetched the RFQ itself rather than reading it from the store, so
-   * the store update alone would leave this screen showing the pre-edit
-   * terms until a reload.
-   */
-  const handleSave = async (identifier: string, changes: Parameters<typeof updateRFQ>[1]) => {
-    const saved = await updateRFQ(identifier, changes);
-    setState({ status: 'loaded', rfq: saved });
-    return saved;
-  };
-
-  // Back to the console afterwards: staying here would leave the CM looking
-  // at a record that no longer exists.
-  const handleDelete = async (identifier: string) => {
-    await deleteRFQ(identifier);
-    onBack();
-  };
-
-  return (
-    <>
-      <RFQDetails
-        rfq={rfq}
-        onBack={onBack}
-        onEdit={() => setIsEditing(true)}
-        onDelete={() => setIsDeleting(true)}
-      />
-      <RFQEditModal rfq={isEditing ? rfq : null} onClose={() => setIsEditing(false)} onSave={handleSave} />
-      <RFQDeleteDialog
-        rfq={isDeleting ? rfq : null}
-        onClose={() => setIsDeleting(false)}
-        onConfirm={handleDelete}
-      />
-    </>
-  );
+  return <RFQDetails rfq={state.rfq} onBack={onBack} />;
 }
 
-export default function CategoryManagerRFQDetailsPage() {
+export default function VendorRFQDetailsPage() {
   // useSearchParams suspends during prerender, so the boundary is required for
   // `next build` to statically render this route.
   return (
     <Suspense fallback={null}>
-      <CategoryManagerRFQDetailsView />
+      <VendorRFQDetailsView />
     </Suspense>
   );
 }
