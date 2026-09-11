@@ -481,6 +481,92 @@ describe('mailerService', () => {
 
       expect(typeof mailerService.isConfigured()).toBe('boolean');
     });
+
+    test('getTransporter handles custom SMTP_PORT, SMTP_SECURE, non-gmail host, and SMTP_SERVICE', () => {
+      let createdConfig;
+      jest.isolateModules(() => {
+        process.env.NODE_ENV = 'development';
+        process.env.SMTP_USER = 'test@example.com';
+        process.env.SMTP_PASSWORD = 'pw';
+        process.env.SMTP_PORT = '2525';
+        process.env.SMTP_SECURE = 'false';
+        process.env.SMTP_HOST = 'smtp.custom.com';
+        process.env.SMTP_SERVICE = 'gmail';
+        jest.doMock('nodemailer', () => ({
+          createTransport: jest.fn((cfg) => {
+            createdConfig = cfg;
+            return { sendMail: jest.fn() };
+          }),
+        }));
+        const fresh = require('../src/services/mailerService');
+        fresh.getTransporter();
+      });
+      expect(createdConfig.port).toBe(2525);
+      expect(createdConfig.secure).toBe(false);
+
+      // Branch: SMTP_SECURE without SMTP_PORT
+      jest.isolateModules(() => {
+        process.env.NODE_ENV = 'development';
+        process.env.SMTP_USER = 'test@example.com';
+        process.env.SMTP_PASSWORD = 'pw';
+        delete process.env.SMTP_PORT;
+        process.env.SMTP_SECURE = 'true';
+        delete process.env.SMTP_HOST;
+        delete process.env.SMTP_SERVICE;
+        jest.doMock('nodemailer', () => ({
+          createTransport: jest.fn((cfg) => {
+            createdConfig = cfg;
+            return { sendMail: jest.fn() };
+          }),
+        }));
+        const fresh = require('../src/services/mailerService');
+        fresh.getTransporter();
+      });
+      expect(createdConfig.port).toBe(465);
+      expect(createdConfig.secure).toBe(true);
+
+      // Branch: Non-gmail host without SMTP_PORT/SMTP_SECURE
+      jest.isolateModules(() => {
+        process.env.NODE_ENV = 'development';
+        process.env.SMTP_USER = 'test@example.com';
+        process.env.SMTP_PASSWORD = 'pw';
+        delete process.env.SMTP_PORT;
+        delete process.env.SMTP_SECURE;
+        process.env.SMTP_HOST = 'mail.otherdomain.com';
+        delete process.env.SMTP_SERVICE;
+        jest.doMock('nodemailer', () => ({
+          createTransport: jest.fn((cfg) => {
+            createdConfig = cfg;
+            return { sendMail: jest.fn() };
+          }),
+        }));
+        const fresh = require('../src/services/mailerService');
+        fresh.getTransporter();
+      });
+      expect(createdConfig.port).toBe(587);
+      expect(createdConfig.secure).toBe(false);
+
+      // Cleanup
+      delete process.env.SMTP_USER;
+      delete process.env.SMTP_PASSWORD;
+      delete process.env.SMTP_PORT;
+      delete process.env.SMTP_SECURE;
+      delete process.env.SMTP_HOST;
+      delete process.env.SMTP_SERVICE;
+      process.env.NODE_ENV = 'test';
+    });
+
+    test('fromAddress and vendorSignInUrl handle custom format and fallback envs', () => {
+      process.env.SMTP_FROM = '"Custom Sender" <custom@procucev.com>';
+      expect(mailerService.fromAddress()).toBe('"Custom Sender" <custom@procucev.com>');
+
+      delete process.env.APP_PUBLIC_URL;
+      process.env.FRONTEND_URL = 'https://frontend.vercel.app/';
+      expect(mailerService.vendorSignInUrl()).toBe('https://frontend.vercel.app/login');
+
+      delete process.env.SMTP_FROM;
+      delete process.env.FRONTEND_URL;
+    });
   });
 });
 

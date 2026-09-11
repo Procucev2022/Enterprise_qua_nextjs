@@ -1,17 +1,23 @@
 const nodemailer = require('nodemailer');
+const dns = require('dns');
 const { logger } = require('./loggerService');
 
+// Force Node.js DNS resolver to prefer IPv4 over IPv6.
+// Cloud environments like Render lack IPv6 egress routing; without this,
+// smtp.gmail.com resolves to IPv6 (e.g. 2607:f8b0:...) causing errno -101 ESOCKET.
+if (typeof dns.setDefaultResultOrder === 'function') {
+  dns.setDefaultResultOrder('ipv4first');
+}
+
 let transporter;
-let transporterInitialized = false;
 
 /**
- * Lazily builds a Gmail SMTP transporter from SMTP_USER/SMTP_PASSWORD.
+ * Lazily builds a Gmail / SMTP transporter from SMTP_USER/SMTP_PASSWORD.
  * Returns undefined if either is unset, so callers can no-op gracefully
  * instead of throwing when SMTP isn't configured.
  */
 function getTransporter() {
-  if (transporterInitialized) return transporter;
-  transporterInitialized = true;
+  if (transporter) return transporter;
 
   const user = process.env.SMTP_USER;
   const rawPass = process.env.SMTP_PASSWORD;
@@ -19,24 +25,52 @@ function getTransporter() {
 
   const pass = rawPass.replace(/\s+/g, '');
   const host = process.env.SMTP_HOST || 'smtp.gmail.com';
-  const port = Number(process.env.SMTP_PORT) || (process.env.SMTP_SECURE === 'true' ? 465 : 587);
-  const secure = process.env.SMTP_SECURE ? process.env.SMTP_SECURE === 'true' : port === 465;
+  const isGmail =
+    (process.env.SMTP_SERVICE && process.env.SMTP_SERVICE.toLowerCase() === 'gmail') ||
+    host.toLowerCase().includes('gmail');
 
-  transporter = nodemailer.createTransport({
+  // On cloud platforms (Render, AWS, etc.), port 587 (STARTTLS) is often blocked
+  // or experiences handshake timeouts. Default to port 465 (direct SSL) for Gmail.
+  let port;
+  let secure;
+
+  if (process.env.SMTP_PORT) {
+    port = Number(process.env.SMTP_PORT);
+    secure = process.env.SMTP_SECURE !== undefined ? process.env.SMTP_SECURE === 'true' : port === 465;
+  } else if (process.env.SMTP_SECURE !== undefined) {
+    secure = process.env.SMTP_SECURE === 'true';
+    port = secure ? 465 : 587;
+  } else if (isGmail) {
+    port = 465;
+    secure = true;
+  } else {
+    port = 587;
+    secure = false;
+  }
+
+  const transportConfig = {
     host,
     port,
     secure,
+    family: 4, // CRITICAL: Force IPv4 socket to prevent IPv6 errno -101 ESOCKET on Render/AWS/Docker
     auth: { user, pass },
-    family: 4, // Force IPv4 to prevent IPv6 timeouts on cloud platforms (AWS, Render, Vercel)
-    connectionTimeout: 15000,
-    greetingTimeout: 15000,
-    socketTimeout: 20000,
-  });
+    tls: {
+      rejectUnauthorized: false,
+    },
+    connectionTimeout: 25000,
+    greetingTimeout: 25000,
+    socketTimeout: 30000,
+  };
+
+  transporter = nodemailer.createTransport(transportConfig);
   return transporter;
 }
 
 function fromAddress() {
-  const user = process.env.SMTP_USER || 'RFQ@procucev.com';
+  const user = process.env.SMTP_FROM || process.env.SMTP_USER || 'RFQ@procucev.com';
+  if (user.includes('<') && user.includes('>')) {
+    return user;
+  }
   return `"Procucev Enterprise" <${user}>`;
 }
 
@@ -60,7 +94,7 @@ function buildRequisitionEmail(to, rfq = {}, fromEmail = '') {
     : `<tr><td colspan="3" style="padding: 10px; color: #64748b;">No specific line items itemized.</td></tr>`;
 
   return {
-    from: process.env.SMTP_USER || 'no-reply@procucev.com',
+    from: fromAddress(),
     to: to || 'navinchaudhary.dev@gmail.com',
     replyTo: fromEmail || safeRfq.sourceEmail || undefined,
     subject: `[Procucev Requisition] ${safeRfq.title || 'New Inbound Requisition'} (${safeRfq.rfqNumber || 'Draft'})`,
@@ -163,7 +197,7 @@ function row(label, value) {
 function buildOtpEmail(to, code, expiresInSeconds) {
   const minutes = Math.max(1, Math.round((expiresInSeconds || 600) / 60));
   return {
-    from: process.env.SMTP_USER,
+    from: fromAddress(),
     to,
     subject: 'Your Procucev Enterprise verification code',
     html: wrapEmail(
@@ -225,7 +259,7 @@ function buildRfqInviteEmail(to, { rfq, recipientName }) {
   `;
 
   return {
-    from: process.env.SMTP_USER,
+    from: fromAddress(),
     to,
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'New Sourcing Enquiry', inner),
@@ -256,7 +290,7 @@ function buildQuoteReceivedEmail(to, { rfq, quote, recipientName }) {
   `;
 
   return {
-    from: process.env.SMTP_USER,
+    from: fromAddress(),
     to,
     subject: `New quote on ${rfq.rfqNumber}${quote.vendorName ? ` from ${quote.vendorName}` : ''}`,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Quotation Received', inner),
@@ -302,7 +336,7 @@ async function sendRequisitionNotificationEmail(to, rfq, fromEmail) {
 
 /** Where a supplier signs in. Configurable because it differs per deployment. */
 function vendorSignInUrl() {
-  const base = process.env.APP_PUBLIC_URL || 'http://localhost:3000';
+  const base = process.env.APP_PUBLIC_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
   return `${String(base).replace(/\/+$/, '')}/login`;
 }
 
@@ -354,7 +388,7 @@ function buildVendorCategoryMappingEmail({
   `;
 
   return {
-    from: process.env.SMTP_USER,
+    from: fromAddress(),
     to,
     subject: `${buyer} has mapped your supply categories${majorCategory ? ` — ${majorCategory}` : ''}`,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Vendor Category Mapping Confirmed', inner),
@@ -387,7 +421,7 @@ function buildVendorSelfMappingEmail({ to, recipientName, buyerOrganizationName,
   `;
 
   return {
-    from: process.env.SMTP_USER,
+    from: fromAddress(),
     to,
     subject: 'Complete Your Category Mapping to Receive Enquiries',
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Category Mapping Required', inner),
@@ -453,7 +487,7 @@ function buildVendorOnboardingEmail({ to, recipientName, buyerOrganizationName, 
   `;
 
   return {
-    from: process.env.SMTP_USER,
+    from: fromAddress(),
     to,
     subject: `[Action Required] Welcome to Procucev - Your Account Credentials from ${buyer}`,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Supplier Onboarding & Login Credentials', inner),
@@ -519,7 +553,7 @@ function buildRatingRevisionEmail({ to, recipientName, vendorName, buyerCompany,
       </p>
       
       <p style="margin: 28px 0;">
-        <a href="${vendorSignInUrl()}" style="background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%); color: #ffffff; padding: 14px 28px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 15px; box-shadow: 0 4px 6px -1px rgba(2, 132, 199, 0.3);View Performance Dashboard</a>
+        <a href="${vendorSignInUrl()}" style="background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%); color: #ffffff; padding: 14px 28px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 15px; box-shadow: 0 4px 6px -1px rgba(2, 132, 199, 0.3);">View Performance Dashboard</a>
       </p>
       
       <p style="font-size: 13px; color: #64748b; margin: 0; line-height: 1.6;">
@@ -529,7 +563,7 @@ function buildRatingRevisionEmail({ to, recipientName, vendorName, buyerCompany,
   `;
 
   return {
-    from: process.env.SMTP_USER,
+    from: fromAddress(),
     to,
     subject: `[Rating Update] Your performance rating has been updated by ${buyerCompany}`,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Vendor Rating Revision', inner),
@@ -561,6 +595,7 @@ module.exports = {
   buildQuoteReceivedEmail,
   sendRequisitionNotificationEmail,
   buildRequisitionEmail,
+  fromAddress,
   vendorSignInUrl,
   categoryList,
   buildVendorCategoryMappingEmail,
