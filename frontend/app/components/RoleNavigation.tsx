@@ -28,6 +28,7 @@ import {
   Award,
   ClipboardList,
   Database,
+  Receipt,
   Menu,
   X,
   LogOut,
@@ -51,6 +52,7 @@ const SIDEBAR_ICONS: Record<SidebarIconKey, LucideIcon> = {
   Award,
   ClipboardList,
   Database,
+  Receipt,
 };
 
 const NAV = UI_STRINGS.navigation;

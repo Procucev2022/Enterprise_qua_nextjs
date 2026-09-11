@@ -587,7 +587,7 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
       throw new Error('Update subscription error');
     });
     await vendorController.updateSubscription(
-      { params: { id: subscriptionVendor.id }, body: { plan: 'select' }, user: adminUser },
+      { params: { id: subscriptionVendor.id }, body: { plan: 'premium' }, user: adminUser },
       res,
       next
     );

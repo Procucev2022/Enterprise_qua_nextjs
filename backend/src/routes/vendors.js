@@ -13,6 +13,8 @@ router.post('/:id/rating-revision', authenticate, vendorController.reviseRating)
 router.put('/:id/categories', authenticate, vendorController.updateCategories);
 router.put('/:id/subscription', authenticate, vendorController.updateSubscription);
 router.post('/:id/payment-link', authenticate, vendorController.createSubscriptionPaymentLink);
+router.get('/:id/payment-links', authenticate, vendorController.getPaymentLinks);
+router.get('/:id/payment-links/:linkId/invoice', authenticate, vendorController.downloadInvoice);
 router.get('/:id/onboarding-email', authenticate, vendorController.generateOnboardingEmailPreview);
 
 module.exports = router;

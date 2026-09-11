@@ -942,6 +942,70 @@ describe('Store Service & Business Operations', () => {
       expect(pending.some((l) => l.id === 'pl-status-b')).toBe(false);
     });
 
+    test('getPaymentLinksForVendor returns only that vendor\'s links, newest first, and re-syncs from Neon when configured', async () => {
+      storeService.createPaymentLinkRecord({ id: 'pl-vendor-hist-a', zohoPaymentLinkId: 'z-a', vendorId: 'v-hist', payerType: 'vendor', planId: 'connect', amount: 1, paymentUrl: '', status: 'active' });
+      storeService.createPaymentLinkRecord({ id: 'pl-vendor-hist-b', zohoPaymentLinkId: 'z-b', vendorId: 'v-other', payerType: 'vendor', planId: 'connect', amount: 1, paymentUrl: '', status: 'active' });
+
+      const poolModule = require('../src/db/pool');
+      const domainQueries = require('../src/db/domainQueries');
+      const originalPool = poolModule.pool;
+      poolModule.pool = {};
+      const dbOnlyLink = { id: 'pl-vendor-hist-db', zohoPaymentLinkId: 'z-db', vendorId: 'v-hist', payerType: 'vendor', status: 'paid' };
+      const spy = jest.spyOn(domainQueries, 'getPaymentLinksFromDB').mockResolvedValueOnce([dbOnlyLink]);
+      try {
+        const links = await storeService.getPaymentLinksForVendor('v-hist');
+        expect(links.map((l) => l.id)).toEqual(expect.arrayContaining(['pl-vendor-hist-a', 'pl-vendor-hist-db']));
+        expect(links.some((l) => l.id === 'pl-vendor-hist-b')).toBe(false);
+      } finally {
+        spy.mockRestore();
+        poolModule.pool = originalPool;
+      }
+    });
+
+    test('getPaymentLinksForBuyer returns only that buyer\'s links, newest first, and re-syncs from Neon when configured', async () => {
+      storeService.createPaymentLinkRecord({ id: 'pl-buyer-hist-a', zohoPaymentLinkId: 'zb-a', buyerAccountId: 'b-hist', payerType: 'buyer', planId: 'version_1', amount: 1, paymentUrl: '', status: 'active' });
+      storeService.createPaymentLinkRecord({ id: 'pl-buyer-hist-b', zohoPaymentLinkId: 'zb-b', buyerAccountId: 'b-other', payerType: 'buyer', planId: 'version_1', amount: 1, paymentUrl: '', status: 'active' });
+
+      const poolModule = require('../src/db/pool');
+      const domainQueries = require('../src/db/domainQueries');
+      const originalPool = poolModule.pool;
+      poolModule.pool = {};
+      const dbOnlyLink = { id: 'pl-buyer-hist-db', zohoPaymentLinkId: 'zb-db', buyerAccountId: 'b-hist', payerType: 'buyer', status: 'paid' };
+      const spy = jest.spyOn(domainQueries, 'getPaymentLinksFromDB').mockResolvedValueOnce([dbOnlyLink]);
+      try {
+        const links = await storeService.getPaymentLinksForBuyer('b-hist');
+        expect(links.map((l) => l.id)).toEqual(expect.arrayContaining(['pl-buyer-hist-a', 'pl-buyer-hist-db']));
+        expect(links.some((l) => l.id === 'pl-buyer-hist-b')).toBe(false);
+      } finally {
+        spy.mockRestore();
+        poolModule.pool = originalPool;
+      }
+    });
+
+    test('getPaymentLinkById finds an in-memory link, falls back to Neon on a miss, and returns null when unconfigured/not found', async () => {
+      storeService.createPaymentLinkRecord({ id: 'pl-byid-mem', zohoPaymentLinkId: 'z-byid-mem', vendorId: 'v-x', planId: 'connect', amount: 1, paymentUrl: '', status: 'active' });
+      await expect(storeService.getPaymentLinkById('pl-byid-mem')).resolves.toMatchObject({ id: 'pl-byid-mem' });
+
+      const poolModule = require('../src/db/pool');
+      const domainQueries = require('../src/db/domainQueries');
+      const originalPool = poolModule.pool;
+
+      poolModule.pool = null;
+      await expect(storeService.getPaymentLinkById('pl-byid-unconfigured')).resolves.toBeNull();
+
+      poolModule.pool = {};
+      const dbOnlyLink = { id: 'pl-byid-db', zohoPaymentLinkId: 'z-byid-db', status: 'paid' };
+      let spy = jest.spyOn(domainQueries, 'getPaymentLinksFromDB').mockResolvedValueOnce([dbOnlyLink]);
+      await expect(storeService.getPaymentLinkById('pl-byid-db')).resolves.toEqual(dbOnlyLink);
+      spy.mockRestore();
+
+      spy = jest.spyOn(domainQueries, 'getPaymentLinksFromDB').mockResolvedValueOnce([]);
+      await expect(storeService.getPaymentLinkById('pl-byid-not-anywhere')).resolves.toBeNull();
+      spy.mockRestore();
+
+      poolModule.pool = originalPool;
+    });
+
     test('updatePaymentLinkRecord merges updates and returns null for an unknown id', () => {
       storeService.createPaymentLinkRecord({ id: 'pl-update-1', zohoPaymentLinkId: 'zoho-update-1', vendorId: 'v-x', planId: 'connect', amount: 1, paymentUrl: '', status: 'CREATED' });
 

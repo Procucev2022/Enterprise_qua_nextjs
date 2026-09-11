@@ -190,6 +190,10 @@ export const UI_STRINGS = {
         label: 'Subscription Plans',
         description: 'Access tiers, quotas & downloads',
       },
+      billingHistory: {
+        label: 'Billing History',
+        description: 'Past payments & downloadable receipts',
+      },
       supplierProfile: {
         label: 'Vendor Profile',
         description: 'Company credentials & banking vault',

@@ -14,5 +14,7 @@ router.put('/:id', authenticate, buyerAccountController.updateBuyerAccount);
 router.delete('/:id', authenticate, buyerAccountController.deleteBuyerAccount);
 router.post('/:id/activate', authenticate, buyerAccountController.setActiveAccount);
 router.post('/:id/subscription-payment', authenticate, buyerAccountController.createSubscriptionPaymentLink);
+router.get('/:id/payment-links', authenticate, buyerAccountController.getPaymentLinks);
+router.get('/:id/payment-links/:linkId/invoice', authenticate, buyerAccountController.downloadInvoice);
 
 module.exports = router;
