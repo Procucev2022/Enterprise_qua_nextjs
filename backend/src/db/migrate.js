@@ -52,6 +52,14 @@ const REPORTED_TABLES = [
   'ai_feed',
   'audit_logs',
   'notifications',
+  'vendor_ingestion_sessions',
+  'vendor_master_records',
+  'po_line_items',
+  'vendor_category_mappings',
+  'vendor_category_dispatches',
+  'vendor_email_dispatch_log',
+  'vendor_ingestion_audit',
+  'ai_classification_logs',
 ];
 
 async function reportRowCounts() {

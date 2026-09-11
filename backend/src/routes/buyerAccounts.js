@@ -9,6 +9,7 @@ router.post('/', authenticate, buyerAccountController.createBuyerAccount);
 // schema, so it needs a session to know whose account to return.
 router.get('/active', authenticate, buyerAccountController.getActiveAccount);
 router.post('/historical-data', authenticate, buyerAccountController.ingestHistoricalData);
+router.post('/ai-cross-match', authenticate, buyerAccountController.aiCrossMatch);
 router.put('/:id', authenticate, buyerAccountController.updateBuyerAccount);
 router.delete('/:id', authenticate, buyerAccountController.deleteBuyerAccount);
 router.post('/:id/activate', authenticate, buyerAccountController.setActiveAccount);

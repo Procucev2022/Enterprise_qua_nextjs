@@ -386,4 +386,101 @@ describe('mailerService', () => {
     expect(email1.html).toContain('Grade A');
     expect(email1.html).toContain('0-10 bar');
   });
+
+  describe('Vendor Category & Onboarding Emails', () => {
+    test('categoryList formats items or returns empty string', () => {
+      expect(mailerService.categoryList([])).toBe('');
+      expect(mailerService.categoryList(['', '   ', null])).toBe('');
+      const html = mailerService.categoryList(['Valves', 'Pumps']);
+      expect(html).toContain('Valves');
+      expect(html).toContain('Pumps');
+    });
+
+    test('buildVendorCategoryMappingEmail renders correctly with and without minors', () => {
+      const email1 = mailerService.buildVendorCategoryMappingEmail({
+        to: 'vendor@test.com',
+        recipientName: 'Rajesh',
+        buyerOrganizationName: 'Tata Steel',
+        vendorCode: 'V-1001',
+        majorCategory: 'Industrial Valves',
+        minorCategories: ['Ball Valves', 'Gate Valves'],
+      });
+      expect(email1.to).toBe('vendor@test.com');
+      expect(email1.subject).toContain('Tata Steel has mapped your supply categories');
+      expect(email1.html).toContain('Rajesh');
+      expect(email1.html).toContain('Ball Valves');
+
+      const email2 = mailerService.buildVendorCategoryMappingEmail({
+        to: 'vendor2@test.com',
+      });
+      expect(email2.subject).toContain('A buyer on Procucev');
+      expect(email2.html).toContain('Hello,');
+    });
+
+    test('buildVendorSelfMappingEmail renders correctly', () => {
+      const email = mailerService.buildVendorSelfMappingEmail({
+        to: 'vendor@test.com',
+        recipientName: 'Suresh',
+        buyerOrganizationName: 'L&T',
+        vendorCode: 'V-2002',
+      });
+      expect(email.to).toBe('vendor@test.com');
+      expect(email.subject).toBe('Complete Your Category Mapping to Receive Enquiries');
+      expect(email.html).toContain('Suresh');
+      expect(email.html).toContain('L&T');
+
+      const emailFallback = mailerService.buildVendorSelfMappingEmail({ to: 'v@test.com' });
+      expect(emailFallback.html).toContain('Hello,');
+    });
+
+    test('buildVendorOnboardingEmail renders credentials and contact info', () => {
+      const email = mailerService.buildVendorOnboardingEmail({
+        to: 'onboard@test.com',
+        recipientName: 'Amit',
+        buyerOrganizationName: 'Reliance',
+        vendorCode: 'V-3003',
+        tempPassword: 'SecretPassword123',
+        contactPhone: '+919876543210',
+      });
+      expect(email.to).toBe('onboard@test.com');
+      expect(email.subject).toContain('Welcome to Procucev');
+      expect(email.html).toContain('SecretPassword123');
+      expect(email.html).toContain('+919876543210');
+
+      const emailFallback = mailerService.buildVendorOnboardingEmail({
+        to: 'onboard2@test.com',
+      });
+      expect(emailFallback.html).toContain('Set during first login');
+    });
+
+    test('buildRatingRevisionEmail renders rating update summary', () => {
+      const email = mailerService.buildRatingRevisionEmail({
+        to: 'rating@test.com',
+        recipientName: 'Vikram',
+        vendorName: 'Apex Tools',
+        buyerCompany: 'Mahindra',
+        buyerName: 'Buyer Lead',
+        previousRating: 3.5,
+        newRating: 4.5,
+        previousScore: 70.0,
+        newScore: 90.0,
+        remarks: 'Great on-time delivery record',
+        qualityScore: 95,
+        costScore: 85,
+        deliveryScore: 90,
+      });
+      expect(email.to).toBe('rating@test.com');
+      expect(email.subject).toContain('Mahindra');
+      expect(email.html).toContain('4.5 / 5.0');
+      expect(email.html).toContain('Great on-time delivery record');
+    });
+
+    test('sendVendorIngestionEmail and isConfigured work properly', async () => {
+      const res = await mailerService.sendVendorIngestionEmail({ to: 'x@test.com' }, 'mapping');
+      expect(res.sent).toBe(false);
+
+      expect(typeof mailerService.isConfigured()).toBe('boolean');
+    });
+  });
 });
+

@@ -114,9 +114,11 @@ jest.mock('@/app/buyer/buyer-account-table', () => stub('buyer-account-table'));
 
 // ── Category manager screens ─────────────────────────────────────────────────
 jest.mock('@/app/category-manager/kanban-board', () =>
-  stub('kanban-board', ['onNavigateToMatrix', 'onNavigateToSpend'])
+  stub('kanban-board', ['onNavigateToMatrix', 'onNavigateToSpend', 'onNavigateToAllRfqs', 'onNavigateToVendorConsole'])
 );
-jest.mock('@/app/category-manager/spend-dashboard', () => stub('spend-dashboard', ['onBackToKanban']));
+jest.mock('@/app/category-manager/spend-dashboard', () =>
+  stub('spend-dashboard', ['onBackToKanban', 'onNavigateToAllRfqs', 'onNavigateToVendorConsole', 'onNavigateToKanban'])
+);
 jest.mock('@/app/category-manager/buyer-console', () =>
   stub('buyer-console', ['onNavigateToMatrix', 'onNavigateToEvaluation'])
 );
@@ -182,6 +184,7 @@ describe('Role screen routes', () => {
   const setSelectedRFQForMatrix = jest.fn();
   const setSelectedVendorOpportunity = jest.fn();
   const setActiveEvaluationRecord = jest.fn();
+  const setInitialSetupModalOpen = jest.fn();
   const storeUpdateRFQ = jest.fn();
   const storeDeleteRFQ = jest.fn();
 
@@ -190,6 +193,7 @@ describe('Role screen routes', () => {
       setSelectedRFQForMatrix,
       setSelectedVendorOpportunity,
       setActiveEvaluationRecord,
+      setInitialSetupModalOpen,
       activeEvaluationRecord: EVALUATION,
       updateRFQ: storeUpdateRFQ,
       deleteRFQ: storeDeleteRFQ,
@@ -429,7 +433,7 @@ describe('Role screen routes', () => {
       expect(mockPush).toHaveBeenCalledWith('/buyer/vendor-evaluation-summary');
 
       clickCallback('vendor-summary:onNavigateToWizard');
-      expect(mockPush).toHaveBeenCalledWith('/buyer/ingestion-wizard');
+      expect(setInitialSetupModalOpen).toHaveBeenCalledWith(true);
     });
 
     it.each<[string, React.ComponentType, string]>([
@@ -453,9 +457,32 @@ describe('Role screen routes', () => {
       expect(mockPush).toHaveBeenCalledWith('/category-manager/spend-dashboard');
     });
 
+    it('kanban board summary cards navigate to their real targets', () => {
+      render(<CmKanbanPage />);
+
+      clickCallback('kanban-board:onNavigateToAllRfqs');
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/all-rfqs');
+
+      clickCallback('kanban-board:onNavigateToVendorConsole');
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/vendor-console');
+    });
+
     it('spend dashboard returns to the kanban board', () => {
       render(<CmSpendPage />);
       clickCallback('spend-dashboard:onBackToKanban');
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/kanban-board');
+    });
+
+    it('spend dashboard KPI cards navigate to their real targets', () => {
+      render(<CmSpendPage />);
+
+      clickCallback('spend-dashboard:onNavigateToAllRfqs');
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/all-rfqs');
+
+      clickCallback('spend-dashboard:onNavigateToVendorConsole');
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/vendor-console');
+
+      clickCallback('spend-dashboard:onNavigateToKanban');
       expect(mockPush).toHaveBeenCalledWith('/category-manager/kanban-board');
     });
 
@@ -480,10 +507,10 @@ describe('Role screen routes', () => {
       expect(mockPush).toHaveBeenCalledWith('/category-manager/quote-matrix');
     });
 
-    it('quote matrix returns to the kanban board', () => {
+    it('quote matrix returns to the All RFQs console', () => {
       render(<CmQuoteMatrixPage />);
       clickCallback('quote-matrix:onBackToDashboard');
-      expect(mockPush).toHaveBeenCalledWith('/category-manager/kanban-board');
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/all-rfqs');
     });
 
     it('renders the category summary screen', () => {
@@ -558,6 +585,62 @@ describe('Role screen routes', () => {
       render(<CmRFQDetailsPage />);
       fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.rfqDetails.backAction }));
       expect(mockPush).toHaveBeenCalledWith('/category-manager/all-rfqs');
+    });
+
+    // ── Editing and deleting from the CM details route ──────────────────────
+    // canAccessRfq/PUT/DELETE /api/rfqs/:id have no buyer-only role gate, so a
+    // category manager gets the same edit/delete flow the buyer's own page
+    // already uses.
+    it('CM rfq details opens the edit dialog and adopts what was saved', async () => {
+      mockSearchParams.set('rfq', 'RFQ-1');
+      mockFetchRFQById.mockResolvedValue({ success: true, rfq: RFQ });
+
+      render(<CmRFQDetailsPage />);
+      await waitFor(() => expect(screen.getByTestId('rfq-details')).toBeInTheDocument());
+
+      expect(screen.queryByTestId('edit-modal-open')).not.toBeInTheDocument();
+      clickCallback('rfq-details:onEdit');
+      expect(screen.getByTestId('edit-modal-open')).toBeInTheDocument();
+
+      clickCallback('edit-modal:save');
+      await waitFor(() =>
+        expect(storeUpdateRFQ).toHaveBeenCalledWith('RFQ-1', { title: 'Edited title' })
+      );
+      mockSearchParams.delete('rfq');
+    });
+
+    it('CM rfq details deletes on confirmation and returns to the console', async () => {
+      mockSearchParams.set('rfq', 'RFQ-1');
+      mockFetchRFQById.mockResolvedValue({ success: true, rfq: RFQ });
+
+      render(<CmRFQDetailsPage />);
+      await waitFor(() => expect(screen.getByTestId('rfq-details')).toBeInTheDocument());
+
+      expect(screen.queryByTestId('delete-dialog-open')).not.toBeInTheDocument();
+      clickCallback('rfq-details:onDelete');
+      expect(screen.getByTestId('delete-dialog-open')).toBeInTheDocument();
+
+      clickCallback('delete-dialog:confirm');
+      await waitFor(() => expect(storeDeleteRFQ).toHaveBeenCalledWith('RFQ-1'));
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/all-rfqs');
+      mockSearchParams.delete('rfq');
+    });
+
+    it('CM rfq details closes each dialog without changing anything', async () => {
+      mockSearchParams.set('rfq', 'RFQ-1');
+      mockFetchRFQById.mockResolvedValue({ success: true, rfq: RFQ });
+
+      render(<CmRFQDetailsPage />);
+      await waitFor(() => expect(screen.getByTestId('rfq-details')).toBeInTheDocument());
+
+      clickCallback('rfq-details:onEdit');
+      clickCallback('edit-modal:close');
+      expect(screen.queryByTestId('edit-modal-open')).not.toBeInTheDocument();
+
+      clickCallback('rfq-details:onDelete');
+      clickCallback('delete-dialog:close');
+      expect(screen.queryByTestId('delete-dialog-open')).not.toBeInTheDocument();
+      mockSearchParams.delete('rfq');
     });
   });
 

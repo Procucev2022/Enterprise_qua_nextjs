@@ -237,7 +237,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
     },
     {
       id: 'buyer_profile',
-      screenTag: 'Screen 1.7',
+      screenTag: 'Screen 1.8',
       label: NAV_ITEMS.buyerProfile.label,
       description: NAV_ITEMS.buyerProfile.description,
       icon: 'Building2',

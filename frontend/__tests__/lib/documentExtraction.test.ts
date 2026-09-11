@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import {
   isSpreadsheet,
+  isEmailFile,
   flattenWorkbook,
   readAsBase64,
   readAsArrayBuffer,
@@ -38,6 +39,19 @@ describe('isSpreadsheet', () => {
     'does not treat %s as a spreadsheet',
     (name) => {
       expect(isSpreadsheet(name)).toBe(false);
+    }
+  );
+});
+
+describe('isEmailFile', () => {
+  test.each(['original_msg.eml', 'Requisition.EML'])('treats %s as an email', (name) => {
+    expect(isEmailFile(name)).toBe(true);
+  });
+
+  test.each(['boq.xlsx', 'spec.pdf', 'requisition.msg', 'noextension'])(
+    'does not treat %s as an email',
+    (name) => {
+      expect(isEmailFile(name)).toBe(false);
     }
   );
 });
@@ -234,6 +248,19 @@ describe('buildExtractionRequest', () => {
 
     await expect(buildExtractionRequest(file)).resolves.toMatchObject({
       mimeType: 'image/png',
+    });
+  });
+
+  // A raw .eml is routed through the backend's emailIngestionService, not
+  // Gemini's inline MIME allow-list — sent with an explicit message/rfc822
+  // type rather than falling into the generic "assume PDF" default.
+  test('sends a .eml file inline as message/rfc822, ignoring the browser type', async () => {
+    const file = new File(['From: a@b.com\r\nSubject: RFQ\r\n\r\nBody'], 'original_msg.eml', { type: '' });
+
+    await expect(buildExtractionRequest(file)).resolves.toEqual({
+      fileName: 'original_msg.eml',
+      inlineData: expect.any(String),
+      mimeType: 'message/rfc822',
     });
   });
 });

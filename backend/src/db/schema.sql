@@ -424,3 +424,285 @@ CREATE INDEX IF NOT EXISTS idx_payment_links_status ON payment_links (status);
 -- backend/scripts/transfer-neon.js — a real structural change applied by hand,
 -- once, outside the automatic migrate flow). A brand new environment gets this
 -- shape for free from the CREATE TABLE above; nothing further is needed there.
+
+-- ============================================================================
+-- VENDOR MASTER & PO DATA INGESTION (Buyer module)
+-- ============================================================================
+-- A buyer uploads their Vendor Master and their historical PO purchase dump as
+-- two separate files, the PO history is joined onto the vendor master, and the
+-- joined purchasing profile — not the company name — is what the AI categoriser
+-- reads. Everything below is scoped by organization_id and every read filters
+-- on it: one buyer must never see another buyer's vendor master or spend.
+--
+-- These are typed tables rather than the `raw JSONB` domain style used by
+-- vendors/rfqs, because every column here is something the module filters,
+-- aggregates or joins on (horizon dates, vendor code, GSTIN, spend, status).
+-- A `raw` column is still carried for the untouched source row, so an operator
+-- can always see exactly what the spreadsheet said.
+--
+-- Reminder (same rule as the rest of this file): only CREATE ... IF NOT EXISTS.
+-- Never ALTER, never DROP — this runs automatically against the live database.
+
+-- One ingestion run. Holds the selected time horizon and the per-step progress
+-- so a buyer who navigates away resumes exactly where they left off rather than
+-- restarting from the file pickers.
+CREATE TABLE IF NOT EXISTS vendor_ingestion_sessions (
+  id VARCHAR(64) PRIMARY KEY,
+  organization_id VARCHAR(64) NOT NULL,
+  created_by_user_id VARCHAR(64),
+  created_by_email VARCHAR(320),
+  -- DRAFT | VENDOR_MASTER_STORED | PO_STORED | JOINED | AI_COMPLETED | DISPATCHED
+  status VARCHAR(40) NOT NULL DEFAULT 'DRAFT',
+  -- Furthest step the buyer has legitimately reached (1..5). Forward jumps are
+  -- refused server-side, so this is the authority, not the client's useState.
+  current_step SMALLINT NOT NULL DEFAULT 1,
+  -- LAST_1_YEAR | LAST_2_YEARS | LAST_3_YEARS | CUSTOM. The concrete range is
+  -- always resolved and stored, even for the predefined options, so a session
+  -- re-read months later still reports the window the PO filter actually used.
+  horizon_type VARCHAR(16),
+  horizon_start DATE,
+  horizon_end DATE,
+  vendor_master_file_name VARCHAR(512),
+  vendor_master_row_count INTEGER NOT NULL DEFAULT 0,
+  po_file_name VARCHAR(512),
+  po_row_count INTEGER NOT NULL DEFAULT 0,
+  po_in_horizon_count INTEGER NOT NULL DEFAULT 0,
+  po_outside_horizon_count INTEGER NOT NULL DEFAULT 0,
+  matched_vendor_count INTEGER NOT NULL DEFAULT 0,
+  unmatched_vendor_count INTEGER NOT NULL DEFAULT 0,
+  -- IDLE | QUEUED | PROCESSING | COMPLETED | FAILED — persisted so a large AI
+  -- job survives the browser closing and the UI can reattach to its progress.
+  ai_status VARCHAR(20) NOT NULL DEFAULT 'IDLE',
+  ai_processed_count INTEGER NOT NULL DEFAULT 0,
+  ai_total_count INTEGER NOT NULL DEFAULT 0,
+  ai_failed_count INTEGER NOT NULL DEFAULT 0,
+  ai_started_at TIMESTAMPTZ,
+  ai_completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  raw JSONB
+);
+CREATE INDEX IF NOT EXISTS idx_vendor_ingestion_sessions_org ON vendor_ingestion_sessions (organization_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vendor_ingestion_sessions_status ON vendor_ingestion_sessions (status);
+
+-- File 1: the buyer's vendor master. normalized_name is the pre-computed
+-- fallback match key (lowercased, legal suffixes and punctuation stripped) so
+-- the name-based join is an indexed equality test rather than a per-row scan.
+CREATE TABLE IF NOT EXISTS vendor_master_records (
+  id VARCHAR(64) PRIMARY KEY,
+  session_id VARCHAR(64) NOT NULL,
+  organization_id VARCHAR(64) NOT NULL,
+  source_row_number INTEGER,
+  vendor_code VARCHAR(120),
+  company_name VARCHAR(512) NOT NULL,
+  normalized_name VARCHAR(512),
+  contact_person VARCHAR(255),
+  email VARCHAR(320),
+  phone VARCHAR(64),
+  address VARCHAR(1024),
+  gstin VARCHAR(64),
+  -- 0..100, optional in the sheet and therefore nullable here. Never defaulted:
+  -- an unrated supplier must not arrive carrying a score nobody assessed.
+  rating NUMERIC(5, 2),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  raw JSONB,
+  -- Re-confirming the same file replaces rather than duplicates its rows.
+  CONSTRAINT uq_vendor_master_session_code UNIQUE (session_id, vendor_code)
+);
+CREATE INDEX IF NOT EXISTS idx_vendor_master_records_session ON vendor_master_records (session_id);
+CREATE INDEX IF NOT EXISTS idx_vendor_master_records_org ON vendor_master_records (organization_id);
+CREATE INDEX IF NOT EXISTS idx_vendor_master_records_code ON vendor_master_records (organization_id, vendor_code);
+CREATE INDEX IF NOT EXISTS idx_vendor_master_records_gstin ON vendor_master_records (organization_id, gstin);
+CREATE INDEX IF NOT EXISTS idx_vendor_master_records_norm_name ON vendor_master_records (organization_id, normalized_name);
+
+-- File 2: historical PO line items. in_horizon is stamped at confirm time from
+-- the session's resolved window, so every later read (the AI aggregation, the
+-- spend rollups, the match summary) filters on one indexed boolean instead of
+-- re-deriving the date maths and risking two code paths disagreeing.
+CREATE TABLE IF NOT EXISTS po_line_items (
+  id VARCHAR(64) PRIMARY KEY,
+  session_id VARCHAR(64) NOT NULL,
+  organization_id VARCHAR(64) NOT NULL,
+  source_row_number INTEGER,
+  po_number VARCHAR(120),
+  po_date DATE,
+  vendor_code VARCHAR(120),
+  vendor_name VARCHAR(512),
+  normalized_vendor_name VARCHAR(512),
+  vendor_gstin VARCHAR(64),
+  item_description TEXT,
+  specification TEXT,
+  quantity NUMERIC(18, 3),
+  uom VARCHAR(64),
+  spend NUMERIC(18, 2),
+  currency VARCHAR(8),
+  department VARCHAR(255),
+  material_code VARCHAR(120),
+  existing_category VARCHAR(255),
+  existing_subcategory VARCHAR(255),
+  in_horizon BOOLEAN NOT NULL DEFAULT true,
+  -- Filled by the join step. VENDOR_CODE | GSTIN | NORMALIZED_NAME | UNMATCHED.
+  matched_vendor_record_id VARCHAR(64),
+  match_strategy VARCHAR(24),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  raw JSONB
+);
+CREATE INDEX IF NOT EXISTS idx_po_line_items_session ON po_line_items (session_id);
+CREATE INDEX IF NOT EXISTS idx_po_line_items_org ON po_line_items (organization_id);
+CREATE INDEX IF NOT EXISTS idx_po_line_items_horizon ON po_line_items (session_id, in_horizon);
+CREATE INDEX IF NOT EXISTS idx_po_line_items_matched ON po_line_items (session_id, matched_vendor_record_id);
+CREATE INDEX IF NOT EXISTS idx_po_line_items_vendor_code ON po_line_items (organization_id, vendor_code);
+
+-- The AI suggestion and the buyer's decision are deliberately separate columns.
+-- Approving or editing never overwrites what the model proposed, so the trail
+-- always shows what was suggested, what was saved, and who changed it.
+CREATE TABLE IF NOT EXISTS vendor_category_mappings (
+  id VARCHAR(64) PRIMARY KEY,
+  session_id VARCHAR(64) NOT NULL,
+  organization_id VARCHAR(64) NOT NULL,
+  vendor_record_id VARCHAR(64) NOT NULL,
+  vendor_code VARCHAR(120),
+  company_name VARCHAR(512),
+  email VARCHAR(320),
+  -- Set once the supplier is empanelled into `vendors`, so the buyer dashboard
+  -- can join a mapping onto the live vendor row it produced.
+  vendor_id VARCHAR(64),
+  ai_major_category VARCHAR(255),
+  ai_minor_categories JSONB NOT NULL DEFAULT '[]'::jsonb,
+  ai_relevant_products JSONB NOT NULL DEFAULT '[]'::jsonb,
+  ai_confidence NUMERIC(5, 2),
+  ai_reason TEXT,
+  ai_model VARCHAR(120),
+  buyer_major_category VARCHAR(255),
+  buyer_minor_categories JSONB NOT NULL DEFAULT '[]'::jsonb,
+  -- AI | BUYER | SELF_MAPPED
+  source VARCHAR(16),
+  -- PENDING_REVIEW | AI_MAPPED | BUYER_APPROVED | SELF_MAP_REQUIRED |
+  -- SELF_MAPPED | REJECTED | NEW_CATEGORY_SUGGESTION | FAILED
+  status VARCHAR(32) NOT NULL DEFAULT 'PENDING_REVIEW',
+  -- QUEUED | PROCESSING | COMPLETED | FAILED — per-vendor AI job state, so a
+  -- partial failure can be retried for exactly the vendors that failed.
+  processing_status VARCHAR(16) NOT NULL DEFAULT 'QUEUED',
+  processing_error TEXT,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  po_count INTEGER NOT NULL DEFAULT 0,
+  total_spend NUMERIC(18, 2) NOT NULL DEFAULT 0,
+  has_po_history BOOLEAN NOT NULL DEFAULT false,
+  -- True when the model could not place the supplier inside the buyer's own
+  -- category master. Requires buyer review; never auto-creates a category.
+  is_new_category_suggestion BOOLEAN NOT NULL DEFAULT false,
+  suggested_new_category VARCHAR(255),
+  reviewed_by VARCHAR(320),
+  reviewed_at TIMESTAMPTZ,
+  -- APPROVED | EDITED | REJECTED | RE_RAN_AI
+  review_action VARCHAR(32),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  raw JSONB,
+  CONSTRAINT uq_vendor_category_mapping UNIQUE (session_id, vendor_record_id)
+);
+CREATE INDEX IF NOT EXISTS idx_vendor_category_mappings_session ON vendor_category_mappings (session_id);
+CREATE INDEX IF NOT EXISTS idx_vendor_category_mappings_org ON vendor_category_mappings (organization_id);
+CREATE INDEX IF NOT EXISTS idx_vendor_category_mappings_status ON vendor_category_mappings (session_id, status);
+CREATE INDEX IF NOT EXISTS idx_vendor_category_mappings_processing ON vendor_category_mappings (session_id, processing_status);
+CREATE INDEX IF NOT EXISTS idx_vendor_category_mappings_major ON vendor_category_mappings (organization_id, buyer_major_category);
+
+-- One "send this template to these vendors" campaign.
+CREATE TABLE IF NOT EXISTS vendor_category_dispatches (
+  id VARCHAR(64) PRIMARY KEY,
+  session_id VARCHAR(64) NOT NULL,
+  organization_id VARCHAR(64) NOT NULL,
+  -- CATEGORY_MAPPED | SELF_MAP_REQUIRED | GENERAL_ONBOARDING
+  template VARCHAR(40) NOT NULL,
+  major_category VARCHAR(255),
+  recipient_count INTEGER NOT NULL DEFAULT 0,
+  sent_count INTEGER NOT NULL DEFAULT 0,
+  failed_count INTEGER NOT NULL DEFAULT 0,
+  skipped_count INTEGER NOT NULL DEFAULT 0,
+  -- QUEUED | COMPLETED | PARTIAL | FAILED
+  status VARCHAR(24) NOT NULL DEFAULT 'QUEUED',
+  dispatched_by VARCHAR(320),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  raw JSONB
+);
+CREATE INDEX IF NOT EXISTS idx_vendor_category_dispatches_session ON vendor_category_dispatches (session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vendor_category_dispatches_org ON vendor_category_dispatches (organization_id);
+
+-- Per-recipient send ledger. idempotency_key is the whole duplicate-send
+-- defence: it is UNIQUE, so a double-clicked Dispatch, a retried request or a
+-- re-run campaign cannot mail the same vendor the same template twice. A retry
+-- updates the existing row rather than inserting a second one, which is also
+-- why a successful send can never be re-sent by "retry failed".
+CREATE TABLE IF NOT EXISTS vendor_email_dispatch_log (
+  id VARCHAR(64) PRIMARY KEY,
+  dispatch_id VARCHAR(64),
+  session_id VARCHAR(64) NOT NULL,
+  organization_id VARCHAR(64) NOT NULL,
+  vendor_record_id VARCHAR(64),
+  recipient_email VARCHAR(320) NOT NULL,
+  recipient_name VARCHAR(512),
+  template VARCHAR(40) NOT NULL,
+  major_category VARCHAR(255),
+  idempotency_key VARCHAR(512) NOT NULL UNIQUE,
+  -- PENDING | QUEUED | SENT | FAILED | DELIVERED | BOUNCED
+  status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  message_id VARCHAR(512),
+  detail TEXT,
+  sent_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_vendor_email_dispatch_log_session ON vendor_email_dispatch_log (session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vendor_email_dispatch_log_dispatch ON vendor_email_dispatch_log (dispatch_id);
+CREATE INDEX IF NOT EXISTS idx_vendor_email_dispatch_log_status ON vendor_email_dispatch_log (session_id, status);
+CREATE INDEX IF NOT EXISTS idx_vendor_email_dispatch_log_org ON vendor_email_dispatch_log (organization_id);
+
+-- Module audit trail. Separate from `audit_logs` (which is a hash-chained
+-- action log keyed on an actor and an RFQ number) because every entry here
+-- needs entity_type/entity_id plus the before/after values of a category
+-- change, which that shape cannot carry. Both are written: this one for the
+-- module's own reviewable history, `audit_logs` for the tamper-evident chain.
+CREATE TABLE IF NOT EXISTS vendor_ingestion_audit (
+  id VARCHAR(64) PRIMARY KEY,
+  sequence BIGSERIAL,
+  session_id VARCHAR(64),
+  organization_id VARCHAR(64) NOT NULL,
+  user_id VARCHAR(64),
+  user_email VARCHAR(320),
+  action VARCHAR(64) NOT NULL,
+  entity_type VARCHAR(48),
+  entity_id VARCHAR(64),
+  old_value JSONB,
+  new_value JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_vendor_ingestion_audit_session ON vendor_ingestion_audit (session_id, sequence DESC);
+CREATE INDEX IF NOT EXISTS idx_vendor_ingestion_audit_org ON vendor_ingestion_audit (organization_id, sequence DESC);
+CREATE INDEX IF NOT EXISTS idx_vendor_ingestion_audit_action ON vendor_ingestion_audit (action);
+
+-- Every AI classification attempt, including the failures. The prompt itself is
+-- deliberately NOT stored — only its length — because it embeds the buyer's
+-- category master and spend detail, and this table is read by support tooling.
+CREATE TABLE IF NOT EXISTS ai_classification_logs (
+  id VARCHAR(64) PRIMARY KEY,
+  session_id VARCHAR(64) NOT NULL,
+  organization_id VARCHAR(64) NOT NULL,
+  vendor_record_id VARCHAR(64),
+  vendor_code VARCHAR(120),
+  model VARCHAR(120),
+  -- SUCCESS | INVALID_RESPONSE | AI_FAILED | NOT_CONFIGURED | NO_CONTENT
+  status VARCHAR(24) NOT NULL,
+  attempt INTEGER NOT NULL DEFAULT 1,
+  prompt_chars INTEGER,
+  po_count INTEGER,
+  duration_ms INTEGER,
+  error TEXT,
+  response JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ai_classification_logs_session ON ai_classification_logs (session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_classification_logs_vendor ON ai_classification_logs (vendor_record_id);
+CREATE INDEX IF NOT EXISTS idx_ai_classification_logs_status ON ai_classification_logs (status);

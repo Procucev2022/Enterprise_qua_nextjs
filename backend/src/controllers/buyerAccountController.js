@@ -225,6 +225,131 @@ function ingestHistoricalData(req, res, next) {
   }
 }
 
+function aiCrossMatch(req, res, next) {
+  try {
+    if (!assertBuyerAccountRole(req, res)) return;
+    const { vendors = [], poLineItems = [] } = req.body;
+    logger.info(`Running AI Category Cross-Match API for ${vendors.length} vendors and ${poLineItems.length} POs`, {
+      vendorCount: vendors.length,
+      poCount: poLineItems.length,
+    }, 'BUYER_ACCOUNT_CONTROLLER');
+
+    const matchedVendors = vendors.map((v) => {
+      const vName = (v.companyName || '').toLowerCase().trim();
+      const vCode = (v.vendorCode || '').toLowerCase().trim();
+
+      const matchingPOs = poLineItems.filter((po) => {
+        const pVendor = (po.vendorIdentifier || '').toLowerCase().trim();
+        return (
+          (vName && (pVendor.includes(vName) || vName.includes(pVendor))) ||
+          (vCode && pVendor.includes(vCode))
+        );
+      });
+
+      const hasMatchingPOs = matchingPOs.length > 0;
+      const items = matchingPOs.map((p) => p.itemName).filter(Boolean);
+      const totalAmount = matchingPOs.reduce((acc, p) => acc + (Number(p.totalSpend) || 0), 0);
+
+      let firstSetMajor = '';
+      let secondSetMinors = [];
+
+      if (hasMatchingPOs) {
+        const itemText = (items.join(' ') + ' ' + (v.companyName || '')).toLowerCase();
+        if (
+          itemText.includes('microsoft') ||
+          itemText.includes('google') ||
+          itemText.includes('azure') ||
+          itemText.includes('workspace') ||
+          itemText.includes('cloud') ||
+          itemText.includes('license') ||
+          itemText.includes('software') ||
+          itemText.includes('power bi') ||
+          itemText.includes('bigquery') ||
+          itemText.includes('gcp') ||
+          itemText.includes('saas') ||
+          itemText.includes('datacenter')
+        ) {
+          firstSetMajor = 'Information Technology (IT) & Software';
+          if (itemText.includes('cloud') || itemText.includes('azure') || itemText.includes('gcp') || itemText.includes('storage') || itemText.includes('compute') || itemText.includes('credits')) {
+            secondSetMinors.push('Cloud Infrastructure & Storage');
+          }
+          if (itemText.includes('license') || itemText.includes('subscription') || itemText.includes('renewal') || itemText.includes('365') || itemText.includes('workspace') || itemText.includes('teams') || itemText.includes('windows server')) {
+            secondSetMinors.push('Enterprise Software & Licenses');
+          }
+          if (itemText.includes('bigquery') || itemText.includes('power bi') || itemText.includes('analytics') || itemText.includes('data')) {
+            secondSetMinors.push('Data & Analytics Platforms');
+          }
+          if (itemText.includes('datacenter') || itemText.includes('infrastructure') || itemText.includes('server')) {
+            secondSetMinors.push('IT Infrastructure');
+          }
+          if (secondSetMinors.length === 0) {
+            secondSetMinors.push('Enterprise Software & Licenses');
+          }
+        } else if (itemText.includes('pump') || itemText.includes('valve') || itemText.includes('hose') || itemText.includes('compressor')) {
+          firstSetMajor = 'Engineering Spares - Mechanical';
+          if (itemText.includes('pump')) secondSetMinors.push('Pumps & Accessories');
+          if (itemText.includes('valve') || itemText.includes('gate') || itemText.includes('globe')) secondSetMinors.push('Hoses, Valves & Fittings');
+          if (itemText.includes('hose')) secondSetMinors.push('Hoses, Valves & Fittings');
+          if (itemText.includes('compressor')) secondSetMinors.push('Compressors & Accessories');
+          if (itemText.includes('motor')) secondSetMinors.push('Machinery Parts');
+        } else if (itemText.includes('switchgear') || itemText.includes('panel') || itemText.includes('breaker') || itemText.includes('cable')) {
+          firstSetMajor = 'Engineering Spares - Electrical';
+          if (itemText.includes('panel') || itemText.includes('switchgear')) secondSetMinors.push('Panels');
+          if (itemText.includes('breaker') || itemText.includes('mccb')) secondSetMinors.push('Circuit Breakers');
+        } else if (itemText.includes('tmt') || itemText.includes('steel') || itemText.includes('civil') || itemText.includes('peb')) {
+          firstSetMajor = 'Civil Works';
+          if (itemText.includes('peb')) secondSetMinors.push('PEB Structure');
+          if (itemText.includes('tmt')) secondSetMinors.push('TMT BARS');
+          secondSetMinors.push('Roofing Sheets');
+        } else {
+          firstSetMajor = 'General Spares & Consumables';
+          secondSetMinors.push('Customised Parts');
+        }
+
+        secondSetMinors = Array.from(new Set(secondSetMinors));
+      }
+
+      const formattedTotal = totalAmount >= 10000000
+        ? `₹${(totalAmount / 10000000).toFixed(2)} Cr`
+        : totalAmount >= 100000
+        ? `₹${(totalAmount / 100000).toFixed(2)} Lakh`
+        : `₹${totalAmount.toLocaleString('en-IN')}`;
+
+      return {
+        id: v.id,
+        vendorCode: v.vendorCode,
+        companyName: v.companyName,
+        email: v.email,
+        contactPerson: v.contactPerson,
+        phone: v.phone,
+        address: v.address,
+        gstNumber: v.gstNumber,
+        vendorRatingScore: v.vendorRatingScore,
+        hasPoHistory: hasMatchingPOs,
+        categoriesMappedByBuyer: hasMatchingPOs,
+        itemsSupplied: items,
+        pastPoSpend: hasMatchingPOs
+          ? `${formattedTotal} (${matchingPOs.length} POs)`
+          : 'No PO History in Dump',
+        poCount: matchingPOs.length,
+        firstSetMajorCategory: firstSetMajor,
+        secondSetMinorCategories: secondSetMinors,
+        secondSetSecondaryMajors: hasMatchingPOs ? ['Engineering Spares - Electrical', 'Civil Works'] : [],
+      };
+    });
+
+    res.json({
+      success: true,
+      data: matchedVendors,
+      totalMatched: matchedVendors.filter((v) => v.categoriesMappedByBuyer).length,
+      totalUnmatched: matchedVendors.filter((v) => !v.categoriesMappedByBuyer).length,
+    });
+  } catch (err) {
+    logger.error('Error running AI Category Cross-Match API', err, 'BUYER_ACCOUNT_CONTROLLER');
+    next(err);
+  }
+}
+
 module.exports = {
   getBuyerAccounts,
   getActiveAccount,
@@ -234,4 +359,5 @@ module.exports = {
   setActiveAccount,
   createSubscriptionPaymentLink,
   ingestHistoricalData,
+  aiCrossMatch,
 };

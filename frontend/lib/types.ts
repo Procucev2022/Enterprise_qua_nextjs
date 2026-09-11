@@ -362,6 +362,13 @@ export interface RFQCreatePayload {
   deliveryPincode: string;
   extractedEntities: ExtractedEntity[];
   attachments: RFQAttachment[];
+  assignedVendors?: Array<{
+    id?: string;
+    name: string;
+    email?: string | null;
+    contactPerson?: string | null;
+    phone?: string | null;
+  }>;
 }
 
 /**
@@ -784,7 +791,18 @@ export interface VendorEntry {
   minorCategories: string[];
   location: string;
   rating: number;
-  source: 'buyer_manual' | 'buyer_excel' | 'procucev_network' | 'manual' | 'excel';
+  source:
+    | 'buyer_manual'
+    | 'buyer_excel'
+    | 'buyer_uploaded'
+    | 'vendor_master_ingestion'
+    | 'historical_purchase_dump'
+    | 'procucev_network'
+    | 'manual'
+    | 'excel'
+    | 'self_onboarded'
+    | 'category_manager_upload'
+    | string;
   status?: 'PREFERRED ENTERPRISE SUPPLIER' | 'CONDITIONAL / UNDER REVIEW' | 'REGISTERED / NOT EVALUATED';
   score?: number | null;
   evaluated?: boolean;
@@ -832,6 +850,16 @@ export interface VendorEntry {
   // POST /api/vendors/bulk-import). Not part of the vendor's own
   // self-service profile edit; optional everywhere else.
   gstin?: string;
+  gst?: string;
+  pan?: string;
+  msme?: string;
+  annualTurnover?: string;
+  brandName?: string;
+  contactDesignation?: string;
+  country?: string;
+  website?: string;
+  orgType?: string;
+  factoryAddress?: string;
   city?: string;
   state?: string;
   pincode?: string;
@@ -966,6 +994,491 @@ export interface HistoricalPurchaseVendorRecord {
   secondSetSecondaryMajors?: string[]; // 2nd Set: Secondary Major Categories
   isExistingInDatabase?: boolean;
   tempPassword?: string;
+}
+
+// ==============================================================================
+// VENDOR MASTER & PO DATA INGESTION (buyer module)
+// ==============================================================================
+// Contracts for /api/vendor-ingestion/*. Deliberately separate from the
+// VendorMasterUploadRecord / PurchaseOrderLineItemRecord types above, which back
+// the older client-side-only initial setup modal: those default every missing
+// field to a plausible-looking value, whereas everything below is what the
+// server actually stored and validated.
+
+export type VendorIngestionHorizonType = 'LAST_1_YEAR' | 'LAST_2_YEARS' | 'LAST_3_YEARS' | 'CUSTOM';
+
+export type VendorIngestionSessionStatus =
+  | 'DRAFT'
+  | 'VENDOR_MASTER_STORED'
+  | 'PO_STORED'
+  | 'JOINED'
+  | 'AI_COMPLETED'
+  | 'DISPATCHED';
+
+export type VendorIngestionAiStatus = 'IDLE' | 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+
+export type VendorMappingStatus =
+  | 'PENDING_REVIEW'
+  | 'AI_MAPPED'
+  | 'BUYER_APPROVED'
+  | 'SELF_MAP_REQUIRED'
+  | 'SELF_MAPPED'
+  | 'REJECTED'
+  | 'NEW_CATEGORY_SUGGESTION'
+  | 'FAILED';
+
+export type VendorMappingSource = 'AI' | 'BUYER' | 'SELF_MAPPED';
+
+export type VendorAiProcessingStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+
+/** High >= 90, Medium >= 70, anything lower (or unstated) needs buyer review. */
+export type VendorConfidenceBand = 'HIGH' | 'MEDIUM' | 'NEEDS_REVIEW';
+
+export type VendorDispatchTemplate = 'CATEGORY_MAPPED' | 'SELF_MAP_REQUIRED' | 'GENERAL_ONBOARDING';
+
+export type VendorEmailStatus = 'PENDING' | 'QUEUED' | 'SENT' | 'FAILED' | 'DELIVERED' | 'BOUNCED';
+
+export type VendorCategoryReviewAction = 'APPROVE' | 'EDIT' | 'REJECT';
+
+/** One ingestion run. `currentStep` and `status` are the server's authority. */
+export interface VendorIngestionSession {
+  id: string;
+  organizationId: string;
+  createdByUserId: string | null;
+  createdByEmail: string | null;
+  status: VendorIngestionSessionStatus;
+  currentStep: number;
+  horizonType: VendorIngestionHorizonType | null;
+  horizonStart: string | null;
+  horizonEnd: string | null;
+  vendorMasterFileName: string | null;
+  vendorMasterRowCount: number;
+  poFileName: string | null;
+  poRowCount: number;
+  poInHorizonCount: number;
+  poOutsideHorizonCount: number;
+  matchedVendorCount: number;
+  unmatchedVendorCount: number;
+  aiStatus: VendorIngestionAiStatus;
+  aiProcessedCount: number;
+  aiTotalCount: number;
+  aiFailedCount: number;
+  aiStartedAt: string | null;
+  aiCompletedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A stored vendor-master row, as the server holds it. */
+export interface VendorIngestionMasterRecord {
+  id: string;
+  sessionId: string;
+  sourceRowNumber: number | null;
+  vendorCode: string;
+  companyName: string;
+  normalizedName: string;
+  contactPerson: string;
+  email: string;
+  phone: string;
+  address: string;
+  gstin: string;
+  rating: number | null;
+}
+
+/** A row the server refused, with every reason it refused it. */
+export interface VendorIngestionRejectedRow {
+  rowNumber: number;
+  errors: string[];
+}
+
+/** Result of one upload chunk. Invalid rows are reported, never dropped. */
+export interface VendorMasterUploadResult {
+  session: VendorIngestionSession;
+  totalRows: number;
+  validRows: number;
+  storedRows: number;
+  invalidRows: number;
+  duplicateRows: number;
+  totalStored: number;
+  rejected: VendorIngestionRejectedRow[];
+}
+
+/** Result of one PO chunk, including the inside/outside-period split. */
+export interface PoDumpUploadResult {
+  session: VendorIngestionSession;
+  totalRows: number;
+  validRows: number;
+  invalidRows: number;
+  insidePeriod: number;
+  outsidePeriod: number;
+  totalStored: number;
+  rejected: VendorIngestionRejectedRow[];
+}
+
+/** How PO lines were attributed, by strategy. */
+export interface VendorMatchCounts {
+  byVendorCode: number;
+  byGstin: number;
+  byName: number;
+  unmatched: number;
+}
+
+export interface VendorJoinMatchedVendor {
+  vendorRecordId: string;
+  vendorCode: string;
+  companyName: string;
+  poCount: number;
+  poLineCount: number;
+  totalSpend: number;
+  purchasedItems: string[];
+}
+
+export interface VendorJoinSelfMapVendor {
+  vendorRecordId: string;
+  vendorCode: string;
+  companyName: string;
+  email: string;
+  status: VendorMappingStatus;
+}
+
+/** PO spend for a vendor that is not in the vendor master at all. */
+export interface UnmatchedPoVendor {
+  vendorLabel: string;
+  vendorCode: string;
+  poLineCount: number;
+  totalSpend: number;
+}
+
+export interface VendorPoJoinResult {
+  session: VendorIngestionSession;
+  totalVendors: number;
+  matchedVendorCount: number;
+  unmatchedVendorCount: number;
+  matchCounts: VendorMatchCounts;
+  unmatchedPoVendors: UnmatchedPoVendor[];
+  matchedVendors: VendorJoinMatchedVendor[];
+  selfMapVendors: VendorJoinSelfMapVendor[];
+}
+
+/** What the model proposed. Kept separate from the buyer's decision. */
+export interface VendorAiSuggestion {
+  majorCategory: string;
+  minorCategories: string[];
+  relevantProducts: string[];
+  confidence: number | null;
+  reason: string;
+  model: string;
+}
+
+/**
+ * One supplier's mapping row.
+ *
+ * `aiSuggestion` and `buyerMajorCategory`/`buyerMinorCategories` are both
+ * present at once by design: approving or editing never overwrites the
+ * recommendation, so the review trail stays readable. `finalMajorCategory` is the
+ * one actually in force, computed by the server so the UI cannot pick differently.
+ */
+export interface VendorCategoryMapping {
+  id: string;
+  sessionId: string;
+  vendorRecordId: string;
+  vendorCode: string;
+  companyName: string;
+  email: string;
+  vendorId: string | null;
+  aiSuggestion: VendorAiSuggestion;
+  buyerMajorCategory: string;
+  buyerMinorCategories: string[];
+  source: VendorMappingSource | null;
+  status: VendorMappingStatus;
+  processingStatus: VendorAiProcessingStatus;
+  processingError: string;
+  attemptCount: number;
+  poCount: number;
+  totalSpend: number;
+  hasPoHistory: boolean;
+  isNewCategorySuggestion: boolean;
+  suggestedNewCategory: string;
+  reviewedBy: string;
+  reviewedAt: string | null;
+  reviewAction: string | null;
+  createdAt: string;
+  updatedAt: string;
+  confidenceBand: VendorConfidenceBand;
+  finalMajorCategory: string;
+  finalMinorCategories: string[];
+}
+
+export interface VendorMappingSummary {
+  total: number;
+  mapped: number;
+  approved: number;
+  pendingReview: number;
+  selfMapRequired: number;
+  selfMapped: number;
+  rejected: number;
+  newCategorySuggestions: number;
+  failed: number;
+  queued: number;
+  processing: number;
+  completed: number;
+  highConfidence: number;
+  mediumConfidence: number;
+  lowConfidence: number;
+}
+
+export interface VendorMappingListResult {
+  vendors: VendorCategoryMapping[];
+  total: number;
+  limit: number;
+  offset: number;
+  summary: VendorMappingSummary;
+  confidenceBands: { HIGH_MIN: number; MEDIUM_MIN: number; REVIEW_THRESHOLD: number };
+}
+
+export interface VendorCategorizationOutcome {
+  vendorRecordId: string;
+  companyName: string;
+  status: string;
+  error: string | null;
+}
+
+/** One poll of the batched AI job. `done` is true once nothing is queued. */
+export interface VendorCategorizationBatchResult {
+  session: VendorIngestionSession;
+  done: boolean;
+  processedInBatch: number;
+  outcomes: VendorCategorizationOutcome[];
+  summary: VendorMappingSummary;
+}
+
+export interface VendorCategorySegment {
+  majorCategory: string;
+  vendorCount: number;
+  totalSpend: number;
+  companies: string[];
+}
+
+export interface VendorCategorySegmentation {
+  categories: VendorCategorySegment[];
+  selfMappingRequired: string[];
+}
+
+export interface VendorDispatchRecipient {
+  vendorRecordId: string;
+  mappingId: string;
+  companyName: string;
+  email: string;
+  vendorCode: string;
+  majorCategory: string;
+  minorCategories: string[];
+  status: VendorMappingStatus;
+}
+
+/** Preview separates who will be mailed from who is skipped as already sent. */
+export interface VendorDispatchPreview {
+  template: VendorDispatchTemplate;
+  majorCategory: string;
+  recipients: VendorDispatchRecipient[];
+  sendable: VendorDispatchRecipient[];
+  alreadySent: VendorDispatchRecipient[];
+  warning: string | null;
+}
+
+export interface VendorEmailSummary {
+  total: number;
+  pending: number;
+  queued: number;
+  sent: number;
+  failed: number;
+  delivered: number;
+  bounced: number;
+}
+
+export interface VendorDispatchRecord {
+  id: string;
+  sessionId: string;
+  template: VendorDispatchTemplate;
+  majorCategory: string;
+  recipientCount: number;
+  sentCount: number;
+  failedCount: number;
+  skippedCount: number;
+  status: 'QUEUED' | 'COMPLETED' | 'PARTIAL' | 'FAILED';
+  dispatchedBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface VendorEmailLogEntry {
+  id: string;
+  dispatchId: string | null;
+  vendorRecordId: string | null;
+  recipientEmail: string;
+  recipientName: string;
+  template: VendorDispatchTemplate;
+  majorCategory: string;
+  status: VendorEmailStatus;
+  attemptCount: number;
+  messageId: string;
+  detail: string;
+  sentAt: string | null;
+  createdAt: string;
+}
+
+export interface VendorDispatchSendResult {
+  session: VendorIngestionSession;
+  sent: number;
+  failed: number;
+  skipped: number;
+  perRecipient: Array<{ email: string; companyName: string; status: string; detail?: string | null }>;
+  emailSummary: VendorEmailSummary;
+}
+
+export interface VendorDispatchRetryResult {
+  attempted: number;
+  sent: number;
+  failed: number;
+  skipped: number;
+  emailSummary: VendorEmailSummary;
+}
+
+export interface VendorDispatchStatusResult {
+  dispatches: VendorDispatchRecord[];
+  logs: VendorEmailLogEntry[];
+  summary: VendorEmailSummary;
+}
+
+/** Module audit entry. old/new value is what makes a change reviewable. */
+export interface VendorIngestionAuditEntry {
+  id: string;
+  sequence: number;
+  sessionId: string | null;
+  userEmail: string;
+  action: string;
+  entityType: string;
+  entityId: string;
+  oldValue: Record<string, unknown> | null;
+  newValue: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+/** One AI attempt, including failures. The prompt is never returned. */
+export interface VendorAiClassificationLogEntry {
+  id: string;
+  vendorRecordId: string | null;
+  vendorCode: string;
+  model: string;
+  status: string;
+  attempt: number;
+  promptChars: number;
+  poCount: number;
+  durationMs: number;
+  error: string;
+  createdAt: string;
+}
+
+export interface VendorIngestionCategoryMaster {
+  categories: MajorMinorCategory[];
+  total: number;
+  isEmpty: boolean;
+  reason: string | null;
+}
+
+/** Everything the wizard needs to rehydrate. `session` is null on first visit. */
+export interface VendorIngestionResumeState {
+  session: VendorIngestionSession | null;
+  categoryMaster: MajorMinorCategory[];
+  mappingSummary?: VendorMappingSummary;
+  emailSummary?: VendorEmailSummary;
+  poCounts?: { total: number; inHorizon: number; outsideHorizon: number };
+  unlockedStep?: number;
+}
+
+/**
+ * An approved mapping, read across every session.
+ *
+ * Consumed by the Vendor Summary screen so it can show the category a supplier is
+ * genuinely empanelled under instead of guessing one from the company name.
+ */
+export interface ApprovedVendorMapping {
+  vendorId: string | null;
+  vendorRecordId: string;
+  vendorCode: string;
+  companyName: string;
+  email: string;
+  majorCategory: string;
+  minorCategories: string[];
+  source: VendorMappingSource | null;
+  status: VendorMappingStatus;
+  aiConfidence: number | null;
+  confidenceBand: VendorConfidenceBand;
+  aiReason: string;
+  poCount: number;
+  totalSpend: number;
+  reviewedBy: string;
+  reviewedAt: string | null;
+}
+
+// --- Client-side spreadsheet parsing -----------------------------------------
+
+/** A parsed-and-validated Vendor Master row, before it is submitted. */
+export interface ParsedVendorMasterRow {
+  rowNumber: number;
+  vendor: {
+    vendorCode: string;
+    companyName: string;
+    contactPerson: string;
+    email: string;
+    phone: string;
+    address: string;
+    gstin: string;
+    rating?: number;
+  };
+  isValid: boolean;
+  errors: string[];
+}
+
+/** A parsed-and-validated PO line item, before it is submitted. */
+export interface ParsedPoRow {
+  rowNumber: number;
+  line: {
+    poNumber: string;
+    poDate: string;
+    vendorCode: string;
+    vendorName: string;
+    vendorGstin: string;
+    itemDescription: string;
+    specification: string;
+    quantity: number;
+    uom: string;
+    spend: number;
+    currency: string;
+    department: string;
+    materialCode: string;
+    existingCategory: string;
+    existingSubcategory: string;
+  };
+  isValid: boolean;
+  errors: string[];
+}
+
+/** Outcome of reading a spreadsheet in the browser. Never throws. */
+export interface ParseIngestionFileResult<TRow> {
+  success: boolean;
+  rows: TRow[];
+  blankRowCount: number;
+  missingColumns: string[];
+  error?: string;
+}
+
+/** Progress of a chunked upload, reported after every chunk. */
+export interface IngestionUploadProgress {
+  chunksSent: number;
+  totalChunks: number;
+  rowsSubmitted: number;
+  rowsStored: number;
+  rowsRejected: number;
 }
 
 export interface VendorOnboardingEmailPayload {

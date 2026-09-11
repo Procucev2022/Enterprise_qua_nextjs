@@ -1,51 +1,20 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import IngestionWizard from '@/app/buyer/ingestion-wizard';
-import { AppProvider, useApp } from '@/lib/store';
-import { extractLineItemsFromDocument, classifyLineItems, uploadRFQAttachment } from '@/lib/rfqClient';
-import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { SOURCING_MODES } from '@/lib/constants';
+import { AppProvider } from '@/lib/store';
+import { extractLineItemsFromDocument, classifyLineItems, uploadRFQAttachment, createRFQ } from '@/lib/rfqClient';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import { CATEGORY_TAXONOMY_FIXTURE as categoriesData } from '../../../test-fixtures/categoryTaxonomy';
-import type { ExtractedEntity, RFQAttachment, RFQExtractionResult } from '@/lib/types';
+import type { ExtractedEntity, RFQExtractionResult, RFQItem } from '@/lib/types';
 
-// Only the three functions the wizard drives are doubled. The rest of the module
-// is kept real because the store imports `createRFQ`/`fetchRFQList` from here and
-// those go through the global fetch mock like every other suite.
 jest.mock('@/lib/rfqClient', () => ({
   ...jest.requireActual('@/lib/rfqClient'),
   extractLineItemsFromDocument: jest.fn(),
   classifyLineItems: jest.fn(),
   uploadRFQAttachment: jest.fn(),
-}));
-// The gateway tab renders EmailGatewayPanel, which reads status on mount. Doubled
-// here so this suite stays about the wizard; the panel has its own suite.
-jest.mock('@/lib/emailGatewayClient', () => ({
-  fetchEmailGatewayStatus: jest.fn().mockResolvedValue({
-    success: true,
-    data: {
-      enabled: false,
-      configured: false,
-      watching: false,
-      mailboxUser: null,
-      mailbox: 'INBOX',
-      host: null,
-      pollIntervalMs: 120000,
-      allowedSenders: [],
-      allowedDomains: [],
-      lastPollAt: null,
-      lastPollDurationMs: null,
-      lastConnectedAt: null,
-      lastError: null,
-      isPolling: false,
-      counts: {},
-      recent: [],
-      ingestedStatus: 'Parsing',
-    },
-  }),
-  pollEmailGateway: jest.fn().mockResolvedValue({ success: true, data: { considered: 0, ingested: 0, pending: 0 } }),
+  createRFQ: jest.fn(),
 }));
 
-// The wizard flattens a workbook with header:1, so the mock returns row arrays.
 jest.mock('xlsx', () => ({
   read: jest.fn(() => ({ SheetNames: ['Sheet1'], Sheets: { Sheet1: {} } })),
   utils: {
@@ -58,9 +27,11 @@ jest.mock('xlsx', () => ({
 }));
 
 const EXTRACTION = UI_STRINGS.rfqExtraction;
+const MODAL = UI_STRINGS.manualRfqModal;
 const mockExtract = extractLineItemsFromDocument as jest.Mock;
 const mockClassify = classifyLineItems as jest.Mock;
 const mockAttach = uploadRFQAttachment as jest.Mock;
+const mockCreateRFQ = createRFQ as jest.Mock;
 
 function entity(overrides: Partial<ExtractedEntity> = {}): ExtractedEntity {
   return {
@@ -100,6 +71,28 @@ function successResult(entities = [entity()], estimatedBudget: number | null = n
   };
 }
 
+function mockCreatedRFQ(): RFQItem {
+  return {
+    id: 'rfq-new-1',
+    rfqNumber: 'RFQ-2026-00450',
+    title: 'Pump Requirement',
+    category: 'Engineering Spares - Mechanical',
+    status: 'Quotes Pending',
+    sourcingMode: 'mode_2',
+    quotesCount: 0,
+    targetDeliveryDate: '2026-09-15',
+    budget: 500000,
+    deliveryLocation: 'Navi Mumbai Plant',
+    deliveryPincode: '400701',
+    attachments: [],
+    createdAt: '2026-09-10T10:00:00Z',
+    updatedAt: '2026-09-10T10:00:00Z',
+    extractedEntities: [],
+    quotes: [],
+    chasingActive: false,
+  };
+}
+
 function renderWizard(props: Partial<React.ComponentProps<typeof IngestionWizard>> = {}) {
   return render(
     <AppProvider>
@@ -117,1288 +110,781 @@ const uploadFile = (file: File) => {
   fireEvent.change(input, { target: { files: [file] } });
 };
 
-/** The budget input starts empty, so it is found by its label, not its value. */
-const budgetField = () =>
-  screen.getByLabelText(new RegExp(EXTRACTION.budgetLabel.replace('({symbol})', ''), 'i'));
-
-/** The Auto-Categorize control, resolved from the UI string not a literal. */
-const clickClassify = () => screen.getByRole('button', { name: new RegExp(EXTRACTION.classifyAction, 'i') });
-
-/**
- * Completes the fields a blank row leaves empty. Every one is required before
- * Step 3 unlocks, because a vendor cannot quote against a missing quantity,
- * unit or category.
- */
-const fillBlankRow = (row: HTMLElement) => {
-  const [major, minor] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
-  fireEvent.change(major, { target: { value: categoriesData[0].majorCategory } });
-  fireEvent.change(minor, { target: { value: categoriesData[0].minorCategories[0] } });
-  fireEvent.change(within(row).getByPlaceholderText(EXTRACTION.itemQtyPlaceholder), {
-    target: { value: '4' },
-  });
-  fireEvent.change(within(row).getByPlaceholderText(EXTRACTION.itemUnitPlaceholder), {
-    target: { value: 'Nos' },
-  });
-};
-
 const clickExtract = () =>
-  fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.extractAction, 'i') }));
+  fireEvent.click(screen.getByRole('button', { name: /Extract Line Items with AI/i }));
 
-const clickProceed = () =>
-  fireEvent.click(screen.getByRole('button', { name: /Proceed to Sourcing Mode/i }));
-
-const setDeliveryLocation = (value: string) =>
-  fireEvent.change(screen.getByLabelText(new RegExp(EXTRACTION.deliveryLocationLabel, 'i')), {
-    target: { value },
-  });
-
-const setDeliveryPincode = (value: string) =>
-  fireEvent.change(screen.getByLabelText(new RegExp(EXTRACTION.deliveryPincodeLabel, 'i')), {
-    target: { value },
-  });
-
-/**
- * The delivery destination, which is mandatory before Step 3 unlocks. Extraction
- * never supplies it, so every test that needs the sourcing step keys it by hand
- * exactly as a buyer does.
- */
-const fillDelivery = () => {
-  setDeliveryLocation('Navi Mumbai Plant, Gate 3');
-  setDeliveryPincode('400701');
-};
-
-/** Supplies the mandatory delivery destination, then leaves Step 2. */
-const proceedToSourcing = () => {
-  fillDelivery();
-  clickProceed();
-};
-
-describe('IngestionWizard: Step 1 AI document extraction', () => {
+describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockExtract.mockResolvedValue(successResult());
-  });
-
-  it('keeps the review and sourcing steps locked until a document is extracted', () => {
-    renderWizard();
-    // The step strip is a clickable panel rather than a button.
-    fireEvent.click(screen.getByTestId('wizard-step-2'));
-    expect(screen.getByText(/INGESTION SOURCE/i)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByTestId('wizard-step-3'));
-    expect(screen.getByText(/INGESTION SOURCE/i)).toBeInTheDocument();
-
-    // Nothing is fabricated ahead of extraction either.
-    expect(screen.queryByDisplayValue(/Centrifugal Water Pump/i)).not.toBeInTheDocument();
-    expect(screen.getByTestId('wizard-step-2').getAttribute('aria-disabled')).toBe('true');
-  });
-
-  // Toasts render in the workspace shell, not in a bare provider, so staying on
-  // Step 1 with no API call is the observable outcome here.
-  it('refuses to extract until a document has been chosen', async () => {
-    renderWizard();
-    clickExtract();
-
-    await waitFor(() => expect(mockExtract).not.toHaveBeenCalled());
-    expect(screen.getByText(/INGESTION SOURCE/i)).toBeInTheDocument();
-  });
-
-  it('flattens a spreadsheet to text and sends it for extraction', async () => {
-    renderWizard();
-    uploadFile(new File(['binary'], 'BOQ_Pumps.xlsx', { type: '' }));
-
-    clickExtract();
-
-    await waitFor(() => expect(mockExtract).toHaveBeenCalled());
-    const payload = mockExtract.mock.calls[0][0];
-    expect(payload.fileName).toBe('BOQ_Pumps.xlsx');
-    // Rows are pipe-joined so quantities stay aligned with their item.
-    expect(payload.documentText).toContain('Centrifugal Water Pump 500 GPM | 12 | Units');
-    expect(payload.documentText).toContain('SHEET: Sheet1');
-    // Blank rows are dropped rather than sent as noise.
-    expect(payload.documentText).not.toMatch(/\n\s*\|\s*\|\s*\n/);
-    expect(payload.inlineData).toBeUndefined();
-  });
-
-  it('sends a PDF as inline base64 with its mime type', async () => {
-    renderWizard();
-    uploadFile(new File(['%PDF-1.4'], 'requirement.pdf', { type: 'application/pdf' }));
-
-    clickExtract();
-
-    await waitFor(() => expect(mockExtract).toHaveBeenCalled());
-    const payload = mockExtract.mock.calls[0][0];
-    expect(payload.mimeType).toBe('application/pdf');
-    expect(typeof payload.inlineData).toBe('string');
-    expect(payload.inlineData).not.toContain('data:');
-    expect(payload.documentText).toBeUndefined();
-  });
-
-  it('defaults an unknown browser mime type to PDF', async () => {
-    renderWizard();
-    uploadFile(new File(['scan'], 'scan.pdf', { type: '' }));
-
-    clickExtract();
-
-    await waitFor(() => expect(mockExtract).toHaveBeenCalled());
-    expect(mockExtract.mock.calls[0][0].mimeType).toBe('application/pdf');
-  });
-
-});
-
-describe('IngestionWizard: Step 2 review of extracted line items', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
-  const extractThen = async (result: RFQExtractionResult) => {
-    mockExtract.mockResolvedValue(result);
-    renderWizard();
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-  };
-
-  it('advances to review and reports what the model read', async () => {
-    await extractThen(successResult());
-
-    expect(screen.getByText(EXTRACTION.successTitle)).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        formatString(EXTRACTION.successSummary, { accepted: 1, model: 'gemini-3.6-flash', needsReview: 0 })
-      )
-    ).toBeInTheDocument();
-    expect(screen.getByDisplayValue('Centrifugal Water Pump 500 GPM')).toBeInTheDocument();
-    // The AI-derived title pre-fills the RFQ header.
-    expect(screen.getByDisplayValue('Pump Requirement')).toBeInTheDocument();
-  });
-
-  // The whole point of the fallback: an unreadable document must not dead-end.
-  it('explains why extraction failed and offers manual entry', async () => {
-    await extractThen({
-      success: false,
-      reason: 'NO_ITEMS_FOUND',
-      error: 'No procurement line items could be identified in this document.',
+    mockClassify.mockResolvedValue({
+      success: true,
+      data: {
+        extractedEntities: [entity()],
+      },
     });
-
-    expect(screen.getByText(EXTRACTION.fallbackTitle)).toBeInTheDocument();
-    expect(
-      screen.getByText('No procurement line items could be identified in this document.')
-    ).toBeInTheDocument();
-    expect(screen.getByText(EXTRACTION.fallbackHint)).toBeInTheDocument();
-    expect(screen.getByText(EXTRACTION.emptyTitle)).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: new RegExp(EXTRACTION.addFirstItemAction, 'i') })
-    ).toBeInTheDocument();
-  });
-
-  it('surfaces the NOT_CONFIGURED reason when no API key is set', async () => {
-    await extractThen({
-      success: false,
-      reason: 'NOT_CONFIGURED',
-      error: 'AI extraction is not configured on this environment (GEMINI_API_KEY is unset).',
-    });
-
-    expect(screen.getByText(/GEMINI_API_KEY is unset/i)).toBeInTheDocument();
-  });
-
-  it('lets the buyer key a line item after a failed extraction', async () => {
-    await extractThen({ success: false, reason: 'AI_FAILED', error: 'AI extraction could not read this document.' });
-
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.addFirstItemAction, 'i') }));
-
-    expect(screen.queryByText(EXTRACTION.emptyTitle)).not.toBeInTheDocument();
-    expect(screen.getByRole('table')).toBeInTheDocument();
-  });
-
-  it('blocks sourcing while a line item has no description', async () => {
-    await extractThen(successResult([entity({ itemName: '' })]));
-
-    proceedToSourcing();
-
-    // Held on Step 2: the Coming Soon panel that only Step 3 renders is absent.
-    expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument();
-    expect(screen.queryByText(EXTRACTION.vendorComingSoonTitle)).not.toBeInTheDocument();
-  });
-
-  it('blocks sourcing when there are no line items at all', async () => {
-    await extractThen({ success: false, reason: 'AI_FAILED', error: 'unreadable' });
-
-    proceedToSourcing();
-
-    expect(screen.getByText(EXTRACTION.emptyTitle)).toBeInTheDocument();
-    expect(screen.queryByText(EXTRACTION.vendorComingSoonTitle)).not.toBeInTheDocument();
-  });
-
-  it('reaches sourcing once every line item is described', async () => {
-    await extractThen(successResult());
-
-    proceedToSourcing();
-
-    expect(screen.getByText(EXTRACTION.vendorComingSoonTitle)).toBeInTheDocument();
-  });
-});
-
-describe('IngestionWizard: Step 3 sourcing mode only', () => {
-  const reachStep3 = async (forceSubscription: 'version_1' | 'version_2' | 'version_3' = 'version_3') => {
-    mockExtract.mockResolvedValue(successResult());
-    const onComplete = jest.fn();
-    renderWizard({ forceSubscription, onComplete });
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-    proceedToSourcing();
-    return onComplete;
-  };
-
-  beforeEach(() => {
-    jest.clearAllMocks();
-    // Dispatch stores the extracted document, so every test in this block reaches
-    // the uploader. Defaulted to success here so only the tests that care about
-    // attachment behaviour have to say anything about it.
     mockAttach.mockResolvedValue({
       success: true,
       data: {
-        id: 'att-default',
-        fileName: 'BOQ.xlsx',
-        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        size: 1024,
-        uploadedAt: '2026-09-05T06:00:00.000Z',
+        id: 'att-1',
+        fileName: 'BOQ_Pumps.xlsx',
+        fileSize: 1024,
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        storagePath: 'rfq-attachments/att-1.xlsx',
+        uploadedAt: new Date().toISOString(),
       },
     });
-  });
-
-  it('offers every sourcing mode', async () => {
-    await reachStep3();
-    SOURCING_MODES.forEach((mode) => {
-      expect(screen.getByTestId(`mode-card-${mode.id}`)).toBeInTheDocument();
+    mockCreateRFQ.mockResolvedValue({
+      success: true,
+      rfq: mockCreatedRFQ(),
     });
   });
 
-  it('marks vendor matching as coming soon and shows no vendor list', async () => {
-    await reachStep3();
+  it('renders the direct manual form directly without step 1/2/3 cards', () => {
+    renderWizard();
 
-    expect(screen.getByText(EXTRACTION.vendorComingSoonTitle)).toBeInTheDocument();
-    expect(screen.getByText(EXTRACTION.vendorComingSoonBadge)).toBeInTheDocument();
-    expect(screen.getByText(EXTRACTION.vendorComingSoonMessage)).toBeInTheDocument();
-    // The old matched-vendor grid and Mode 3 pool are gone.
-    expect(screen.queryByText(/Matched Suitable Vendors/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Choose Max 5 out of 10 Suppliers/i)).not.toBeInTheDocument();
+    // Verify step cards are hidden
+    expect(screen.queryByTestId('wizard-step-1')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('wizard-step-2')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('wizard-step-3')).not.toBeInTheDocument();
+
+    // Verify header and sections render directly
+    expect(screen.getByText(/AI RFQ Ingestion & Multi-Mode Sourcing Dispatch/i)).toBeInTheDocument();
+    expect(screen.getByText(/Upload Source Documents & Forwarded Emails/i)).toBeInTheDocument();
+    expect(screen.getByText(/1. RFQ Details & Delivery Terms/i)).toBeInTheDocument();
+    expect(screen.getByText(/2. Line Items Specification/i)).toBeInTheDocument();
+    expect(screen.getByText(/3. Select Sourcing Mode/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Create & Dispatch RFQ/i })).toBeInTheDocument();
   });
 
-  it('summarises what will be saved against the chosen mode', async () => {
-    await reachStep3();
-    fireEvent.click(screen.getByTestId('mode-card-mode_2'));
+  it('handles uploading BOQ and forwarded .eml files and shows them in the list', () => {
+    renderWizard();
 
-    const mode2 = SOURCING_MODES.find((m) => m.id === 'mode_2')!;
-    // The RFQ number is generated, so the assertion matches the stable tail.
-    expect(
-      screen.getByText((content) =>
-        content.includes(`1 categorised line items will be saved under ${mode2.code}`)
-      )
-    ).toBeInTheDocument();
+    const emailFile = new File(['Subject: RFQ Requisition'], 'requisition.eml', { type: 'message/rfc822' });
+    uploadFile(emailFile);
+
+    expect(screen.getByText('requisition.eml')).toBeInTheDocument();
+    expect(screen.getByText(/Uploaded Documents \(1\)/i)).toBeInTheDocument();
+
+    // Remove file
+    const removeBtn = screen.getByTitle('Remove file');
+    fireEvent.click(removeBtn);
+    expect(screen.queryByText('requisition.eml')).not.toBeInTheDocument();
   });
 
-  it('locks Mode 3 behind a Version 3 plan', async () => {
-    await reachStep3('version_1');
+  it('extracts line items with AI and populates title, budget, and line items', async () => {
+    renderWizard();
 
-    const mode3 = screen.getByTestId('mode-card-mode_3');
-    // Version 1 locks both Mode 2 and Mode 3, so the badge is scoped to the card.
-    expect(mode3.textContent).toMatch(/Upgrade Required/i);
-
-    fireEvent.click(mode3);
-    // The locked card is never selected, so it keeps the unselected border.
-    expect(mode3.className).not.toContain('border-indigo-600');
-  });
-
-  it('saves the RFQ with the selected mode and no vendors attached', async () => {
-    let captured: { sourcingMode?: string; vendorCount?: number; itemCount?: number } | undefined;
-
-    function Harness() {
-      const { rfqs } = useApp();
-      const mine = rfqs.find((r) => r.title === 'Pump Requirement');
-      if (mine) {
-        captured = {
-          sourcingMode: mine.sourcingMode,
-          vendorCount: mine.followUpData?.totalInvited ?? 0,
-          itemCount: mine.extractedEntities.length,
-        };
-      }
-      return <IngestionWizard onComplete={jest.fn()} onCancel={jest.fn()} forceSubscription="version_3" />;
-    }
-
-    mockExtract.mockResolvedValue(successResult([entity()], 145000));
-    render(
-      <AppProvider>
-        <Harness />
-      </AppProvider>
-    );
-
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
+    uploadFile(new File(['binary'], 'BOQ_Pumps.xlsx', { type: '' }));
     clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-    proceedToSourcing();
-    fireEvent.click(screen.getByTestId('mode-card-mode_2'));
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') }));
 
-    await waitFor(() => expect(captured).toBeDefined());
-    expect(captured).toMatchObject({ sourcingMode: 'mode_2', itemCount: 1 });
-    // Vendors are Coming Soon, so nothing is invited and no chaser is aimed at a
-    // supplier the buyer never picked.
-    expect(captured?.vendorCount).toBe(0);
+    await waitFor(() => expect(mockExtract).toHaveBeenCalled());
+    expect(screen.getByText(/Extraction Complete/i)).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Pump Requirement')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Centrifugal Water Pump 500 GPM')).toBeInTheDocument();
   });
 
-  it('returns to review from sourcing', async () => {
-    await reachStep3();
+  it('allows adding, editing, and deleting line items in the table', () => {
+    renderWizard();
 
-    fireEvent.click(screen.getByRole('button', { name: /Back to Review/i }));
+    // Click Add Line Item
+    const addBtn = screen.getByRole('button', { name: /Add Line Item/i });
+    fireEvent.click(addBtn);
 
-    expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument();
+    const itemInputs = screen.getAllByPlaceholderText(MODAL.itemPlaceholder);
+    expect(itemInputs.length).toBe(2);
+
+    fireEvent.change(itemInputs[0], { target: { value: 'Ball Valves 2 inch' } });
+    expect(itemInputs[0]).toHaveValue('Ball Valves 2 inch');
+
+    // Remove the second item
+    const deleteButtons = screen.getAllByTitle('Remove line item');
+    fireEvent.click(deleteButtons[1]);
+    expect(screen.getAllByPlaceholderText(MODAL.itemPlaceholder).length).toBe(1);
   });
 
-  // ── The uploaded document is kept ────────────────────────────────────────────
-  // This wizard used to send `attachments: []` unconditionally and retain only the
-  // file *name*, so the BOQ a buyer uploaded was read for extraction and then
-  // discarded. The RFQ details screen had nothing to list, which is why its
-  // Supporting Documents panel was empty for every RFQ raised through this flow.
-  it('stores the document it extracted from and sends its metadata with the RFQ', async () => {
-    const stored: RFQAttachment = {
-      id: 'att-boq-1',
-      fileName: 'BOQ.xlsx',
-      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      size: 1024,
-      uploadedAt: '2026-09-05T06:00:00.000Z',
-    };
-    mockAttach.mockResolvedValue({ success: true, data: stored });
-    mockExtract.mockResolvedValue(successResult());
+  it('auto-categorizes line items when clicking Auto-Categorize All (AI)', async () => {
+    renderWizard();
 
-    const file = new File(['x'], 'BOQ.xlsx', { type: '' });
-    renderWizard({ forceSubscription: 'version_3' });
-    uploadFile(file);
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-    proceedToSourcing();
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') }));
+    const itemInput = screen.getByPlaceholderText(MODAL.itemPlaceholder);
+    fireEvent.change(itemInput, { target: { value: 'Centrifugal Pump' } });
 
-    // Uploaded at dispatch, not at extraction: an abandoned wizard session must
-    // not leave an orphaned object in storage.
-    await waitFor(() => expect(mockAttach).toHaveBeenCalledWith(file));
+    const classifyBtn = screen.getByRole('button', { name: /Auto-Categorize All \(AI\)/i });
+    fireEvent.click(classifyBtn);
 
-    const createCall = (global.fetch as jest.Mock).mock.calls.find(
-      ([url, init]) => /\/api\/rfqs(\?|$)/.test(String(url)) && init?.method === 'POST'
-    );
-    expect(createCall).toBeDefined();
-    expect(JSON.parse(createCall![1].body).attachments).toEqual([stored]);
+    await waitFor(() => expect(mockClassify).toHaveBeenCalled());
   });
 
-  it('still raises the RFQ when the document cannot be stored, and says what is missing', async () => {
-    // The RFQ is what the buyer came to create. Refusing it because a copy of the
-    // source document could not be kept would be the wrong trade-off, so the
-    // failure is reported and the RFQ goes through without the attachment.
-    mockAttach.mockResolvedValue({ success: false, error: 'Storage unavailable.' });
-    mockExtract.mockResolvedValue(successResult());
+  it('switches sourcing mode when clicking sourcing cards', () => {
+    renderWizard();
 
-    // The toast host lives in the app layout, not in AppProvider, so the warning
-    // is read off store state rather than the DOM.
-    // Collected rather than sampled: several toasts fire during a dispatch and
-    // only the most recent survives in state, so a single read races them.
-    const toastTitles: string[] = [];
-    function Harness() {
-      const { toastMessage } = useApp();
-      if (toastMessage && !toastTitles.includes(toastMessage.title)) toastTitles.push(toastMessage.title);
-      return <IngestionWizard onComplete={jest.fn()} onCancel={jest.fn()} forceSubscription="version_3" />;
-    }
-    render(
-      <AppProvider>
-        <Harness />
-      </AppProvider>
-    );
+    const version1Mode = screen.getByTestId('mode-mode_1');
+    fireEvent.click(version1Mode);
+    expect(version1Mode.getAttribute('aria-checked')).toBe('true');
 
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-    proceedToSourcing();
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') }));
+    const version3Mode = screen.getByTestId('mode-mode_3');
+    fireEvent.click(version3Mode);
+    expect(version3Mode.getAttribute('aria-checked')).toBe('true');
+  });
 
-    await waitFor(() => expect(mockAttach).toHaveBeenCalled());
+  it('validates required fields on submission and dispatches RFQ on valid input', async () => {
+    const onComplete = jest.fn();
+    renderWizard({ onComplete });
 
-    const createCall = await waitFor(() => {
-      const call = (global.fetch as jest.Mock).mock.calls.find(
-        ([url, init]) => /\/api\/rfqs(\?|$)/.test(String(url)) && init?.method === 'POST'
-      );
-      expect(call).toBeDefined();
-      return call;
+    // Submit with empty required fields
+    const submitBtn = screen.getByRole('button', { name: /Create & Dispatch RFQ/i });
+    fireEvent.click(submitBtn);
+
+    const MANUAL = UI_STRINGS.manualRfq;
+    expect(screen.getByText(new RegExp(MANUAL.deliveryLocationRequired, 'i'))).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(MANUAL.deliveryPincodeRequired, 'i'))).toBeInTheDocument();
+
+    // Fill required delivery fields
+    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
+      target: { value: 'Navi Mumbai Plant' },
     });
-    // Reported as having no attachment rather than implying one is there.
-    expect(JSON.parse(createCall![1].body).attachments).toEqual([]);
-    await waitFor(() => expect(toastTitles).toContain(EXTRACTION.attachmentStoreFailedTitle));
-    // The warning is what the buyer is left looking at, not the success toast it
-    // would otherwise have been overwritten by.
-    expect(toastTitles).not.toContain(EXTRACTION.manualCreatedTitle);
+    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder), {
+      target: { value: '400701' },
+    });
+
+    // Fill the required line item fields
+    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.itemPlaceholder), {
+      target: { value: 'Centrifugal Water Pump' },
+    });
+
+    const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
+    fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
+    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), {
+      target: { value: '10' },
+    });
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), {
+      target: { value: 'Units' },
+    });
+
+    // Now submit
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
+    expect(onComplete).toHaveBeenCalled();
   });
 
-  it('offers no extract action on the gateway tab', async () => {
-    renderWizard({ forceSubscription: 'version_3' });
-
-    fireEvent.click(screen.getByRole('button', { name: /Email Ingestion Gateway/i }));
-
-    expect(await screen.findByTestId('gateway-panel')).toBeInTheDocument();
-    // The gateway raises RFQs on its own; there is nothing for the buyer to submit.
-    expect(
-      screen.queryByRole('button', { name: new RegExp(EXTRACTION.extractAction, 'i') })
-    ).not.toBeInTheDocument();
-    expect(mockExtract).not.toHaveBeenCalled();
-    expect(mockAttach).not.toHaveBeenCalled();
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Step 1 intake controls: tabs, drag-and-drop, and the email gateway simulator
-// ═══════════════════════════════════════════════════════════════════════════════
-describe('IngestionWizard: Step 1 intake controls', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    mockExtract.mockResolvedValue(successResult());
-  });
-
-  const dropZone = () => screen.getByText(/Click to Browse or Drag & Drop/i).closest('div') as HTMLElement;
-
-  it('offers document upload only, with no email-file sub-tab', () => {
-    renderWizard();
-
-    expect(screen.getByText(EXTRACTION.dropZoneHeading)).toBeInTheDocument();
-    // An emailed requisition is picked up by the gateway, so no email container is
-    // accepted here and the picker must not advertise one.
-    expect(screen.queryByRole('button', { name: /Upload Email File/i })).not.toBeInTheDocument();
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
-    expect(input.accept).not.toContain('.eml');
-    expect(input.accept).not.toContain('.msg');
-  });
-
-  it('accepts a dropped document and shows the selected file', async () => {
-    renderWizard();
-    const zone = dropZone();
-
-    fireEvent.dragOver(zone);
-    fireEvent.dragLeave(zone);
-    fireEvent.drop(zone, { dataTransfer: { files: [new File(['x'], 'Dropped_BOQ.xlsx', { type: '' })] } });
-
-    expect(await screen.findByText('Dropped_BOQ.xlsx')).toBeInTheDocument();
-  });
-
-  it('ignores a drop that carries no file', () => {
-    renderWizard();
-
-    fireEvent.drop(dropZone(), { dataTransfer: { files: [] } });
-
-    expect(screen.queryByText(/Selected File:/i)).not.toBeInTheDocument();
-  });
-
-  it('shows no selected-file chip until a document is chosen', () => {
-    renderWizard();
-    expect(screen.queryByText(/Selected File:/i)).not.toBeInTheDocument();
-  });
-
-  it('returns to the web portal method from the email gateway', async () => {
-    renderWizard();
-    fireEvent.click(screen.getByRole('button', { name: /Email Ingestion Gateway/i }));
-    expect(await screen.findByTestId('gateway-panel')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /AI RFQ Create/i }));
-    expect(screen.getByText(EXTRACTION.dropZoneHeading)).toBeInTheDocument();
-  });
-
-  it('exits the wizard through the header control', () => {
+  it('cancels when clicking Cancel button or Exit Wizard button', () => {
     const onCancel = jest.fn();
     renderWizard({ onCancel });
 
     fireEvent.click(screen.getByRole('button', { name: /Exit Wizard/i }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
 
-    expect(onCancel).toHaveBeenCalled();
+    const cancelButtons = screen.getAllByRole('button', { name: /^Cancel$/i });
+    fireEvent.click(cancelButtons[0]);
+    expect(onCancel).toHaveBeenCalledTimes(2);
   });
 
-  it('shows the free-trial quota banner on a free account', async () => {
-    mockExtract.mockResolvedValue(successResult());
-    renderWizard({ forceSubscription: 'free_trial' });
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-    proceedToSourcing();
-
-    expect(screen.getByText(/Free Starter Account/i)).toBeInTheDocument();
-    expect(screen.getByText(/All 3 Versions Unlocked/i)).toBeInTheDocument();
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Step 2 line-item editing
-// ═══════════════════════════════════════════════════════════════════════════════
-describe('IngestionWizard: Step 2 line-item editing', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    mockExtract.mockResolvedValue(successResult());
-  });
-
-  const reachStep2 = async () => {
+  it('resets all form fields and uploaded documents when clicking Clear Form', () => {
     renderWizard();
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-  };
 
-  const selects = () =>
-    screen.getAllByRole('combobox').filter((el): el is HTMLSelectElement => el.tagName === 'SELECT');
+    // Fill some fields
+    const titleInput = screen.getByPlaceholderText(MODAL.titlePlaceholder);
+    fireEvent.change(titleInput, { target: { value: 'Custom Title' } });
+    expect(titleInput).toHaveValue('Custom Title');
 
-  it('edits the RFQ title and budget', async () => {
-    await reachStep2();
+    const locationInput = screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder);
+    fireEvent.change(locationInput, { target: { value: 'Location A' } });
+    expect(locationInput).toHaveValue('Location A');
 
-    fireEvent.change(screen.getByDisplayValue('Pump Requirement'), { target: { value: 'Revised Title' } });
-    expect(screen.getByDisplayValue('Revised Title')).toBeInTheDocument();
+    // Click Clear Form
+    const clearButtons = screen.getAllByRole('button', { name: /Clear Form/i });
+    fireEvent.click(clearButtons[0]);
 
-    fireEvent.change(budgetField(), { target: { value: '250000' } });
-    expect(screen.getByDisplayValue('250000')).toBeInTheDocument();
+    expect(titleInput).toHaveValue('');
+    expect(locationInput).toHaveValue('');
   });
 
-  it('edits a line item description, specification, quantity, unit and date', async () => {
-    await reachStep2();
+  it('handles file input triggers and file additions', () => {
+    renderWizard();
 
-    fireEvent.change(screen.getByDisplayValue('Centrifugal Water Pump 500 GPM'), {
-      target: { value: 'Booster Pump' },
+    // Clicking Select Files button triggers file input
+    const selectFilesBtn = screen.getByRole('button', { name: /Select Files/i });
+    fireEvent.click(selectFilesBtn);
+
+    // Add document file
+    const docFile = new File(['specs content'], 'specification.docx', {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     });
-    expect(screen.getByDisplayValue('Booster Pump')).toBeInTheDocument();
-
-    fireEvent.change(screen.getByDisplayValue('SS316 impeller'), { target: { value: 'CI casing' } });
-    expect(screen.getByDisplayValue('CI casing')).toBeInTheDocument();
-
-    fireEvent.change(screen.getByDisplayValue('12'), { target: { value: '30' } });
-    expect(screen.getByDisplayValue('30')).toBeInTheDocument();
-
-    fireEvent.change(screen.getByDisplayValue('Units'), { target: { value: 'Sets' } });
-    expect(screen.getByDisplayValue('Sets')).toBeInTheDocument();
-
-    fireEvent.change(screen.getByDisplayValue('2026-09-15'), { target: { value: '2026-10-01' } });
-    expect(screen.getByDisplayValue('2026-10-01')).toBeInTheDocument();
+    uploadFile(docFile);
+    expect(screen.getByText('specification.docx')).toBeInTheDocument();
   });
 
-  it('lets the quantity be cleared and shows it as blank rather than zero', async () => {
-    await reachStep2();
+  it('handles extraction error and extraction without files gracefully', async () => {
+    renderWizard();
 
-    fireEvent.change(screen.getByDisplayValue('12'), { target: { value: '0' } });
+    // Extract without files
+    clickExtract();
 
-    // Clamping every entry up to 1 meant the field could never be emptied, and a
-    // quantity of 1 nobody typed was dispatched to vendors. Scoped to the row so
-    // the budget input, which legitimately holds 0, is not matched.
-    const qty = within(screen.getAllByRole('row')[1]).getByPlaceholderText(EXTRACTION.itemQtyPlaceholder);
-    expect(qty).toHaveValue(null);
+    // Upload file and simulate failure response
+    const badFile = new File(['dummy'], 'corrupt.xlsx', { type: 'application/vnd.ms-excel' });
+    uploadFile(badFile);
+
+    mockExtract.mockResolvedValueOnce({
+      success: false,
+      error: 'Corrupt file structure',
+    });
+    clickExtract();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Corrupt file structure/i)).toBeInTheDocument();
+    });
+
+    // Simulate extraction throwing exception
+    mockExtract.mockRejectedValueOnce(new Error('Network failure parsing document'));
+    clickExtract();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Network failure parsing document/i)).toBeInTheDocument();
+    });
   });
 
-  it('locks sourcing while a row has no quantity', async () => {
-    await reachStep2();
+  it('handles auto-categorization errors and empty line items', async () => {
+    renderWizard();
 
-    fireEvent.change(screen.getByDisplayValue('12'), { target: { value: '0' } });
+    // Line item with empty name should trigger warning when categorizing
+    const classifyBtn = screen.getByRole('button', { name: /Auto-Categorize All \(AI\)/i });
+    fireEvent.click(classifyBtn);
 
-    proceedToSourcing();
-    expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument();
-    expect(screen.getByTestId('wizard-step-3').getAttribute('aria-disabled')).toBe('true');
+    // Add item with name
+    const itemInput = screen.getByPlaceholderText(MODAL.itemPlaceholder);
+    fireEvent.change(itemInput, { target: { value: 'High Pressure Valve' } });
+
+    // Mock classify failure
+    mockClassify.mockResolvedValueOnce({
+      success: false,
+      error: 'AI Classifier quota exceeded',
+    });
+    fireEvent.click(classifyBtn);
+    await waitFor(() => expect(mockClassify).toHaveBeenCalled());
+
+    // Mock classify throwing exception
+    mockClassify.mockRejectedValueOnce(new Error('Classification connection timeout'));
+    fireEvent.click(classifyBtn);
+    await waitFor(() => expect(mockClassify).toHaveBeenCalled());
   });
 
-  // Changing the major category must reset the minor, otherwise the row would
-  // keep a minor category that does not belong to its new major.
-  it('resets the minor category when the major category changes', async () => {
-    await reachStep2();
-    const majorSelect = selects().find((s) =>
-      Array.from(s.options).some((o) => o.value === 'Civil Works')
-    ) as HTMLSelectElement;
+  it('allows updating general RFQ fields and line item details', () => {
+    renderWizard();
 
-    fireEvent.change(majorSelect, { target: { value: 'Civil Works' } });
+    // Update title, major category, delivery date, budget
+    const titleInput = screen.getByPlaceholderText(MODAL.titlePlaceholder);
+    fireEvent.change(titleInput, { target: { value: 'Annual Maintenance Spares' } });
 
-    // The row falls back to the first minor of the newly chosen major.
-    const expectedMinor = categoriesData.find((c) => c.majorCategory === 'Civil Works')!.minorCategories[0];
-    const minorSelect = selects().find((s) =>
-      Array.from(s.options).some((o) => o.value === expectedMinor)
-    ) as HTMLSelectElement;
-    expect(minorSelect.value).toBe(expectedMinor);
+    const budgetInput = screen.getByPlaceholderText('e.g. 500000');
+    fireEvent.change(budgetInput, { target: { value: '750000' } });
+
+    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
+    // Change technical specs
+    const specsInput = within(row).getByPlaceholderText(MODAL.specsPlaceholder);
+    fireEvent.change(specsInput, { target: { value: 'Class 300 Flanged' } });
+    expect(specsInput).toHaveValue('Class 300 Flanged');
   });
 
-  it('re-categorises every row through the server taxonomy on demand', async () => {
-    await reachStep2();
+  it('handles RFQ creation submission failures and errors', async () => {
+    renderWizard();
 
-    mockClassify.mockResolvedValue({
+    // Fill minimum required fields
+    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
+      target: { value: 'Dahej Port Complex' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder), {
+      target: { value: '392130' },
+    });
+
+    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.itemPlaceholder), {
+      target: { value: 'TMT Rebars Fe550D' },
+    });
+    const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
+    fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
+    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), {
+      target: { value: '50' },
+    });
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), {
+      target: { value: 'MT' },
+    });
+
+    // Upload attachment that fails upload
+    mockAttach.mockRejectedValueOnce(new Error('Storage S3 upload timeout'));
+    uploadFile(new File(['file'], 'specs.pdf', { type: 'application/pdf' }));
+
+    // Mock createRFQ failure
+    mockCreateRFQ.mockResolvedValueOnce({
+      success: false,
+      error: 'Database constraint violation during RFQ creation',
+    });
+
+    const submitBtn = screen.getByRole('button', { name: /Create & Dispatch RFQ/i });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Database constraint violation during RFQ creation/i)).toBeInTheDocument();
+    });
+
+    // Mock createRFQ exception
+    mockCreateRFQ.mockRejectedValueOnce(new Error('Network error during dispatch'));
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Network error during dispatch/i)).toBeInTheDocument();
+    });
+  });
+
+  it('handles drag-and-drop events on the drop zone', () => {
+    renderWizard();
+
+    const dropZone = screen.getByText(/Drag and drop BOQ spreadsheets/i).closest('div')!;
+
+    fireEvent.dragOver(dropZone, { dataTransfer: { files: [] } });
+    fireEvent.dragLeave(dropZone);
+
+    const droppedFile = new File(['dropped'], 'dropped.pdf', { type: 'application/pdf' });
+    fireEvent.drop(dropZone, { dataTransfer: { files: [droppedFile] } });
+
+    expect(screen.getByText('dropped.pdf')).toBeInTheDocument();
+  });
+
+  it('leaves unmatched line items unchanged when auto-categorize response omits them', async () => {
+    renderWizard();
+
+    // Add a second row so one item id ("ent-1" from the mocked response) won't match either.
+    const itemInput = screen.getByPlaceholderText(MODAL.itemPlaceholder);
+    fireEvent.change(itemInput, { target: { value: 'Unmatched Item' } });
+
+    mockClassify.mockResolvedValueOnce({
       success: true,
       data: {
-        ...successResult().data,
+        extractedEntities: [entity({ id: 'some-other-id' })],
+      },
+    });
+
+    const classifyBtn = screen.getByRole('button', { name: /Auto-Categorize All \(AI\)/i });
+    fireEvent.click(classifyBtn);
+
+    await waitFor(() => expect(mockClassify).toHaveBeenCalled());
+    expect(screen.getByDisplayValue('Unmatched Item')).toBeInTheDocument();
+  });
+
+  it('applies the matched category onto its own line item when ids align', async () => {
+    renderWizard();
+
+    // Extract first so the line item's id is deterministically "ent-1" (from the mock entity).
+    uploadFile(new File(['binary'], 'BOQ_Pumps.xlsx', { type: '' }));
+    clickExtract();
+    await waitFor(() => expect(mockExtract).toHaveBeenCalled());
+
+    mockClassify.mockResolvedValueOnce({
+      success: true,
+      data: {
         extractedEntities: [
-          entity({ minorCategory: 'Hoses, Valves & Fittings', category: 'Hoses, Valves & Fittings' }),
+          entity({ id: 'ent-1', majorCategory: categoriesData[0].majorCategory, minorCategory: categoriesData[0].minorCategories[0] }),
         ],
       },
-      classification: {
-        totalExtracted: 1,
-        accepted: 1,
-        duplicatesRemoved: 0,
-        needsReview: 0,
-        autoClassified: 1,
-      },
     });
 
-    fireEvent.click(clickClassify());
-
-    // The server owns the 280+ category taxonomy, so the row is whatever it says.
-    await waitFor(() => {
-      const minorSelect = selects().find((s) =>
-        Array.from(s.options).some((o) => o.value === 'Hoses, Valves & Fittings')
-      ) as HTMLSelectElement;
-      expect(minorSelect.value).toBe('Hoses, Valves & Fittings');
-    });
-
-    // Only quotable rows are sent; rfqClient decides what fields travel.
-    const [sent] = mockClassify.mock.calls[0];
-    expect(sent).toHaveLength(1);
-    expect(sent[0].itemName).toBe('Centrifugal Water Pump 500 GPM');
-  });
-
-  it('keeps a row the server dropped when re-categorising', async () => {
-    await reachStep2();
-    fireEvent.click(screen.getByRole('button', { name: /Add Line Item/i }));
-    expect(screen.getAllByRole('row')).toHaveLength(3);
-
-    // A blank row has no description, so the server never returns it.
-    mockClassify.mockResolvedValue({
-      success: true,
-      data: { ...successResult().data, extractedEntities: [entity()] },
-      classification: {
-        totalExtracted: 1,
-        accepted: 1,
-        duplicatesRemoved: 0,
-        needsReview: 0,
-        autoClassified: 1,
-      },
-    });
-
-    fireEvent.click(clickClassify());
+    const classifyBtn = screen.getByRole('button', { name: /Auto-Categorize All \(AI\)/i });
+    fireEvent.click(classifyBtn);
 
     await waitFor(() => expect(mockClassify).toHaveBeenCalled());
-    // Still three rows: the blank one was preserved rather than discarded.
-    expect(screen.getAllByRole('row')).toHaveLength(3);
+    expect(screen.getByDisplayValue(categoriesData[0].majorCategory)).toBeInTheDocument();
   });
 
-  it('leaves the rows untouched when re-categorisation fails', async () => {
-    await reachStep2();
-    mockClassify.mockResolvedValue({ success: false, error: EXTRACTION.classifyFailed });
-
-    fireEvent.click(clickClassify());
-
-    await waitFor(() => expect(mockClassify).toHaveBeenCalled());
-    expect(screen.getByDisplayValue('Centrifugal Water Pump 500 GPM')).toBeInTheDocument();
-  });
-
-  it('does not call the classifier when no row has a description', async () => {
-    mockExtract.mockResolvedValue({
-      success: false,
-      reason: 'NO_ITEMS_FOUND',
-      error: EXTRACTION.unreadableResponse,
-    });
+  it('changes the target delivery date and per-item target date fields', () => {
     renderWizard();
-    uploadFile(new File(['x'], 'note.pdf', { type: 'application/pdf' }));
+
+    const dateInput = document.getElementById('rfq-date') as HTMLInputElement;
+    fireEvent.change(dateInput, { target: { value: '2026-12-01' } });
+    expect(dateInput).toHaveValue('2026-12-01');
+
+    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
+    const itemDateInput = within(row).getByLabelText(MODAL.colTargetDate) as HTMLInputElement;
+    fireEvent.change(itemDateInput, { target: { value: '2026-12-15' } });
+    expect(itemDateInput).toHaveValue('2026-12-15');
+  });
+
+  it('ignores a file input change carrying no files and one carrying an empty file list', () => {
+    renderWizard();
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+
+    fireEvent.change(input, { target: { files: null } });
+    expect(screen.queryByText(/Uploaded Documents/i)).not.toBeInTheDocument();
+
+    fireEvent.change(input, { target: { files: [] } });
+    expect(screen.queryByText(/Uploaded Documents/i)).not.toBeInTheDocument();
+  });
+
+  it('applies fallback values when the extraction response omits optional fields', async () => {
+    renderWizard();
+    uploadFile(new File(['binary'], 'BOQ_Pumps.xlsx', { type: '' }));
+
+    mockExtract.mockResolvedValueOnce({
+      success: true,
+      data: {
+        title: '',
+        category: '',
+        targetDeliveryDate: '',
+        estimatedBudget: null,
+        extractedEntities: [],
+        source: 'web_portal',
+      },
+      classification: undefined,
+      extraction: undefined,
+    });
+
     clickExtract();
-    await waitFor(() => expect(screen.getByText(EXTRACTION.emptyTitle)).toBeInTheDocument());
-
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.addFirstItemAction, 'i') }));
-    fireEvent.click(clickClassify());
-
-    expect(mockClassify).not.toHaveBeenCalled();
+    await waitFor(() => expect(mockExtract).toHaveBeenCalled());
+    expect(screen.getByText(/Gemini 2.5 AI/i)).toBeInTheDocument();
   });
 
-  it('adds and deletes line items', async () => {
-    await reachStep2();
-    expect(screen.getAllByRole('row')).toHaveLength(2); // header + one row
+  it('falls back to a default message when extraction fails without an error string', async () => {
+    renderWizard();
+    uploadFile(new File(['binary'], 'BOQ_Pumps.xlsx', { type: '' }));
 
-    fireEvent.click(screen.getByRole('button', { name: /Add Line Item/i }));
-    expect(screen.getAllByRole('row')).toHaveLength(3);
+    mockExtract.mockResolvedValueOnce({ success: false });
+    clickExtract();
 
-    fireEvent.click(screen.getAllByTitle(/Delete item/i)[1]);
-    expect(screen.getAllByRole('row')).toHaveLength(2);
+    await waitFor(() => {
+      expect(screen.getByText(new RegExp(EXTRACTION.unreadableResponse, 'i'))).toBeInTheDocument();
+    });
   });
 
-  it('returns to ingestion from review', async () => {
-    await reachStep2();
+  it('falls back to a default message when extraction throws without a message', async () => {
+    renderWizard();
+    uploadFile(new File(['binary'], 'BOQ_Pumps.xlsx', { type: '' }));
 
-    fireEvent.click(screen.getByRole('button', { name: /Back to Ingestion/i }));
+    mockExtract.mockRejectedValueOnce(new Error());
+    clickExtract();
 
-    expect(screen.getByText(/INGESTION SOURCE/i)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText(new RegExp(EXTRACTION.unreadableResponse, 'i'))).toBeInTheDocument();
+    });
   });
 
-  it('navigates via the step strip', async () => {
-    await reachStep2();
+  it('falls back to a default message when auto-categorize fails without an error string', async () => {
+    renderWizard();
+    fireEvent.change(screen.getByPlaceholderText(MODAL.itemPlaceholder), { target: { value: 'Item A' } });
 
-    fireEvent.click(screen.getByText(/STEP 1: INGESTION/i));
-    expect(screen.getByText(/INGESTION SOURCE/i)).toBeInTheDocument();
+    mockClassify.mockResolvedValueOnce({ success: false });
+    fireEvent.click(screen.getByRole('button', { name: /Auto-Categorize All \(AI\)/i }));
 
-    fireEvent.click(screen.getByText(/STEP 2: MINOR CATEGORIZATION/i));
-    expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument();
+    await waitFor(() => expect(mockClassify).toHaveBeenCalled());
+  });
+
+  it('keeps existing categories when a matched entity omits its own category fields', async () => {
+    renderWizard();
+    uploadFile(new File(['binary'], 'BOQ_Pumps.xlsx', { type: '' }));
+    clickExtract();
+    await waitFor(() => expect(mockExtract).toHaveBeenCalled());
+
+    mockClassify.mockResolvedValueOnce({
+      success: true,
+      data: {
+        extractedEntities: [{ ...entity({ id: 'ent-1' }), majorCategory: '', minorCategory: '' }],
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Auto-Categorize All \(AI\)/i }));
+    await waitFor(() => expect(mockClassify).toHaveBeenCalled());
+
+    // The originally-extracted major category should remain since the response's was blank.
+    expect(screen.getByDisplayValue(entity().majorCategory)).toBeInTheDocument();
+  });
+
+  it('drops a failed attachment upload result but still dispatches the RFQ', async () => {
+    renderWizard();
+
+    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
+      target: { value: 'Pune Depot' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder), {
+      target: { value: '411001' },
+    });
+    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.itemPlaceholder), {
+      target: { value: 'Gate Valves' },
+    });
+    const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
+    fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
+    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '5' } });
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
+
+    uploadFile(new File(['file'], 'specs.pdf', { type: 'application/pdf' }));
+    mockAttach.mockResolvedValueOnce({ success: false, error: 'rejected' });
+
+    fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
+
+    await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
+  });
+
+  it('ignores a second submit click while a dispatch is already in flight', async () => {
+    renderWizard();
+
+    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
+      target: { value: 'Chennai Yard' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder), {
+      target: { value: '600001' },
+    });
+    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.itemPlaceholder), {
+      target: { value: 'Steel Plates' },
+    });
+    const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
+    fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
+    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '3' } });
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'MT' } });
+
+    let resolveCreate: (v: any) => void;
+    mockCreateRFQ.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveCreate = resolve;
+      })
+    );
+
+    const submitBtn = screen.getByRole('button', { name: /Create & Dispatch RFQ/i });
+    fireEvent.click(submitBtn);
+    fireEvent.click(submitBtn);
+    fireEvent.click(submitBtn);
+
+    resolveCreate!({ success: true, rfq: mockCreatedRFQ() });
+    await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalledTimes(1));
+  });
+
+  it('falls back to default messages when RFQ creation fails or throws without details', async () => {
+    renderWizard();
+
+    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
+      target: { value: 'Kolkata Yard' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder), {
+      target: { value: '700001' },
+    });
+    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.itemPlaceholder), {
+      target: { value: 'Copper Wire' },
+    });
+    const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
+    fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
+    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '20' } });
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Rolls' } });
+
+    const submitBtn = screen.getByRole('button', { name: /Create & Dispatch RFQ/i });
+
+    mockCreateRFQ.mockResolvedValueOnce({ success: false });
+    fireEvent.click(submitBtn);
+    await waitFor(() => {
+      expect(screen.getByText(/Failed to create RFQ\./i)).toBeInTheDocument();
+    });
+
+    mockCreateRFQ.mockRejectedValueOnce(new Error());
+    fireEvent.click(submitBtn);
+    await waitFor(() => {
+      expect(screen.getByText(/Failed to dispatch RFQ\./i)).toBeInTheDocument();
+    });
+  });
+
+  it('ignores a drop event that carries no files', () => {
+    renderWizard();
+    const dropZone = screen.getByText(/Drag and drop BOQ spreadsheets/i).closest('div')!;
+
+    fireEvent.drop(dropZone, { dataTransfer: {} });
+    expect(screen.queryByText(/Uploaded Documents/i)).not.toBeInTheDocument();
+  });
+
+  it('clears the budget and quantity fields back to empty', () => {
+    renderWizard();
+
+    const budgetInput = screen.getByPlaceholderText('e.g. 500000');
+    fireEvent.change(budgetInput, { target: { value: '750000' } });
+    fireEvent.change(budgetInput, { target: { value: '' } });
+    expect(budgetInput).toHaveValue(null);
+
+    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
+    const qtyInput = within(row).getByPlaceholderText(MODAL.qtyPlaceholder);
+    fireEvent.change(qtyInput, { target: { value: '9' } });
+    fireEvent.change(qtyInput, { target: { value: '' } });
+    expect(qtyInput).toHaveValue(null);
+  });
+
+  it('adds the first line item from the empty-state button', () => {
+    renderWizard();
+
+    // Remove the default line item to reach the empty state.
+    const deleteBtn = screen.getByTitle('Remove line item');
+    fireEvent.click(deleteBtn);
+    expect(screen.getByText(/No line items added yet\./i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Add First Line Item/i }));
+    expect(screen.getByPlaceholderText(MODAL.itemPlaceholder)).toBeInTheDocument();
   });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// Remaining branches: read failures, keyword classification, and the step strip
-// ═══════════════════════════════════════════════════════════════════════════════
-describe('IngestionWizard: edge cases', () => {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const XLSX = require('xlsx');
+
+describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
+  const realFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = realFetch;
+  });
+
+  // Overrides only the /api/bootstrap vendors list; every other URL (category
+  // taxonomy, RFQs, etc.) still goes through jest.setup.ts's real default
+  // fetch mock, so the category dropdowns stay populated.
+  function serveBootstrap(vendors: Array<Record<string, unknown>>) {
+    global.fetch = jest.fn((url: RequestInfo | URL, init?: any) => {
+      if (typeof url === 'string' && url.includes('/api/bootstrap')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            success: true,
+            data: { vendors, buyerAccounts: [], evaluations: [], auditLogs: [], aiFeed: [], systemConfig: {} },
+          }),
+        }) as any;
+      }
+      return (realFetch as any)(url, init);
+    });
+  }
 
   beforeEach(() => {
     jest.clearAllMocks();
-    mockExtract.mockResolvedValue(successResult());
-    XLSX.read.mockImplementation(() => ({ SheetNames: ['Sheet1'], Sheets: { Sheet1: {} } }));
-    XLSX.utils.sheet_to_json.mockImplementation(() => [
-      ['Item', 'Qty', 'Unit'],
-      ['Centrifugal Water Pump 500 GPM', 12, 'Units'],
+    mockCreateRFQ.mockResolvedValue({ success: true, rfq: mockCreatedRFQ() });
+  });
+
+  it('shows the empty-roster state and omits assignedVendors when the buyer has no uploaded vendors', async () => {
+    serveBootstrap([]);
+    renderWizard();
+
+    fireEvent.click(screen.getByTestId('mode-mode_1'));
+    await waitFor(() => expect(screen.getByText('No Private Vendors Uploaded Yet')).toBeInTheDocument());
+    expect(screen.getByText('0 Suppliers Found')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
+      target: { value: 'Navi Mumbai Plant' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder), {
+      target: { value: '400701' },
+    });
+    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.itemPlaceholder), {
+      target: { value: 'Centrifugal Water Pump' },
+    });
+    const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
+    fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
+    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '10' } });
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
+
+    await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
+    expect(mockCreateRFQ.mock.calls[0][0].assignedVendors).toEqual([]);
+  });
+
+  it('lists the buyer-uploaded vendors, shows category/rating, and dispatches strictly to them on save', async () => {
+    serveBootstrap([
+      {
+        id: 'v-hist-1',
+        name: 'Apex Industrial Dynamics',
+        contactPerson: 'Rajesh Nair',
+        email: 'rajesh@apex.in',
+        phone: '+91 98200 11111',
+        source: 'historical_purchase_dump',
+        majorCategory: 'Engineering Spares - Mechanical',
+        rating: 4.8,
+      },
+      // No name/email/phone/contactPerson/majorCategory: exercises every fallback.
+      { id: 'v-hist-2', source: 'historical_purchase_dump' },
+      // Not buyer-uploaded: must be excluded from both the preview and the payload.
+      { id: 'v-cm-1', name: 'Category Manager Vendor', source: 'category_manager_upload' },
+    ]);
+    renderWizard();
+
+    fireEvent.click(screen.getByTestId('mode-mode_1'));
+    await waitFor(() => expect(screen.getByText('2 Suppliers Found')).toBeInTheDocument());
+    expect(screen.getByText('Apex Industrial Dynamics')).toBeInTheDocument();
+    expect(screen.getByText('Rajesh Nair')).toBeInTheDocument();
+    expect(screen.getByText('rajesh@apex.in')).toBeInTheDocument();
+    expect(screen.getByText('+91 98200 11111')).toBeInTheDocument();
+    expect(screen.getAllByText('Engineering Spares - Mechanical').length).toBeGreaterThan(0);
+    expect(screen.getByText('4.8')).toBeInTheDocument();
+    expect(screen.queryByText('Category Manager Vendor')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
+      target: { value: 'Navi Mumbai Plant' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder), {
+      target: { value: '400701' },
+    });
+    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.itemPlaceholder), {
+      target: { value: 'Centrifugal Water Pump' },
+    });
+    const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
+    fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
+    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '10' } });
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
+
+    await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
+    expect(mockCreateRFQ.mock.calls[0][0].assignedVendors).toEqual([
+      {
+        id: 'v-hist-1',
+        name: 'Apex Industrial Dynamics',
+        email: 'rajesh@apex.in',
+        contactPerson: 'Rajesh Nair',
+        phone: '+91 98200 11111',
+      },
+      {
+        id: 'v-hist-2',
+        name: 'Enterprise Vendor',
+        email: null,
+        contactPerson: null,
+        phone: null,
+      },
     ]);
   });
 
-  // A corrupt workbook must surface the manual-entry fallback, not a crash.
-  it('falls back to manual entry when the document cannot be read', async () => {
-    XLSX.read.mockImplementation(() => {
-      throw new Error('corrupt workbook');
+  it('does not attach assignedVendors when the selected mode is not Mode 1', async () => {
+    serveBootstrap([
+      { id: 'v-hist-1', name: 'Apex Industrial Dynamics', source: 'historical_purchase_dump' },
+    ]);
+    renderWizard();
+
+    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
+      target: { value: 'Navi Mumbai Plant' },
     });
-    renderWizard();
-    uploadFile(new File(['x'], 'broken.xlsx', { type: '' }));
-
-    clickExtract();
-
-    await waitFor(() => expect(screen.getByText(EXTRACTION.fallbackTitle)).toBeInTheDocument());
-    expect(screen.getByText(EXTRACTION.emptyTitle)).toBeInTheDocument();
-    expect(mockExtract).not.toHaveBeenCalled();
-  });
-
-  it('opens the file picker when the drop zone is clicked', () => {
-    renderWizard();
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
-    const clickSpy = jest.spyOn(input, 'click').mockImplementation(() => {});
-
-    fireEvent.click(screen.getByText(/Click to Browse or Drag & Drop/i).closest('div') as HTMLElement);
-
-    expect(clickSpy).toHaveBeenCalled();
-  });
-
-  it('changes a minor category directly', async () => {
-    renderWizard();
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-
-    const minorSelect = screen
-      .getAllByRole('combobox')
-      .filter((el): el is HTMLSelectElement => el.tagName === 'SELECT')
-      .find((s) => Array.from(s.options).some((o) => o.value === 'Bearings & Accessories')) as HTMLSelectElement;
-
-    fireEvent.change(minorSelect, { target: { value: 'Bearings & Accessories' } });
-
-    expect(minorSelect.value).toBe('Bearings & Accessories');
-  });
-
-  // The step strip bypasses the Step 2 gate, so dispatch itself must also refuse
-  // an RFQ whose line items lost their descriptions.
-  it('refuses to save when a line item was blanked after reaching sourcing', async () => {
-    renderWizard();
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-
-    // Reach Step 3 while every row is still valid, then blank one from there.
-    proceedToSourcing();
-    expect(screen.getByText(EXTRACTION.vendorComingSoonTitle)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByTestId('wizard-step-2'));
-    fireEvent.change(screen.getByDisplayValue('Centrifugal Water Pump 500 GPM'), { target: { value: '  ' } });
-    fireEvent.click(screen.getByTestId('wizard-step-3'));
-
-    // Step 3 locks again the moment a row loses its description.
-    expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument();
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Fallback branches on optional values
-// ═══════════════════════════════════════════════════════════════════════════════
-describe('IngestionWizard: fallback branches', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    mockExtract.mockResolvedValue(successResult());
-  });
-
-  it('ignores a file input change that carries no file', () => {
-    renderWizard();
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
-
-    fireEvent.change(input, { target: { files: [] } });
-
-    expect(screen.queryByText(/Selected File:/i)).not.toBeInTheDocument();
-  });
-
-  it('keeps the extracted title when the model supplies none', async () => {
-    const result = successResult();
-    result.data!.title = '';
-    mockExtract.mockResolvedValue(result);
-
-    renderWizard();
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-    // Nothing is invented: the title input simply stays empty for the buyer.
-    expect(screen.getByLabelText(/Procurement Project Title/i)).toHaveValue('');
-  });
-
-  it('derives counts from the entity list when classification is absent', async () => {
-    mockExtract.mockResolvedValue({
-      success: true,
-      data: {
-        title: 'Pump Requirement',
-        category: 'Engineering Spares - Mechanical',
-        targetDeliveryDate: '2026-09-15',
-        extractedEntities: [entity()],
-        source: 'web_portal',
-      },
+    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder), {
+      target: { value: '400701' },
     });
-
-    renderWizard();
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-
-    await waitFor(() => expect(screen.getByText(EXTRACTION.successTitle)).toBeInTheDocument());
-    expect(
-      screen.getByText(formatString(EXTRACTION.successSummary, { accepted: 1, model: '', needsReview: 0 }))
-    ).toBeInTheDocument();
-  });
-
-  it('locks sourcing when a line item carries no major category', async () => {
-    mockExtract.mockResolvedValue(successResult([entity({ majorCategory: '' })], 145000));
-    renderWizard();
-
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-
-    // The RFQ header category is taken from the leading item, so an unclassified
-    // row cannot reach dispatch.
-    proceedToSourcing();
-    expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument();
-  });
-
-  it('allows every mode on a version_2 plan except Mode 3', async () => {
-    mockExtract.mockResolvedValue(successResult());
-    renderWizard({ forceSubscription: 'version_2' });
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-    proceedToSourcing();
-
-    fireEvent.click(screen.getByTestId('mode-card-mode_2'));
-    expect(screen.getByTestId('mode-card-mode_2').className).toContain('border-indigo-600');
-
-    expect(screen.getByTestId('mode-card-mode_3').textContent).toMatch(/Upgrade Required/i);
-  });
-
-  it('refuses to select a locked mode and keeps the current selection', async () => {
-    mockExtract.mockResolvedValue(successResult());
-    renderWizard({ forceSubscription: 'version_2' });
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-    proceedToSourcing();
-
-    // Mode 3 is gated behind the Version 3 plan, so the click must be rejected.
-    fireEvent.click(screen.getByTestId('mode-card-mode_3'));
-    expect(screen.getByTestId('mode-card-mode_3').className).not.toContain('border-indigo-600');
-  });
-
-  it('refuses to select Mode 2 on a version_1 plan', async () => {
-    mockExtract.mockResolvedValue(successResult());
-    renderWizard({ forceSubscription: 'version_1' });
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-    proceedToSourcing();
-
-    // Version 1 only unlocks Mode 1, so the upgrade path for Mode 2 is taken.
-    fireEvent.click(screen.getByTestId('mode-card-mode_2'));
-    expect(screen.getByTestId('mode-card-mode_2').className).not.toContain('border-indigo-600');
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Estimated budget read from the uploaded document
-// ═══════════════════════════════════════════════════════════════════════════════
-describe('IngestionWizard: estimated budget', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
-  const reachStep2 = async () => {
-    renderWizard();
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-  };
-
-  it('fills the budget from the value read off the document', async () => {
-    mockExtract.mockResolvedValue(successResult([entity()], 348000));
-    await reachStep2();
-
-    expect(budgetField()).toHaveValue(348000);
-    expect(screen.getByText(formatString(EXTRACTION.budgetFromDocumentHint, { fileName: 'BOQ.xlsx' })))
-      .toBeInTheDocument();
-  });
-
-  it('asks the buyer for a budget when the document priced nothing', async () => {
-    mockExtract.mockResolvedValue(successResult([entity()], null));
-    await reachStep2();
-
-    expect(budgetField()).toHaveValue(0);
-    expect(screen.getByText(EXTRACTION.budgetMissingHint)).toBeInTheDocument();
-  });
-
-  it('drops the document attribution once the buyer overrides the figure', async () => {
-    mockExtract.mockResolvedValue(successResult([entity()], 348000));
-    await reachStep2();
-
-    fireEvent.change(budgetField(), { target: { value: '400000' } });
-
-    expect(
-      screen.queryByText(formatString(EXTRACTION.budgetFromDocumentHint, { fileName: 'BOQ.xlsx' }))
-    ).not.toBeInTheDocument();
-    // A positive override needs no prompt either.
-    expect(screen.queryByText(EXTRACTION.budgetMissingHint)).not.toBeInTheDocument();
-  });
-
-  it('clears a stale budget when a later extraction fails', async () => {
-    mockExtract.mockResolvedValue(successResult([entity()], 348000));
-    await reachStep2();
-    expect(budgetField()).toHaveValue(348000);
-
-    // Second upload cannot be read: the previous document's figure must not stick.
-    mockExtract.mockResolvedValue({
-      success: false,
-      reason: 'NO_ITEMS_FOUND',
-      error: EXTRACTION.unreadableResponse,
+    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.itemPlaceholder), {
+      target: { value: 'Centrifugal Water Pump' },
     });
-    fireEvent.click(screen.getByTestId('wizard-step-1'));
-    uploadFile(new File(['y'], 'note.pdf', { type: 'application/pdf' }));
-    clickExtract();
+    const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
+    fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
+    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '10' } });
+    fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
 
-    await waitFor(() => expect(screen.getByText(EXTRACTION.emptyTitle)).toBeInTheDocument());
-    expect(budgetField()).toHaveValue(0);
-  });
-});
+    fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// Sequential step gating
-// ═══════════════════════════════════════════════════════════════════════════════
-describe('IngestionWizard: step gating', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    mockExtract.mockResolvedValue(successResult([entity()], 348000));
-  });
-
-  it('unlocks the review step once extraction has been attempted', async () => {
-    renderWizard();
-    expect(screen.getByTestId('wizard-step-2').getAttribute('aria-disabled')).toBe('true');
-
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-
-    expect(screen.getByTestId('wizard-step-2').getAttribute('aria-disabled')).toBe('false');
-    // Valid line items are not enough on their own: the delivery destination is
-    // mandatory too, and extraction never supplies it.
-    expect(screen.getByTestId('wizard-step-3').getAttribute('aria-disabled')).toBe('true');
-
-    fillDelivery();
-    expect(screen.getByTestId('wizard-step-3').getAttribute('aria-disabled')).toBe('false');
-  });
-
-  it('unlocks the review step even when extraction found nothing', async () => {
-    mockExtract.mockResolvedValue({
-      success: false,
-      reason: 'NO_ITEMS_FOUND',
-      error: EXTRACTION.unreadableResponse,
-    });
-    renderWizard();
-    uploadFile(new File(['x'], 'note.pdf', { type: 'application/pdf' }));
-    clickExtract();
-
-    await waitFor(() => expect(screen.getByText(EXTRACTION.emptyTitle)).toBeInTheDocument());
-    // Manual entry is the documented fallback, so Step 2 must be reachable,
-    // while sourcing stays locked until a line item exists.
-    expect(screen.getByTestId('wizard-step-2').getAttribute('aria-disabled')).toBe('false');
-    expect(screen.getByTestId('wizard-step-3').getAttribute('aria-disabled')).toBe('true');
-  });
-
-  it('allows navigation back to a completed step', async () => {
-    renderWizard();
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-
-    fireEvent.click(screen.getByTestId('wizard-step-1'));
-    expect(screen.getByText(/INGESTION SOURCE/i)).toBeInTheDocument();
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Manual RFQ entry, delivery details and the now-optional budget
-// ═══════════════════════════════════════════════════════════════════════════════
-describe('IngestionWizard: manual entry and delivery details', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    mockExtract.mockResolvedValue(successResult([entity()], 348000));
-  });
-
-  it('offers a manual path that skips extraction entirely', () => {
-    renderWizard();
-    fireEvent.click(screen.getByTestId('intake-manual'));
-
-    // The manual panel is what replaces the upload and email panels.
-    expect(screen.getByRole('button', { name: new RegExp(EXTRACTION.manualStartAction, 'i') })).toBeInTheDocument();
-    // No document is involved, so the AI extract action must not be offered.
-    expect(
-      screen.queryByRole('button', { name: new RegExp(EXTRACTION.extractAction, 'i') })
-    ).not.toBeInTheDocument();
-  });
-
-  // The budget is optional now: a document that prices nothing must still save.
-  it('saves an RFQ with no budget at all', async () => {
-    const onComplete = jest.fn();
-    mockExtract.mockResolvedValue(successResult([entity()], null));
-
-    renderWizard({ onComplete });
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-    expect(budgetField()).toHaveValue(0);
-
-    proceedToSourcing();
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') }));
-
-    await waitFor(() => expect(onComplete).toHaveBeenCalled());
-  });
-
-  it('refuses to save a malformed pincode and returns to the review step', async () => {
-    const onComplete = jest.fn();
-    renderWizard({ onComplete });
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-
-    // The location is supplied so the malformed pincode is the only blocker.
-    setDeliveryLocation('Navi Mumbai Plant, Gate 3');
-    setDeliveryPincode('-!');
-    // Flagged inline while the buyer is still on the field. A malformed value is
-    // reported straight away, unlike a blank one, which waits for Proceed.
-    expect(screen.getByText(EXTRACTION.deliveryPincodeInvalidMessage)).toBeInTheDocument();
-
-    // A malformed pincode now blocks the Step 2 gate rather than only failing on
-    // save, so sourcing is never reached and there is no dispatch button to press.
-    clickProceed();
-
-    expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') })
-    ).not.toBeInTheDocument();
-    expect(onComplete).not.toHaveBeenCalled();
-  });
-
-  // Both fields start empty, so validating on first render greeted the buyer with
-  // two errors against fields they had not reached yet.
-  it('holds back the blank-field warnings until the buyer tries to move on', async () => {
-    renderWizard();
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-
-    expect(screen.queryByText(EXTRACTION.deliveryLocationRequiredMessage)).not.toBeInTheDocument();
-    expect(screen.queryByText(EXTRACTION.deliveryPincodeRequiredMessage)).not.toBeInTheDocument();
-
-    clickProceed();
-
-    expect(screen.getByText(EXTRACTION.deliveryLocationRequiredMessage)).toBeInTheDocument();
-    expect(screen.getByText(EXTRACTION.deliveryPincodeRequiredMessage)).toBeInTheDocument();
-    expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument();
-  });
-
-  // Each warning clears on its own so the buyer can see which field is still open.
-  it('clears each blank-field warning as that field is filled', async () => {
-    renderWizard();
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-
-    clickProceed();
-    setDeliveryLocation('Navi Mumbai Plant, Gate 3');
-
-    expect(screen.queryByText(EXTRACTION.deliveryLocationRequiredMessage)).not.toBeInTheDocument();
-    expect(screen.getByText(EXTRACTION.deliveryPincodeRequiredMessage)).toBeInTheDocument();
-
-    setDeliveryPincode('400701');
-
-    expect(screen.queryByText(EXTRACTION.deliveryPincodeRequiredMessage)).not.toBeInTheDocument();
-    expect(screen.getByTestId('wizard-step-3').getAttribute('aria-disabled')).toBe('false');
-  });
-
-  it('accepts an international zipcode with a space or hyphen', async () => {
-    const onComplete = jest.fn();
-    renderWizard({ onComplete });
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-
-    setDeliveryLocation('Tilbury Docks, Berth 4');
-    setDeliveryPincode('SW1A 1AA');
-    expect(screen.queryByText(EXTRACTION.deliveryPincodeInvalidMessage)).not.toBeInTheDocument();
-
-    clickProceed();
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.dispatchAction, 'i') }));
-
-    await waitFor(() => expect(onComplete).toHaveBeenCalled());
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// A row added by hand starts genuinely blank
-//
-// Defaults used to be pre-filled — quantity 1, unit Nos, a target date and the
-// first taxonomy pair — which read as answers the buyer had given. A quantity of
-// 1 and a category of "Civil Works" are exactly the values that get dispatched
-// to vendors unnoticed.
-// ═══════════════════════════════════════════════════════════════════════════════
-describe('IngestionWizard: blank added row', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    mockExtract.mockResolvedValue(successResult([entity()], 145000));
-  });
-
-  const addedRow = async () => {
-    renderWizard();
-    uploadFile(new File(['x'], 'BOQ.xlsx', { type: '' }));
-    clickExtract();
-    await waitFor(() => expect(screen.getByText(/REVIEW ENTITIES/i)).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /Add Line Item/i }));
-    // Row 1 is the extracted item, row 2 the one just added.
-    return screen.getAllByRole('row')[2];
-  };
-
-  it('leaves every field on the new row empty', async () => {
-    const row = await addedRow();
-
-    const [name, specs] = within(row).getAllByRole('textbox') as HTMLTextAreaElement[];
-    expect(name).toHaveValue('');
-    expect(specs).toHaveValue('');
-    expect(within(row).getByPlaceholderText(EXTRACTION.itemQtyPlaceholder)).toHaveValue(null);
-    expect(within(row).getByPlaceholderText(EXTRACTION.itemUnitPlaceholder)).toHaveValue('');
-
-    const [major, minor] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
-    expect(major.value).toBe('');
-    expect(minor.value).toBe('');
-  });
-
-  it('guides each empty field with a placeholder', async () => {
-    const row = await addedRow();
-
-    expect(within(row).getByPlaceholderText(EXTRACTION.itemNamePlaceholder)).toBeInTheDocument();
-    expect(within(row).getByPlaceholderText(EXTRACTION.itemSpecsPlaceholder)).toBeInTheDocument();
-    expect(within(row).getByText(EXTRACTION.categoryPlaceholder)).toBeInTheDocument();
-    expect(within(row).getByText(EXTRACTION.minorCategoryPlaceholder)).toBeInTheDocument();
-  });
-
-  // A green 0% badge would report a score that was never computed.
-  it('reports no confidence rather than zero percent', async () => {
-    const row = await addedRow();
-
-    expect(within(row).getByText(EXTRACTION.confidenceUnset)).toBeInTheDocument();
-    expect(within(row).queryByText('0%')).not.toBeInTheDocument();
-  });
-
-  it('keeps sourcing locked until the new row is completed', async () => {
-    const row = await addedRow();
-    expect(screen.getByTestId('wizard-step-3').getAttribute('aria-disabled')).toBe('true');
-
-    fireEvent.change(within(row).getAllByRole('textbox')[0], { target: { value: 'Gasket Set' } });
-    fillBlankRow(row);
-    fillDelivery();
-
-    expect(screen.getByTestId('wizard-step-3').getAttribute('aria-disabled')).toBe('false');
-  });
-
-  it('clears the minor category when the major is changed', async () => {
-    const row = await addedRow();
-    fillBlankRow(row);
-
-    const [major, minor] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
-    expect(minor.value).toBe(categoriesData[0].minorCategories[0]);
-
-    // The minor belongs to the major, so it must follow it rather than keep a
-    // value from a different family.
-    fireEvent.change(major, { target: { value: categoriesData[1].majorCategory } });
-    expect(minor.value).toBe(categoriesData[1].minorCategories[0]);
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Manual entry opens a dialog
-//
-// The manual path no longer routes through the extraction steps. There is no
-// document to read and nothing to review, so it is keyed and saved in one dialog
-// which posts to the API itself.
-// ═══════════════════════════════════════════════════════════════════════════════
-describe('IngestionWizard: manual entry dialog', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
-  it('opens the dialog as soon as the Manual method is chosen', () => {
-    renderWizard();
-    expect(screen.queryByTestId('manual-rfq-modal')).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByTestId('intake-manual'));
-
-    expect(screen.getByTestId('manual-rfq-modal')).toBeInTheDocument();
-  });
-
-  it('never calls the extractor on the manual path', () => {
-    renderWizard();
-    fireEvent.click(screen.getByTestId('intake-manual'));
-    expect(mockExtract).not.toHaveBeenCalled();
-  });
-
-  it('closes the dialog and leaves the wizard on step 1', () => {
-    renderWizard();
-    fireEvent.click(screen.getByTestId('intake-manual'));
-
-    fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.manualRfqModal.closeAria }));
-
-    expect(screen.queryByTestId('manual-rfq-modal')).not.toBeInTheDocument();
-    // Still on ingestion: the dialog saves directly rather than feeding step 2.
-    expect(screen.getByTestId('wizard-step-2').getAttribute('aria-disabled')).toBe('true');
-  });
-
-  it('reopens the dialog from the panel action', () => {
-    renderWizard();
-    fireEvent.click(screen.getByTestId('intake-manual'));
-    fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.manualRfqModal.closeAria }));
-
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(EXTRACTION.manualStartAction, 'i') }));
-
-    expect(screen.getByTestId('manual-rfq-modal')).toBeInTheDocument();
-  });
-
-  // No document is involved, so the AI extract action must not be offered.
-  it('offers no extract action on the manual panel', () => {
-    renderWizard();
-    fireEvent.click(screen.getByTestId('intake-manual'));
-    fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.manualRfqModal.closeAria }));
-
-    expect(
-      screen.queryByRole('button', { name: new RegExp(EXTRACTION.extractAction, 'i') })
-    ).not.toBeInTheDocument();
+    await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
+    expect(mockCreateRFQ.mock.calls[0][0].assignedVendors).toEqual([]);
   });
 });

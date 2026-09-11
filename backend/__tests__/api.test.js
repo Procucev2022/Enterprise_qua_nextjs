@@ -700,7 +700,7 @@ describe('API Route Endpoints', () => {
       expect(res.body.data).toHaveProperty('htmlBody');
     });
 
-    test('GET /api/rfqs/:id/email-preview rejects a free-tier vendor downloading a marketplace RFQ', async () => {
+    test('GET /api/rfqs/:id/email-preview succeeds for a free-tier vendor downloading a marketplace RFQ (quota enforcement temporarily disabled for every tier), and still tracks usage', async () => {
       const header = customAuthHeader({
         id: 'usr-free-tier-vendor',
         email: 'free-tier@vendor.com',
@@ -711,21 +711,26 @@ describe('API Route Endpoints', () => {
         name: 'Free Tier Supplier Co',
         majorCategory: 'Engineering Spares - Mechanical',
       });
-      // Invite this vendor so the 403 asserted below is the quota gate, not
-      // the (separately-tested) invite gate.
+      // Invite this vendor so access is granted at all — the endpoint under
+      // test is the download itself, not the (separately-tested) invite gate.
       await request(app)
         .post(`/api/rfqs/${testRfqId}/invite-vendors`)
         .set(authHeader('category_manager'))
         .send({ vendorIds: [freeVendorRes.body.data.id] });
       // Left on the default 'premium' (free, client-uploaded-only) plan —
       // this RFQ was never raised by a buyer who added this vendor, so it's
-      // a marketplace download outside what that plan grants.
+      // a marketplace download. Quota enforcement is disabled for every tier
+      // right now, so this still succeeds and increments rfqDownloadsUsed.
       const res = await request(app).get(`/api/rfqs/${testRfqId}/email-preview`).set(header);
-      expect(res.statusCode).toBe(403);
-      expect(res.body.error).toMatch(/Connect or Select subscription/i);
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data).toHaveProperty('htmlBody');
+      const vendorAfter = await request(app)
+        .get(`/api/vendors/${encodeURIComponent(freeVendorRes.body.data.id)}`)
+        .set(header);
+      expect(vendorAfter.body.data.rfqDownloadsUsed).toBe(1);
     });
 
-    test('GET /api/rfqs/:id/email-preview rejects a vendor who has exhausted their quota', async () => {
+    test('GET /api/rfqs/:id/email-preview keeps succeeding for a vendor whose usage counter is already past the old quota', async () => {
       const header = customAuthHeader({
         id: 'usr-exhausted-vendor',
         email: 'exhausted@vendor.com',
@@ -744,8 +749,8 @@ describe('API Route Endpoints', () => {
         .send({ vendorIds: [created.body.data.id] });
 
       const res = await request(app).get(`/api/rfqs/${testRfqId}/email-preview`).set(header);
-      expect(res.statusCode).toBe(403);
-      expect(res.body.error).toMatch(/reached your 50-RFQ download quota/i);
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data).toHaveProperty('htmlBody');
     });
   });
 

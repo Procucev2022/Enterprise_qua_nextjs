@@ -13,6 +13,8 @@
 // ==============================================================================
 
 import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { useApp } from '@/lib/store';
+import { isBuyerUploaded } from './vendor-summary';
 import {
   Plus,
   Trash2,
@@ -24,6 +26,11 @@ import {
   FileText,
   Sparkles,
   CheckCircle2,
+  Building2,
+  Mail,
+  Phone,
+  Users,
+  Star,
 } from 'lucide-react';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { CURRENCY, SOURCING_MODES } from '@/lib/constants';
@@ -76,6 +83,14 @@ function FieldError({ message }: { message?: string }) {
 }
 
 export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQModalProps) {
+  let buyerVendors: any[] = [];
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const store = useApp();
+    buyerVendors = store?.buyerVendors || [];
+  } catch {
+    buyerVendors = [];
+  }
   const [form, setForm] = useState<ManualRFQForm>(createEmptyManualRFQForm);
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -206,7 +221,28 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     if (!validateManualRFQForm(form).isValid) return;
 
     setIsSaving(true);
-    const result = await createRFQ(toRFQCreatePayload(form));
+    let mode1AssignedVendors: Array<{
+      id?: string;
+      name: string;
+      email?: string | null;
+      contactPerson?: string | null;
+      phone?: string | null;
+    }> | undefined = undefined;
+
+    if (form.sourcingMode === 'mode_1' && Array.isArray(buyerVendors)) {
+      const myUploadedVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+      if (myUploadedVendors.length > 0) {
+        mode1AssignedVendors = myUploadedVendors.map((v) => ({
+          id: v.id,
+          name: v.name || 'Enterprise Vendor',
+          email: v.email || null,
+          contactPerson: v.contactPerson || v.name || null,
+          phone: v.phone || null,
+        }));
+      }
+    }
+
+    const result = await createRFQ(toRFQCreatePayload(form, mode1AssignedVendors));
     setIsSaving(false);
 
     if (!result.success) {
@@ -785,6 +821,89 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                 );
               })}
             </div>
+
+            {/* ── Mode 1: Private Approved Vendor Roster Preview ── */}
+            {form.sourcingMode === 'mode_1' && (
+              <div className="mt-4 rounded-xl border border-blue-200 dark:border-blue-900/60 bg-blue-50/40 dark:bg-blue-950/20 p-4 space-y-3 animate-fade-in shadow-2xs">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-blue-100 dark:border-blue-900/40 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <div className="p-1 rounded-lg bg-blue-600 text-white shadow-2xs">
+                      <Building2 size={14} />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                        <span>Mode 1: Buyer&apos;s Approved Vendor Roster</span>
+                        <span className="badge badge-blue text-[9px] font-bold">
+                          {buyerVendors.filter((v) => isBuyerUploaded(v)).length} Suppliers Found
+                        </span>
+                      </h4>
+                      <p className="text-[10px] text-slate-500 dark:text-gray-400">
+                        This RFQ will strictly be dispatched to your private supplier network below.
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-[9px] font-bold text-blue-700 dark:text-blue-300 bg-blue-100/70 dark:bg-blue-900/50 px-2 py-0.5 rounded-full border border-blue-200 dark:border-blue-800 shrink-0">
+                    🔒 Private Roster Only
+                  </span>
+                </div>
+
+                {(() => {
+                  const myVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+                  if (myVendors.length === 0) {
+                    return (
+                      <div className="p-4 text-center rounded-lg bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-1">
+                        <Users size={22} className="mx-auto text-slate-400 opacity-60" />
+                        <p className="text-xs font-bold text-slate-700 dark:text-gray-300">No Private Vendors Uploaded Yet</p>
+                        <p className="text-[10px] text-slate-500 dark:text-gray-400">
+                          Please ingest your PO history or add approved vendors in the Vendor Directory to dispatch in Mode 1.
+                        </p>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-56 overflow-y-auto pr-1">
+                      {myVendors.map((vendor, idx) => (
+                        <div
+                          key={vendor.id || idx}
+                          className="rounded-lg border border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 p-2.5 space-y-1.5 shadow-2xs"
+                        >
+                          <div className="flex items-start justify-between gap-1">
+                            <span className="text-[11px] font-bold text-slate-900 dark:text-white truncate" title={vendor.name}>
+                              {idx + 1}. {vendor.name}
+                            </span>
+                            <span className="badge badge-emerald text-[8px] font-bold shrink-0">
+                              Preferred
+                            </span>
+                          </div>
+
+                          <div className="space-y-0.5 text-[10px] text-slate-500 dark:text-gray-400">
+                            {vendor.contactPerson && (
+                              <div className="flex items-center gap-1 text-slate-700 dark:text-gray-300">
+                                <Users size={10} className="text-slate-400 shrink-0" />
+                                <span className="truncate">{vendor.contactPerson}</span>
+                              </div>
+                            )}
+                            {vendor.email && (
+                              <div className="flex items-center gap-1">
+                                <Mail size={10} className="text-blue-500 shrink-0" />
+                                <span className="font-mono truncate">{vendor.email}</span>
+                              </div>
+                            )}
+                            {vendor.phone && (
+                              <div className="flex items-center gap-1">
+                                <Phone size={10} className="text-emerald-500 shrink-0" />
+                                <span className="font-mono">{vendor.phone}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
           </section>
 
           {submitError && (

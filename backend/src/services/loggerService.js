@@ -101,6 +101,18 @@ class LoggerService {
   log(level, message, meta = {}, category = 'SYSTEM') {
     const entry = this.createLogEntry(level, message, meta, category);
 
+    // Output to console in non-test environment so cloud dashboards (Render, Railway) stream logs live
+    if (process.env.NODE_ENV !== 'test') {
+      const metaStr = meta && Object.keys(meta).length > 0 ? ` ${JSON.stringify(meta)}` : '';
+      if (level === 'ERROR') {
+        console.error(`[${level}] [${category}] ${message}${metaStr}`);
+      } else if (level === 'WARN') {
+        console.warn(`[${level}] [${category}] ${message}${metaStr}`);
+      } else {
+        console.log(`[${level}] [${category}] ${message}${metaStr}`);
+      }
+    }
+
     // Keep within buffer limit
     this.inMemoryLogs.unshift(entry);
     if (this.inMemoryLogs.length > this.maxBufferSize) {
