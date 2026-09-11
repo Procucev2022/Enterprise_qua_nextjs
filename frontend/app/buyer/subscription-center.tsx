@@ -13,9 +13,9 @@ const PLAN_LABEL: Record<string, string> = {
 };
 
 const PLAN_PRICE: Record<string, string> = {
-  version_1: '$199',
-  version_2: '$499',
-  version_3: '$999',
+  version_1: '₹2',
+  version_2: '₹5',
+  version_3: '₹8',
 };
 
 export default function SubscriptionCenter() {
@@ -98,7 +98,7 @@ export default function SubscriptionCenter() {
       id: 'version_1' as const,
       name: 'Version 1 Plan',
       subtext: 'Features of Version 1 Only',
-      price: '$199',
+      price: '₹2',
       billing: 'per user / month',
       description: 'Streamline procurement across your private pre-approved vendor roster (Mode 1 only) with working-hour multi-channel follow-ups.',
       colorClass: 'from-indigo-650 to-indigo-750 text-indigo-600 border-indigo-200 dark:border-indigo-900',
@@ -118,7 +118,7 @@ export default function SubscriptionCenter() {
       id: 'version_2' as const,
       name: 'Version 2 Plan',
       subtext: 'Features of Version 1 & 2 Included',
-      price: '$499',
+      price: '₹5',
       billing: 'per user / month',
       description: 'Cumulative plan giving you full access to BOTH Version 1 and Version 2 (Mode 1 & Mode 2) with hybrid platform network discovery.',
       colorClass: 'from-sky-600 to-blue-600 text-sky-600 border-sky-200 dark:border-sky-900',
@@ -138,7 +138,7 @@ export default function SubscriptionCenter() {
       id: 'version_3' as const,
       name: 'Version 3 Plan',
       subtext: 'Features of Version 1, 2 & 3 Included',
-      price: '$999',
+      price: '₹8',
       billing: 'per user / month',
       description: 'Ultimate all-inclusive tier giving you full access to Version 1, Version 2, AND Version 3 (Mode 1, Mode 2 & Mode 3) with autonomous AI governance.',
       colorClass: 'from-purple-600 to-indigo-650 text-purple-600 border-purple-200 dark:border-purple-900',

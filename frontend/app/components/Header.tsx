@@ -135,8 +135,8 @@ export default function Header() {
       tier === 'premium'
         ? 'Premium (Client Uploaded)'
         : tier === 'connect'
-        ? 'Connect Model ($149)'
-        : 'Select Model ($349)';
+        ? 'Connect Model (₹2)'
+        : 'Select Model (₹5)';
     showToast('Vendor Tier Switched', `Active vendor access model set to: ${tierName}`, 'success');
   };
 
@@ -231,8 +231,8 @@ export default function Header() {
                 {vendorSubscription === 'premium'
                   ? 'Premium Model (Client Uploaded)'
                   : vendorSubscription === 'connect'
-                  ? 'Connect Model ($149 / 3mo)'
-                  : 'Select Model ($349 / 3mo)'}
+                  ? 'Connect Model (₹2 / 3mo)'
+                  : 'Select Model (₹5 / 3mo)'}
               </span>
               <ChevronDown
                 size={14}
@@ -313,7 +313,7 @@ export default function Header() {
                         className={vendorSubscription === 'connect' ? 'text-emerald-600' : 'text-slate-300'}
                       />
                       <div>
-                        <div className="font-bold text-xs">Connect Model ($149 / 3 Months)</div>
+                        <div className="font-bold text-xs">Connect Model (₹2 / 3 Months)</div>
                         <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
                           50 RFQ downloads in 3 months ({vendorRfqDownloadsUsed}/50 used) • $0 Self-Evaluation Fee
                         </div>
@@ -333,7 +333,7 @@ export default function Header() {
                         className={vendorSubscription === 'select' ? 'text-emerald-600' : 'text-slate-300'}
                       />
                       <div>
-                        <div className="font-bold text-xs">Select Model ($349 / 3 Months)</div>
+                        <div className="font-bold text-xs">Select Model (₹5 / 3 Months)</div>
                         <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
                           Item Catalogue (Max 100 SKUs) + 100 RFQs • $0 Self-Evaluation Fee
                         </div>

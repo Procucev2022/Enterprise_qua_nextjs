@@ -329,7 +329,7 @@ export default function ItemCatalogue() {
                 Item Catalogue Feature (Select Model)
               </span>
               <span className="text-[11px] text-slate-500 dark:text-gray-400">
-                Vendors on the <strong>Select Model</strong> ($349 / 3 mo) can publish up to 100 products with MOQs and download up to 100 RFQs.
+                Vendors on the <strong>Select Model</strong> (₹5 / 3 mo) can publish up to 100 products with MOQs and download up to 100 RFQs.
               </span>
             </div>
           </div>
