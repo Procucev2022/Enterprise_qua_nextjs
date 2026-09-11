@@ -595,6 +595,7 @@ module.exports = {
   buildQuoteReceivedEmail,
   sendRequisitionNotificationEmail,
   buildRequisitionEmail,
+  fromAddress,
   vendorSignInUrl,
   categoryList,
   buildVendorCategoryMappingEmail,
