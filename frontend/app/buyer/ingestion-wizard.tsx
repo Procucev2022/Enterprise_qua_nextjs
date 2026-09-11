@@ -26,6 +26,7 @@ import {
 } from '@/lib/manualRfqModel';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
+import { extractRfqCategorySignals, getCategoryMatchedProcucevVendors } from '@/lib/vendorMatching';
 import type {
   ManualRFQForm,
   ManualRFQLineItem,
@@ -55,6 +56,7 @@ import {
   Users,
   ShieldCheck,
   Tag,
+  Info,
 } from 'lucide-react';
 
 const EXTRACTION = UI_STRINGS.rfqExtraction;
@@ -111,6 +113,7 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
     needsReview: number;
     fileName: string;
   } | null>(null);
+  const [showAiInfo, setShowAiInfo] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -854,8 +857,8 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
               {
                 icon: '🚀',
                 badge: 'FULL REACH',
-                badgeStyle: 'bg-purple-100 text-purple-700 dark:bg-purple-900/60 dark:text-purple-300 border-purple-200 dark:border-purple-800',
-                activeBorder: 'border-purple-500 ring-2 ring-purple-500/20 bg-purple-50/40 dark:bg-purple-950/30',
+                badgeStyle: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800',
+                activeBorder: 'border-indigo-500 ring-2 ring-indigo-500/20 bg-indigo-50/40 dark:bg-indigo-950/30',
               },
             ][index];
 
@@ -981,59 +984,89 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
 
               return (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-72 overflow-y-auto pr-1">
-                  {myVendors.map((vendor, idx) => (
-                    <div
-                      key={vendor.id || idx}
-                      className="rounded-xl border border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 p-3.5 space-y-2 shadow-2xs hover:border-blue-300 dark:hover:border-blue-700 transition-all"
-                    >
-                      <div className="flex items-start justify-between gap-1.5">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 text-xs font-bold font-mono">
-                            {idx + 1}
-                          </span>
-                          <span className="text-xs font-bold text-slate-900 dark:text-white truncate" title={vendor.name}>
-                            {vendor.name}
+                  {myVendors.map((vendor, idx) => {
+                    const rawMinor = vendor.minorCategories as string | string[] | undefined;
+                    const minorList: string[] = Array.isArray(rawMinor)
+                      ? rawMinor
+                      : typeof rawMinor === 'string'
+                      ? (rawMinor as string).split(',').map((s: string) => s.trim()).filter(Boolean)
+                      : Array.isArray(vendor.vendorSelectedCategories)
+                      ? vendor.vendorSelectedCategories
+                      : [];
+
+                    return (
+                      <div
+                        key={vendor.id || idx}
+                        className="rounded-xl border border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 p-3.5 space-y-2 shadow-2xs hover:border-blue-300 dark:hover:border-blue-700 transition-all"
+                      >
+                        <div className="flex items-start justify-between gap-1.5">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 text-xs font-bold font-mono">
+                              {idx + 1}
+                            </span>
+                            <span className="text-xs font-bold text-slate-900 dark:text-white truncate" title={vendor.name}>
+                              {vendor.name}
+                            </span>
+                          </div>
+                          <span className="badge badge-emerald text-[9px] font-bold shrink-0">
+                            Preferred
                           </span>
                         </div>
-                        <span className="badge badge-emerald text-[9px] font-bold shrink-0">
-                          Preferred
-                        </span>
-                      </div>
 
-                      <div className="space-y-1 text-[11px] text-slate-600 dark:text-gray-300">
-                        {vendor.contactPerson && (
-                          <div className="flex items-center gap-1.5 text-slate-700 dark:text-gray-300">
-                            <Users size={11} className="text-slate-400 shrink-0" />
-                            <span className="truncate">{vendor.contactPerson}</span>
-                          </div>
-                        )}
-                        {vendor.email && (
-                          <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
-                            <Mail size={11} className="text-blue-500 shrink-0" />
-                            <span className="font-mono text-[10px] truncate">{vendor.email}</span>
-                          </div>
-                        )}
-                        {vendor.phone && (
-                          <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
-                            <Phone size={11} className="text-emerald-500 shrink-0" />
-                            <span className="font-mono text-[10px]">{vendor.phone}</span>
-                          </div>
-                        )}
-                      </div>
-
-                      {vendor.majorCategory && (
-                        <div className="pt-1.5 border-t border-slate-100 dark:border-gray-800/80 flex items-center justify-between gap-1 text-[10px]">
-                          <span className="text-slate-400 truncate max-w-[150px]">
-                            {vendor.majorCategory}
-                          </span>
-                          <span className="text-amber-500 font-bold flex items-center gap-0.5 shrink-0">
-                            <Star size={10} className="fill-amber-400 text-amber-400" />
-                            <span>{vendor.rating || 4.5}</span>
-                          </span>
+                        <div className="space-y-1 text-[11px] text-slate-600 dark:text-gray-300">
+                          {vendor.contactPerson && (
+                            <div className="flex items-center gap-1.5 text-slate-700 dark:text-gray-300">
+                              <Users size={11} className="text-slate-400 shrink-0" />
+                              <span className="truncate">{vendor.contactPerson}</span>
+                            </div>
+                          )}
+                          {vendor.email && (
+                            <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
+                              <Mail size={11} className="text-blue-500 shrink-0" />
+                              <span className="font-mono text-[10px] truncate">{vendor.email}</span>
+                            </div>
+                          )}
+                          {vendor.phone && (
+                            <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
+                              <Phone size={11} className="text-emerald-500 shrink-0" />
+                              <span className="font-mono text-[10px]">{vendor.phone}</span>
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                  ))}
+
+                        {/* Category & Rating */}
+                        <div className="pt-2 border-t border-slate-100 dark:border-gray-800 space-y-1.5">
+                          <div className="flex items-center justify-between text-[10px]">
+                            <span className="font-semibold text-blue-700 dark:text-blue-300 truncate max-w-[150px]">
+                              {vendor.majorCategory || 'General Industrial'}
+                            </span>
+                            <span className="text-amber-500 font-bold flex items-center gap-0.5 shrink-0">
+                              <Star size={10} className="fill-amber-400 text-amber-400" />
+                              <span>{vendor.rating || 4.5}</span>
+                            </span>
+                          </div>
+                          {minorList.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {minorList.slice(0, 2).map((cat: string, ci: number) => (
+                                <span
+                                  key={ci}
+                                  className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-medium bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 border border-slate-200/60 dark:border-gray-700/60 truncate max-w-[120px]"
+                                  title={cat}
+                                >
+                                  {cat}
+                                </span>
+                              ))}
+                              {minorList.length > 2 && (
+                                <span className="text-[8px] font-bold text-slate-400 dark:text-gray-500 self-center">
+                                  +{minorList.length - 2}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })()}
@@ -1045,7 +1078,8 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
           <div className="mt-5 rounded-2xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
             {(() => {
               const myVendors = buyerVendors.filter(isBuyerUploaded);
-              const procucevVendors = buyerVendors.filter(isProcucevVendor);
+              const { signals: rfqSignals } = extractRfqCategorySignals(form);
+              const matchedProcucev = getCategoryMatchedProcucevVendors(buyerVendors, rfqSignals, 80);
 
               return (
                 <>
@@ -1058,18 +1092,66 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                           <span>Mode 2: Hybrid Sourcing Pool (Private Roster + Procucev Marketplace)</span>
                           <span className="badge badge-emerald text-[10px] font-bold">
-                            {myVendors.length + procucevVendors.length} Suppliers Matched
+                            {myVendors.length + matchedProcucev.length} Suppliers Matched
                           </span>
                         </h3>
                         <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                          Combines your approved roster with verified Procucev marketplace suppliers for optimal price discovery and quotation comparison.
+                          Combines your approved roster ({myVendors.length}) with AI category-matched Procucev marketplace suppliers ({matchedProcucev.length}) for optimal price discovery.
                         </p>
                       </div>
                     </div>
-                    <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-100/70 dark:bg-emerald-900/50 px-2.5 py-1 rounded-full border border-emerald-200 dark:border-emerald-800 shrink-0">
-                      ⚡ Hybrid Multi-Channel
-                    </span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setShowAiInfo(!showAiInfo)}
+                        className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 hover:text-emerald-900 dark:hover:text-emerald-100 bg-emerald-100/80 dark:bg-emerald-900/60 px-3 py-1 rounded-full border border-emerald-200 dark:border-emerald-800 transition-colors cursor-pointer"
+                        title="Learn how AI categorizes and matches suppliers"
+                      >
+                        <Info size={13} />
+                        <span>AI Matching Criteria</span>
+                      </button>
+                      <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-100/70 dark:bg-emerald-900/50 px-2.5 py-1 rounded-full border border-emerald-200 dark:border-emerald-800 shrink-0">
+                        ⚡ Hybrid Multi-Channel
+                      </span>
+                    </div>
                   </div>
+
+                  {/* AI Matching Info Panel */}
+                  {showAiInfo && (
+                    <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-emerald-200 dark:border-emerald-800/60 text-slate-800 dark:text-gray-200 space-y-3 animate-fade-in shadow-xs">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 font-bold text-xs text-emerald-800 dark:text-emerald-200">
+                          <Sparkles size={15} className="text-emerald-600 dark:text-emerald-400" />
+                          <span>How QUA AI Categorizes Line Items & Matches Marketplace Suppliers</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setShowAiInfo(false)}
+                          className="text-[10px] font-bold text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                        >
+                          ✕ Close
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-[11px] leading-relaxed">
+                        <div className="p-2.5 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
+                          <strong className="text-emerald-800 dark:text-emerald-300 block mb-1">1. BOQ & Line-Item Classification</strong>
+                          Extracts items and maps keywords against our 280+ standard industrial category taxonomy.
+                        </div>
+                        <div className="p-2.5 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
+                          <strong className="text-emerald-800 dark:text-emerald-300 block mb-1">2. Multi-Signal Supplier Scoring</strong>
+                          Matches vendor primary capabilities, registered minor categories, and historical PO delivery records.
+                        </div>
+                        <div className="p-2.5 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
+                          <strong className="text-emerald-800 dark:text-emerald-300 block mb-1">3. ≥80% Relevance Threshold</strong>
+                          Ensures only verified suppliers with direct capability overlap receive RFQ invitations.
+                        </div>
+                        <div className="p-2.5 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
+                          <strong className="text-emerald-800 dark:text-emerald-300 block mb-1">4. Category Benchmarking</strong>
+                          Evaluates vendor reliability ratings, location proximity, and verified product specifications.
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Buyer Approved Roster */}
                   <div className="space-y-2">
@@ -1094,7 +1176,7 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                               <span className="badge badge-blue text-[8px] font-bold shrink-0">Private</span>
                             </div>
                             <div className="text-[10px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
-                              <span>{v.majorCategory || 'General Industrial'}</span>
+                              <span className="font-semibold text-slate-700 dark:text-gray-300">{v.majorCategory || 'General Industrial'}</span>
                               <span>{v.location || v.city || v.state || 'India'}</span>
                             </div>
                           </div>
@@ -1108,38 +1190,61 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                     <div className="flex items-center justify-between">
                       <h4 className="text-xs font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1.5">
                         <Sparkles size={13} className="text-emerald-600 dark:text-emerald-400" />
-                        <span>Procucev Verified Marketplace Suppliers ({procucevVendors.length} Suppliers)</span>
+                        <span>Procucev Verified Marketplace Suppliers ({matchedProcucev.length} Matched)</span>
                       </h4>
-                      <span className="text-[10px] text-emerald-700 dark:text-emerald-300 font-semibold">Verified Network</span>
+                      <span className="text-[10px] text-emerald-700 dark:text-emerald-300 font-semibold">Category Matched</span>
                     </div>
 
-                    {procucevVendors.length === 0 ? (
-                      <div className="p-3.5 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500">
-                        No Procucev marketplace vendors found in the database.
+                    {matchedProcucev.length === 0 ? (
+                      <div className="p-3.5 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500 space-y-1">
+                        <p className="font-semibold text-slate-600 dark:text-gray-400">No marketplace suppliers directly matching this category yet.</p>
+                        <p className="text-[10px] text-slate-400">Your RFQ will dispatch to your private roster, and category managers will assist with extended sourcing.</p>
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-60 overflow-y-auto pr-1">
-                        {procucevVendors.map((v, i) => {
-                          const rfqMajor = (form.majorCategory || '').toLowerCase();
-                          const vMajor = (v.majorCategory || '').toLowerCase();
-                          const isMatch = rfqMajor && vMajor && (rfqMajor === vMajor || vMajor.includes(rfqMajor));
-                          const score = isMatch ? 95 : 88 + (i % 8);
+                        {matchedProcucev.map(({ vendor: v, matchScore, matchedMajor, matchedCategories }) => {
+                          const rawMinor = v.minorCategories as string | string[] | undefined;
+                          const minorList = Array.isArray(matchedCategories) && matchedCategories.length > 0
+                            ? matchedCategories
+                            : Array.isArray(rawMinor)
+                            ? rawMinor
+                            : typeof rawMinor === 'string'
+                            ? (rawMinor as string).split(',').map((s: string) => s.trim()).filter(Boolean)
+                            : [];
 
                           return (
                             <div
-                              key={v.id || i}
+                              key={v.id}
                               className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-emerald-200/70 dark:border-emerald-900/50 space-y-1.5 shadow-2xs hover:border-emerald-400 transition-colors"
                             >
                               <div className="flex items-start justify-between gap-1">
                                 <span className="text-xs font-bold text-slate-900 dark:text-white truncate" title={v.name}>{v.name}</span>
                                 <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-emerald-50 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-200/40 shrink-0">
-                                  {score}% Match
+                                  {matchScore}% Match
                                 </span>
                               </div>
                               <div className="text-[10px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
-                                <span className="truncate">{v.majorCategory || 'General Industrial'}</span>
+                                <span className="truncate font-semibold text-emerald-700 dark:text-emerald-300">{matchedMajor || v.majorCategory || 'General Industrial'}</span>
                                 <span className="truncate">{v.city || v.state || v.location || 'India'}</span>
                               </div>
+                              {minorList.length > 0 && (
+                                <div className="flex flex-wrap gap-1 pt-1 border-t border-slate-100 dark:border-gray-800">
+                                  {minorList.slice(0, 2).map((cat: string, ci: number) => (
+                                    <span
+                                      key={ci}
+                                      className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-medium bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 border border-slate-200/60 dark:border-gray-700/60 truncate max-w-[120px]"
+                                      title={cat}
+                                    >
+                                      {cat}
+                                    </span>
+                                  ))}
+                                  {minorList.length > 2 && (
+                                    <span className="text-[8px] font-bold text-slate-400 dark:text-gray-500 self-center">
+                                      +{minorList.length - 2}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
                               <div className="pt-1 border-t border-slate-100 dark:border-gray-800 flex items-center justify-between text-[9px]">
                                 <span className="text-slate-400 truncate">{v.contactPerson || 'Verified Supplier'}</span>
                                 <span className="text-amber-500 font-bold flex items-center gap-0.5 shrink-0">
@@ -1159,44 +1264,93 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
           </div>
         )}
 
-        {/* ── Mode 3: Autonomous Sourcing & Double-Blind Verification Protocol ── */}
+        {/* ── Mode 3: Autonomous Sourcing & Double-Blind Verification Protocol (Version 3) ── */}
         {form.sourcingMode === 'mode_3' && (
-          <div className="mt-5 rounded-2xl border border-purple-200 dark:border-purple-900/60 bg-purple-50/40 dark:bg-purple-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
+          <div className="mt-5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
             {(() => {
-              const procucevVendors = buyerVendors.filter(isProcucevVendor);
+              const { signals: rfqSignals } = extractRfqCategorySignals(form);
+              const matchedProcucev = getCategoryMatchedProcucevVendors(buyerVendors, rfqSignals, 80);
 
               return (
                 <>
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-purple-100 dark:border-purple-900/40 pb-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-100 dark:border-indigo-900/40 pb-3">
                     <div className="flex items-center gap-2">
-                      <div className="p-1.5 rounded-lg bg-purple-600 text-white shadow-xs">
+                      <div className="p-1.5 rounded-lg bg-indigo-600 text-white shadow-xs">
                         <ShieldCheck size={16} />
                       </div>
                       <div>
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                           <span>Mode 3: Autonomous Sourcing & Double-Blind Verification Protocol</span>
-                          <span className="badge badge-purple text-[10px] font-bold">
-                            {procucevVendors.length} Database Suppliers Queued
+                          <span className="badge badge-indigo text-[10px] font-bold">
+                            {matchedProcucev.length} Database Suppliers Queued
                           </span>
                         </h3>
                         <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                          Suppliers receive an anonymous capability questionnaire. Your corporate identity &amp; contacts remain completely withheld until qualification.
+                          Suppliers with &gt;80% category match receive an anonymous capability questionnaire. Your corporate identity remains confidential.
                         </p>
                       </div>
                     </div>
-                    <span className="text-[10px] font-bold text-purple-700 dark:text-purple-300 bg-purple-100/70 dark:bg-purple-900/50 px-2.5 py-1 rounded-full border border-purple-200 dark:border-purple-800 shrink-0">
-                      🛡️ Double-Blind Active
-                    </span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setShowAiInfo(!showAiInfo)}
+                        className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-indigo-700 dark:text-indigo-300 hover:text-indigo-900 dark:hover:text-indigo-100 bg-indigo-100/80 dark:bg-indigo-900/60 px-3 py-1 rounded-full border border-indigo-200 dark:border-indigo-800 transition-colors cursor-pointer"
+                        title="Learn how AI categorizes and matches suppliers"
+                      >
+                        <Info size={13} />
+                        <span>AI Matching Criteria</span>
+                      </button>
+                      <span className="text-[10px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-100/70 dark:bg-indigo-900/50 px-2.5 py-1 rounded-full border border-indigo-200 dark:border-indigo-800 shrink-0">
+                        🛡️ Double-Blind Active
+                      </span>
+                    </div>
                   </div>
 
+                  {/* AI Matching Info Panel */}
+                  {showAiInfo && (
+                    <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-indigo-200 dark:border-indigo-800/60 text-slate-800 dark:text-gray-200 space-y-3 animate-fade-in shadow-xs">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 font-bold text-xs text-indigo-800 dark:text-indigo-200">
+                          <Sparkles size={15} className="text-indigo-600 dark:text-indigo-400" />
+                          <span>How QUA AI Categorizes Line Items & Matches Suppliers for Double-Blind Evaluation</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setShowAiInfo(false)}
+                          className="text-[10px] font-bold text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                        >
+                          ✕ Close
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-[11px] leading-relaxed">
+                        <div className="p-2.5 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
+                          <strong className="text-indigo-800 dark:text-indigo-300 block mb-1">1. BOQ & Line-Item Classification</strong>
+                          Extracts items and maps keywords against our 280+ standard industrial category taxonomy.
+                        </div>
+                        <div className="p-2.5 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
+                          <strong className="text-indigo-800 dark:text-indigo-300 block mb-1">2. Multi-Signal Supplier Scoring</strong>
+                          Matches vendor primary capabilities, registered minor categories, and historical PO delivery records.
+                        </div>
+                        <div className="p-2.5 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
+                          <strong className="text-indigo-800 dark:text-indigo-300 block mb-1">3. ≥80% Relevance Threshold</strong>
+                          Ensures only verified suppliers with direct capability overlap receive RFQ invitations.
+                        </div>
+                        <div className="p-2.5 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
+                          <strong className="text-indigo-800 dark:text-indigo-300 block mb-1">4. Double-Blind Confidentiality Protocol</strong>
+                          Supplier capability invites are anonymized; buyer identity is withheld until qualification.
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Explanatory banner */}
-                  <div className="p-3.5 rounded-xl bg-purple-100/50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/60 text-[11px] text-purple-950 dark:text-purple-200 space-y-1">
-                    <div className="font-bold flex items-center gap-1.5 text-purple-900 dark:text-purple-300">
+                  <div className="p-3.5 rounded-xl bg-indigo-100/50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 text-[11px] text-indigo-950 dark:text-indigo-200 space-y-1">
+                    <div className="font-bold flex items-center gap-1.5 text-indigo-900 dark:text-indigo-300">
                       <ShieldCheck size={14} />
                       <span>Evaluation-First Protocol Active</span>
                     </div>
                     <p>
-                      The RFQ will be sent immediately to your private roster. Simultaneously, the {procucevVendors.length} vetted Procucev database vendors below will receive an anonymous RFQ evaluation invite with specifications, while your company identity stays 100% confidential.
+                      The RFQ will be sent immediately to your private roster. Simultaneously, the {matchedProcucev.length} category-matched Procucev database vendors below will receive an anonymous RFQ evaluation invite with specifications, while your company identity stays 100% confidential.
                     </p>
                   </div>
 
@@ -1204,47 +1358,68 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <h4 className="text-xs font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1.5">
-                        <Users size={13} className="text-purple-600 dark:text-purple-400" />
+                        <Users size={13} className="text-indigo-600 dark:text-indigo-400" />
                         <span>Vetted Procucev Database Suppliers (Invited for Double-Blind Evaluation)</span>
                       </h4>
-                      <span className="text-[10px] text-purple-700 dark:text-purple-300 font-semibold">{procucevVendors.length} Database Matches</span>
+                      <span className="text-[10px] text-indigo-700 dark:text-indigo-300 font-semibold">{matchedProcucev.length} Database Matches</span>
                     </div>
 
-                    {procucevVendors.length === 0 ? (
-                      <div className="p-3.5 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500">
-                        No Procucev database vendors available for evaluation.
+                    {matchedProcucev.length === 0 ? (
+                      <div className="p-3.5 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500 space-y-1">
+                        <p className="font-semibold text-slate-600 dark:text-gray-400">No database vendors with &gt;80% match in this category.</p>
+                        <p className="text-[10px] text-slate-400">The RFQ will be routed to your private roster while our AI category desk identifies qualified suppliers.</p>
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-72 overflow-y-auto pr-1">
-                        {procucevVendors.map((v, i) => {
-                          const rfqMajor = (form.majorCategory || '').toLowerCase();
-                          const vMajor = (v.majorCategory || '').toLowerCase();
-                          const isMatch = rfqMajor && vMajor && (rfqMajor === vMajor || vMajor.includes(rfqMajor));
-                          const score = isMatch ? 96 : 89 + (i % 7);
+                        {matchedProcucev.map(({ vendor: v, matchScore, matchedMajor, matchedCategories }) => {
+                          const rawMinor = v.minorCategories as string | string[] | undefined;
+                          const minorList = Array.isArray(matchedCategories) && matchedCategories.length > 0
+                            ? matchedCategories
+                            : Array.isArray(rawMinor)
+                            ? rawMinor
+                            : typeof rawMinor === 'string'
+                            ? (rawMinor as string).split(',').map((s: string) => s.trim()).filter(Boolean)
+                            : [];
 
                           return (
                             <div
-                              key={v.id || i}
-                              className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-purple-200/70 dark:border-purple-900/50 space-y-2 shadow-2xs hover:border-purple-400 transition-colors"
+                              key={v.id}
+                              className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-indigo-200/70 dark:border-indigo-900/50 space-y-2 shadow-2xs hover:border-indigo-400 transition-colors"
                             >
                               <div className="flex items-start justify-between gap-1.5">
                                 <div>
                                   <div className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
                                     <span className="truncate" title={v.name}>{v.name}</span>
-                                    <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border border-purple-200/40 shrink-0">
-                                      {score}% Match
+                                    <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200/40 shrink-0">
+                                      {matchScore}% Match
                                     </span>
                                   </div>
-                                  <div className="text-[10px] text-slate-500 dark:text-gray-400 mt-0.5">{v.majorCategory || 'General Industrial'} · {v.city || v.state || v.location || 'India'}</div>
+                                  <div className="text-[10px] text-slate-500 dark:text-gray-400 mt-0.5">{matchedMajor || v.majorCategory || 'General Industrial'} · {v.city || v.state || v.location || 'India'}</div>
                                 </div>
-                                <span className="text-[8px] font-bold uppercase text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-200/40 shrink-0">
-                                  Evaluation Invite Queued
-                                </span>
                               </div>
+
+                              {minorList.length > 0 && (
+                                <div className="flex flex-wrap gap-1 pt-1 border-t border-slate-100 dark:border-gray-800">
+                                  {minorList.slice(0, 3).map((cat: string, ci: number) => (
+                                    <span
+                                      key={ci}
+                                      className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-medium bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 border border-slate-200/60 dark:border-gray-700/60 truncate max-w-[120px]"
+                                      title={cat}
+                                    >
+                                      {cat}
+                                    </span>
+                                  ))}
+                                  {minorList.length > 3 && (
+                                    <span className="text-[8px] font-bold text-slate-400 dark:text-gray-500 self-center">
+                                      +{minorList.length - 3}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
 
                               <div className="pt-1.5 border-t border-slate-100 dark:border-gray-800 flex items-center justify-between text-[9px]">
                                 <span className="text-slate-500 font-medium">Rating: ⭐ <strong className="text-slate-700 dark:text-gray-300">{v.rating || 4.5}</strong></span>
-                                <span className="text-purple-600 dark:text-purple-400 font-bold flex items-center gap-0.5">
+                                <span className="text-indigo-600 dark:text-indigo-400 font-bold flex items-center gap-0.5">
                                   🔒 Double-Blind
                                 </span>
                               </div>

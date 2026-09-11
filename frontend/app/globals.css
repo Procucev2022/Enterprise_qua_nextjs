@@ -285,6 +285,17 @@ h1, h2, h3, h4, h5, h6 {
   border-color: rgba(7, 65, 147, 0.3);
 }
 
+.badge-indigo {
+  background: #eef2ff;
+  color: #4338ca;
+  border: 1px solid #c7d2fe;
+}
+.dark .badge-indigo {
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
 .badge-purple {
   background: rgba(255, 0, 255, 0.04);
   color: var(--accent-rose);

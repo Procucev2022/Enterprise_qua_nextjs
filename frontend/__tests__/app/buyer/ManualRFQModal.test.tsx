@@ -159,8 +159,11 @@ function extractionResult({
   };
 }
 
+import { setCategoryTaxonomy } from '@/lib/categoryTaxonomy';
+
 beforeEach(() => {
   jest.clearAllMocks();
+  setCategoryTaxonomy(categoriesData);
   rfqClient.createRFQ.mockResolvedValue({ success: true, rfq: savedRFQ() });
   // A distinct id and name per upload: the list is keyed on the id, and two
   // documents in one selection must not collide.
@@ -821,4 +824,57 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
     expect(rfqClient.createRFQ.mock.calls[0][0].assignedVendors).toEqual([]);
   });
+
+  describe('Mode 2 and Mode 3 category-matched vendor previews', () => {
+    it('filters Procucev vendors in Mode 2 and Mode 3 to only category-matching suppliers', () => {
+      const testMajor = 'Professional Services';
+      const testMinor = 'Security Service';
+
+      (useApp as jest.Mock).mockReturnValue({
+        buyerVendors: [
+          { id: 'v-hist-1', name: 'Private Vendor', source: 'buyer_uploaded' },
+          { id: 'proc-serv', name: 'Procucev Security Corp', majorCategory: testMajor, minorCategories: [testMinor], source: 'procucev_network' },
+          { id: 'proc-civil', name: 'Procucev Civil Works Ltd', majorCategory: 'Civil Works', minorCategories: ['Excavation'], source: 'procucev_network' },
+        ],
+      });
+      renderModal();
+
+      const row = screen.getAllByRole('row')[1];
+      fireEvent.change(within(row).getByLabelText(MODAL.colMajor), {
+        target: { value: testMajor },
+      });
+      fireEvent.change(within(row).getByLabelText(MODAL.colMinor), {
+        target: { value: testMinor },
+      });
+
+      // Select Mode 2
+      const modes = screen.getAllByRole('radio');
+      fireEvent.click(modes[1]); // Mode 2
+
+      expect(screen.getByText(/Mode 2: Hybrid Sourcing Pool/i)).toBeInTheDocument();
+      expect(screen.getByText('Procucev Security Corp')).toBeInTheDocument();
+      expect(screen.getAllByText(testMinor).length).toBeGreaterThanOrEqual(1);
+      expect(screen.queryByText('Procucev Civil Works Ltd')).not.toBeInTheDocument();
+
+      // Test AI Info button toggle in Mode 2
+      const aiInfoBtn = screen.getByRole('button', { name: /ai matching info/i });
+      expect(screen.queryByText(/How QUA AI Categorizes & Matches Suppliers/i)).not.toBeInTheDocument();
+      fireEvent.click(aiInfoBtn);
+      expect(screen.getByText(/How QUA AI Categorizes & Matches Suppliers/i)).toBeInTheDocument();
+      expect(screen.getByText(/BOQ & Line-Item Classification/i)).toBeInTheDocument();
+
+      // Select Mode 3
+      fireEvent.click(modes[2]); // Mode 3
+      expect(screen.getByText(/Mode 3: Double-Blind Anonymous Verification/i)).toBeInTheDocument();
+      expect(screen.getByText('Procucev Security Corp')).toBeInTheDocument();
+      expect(screen.getAllByText(testMinor).length).toBeGreaterThanOrEqual(1);
+      expect(screen.queryByText('Procucev Civil Works Ltd')).not.toBeInTheDocument();
+
+      // Verify Mode 3 does not use purple/pink badges
+      const mode3Container = screen.getByText(/Mode 3: Double-Blind Anonymous Verification/i).closest('.border-indigo-200');
+      expect(mode3Container).not.toBeNull();
+      expect(screen.getByText(/Database Suppliers Queued/i)).toHaveClass('badge-indigo');
+    });
+  });
 });
+

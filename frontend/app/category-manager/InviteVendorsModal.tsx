@@ -61,6 +61,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
+  const [allVendorsFetched, setAllVendorsFetched] = useState(false);
 
   useEffect(() => {
     if (!isOpen || !rfq) return;
@@ -71,6 +72,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     setSelected(new Set());
     setAllVendors(null);
     setAllVendorsError(null);
+    setAllVendorsFetched(false);
     void fetchVendorCandidates(rfq.id).then((result) => {
       if (result.success) {
         setCandidates(result.candidates);
@@ -83,9 +85,10 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
 
   // Fetched lazily, only the first time the CM switches into "All Vendors".
   useEffect(() => {
-    if (!isOpen || !rfq || tab !== 'all' || allVendors !== null || allVendorsLoading) return;
+    if (!isOpen || !rfq || tab !== 'all' || allVendorsFetched || allVendorsLoading) return;
     setAllVendorsLoading(true);
     setAllVendorsError(null);
+    setAllVendorsFetched(true);
     void fetchAllVendors().then((result) => {
       if (result.success) {
         const invitedIds = new Set((rfq.assignedVendors || []).map((v) => v.id));
@@ -95,7 +98,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       }
       setAllVendorsLoading(false);
     });
-  }, [isOpen, rfq, tab, allVendors, allVendorsLoading]);
+  }, [isOpen, rfq, tab, allVendorsFetched, allVendorsLoading]);
 
   const categorySignals = useMemo(() => (rfq ? rfqCategorySignals(rfq) : []), [rfq]);
 
