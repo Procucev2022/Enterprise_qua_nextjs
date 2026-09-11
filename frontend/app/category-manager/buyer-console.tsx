@@ -66,14 +66,22 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
       const totalQuotes = rfqsList.reduce((sum, r) => sum + (r.quotesCount || 0), 0);
       const avgQuotesPerRfq = rfqsList.length > 0 ? Math.round((totalQuotes / rfqsList.length) * 10) / 10 : null;
 
-      const style = avatarStyleFor(account.organizationName);
+      // Some real buyer accounts have no contactPerson/organizationName on
+      // file (e.g. a web-registration that never completed profile setup) —
+      // both used to be read unguarded below (.toLowerCase(), .split(' '),
+      // .length inside avatarStyleFor), which threw on render and crashed
+      // this entire screen for every buyer whenever even one account had a
+      // null field.
+      const displayName = account.contactPerson || 'Unnamed Contact';
+      const displayCompany = account.organizationName || 'Unnamed Organization';
+      const style = avatarStyleFor(displayCompany);
 
       return {
         id: account.id,
-        name: account.contactPerson,
+        name: displayName,
         email: account.corporateEmail,
-        company: account.organizationName,
-        logoLetter: (account.organizationName || '?').charAt(0).toUpperCase(),
+        company: displayCompany,
+        logoLetter: displayCompany.charAt(0).toUpperCase(),
         logoBg: style.bg,
         avatarColor: style.avatar,
         // A real, configured account preference — not derived or invented.
@@ -428,6 +436,9 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
               {selectedBuyer.rfqsList.map((rfq) => {
                 const isRfqExpanded = expandedRfqNumber === rfq.rfqNumber;
                 const rfqModeObj = SOURCING_MODES.find(m => m.id === rfq.sourcingMode);
+                // Some real RFQ rows predate extractedEntities being reliably
+                // set — unguarded .length/.map here threw on render.
+                const lineItems = rfq.extractedEntities || [];
 
                 return (
                   <div
@@ -452,7 +463,7 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
                           </div>
                           <div className="flex items-center gap-3 text-[10px] text-slate-450 dark:text-gray-500 mt-1">
                             <span>Sourced Spend: <strong>{formatCurrency(rfq.budget)}</strong></span>
-                            <span>Line Items: <strong>{rfq.extractedEntities.length}</strong></span>
+                            <span>Line Items: <strong>{lineItems.length}</strong></span>
                             <span>Quotes Recd: <strong>{rfq.quotesCount}</strong></span>
                           </div>
                         </div>
@@ -490,7 +501,7 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
                         {/* 1. Line Item Table */}
                         <div className="space-y-1.5">
                           <h4 className="text-[10px] font-extrabold uppercase text-slate-450 dark:text-gray-500 tracking-wider">
-                            BOQ Specifications & Item Roster ({rfq.extractedEntities.length} items)
+                            BOQ Specifications & Item Roster ({lineItems.length} items)
                           </h4>
                           <div className="border border-slate-200 dark:border-gray-800 rounded-lg overflow-hidden">
                             <table className="w-full text-[11px] text-left">
@@ -503,7 +514,7 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
                                 </tr>
                               </thead>
                               <tbody>
-                                {rfq.extractedEntities.map((ent) => (
+                                {lineItems.map((ent) => (
                                   <tr key={ent.id} className="border-b border-slate-100 dark:border-gray-850 text-slate-800 dark:text-gray-300">
                                     <td className="p-2.5 font-semibold text-slate-900 dark:text-white">{ent.itemName}</td>
                                     <td className="p-2.5">{ent.category}</td>

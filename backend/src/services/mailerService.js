@@ -14,14 +14,30 @@ function getTransporter() {
   transporterInitialized = true;
 
   const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASSWORD;
-  if (!user || !pass) return undefined;
+  const rawPass = process.env.SMTP_PASSWORD;
+  if (!user || !rawPass) return undefined;
+
+  const pass = rawPass.replace(/\s+/g, '');
+  const host = process.env.SMTP_HOST || 'smtp.gmail.com';
+  const port = Number(process.env.SMTP_PORT) || (process.env.SMTP_SECURE === 'true' ? 465 : 587);
+  const secure = process.env.SMTP_SECURE ? process.env.SMTP_SECURE === 'true' : port === 465;
 
   transporter = nodemailer.createTransport({
-    service: 'gmail',
+    host,
+    port,
+    secure,
     auth: { user, pass },
+    family: 4, // Force IPv4 to prevent IPv6 timeouts on cloud platforms (AWS, Render, Vercel)
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 20000,
   });
   return transporter;
+}
+
+function fromAddress() {
+  const user = process.env.SMTP_USER || 'RFQ@procucev.com';
+  return `"Procucev Enterprise" <${user}>`;
 }
 
 // ── Autonomous email-gateway: buyer requisition inbound notification ─────────
@@ -103,8 +119,9 @@ async function deliver(message, label) {
     return { sent: false, reason: 'SMTP not configured' };
   }
 
+  logger.info(`Dispatching ${label} to ${message.to}`, { subject: message.subject }, 'MAILER_SERVICE');
   const info = await activeTransporter.sendMail(message);
-  logger.info(`${label} sent to ${message.to}`, { messageId: info.messageId }, 'MAILER_SERVICE');
+  logger.info(`${label} sent successfully to ${message.to}`, { messageId: info.messageId }, 'MAILER_SERVICE');
   return { sent: true, messageId: info.messageId };
 }
 

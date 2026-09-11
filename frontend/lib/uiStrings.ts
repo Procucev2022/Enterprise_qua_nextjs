@@ -697,6 +697,12 @@ export const UI_STRINGS = {
     successTitle: 'Vendors Invited',
     successMessage: '{count} vendor(s) invited to {rfqNumber}. They can now see it, and have been notified.',
     failTitle: 'Could Not Invite Vendors',
+    categoryMatchesTab: 'Category Matches',
+    allVendorsTab: 'All Vendors',
+    searchPlaceholder: 'Search by name, category, email…',
+    outsideCategoryBadge: 'Outside Category',
+    noVendorsFound: 'No vendors match your search.',
+    allVendorsLoadFailed: 'The vendor list could not be loaded.',
   },
 
   notifications: {

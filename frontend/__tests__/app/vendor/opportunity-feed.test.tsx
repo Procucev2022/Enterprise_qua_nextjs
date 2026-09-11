@@ -5,6 +5,13 @@ import { AppProvider, useApp } from '@/lib/store';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import type { QuoteComparison, RFQItem, VendorOpportunity, VendorSubscriptionPlan } from '@/lib/types';
 
+const mockRouterPush = jest.fn();
+jest.mock('next/navigation', () => ({
+  useRouter: () => ({
+    push: mockRouterPush,
+  }),
+}));
+
 /**
  * The feed is derived from `GET /api/rfqs`, so every test supplies the RFQs whose
  * projection it wants to assert on. Nothing is seeded any more: an empty API means
@@ -335,6 +342,7 @@ async function renderEmptyFeed(props: HarnessProps = {}) {
 }
 
 const downloadButtons = () => screen.getAllByTitle(/Download RFQ Technical BOQ/i);
+const viewDetailsButtons = () => screen.getAllByTitle(/View RFQ Details/i);
 
 /** The five filter selects, in DOM order. */
 function selects() {
@@ -691,6 +699,16 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     serveRFQs(ALL_FIXTURES);
   });
 
+  test('View Details navigates to the vendor RFQ details route for the clicked card', async () => {
+    await renderFeed({ subscription: 'premium' });
+
+    fireEvent.click(viewDetailsButtons()[0]);
+
+    expect(mockRouterPush).toHaveBeenCalledWith(
+      `/vendor/rfq-details?rfq=${encodeURIComponent(DIRECT_OWN.rfqNumber as string)}`,
+    );
+  });
+
   test('downloads an own-roster RFQ without prompting for an upgrade', async () => {
     // isOwnBuyerRfq needs a real vendor record (matched by session email) whose
     // addedByBuyerCompany equals the RFQ's buyerAccountName — serveRFQs's
@@ -700,8 +718,71 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     await act(async () => {
       fireEvent.click(downloadButtons()[0]);
     });
-    await waitFor(() => expect(screen.getByText('Spreadsheet Sent to Registered Email')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('RFQ Downloaded')).toBeInTheDocument());
     expect(screen.queryByText(/Upgrade to Premium Sourcing Plan/i)).not.toBeInTheDocument();
+  });
+
+  test('downloading an RFQ also downloads its real attachments, skipping any that fail to fetch', async () => {
+    await renderFeed({ subscription: 'premium' });
+
+    const priorImpl = (global.fetch as jest.Mock).getMockImplementation()!;
+    const rfqSpecific = jest.fn((url: string, init?: unknown) => {
+      if (typeof url === 'string' && new RegExp(`/api/rfqs/${DIRECT_OWN.rfqNumber}$`).test(url)) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              attachments: [
+                { id: 'att-1', fileName: 'boq.pdf' },
+                { id: 'att-2', fileName: 'specs.xlsx' },
+              ],
+            },
+          }),
+        });
+      }
+      if (typeof url === 'string' && /\/api\/rfqs\/attachments\/att-1$/.test(url)) {
+        return Promise.resolve({ ok: true, blob: async () => new Blob(['pdf']) });
+      }
+      if (typeof url === 'string' && /\/api\/rfqs\/attachments\/att-2$/.test(url)) {
+        return Promise.resolve({ ok: false });
+      }
+      return priorImpl(url, init);
+    });
+    (global.fetch as jest.Mock).mockImplementation(rfqSpecific);
+
+    await act(async () => {
+      fireEvent.click(downloadButtons()[0]);
+    });
+
+    await waitFor(() =>
+      expect(rfqSpecific).toHaveBeenCalledWith(
+        expect.stringContaining('/api/rfqs/attachments/att-1'),
+        expect.anything(),
+      ),
+    );
+    expect(rfqSpecific).toHaveBeenCalledWith(
+      expect.stringContaining('/api/rfqs/attachments/att-2'),
+      expect.anything(),
+    );
+  });
+
+  test('gracefully continues past a failed attachment-listing fetch after the specification already downloaded', async () => {
+    await renderFeed({ subscription: 'premium' });
+
+    const priorImpl = (global.fetch as jest.Mock).getMockImplementation()!;
+    (global.fetch as jest.Mock).mockImplementation((url: string, init?: unknown) => {
+      if (typeof url === 'string' && new RegExp(`/api/rfqs/${DIRECT_OWN.rfqNumber}$`).test(url)) {
+        return Promise.reject(new Error('network down'));
+      }
+      return priorImpl(url, init);
+    });
+
+    await act(async () => {
+      fireEvent.click(downloadButtons()[0]);
+    });
+
+    await waitFor(() => expect(screen.getByText('RFQ Downloaded')).toBeInTheDocument());
   });
 
   test('blocks a marketplace download on the client-uploaded Premium plan', async () => {
@@ -729,7 +810,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     await act(async () => {
       fireEvent.click(downloadButtons()[1]);
     });
-    expect(screen.getByText('Spreadsheet Sent to Registered Email')).toBeInTheDocument();
+    expect(screen.getByText('RFQ Downloaded')).toBeInTheDocument();
   });
 
   test('blocks a marketplace download once the Select quota is spent', async () => {
@@ -745,7 +826,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
     await act(async () => {
       fireEvent.click(downloadButtons()[1]);
     });
-    expect(screen.getByText('Spreadsheet Sent to Registered Email')).toBeInTheDocument();
+    expect(screen.getByText('RFQ Downloaded')).toBeInTheDocument();
   });
 
   test('locks off-roster RFQs below the top tier', async () => {
