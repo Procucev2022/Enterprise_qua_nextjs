@@ -113,7 +113,7 @@ describe('POST /api/buyer-accounts/:id/subscription-payment', () => {
     expect(zohoPaymentService.createPaymentLink).toHaveBeenCalledWith(
       expect.objectContaining({ planId: 'version_2', email: buyerAccount.corporateEmail, phone: buyerAccount.mobileNumber })
     );
-    const link = storeService.getPaymentLinkByZohoId('zoho-buyer-happy-1');
+    const link = await storeService.getPaymentLinkByZohoId('zoho-buyer-happy-1');
     expect(link).toMatchObject({ buyerAccountId: buyerAccount.id, payerType: 'buyer', planId: 'version_2' });
   });
 

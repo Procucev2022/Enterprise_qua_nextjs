@@ -39,7 +39,7 @@ async function handleWebhook(req, res) {
   }
 
   const eventObject = event.event_object || {};
-  const link = storeService.getPaymentLinkByZohoId(eventObject.payment_link_id);
+  const link = await storeService.getPaymentLinkByZohoId(eventObject.payment_link_id);
   if (!link) {
     logger.warn('Zoho webhook for an unknown payment link', { paymentLinkId: eventObject.payment_link_id }, 'ZOHO_WEBHOOK');
     if (event.event_id !== undefined) processedEventIds.add(event.event_id);
