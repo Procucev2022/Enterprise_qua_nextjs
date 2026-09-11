@@ -654,8 +654,8 @@ const ZOHO_CONFIG = {
 // and never reaches this table. INR chosen to match Zoho's `currency=INR`
 // paymentlinks contract the reference app uses.
 const ZOHO_SUBSCRIPTION_PRICING = {
-  connect: 12000,
-  select: 28000,
+  connect: 2,
+  select: 5,
 };
 
 /** GST-inclusive amount Zoho actually charges for a plan, 2dp, or null if the plan isn't payable. */
@@ -669,9 +669,9 @@ function computeZohoPlanAmount(planId) {
 // display price ('$199' etc.). 'free_trial' is free/instant and never reaches
 // this table — only the three paid tiers are real Zoho charges.
 const ZOHO_BUYER_SUBSCRIPTION_PRICING = {
-  version_1: 16000,
-  version_2: 40000,
-  version_3: 80000,
+  version_1: 2,
+  version_2: 5,
+  version_3: 8,
 };
 
 /** GST-inclusive amount Zoho actually charges for a buyer plan, 2dp, or null if the plan isn't payable. */
