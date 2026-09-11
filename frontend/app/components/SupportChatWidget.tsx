@@ -154,7 +154,7 @@ export default function SupportChatWidget() {
         text.includes('connect') ||
         text.includes('select')
       ) {
-        aiText = `Vendor Subscriptions:\n1. Premium (Free): Direct buyer RFQs\n2. Connect ($149 / 3mo): 50 RFQ downloads ($0 self-eval)\n3. Select ($349 / 3mo): 100 SKUs catalogue + 100 RFQs ($0 self-eval).`;
+        aiText = `Vendor Subscriptions:\n1. Premium (Free): Direct buyer RFQs\n2. Connect (₹2 / 3mo): 50 RFQ downloads ($0 self-eval)\n3. Select (₹5 / 3mo): 100 SKUs catalogue + 100 RFQs ($0 self-eval).`;
       } else if (text.includes('mode') || text.includes('engine') || text.includes('sourcing')) {
         aiText = `3 Sourcing Modes:\n• Mode 1: Private Client Roster\n• Mode 2: Hybrid Base Network\n• Mode 3: 360° AI Evaluated Roster.`;
       } else if (text.includes('download') || text.includes('quote') || text.includes('boq')) {

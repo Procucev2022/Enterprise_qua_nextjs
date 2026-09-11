@@ -343,7 +343,7 @@ export default function OpportunityFeed({
       return;
     }
     const planName = plan === 'connect' ? 'Connect Model (50 RFQs / 3 Months)' : 'Select Model (Catalogue & 100 RFQs / 3 Months)';
-    const price = plan === 'connect' ? '$149' : '$349';
+    const price = plan === 'connect' ? '₹2' : '₹5';
     setPendingPayment({ planId: plan as 'connect' | 'select', planName, price });
   };
 
@@ -1128,7 +1128,7 @@ export default function OpportunityFeed({
               }`}>
                 <div>
                   <h4 className="font-extrabold text-slate-900 dark:text-white text-xs flex items-center gap-1">
-                    Connect Model ($149 / 3 mo)
+                    Connect Model (₹2 / 3 mo)
                   </h4>
                   <p className="text-[10px] text-slate-400 mt-0.5">Download up to 50 RFQs in 3 months from Marketplace.</p>
                 </div>
@@ -1151,7 +1151,7 @@ export default function OpportunityFeed({
               }`}>
                 <div>
                   <h4 className="font-extrabold text-slate-900 dark:text-white text-xs flex items-center gap-1">
-                    Select Model ($349 / 3 mo)
+                    Select Model (₹5 / 3 mo)
                   </h4>
                   <p className="text-[10px] text-slate-400 mt-0.5">Item Catalogue (100 products) + 100 RFQs / 3 months.</p>
                 </div>

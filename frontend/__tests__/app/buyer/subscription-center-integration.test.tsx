@@ -75,7 +75,7 @@ describe('SubscriptionCenter (real AppProvider integration)', () => {
     // "Active Free Trial") since the account is on free_trial — Version 2 is
     // the first actually-subscribable paid plan.
     fireEvent.click(screen.getByText('Subscribe to Version 2'));
-    const payBtn = screen.getByRole('button', { name: /Pay \$499/i });
+    const payBtn = screen.getByRole('button', { name: /Pay ₹5/i });
     await act(async () => {
       fireEvent.click(payBtn);
       await Promise.resolve();
@@ -101,7 +101,7 @@ describe('SubscriptionCenter (real AppProvider integration)', () => {
     });
 
     fireEvent.click(screen.getByText('Subscribe to Version 2'));
-    const payBtn = screen.getByRole('button', { name: /Pay \$499/i });
+    const payBtn = screen.getByRole('button', { name: /Pay ₹5/i });
     await act(async () => {
       fireEvent.click(payBtn);
       await Promise.resolve();

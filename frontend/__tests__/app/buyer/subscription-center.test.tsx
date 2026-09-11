@@ -140,7 +140,7 @@ describe('app/buyer/subscription-center.tsx', () => {
     expect(screen.getByText(/Secure Payment/i)).toBeInTheDocument();
     expect(screen.getByText('Version 2: Hybrid Sourcing Plan')).toBeInTheDocument();
 
-    const payBtn = screen.getByRole('button', { name: /Pay \$499/i });
+    const payBtn = screen.getByRole('button', { name: /Pay ₹5/i });
     mockCreateBuyerPaymentLink.mockResolvedValue('https://payments.zoho.in/buyer-mock');
     await act(async () => {
       fireEvent.click(payBtn);

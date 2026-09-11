@@ -176,13 +176,13 @@ describe('Header', () => {
     rerender(<Header />);
 
     fireEvent.click(vendorModelBtn);
-    const selectOptions = screen.getAllByText(/Select Model \(\$349 \/ 3 Months\)/);
+    const selectOptions = screen.getAllByText(/Select Model \(₹5 \/ 3 Months\)/);
     fireEvent.click(selectOptions[selectOptions.length - 1]);
     expect(mockSetVendorSubscription).toHaveBeenCalledWith('select');
 
     // Switch to connect
     fireEvent.click(vendorModelBtn);
-    const connectOptions = screen.getAllByText(/Connect Model \(\$149 \/ 3 Months\)/);
+    const connectOptions = screen.getAllByText(/Connect Model \(₹2 \/ 3 Months\)/);
     fireEvent.click(connectOptions[connectOptions.length - 1]);
     expect(mockSetVendorSubscription).toHaveBeenCalledWith('connect');
   });
@@ -477,10 +477,10 @@ describe('Header vendor subscription pill', () => {
     (storeModule.useApp as jest.Mock).mockReturnValue(vendorStore('connect'));
     render(<Header />);
 
-    expect(screen.getByText('Connect Model ($149 / 3mo)')).toBeInTheDocument();
+    expect(screen.getByText('Connect Model (₹2 / 3mo)')).toBeInTheDocument();
 
     fireEvent.click(screen.getByTitle('Vendor Subscription Access Model'));
-    expect(screen.getByText('Connect Model ($149 / 3 Months)')).toBeInTheDocument();
+    expect(screen.getByText('Connect Model (₹2 / 3 Months)')).toBeInTheDocument();
     expect(screen.getByText(/5\/50 used/)).toBeInTheDocument();
   });
 
@@ -488,7 +488,7 @@ describe('Header vendor subscription pill', () => {
     (storeModule.useApp as jest.Mock).mockReturnValue(vendorStore('select'));
     render(<Header />);
 
-    expect(screen.getByText('Select Model ($349 / 3mo)')).toBeInTheDocument();
+    expect(screen.getByText('Select Model (₹5 / 3mo)')).toBeInTheDocument();
   });
 });
 
