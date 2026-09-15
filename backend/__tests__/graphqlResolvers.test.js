@@ -288,7 +288,7 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
     // The id comes from the server, never the client. Attributed to the requesting
     // buyer's own account (the beforeEach fixture, matched by session email),
     // resolved server-side rather than taken from the payload.
-    expect(createdRFQ.rfqNumber).toMatch(/^RFQ-/);
+    expect(createdRFQ.rfqNumber).toMatch(/^RFQ\d{12}$/);
     expect(createdRFQ.buyerAccountId).toBe(seededRfq.buyerAccountId);
 
     const updatedRFQ = await rootResolvers.updateRFQ(

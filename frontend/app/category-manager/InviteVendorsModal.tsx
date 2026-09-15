@@ -83,7 +83,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
 
   // Fetched lazily, only the first time the CM switches into "All Vendors".
   useEffect(() => {
-    if (!isOpen || !rfq || tab !== 'all' || allVendors !== null || allVendorsLoading) return;
+    if (!isOpen || !rfq || tab !== 'all' || allVendors !== null || allVendorsLoading || allVendorsError !== null) return;
     setAllVendorsLoading(true);
     setAllVendorsError(null);
     void fetchAllVendors().then((result) => {
@@ -95,7 +95,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       }
       setAllVendorsLoading(false);
     });
-  }, [isOpen, rfq, tab, allVendors, allVendorsLoading]);
+  }, [isOpen, rfq, tab, allVendors, allVendorsLoading, allVendorsError]);
 
   const categorySignals = useMemo(() => (rfq ? rfqCategorySignals(rfq) : []), [rfq]);
 

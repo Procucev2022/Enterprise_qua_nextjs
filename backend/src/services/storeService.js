@@ -860,27 +860,31 @@ class StoreService {
   }
 
   /**
-   * A fresh `RFQ-2026-NNNN` not already held by any RFQ currently in memory.
-   *
-   * Previously `this.rfqs.length + 893` — the current in-memory count, not a
-   * persistent counter. Any RFQ deleted directly (a cleanup script, a raw SQL
-   * delete) shrinks that count, so the next creation could regenerate a
-   * number an older, still-present Neon row already holds. Because
-   * `_persistRFQ` is fire-and-forget, that collision against the DB's
-   * `rfqs_rfq_number_key` UNIQUE constraint failed silently: the API still
-   * returned 200 with a full RFQ object, but the row never actually reached
-   * Neon — confirmed live (RFQ-2026-0918 was generated and "created" five
-   * separate times across this engagement's sessions). Deduping against the
-   * real in-memory set (accurate for the life of a process, since hydration
-   * loads every persisted row at boot and every creation appends here) makes
-   * a repeat astronomically unlikely instead of routine.
+   * Generates a unique RFQ number matching p2pservices_v1_qua AutomaticRfqServiceImpl:
+   * [Company prefix (3 letters uppercase, default 'RFQ')][yyddMM][6-digit suffix]
+   * e.g., RFQ261109000123 (matching ^RFQ\\d{12}$)
    */
-  generateRFQNumber() {
+  generateRFQNumber(company = 'RFQ') {
+    let companyLetters = 'RFQ';
+    if (company && typeof company === 'string' && company.trim().length > 0) {
+      const clean = company.trim().replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+      companyLetters = clean.length >= 3 ? clean.substring(0, 3) : clean.padEnd(3, 'X');
+    }
+
+    const now = new Date();
+    const yy = String(now.getFullYear()).slice(-2);
+    const dd = String(now.getDate()).padStart(2, '0');
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const datePart = `${yy}${dd}${mm}`;
+
     const existing = new Set(this.rfqs.map((r) => r.rfqNumber));
     let candidate;
+    let attempts = 0;
     do {
-      candidate = `RFQ-2026-${Math.floor(1000 + Math.random() * 9000)}`;
-    } while (existing.has(candidate));
+      const suffix = String(Math.floor(Math.random() * 1000000)).padStart(6, '0');
+      candidate = `${companyLetters}${datePart}${suffix}`;
+      attempts++;
+    } while (existing.has(candidate) && attempts < 1000000);
     return candidate;
   }
 
