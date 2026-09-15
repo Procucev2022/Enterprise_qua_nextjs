@@ -409,6 +409,16 @@ class StoreService {
    * @returns {Promise<{results: object[], importedCount: number, duplicateCount: number}>}
    */
   async bulkAddVendors(rows) {
+    // Neon is the single source of truth for vendor records (see the standing
+    // "no in-memory-only data path" principle). A bulk import with no database
+    // configured must fail loudly, not silently accept rows into `this.vendors`
+    // that vanish on the next restart and were never really "imported".
+    if (!pool.pool) {
+      const err = new Error('Database is not configured — vendors cannot be bulk-imported right now.');
+      err.statusCode = 500;
+      throw err;
+    }
+
     const existingEmails = new Set(this.vendors.map((v) => (v.email || '').toLowerCase()));
     const seenInBatch = new Set();
     const results = [];
@@ -461,14 +471,8 @@ class StoreService {
     }
     const insertedEmailSet = new Set(insertedEmails.map((e) => (e || '').toLowerCase()));
 
-    // No DB pool configured means bulkInsertVendorsInDB no-op'd to [] rather
-    // than actually attempting anything — matches every other write path's
-    // in-memory fallback (this.vendors is the store) rather than reporting
-    // every row as a spurious failure.
-    const inMemoryMode = !pool.pool;
-
     for (const { rowNumber, vendor } of toInsert) {
-      const persisted = inMemoryMode || insertedEmailSet.has(vendor.email.toLowerCase());
+      const persisted = insertedEmailSet.has(vendor.email.toLowerCase());
       if (persisted) {
         this.vendors.unshift(vendor);
         results.push({ rowNumber, status: 'imported', email: vendor.email, vendor });

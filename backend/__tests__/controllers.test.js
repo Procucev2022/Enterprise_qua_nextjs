@@ -10,6 +10,8 @@ const rfqController = require('../src/controllers/rfqController');
 const supportChatController = require('../src/controllers/supportChatController');
 const vendorController = require('../src/controllers/vendorController');
 const storeService = require('../src/services/storeService');
+const domainPool = require('../src/db/pool');
+const domainQueries = require('../src/db/domainQueries');
 
 function mockRes() {
   const res = {};
@@ -633,7 +635,14 @@ describe('Controllers Error & Edge-Case Coverage', () => {
 
     // A mix of one valid row and one row missing required fields — server-side
     // re-validation must catch the bad row even though nothing client-side
-    // filtered it out first.
+    // filtered it out first. bulkAddVendors now requires a real DB pool (see
+    // the "no in-memory-only vendor import" fix), so one is simulated here.
+    const originalPool = domainPool.pool;
+    domainPool.pool = { query: jest.fn() };
+    const insertSpy = jest.spyOn(domainQueries, 'bulkInsertVendorsInDB').mockImplementation(async (vendors) =>
+      vendors.map((v) => v.email)
+    );
+
     const mixedRes = mockRes();
     await vendorController.bulkImportVendors(
       {
@@ -664,6 +673,35 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     );
     expect(adminRes.json).toHaveBeenCalled();
     expect(adminRes.json.mock.calls[0][0].data.imported).toBe(1);
+
+    domainPool.pool = originalPool;
+    insertSpy.mockRestore();
+  });
+
+  test('vendorController.bulkImportVendors: no DB pool configured surfaces as a 500 via next(err), not a silent in-memory import', async () => {
+    const next = jest.fn();
+    const categoryManagerUser = { role: 'category_manager', email: 'cm@procucev.com' };
+    const originalPool = domainPool.pool;
+    domainPool.pool = null;
+
+    const before = storeService.getVendors().length;
+    const res = mockRes();
+    await vendorController.bulkImportVendors(
+      {
+        body: { vendors: [{ rowNumber: 1, name: 'No DB Co', email: 'no-db-pool@example.com', phone: '9876543210' }] },
+        user: categoryManagerUser,
+      },
+      res,
+      next
+    );
+
+    domainPool.pool = originalPool;
+
+    expect(res.json).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalled();
+    expect(next.mock.calls[0][0]).toMatchObject({ statusCode: 500 });
+    expect(storeService.getVendors().some((v) => v.email === 'no-db-pool@example.com')).toBe(false);
+    expect(storeService.getVendors().length).toBe(before);
   });
 });
 
