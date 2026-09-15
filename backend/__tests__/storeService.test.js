@@ -130,6 +130,31 @@ describe('Store Service & Business Operations', () => {
       };
     }
 
+    // Neon is the single source of truth for vendors — bulkAddVendors now
+    // refuses to run at all without a configured DB pool (throws a 500
+    // rather than silently keeping the import in memory only), so every
+    // test below simulates a real, connected pool and a successful insert.
+    let originalPool;
+    beforeEach(() => {
+      originalPool = domainPool.pool;
+      domainPool.pool = { query: jest.fn() }; // truthy sentinel: "a pool is configured"
+      jest.spyOn(domainQueries, 'bulkInsertVendorsInDB').mockImplementation(async (vendors) =>
+        vendors.map((v) => v.email)
+      );
+    });
+    afterEach(() => {
+      domainPool.pool = originalPool;
+      jest.restoreAllMocks();
+    });
+
+    test('throws a 500 error instead of importing in memory when no DB pool is configured', async () => {
+      domainPool.pool = null;
+      await expect(storeService.bulkAddVendors([row({ rowNumber: 1, email: 'no-db@example.com' })])).rejects.toMatchObject({
+        statusCode: 500,
+      });
+      expect(storeService.getVendors().some((v) => v.email === 'no-db@example.com')).toBe(false);
+    });
+
     test('imports valid, distinct rows and reflects them in getVendors', async () => {
       const before = storeService.getVendors().length;
       const { results, importedCount, duplicateCount } = await storeService.bulkAddVendors([
