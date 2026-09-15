@@ -244,6 +244,15 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       group: NAV_GROUPS.buyerAccount,
       route: '/buyer/profile',
     },
+    {
+      id: 'buyer_billing_history',
+      screenTag: 'Screen 1.9',
+      label: NAV_ITEMS.billingHistory.label,
+      description: NAV_ITEMS.billingHistory.description,
+      icon: 'Receipt',
+      group: NAV_GROUPS.buyerAccount,
+      route: '/buyer/billing-history',
+    },
     // Temporarily hidden: Buyer DB Sync
     /*
     {
@@ -379,6 +388,16 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       icon: 'Sparkles',
       group: NAV_GROUPS.vendorAccount,
       route: '/vendor/vendor-subscription',
+    },
+    {
+      id: 'vendor_billing_history',
+      screenTag: 'Screen 3.7',
+      shortTag: '3.7',
+      label: NAV_ITEMS.billingHistory.label,
+      description: NAV_ITEMS.billingHistory.description,
+      icon: 'Receipt',
+      group: NAV_GROUPS.vendorAccount,
+      route: '/vendor/billing-history',
     },
     {
       id: 'vendor_profile',

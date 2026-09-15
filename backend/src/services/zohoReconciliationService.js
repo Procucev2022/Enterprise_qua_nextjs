@@ -21,7 +21,14 @@ const { logger } = require('./loggerService');
 
 const runtime = { timer: null };
 
-const RECONCILABLE_STATUSES = ['CREATED', 'pending'];
+// 'CREATED'/'pending' are this app's own placeholder status
+// (createPaymentLinkRecord's `status || 'CREATED'` fallback); 'active' is
+// what Zoho's create-payment-link response actually returns as the initial
+// status for a real, live, unpaid link (confirmed against a real response —
+// `payment_links.status: "active"`). Every link this app has ever created
+// came back 'active', so omitting it here meant reconciliation never once
+// re-checked a real payment link's status with Zoho.
+const RECONCILABLE_STATUSES = ['CREATED', 'pending', 'active'];
 
 async function reconcileOnce() {
   const pending = await storeService.getPaymentLinksByStatusIn(RECONCILABLE_STATUSES);
@@ -29,7 +36,11 @@ async function reconcileOnce() {
     try {
       const result = await zohoPaymentService.getPaymentLinkStatus(link.zohoPaymentLinkId);
       storeService.updatePaymentLinkRecord(link.id, { status: result.status, rawResponse: result.rawResponse });
-      if (result.status === 'PAID') {
+      // Zoho's own status strings are lowercase ('active', 'paid', 'expired',
+      // 'cancelled') — compared case-insensitively since the webhook path
+      // separately writes its own app-invented 'PAID' (uppercase) for the
+      // same lifecycle point, and this check needs to recognize either.
+      if (String(result.status || '').toLowerCase() === 'paid') {
         if (link.payerType === 'buyer') {
           storeService.activateBuyerSubscriptionFromPayment(link.id);
         } else {

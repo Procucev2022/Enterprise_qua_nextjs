@@ -1,6 +1,7 @@
 const storeService = require('../services/storeService');
 const buyerAccountResolver = require('../services/buyerAccountResolver');
 const zohoPaymentService = require('../services/zohoPaymentService');
+const { generateReceiptPdf } = require('../services/invoiceService');
 const { logger } = require('../services/loggerService');
 const { ZOHO_CONFIG, computeZohoBuyerPlanAmount, BUYER_SUBSCRIPTION_PLANS } = require('../config/constants');
 
@@ -83,11 +84,31 @@ function createBuyerAccount(req, res, next) {
   }
 }
 
+// 'free_trial' is the only subscriptionPlan value this generic endpoint may
+// set directly (the free/reset-to-starter path subscription-center.tsx's
+// handleResetTrial already relies on). version_1/2/3 are real, paid tiers
+// that must only ever be granted by activateBuyerSubscriptionFromPayment
+// after a genuine Zoho payment (createSubscriptionPaymentLink ->
+// webhook/reconciliation) — this endpoint previously accepted any
+// subscriptionPlan value with no check at all, letting any buyer/admin
+// grant a paid plan to any buyer account (not even scoped to their own)
+// for free.
+function sanitizeBuyerAccountUpdates(updates, res) {
+  if (!Object.prototype.hasOwnProperty.call(updates, 'subscriptionPlan')) return updates;
+  if (updates.subscriptionPlan === 'free_trial') return updates;
+  res.status(400).json({
+    success: false,
+    error: 'subscriptionPlan can only be reset to free_trial here — paid plans can only be granted via a completed Zoho payment.',
+  });
+  return null;
+}
+
 function updateBuyerAccount(req, res, next) {
   try {
     if (!assertBuyerAccountRole(req, res)) return;
     const { id } = req.params;
-    const updates = req.body;
+    const updates = sanitizeBuyerAccountUpdates(req.body, res);
+    if (!updates) return;
     logger.info(`Updating buyer account ${id}`, { id, updates }, 'BUYER_ACCOUNT_CONTROLLER');
     const updated = storeService.updateBuyerAccount(id, updates);
     if (!updated) {
@@ -204,6 +225,61 @@ async function createSubscriptionPaymentLink(req, res, next) {
   } catch (err) {
     logger.error(`Error creating Zoho payment link for buyer account ${req.params.id}`, err, 'BUYER_ACCOUNT_CONTROLLER');
     res.status(502).json({ success: false, error: 'Unable to create a payment link right now. Please try again shortly.' });
+  }
+}
+
+/**
+ * The caller's own billing history — resolved by session email, same
+ * reasoning as createSubscriptionPaymentLink above (never trust :id to
+ * already be the right storeService.buyerAccounts record). No auto-create
+ * here, unlike the payment-link endpoint: a GET should have no side effects,
+ * so a buyer with no legacy billing record yet just sees an empty list.
+ */
+async function getPaymentLinks(req, res, next) {
+  try {
+    if (!assertBuyerAccountRole(req, res)) return;
+    const existing = storeService.getBuyerAccountByEmail(req.user.email);
+    if (!existing) {
+      return res.json({ success: true, data: [] });
+    }
+    const links = await storeService.getPaymentLinksForBuyer(existing.id);
+    res.json({ success: true, data: links });
+  } catch (err) {
+    logger.error(`Error fetching payment links for buyer account ${req.params.id}`, err, 'BUYER_ACCOUNT_CONTROLLER');
+    next(err);
+  }
+}
+
+/** Stream a PDF receipt for one of the caller's own past payments. */
+async function downloadInvoice(req, res, next) {
+  try {
+    if (!assertBuyerAccountRole(req, res)) return;
+    const { linkId } = req.params;
+    const existing = storeService.getBuyerAccountByEmail(req.user.email);
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'No buyer account found for this session.' });
+    }
+
+    const link = await storeService.getPaymentLinkById(linkId);
+    if (!link || link.payerType !== 'buyer' || link.buyerAccountId !== existing.id) {
+      return res.status(404).json({ success: false, error: `Payment ${linkId} not found for this buyer account.` });
+    }
+
+    const planLabel = (BUYER_SUBSCRIPTION_PLANS.find((p) => p.id === link.planId) || {}).name || link.planId;
+    const pdf = await generateReceiptPdf({
+      link,
+      payerName: existing.organizationName || existing.corporateEmail,
+      payerEmail: existing.corporateEmail,
+      planLabel,
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Length', pdf.length);
+    res.setHeader('Content-Disposition', `attachment; filename="receipt-${link.id}.pdf"`);
+    res.send(pdf);
+  } catch (err) {
+    logger.error(`Error generating invoice for buyer account ${req.params.id}`, err, 'BUYER_ACCOUNT_CONTROLLER');
+    next(err);
   }
 }
 
@@ -358,6 +434,8 @@ module.exports = {
   deleteBuyerAccount,
   setActiveAccount,
   createSubscriptionPaymentLink,
+  getPaymentLinks,
+  downloadInvoice,
   ingestHistoricalData,
   aiCrossMatch,
 };

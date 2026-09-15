@@ -30,12 +30,33 @@ describe('zohoReconciliationService', () => {
       const result = await zohoReconciliationService.reconcileOnce();
 
       expect(result).toEqual({ checked: 2 });
-      expect(storeService.getPaymentLinksByStatusIn).toHaveBeenCalledWith(['CREATED', 'pending']);
+      expect(storeService.getPaymentLinksByStatusIn).toHaveBeenCalledWith(['CREATED', 'pending', 'active']);
       expect(storeService.updatePaymentLinkRecord).toHaveBeenCalledWith('pl-1', { status: 'CREATED', rawResponse: {} });
       expect(storeService.updatePaymentLinkRecord).toHaveBeenCalledWith('pl-2', { status: 'PAID', rawResponse: {} });
       // Only the link discovered PAID triggers activation.
       expect(storeService.activateVendorSubscriptionFromPayment).toHaveBeenCalledTimes(1);
       expect(storeService.activateVendorSubscriptionFromPayment).toHaveBeenCalledWith('pl-2');
+    });
+
+    test('recognizes Zoho\'s real lowercase "paid" status, not just the app\'s own uppercase PAID', async () => {
+      storeService.getPaymentLinksByStatusIn.mockReturnValue([{ id: 'pl-real-1', zohoPaymentLinkId: 'zoho-real-1' }]);
+      // Zoho's actual API returns lowercase status strings ('active', 'paid',
+      // 'expired', 'cancelled') — confirmed against a real payment-link
+      // response. A link genuinely paid on Zoho's side must still activate.
+      zohoPaymentService.getPaymentLinkStatus.mockResolvedValueOnce({ status: 'paid', rawResponse: {} });
+
+      await zohoReconciliationService.reconcileOnce();
+
+      expect(storeService.activateVendorSubscriptionFromPayment).toHaveBeenCalledWith('pl-real-1');
+    });
+
+    test('does not activate when Zoho returns no status at all', async () => {
+      storeService.getPaymentLinksByStatusIn.mockReturnValue([{ id: 'pl-no-status-1', zohoPaymentLinkId: 'zoho-no-status-1' }]);
+      zohoPaymentService.getPaymentLinkStatus.mockResolvedValueOnce({ status: undefined, rawResponse: {} });
+
+      await zohoReconciliationService.reconcileOnce();
+
+      expect(storeService.activateVendorSubscriptionFromPayment).not.toHaveBeenCalled();
     });
 
     test('activates a buyer subscription (not a vendor one) for a link with payerType buyer', async () => {

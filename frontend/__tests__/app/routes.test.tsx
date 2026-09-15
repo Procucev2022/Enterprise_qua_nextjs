@@ -111,6 +111,7 @@ jest.mock('@/app/buyer/vendor-summary', () =>
 jest.mock('@/app/buyer/subscription-center', () => stub('subscription-center'));
 jest.mock('@/app/buyer/buyer-profile', () => stub('buyer-profile'));
 jest.mock('@/app/buyer/buyer-account-table', () => stub('buyer-account-table'));
+jest.mock('@/app/buyer/billing-history', () => stub('buyer-billing-history'));
 
 // ── Category manager screens ─────────────────────────────────────────────────
 jest.mock('@/app/category-manager/kanban-board', () =>
@@ -137,6 +138,7 @@ jest.mock('@/app/vendor/qualification-form', () => stub('qualification-form', ['
 jest.mock('@/app/vendor/item-catalogue', () => stub('item-catalogue'));
 jest.mock('@/app/vendor/vendor-subscription', () => stub('vendor-subscription'));
 jest.mock('@/app/vendor/vendor-profile', () => stub('vendor-profile'));
+jest.mock('@/app/vendor/billing-history', () => stub('vendor-billing-history'));
 
 // ── Admin screens ────────────────────────────────────────────────────────────
 jest.mock('@/app/admin/infra-control', () => stub('infra-control', ['onNavigateToAuditLog']));
@@ -154,6 +156,7 @@ const BuyerVendorSummaryPage = require('@/app/buyer/vendor-summary/page').defaul
 const BuyerSubscriptionCenterPage = require('@/app/buyer/subscription-center/page').default;
 const BuyerProfileRoute = require('@/app/buyer/profile/page').default;
 const BuyerDirectoryPage = require('@/app/buyer/buyer-directory/page').default;
+const BuyerBillingHistoryPage = require('@/app/buyer/billing-history/page').default;
 
 const CmKanbanPage = require('@/app/category-manager/kanban-board/page').default;
 const CmSpendPage = require('@/app/category-manager/spend-dashboard/page').default;
@@ -171,6 +174,7 @@ const VendorQualificationFormPage = require('@/app/vendor/qualification-form/pag
 const VendorItemCataloguePage = require('@/app/vendor/item-catalogue/page').default;
 const VendorSubscriptionPage = require('@/app/vendor/vendor-subscription/page').default;
 const VendorProfileRoute = require('@/app/vendor/vendor-profile/page').default;
+const VendorBillingHistoryPage = require('@/app/vendor/billing-history/page').default;
 
 const AdminInfraControlPage = require('@/app/admin/infra-control/page').default;
 const AdminAuditLogPage = require('@/app/admin/audit-log/page').default;
@@ -440,6 +444,7 @@ describe('Role screen routes', () => {
       ['subscription centre', BuyerSubscriptionCenterPage, 'subscription-center'],
       ['profile', BuyerProfileRoute, 'buyer-profile'],
       ['directory', BuyerDirectoryPage, 'buyer-account-table'],
+      ['billing history', BuyerBillingHistoryPage, 'buyer-billing-history'],
     ])('renders the buyer %s screen', (_label, Page, testId) => {
       render(<Page />);
       expect(screen.getByTestId(testId)).toBeInTheDocument();
@@ -693,6 +698,7 @@ describe('Role screen routes', () => {
       ['item catalogue', VendorItemCataloguePage, 'item-catalogue'],
       ['subscription centre', VendorSubscriptionPage, 'vendor-subscription'],
       ['profile', VendorProfileRoute, 'vendor-profile'],
+      ['billing history', VendorBillingHistoryPage, 'vendor-billing-history'],
     ])('renders the vendor %s screen', (_label, Page, testId) => {
       render(<Page />);
       expect(screen.getByTestId(testId)).toBeInTheDocument();

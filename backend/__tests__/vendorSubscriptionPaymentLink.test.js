@@ -153,3 +153,189 @@ describe('POST /api/vendors/:id/payment-link', () => {
     expect(res.body.success).toBe(false);
   });
 });
+
+describe('GET /api/vendors/:id/payment-links and invoice download', () => {
+  let vendor;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    vendor = storeService.addVendor({
+      name: 'Billing History Test Vendor',
+      email: TEST_USERS.vendor.email,
+      phone: '9876543210',
+      majorCategory: 'Payment-Link-Cat',
+    });
+  });
+
+  test('requires a session', async () => {
+    const res = await request(app).get(`/api/vendors/${vendor.id}/payment-links`);
+    expect(res.statusCode).toBe(401);
+  });
+
+  test('a buyer cannot list another vendor\'s billing history', async () => {
+    const res = await request(app).get(`/api/vendors/${vendor.id}/payment-links`).set(authHeader('buyer'));
+    expect(res.statusCode).toBe(403);
+  });
+
+  test('lists only this vendor\'s own payment links, newest first', async () => {
+    storeService.createPaymentLinkRecord({
+      id: 'pl-hist-1',
+      zohoPaymentLinkId: 'zoho-hist-1',
+      vendorId: vendor.id,
+      planId: 'connect',
+      amount: 2.36,
+      paymentUrl: 'https://payments.zoho.in/1',
+      status: 'active',
+    });
+    storeService.createPaymentLinkRecord({
+      id: 'pl-hist-2',
+      zohoPaymentLinkId: 'zoho-hist-2',
+      vendorId: vendor.id,
+      planId: 'select',
+      amount: 5.9,
+      paymentUrl: 'https://payments.zoho.in/2',
+      status: 'paid',
+    });
+    // A different vendor's link must never appear in this vendor's history.
+    const otherVendor = storeService.addVendor({ name: 'Other Vendor', email: 'other-billing@vendor.test', majorCategory: 'X' });
+    storeService.createPaymentLinkRecord({
+      id: 'pl-hist-other',
+      zohoPaymentLinkId: 'zoho-hist-other',
+      vendorId: otherVendor.id,
+      planId: 'connect',
+      amount: 2.36,
+      paymentUrl: 'https://payments.zoho.in/3',
+      status: 'active',
+    });
+
+    const res = await request(app).get(`/api/vendors/${vendor.id}/payment-links`).set(authHeader('vendor'));
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.data.map((l) => l.id)).toEqual(['pl-hist-2', 'pl-hist-1']);
+  });
+
+  test('404s for an unknown vendor', async () => {
+    const res = await request(app).get('/api/vendors/does-not-exist/payment-links').set(authHeader('vendor'));
+    expect(res.statusCode).toBe(404);
+  });
+
+  test('downloads a real PDF receipt for one of this vendor\'s own payments', async () => {
+    const link = storeService.createPaymentLinkRecord({
+      id: 'pl-invoice-1',
+      zohoPaymentLinkId: 'zoho-invoice-1',
+      vendorId: vendor.id,
+      planId: 'connect',
+      amount: 2.36,
+      paymentUrl: 'https://payments.zoho.in/1',
+      status: 'paid',
+    });
+
+    const res = await request(app)
+      .get(`/api/vendors/${vendor.id}/payment-links/${link.id}/invoice`)
+      .set(authHeader('vendor'));
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('application/pdf');
+    expect(res.headers['content-disposition']).toContain(`receipt-${link.id}.pdf`);
+    expect(Buffer.isBuffer(res.body)).toBe(true);
+    expect(res.body.subarray(0, 4).toString('utf8')).toBe('%PDF');
+  });
+
+  test('404s for a payment link that belongs to a different vendor', async () => {
+    const otherVendor = storeService.addVendor({ name: 'Other Vendor 2', email: 'other-billing-2@vendor.test', majorCategory: 'X' });
+    const otherLink = storeService.createPaymentLinkRecord({
+      id: 'pl-not-mine',
+      zohoPaymentLinkId: 'zoho-not-mine',
+      vendorId: otherVendor.id,
+      planId: 'connect',
+      amount: 2.36,
+      paymentUrl: 'https://payments.zoho.in/1',
+      status: 'paid',
+    });
+
+    const res = await request(app)
+      .get(`/api/vendors/${vendor.id}/payment-links/${otherLink.id}/invoice`)
+      .set(authHeader('vendor'));
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  test('404s for an unknown payment link id', async () => {
+    const res = await request(app)
+      .get(`/api/vendors/${vendor.id}/payment-links/does-not-exist/invoice`)
+      .set(authHeader('vendor'));
+    expect(res.statusCode).toBe(404);
+  });
+
+  test('404s downloading an invoice for an unknown vendor', async () => {
+    const res = await request(app)
+      .get('/api/vendors/does-not-exist/payment-links/pl-whatever/invoice')
+      .set(authHeader('vendor'));
+    expect(res.statusCode).toBe(404);
+  });
+
+  test('a buyer cannot download another vendor\'s invoice', async () => {
+    const link = storeService.createPaymentLinkRecord({
+      id: 'pl-invoice-forbidden',
+      zohoPaymentLinkId: 'zoho-invoice-forbidden',
+      vendorId: vendor.id,
+      planId: 'connect',
+      amount: 2.36,
+      paymentUrl: 'https://payments.zoho.in/1',
+      status: 'paid',
+    });
+
+    const res = await request(app)
+      .get(`/api/vendors/${vendor.id}/payment-links/${link.id}/invoice`)
+      .set(authHeader('buyer'));
+
+    expect(res.statusCode).toBe(403);
+  });
+
+  test('returns 500 when fetching billing history throws', async () => {
+    jest.spyOn(storeService, 'getPaymentLinksForVendor').mockRejectedValueOnce(new Error('DB unavailable'));
+
+    const res = await request(app).get(`/api/vendors/${vendor.id}/payment-links`).set(authHeader('vendor'));
+
+    expect(res.statusCode).toBe(500);
+  });
+
+  test('falls back to email and raw planId when the vendor has no name / the plan is unrecognized', async () => {
+    storeService.updateVendor(vendor.id, { name: '' });
+    const link = storeService.createPaymentLinkRecord({
+      id: 'pl-invoice-fallback',
+      zohoPaymentLinkId: 'zoho-invoice-fallback',
+      vendorId: vendor.id,
+      planId: 'not-a-real-plan-id',
+      amount: 2.36,
+      paymentUrl: 'https://payments.zoho.in/1',
+      status: 'paid',
+    });
+
+    const res = await request(app)
+      .get(`/api/vendors/${vendor.id}/payment-links/${link.id}/invoice`)
+      .set(authHeader('vendor'));
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('application/pdf');
+  });
+
+  test('returns 500 when generating the invoice PDF throws', async () => {
+    const link = storeService.createPaymentLinkRecord({
+      id: 'pl-invoice-error',
+      zohoPaymentLinkId: 'zoho-invoice-error',
+      vendorId: vendor.id,
+      planId: 'connect',
+      amount: 2.36,
+      paymentUrl: 'https://payments.zoho.in/1',
+      status: 'paid',
+    });
+    jest.spyOn(storeService, 'getPaymentLinkById').mockRejectedValueOnce(new Error('DB unavailable'));
+
+    const res = await request(app)
+      .get(`/api/vendors/${vendor.id}/payment-links/${link.id}/invoice`)
+      .set(authHeader('vendor'));
+
+    expect(res.statusCode).toBe(500);
+  });
+});

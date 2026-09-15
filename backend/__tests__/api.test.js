@@ -85,6 +85,26 @@ describe('API Route Endpoints', () => {
       expect(res.statusCode).toBe(404);
     });
 
+    test('PUT /api/buyer-accounts/:id rejects granting a paid subscriptionPlan directly (must go through Zoho payment)', async () => {
+      const res = await request(app)
+        .put(`/api/buyer-accounts/${testAccountId}`)
+        .set(authHeader('buyer'))
+        .send({ subscriptionPlan: 'version_3' });
+      expect(res.statusCode).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toMatch(/completed zoho payment/i);
+      expect(storeService.getBuyerAccounts().find((a) => a.id === testAccountId).subscriptionPlan).not.toBe('version_3');
+    });
+
+    test('PUT /api/buyer-accounts/:id still allows resetting subscriptionPlan to free_trial', async () => {
+      const res = await request(app)
+        .put(`/api/buyer-accounts/${testAccountId}`)
+        .set(authHeader('buyer'))
+        .send({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 5 });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data.subscriptionPlan).toBe('free_trial');
+    });
+
     test('POST /api/buyer-accounts/:id/activate switches active account', async () => {
       const res = await request(app).post(`/api/buyer-accounts/${testAccountId}/activate`).set(authHeader('buyer'));
       expect(res.statusCode).toBe(200);
@@ -687,11 +707,12 @@ describe('API Route Endpoints', () => {
     test('GET /api/rfqs/:id/email-preview generates standard RFQ email', async () => {
       // This RFQ isn't a direct-roster invite for this vendor, so downloading
       // it is a marketplace download gated by subscription — grant a plan
-      // with quota first (also exercises PUT /api/vendors/:id/subscription).
-      await request(app)
-        .put(`/api/vendors/${encodeURIComponent('vendor@apexsupplies.com')}/subscription`)
-        .set(authHeader('vendor'))
-        .send({ plan: 'connect' });
+      // with quota first. Paid plans can only be granted server-side after a
+      // real Zoho payment (PUT /api/vendors/:id/subscription now only allows
+      // 'premium' — see that endpoint's own test coverage), so tests that just
+      // need the entitlement set it directly, same as the buyer tests do via
+      // storeService.updateBuyerAccount.
+      storeService.updateVendor('vendor@apexsupplies.com', { subscriptionPlan: 'connect' });
       // Category match alone no longer grants access — this vendor was already
       // invited to testRfqId in the quotes test above, so this just re-confirms
       // that access before exercising the download-quota path.
@@ -741,8 +762,7 @@ describe('API Route Endpoints', () => {
         name: 'Exhausted Quota Supplier Co',
         majorCategory: 'Engineering Spares - Mechanical',
       });
-      await request(app).put(`/api/vendors/${created.body.data.id}/subscription`).set(header).send({ plan: 'connect' });
-      storeService.updateVendor(created.body.data.id, { rfqDownloadsUsed: 50 });
+      storeService.updateVendor(created.body.data.id, { subscriptionPlan: 'connect', rfqDownloadsUsed: 50 });
       await request(app)
         .post(`/api/rfqs/${testRfqId}/invite-vendors`)
         .set(authHeader('category_manager'))

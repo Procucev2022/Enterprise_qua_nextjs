@@ -627,18 +627,40 @@ const EMAIL_INGESTION_CONFIG = {
 // PaymentLinkService/ZohoWebhookController. Real secrets (CLIENT_SECRET,
 // REFRESH_TOKEN) live only in backend/.env, never hardcoded — same rule as
 // DATABASE_URL and EMAIL_GATEWAY_*.
+//
+// Live and sandbox are separately-authorized Zoho OAuth grants (different scope
+// prefix, ZohoPay.* vs ZohoPaySandbox.*, and a different API host), so each needs
+// its own full credential set rather than one set with a URL swap. ZOHO_MODE
+// picks which block is active; the backend must be restarted to change it.
+const ZOHO_MODE = (process.env.ZOHO_MODE || 'live').toLowerCase() === 'sandbox' ? 'sandbox' : 'live';
+
+const ZOHO_LIVE_CONFIG = {
+  CLIENT_ID: process.env.ZOHO_LIVE_CLIENT_ID || process.env.ZOHO_CLIENT_ID || '',
+  CLIENT_SECRET: process.env.ZOHO_LIVE_CLIENT_SECRET || process.env.ZOHO_CLIENT_SECRET || '',
+  REFRESH_TOKEN: process.env.ZOHO_LIVE_REFRESH_TOKEN || process.env.ZOHO_REFRESH_TOKEN || '',
+  OAUTH_TOKEN_URL: process.env.ZOHO_LIVE_OAUTH_TOKEN_URL || process.env.ZOHO_OAUTH_TOKEN_URL || 'https://accounts.zoho.in/oauth/v2/token',
+  PAYMENTS_BASE_URL: process.env.ZOHO_LIVE_PAYMENTS_BASE_URL || 'https://payments.zoho.in/api/v1',
+  ACCOUNT_ID: process.env.ZOHO_LIVE_PAYMENTS_ACCOUNT_ID || process.env.ZOHO_PAYMENTS_ACCOUNT_ID || '',
+  WEBHOOK_SIGNING_KEY: process.env.ZOHO_LIVE_WEBHOOK_SIGNING_KEY || process.env.ZOHO_WEBHOOK_SIGNING_KEY || '',
+  RETURN_URL_BASE: process.env.ZOHO_LIVE_RETURN_URL_BASE || process.env.ZOHO_PAYMENTS_RETURN_URL_BASE || 'http://localhost:3000',
+};
+
+const ZOHO_SANDBOX_CONFIG = {
+  CLIENT_ID: process.env.ZOHO_SANDBOX_CLIENT_ID || process.env.ZOHO_CLIENT_ID || '',
+  CLIENT_SECRET: process.env.ZOHO_SANDBOX_CLIENT_SECRET || process.env.ZOHO_CLIENT_SECRET || '',
+  REFRESH_TOKEN: process.env.ZOHO_SANDBOX_REFRESH_TOKEN || '',
+  OAUTH_TOKEN_URL: process.env.ZOHO_SANDBOX_OAUTH_TOKEN_URL || 'https://accounts.zoho.in/oauth/v2/token',
+  PAYMENTS_BASE_URL: process.env.ZOHO_SANDBOX_PAYMENTS_BASE_URL || 'https://paymentssandbox.zoho.in/api/v1',
+  ACCOUNT_ID: process.env.ZOHO_SANDBOX_PAYMENTS_ACCOUNT_ID || process.env.ZOHO_PAYMENTS_ACCOUNT_ID || '',
+  WEBHOOK_SIGNING_KEY: process.env.ZOHO_SANDBOX_WEBHOOK_SIGNING_KEY || '',
+  RETURN_URL_BASE: process.env.ZOHO_SANDBOX_RETURN_URL_BASE || process.env.ZOHO_PAYMENTS_RETURN_URL_BASE || 'http://localhost:3000',
+};
+
+const ZOHO_ACTIVE_CREDENTIALS = ZOHO_MODE === 'sandbox' ? ZOHO_SANDBOX_CONFIG : ZOHO_LIVE_CONFIG;
+
 const ZOHO_CONFIG = {
-  CLIENT_ID: process.env.ZOHO_CLIENT_ID || '',
-  CLIENT_SECRET: process.env.ZOHO_CLIENT_SECRET || '',
-  REFRESH_TOKEN: process.env.ZOHO_REFRESH_TOKEN || '',
-  OAUTH_TOKEN_URL: process.env.ZOHO_OAUTH_TOKEN_URL || 'https://accounts.zoho.in/oauth/v2/token',
-  PAYMENTS_BASE_URL: process.env.ZOHO_PAYMENTS_BASE_URL || 'https://payments.zoho.in/api/v1',
-  ACCOUNT_ID: process.env.ZOHO_PAYMENTS_ACCOUNT_ID || '',
-  WEBHOOK_SIGNING_KEY: process.env.ZOHO_WEBHOOK_SIGNING_KEY || '',
-  // Base URL the vendor is sent back to after paying, and (in a real deployment)
-  // the base Zoho's webhook would need to reach. No public URL exists yet for
-  // this app, so this defaults to localhost until one is supplied.
-  RETURN_URL_BASE: process.env.ZOHO_PAYMENTS_RETURN_URL_BASE || 'http://localhost:3000',
+  MODE: ZOHO_MODE,
+  ...ZOHO_ACTIVE_CREDENTIALS,
   RECONCILIATION_ENABLED: String(process.env.ZOHO_RECONCILIATION_ENABLED || '').toLowerCase() === 'true',
   // 10 minutes, matching the reference app's `0 */10 * * * *` cron.
   RECONCILIATION_INTERVAL_MS: Number(process.env.ZOHO_RECONCILIATION_INTERVAL_MS || 10 * 60 * 1000),

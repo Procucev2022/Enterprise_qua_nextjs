@@ -1916,7 +1916,8 @@ export type SidebarIconKey =
   | 'Server'
   | 'Award'
   | 'ClipboardList'
-  | 'Database';
+  | 'Database'
+  | 'Receipt';
 
 export interface SidebarNavItem {
   /** Active screen key consumed by the screen switchboard */

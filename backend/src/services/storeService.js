@@ -610,6 +610,55 @@ class StoreService {
     return this.paymentLinks.filter((l) => statuses.includes(l.status));
   }
 
+  /**
+   * A vendor's own billing history, newest first — re-synced from Neon first
+   * for the same reason getPaymentLinksByStatusIn is: a link created by a
+   * different process instance than the one now serving this request would
+   * otherwise be invisible.
+   */
+  async getPaymentLinksForVendor(vendorId) {
+    if (pool.pool) {
+      const allFromDB = await domainQueries.getPaymentLinksFromDB();
+      const byId = new Map(this.paymentLinks.map((l) => [l.id, l]));
+      for (const link of allFromDB) byId.set(link.id, link);
+      this.paymentLinks = Array.from(byId.values());
+    }
+    return this.paymentLinks
+      .filter((l) => l.payerType === 'vendor' && l.vendorId === vendorId)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  /** Same as getPaymentLinksForVendor, scoped to a buyer account instead. */
+  async getPaymentLinksForBuyer(buyerAccountId) {
+    if (pool.pool) {
+      const allFromDB = await domainQueries.getPaymentLinksFromDB();
+      const byId = new Map(this.paymentLinks.map((l) => [l.id, l]));
+      for (const link of allFromDB) byId.set(link.id, link);
+      this.paymentLinks = Array.from(byId.values());
+    }
+    return this.paymentLinks
+      .filter((l) => l.payerType === 'buyer' && l.buyerAccountId === buyerAccountId)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  /**
+   * Look up a single payment link by its own (not Zoho's) id — used by the
+   * invoice download route. Falls back to Neon on a memory miss, same
+   * cross-process reasoning as getPaymentLinkByZohoId.
+   */
+  async getPaymentLinkById(id) {
+    const cached = this.paymentLinks.find((l) => l.id === id);
+    if (cached) return cached;
+    if (!pool.pool) return null;
+    const allFromDB = await domainQueries.getPaymentLinksFromDB();
+    const fromDB = allFromDB.find((l) => l.id === id);
+    if (!fromDB) return null;
+    if (!this.paymentLinks.some((l) => l.id === fromDB.id)) {
+      this.paymentLinks.unshift(fromDB);
+    }
+    return fromDB;
+  }
+
   createPaymentLinkRecord({
     id,
     zohoPaymentLinkId,

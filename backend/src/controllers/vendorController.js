@@ -1,6 +1,7 @@
 const storeService = require('../services/storeService');
 const { generateVendorOnboardingEmail } = require('../services/emailService');
 const zohoPaymentService = require('../services/zohoPaymentService');
+const { generateReceiptPdf } = require('../services/invoiceService');
 const { normalizePhone } = require('../db/identityQueries');
 const { logger } = require('../services/loggerService');
 const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
@@ -273,9 +274,14 @@ function generateOnboardingEmailPreview(req, res, next) {
   }
 }
 
-// The frontend only ever offers these three; 'premium_network' exists in the
-// shared TS union type but nothing in the app assigns it.
-const VALID_VENDOR_SUBSCRIPTION_PLANS = ['premium', 'connect', 'select'];
+// 'premium' is the only plan this endpoint may grant directly — it's free and
+// auto-assigned (e.g. a buyer uploading a vendor to their roster). 'connect'
+// and 'select' are real, paid tiers that must only ever be granted by
+// activateVendorSubscriptionFromPayment after a genuine Zoho payment
+// (createSubscriptionPaymentLink -> webhook/reconciliation), never by a
+// vendor (or anyone) calling this endpoint directly — that was previously
+// possible and let a vendor self-grant a paid plan for free.
+const VALID_VENDOR_SUBSCRIPTION_PLANS = ['premium'];
 
 function updateSubscription(req, res, next) {
   try {
@@ -289,7 +295,10 @@ function updateSubscription(req, res, next) {
     if (!assertVendorOwnership(req, res, existing.email)) return;
     if (!VALID_VENDOR_SUBSCRIPTION_PLANS.includes(plan)) {
       logger.warn(`Failed to update subscription for vendor ${id}: invalid plan`, { id, plan }, 'VENDOR_CONTROLLER');
-      return res.status(400).json({ success: false, error: `plan must be one of: ${VALID_VENDOR_SUBSCRIPTION_PLANS.join(', ')}.` });
+      return res.status(400).json({
+        success: false,
+        error: `plan must be one of: ${VALID_VENDOR_SUBSCRIPTION_PLANS.join(', ')}. Paid plans (connect/select) can only be granted via a completed Zoho payment.`,
+      });
     }
     logger.info(`Updating subscription for vendor ${id} to ${plan}`, { id, plan }, 'VENDOR_CONTROLLER');
     const updated = storeService.updateVendor(existing.id, { subscriptionPlan: plan });
@@ -352,6 +361,56 @@ async function createSubscriptionPaymentLink(req, res, next) {
   } catch (err) {
     logger.error(`Error creating Zoho payment link for vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
     res.status(502).json({ success: false, error: 'Unable to create a payment link right now. Please try again shortly.' });
+  }
+}
+
+/** A vendor's own billing history — every payment link ever created for them, newest first. */
+async function getPaymentLinks(req, res, next) {
+  try {
+    const { id } = req.params;
+    const existing = storeService.getVendorById(id);
+    if (!existing) {
+      return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
+    }
+    if (!assertVendorOwnership(req, res, existing.email)) return;
+    const links = await storeService.getPaymentLinksForVendor(existing.id);
+    res.json({ success: true, data: links });
+  } catch (err) {
+    logger.error(`Error fetching payment links for vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
+/** Stream a PDF receipt for one of this vendor's own past payments. */
+async function downloadInvoice(req, res, next) {
+  try {
+    const { id, linkId } = req.params;
+    const existing = storeService.getVendorById(id);
+    if (!existing) {
+      return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
+    }
+    if (!assertVendorOwnership(req, res, existing.email)) return;
+
+    const link = await storeService.getPaymentLinkById(linkId);
+    if (!link || link.payerType !== 'vendor' || link.vendorId !== existing.id) {
+      return res.status(404).json({ success: false, error: `Payment ${linkId} not found for this vendor.` });
+    }
+
+    const planLabel = (VENDOR_SUBSCRIPTION_PLANS.find((p) => p.id === link.planId) || {}).name || link.planId;
+    const pdf = await generateReceiptPdf({
+      link,
+      payerName: existing.name || existing.email,
+      payerEmail: existing.email,
+      planLabel,
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Length', pdf.length);
+    res.setHeader('Content-Disposition', `attachment; filename="receipt-${link.id}.pdf"`);
+    res.send(pdf);
+  } catch (err) {
+    logger.error(`Error generating invoice for vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
+    next(err);
   }
 }
 
@@ -451,5 +510,7 @@ module.exports = {
   updateCategories,
   updateSubscription,
   createSubscriptionPaymentLink,
+  getPaymentLinks,
+  downloadInvoice,
   bulkImportVendors,
 };

@@ -139,3 +139,115 @@ describe('POST /api/buyer-accounts/:id/subscription-payment', () => {
     expect(res.body.success).toBe(false);
   });
 });
+
+describe('GET /api/buyer-accounts/:id/payment-links and invoice download', () => {
+  let buyerAccount;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    buyerAccount = storeService.addBuyerAccount({
+      organizationName: 'Billing History Test Buyer Co',
+      corporateEmail: TEST_USERS.buyer.email,
+      mobileNumber: '9876543210',
+    });
+  });
+
+  test('requires a session', async () => {
+    const res = await request(app).get(`/api/buyer-accounts/${buyerAccount.id}/payment-links`);
+    expect(res.statusCode).toBe(401);
+  });
+
+  test('a vendor cannot list buyer billing history', async () => {
+    const res = await request(app).get(`/api/buyer-accounts/${buyerAccount.id}/payment-links`).set(authHeader('vendor'));
+    expect(res.statusCode).toBe(403);
+  });
+
+  test('lists only the caller\'s own payment links, newest first', async () => {
+    storeService.createPaymentLinkRecord({
+      id: 'pl-buyer-hist-1',
+      zohoPaymentLinkId: 'zoho-buyer-hist-1',
+      buyerAccountId: buyerAccount.id,
+      payerType: 'buyer',
+      planId: 'version_1',
+      amount: 2.36,
+      paymentUrl: 'https://payments.zoho.in/1',
+      status: 'active',
+    });
+    storeService.createPaymentLinkRecord({
+      id: 'pl-buyer-hist-2',
+      zohoPaymentLinkId: 'zoho-buyer-hist-2',
+      buyerAccountId: buyerAccount.id,
+      payerType: 'buyer',
+      planId: 'version_3',
+      amount: 9.44,
+      paymentUrl: 'https://payments.zoho.in/2',
+      status: 'paid',
+    });
+    // A different buyer's link must never appear here.
+    const otherBuyer = storeService.addBuyerAccount({ organizationName: 'Other Buyer Co', corporateEmail: 'other-billing-buyer@example.com' });
+    storeService.createPaymentLinkRecord({
+      id: 'pl-buyer-hist-other',
+      zohoPaymentLinkId: 'zoho-buyer-hist-other',
+      buyerAccountId: otherBuyer.id,
+      payerType: 'buyer',
+      planId: 'version_2',
+      amount: 5.9,
+      paymentUrl: 'https://payments.zoho.in/3',
+      status: 'active',
+    });
+
+    const res = await request(app).get(`/api/buyer-accounts/${buyerAccount.id}/payment-links`).set(authHeader('buyer'));
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.data.map((l) => l.id)).toEqual(['pl-buyer-hist-2', 'pl-buyer-hist-1']);
+  });
+
+  test('downloads a real PDF receipt for one of this buyer\'s own payments', async () => {
+    const link = storeService.createPaymentLinkRecord({
+      id: 'pl-buyer-invoice-1',
+      zohoPaymentLinkId: 'zoho-buyer-invoice-1',
+      buyerAccountId: buyerAccount.id,
+      payerType: 'buyer',
+      planId: 'version_2',
+      amount: 5.9,
+      paymentUrl: 'https://payments.zoho.in/1',
+      status: 'paid',
+    });
+
+    const res = await request(app)
+      .get(`/api/buyer-accounts/${buyerAccount.id}/payment-links/${link.id}/invoice`)
+      .set(authHeader('buyer'));
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('application/pdf');
+    expect(res.headers['content-disposition']).toContain(`receipt-${link.id}.pdf`);
+    expect(res.body.subarray(0, 4).toString('utf8')).toBe('%PDF');
+  });
+
+  test('404s for a payment link that belongs to a different buyer account', async () => {
+    const otherBuyer = storeService.addBuyerAccount({ organizationName: 'Other Buyer Co 2', corporateEmail: 'other-billing-buyer-2@example.com' });
+    const otherLink = storeService.createPaymentLinkRecord({
+      id: 'pl-buyer-not-mine',
+      zohoPaymentLinkId: 'zoho-buyer-not-mine',
+      buyerAccountId: otherBuyer.id,
+      payerType: 'buyer',
+      planId: 'version_1',
+      amount: 2.36,
+      paymentUrl: 'https://payments.zoho.in/1',
+      status: 'paid',
+    });
+
+    const res = await request(app)
+      .get(`/api/buyer-accounts/${buyerAccount.id}/payment-links/${otherLink.id}/invoice`)
+      .set(authHeader('buyer'));
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  test('404s for an unknown payment link id', async () => {
+    const res = await request(app)
+      .get(`/api/buyer-accounts/${buyerAccount.id}/payment-links/does-not-exist/invoice`)
+      .set(authHeader('buyer'));
+    expect(res.statusCode).toBe(404);
+  });
+});
