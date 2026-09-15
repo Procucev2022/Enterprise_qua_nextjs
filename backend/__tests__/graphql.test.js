@@ -202,7 +202,7 @@ describe('GraphQL API & Controller Integration Tests', () => {
     expect(createdRFQ.title).toBe('GraphQL Sourcing RFQ Test');
 
     // The server allocates the RFQ number, never the client.
-    expect(createdRFQ.rfqNumber).toMatch(/^RFQ-/);
+    expect(createdRFQ.rfqNumber).toMatch(/^RFQ\d{12}$/);
 
     // 2. Update RFQ.
     const updateRFQMutation = `
