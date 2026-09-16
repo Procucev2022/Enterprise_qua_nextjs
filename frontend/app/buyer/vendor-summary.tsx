@@ -629,12 +629,15 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     const originDetails = getVendorOriginDetails(vendor);
 
     // Check if this vendor has submitted a quote in any RFQ
+    const vendorNameLower = (vendor.name || '').toLowerCase();
     const hasSubmittedQuote = rfqs.some((r) =>
-      r.quotes.some(
-        (q) =>
-          q.vendorName.toLowerCase().includes(vendor.name.toLowerCase()) ||
-          vendor.name.toLowerCase().includes(q.vendorName.toLowerCase())
-      )
+      (r.quotes || []).some((q) => {
+        const qNameLower = (q.vendorName || '').toLowerCase();
+        return (
+          (qNameLower && qNameLower.includes(vendorNameLower)) ||
+          (vendorNameLower && vendorNameLower.includes(qNameLower))
+        );
+      })
     );
 
     // Version Rules
