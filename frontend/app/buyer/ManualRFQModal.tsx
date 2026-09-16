@@ -12,7 +12,7 @@
 // the server returns rather than assuming what it saved.
 // ==============================================================================
 
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import { extractRfqCategorySignals, getCategoryMatchedProcucevVendors } from '@/lib/vendorMatching';
@@ -37,7 +37,7 @@ import {
 } from 'lucide-react';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { CURRENCY, SOURCING_MODES } from '@/lib/constants';
-import { createRFQ, extractLineItemsFromDocument, uploadRFQAttachment } from '@/lib/rfqClient';
+import { createRFQ, extractLineItemsFromDocument, fetchAllVendors, uploadRFQAttachment } from '@/lib/rfqClient';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
 import {
   addManualRFQLineItem,
@@ -55,6 +55,7 @@ import type {
   RFQAttachment,
   RFQItem,
   SourcingMode,
+  VendorEntry,
 } from '@/lib/types';
 
 const MANUAL = UI_STRINGS.manualRfq;
@@ -113,6 +114,46 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
    * base64 in every subsequent render.
    */
   const pendingFilesRef = useRef<File[]>([]);
+
+  // Mode 2/3's "Procucev marketplace matches" used to score-match against
+  // `buyerVendors` — the same 500-row bootstrap-capped list used app-wide for
+  // startup. Once the real directory grew into the tens of thousands, that
+  // cap became dominated by whatever category happened to be uploaded most
+  // recently (e.g. 495/500 "bearings and accessories" after one bulk
+  // import), so a buyer creating an RFQ for almost any other category saw
+  // next to nothing — not because no matches existed, but because the form
+  // never looked past the first 500 rows of an 80k+-row table. Fetched from
+  // the real paginated/searchable directory instead, scoped to the RFQ's
+  // own category signals, same as every other screen fixed this session.
+  const { rawSignals: categoryFetchSignals } = useMemo(() => extractRfqCategorySignals(form), [form]);
+  const [fetchedCategoryVendors, setFetchedCategoryVendors] = useState<VendorEntry[]>([]);
+  const lastFetchedCategorySignalsRef = useRef<string>('');
+  useEffect(() => {
+    const key = categoryFetchSignals.slice().sort().join('|');
+    if (!key) {
+      setFetchedCategoryVendors([]);
+      lastFetchedCategorySignalsRef.current = '';
+      return;
+    }
+    if (key === lastFetchedCategorySignalsRef.current) return;
+    const t = setTimeout(() => {
+      lastFetchedCategorySignalsRef.current = key;
+      void Promise.all(
+        categoryFetchSignals.slice(0, 5).map((signal) =>
+          fetchAllVendors({ page: 1, pageSize: 50, search: signal })
+        )
+      ).then((results) => {
+        const byId = new Map<string, VendorEntry>();
+        for (const result of results) {
+          if (result.success) {
+            for (const v of result.candidates) byId.set(v.id, v as unknown as VendorEntry);
+          }
+        }
+        setFetchedCategoryVendors(Array.from(byId.values()));
+      });
+    }, 350);
+    return () => clearTimeout(t);
+  }, [categoryFetchSignals]);
 
   const validation = useMemo(() => validateManualRFQForm(form), [form]);
 
@@ -954,7 +995,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                 {(() => {
                   const myVendors = buyerVendors.filter(isBuyerUploaded);
                   const { signals: rfqSignals } = extractRfqCategorySignals(form);
-                  const matchedProcucev = getCategoryMatchedProcucevVendors(buyerVendors, rfqSignals, 80);
+                  const matchedProcucev = getCategoryMatchedProcucevVendors(fetchedCategoryVendors, rfqSignals, 80);
 
                   return (
                     <>
@@ -1095,7 +1136,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
               <div className="mt-4 rounded-xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 p-4 space-y-3 animate-fade-in shadow-2xs">
                 {(() => {
                   const { signals: rfqSignals } = extractRfqCategorySignals(form);
-                  const matchedProcucev = getCategoryMatchedProcucevVendors(buyerVendors, rfqSignals, 80);
+                  const matchedProcucev = getCategoryMatchedProcucevVendors(fetchedCategoryVendors, rfqSignals, 80);
 
                   return (
                     <>

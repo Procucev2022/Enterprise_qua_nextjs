@@ -487,7 +487,18 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
   if (!isOpen || !rfq) return null;
 
   const followUp = rfq.followUpData;
-  const vendors = followUp?.vendors || [];
+  // A vendor invited straight onto assignedVendors (see
+  // storeService.inviteVendorsToRFQ) never got the simulated chaser
+  // dispatch's call/whatsapp/sms sub-objects built for it — every field
+  // below assumes they always exist, which crashed the whole modal for
+  // any such vendor. Normalized once here instead of guarding every
+  // access site individually.
+  const vendors = (followUp?.vendors || []).map((v) => ({
+    ...v,
+    call: v.call || { status: 'not_dispatched', lastAttempt: 'Not yet dispatched' },
+    whatsapp: v.whatsapp || { status: 'not_dispatched', lastAttempt: 'Not yet dispatched' },
+    sms: v.sms || { status: 'not_dispatched', lastAttempt: 'Not yet dispatched' },
+  }));
 
   const filteredVendors = vendors.filter((v) => {
     if (activeChannelTab === 'all') return true;
