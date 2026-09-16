@@ -125,8 +125,9 @@ function pickUpdatableRfqFields(body) {
  * unauthenticated route. That is what put one buyer's RFQs on another
  * buyer's dashboard.
  */
-function getRFQs(req, res, next) {
+async function getRFQs(req, res, next) {
   try {
+    await storeService.syncRFQsFromDB();
     const scope = resolveRfqReadScope(req);
     const rfqs = scopedRfqList(scope);
     logger.info('Fetching RFQs list', { role: scope.role, restricted: scope.restricted, count: rfqs.length }, 'RFQ_CONTROLLER');
@@ -147,8 +148,9 @@ function getRFQs(req, res, next) {
  * route is gated to category_manager/admin, so the "no scope" here can never
  * be reached by a buyer or vendor.
  */
-function getAllRFQs(req, res, next) {
+async function getAllRFQs(req, res, next) {
   try {
+    await storeService.syncRFQsFromDB();
     const rfqs = storeService
       .getRFQs()
       .slice()
@@ -220,11 +222,11 @@ function inviteVendors(req, res, next) {
  * exist, so the response cannot be used to probe what other buyers have
  * raised.
  */
-function getRFQById(req, res, next) {
+async function getRFQById(req, res, next) {
   try {
     const { id } = req.params;
     logger.info(`Fetching RFQ by ID: ${id}`, { id }, 'RFQ_CONTROLLER');
-    const rfq = storeService.getRFQById(id);
+    const rfq = await storeService.getRFQByIdAsync(id);
     if (!rfq || !canAccessRfq(req, rfq)) {
       logger.warn(`RFQ not found for ID: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
@@ -320,6 +322,22 @@ async function createRFQ(req, res, next) {
         created,
         body.sourceEmail || (req.user && req.user.email)
       );
+    }
+
+    // Share RFQ creation acknowledgement to the buyer
+    const buyerEmail = body.sourceEmail || (requestingBuyerAccount && requestingBuyerAccount.corporateEmail) || (req.user && req.user.email);
+    if (buyerEmail) {
+      const buyerName =
+        requestingBuyerAccount?.contactPerson ||
+        requestingBuyerAccount?.organizationName ||
+        (req.user && req.user.fullName) ||
+        'Valued Buyer';
+      void mailerService.sendRfqAcknowledgementEmail({
+        to: buyerEmail,
+        buyerName,
+        rfqNumber: created.rfqNumber,
+        rfqTitle: created.title,
+      });
     }
 
     res.status(201).json({ success: true, data: created });
@@ -533,8 +551,9 @@ async function extractRFQFromDocument(req, res, next) {
  * buyer saw the same portfolio totals, including spend figures belonging to
  * other companies.
  */
-function getRFQSummary(req, res, next) {
+async function getRFQSummary(req, res, next) {
   try {
+    await storeService.syncRFQsFromDB();
     const scope = resolveRfqReadScope(req);
     const rfqs = scopedRfqList(scope);
     logger.info('Building RFQ portfolio summary', { role: scope.role, restricted: scope.restricted, count: rfqs.length }, 'RFQ_CONTROLLER');

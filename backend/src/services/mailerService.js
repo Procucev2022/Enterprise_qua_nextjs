@@ -1,6 +1,7 @@
 const nodemailer = require('nodemailer');
 const dns = require('dns');
 const { logger } = require('./loggerService');
+const { UNAUTHORIZED_BUYER_NOTIFICATION, RFQ_ACKNOWLEDGEMENT_NOTIFICATION } = require('../config/constants');
 
 // Force Node.js DNS resolver to prefer IPv4 over IPv6.
 // Cloud environments like Render lack IPv6 egress routing; without this,
@@ -340,6 +341,61 @@ function vendorSignInUrl() {
   return `${String(base).replace(/\/+$/, '')}/login`;
 }
 
+/** Where a buyer registers or signs in. Configurable because it differs per deployment. */
+function buyerPortalUrl() {
+  const base = process.env.APP_PUBLIC_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
+  return `${String(base).replace(/\/+$/, '')}/login`;
+}
+
+/**
+ * Builds the notification email sent to unauthorized/unregistered senders.
+ */
+function buildUnauthorizedBuyerEmail(to, context = {}) {
+  const portalUrl = buyerPortalUrl();
+  const gatewayAddress =
+    context.gatewayAddress ||
+    process.env.EMAIL_GATEWAY_USER ||
+    UNAUTHORIZED_BUYER_NOTIFICATION.DEFAULT_GATEWAY_EMAIL;
+
+  const inner = `
+    <p>Dear Sir/Madam,</p>
+    <p>We received your RFQ email, but the sender email address (<strong>${to}</strong>) is not registered as an authorized buyer in Enterprise QUA.</p>
+    <p>To submit RFQs through Enterprise QUA, please register your buyer account and complete the required verification process.</p>
+    <div style="background: #f8fafc; padding: 16px; border-radius: 6px; border: 1px solid #cbd5e1; margin: 20px 0;">
+      <p style="margin: 0 0 10px 0; font-weight: bold; color: #0f172a;">Please register or sign in through the Enterprise QUA Buyer Portal:</p>
+      <p style="margin: 10px 0;">
+        <a href="${portalUrl}" style="background: #0284c7; color: #ffffff; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Enterprise QUA Buyer Portal</a>
+      </p>
+      <p style="margin: 4px 0; font-size: 12px; color: #64748b;">Registration URL: <a href="${portalUrl}" style="color: #0284c7;">${portalUrl}</a></p>
+    </div>
+    <p>After completing the registration and verification process, please resend your RFQ email to the Enterprise QUA RFQ email address (<strong>${gatewayAddress}</strong>).</p>
+    <p style="font-size: 13px; color: #dc2626; font-weight: 500;">Your RFQ has not been created because the sender email is currently not authorized.</p>
+    <p style="margin-top: 24px;">Regards,<br/><strong>Enterprise QUA</strong><br/>ProcureV</p>
+  `;
+
+  return {
+    from: fromAddress(),
+    to,
+    subject: UNAUTHORIZED_BUYER_NOTIFICATION.SUBJECT,
+    html: wrapEmail(
+      UNAUTHORIZED_BUYER_NOTIFICATION.HEADLINE,
+      UNAUTHORIZED_BUYER_NOTIFICATION.SUBLINE,
+      inner
+    ),
+  };
+}
+
+/**
+ * Dispatches a registration notification to an unregistered/unauthorized sender.
+ */
+async function sendUnauthorizedBuyerNotificationEmail(to, context = {}) {
+  if (!to) return { sent: false, reason: 'missing recipient email' };
+  return deliver(
+    buildUnauthorizedBuyerEmail(to, context),
+    'unauthorized-buyer registration notification email'
+  );
+}
+
 /** A styled list of the categories a supplier has been mapped to. */
 function categoryList(items = []) {
   const real = items.filter((item) => typeof item === 'string' && item.trim() !== '');
@@ -582,6 +638,92 @@ async function sendVendorIngestionEmail(message, template) {
   return deliver(message, `vendor ingestion ${template} email`);
 }
 
+/**
+ * Template E — Buyer RFQ Creation Acknowledgement.
+ * Sent to the buyer once their requirement has been converted into an RFQ.
+ */
+function buildRfqAcknowledgementEmail({ to, buyerName, rfqNumber, rfqTitle }) {
+  const rawNumber = String(rfqNumber || '').trim();
+  const cleanNumber = rawNumber.replace(/^#+/, '');
+  const formattedRfqNumber = cleanNumber ? `#${cleanNumber}` : '#RFQ';
+  const name = buyerName || 'Valued Buyer';
+  const subject = RFQ_ACKNOWLEDGEMENT_NOTIFICATION.SUBJECT.replace('{rfqNumber}', cleanNumber || 'RFQ');
+
+  const text = `Hi ${name},
+
+Great news! Your requirement has been converted into RFQ ${formattedRfqNumber} and sent to verified suppliers on Procucev right now.
+
+📩 ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.QUOTES_TIMELINE}
+
+${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.NEED_IT_FASTER}
+
+📞 Call: ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.SUPPORT_PHONE}
+✉️ Email: ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.SUPPORT_EMAIL}
+
+${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.CLOSING}
+
+${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.TEAM_SIGNATURE}`;
+
+  const inner = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #1e293b; line-height: 1.6;">
+      <p style="font-size: 16px; margin: 0 0 16px 0;">Hi <strong>${name}</strong>,</p>
+
+      <p style="font-size: 15px; margin: 0 0 18px 0; line-height: 1.6;">
+        Great news! Your requirement has been converted into <strong>RFQ <span style="color: #0284c7; font-family: monospace; font-size: 16px;">${formattedRfqNumber}</span></strong> and sent to verified suppliers on Procucev right now.
+      </p>
+
+      ${rfqTitle ? `<p style="font-size: 13px; color: #64748b; margin: 0 0 16px 0;"><strong>Requisition:</strong> ${rfqTitle}</p>` : ''}
+
+      <div style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border: 1px solid #86efac; border-radius: 8px; padding: 14px 18px; margin: 20px 0;">
+        <p style="margin: 0; font-size: 14px; color: #166534; font-weight: 600;">
+          📩 ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.QUOTES_TIMELINE}
+        </p>
+      </div>
+
+      <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px 18px; margin: 20px 0;">
+        <p style="margin: 0 0 10px 0; font-size: 14px; font-weight: bold; color: #0f172a;">
+          ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.NEED_IT_FASTER}
+        </p>
+        <p style="margin: 0 0 8px 0; font-size: 13px;">
+          📞 <strong>Call:</strong> <a href="tel:+917996170801" style="color: #0284c7; text-decoration: none; font-weight: 600;">${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.SUPPORT_PHONE}</a>
+        </p>
+        <p style="margin: 0; font-size: 13px;">
+          ✉️ <strong>Email:</strong> <a href="mailto:RFQ@procucev.com" style="color: #0284c7; text-decoration: none;">RFQ@procucev.com</a> / <a href="mailto:support@procucev.com" style="color: #0284c7; text-decoration: none;">support@procucev.com</a>
+        </p>
+      </div>
+
+      <p style="font-size: 14px; margin: 20px 0 24px 0; color: #334155;">
+        ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.CLOSING}
+      </p>
+
+      <p style="font-size: 15px; font-weight: bold; color: #0f172a; margin: 0;">
+        ${RFQ_ACKNOWLEDGEMENT_NOTIFICATION.TEAM_SIGNATURE}
+      </p>
+    </div>
+  `;
+
+  return {
+    from: fromAddress(),
+    to,
+    replyTo: RFQ_ACKNOWLEDGEMENT_NOTIFICATION.DEFAULT_GATEWAY_EMAIL,
+    subject,
+    text,
+    html: wrapEmail(
+      RFQ_ACKNOWLEDGEMENT_NOTIFICATION.HEADLINE,
+      RFQ_ACKNOWLEDGEMENT_NOTIFICATION.SUBLINE,
+      inner
+    ),
+  };
+}
+
+/**
+ * Dispatch RFQ creation acknowledgement email to the buyer.
+ */
+async function sendRfqAcknowledgementEmail(params) {
+  const message = buildRfqAcknowledgementEmail(params);
+  return deliver(message, 'buyer RFQ acknowledgement');
+}
+
 function isConfigured() {
   return Boolean(process.env.SMTP_USER && process.env.SMTP_PASSWORD);
 }
@@ -597,12 +739,17 @@ module.exports = {
   buildRequisitionEmail,
   fromAddress,
   vendorSignInUrl,
+  buyerPortalUrl,
+  buildUnauthorizedBuyerEmail,
+  sendUnauthorizedBuyerNotificationEmail,
   categoryList,
   buildVendorCategoryMappingEmail,
   buildVendorSelfMappingEmail,
   buildVendorOnboardingEmail,
   buildRatingRevisionEmail,
   sendVendorIngestionEmail,
+  buildRfqAcknowledgementEmail,
+  sendRfqAcknowledgementEmail,
   isConfigured,
 };
 
