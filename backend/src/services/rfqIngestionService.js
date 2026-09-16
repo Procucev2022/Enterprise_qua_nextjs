@@ -379,7 +379,7 @@ function normalizeLineItems(rawItems, options = {}) {
     // one malformed cell from failing the whole ingest with a 500.
     if (!raw || typeof raw !== 'object') return;
 
-    const itemName = String(raw.itemName || raw.description || '').trim();
+    const itemName = String(raw.itemName || raw.itemDescription || raw.description || '').trim();
     // A row with no description cannot be quoted against, so it is dropped
     // rather than surfaced as a blank line for the buyer to clean up.
     if (!itemName) return;
@@ -388,9 +388,14 @@ function normalizeLineItems(rawItems, options = {}) {
       id: raw.id || `ent-ingested-${Date.now()}-${index}`,
       itemName,
       quantity: normalizeQuantity(raw.quantity),
-      unit: String(raw.unit || '').trim() || DEFAULT_UNIT,
+      unit: String(raw.unit || raw.uom || '').trim() || DEFAULT_UNIT,
       targetDate: String(raw.targetDate || '').trim() || defaultTargetDate(),
-      technicalSpecs: String(raw.technicalSpecs || raw.specification || '').trim(),
+      technicalSpecs: String(raw.technicalSpecs || raw.specifications || raw.specification || '').trim(),
+      brand: String(raw.brand || '').trim(),
+      deliveryCity: String(raw.deliveryCity || '').trim(),
+      deliveryState: String(raw.deliveryState || '').trim(),
+      deliveryPincode: String(raw.deliveryPincode || '').trim(),
+      deliveryLocation: String(raw.deliveryLocation || '').trim(),
     };
 
     const key = buildDeduplicationKey(normalized);
@@ -477,6 +482,14 @@ async function buildRFQDraft(payload = {}) {
     // field so the buyer supplies the number the document did not state.
     estimatedBudget,
     extractedEntities: entities,
+    deliveryLocation:
+      (entities.length > 0 && entities[0].deliveryLocation) || payload.deliveryLocation || '',
+    deliveryCity:
+      (entities.length > 0 && entities[0].deliveryCity) || payload.deliveryCity || '',
+    deliveryState:
+      (entities.length > 0 && entities[0].deliveryState) || payload.deliveryState || '',
+    deliveryPincode:
+      (entities.length > 0 && entities[0].deliveryPincode) || payload.deliveryPincode || '',
     source: payload.source || 'web_portal',
     ...(payload.sourceFileName ? { sourceFileName: payload.sourceFileName } : {}),
     ...(payload.sourceEmail ? { sourceEmail: payload.sourceEmail } : {}),

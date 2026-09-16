@@ -936,6 +936,38 @@ class StoreService {
     return this.rfqs.map((r) => (r.quotes ? { ...r, quotes: evaluateQuotes(r.quotes) } : r));
   }
 
+  /**
+   * Re-sync RFQs from Neon PostgreSQL so records inserted by external processes
+   * (e.g. check-email CLI, background workers) are merged into memory.
+   */
+  async syncRFQsFromDB() {
+    if (!pool.pool) return this.getRFQs();
+    try {
+      const allFromDB = await domainQueries.getRFQsFromDB();
+      if (Array.isArray(allFromDB)) {
+        const byId = new Map(this.rfqs.map((r) => [r.id, r]));
+        for (const rfq of allFromDB) {
+          byId.set(rfq.id, rfq);
+        }
+        this.rfqs = Array.from(byId.values()).sort(
+          (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+        );
+      }
+    } catch (err) {
+      logger.error('Failed to sync RFQs from database', err, 'STORE_SERVICE');
+    }
+    return this.getRFQs();
+  }
+
+  async getRFQByIdAsync(id) {
+    let rfq = this.getRFQById(id);
+    if (!rfq && pool.pool) {
+      await this.syncRFQsFromDB();
+      rfq = this.getRFQById(id);
+    }
+    return rfq;
+  }
+
   getRFQById(id) {
     const rfq = this.rfqs.find((r) => r.id === id || r.rfqNumber === id);
     if (!rfq) return undefined;
@@ -1000,6 +1032,8 @@ class StoreService {
       budget: Number(rfqData.budget) || 0,
       // Vendors price freight against these, so they round-trip with the RFQ.
       deliveryLocation: rfqData.deliveryLocation || '',
+      deliveryCity: rfqData.deliveryCity || '',
+      deliveryState: rfqData.deliveryState || '',
       deliveryPincode: rfqData.deliveryPincode || '',
       // Metadata only. The bytes live in object storage under
       // rfqAttachmentService, so the bootstrap payload stays a fixed size no

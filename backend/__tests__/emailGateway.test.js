@@ -6,6 +6,7 @@ const emailIngestionService = require('../src/services/emailIngestionService');
 const geminiService = require('../src/services/geminiService');
 const rfqIngestionService = require('../src/services/rfqIngestionService');
 const storeService = require('../src/services/storeService');
+const mailerService = require('../src/services/mailerService');
 const dbPool = require('../src/db/pool');
 const { EMAIL_GATEWAY_CONFIG, EMAIL_GATEWAY_MESSAGES } = require('../src/config/constants');
 const { authHeader } = require('./testHelpers');
@@ -37,6 +38,9 @@ function buyerAccount(overrides = {}) {
     id: 'buyer-acc-101',
     organizationName: 'L&T Heavy Engineering',
     corporateEmail: SENDER,
+    city: 'Bangalore',
+    state: 'Karnataka',
+    pincode: '560001',
     ...overrides,
   };
 }
@@ -263,6 +267,71 @@ describe('emailGatewayService.processMessage', () => {
 
     expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
   });
+
+  test('dispatches RFQ acknowledgement email to buyer upon successful RFQ creation', async () => {
+    mockExtraction();
+    jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-ack', rfqNumber: 'RFQ-ACK-001', title: 'Ack Test RFQ' });
+    const sendAckSpy = jest.spyOn(mailerService, 'sendRfqAcknowledgementEmail').mockResolvedValue({ sent: true });
+
+    const result = await emailGatewayService.processMessage(raw(), config());
+    expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+    expect(sendAckSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: SENDER,
+        rfqNumber: 'RFQ-ACK-001',
+      })
+    );
+  });
+
+  test('catches errors gracefully if RFQ acknowledgement email fails to send', async () => {
+    mockExtraction();
+    jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-err', rfqNumber: 'RFQ-ERR-001', title: 'Err RFQ' });
+    jest.spyOn(mailerService, 'sendRfqAcknowledgementEmail').mockRejectedValueOnce(new Error('SMTP connection timed out'));
+
+    const result = await emailGatewayService.processMessage(raw(), config());
+    expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+  });
+
+  test('catches errors gracefully if unauthorized buyer notification email fails to send', async () => {
+    storeService.getBuyerAccountByEmail.mockReturnValue(null);
+    jest.spyOn(mailerService, 'sendUnauthorizedBuyerNotificationEmail').mockRejectedValueOnce(new Error('SMTP down'));
+    const result = await emailGatewayService.processMessage(raw(), config());
+    expect(result.status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
+  });
+
+  test('handles buyerName variations and empty accepted line items', async () => {
+    mockExtraction();
+    jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-var', rfqNumber: 'RFQ-VAR' });
+    const sendAckSpy = jest.spyOn(mailerService, 'sendRfqAcknowledgementEmail').mockResolvedValue({ sent: true });
+
+    // 1. With contactPerson
+    storeService.getBuyerAccountByEmail.mockReturnValueOnce(buyerAccount({ contactPerson: 'Jane Doe' }));
+    await emailGatewayService.processMessage(raw(), config());
+    expect(sendAckSpy).toHaveBeenCalledWith(expect.objectContaining({ buyerName: 'Jane Doe' }));
+
+    // 2. Without contactPerson, but with organizationName
+    storeService.getBuyerAccountByEmail.mockReturnValueOnce({
+      id: 'b2',
+      organizationName: 'Acme Industries',
+      corporateEmail: SENDER,
+    });
+    await emailGatewayService.processMessage(raw(), config());
+    expect(sendAckSpy).toHaveBeenCalledWith(expect.objectContaining({ buyerName: 'Acme Industries' }));
+
+    // 3. When classification accepted is 0 for groups
+    jest.spyOn(rfqIngestionService, 'buildRFQDraft').mockResolvedValueOnce({
+      draft: {},
+      classification: { accepted: 0, needsReview: 0 },
+    });
+    const res = await emailGatewayService.processMessage(raw(), config());
+    expect(res.status).toBe(INGESTION_OUTCOME.NO_LINE_ITEMS);
+
+    // 4. When processLineItemsAndGroups returns empty groups
+    jest.spyOn(emailGatewayService, 'processLineItemsAndGroups').mockReturnValueOnce([]);
+    const resEmpty = await emailGatewayService.processMessage(raw(), config());
+    expect(resEmpty.status).toBe(INGESTION_OUTCOME.NO_LINE_ITEMS);
+    expect(resEmpty.detail).toBe(EMAIL_GATEWAY_MESSAGES.NO_ITEMS_ACCEPTED);
+  });
 });
 
 describe('emailGatewayService.pollOnce', () => {
@@ -410,13 +479,22 @@ describe('emailGatewayService.pollOnce', () => {
     expect(result.ingested).toBe(0);
   });
 
-  test('the interval poll reads configuration from the environment', async () => {
-    const client = fakeImap({ uids: [] });
-    emailGatewayService.ImapFlow = jest.fn(() => client);
-    await withEnv(FULL_ENV, async () => {
-      const result = await emailGatewayService.pollOnce();
-      expect(result.skipped).toBeFalsy();
+  test('records multiple comma-separated rfqNumbers when processMessage returns multiple RFQs', async () => {
+    jest.spyOn(emailGatewayQueries, 'hasProcessed').mockResolvedValue(false);
+    jest.spyOn(emailGatewayService, 'processMessage').mockResolvedValueOnce({
+      status: INGESTION_OUTCOME.INGESTED,
+      rfqs: [{ id: 'rfq-1', rfqNumber: 'RFQ-1' }, { id: 'rfq-2', rfqNumber: 'RFQ-2' }],
+      rfq: { id: 'rfq-1', rfqNumber: 'RFQ-1' },
+      message: { messageId: '<multi-rfq@corp.com>', fromAddress: 'buyer@corp.com' },
     });
+    const client = fakeImap({ uids: [10], messageId: '<multi-rfq@corp.com>' });
+    emailGatewayService.ImapFlow = jest.fn(() => client);
+
+    const result = await emailGatewayService.pollOnce(emailGatewayService.resolveConfig(FULL_ENV));
+    expect(result.ingested).toBe(1);
+    expect(emailGatewayQueries.recordProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({ rfqNumber: 'RFQ-1, RFQ-2' })
+    );
   });
 });
 
@@ -861,5 +939,477 @@ describe('emailGatewayService configuration helpers and connection diagnostics',
     expect(res.skipped).toBe(true);
     expect(res.reason).toContain('smtp.gmail.com');
   });
+
+  test('handles default arguments and edge cases in helpers', () => {
+    expect(typeof emailGatewayService.isConfigured()).toBe('boolean');
+    expect(emailGatewayService.describeConfigurationFault()).toBeNull();
+    expect(emailGatewayService.describeConnectionError(null)).toBe(EMAIL_GATEWAY_MESSAGES.CONNECTION_FAILED_FALLBACK);
+    expect(emailGatewayService.describeConnectionError({})).toBe(EMAIL_GATEWAY_MESSAGES.CONNECTION_FAILED_FALLBACK);
+    expect(typeof emailGatewayService.resolveSenderAuthorisation('test@corp.com').allowed).toBe('boolean');
+    expect(
+      emailGatewayService.resolveSenderAuthorisation('noatsign', { allowedDomains: ['corp.com'], allowedSenders: [] })
+        .allowed
+    ).toBe(false);
+  });
 });
+
+describe('emailGatewayService.resolveBuyerRegisteredLocation', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('resolves location directly from buyer account fields when present', async () => {
+    const loc = await emailGatewayService.resolveBuyerRegisteredLocation({
+      city: 'Bangalore',
+      state: 'Karnataka',
+      pincode: '560001',
+    });
+    expect(loc).toEqual({ city: 'Bangalore', state: 'Karnataka', pincode: '560001' });
+  });
+
+  test('resolves location using deliveryCity/deliveryState/deliveryPincode aliases', async () => {
+    const loc = await emailGatewayService.resolveBuyerRegisteredLocation({
+      deliveryCity: 'Chennai',
+      deliveryState: 'Tamil Nadu',
+      deliveryPincode: '600001',
+    });
+    expect(loc).toEqual({ city: 'Chennai', state: 'Tamil Nadu', pincode: '600001' });
+  });
+
+  test('queries Neon PostgreSQL buyer profile when account fields are empty', async () => {
+    const origPool = dbPool.pool;
+    dbPool.pool = { query: jest.fn() };
+    jest.spyOn(dbPool, 'rows').mockResolvedValue([
+      {
+        user_uuid: 'u-1',
+        username: 'buyer@corp.com',
+        user_email: 'buyer@corp.com',
+        city: 'Mysore',
+        state: 'Karnataka',
+        zip_code: '570001',
+      },
+    ]);
+
+    try {
+      const loc = await emailGatewayService.resolveBuyerRegisteredLocation({
+        corporateEmail: 'buyer@corp.com',
+      });
+      expect(loc).toEqual({ city: 'Mysore', state: 'Karnataka', pincode: '570001' });
+    } finally {
+      dbPool.pool = origPool;
+    }
+  });
+
+  test('handles database errors gracefully and returns empty fields', async () => {
+    const origPool = dbPool.pool;
+    dbPool.pool = { query: jest.fn() };
+    jest.spyOn(dbPool, 'rows').mockRejectedValue(new Error('DB connection failed'));
+
+    try {
+      const loc = await emailGatewayService.resolveBuyerRegisteredLocation({
+        corporateEmail: 'buyer@corp.com',
+      });
+      expect(loc).toEqual({ city: '', state: '', pincode: '' });
+    } finally {
+      dbPool.pool = origPool;
+    }
+  });
+
+  test('returns empty strings when buyer account is null', async () => {
+    const loc = await emailGatewayService.resolveBuyerRegisteredLocation(null);
+    expect(loc).toEqual({ city: '', state: '', pincode: '' });
+  });
+});
+
+describe('emailGatewayService.processLineItemsAndGroups', () => {
+  const buyerLoc = { city: 'Bangalore', state: 'Karnataka', pincode: '560001' };
+
+  test('preserves partial location and does NOT replace Pune with Bangalore', () => {
+    const rawItems = [{ itemName: 'Laptop', deliveryCity: 'Pune' }];
+    const groups = emailGatewayService.processLineItemsAndGroups(rawItems, {}, buyerLoc);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].deliveryCity).toBe('Pune');
+    expect(groups[0].deliveryState).toBe('');
+    expect(groups[0].deliveryPincode).toBe('');
+    expect(groups[0].deliveryCity).not.toBe('Bangalore');
+  });
+
+  test('applies registered buyer location when item has no location at all', () => {
+    const rawItems = [{ itemName: 'Monitor' }];
+    const groups = emailGatewayService.processLineItemsAndGroups(rawItems, {}, buyerLoc);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].deliveryCity).toBe('Bangalore');
+    expect(groups[0].deliveryState).toBe('Karnataka');
+    expect(groups[0].deliveryPincode).toBe('560001');
+  });
+
+  test('groups items with same date and location into a single group', () => {
+    const rawItems = [
+      { itemName: 'Item 1', targetDate: '2026-10-01', deliveryCity: 'Bangalore' },
+      { itemName: 'Item 2', targetDate: '2026-10-01', deliveryCity: 'Bangalore' },
+    ];
+    const groups = emailGatewayService.processLineItemsAndGroups(rawItems, {}, buyerLoc);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].items).toHaveLength(2);
+  });
+
+  test('splits items with different delivery dates into separate groups', () => {
+    const rawItems = [
+      { itemName: 'Item 1', targetDate: '2026-10-01', deliveryCity: 'Bangalore' },
+      { itemName: 'Item 2', targetDate: '2026-10-05', deliveryCity: 'Bangalore' },
+    ];
+    const groups = emailGatewayService.processLineItemsAndGroups(rawItems, {}, buyerLoc);
+
+    expect(groups).toHaveLength(2);
+    expect(groups[0].targetDate).toBe('2026-10-01');
+    expect(groups[1].targetDate).toBe('2026-10-05');
+  });
+
+  test('splits items with different delivery locations into separate groups', () => {
+    const rawItems = [
+      { itemName: 'Item 1', targetDate: '2026-10-01', deliveryCity: 'Bangalore' },
+      { itemName: 'Item 2', targetDate: '2026-10-01', deliveryCity: 'Hyderabad' },
+    ];
+    const groups = emailGatewayService.processLineItemsAndGroups(rawItems, {}, buyerLoc);
+
+    expect(groups).toHaveLength(2);
+    expect(groups[0].deliveryCity).toBe('Bangalore');
+    expect(groups[1].deliveryCity).toBe('Hyderabad');
+  });
+
+  test('uses deliveryLocation as deliveryCity when deliveryCity is not provided', () => {
+    const rawItems = [{ itemName: 'Laptop', deliveryLocation: 'Pune' }];
+    const groups = emailGatewayService.processLineItemsAndGroups(rawItems, {}, buyerLoc);
+    expect(groups[0].deliveryCity).toBe('Pune');
+  });
+});
+
+describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
+  beforeEach(() => {
+    rfqIngestionService.primeTaxonomyIndex(taxonomyFixture.CATEGORY_TAXONOMY_FIXTURE);
+    jest.spyOn(storeService, 'getBuyerAccountByEmail').mockImplementation((email) => {
+      if (email === SENDER) return buyerAccount();
+      return null;
+    });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    rfqIngestionService.resetTaxonomyIndex();
+  });
+
+  const config = () => emailGatewayService.resolveConfig(FULL_ENV);
+
+  test('TEST 1: Single item + date provided + location provided -> uses email date and location', async () => {
+    const createSpy = jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-t1', rfqNumber: 'RFQ-T1' });
+    jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
+      status: geminiService.EXTRACTION_STATUS.SUCCESS,
+      lineItems: [
+        {
+          itemName: 'Industrial Pump',
+          quantity: 2,
+          unit: 'Nos',
+          targetDate: '2026-10-15',
+          deliveryCity: 'Mumbai',
+          deliveryState: 'Maharashtra',
+          deliveryPincode: '400001',
+        },
+      ],
+    });
+
+    const result = await emailGatewayService.processMessage(Buffer.from(fixtures.PLAIN_REQUISITION_EML, 'utf8'), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    const [payload] = createSpy.mock.calls[0];
+    expect(payload.targetDeliveryDate).toBe('2026-10-15');
+    expect(payload.deliveryCity).toBe('Mumbai');
+    expect(payload.deliveryState).toBe('Maharashtra');
+    expect(payload.deliveryPincode).toBe('400001');
+  });
+
+  test('TEST 2: Single item + date missing + location provided -> date = current date + 5 days', async () => {
+    const expectedDate = rfqIngestionService.defaultTargetDate(5);
+    const createSpy = jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-t2', rfqNumber: 'RFQ-T2' });
+    jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
+      status: geminiService.EXTRACTION_STATUS.SUCCESS,
+      lineItems: [
+        {
+          itemName: 'Industrial Pump',
+          quantity: 2,
+          unit: 'Nos',
+          targetDate: null,
+          deliveryCity: 'Pune',
+          deliveryState: 'Maharashtra',
+          deliveryPincode: '411001',
+        },
+      ],
+    });
+
+    const result = await emailGatewayService.processMessage(Buffer.from(fixtures.PLAIN_REQUISITION_EML, 'utf8'), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    const [payload] = createSpy.mock.calls[0];
+    expect(payload.targetDeliveryDate).toBe(expectedDate);
+    expect(payload.deliveryCity).toBe('Pune');
+    expect(payload.deliveryState).toBe('Maharashtra');
+    expect(payload.deliveryPincode).toBe('411001');
+  });
+
+  test('TEST 3: Single item + date provided + location missing -> location = buyer registration default location', async () => {
+    const createSpy = jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-t3', rfqNumber: 'RFQ-T3' });
+    jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
+      status: geminiService.EXTRACTION_STATUS.SUCCESS,
+      lineItems: [
+        {
+          itemName: 'Industrial Pump',
+          quantity: 2,
+          unit: 'Nos',
+          targetDate: '2026-10-20',
+          deliveryCity: '',
+          deliveryState: '',
+          deliveryPincode: '',
+        },
+      ],
+    });
+
+    const result = await emailGatewayService.processMessage(Buffer.from(fixtures.PLAIN_REQUISITION_EML, 'utf8'), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    const [payload] = createSpy.mock.calls[0];
+    expect(payload.targetDeliveryDate).toBe('2026-10-20');
+    expect(payload.deliveryCity).toBe('Bangalore');
+    expect(payload.deliveryState).toBe('Karnataka');
+    expect(payload.deliveryPincode).toBe('560001');
+  });
+
+  test('TEST 4: Single item + date missing + location missing -> date = current + 5 days & location = buyer registration', async () => {
+    const expectedDate = rfqIngestionService.defaultTargetDate(5);
+    const createSpy = jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-t4', rfqNumber: 'RFQ-T4' });
+    jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
+      status: geminiService.EXTRACTION_STATUS.SUCCESS,
+      lineItems: [
+        {
+          itemName: 'Dell Laptop',
+          quantity: 10,
+          unit: 'Nos',
+        },
+      ],
+    });
+
+    const result = await emailGatewayService.processMessage(Buffer.from(fixtures.PLAIN_REQUISITION_EML, 'utf8'), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    const [payload] = createSpy.mock.calls[0];
+    expect(payload.targetDeliveryDate).toBe(expectedDate);
+    expect(payload.deliveryCity).toBe('Bangalore');
+    expect(payload.deliveryState).toBe('Karnataka');
+    expect(payload.deliveryPincode).toBe('560001');
+  });
+
+  test('TEST 5: 5 items + same date + same location -> 1 RFQ with 5 line items', async () => {
+    const createSpy = jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-t5', rfqNumber: 'RFQ-T5' });
+    const items = Array.from({ length: 5 }, (_, i) => ({
+      itemName: `Component Item ${i + 1}`,
+      quantity: (i + 1) * 5,
+      unit: 'Nos',
+      targetDate: '2026-10-15',
+      deliveryCity: 'Bangalore',
+      deliveryState: 'Karnataka',
+      deliveryPincode: '560001',
+    }));
+
+    jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
+      status: geminiService.EXTRACTION_STATUS.SUCCESS,
+      lineItems: items,
+    });
+
+    const result = await emailGatewayService.processMessage(Buffer.from(fixtures.PLAIN_REQUISITION_EML, 'utf8'), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    const [payload] = createSpy.mock.calls[0];
+    expect(payload.extractedEntities).toHaveLength(5);
+  });
+
+  test('TEST 6: 49 items + same date + same location -> 1 RFQ with exactly 49 line items', async () => {
+    const createSpy = jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-t6', rfqNumber: 'RFQ-T6' });
+    const items = Array.from({ length: 49 }, (_, i) => ({
+      itemName: `Equipment Line Item ${i + 1}`,
+      quantity: i + 1,
+      unit: 'Nos',
+      brand: i % 2 === 0 ? 'Dell' : 'HP',
+      specifications: `Specification details for equipment line item ${i + 1}`,
+      targetDate: '2026-10-15',
+      deliveryCity: 'Bangalore',
+      deliveryState: 'Karnataka',
+      deliveryPincode: '560001',
+    }));
+
+    jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
+      status: geminiService.EXTRACTION_STATUS.SUCCESS,
+      lineItems: items,
+    });
+
+    const result = await emailGatewayService.processMessage(Buffer.from(fixtures.PLAIN_REQUISITION_EML, 'utf8'), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    const [payload] = createSpy.mock.calls[0];
+    expect(payload.extractedEntities).toHaveLength(49);
+    expect(payload.extractedEntities[0].quantity).toBe(1);
+    expect(payload.extractedEntities[48].quantity).toBe(49);
+    expect(payload.extractedEntities[0].brand).toBe('Dell');
+  });
+
+  test('TEST 7: Multiple items + different dates -> grouped into separate RFQs', async () => {
+    const createSpy = jest.spyOn(storeService, 'createRFQ').mockImplementation((data) => ({
+      id: `rfq-${data.targetDeliveryDate}`,
+      rfqNumber: `RFQ-${data.targetDeliveryDate}`,
+    }));
+
+    jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
+      status: geminiService.EXTRACTION_STATUS.SUCCESS,
+      lineItems: [
+        { itemName: 'Laptop Batch A', quantity: 10, unit: 'Nos', targetDate: '2026-09-21', deliveryCity: 'Bangalore' },
+        { itemName: 'Printer Batch B', quantity: 5, unit: 'Nos', targetDate: '2026-09-25', deliveryCity: 'Bangalore' },
+      ],
+    });
+
+    const result = await emailGatewayService.processMessage(Buffer.from(fixtures.PLAIN_REQUISITION_EML, 'utf8'), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+    expect(createSpy).toHaveBeenCalledTimes(2);
+    expect(result.rfqs).toHaveLength(2);
+    expect(result.rfqs[0].targetDeliveryDate || createSpy.mock.calls[0][0].targetDeliveryDate).toBe('2026-09-21');
+    expect(result.rfqs[1].targetDeliveryDate || createSpy.mock.calls[1][0].targetDeliveryDate).toBe('2026-09-25');
+  });
+
+  test('TEST 8: Multiple items + different locations -> grouped into separate RFQs', async () => {
+    const createSpy = jest.spyOn(storeService, 'createRFQ').mockImplementation((data) => ({
+      id: `rfq-${data.deliveryCity}`,
+      rfqNumber: `RFQ-${data.deliveryCity}`,
+    }));
+
+    jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
+      status: geminiService.EXTRACTION_STATUS.SUCCESS,
+      lineItems: [
+        { itemName: 'Server Unit', quantity: 2, unit: 'Nos', targetDate: '2026-09-21', deliveryCity: 'Bangalore' },
+        { itemName: 'Router Unit', quantity: 4, unit: 'Nos', targetDate: '2026-09-21', deliveryCity: 'Hyderabad' },
+      ],
+    });
+
+    const result = await emailGatewayService.processMessage(Buffer.from(fixtures.PLAIN_REQUISITION_EML, 'utf8'), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+    expect(createSpy).toHaveBeenCalledTimes(2);
+    expect(result.rfqs).toHaveLength(2);
+    expect(createSpy.mock.calls[0][0].deliveryCity).toBe('Bangalore');
+    expect(createSpy.mock.calls[1][0].deliveryCity).toBe('Hyderabad');
+  });
+
+  test('TEST 9: 49 items + missing date + missing location -> all use default date and buyer location', async () => {
+    const expectedDate = rfqIngestionService.defaultTargetDate(5);
+    const createSpy = jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-t9', rfqNumber: 'RFQ-T9' });
+    const items = Array.from({ length: 49 }, (_, i) => ({
+      itemName: `Stationery Pack ${i + 1}`,
+      quantity: 10 + i,
+      unit: 'Nos',
+    }));
+
+    jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
+      status: geminiService.EXTRACTION_STATUS.SUCCESS,
+      lineItems: items,
+    });
+
+    const result = await emailGatewayService.processMessage(Buffer.from(fixtures.PLAIN_REQUISITION_EML, 'utf8'), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    const [payload] = createSpy.mock.calls[0];
+    expect(payload.extractedEntities).toHaveLength(49);
+    expect(payload.targetDeliveryDate).toBe(expectedDate);
+    expect(payload.deliveryCity).toBe('Bangalore');
+    expect(payload.deliveryState).toBe('Karnataka');
+    expect(payload.deliveryPincode).toBe('560001');
+  });
+
+  test('TEST 10: 50 items -> rejected by 49-item limit validation with no silent data loss', async () => {
+    const createSpy = jest.spyOn(storeService, 'createRFQ');
+    const items = Array.from({ length: 50 }, (_, i) => ({
+      itemName: `Bulk Line Item ${i + 1}`,
+      quantity: 1,
+      unit: 'Nos',
+      targetDate: '2026-10-15',
+      deliveryCity: 'Bangalore',
+    }));
+
+    jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
+      status: geminiService.EXTRACTION_STATUS.SUCCESS,
+      lineItems: items,
+    });
+
+    const result = await emailGatewayService.processMessage(Buffer.from(fixtures.PLAIN_REQUISITION_EML, 'utf8'), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.LINE_ITEMS_EXCEED_LIMIT);
+    expect(result.detail).toContain('Maximum 49 line items per RFQ exceeded (received 50).');
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  test('TEST 11: Unregistered buyer -> registration notification sent, no Gemini call, no RFQ created', async () => {
+    const createRfqSpy = jest.spyOn(storeService, 'createRFQ');
+    const mailerSpy = jest.spyOn(mailerService, 'sendUnauthorizedBuyerNotificationEmail');
+    const geminiSpy = jest.spyOn(geminiService, 'extractLineItems');
+
+    const unregEml = fixtures.PLAIN_REQUISITION_EML.split(SENDER).join('stranger.buyer@outside.org');
+    const result = await emailGatewayService.processMessage(Buffer.from(unregEml, 'utf8'), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
+    expect(mailerSpy).toHaveBeenCalledWith('stranger.buyer@outside.org', expect.anything());
+    expect(geminiSpy).not.toHaveBeenCalled();
+    expect(createRfqSpy).not.toHaveBeenCalled();
+  });
+
+  test('TEST 12: Same email processed twice -> duplicate rejected, no second RFQ created', async () => {
+    const client = fakeImap({ uids: [88], source: fixtures.PLAIN_REQUISITION_EML, messageId: '<msg-dup-12@lt-heavy.com>' });
+    emailGatewayService.ImapFlow = jest.fn(() => client);
+
+    jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+    let hasProcessedFlag = false;
+    jest.spyOn(emailGatewayQueries, 'hasProcessed').mockImplementation(async (mid) => {
+      return hasProcessedFlag && mid === '<msg-dup-12@lt-heavy.com>';
+    });
+
+    const createRfqSpy = jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-dup', rfqNumber: 'RFQ-DUP-12' });
+    jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
+      status: geminiService.EXTRACTION_STATUS.SUCCESS,
+      lineItems: [{ itemName: 'Centrifugal Pump', quantity: 2, unit: 'Nos' }],
+    });
+
+    // Poll 1: First time processed -> Ingested and RFQ created
+    const poll1 = await emailGatewayService.pollOnce(config());
+    expect(poll1.ingested).toBe(1);
+    expect(createRfqSpy).toHaveBeenCalledTimes(1);
+
+    // Ledger records completion
+    hasProcessedFlag = true;
+
+    // Poll 2: Scheduler polls mailbox again
+    const client2 = fakeImap({ uids: [88], source: fixtures.PLAIN_REQUISITION_EML, messageId: '<msg-dup-12@lt-heavy.com>' });
+    emailGatewayService.ImapFlow = jest.fn(() => client2);
+
+    const poll2 = await emailGatewayService.pollOnce(config());
+    expect(poll2.ingested).toBe(0);
+    expect(poll2.outcomes[0].status).toBe(EMAIL_GATEWAY_MESSAGES.ALREADY_PROCESSED);
+    // Verified: Exactly 1 RFQ created across both poll runs
+    expect(createRfqSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
 

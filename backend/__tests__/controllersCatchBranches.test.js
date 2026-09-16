@@ -75,12 +75,12 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
     storeService.isHydratedFromDB = false;
   });
 
-  test('getAllRFQs reports the persisted source and tolerates a missing createdAt', () => {
+  test('getAllRFQs reports the persisted source and tolerates a missing createdAt', async () => {
     const res = mockRes();
     const next = jest.fn();
     jest.spyOn(storeService, 'getRFQs').mockReturnValue([{ id: 'x' }, { id: 'y', createdAt: '2026-05-01T00:00:00Z' }]);
     storeService.isHydratedFromDB = true;
-    rfqController.getAllRFQs({}, res, next);
+    await rfqController.getAllRFQs({}, res, next);
     storeService.isHydratedFromDB = false;
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({ success: true, source: 'persisted' })

@@ -121,6 +121,38 @@ describe('Gemini document extraction service', () => {
     test.each([{}, { items: null }, { items: 'nope' }])('tolerates the malformed payload %p', (payload) => {
       expect(gemini.toRawLineItems(payload)).toEqual([]);
     });
+
+    test('carries brand and location fields from item or document level', () => {
+      const rowsItem = gemini.toRawLineItems({
+        items: [
+          {
+            itemDescription: 'Dell Latitude',
+            brand: 'Dell',
+            deliveryCity: 'Pune',
+            deliveryState: 'Maharashtra',
+            deliveryPincode: '411001',
+            deliveryLocation: 'Pune Hub',
+          },
+        ],
+      });
+      expect(rowsItem[0].brand).toBe('Dell');
+      expect(rowsItem[0].deliveryCity).toBe('Pune');
+      expect(rowsItem[0].deliveryState).toBe('Maharashtra');
+      expect(rowsItem[0].deliveryPincode).toBe('411001');
+      expect(rowsItem[0].deliveryLocation).toBe('Pune Hub');
+
+      const rowsDoc = gemini.toRawLineItems({
+        deliveryCity: 'Bangalore',
+        deliveryState: 'Karnataka',
+        deliveryPincode: '560001',
+        deliveryLocation: 'Bangalore Plant',
+        items: [{ itemDescription: 'HP Laptop' }],
+      });
+      expect(rowsDoc[0].deliveryCity).toBe('Bangalore');
+      expect(rowsDoc[0].deliveryState).toBe('Karnataka');
+      expect(rowsDoc[0].deliveryPincode).toBe('560001');
+      expect(rowsDoc[0].deliveryLocation).toBe('Bangalore Plant');
+    });
   });
 
   describe('buildRequestBody', () => {
