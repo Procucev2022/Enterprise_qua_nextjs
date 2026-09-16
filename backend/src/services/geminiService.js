@@ -66,6 +66,10 @@ Return a SINGLE JSON object with EXACTLY this shape and no surrounding prose or 
   "documentTitle": "String, a short title for the overall requirement, or null",
   "category": "String, the overall category if stated, or null",
   "deliveryDate": "String in YYYY-MM-DD if a delivery or required-by date is stated, else null",
+  "deliveryLocation": "String, overall delivery location or destination if stated, or null",
+  "deliveryCity": "String, overall delivery city if stated, or null",
+  "deliveryState": "String, overall delivery state if stated, or null",
+  "deliveryPincode": "String, overall delivery pincode or postal code if stated, or null",
   "estimatedBudget": "Number, the overall stated total value or budget of the requirement, or null",
   "items": [
     {
@@ -73,8 +77,13 @@ Return a SINGLE JSON object with EXACTLY this shape and no surrounding prose or 
       "quantity": "Number, the purchase quantity exactly as stated, or null if not stated",
       "unit": "String, unit of measure as stated e.g. Nos, Units, Meters, Kg, Sets, or null",
       "specification": "String, technical specification, grade, material or standard as stated, or null",
+      "brand": "String, brand or manufacturer if stated, or null",
       "category": "String, item level category if stated, or null",
       "targetDate": "String in YYYY-MM-DD if this line has its own date, else null",
+      "deliveryCity": "String, destination city for this item if stated, else null",
+      "deliveryState": "String, destination state for this item if stated, else null",
+      "deliveryPincode": "String, destination pincode for this item if stated, else null",
+      "deliveryLocation": "String, destination location for this item if stated, else null",
       "unitPrice": "Number, the stated rate or price for ONE unit of this line, or null",
       "totalPrice": "Number, the stated line total or amount for this line, or null"
     }
@@ -143,17 +152,37 @@ function parseExtractionJson(text) {
  */
 function toRawLineItems(parsed) {
   const items = Array.isArray(parsed?.items) ? parsed.items : [];
+  const docDate = typeof parsed?.deliveryDate === 'string' ? parsed.deliveryDate.trim() : '';
+
   return items
-    .map((item) => ({
-      itemName: typeof item?.itemDescription === 'string' ? item.itemDescription.trim() : '',
-      quantity: item?.quantity,
-      unit: typeof item?.unit === 'string' ? item.unit.trim() : '',
-      technicalSpecs: typeof item?.specification === 'string' ? item.specification.trim() : '',
-      category: typeof item?.category === 'string' ? item.category.trim() : '',
-      targetDate: typeof item?.targetDate === 'string' ? item.targetDate.trim() : '',
-      unitPrice: normalizeAmount(item?.unitPrice),
-      totalPrice: normalizeAmount(item?.totalPrice),
-    }))
+    .map((item) => {
+      const row = {
+        itemName: typeof item?.itemDescription === 'string' ? item.itemDescription.trim() : '',
+        quantity: item?.quantity,
+        unit: typeof item?.unit === 'string' ? item.unit.trim() : '',
+        technicalSpecs: typeof item?.specification === 'string' ? item.specification.trim() : '',
+        category: typeof item?.category === 'string' ? item.category.trim() : '',
+        targetDate: typeof item?.targetDate === 'string' ? item.targetDate.trim() : docDate,
+        unitPrice: normalizeAmount(item?.unitPrice),
+        totalPrice: normalizeAmount(item?.totalPrice),
+      };
+
+      if (item?.brand) row.brand = String(item.brand).trim();
+      if (item?.deliveryCity || parsed?.deliveryCity) {
+        row.deliveryCity = String(item?.deliveryCity || parsed.deliveryCity).trim();
+      }
+      if (item?.deliveryState || parsed?.deliveryState) {
+        row.deliveryState = String(item?.deliveryState || parsed.deliveryState).trim();
+      }
+      if (item?.deliveryPincode || parsed?.deliveryPincode) {
+        row.deliveryPincode = String(item?.deliveryPincode || parsed.deliveryPincode).trim();
+      }
+      if (item?.deliveryLocation || parsed?.deliveryLocation) {
+        row.deliveryLocation = String(item?.deliveryLocation || parsed.deliveryLocation).trim();
+      }
+
+      return row;
+    })
     .filter((item) => item.itemName !== '');
 }
 
@@ -317,6 +346,10 @@ async function extractLineItems(input = {}) {
         documentTitle: typeof parsed.documentTitle === 'string' ? parsed.documentTitle : null,
         category: typeof parsed.category === 'string' ? parsed.category : null,
         deliveryDate: typeof parsed.deliveryDate === 'string' ? parsed.deliveryDate : null,
+        deliveryLocation: typeof parsed.deliveryLocation === 'string' ? parsed.deliveryLocation : null,
+        deliveryCity: typeof parsed.deliveryCity === 'string' ? parsed.deliveryCity : null,
+        deliveryState: typeof parsed.deliveryState === 'string' ? parsed.deliveryState : null,
+        deliveryPincode: typeof parsed.deliveryPincode === 'string' ? parsed.deliveryPincode : null,
         estimatedBudget: normalizeAmount(parsed.estimatedBudget),
         error: null,
       };

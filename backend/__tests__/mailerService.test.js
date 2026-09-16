@@ -567,6 +567,115 @@ describe('mailerService', () => {
       delete process.env.SMTP_FROM;
       delete process.env.FRONTEND_URL;
     });
+
+    test('buyerPortalUrl returns configured or fallback login URL', () => {
+      delete process.env.APP_PUBLIC_URL;
+      delete process.env.FRONTEND_URL;
+      expect(mailerService.buyerPortalUrl()).toBe('http://localhost:3000/login');
+
+      process.env.APP_PUBLIC_URL = 'https://app.procucev.com/';
+      expect(mailerService.buyerPortalUrl()).toBe('https://app.procucev.com/login');
+      delete process.env.APP_PUBLIC_URL;
+    });
+
+    test('buildUnauthorizedBuyerEmail builds expected email template', () => {
+      const email = mailerService.buildUnauthorizedBuyerEmail('unknown@external.com', {
+        gatewayAddress: 'RFQ@procucev.com',
+      });
+      expect(email.to).toBe('unknown@external.com');
+      expect(email.subject).toBe('Enterprise QUA - Buyer Registration Required');
+      expect(email.html).toContain('unknown@external.com');
+      expect(email.html).toContain('not registered as an authorized buyer in Enterprise QUA');
+      expect(email.html).toContain('Enterprise QUA Buyer Portal');
+      expect(email.html).toContain('RFQ@procucev.com');
+      expect(email.html).toContain('Your RFQ has not been created');
+    });
+
+    test('sendUnauthorizedBuyerNotificationEmail validates recipient and dispatches in test mode', async () => {
+      const emptyRes = await mailerService.sendUnauthorizedBuyerNotificationEmail('');
+      expect(emptyRes.sent).toBe(false);
+      expect(emptyRes.reason).toBe('missing recipient email');
+
+      const res = await mailerService.sendUnauthorizedBuyerNotificationEmail('unreg@buyer.com');
+      expect(res.sent).toBe(false);
+      expect(res.reason).toBe('test environment');
+    });
+
+    test('buildRfqAcknowledgementEmail formats email with exact buyer template and numbers', () => {
+      const email = mailerService.buildRfqAcknowledgementEmail({
+        to: 'veerababu.v@procucev.com',
+        buyerName: 'Veerababu',
+        rfqNumber: 'RFQ260909223278',
+        rfqTitle: '100 MT Structural Steel Beams',
+      });
+
+      expect(email.to).toBe('veerababu.v@procucev.com');
+      expect(email.subject).toContain('RFQ260909223278');
+      expect(email.text).toContain('Hi Veerababu,');
+      expect(email.text).toContain('Great news! Your requirement has been converted into RFQ #RFQ260909223278 and sent to verified suppliers on Procucev right now.');
+      expect(email.text).toContain('📩 Quotes typically start coming in within 24–48 hours.');
+      expect(email.text).toContain('Need it faster or have a follow-up requirement?');
+      expect(email.text).toContain('📞 Call: +91-7996170801');
+      expect(email.text).toContain('✉️ Email: RFQ@procucev.com / support@procucev.com');
+      expect(email.text).toContain("Just drop us your requirement anytime — we'll take it from there!");
+      expect(email.text).toContain('Team Procucev');
+
+      expect(email.html).toContain('Hi <strong>Veerababu</strong>,');
+      expect(email.html).toContain('#RFQ260909223278');
+      expect(email.html).toContain('100 MT Structural Steel Beams');
+      expect(email.html).toContain('+91-7996170801');
+      expect(email.html).toContain('RFQ@procucev.com');
+      expect(email.html).toContain('support@procucev.com');
+      expect(email.html).toContain('Team Procucev');
+    });
+
+    test('buildRfqAcknowledgementEmail handles default fallbacks when fields are omitted', () => {
+      const email = mailerService.buildRfqAcknowledgementEmail({
+        to: 'buyer@example.com',
+      });
+
+      expect(email.to).toBe('buyer@example.com');
+      expect(email.text).toContain('Hi Valued Buyer,');
+      expect(email.text).toContain('#RFQ');
+      expect(email.html).not.toContain('Requisition:');
+    });
+
+    test('sendRfqAcknowledgementEmail delivers in test environment and dev with mocked transport', async () => {
+      const testRes = await mailerService.sendRfqAcknowledgementEmail({
+        to: 'buyer@example.com',
+        buyerName: 'Buyer',
+        rfqNumber: 'RFQ123',
+      });
+      expect(testRes.sent).toBe(false);
+      expect(testRes.reason).toBe('test environment');
+
+      let devMailer;
+      let sentMail;
+      jest.isolateModules(() => {
+        process.env.NODE_ENV = 'development';
+        process.env.SMTP_USER = 'test@example.com';
+        process.env.SMTP_PASSWORD = 'password';
+        jest.doMock('nodemailer', () => ({
+          createTransport: jest.fn(() => ({
+            sendMail: jest.fn((mail) => {
+              sentMail = mail;
+              return Promise.resolve({ messageId: 'ack-msg-id-123' });
+            }),
+          })),
+        }));
+        devMailer = require('../src/services/mailerService');
+      });
+
+      const devRes = await devMailer.sendRfqAcknowledgementEmail({
+        to: 'buyer@example.com',
+        buyerName: 'Veerababu',
+        rfqNumber: 'RFQ260909223278',
+      });
+      expect(devRes.sent).toBe(true);
+      expect(devRes.messageId).toBe('ack-msg-id-123');
+      expect(sentMail.to).toBe('buyer@example.com');
+      expect(sentMail.text).toContain('Hi Veerababu,');
+    });
   });
 });
 

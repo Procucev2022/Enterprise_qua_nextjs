@@ -1264,4 +1264,83 @@ describe('demo RFQ seeding', () => {
   test('the bootstrap payload carries no RFQs', () => {
     expect(storeService.getBootstrapData()).not.toHaveProperty('rfqs');
   });
+
+  describe('RFQ Database Synchronization', () => {
+    test('syncRFQsFromDB returns in-memory RFQs when pool is not configured', async () => {
+      const origPool = domainPool.pool;
+      domainPool.pool = null;
+      try {
+        const result = await storeService.syncRFQsFromDB();
+        expect(Array.isArray(result)).toBe(true);
+      } finally {
+        domainPool.pool = origPool;
+      }
+    });
+
+    test('syncRFQsFromDB merges records from DB and sorts them', async () => {
+      const origPool = domainPool.pool;
+      const origGetRFQsFromDB = domainQueries.getRFQsFromDB;
+      domainPool.pool = { query: jest.fn() };
+      domainQueries.getRFQsFromDB = jest.fn().mockResolvedValue([
+        { id: 'rfq-db-1', rfqNumber: 'RFQ2601', title: 'DB RFQ 1', createdAt: '2026-09-16 10:00:00 UTC' },
+        { id: 'rfq-db-2', rfqNumber: 'RFQ2602', title: 'DB RFQ 2', createdAt: '2026-09-16 12:00:00 UTC' },
+      ]);
+
+      try {
+        const result = await storeService.syncRFQsFromDB();
+        expect(result.some((r) => r.id === 'rfq-db-1')).toBe(true);
+        expect(result.some((r) => r.id === 'rfq-db-2')).toBe(true);
+        expect(storeService.getRFQById('rfq-db-1')?.title).toBe('DB RFQ 1');
+      } finally {
+        domainPool.pool = origPool;
+        domainQueries.getRFQsFromDB = origGetRFQsFromDB;
+      }
+    });
+
+    test('syncRFQsFromDB handles database fetch errors gracefully', async () => {
+      const origPool = domainPool.pool;
+      const origGetRFQsFromDB = domainQueries.getRFQsFromDB;
+      domainPool.pool = { query: jest.fn() };
+      domainQueries.getRFQsFromDB = jest.fn().mockRejectedValue(new Error('Connection lost'));
+
+      try {
+        const result = await storeService.syncRFQsFromDB();
+        expect(Array.isArray(result)).toBe(true);
+      } finally {
+        domainPool.pool = origPool;
+        domainQueries.getRFQsFromDB = origGetRFQsFromDB;
+      }
+    });
+
+    test('getRFQByIdAsync finds existing in-memory RFQ without querying DB', async () => {
+      const origPool = domainPool.pool;
+      domainPool.pool = null;
+      storeService.rfqs.push({ id: 'rfq-mem-1', rfqNumber: 'RFQMEM01', title: 'Memory RFQ' });
+      try {
+        const found = await storeService.getRFQByIdAsync('rfq-mem-1');
+        expect(found?.title).toBe('Memory RFQ');
+      } finally {
+        domainPool.pool = origPool;
+      }
+    });
+
+    test('getRFQByIdAsync syncs from DB when not found in memory', async () => {
+      const origPool = domainPool.pool;
+      const origGetRFQsFromDB = domainQueries.getRFQsFromDB;
+      domainPool.pool = { query: jest.fn() };
+      domainQueries.getRFQsFromDB = jest.fn().mockResolvedValue([
+        { id: 'rfq-db-remote', rfqNumber: 'RFQREMOTE', title: 'Remote RFQ', createdAt: '2026-09-16 11:00:00 UTC' },
+      ]);
+
+      try {
+        const found = await storeService.getRFQByIdAsync('rfq-db-remote');
+        expect(found?.title).toBe('Remote RFQ');
+        const notFound = await storeService.getRFQByIdAsync('rfq-absolutely-nowhere');
+        expect(notFound).toBeUndefined();
+      } finally {
+        domainPool.pool = origPool;
+        domainQueries.getRFQsFromDB = origGetRFQsFromDB;
+      }
+    });
+  });
 });

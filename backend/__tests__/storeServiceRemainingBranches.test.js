@@ -631,5 +631,48 @@ describe('Store Service — remaining branch coverage', () => {
 
       expect(po.lineItems).toEqual([{ description: 'Bearing', quantity: 10, unit: 'pcs' }]);
     });
+
+    test('getVendors returns all vendors when scopedBuyerId is all', () => {
+      expect(storeService.getVendors('all')).toBe(storeService.vendors);
+    });
+
+    test('getVendorById returns undefined when vendor is scoped to a buyer but no scopedBuyerId is provided', () => {
+      const vendor = storeService.addVendor({ name: 'Scoped Buyer Vendor', email: 'sbv@test.com' }, 'buyer@x.com', 'buyer-scoped-123');
+      expect(storeService.getVendorById(vendor.id, null)).toBeUndefined();
+    });
+
+    test('_rfqCategorySignals extracts majorCategory and minorCategory from extractedEntities', () => {
+      const signals = storeService._rfqCategorySignals({
+        category: 'MainCat',
+        extractedEntities: [
+          { majorCategory: 'MajorA', minorCategory: 'MinorB', category: 'SubC' }
+        ]
+      });
+      expect(signals).toContain('MajorA');
+      expect(signals).toContain('MinorB');
+      expect(signals).toContain('SubC');
+      expect(signals).toContain('MainCat');
+    });
+
+    test('triggerBatchChaser returns error when assignedVendors is empty, and null when RFQ not found', () => {
+      expect(storeService.triggerBatchChaser('non-existent-rfq')).toBeNull();
+
+      const rfq = storeService.createRFQ({ rfqNumber: 'RFQ-NO-VENDORS-CHASE' });
+      rfq.assignedVendors = [];
+      const res = storeService.triggerBatchChaser(rfq.id);
+      expect(res.success).toBe(false);
+      expect(res.error).toContain('No vendors are assigned to this RFQ');
+    });
+
+    test('triggerBatchChaser caps aiFeed at 100 items when length exceeds 100', () => {
+      const vendor = storeService.addVendor({ name: 'Assigned Vendor Co', email: 'avc@test.com' });
+      const rfq = storeService.createRFQ({ rfqNumber: 'RFQ-CHASE-100' });
+      rfq.assignedVendors = [vendor];
+      storeService.aiFeed = Array.from({ length: 99 }, (_, i) => ({ id: `feed-${i}`, message: 'dummy' }));
+      const res = storeService.triggerBatchChaser(rfq.id);
+      expect(res.success).toBe(true);
+      expect(storeService.aiFeed.length).toBeLessThanOrEqual(100);
+    });
   });
 });
+

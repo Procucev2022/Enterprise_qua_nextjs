@@ -725,6 +725,7 @@ const EMAIL_GATEWAY_CONFIG = {
   // Emails have no file name; this stands in wherever one is recorded.
   SYNTHETIC_FILE_NAME: 'inbound-email.eml',
   DEFAULT_GATEWAY_ADDRESS: 'RFQ@procucev.com',
+  MAX_LINE_ITEMS_PER_RFQ: 49,
 };
 
 /** Connection state reported to the gateway panel. */
@@ -784,7 +785,30 @@ const EMAIL_GATEWAY_MESSAGES = {
   PREPARE_REFUSED: 'The message could not be read for extraction ({status}).',
   EXTRACTION_FAILED: 'AI extraction produced no line items ({status}).',
   NO_ITEMS_ACCEPTED: 'No usable procurement line items were found in the message.',
+  LINE_ITEMS_EXCEED_LIMIT: 'Maximum {max} line items per RFQ exceeded (received {count}).',
   INGESTED_DETAIL: 'Raised with {count} line item(s), {needsReview} needing category review.',
+};
+
+/** Notification email content for unauthorized email senders. */
+const UNAUTHORIZED_BUYER_NOTIFICATION = {
+  SUBJECT: 'Enterprise QUA - Buyer Registration Required',
+  HEADLINE: 'PROCUCEV ENTERPRISE',
+  SUBLINE: 'Buyer Registration Required',
+  DEFAULT_GATEWAY_EMAIL: 'RFQ@procucev.com',
+};
+
+/** RFQ creation acknowledgement notification sent to the buyer. */
+const RFQ_ACKNOWLEDGEMENT_NOTIFICATION = {
+  SUBJECT: 'Great news! Your requirement has been converted into RFQ #{rfqNumber}',
+  HEADLINE: 'PROCUCEV ENTERPRISE',
+  SUBLINE: 'RFQ Creation Acknowledgement',
+  SUPPORT_PHONE: '+91-7996170801',
+  SUPPORT_EMAIL: 'RFQ@procucev.com / support@procucev.com',
+  DEFAULT_GATEWAY_EMAIL: 'RFQ@procucev.com',
+  TEAM_SIGNATURE: 'Team Procucev',
+  QUOTES_TIMELINE: 'Quotes typically start coming in within 24–48 hours.',
+  NEED_IT_FASTER: 'Need it faster or have a follow-up requirement?',
+  CLOSING: "Just drop us your requirement anytime — we'll take it from there!",
 };
 
 /** Outcome of preparing an email for extraction. */
@@ -869,6 +893,7 @@ const RFQ_INGESTION_CONFIG = {
   DEFAULT_QUANTITY: 1,
   DELIVERY_DATE_OFFSET_DAYS: 5,
   MAX_TITLE_LENGTH: 100,
+  MAX_LINE_ITEMS_PER_RFQ: 49,
   TITLE_SUFFIX_SINGLE: ' Procurement',
   TITLE_SUFFIX_MULTIPLE: ' & Allied Items Procurement',
 };
@@ -1283,6 +1308,8 @@ module.exports = {
   EMAIL_GATEWAY_MESSAGES,
   EMAIL_GATEWAY_STATE,
   EMAIL_GATEWAY_SMTP_PORTS,
+  UNAUTHORIZED_BUYER_NOTIFICATION,
+  RFQ_ACKNOWLEDGEMENT_NOTIFICATION,
   ZOHO_CONFIG,
   ZOHO_SUBSCRIPTION_PRICING,
   computeZohoPlanAmount,

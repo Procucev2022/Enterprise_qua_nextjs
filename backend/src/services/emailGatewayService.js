@@ -29,7 +29,10 @@ const emailIngestionService = require('./emailIngestionService');
 const geminiService = require('./geminiService');
 const rfqIngestionService = require('./rfqIngestionService');
 const storeService = require('./storeService');
+const mailerService = require('./mailerService');
 const emailGatewayQueries = require('../db/emailGatewayQueries');
+const buyerProfileQueries = require('../db/buyerProfileQueries');
+const pool = require('../db/pool');
 const { logger } = require('./loggerService');
 const {
   EMAIL_GATEWAY_CONFIG,
@@ -227,6 +230,144 @@ function resolveSenderAuthorisation(fromAddress, config = resolveConfig()) {
 }
 
 /**
+ * Resolves the registered buyer's default delivery location (city, state, pincode)
+ * dynamically from the validated buyer account or linked organization profile.
+ */
+async function resolveBuyerRegisteredLocation(buyerAccount) {
+  if (!buyerAccount) {
+    return { city: '', state: '', pincode: '' };
+  }
+
+  // 1. Direct fields on buyerAccount (in-memory or store service account object)
+  const directCity = buyerAccount.city || buyerAccount.deliveryCity || '';
+  const directState = buyerAccount.state || buyerAccount.deliveryState || '';
+  const directPincode = buyerAccount.pincode || buyerAccount.zipCode || buyerAccount.deliveryPincode || '';
+
+  if (directCity || directState || directPincode) {
+    return {
+      city: String(directCity).trim(),
+      state: String(directState).trim(),
+      pincode: String(directPincode).trim(),
+    };
+  }
+
+  // 2. Query Neon PostgreSQL buyer profile if pool is active and buyer has corporateEmail
+  if (pool && pool.pool && buyerAccount.corporateEmail) {
+    try {
+      const email = String(buyerAccount.corporateEmail).trim().toLowerCase();
+      const rows = await pool.rows(
+        `${buyerProfileQueries.PROFILE_SELECT} where lower(u.username) = lower($1) or lower(u.email) = lower($1) limit 1`,
+        [email]
+      );
+      if (rows.length > 0) {
+        const mapped = buyerProfileQueries.mapRowToProfile(rows[0]);
+        if (mapped) {
+          return {
+            city: mapped.city || '',
+            state: mapped.state || '',
+            pincode: mapped.pincode || '',
+          };
+        }
+      }
+    } catch (dbErr) {
+      logger.error('Failed to query buyer profile for location fallback', dbErr, 'EMAIL_GATEWAY');
+    }
+  }
+
+  return { city: '', state: '', pincode: '' };
+}
+
+/**
+ * Processes extracted line items, applies deterministic defaults (delivery date and location),
+ * and groups items by (delivery_date + delivery_city + delivery_state + delivery_pincode).
+ *
+ * @param {Array<Object>} lineItems Extracted line items from geminiService
+ * @param {Object} extraction Document-level extraction metadata
+ * @param {Object} buyerLocation Registered buyer location ({ city, state, pincode })
+ * @returns {Array<{ groupKey: string, targetDate: string, deliveryCity: string, deliveryState: string, deliveryPincode: string, deliveryLocation: string, items: Array<Object> }>}
+ */
+function processLineItemsAndGroups(lineItems, extraction = {}, buyerLocation = {}) {
+  const items = Array.isArray(lineItems) ? lineItems : [];
+  const defaultDate = rfqIngestionService.defaultTargetDate(5);
+
+  const groupsMap = new Map();
+
+  items.forEach((item) => {
+    // 1. Delivery Date: Explicit on item -> Explicit on document -> Default (today + 5 days)
+    const rawTargetDate =
+      item.targetDate ||
+      item.deliveryDate ||
+      item.delivery_date ||
+      extraction.deliveryDate ||
+      extraction.targetDeliveryDate;
+
+    const targetDate = String(rawTargetDate || defaultDate).trim();
+
+    // 2. Location Handling:
+    const explicitCity = String(item.deliveryCity || item.delivery_city || extraction.deliveryCity || '').trim();
+    const explicitState = String(item.deliveryState || item.delivery_state || extraction.deliveryState || '').trim();
+    const explicitPincode = String(item.deliveryPincode || item.delivery_pincode || extraction.deliveryPincode || '').trim();
+    const explicitLocation = String(item.deliveryLocation || item.delivery_location || extraction.deliveryLocation || '').trim();
+
+    let deliveryCity = explicitCity;
+    let deliveryState = explicitState;
+    let deliveryPincode = explicitPincode;
+    let deliveryLocation = explicitLocation;
+
+    const hasExplicitLocation = Boolean(explicitCity || explicitState || explicitPincode || explicitLocation);
+
+    if (!hasExplicitLocation) {
+      // Entirely missing: apply registered buyer's default delivery location
+      deliveryCity = buyerLocation.city || '';
+      deliveryState = buyerLocation.state || '';
+      deliveryPincode = buyerLocation.pincode || '';
+      deliveryLocation = [deliveryCity, deliveryState, deliveryPincode].filter(Boolean).join(', ');
+    } else {
+      // Partial location handling: preserve explicit fields without replacing them with buyer defaults
+      if (!deliveryCity && deliveryLocation) {
+        deliveryCity = deliveryLocation;
+      }
+      if (!deliveryLocation) {
+        deliveryLocation = [deliveryCity, deliveryState, deliveryPincode].filter(Boolean).join(', ');
+      }
+    }
+
+    const processedItem = {
+      ...item,
+      targetDate,
+      deliveryCity,
+      deliveryState,
+      deliveryPincode,
+      deliveryLocation,
+    };
+
+    // Group key: (delivery_date + delivery_city + delivery_state + delivery_pincode)
+    const groupKey = [
+      targetDate,
+      deliveryCity.toLowerCase(),
+      deliveryState.toLowerCase(),
+      deliveryPincode.toLowerCase(),
+    ].join('|');
+
+    if (!groupsMap.has(groupKey)) {
+      groupsMap.set(groupKey, {
+        groupKey,
+        targetDate,
+        deliveryCity,
+        deliveryState,
+        deliveryPincode,
+        deliveryLocation,
+        items: [],
+      });
+    }
+
+    groupsMap.get(groupKey).items.push(processedItem);
+  });
+
+  return Array.from(groupsMap.values());
+}
+
+/**
  * Turn one raw message into an RFQ.
  *
  * Resolves to the ledger outcome rather than throwing, so one unusable message
@@ -252,6 +393,16 @@ async function processMessage(rawSource, config = resolveConfig()) {
 
   const authorisation = resolveSenderAuthorisation(message.fromAddress, config);
   if (!authorisation.allowed) {
+    if (message.fromAddress) {
+      try {
+        await mailerService.sendUnauthorizedBuyerNotificationEmail(message.fromAddress, {
+          subject: message.subject,
+          gatewayAddress: config.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+        });
+      } catch (mailErr) {
+        logger.error('Failed to dispatch registration notification to unauthorized sender', mailErr, 'EMAIL_GATEWAY');
+      }
+    }
     return { status: INGESTION_OUTCOME.SENDER_NOT_ALLOWED, detail: authorisation.reason, message };
   }
 
@@ -264,16 +415,10 @@ async function processMessage(rawSource, config = resolveConfig()) {
     };
   }
 
-  const { draft, classification } = await rfqIngestionService.buildRFQDraft({
-    lineItems: extraction.lineItems,
-    title: extraction.documentTitle || message.subject,
-    category: extraction.category,
-    estimatedBudget: extraction.estimatedBudget,
-    source: 'email_gateway',
-    sourceEmail: message.fromAddress,
-  });
+  const buyerLocation = await emailGateway.resolveBuyerRegisteredLocation(authorisation.buyerAccount);
+  const groups = emailGateway.processLineItemsAndGroups(extraction.lineItems, extraction, buyerLocation);
 
-  if (classification.accepted === 0) {
+  if (groups.length === 0) {
     return {
       status: INGESTION_OUTCOME.NO_LINE_ITEMS,
       detail: EMAIL_GATEWAY_MESSAGES.NO_ITEMS_ACCEPTED,
@@ -281,39 +426,120 @@ async function processMessage(rawSource, config = resolveConfig()) {
     };
   }
 
-  const created = storeService.createRFQ(
-    {
-      title: draft.title,
-      category: draft.category,
-      sourcingMode: EMAIL_GATEWAY_CONFIG.INGESTED_SOURCING_MODE,
-      // Held for review rather than circulated. Nothing has checked this yet.
-      status: EMAIL_GATEWAY_CONFIG.INGESTED_STATUS,
+  // Enforce maximum 49 line items per RFQ
+  for (const group of groups) {
+    if (group.items.length > EMAIL_GATEWAY_CONFIG.MAX_LINE_ITEMS_PER_RFQ) {
+      const detail = EMAIL_GATEWAY_MESSAGES.LINE_ITEMS_EXCEED_LIMIT
+        .replace('{max}', String(EMAIL_GATEWAY_CONFIG.MAX_LINE_ITEMS_PER_RFQ))
+        .replace('{count}', String(group.items.length));
+      logger.warn(
+        `RFQ ingestion rejected: line items exceed limit of ${EMAIL_GATEWAY_CONFIG.MAX_LINE_ITEMS_PER_RFQ}`,
+        { count: group.items.length, max: EMAIL_GATEWAY_CONFIG.MAX_LINE_ITEMS_PER_RFQ },
+        'EMAIL_GATEWAY'
+      );
+      return {
+        status: INGESTION_OUTCOME.LINE_ITEMS_EXCEED_LIMIT,
+        detail,
+        message,
+      };
+    }
+  }
+
+  const createdRFQs = [];
+  let totalAccepted = 0;
+  let totalNeedsReview = 0;
+
+  for (const group of groups) {
+    const { draft, classification } = await rfqIngestionService.buildRFQDraft({
+      lineItems: group.items,
+      title: extraction.documentTitle || message.subject,
+      category: extraction.category,
+      estimatedBudget: extraction.estimatedBudget,
       source: 'email_gateway',
       sourceEmail: message.fromAddress,
-      sourceFileName: message.subject || EMAIL_GATEWAY_CONFIG.SYNTHETIC_FILE_NAME,
-      raisedByEmail: message.fromAddress,
-      budget: draft.estimatedBudget || 0,
-      targetDeliveryDate: draft.targetDeliveryDate,
-      extractedEntities: draft.extractedEntities,
-      attachments: [],
-    },
-    authorisation.buyerAccount
-  );
+      deliveryLocation: group.deliveryLocation,
+      deliveryCity: group.deliveryCity,
+      deliveryState: group.deliveryState,
+      deliveryPincode: group.deliveryPincode,
+      targetDeliveryDate: group.targetDate,
+    });
 
-  logger.audit(
-    `RFQ ${created.rfqNumber} raised from inbound email`,
-    message.fromAddress,
-    { rfqId: created.id, messageId: message.messageId, accepted: classification.accepted }
-  );
+    if (classification.accepted === 0) {
+      continue;
+    }
+
+    totalAccepted += classification.accepted;
+    totalNeedsReview += classification.needsReview;
+
+    const created = storeService.createRFQ(
+      {
+        title: draft.title,
+        category: draft.category,
+        sourcingMode: EMAIL_GATEWAY_CONFIG.INGESTED_SOURCING_MODE,
+        // Held for review rather than circulated. Nothing has checked this yet.
+        status: EMAIL_GATEWAY_CONFIG.INGESTED_STATUS,
+        source: 'email_gateway',
+        sourceEmail: message.fromAddress,
+        sourceFileName: message.subject || EMAIL_GATEWAY_CONFIG.SYNTHETIC_FILE_NAME,
+        raisedByEmail: message.fromAddress,
+        budget: draft.estimatedBudget || 0,
+        targetDeliveryDate: draft.targetDeliveryDate,
+        extractedEntities: draft.extractedEntities,
+        deliveryLocation: draft.deliveryLocation,
+        deliveryCity: draft.deliveryCity,
+        deliveryState: draft.deliveryState,
+        deliveryPincode: draft.deliveryPincode,
+        attachments: [],
+      },
+      authorisation.buyerAccount
+    );
+
+    createdRFQs.push(created);
+
+    // Dispatch RFQ creation acknowledgement email to the buyer
+    if (message.fromAddress) {
+      try {
+        const buyerName =
+          authorisation.buyerAccount?.contactPerson ||
+          authorisation.buyerAccount?.organizationName ||
+          message.fromName ||
+          'Valued Buyer';
+
+        await mailerService.sendRfqAcknowledgementEmail({
+          to: message.fromAddress,
+          buyerName,
+          rfqNumber: created.rfqNumber,
+          rfqTitle: created.title,
+        });
+      } catch (ackErr) {
+        logger.error('Failed to dispatch RFQ acknowledgement email to buyer', ackErr, 'EMAIL_GATEWAY');
+      }
+    }
+
+    logger.audit(
+      `RFQ ${created.rfqNumber} raised from inbound email`,
+      message.fromAddress,
+      { rfqId: created.id, messageId: message.messageId, accepted: classification.accepted }
+    );
+  }
+
+  if (createdRFQs.length === 0) {
+    return {
+      status: INGESTION_OUTCOME.NO_LINE_ITEMS,
+      detail: EMAIL_GATEWAY_MESSAGES.NO_ITEMS_ACCEPTED,
+      message,
+    };
+  }
 
   return {
     status: INGESTION_OUTCOME.INGESTED,
     detail: EMAIL_GATEWAY_MESSAGES.INGESTED_DETAIL.replace(
       '{count}',
-      String(classification.accepted)
-    ).replace('{needsReview}', String(classification.needsReview)),
+      String(totalAccepted)
+    ).replace('{needsReview}', String(totalNeedsReview)),
     message,
-    rfq: created,
+    rfq: createdRFQs[0],
+    rfqs: createdRFQs,
   };
 }
 
@@ -390,11 +616,12 @@ async function pollOnce(config = resolveConfig()) {
             continue;
           }
           messageId = fetched.envelope && fetched.envelope.messageId ? fetched.envelope.messageId : null;
+          const dedupeKey = messageId || `uid-${uid}@${config.mailbox}`;
 
           // Ours is the authoritative dedupe check; see emailGatewayQueries.
-          if (messageId && (await emailGatewayQueries.hasProcessed(messageId))) {
+          if (await emailGatewayQueries.hasProcessed(dedupeKey)) {
             await client.messageFlagsAdd(String(uid), ['\\Seen']);
-            outcomes.push({ uid, messageId, status: EMAIL_GATEWAY_MESSAGES.ALREADY_PROCESSED });
+            outcomes.push({ uid, messageId: dedupeKey, status: EMAIL_GATEWAY_MESSAGES.ALREADY_PROCESSED });
             continue;
           }
 
@@ -409,7 +636,12 @@ async function pollOnce(config = resolveConfig()) {
             fromAddress: result.message ? result.message.fromAddress : null,
             subject: result.message ? result.message.subject : null,
             rfqId: result.rfq ? result.rfq.id : null,
-            rfqNumber: result.rfq ? result.rfq.rfqNumber : null,
+            rfqNumber:
+              result.rfqs && result.rfqs.length > 1
+                ? result.rfqs.map((r) => r.rfqNumber).join(', ')
+                : result.rfq
+                ? result.rfq.rfqNumber
+                : null,
           });
 
           if (result.status === INGESTION_OUTCOME.INGESTED) {
@@ -566,6 +798,8 @@ const emailGateway = {
   describeConnectionError,
   resolveConnectionState,
   resolveSenderAuthorisation,
+  resolveBuyerRegisteredLocation,
+  processLineItemsAndGroups,
   processMessage,
   pollOnce,
   startPolling,
