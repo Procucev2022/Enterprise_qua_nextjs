@@ -281,6 +281,22 @@ describe('Store Service & Business Operations', () => {
       }
     });
 
+    test('imports rows with no email at all, tagging them missingEmail and never counting them as duplicates of each other', async () => {
+      const { results, importedCount, duplicateCount, missingEmailCount } = await storeService.bulkAddVendors([
+        row({ rowNumber: 1, email: undefined, name: 'No Email Co One' }),
+        row({ rowNumber: 2, email: undefined, name: 'No Email Co Two' }),
+      ]);
+
+      expect(importedCount).toBe(2);
+      expect(duplicateCount).toBe(0);
+      expect(missingEmailCount).toBe(2);
+      expect(results.every((r) => r.status === 'imported' && r.missingEmail === true)).toBe(true);
+
+      const imported = await storeService.getVendors();
+      expect(imported.find((v) => v.name === 'No Email Co One').email).toBeNull();
+      expect(imported.find((v) => v.name === 'No Email Co Two').email).toBeNull();
+    });
+
     test('imported vendors carry the source-tracking and default fields a bulk-Excel import implies', async () => {
       await storeService.bulkAddVendors([row({ rowNumber: 1, email: 'tagged@example.com' })]);
       const created = (await storeService.getVendors()).find((v) => v.email === 'tagged@example.com');

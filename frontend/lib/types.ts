@@ -901,6 +901,13 @@ export interface VendorUploadRow {
   };
   isValid: boolean;
   errors: string[];
+  /**
+   * True when the row has no email at all. Not treated as invalid — the row
+   * still uploads (email is nullable in Postgres, never fabricated) — but
+   * surfaced distinctly so a buyer/CM reviewing a large import can see and
+   * export exactly which rows need a manual follow-up.
+   */
+  missingEmail: boolean;
 }
 
 /** One row's outcome as reported back by POST /api/vendors/bulk-import. */
@@ -910,12 +917,17 @@ export interface VendorUploadRowResult {
   email?: string;
   errors?: string[];
   reason?: string;
+  missingEmail?: boolean;
 }
 
 /** Aggregate response from one bulk-import chunk request. */
 export interface VendorUploadImportResponse {
+  /** Ties every chunk of one upload run together — see bulkImportVendorRows. */
+  sessionId?: string;
   total: number;
   imported: number;
+  /** Successfully imported rows that carried no email. */
+  missingEmail: number;
   duplicates: number;
   failed: number;
   results: VendorUploadRowResult[];

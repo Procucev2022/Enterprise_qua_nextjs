@@ -552,7 +552,11 @@ function updateCategories(req, res, next) {
 // endpoint never holds a whole multi-thousand-row workbook in one request or
 // blocks on parsing it, and per-request size is bounded below regardless of
 // how many rows the source file actually has.
-const MAX_BULK_IMPORT_ROWS_PER_REQUEST = 1000;
+//
+// `bulkInsertVendorsInDB` is one batched multi-row INSERT per chunk, not one
+// query per row, so this cap exists to bound request/response payload size
+// and memory, not to bound database round trips.
+const MAX_BULK_IMPORT_ROWS_PER_REQUEST = 2000;
 
 async function bulkImportVendors(req, res, next) {
   try {
@@ -569,45 +573,99 @@ async function bulkImportVendors(req, res, next) {
       });
     }
 
+    // A multi-hundred-thousand-row upload is hundreds of sequential chunked
+    // requests from the browser. Without a server-side running total, a
+    // dropped tab/connection partway through has no way to report — or
+    // resume from — where it actually got to; each chunk's response only
+    // ever knew about itself. `sessionId` ties every chunk of one upload run
+    // together; absent on the first chunk, it is created here and returned
+    // for the client to reuse on every subsequent chunk.
+    let sessionId = typeof req.body.sessionId === 'string' ? req.body.sessionId : null;
+    let session = null;
+    if (sessionId) {
+      session = await domainQueries.getBulkImportSessionFromDB(sessionId);
+    }
+    if (!session) {
+      sessionId = `bulk-import-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const totalRowsDeclared = Number(req.body.totalRowsDeclared) || rows.length;
+      session = await domainQueries.createBulkImportSessionInDB(sessionId, req.user?.email || null, totalRowsDeclared);
+    }
+
     // Re-validated here even though the client already validated: a client
     // check is a UX convenience, never the actual authority — the same
     // principle already applied to every other write path in this app.
-    const validRows = [];
-    const results = [];
+    //
+    // A row that fails validation (bad email/phone/GSTIN/pincode format, or
+    // missing a normally-required field) is still imported — the marketplace
+    // scrape this feeds from routinely has incomplete real rows, and
+    // rejecting them outright would silently drop real data the same way
+    // fabricating a value would silently invent it. The row is tagged
+    // `hasIssues`/`issues` instead, so the CM can see exactly what's
+    // questionable about it without it being blocked or lost.
+    const rowsToImport = [];
     rows.forEach((row, idx) => {
       const rowNumber = row.rowNumber ?? idx + 1;
       const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.vendorBulkImportRow, row);
-      if (!isValid) {
-        results.push({ rowNumber, status: 'failed', email: row.email, errors: Object.values(errors) });
-        return;
-      }
-      validRows.push({ ...row, rowNumber });
+      rowsToImport.push({
+        ...row,
+        rowNumber,
+        hasIssues: !isValid,
+        issues: isValid ? [] : Object.values(errors),
+      });
     });
 
     logger.info(
-      `Bulk vendor import: ${rows.length} row(s) received, ${validRows.length} passed server validation`,
-      { total: rows.length, valid: validRows.length },
+      `Bulk vendor import: ${rows.length} row(s) received, all sent for import (issues flagged, not rejected)`,
+      { total: rows.length, sessionId },
       'VENDOR_CONTROLLER'
     );
 
-    const { results: importResults, importedCount, duplicateCount } =
-      validRows.length > 0 ? await storeService.bulkAddVendors(validRows) : { results: [], importedCount: 0, duplicateCount: 0 };
+    const { results: importResults, importedCount, duplicateCount, missingEmailCount } =
+      rowsToImport.length > 0
+        ? await storeService.bulkAddVendors(rowsToImport)
+        : { results: [], importedCount: 0, duplicateCount: 0, missingEmailCount: 0 };
 
-    const allResults = [...results, ...importResults].sort((a, b) => a.rowNumber - b.rowNumber);
-    const failedCount = allResults.filter((r) => r.status === 'failed').length;
+    const allResults = importResults.sort((a, b) => a.rowNumber - b.rowNumber);
+    const issuesCount = allResults.filter((r) => r.hasIssues).length;
+
+    const updatedSession = await domainQueries.incrementBulkImportSessionInDB(sessionId, {
+      processed: rows.length,
+      imported: importedCount,
+      missingEmail: missingEmailCount,
+      duplicate: duplicateCount,
+      invalid: issuesCount,
+    });
 
     res.json({
       success: true,
       data: {
+        sessionId,
         total: rows.length,
         imported: importedCount,
+        missingEmail: missingEmailCount,
         duplicates: duplicateCount,
-        failed: failedCount,
+        issues: issuesCount,
+        failed: 0,
         results: allResults,
+        session: updatedSession || session,
       },
     });
   } catch (err) {
     logger.error('Error bulk-importing vendors', err, 'VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
+async function getBulkImportSessionStatus(req, res, next) {
+  try {
+    if (!assertCategoryManagerRole(req, res)) return;
+    const session = await domainQueries.getBulkImportSessionFromDB(req.params.sessionId);
+    if (!session) {
+      return res.status(404).json({ success: false, error: 'Import session not found.' });
+    }
+    res.json({ success: true, data: session });
+  } catch (err) {
+    logger.error('Error fetching bulk-import session status', err, 'VENDOR_CONTROLLER');
     next(err);
   }
 }
@@ -626,4 +684,5 @@ module.exports = {
   getPaymentLinks,
   downloadInvoice,
   bulkImportVendors,
+  getBulkImportSessionStatus,
 };

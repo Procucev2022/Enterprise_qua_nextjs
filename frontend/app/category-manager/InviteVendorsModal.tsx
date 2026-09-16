@@ -324,6 +324,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                 <div className="space-y-1.5">
                   {visibleVendors.map((c) => {
                     const outsideCategory = tab === 'all' && !vendorCoversAnySignal(c, categorySignals);
+                    const missingEmail = !c.email;
                     return (
                       <label
                         key={c.id}
@@ -332,7 +333,9 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                             ? 'bg-slate-50 dark:bg-gray-800/40 border-slate-200 dark:border-gray-700/50 opacity-60 cursor-default'
                             : selected.has(c.id)
                             ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-300 dark:border-indigo-700'
-                            : 'bg-white dark:bg-gray-900 border-slate-200 dark:border-gray-800 hover:border-indigo-300'
+                            : missingEmail
+                            ? 'bg-rose-50/40 dark:bg-rose-950/20 border-rose-300 dark:border-rose-800'
+                            : 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-300 dark:border-emerald-800 hover:border-indigo-300'
                         }`}
                       >
                         <input

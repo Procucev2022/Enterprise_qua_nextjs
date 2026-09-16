@@ -473,24 +473,40 @@ class StoreService {
     const results = [];
     const toInsert = [];
 
-    for (const row of rows) {
+    rows.forEach((row, idx) => {
       const email = (row.email || '').toLowerCase();
-      if (existingEmails.has(email)) {
-        results.push({ rowNumber: row.rowNumber, status: 'duplicate', email: row.email, reason: 'A vendor with this email already exists.' });
-        continue;
+      // A row with no email can never collide on the vendors.email UNIQUE
+      // constraint (Postgres never treats two NULLs as equal), so it is
+      // never a duplicate — the checks below only apply to rows that
+      // actually carry an email.
+      if (email) {
+        if (existingEmails.has(email)) {
+          results.push({ rowNumber: row.rowNumber, status: 'duplicate', email: row.email, reason: 'A vendor with this email already exists.' });
+          return;
+        }
+        if (seenInBatch.has(email)) {
+          results.push({ rowNumber: row.rowNumber, status: 'duplicate', email: row.email, reason: 'Duplicate email within the uploaded file.' });
+          return;
+        }
+        seenInBatch.add(email);
       }
-      if (seenInBatch.has(email)) {
-        results.push({ rowNumber: row.rowNumber, status: 'duplicate', email: row.email, reason: 'Duplicate email within the uploaded file.' });
-        continue;
-      }
-      seenInBatch.add(email);
 
       const newVendor = {
-        id: `v-bulk-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        // Date.now() alone collides constantly at chunk sizes in the
+        // hundreds/thousands — many rows in the same forEach pass land in the
+        // same millisecond, and a 4-char random suffix alone has a real
+        // chance of repeating across a 1000-row batch (birthday paradox: at
+        // n=1000 rows against ~1.68M possible suffixes, roughly a 1-in-4
+        // chance per chunk). A collision hit vendors_pkey and failed the
+        // WHOLE batched INSERT for every row in that chunk, not just the
+        // colliding one. `idx` (this row's position in the batch) is unique
+        // within a single call by construction, so it's included directly
+        // rather than relying on chance.
+        id: `v-bulk-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
         name: row.name,
         contactPerson: row.contactPerson || '',
         phone: row.phone,
-        email: row.email,
+        email: row.email || null,
         majorCategory: row.majorCategory || 'Uncategorised',
         minorCategories: row.minorCategories || [],
         location: row.city || '',
@@ -510,9 +526,17 @@ class StoreService {
         isCategoryAligned: true,
         subscriptionPlan: 'premium',
         rfqDownloadsUsed: 0,
+        // Carried through from the request's server-side re-validation
+        // (see vendorController.bulkImportVendors) so a row that failed a
+        // format check (bad email/phone/GSTIN/pincode, or a normally-
+        // required field left blank) still lands as a real vendor record —
+        // just one the CM can see is questionable, not one that got
+        // silently dropped or had a value invented for it.
+        hasIssues: !!row.hasIssues,
+        issues: Array.isArray(row.issues) ? row.issues : [],
       };
       toInsert.push({ rowNumber: row.rowNumber, vendor: newVendor });
-    }
+    });
 
     let insertedEmails = [];
     if (toInsert.length > 0) {
@@ -521,10 +545,20 @@ class StoreService {
     const insertedEmailSet = new Set(insertedEmails.map((e) => (e || '').toLowerCase()));
 
     for (const { rowNumber, vendor } of toInsert) {
-      const persisted = insertedEmailSet.has(vendor.email.toLowerCase());
+      // A null-email row can never hit the ON CONFLICT (email) target, so it
+      // always inserts — there is nothing to look up in insertedEmailSet.
+      const persisted = !vendor.email || insertedEmailSet.has(vendor.email.toLowerCase());
       if (persisted) {
         this.vendors.unshift(vendor);
-        results.push({ rowNumber, status: 'imported', email: vendor.email, vendor });
+        results.push({
+          rowNumber,
+          status: 'imported',
+          email: vendor.email,
+          missingEmail: !vendor.email,
+          hasIssues: vendor.hasIssues,
+          issues: vendor.issues,
+          vendor,
+        });
 
         if (vendor.email) {
           const tempPassword = this._generateTempPassword();
@@ -568,15 +602,16 @@ class StoreService {
 
     const importedCount = results.filter((r) => r.status === 'imported').length;
     const duplicateCount = results.filter((r) => r.status === 'duplicate').length;
+    const missingEmailCount = results.filter((r) => r.status === 'imported' && r.missingEmail).length;
 
     if (importedCount > 0) {
       this.addAuditLog({
         userEmail: 'procurement@enterprise.com',
-        action: `Bulk-imported ${importedCount} vendor(s) via Excel upload (${duplicateCount} duplicate row(s) skipped)`,
+        action: `Bulk-imported ${importedCount} vendor(s) via Excel upload (${duplicateCount} duplicate row(s) skipped, ${missingEmailCount} missing an email)`,
       });
     }
 
-    return { results, importedCount, duplicateCount };
+    return { results, importedCount, duplicateCount, missingEmailCount };
   }
 
   updateVendor(id, updates) {

@@ -706,3 +706,29 @@ CREATE TABLE IF NOT EXISTS ai_classification_logs (
 CREATE INDEX IF NOT EXISTS idx_ai_classification_logs_session ON ai_classification_logs (session_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_classification_logs_vendor ON ai_classification_logs (vendor_record_id);
 CREATE INDEX IF NOT EXISTS idx_ai_classification_logs_status ON ai_classification_logs (status);
+
+-- ============================================================================
+-- CM BULK VENDOR IMPORT (Category Manager module)
+-- ============================================================================
+-- A single "upload the whole marketplace directory" run, potentially hundreds
+-- of thousands of rows sent up in many chunked HTTP requests from the
+-- browser. Without a persisted running total, a dropped tab/connection partway
+-- through has no way to report (or resume from) where it actually got to —
+-- every chunk response only knew about itself. One row per run; every chunk
+-- request increments its counters instead of the frontend guessing a total
+-- from its own request count.
+CREATE TABLE IF NOT EXISTS bulk_vendor_import_sessions (
+  id VARCHAR(64) PRIMARY KEY,
+  created_by_email VARCHAR(320),
+  -- IN_PROGRESS | COMPLETED
+  status VARCHAR(20) NOT NULL DEFAULT 'IN_PROGRESS',
+  total_rows_declared INTEGER NOT NULL DEFAULT 0,
+  processed_count INTEGER NOT NULL DEFAULT 0,
+  imported_count INTEGER NOT NULL DEFAULT 0,
+  missing_email_count INTEGER NOT NULL DEFAULT 0,
+  duplicate_count INTEGER NOT NULL DEFAULT 0,
+  invalid_count INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_bulk_vendor_import_sessions_status ON bulk_vendor_import_sessions (status);

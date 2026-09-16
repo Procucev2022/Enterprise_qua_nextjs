@@ -131,10 +131,10 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
       // Quote submission (Phase 6) always resolves vendorId server-side from
       // the authenticated vendor, so matching by id alone is reliable here —
       // no need to also match by name.
-      const rfqsList = rfqs.filter((r) => r.quotes.some((q) => q.vendorId === vendor.id));
+      const rfqsList = rfqs.filter((r) => (r.quotes || []).some((q) => q.vendorId === vendor.id));
 
       const myQuotes = rfqsList
-        .map((r) => r.quotes.find((q) => q.vendorId === vendor.id))
+        .map((r) => (r.quotes || []).find((q) => q.vendorId === vendor.id))
         .filter((q): q is NonNullable<typeof q> => !!q);
 
       const avgLeadTimeDays =
@@ -152,14 +152,14 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
         .filter((r) => r.status === 'PO Generated' && r.awardedVendor === vendor.name)
         .reduce((sum, r) => sum + (r.awardedAmount as number), 0);
 
-      const style = avatarStyleFor(vendor.name);
+      const style = avatarStyleFor(vendor.name || '?');
 
       return {
         id: vendor.id,
-        name: vendor.contactPerson || vendor.name,
+        name: vendor.contactPerson || vendor.name || 'Unnamed Vendor',
         email: vendor.email,
-        company: vendor.name,
-        logoLetter: vendor.name.charAt(0).toUpperCase(),
+        company: vendor.name || 'Unnamed Vendor',
+        logoLetter: (vendor.name || '?').charAt(0).toUpperCase(),
         logoBg: style.bg,
         avatarColor: style.avatar,
         category: vendor.majorCategory,
@@ -413,6 +413,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
             // Reflect the resolved panel state so the toggle label always matches
             // what is actually on screen, including dropdown-driven expansion.
             const isSelected = activeVendorId === v.id;
+            const missingEmail = !v.email;
 
             return (
               <div
@@ -420,7 +421,9 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                 className={`glass-panel p-5 rounded-2xl border-2 transition-all flex flex-col justify-between space-y-4 ${
                   isSelected
                     ? 'border-emerald-650 dark:border-emerald-500 bg-emerald-50/10 dark:bg-emerald-950/10 shadow-md'
-                    : 'border-slate-200 dark:border-gray-800 hover:border-slate-300 dark:hover:border-gray-700 bg-white dark:bg-gray-900/80 shadow-sm'
+                    : missingEmail
+                      ? 'border-rose-300 dark:border-rose-800 bg-rose-50/40 dark:bg-rose-950/20'
+                      : 'border-emerald-300 dark:border-emerald-800 bg-emerald-50/40 dark:bg-emerald-950/20'
                 }`}
               >
                 {/* Upper Block: Profile */}

@@ -134,6 +134,50 @@ async function bulkInsertVendorsInDB(vendors) {
   return result.rows.map((row) => row.email);
 }
 
+// ── Bulk vendor import sessions ─────────────────────────────────────────────
+
+async function createBulkImportSessionInDB(id, createdByEmail, totalRowsDeclared) {
+  if (!pool.pool) return null;
+  const result = await pool.query(
+    `INSERT INTO bulk_vendor_import_sessions (id, created_by_email, total_rows_declared)
+     VALUES ($1, $2, $3)
+     RETURNING id, status, total_rows_declared, processed_count, imported_count,
+               missing_email_count, duplicate_count, invalid_count`,
+    [id, createdByEmail, totalRowsDeclared || 0]
+  );
+  return result.rows[0] || null;
+}
+
+async function getBulkImportSessionFromDB(id) {
+  if (!pool.pool) return null;
+  const result = await pool.query(
+    `SELECT id, status, total_rows_declared, processed_count, imported_count,
+            missing_email_count, duplicate_count, invalid_count
+     FROM bulk_vendor_import_sessions WHERE id = $1`,
+    [id]
+  );
+  return result.rows[0] || null;
+}
+
+async function incrementBulkImportSessionInDB(id, delta) {
+  if (!pool.pool) return null;
+  const result = await pool.query(
+    `UPDATE bulk_vendor_import_sessions SET
+       processed_count = processed_count + $2,
+       imported_count = imported_count + $3,
+       missing_email_count = missing_email_count + $4,
+       duplicate_count = duplicate_count + $5,
+       invalid_count = invalid_count + $6,
+       status = CASE WHEN processed_count + $2 >= total_rows_declared THEN 'COMPLETED' ELSE status END,
+       updated_at = now()
+     WHERE id = $1
+     RETURNING id, status, total_rows_declared, processed_count, imported_count,
+               missing_email_count, duplicate_count, invalid_count`,
+    [id, delta.processed || 0, delta.imported || 0, delta.missingEmail || 0, delta.duplicate || 0, delta.invalid || 0]
+  );
+  return result.rows[0] || null;
+}
+
 // ── RFQs ─────────────────────────────────────────────────────────────────────
 
 async function getRFQsFromDB() {
@@ -464,6 +508,9 @@ module.exports = {
   getVendorsFromDB,
   getVendorsPageFromDB,
   getVendorByEmailFromDB,
+  createBulkImportSessionInDB,
+  getBulkImportSessionFromDB,
+  incrementBulkImportSessionInDB,
   upsertVendorInDB,
   deleteVendorInDB,
   bulkInsertVendorsInDB,

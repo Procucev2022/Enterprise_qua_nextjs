@@ -34,6 +34,12 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       await expect(domainQueries.bulkInsertVendorsInDB([{ id: 'v-1', email: 'a@x.com' }])).resolves.toEqual([]);
     });
 
+    test('createBulkImportSessionInDB / getBulkImportSessionFromDB / incrementBulkImportSessionInDB all return null', async () => {
+      await expect(domainQueries.createBulkImportSessionInDB('s-1', 'cm@x.com', 100)).resolves.toBeNull();
+      await expect(domainQueries.getBulkImportSessionFromDB('s-1')).resolves.toBeNull();
+      await expect(domainQueries.incrementBulkImportSessionInDB('s-1', { processed: 1 })).resolves.toBeNull();
+    });
+
     test('getRFQsFromDB returns an empty array', async () => {
       await expect(domainQueries.getRFQsFromDB()).resolves.toEqual([]);
     });
@@ -284,6 +290,53 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
         'v-1', 'a@x.com', 'Mechanical', 'REGISTERED / NOT EVALUATED', 'excel', JSON.stringify(v1),
         'v-2', 'b@x.com', null, null, null, JSON.stringify(v2),
       ]);
+    });
+
+    test('createBulkImportSessionInDB inserts a new session row and returns it', async () => {
+      const sessionRow = { id: 's-1', status: 'IN_PROGRESS', total_rows_declared: 500 };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [sessionRow] }) };
+
+      const result = await domainQueries.createBulkImportSessionInDB('s-1', 'cm@x.com', 500);
+
+      expect(result).toEqual(sessionRow);
+      const [sql, params] = pool.pool.query.mock.calls[0];
+      expect(sql).toContain('INSERT INTO bulk_vendor_import_sessions');
+      expect(params).toEqual(['s-1', 'cm@x.com', 500]);
+    });
+
+    test('createBulkImportSessionInDB defaults totalRowsDeclared to 0 when omitted', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{}] }) };
+      await domainQueries.createBulkImportSessionInDB('s-1', 'cm@x.com', undefined);
+      expect(pool.pool.query.mock.calls[0][1]).toEqual(['s-1', 'cm@x.com', 0]);
+    });
+
+    test('getBulkImportSessionFromDB returns null when no row matches', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      await expect(domainQueries.getBulkImportSessionFromDB('missing')).resolves.toBeNull();
+    });
+
+    test('getBulkImportSessionFromDB returns the matching row', async () => {
+      const sessionRow = { id: 's-1', status: 'IN_PROGRESS' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [sessionRow] }) };
+      await expect(domainQueries.getBulkImportSessionFromDB('s-1')).resolves.toEqual(sessionRow);
+      expect(pool.pool.query.mock.calls[0][1]).toEqual(['s-1']);
+    });
+
+    test('incrementBulkImportSessionInDB adds every delta field, defaulting missing ones to 0', async () => {
+      const updated = { id: 's-1', status: 'IN_PROGRESS', processed_count: 10 };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [updated] }) };
+
+      const result = await domainQueries.incrementBulkImportSessionInDB('s-1', { processed: 10, imported: 8 });
+
+      expect(result).toEqual(updated);
+      const [sql, params] = pool.pool.query.mock.calls[0];
+      expect(sql).toContain('UPDATE bulk_vendor_import_sessions');
+      expect(params).toEqual(['s-1', 10, 8, 0, 0, 0]);
+    });
+
+    test('incrementBulkImportSessionInDB returns null when the session id does not exist', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      await expect(domainQueries.incrementBulkImportSessionInDB('missing', {})).resolves.toBeNull();
     });
   });
 
