@@ -684,7 +684,7 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     const originalPool = domainPool.pool;
     domainPool.pool = null;
 
-    const before = storeService.getVendors().length;
+    const before = (await storeService.getVendors()).length;
     const res = mockRes();
     await vendorController.bulkImportVendors(
       {
@@ -700,8 +700,8 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     expect(res.json).not.toHaveBeenCalled();
     expect(next).toHaveBeenCalled();
     expect(next.mock.calls[0][0]).toMatchObject({ statusCode: 500 });
-    expect(storeService.getVendors().some((v) => v.email === 'no-db-pool@example.com')).toBe(false);
-    expect(storeService.getVendors().length).toBe(before);
+    expect((await storeService.getVendors()).some((v) => v.email === 'no-db-pool@example.com')).toBe(false);
+    expect((await storeService.getVendors()).length).toBe(before);
   });
 });
 
@@ -794,7 +794,7 @@ describe('rfqController scope and fallback branches', () => {
   test('generateEmailPreview resolves a named vendor', async () => {
     const res = mockRes();
     const storeSvc = require('../src/services/storeService');
-    const vendor = storeSvc.getVendors()[0];
+    const vendor = (await storeSvc.getVendors())[0];
 
     await rfqController.generateEmailPreview(
       scopedReq({ params: { id: seededRfq.id }, query: { vendorId: vendor.id } }),

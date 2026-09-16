@@ -148,6 +148,41 @@ class StoreService {
     domainQueries.upsertVendorInDB(vendor).catch((err) => logger.error('Failed to persist vendor', err, 'STORE_SERVICE'));
   }
 
+  /**
+   * Awaits real Postgres confirmation for a just-created vendor, specifically
+   * to surface a duplicate-email conflict (`vendors.email` is UNIQUE) that
+   * `addVendor`'s normal fire-and-forget `_persistVendor` swallows into a log
+   * line — the caller previously got a 201 for a vendor whose insert then
+   * silently failed. On a real conflict, the in-memory row is rolled back so
+   * the API's response matches what Postgres actually holds, and there is no
+   * audit-log entry (unlike deleteVendor — this vendor was never really
+   * "added" as far as the durable record is concerned).
+   *
+   * No-ops when no DB pool is configured, matching every other query in
+   * domainQueries.js — nothing to confirm against.
+   */
+  async confirmVendorPersisted(vendor) {
+    if (!pool.pool) return { persisted: null };
+    try {
+      await domainQueries.upsertVendorInDB(vendor);
+      return { persisted: true };
+    } catch (err) {
+      if (err && err.code === '23505') {
+        this.vendors = this.vendors.filter((v) => v.id !== vendor.id);
+        const conflictErr = new Error(`A vendor with the email ${vendor.email} already exists.`);
+        conflictErr.statusCode = 409;
+        throw conflictErr;
+      }
+      // Any other DB failure: leave the in-memory row in place (matches the
+      // existing fire-and-forget behavior elsewhere) but surface it instead
+      // of reporting false success.
+      logger.error('Failed to persist vendor', err, 'STORE_SERVICE');
+      const persistErr = new Error('The vendor was not saved. Try again.');
+      persistErr.statusCode = 500;
+      throw persistErr;
+    }
+  }
+
   _removeVendor(id) {
     domainQueries.deleteVendorInDB(id).catch((err) => logger.error('Failed to delete persisted vendor', err, 'STORE_SERVICE'));
   }
@@ -312,7 +347,21 @@ class StoreService {
   // ==========================================
   // 2. VENDORS
   // ==========================================
-  getVendors(scopedBuyerId = null) {
+  /**
+   * Re-syncs `this.vendors` from Neon before reading. A vendor row written by
+   * a different process instance (another backend deploy, or a bulk import
+   * that ran against a process other than the one serving this request)
+   * would otherwise be invisible forever — the in-memory cache only reflects
+   * what this specific process happened to load at boot or write itself.
+   * Same pattern as getPaymentLinksForVendor/getPaymentLinksForBuyer.
+   */
+  async getVendors(scopedBuyerId = null) {
+    if (pool.pool) {
+      const allFromDB = await domainQueries.getVendorsFromDB();
+      const byId = new Map(this.vendors.map((v) => [v.id, v]));
+      for (const vendor of allFromDB) byId.set(vendor.id, vendor);
+      this.vendors = Array.from(byId.values());
+    }
     if (scopedBuyerId === 'all') {
       return this.vendors;
     }
@@ -1652,9 +1701,17 @@ class StoreService {
    * supplier, so it is skipped and counted, and the caller is told how many were
    * rejected and why.
    */
-  processHistoricalPurchaseData(period, vendorRecords = [], requestingBuyerAccount = null) {
+  async processHistoricalPurchaseData(period, vendorRecords = [], requestingBuyerAccount = null) {
     let importedCount = 0;
     const skipped = [];
+    // Every genuinely-new vendor pushed into `this.vendors` this run — awaited
+    // against Postgres below before the response goes out, since `vendors.email`
+    // is UNIQUE and this ingestion never checked for a collision outside the
+    // requesting buyer's own scope. A colliding email used to insert cleanly
+    // into memory while the real Postgres write silently failed in the
+    // background, so the buyer saw "imported" for a supplier that was never
+    // actually persisted.
+    const createdThisRun = [];
     const attributedAccount = requestingBuyerAccount || this.activeBuyerAccount;
     const buyerId = attributedAccount ? attributedAccount.id : null;
     const buyerEmail = attributedAccount ? attributedAccount.corporateEmail : null;
@@ -1737,6 +1794,7 @@ class StoreService {
       };
       this.vendors.push(newVendor);
       this._persistVendor(newVendor);
+      createdThisRun.push({ row: idx + 1, vendor: newVendor });
       importedCount++;
 
       // Create identity database account for the vendor so they can log in
@@ -1785,6 +1843,25 @@ class StoreService {
           });
       }
     });
+
+    // Confirm each new vendor actually landed in Postgres before reporting
+    // success for it — a row whose email collided with one from a different
+    // buyer (or the marketplace directory) is rolled back here instead of
+    // staying an in-memory-only phantom.
+    for (const { row, vendor } of createdThisRun) {
+      try {
+        await this.confirmVendorPersisted(vendor);
+      } catch (err) {
+        this.vendors = this.vendors.filter((v) => v.id !== vendor.id);
+        importedCount--;
+        skipped.push({
+          row,
+          reason: err && err.statusCode === 409
+            ? `A vendor with the email ${vendor.email} already exists.`
+            : 'Could not be saved — try again.',
+        });
+      }
+    }
 
     // Attributed to the requesting buyer's own account when the controller
     // resolved one from the session (same convention as createRFQ).
@@ -2093,12 +2170,62 @@ class StoreService {
    * and returning global arrays from it leaks one buyer's data onto another buyer's
    * dashboard. RFQs are fetched from GET /api/rfqs and follow-up alerts from
    * GET /api/ai-feed, which are both authenticated and org-scoped.
+   *
+   * `vendors` is capped: the real marketplace vendor directory reached 80k+
+   * rows (a bulk Vendor Master import), and shipping all of them on every
+   * single page load — anonymous or not — crashed the browser tab. Real
+   * per-vendor lookups (GET /api/vendors, the paginated "All Vendors" invite
+   * flow) are unaffected; only this anonymous startup payload is capped.
+   * `sessionEmail`, when given, guarantees the caller's own vendor record is
+   * present even if it falls outside the cap, since several screens resolve
+   * "my own vendor" purely from this list (billing, opportunity feed).
    */
-  getBootstrapData(scopedBuyerId = null) {
+  async getBootstrapData(scopedBuyerId = null, sessionEmail = null) {
+    const MAX_BOOTSTRAP_VENDORS = 500;
+    let vendors;
+    let vendorsTotal;
+
+    // The common case (no buyer scoping — anonymous, vendor, CM, or admin
+    // bootstrap) is answered straight from Postgres with LIMIT, the same way
+    // the paginated vendors endpoint is: this used to call this.getVendors(),
+    // which re-syncs (fetches + re-serializes) every row in the table on
+    // every call. At 500 vendors that was unnoticeable; once the table
+    // reached 80k+ (a bulk Vendor Master import), it meant every single page
+    // load / login / refreshFromDB() call across the whole app re-fetched
+    // the entire vendor table just to keep the first 500 — the same
+    // performance disaster the CM's "Load more" pagination hit, just
+    // triggered by something as ordinary as loading the app.
+    if (!scopedBuyerId && pool.pool) {
+      const page = await domainQueries.getVendorsPageFromDB({ limit: MAX_BOOTSTRAP_VENDORS, offset: 0, publicOnly: true });
+      vendors = page.rows;
+      vendorsTotal = page.total;
+      if (sessionEmail) {
+        const email = String(sessionEmail).toLowerCase();
+        if (!vendors.some((v) => (v.email || '').toLowerCase() === email)) {
+          const own = await domainQueries.getVendorByEmailFromDB(email);
+          if (own) vendors = [own, ...vendors];
+        }
+      }
+    } else {
+      // Buyer-scoped (their own vendors) or no DB configured: a small enough
+      // set that the full in-memory path is fine.
+      const allVendors = await this.getVendors(scopedBuyerId);
+      vendors = allVendors.slice(0, MAX_BOOTSTRAP_VENDORS);
+      vendorsTotal = allVendors.length;
+      if (sessionEmail) {
+        const email = String(sessionEmail).toLowerCase();
+        if (!vendors.some((v) => (v.email || '').toLowerCase() === email)) {
+          const own = allVendors.find((v) => (v.email || '').toLowerCase() === email);
+          if (own) vendors = [own, ...vendors];
+        }
+      }
+    }
+
     return {
       buyerAccounts: this.buyerAccounts,
       activeBuyerAccount: this.activeBuyerAccount,
-      vendors: this.getVendors(scopedBuyerId),
+      vendors,
+      vendorsTotal,
       evaluations: this.evaluations,
       auditLogs: this.auditLogs,
       aiFeed: [],

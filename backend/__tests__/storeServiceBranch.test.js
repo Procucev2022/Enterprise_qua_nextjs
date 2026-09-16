@@ -1,7 +1,7 @@
 const storeService = require('../src/services/storeService');
 
 describe('Store Service Deep Branch & Fallback Tests', () => {
-  test('All store getter and setter edge cases', () => {
+  test('All store getter and setter edge cases', async () => {
     // 1. Buyer Accounts. Not seeded any more; the signed-in buyer's account comes
     // from the identity schema, so this holds only runtime-created accounts.
     expect(storeService.getBuyerAccounts()).toEqual([]);
@@ -32,14 +32,14 @@ describe('Store Service Deep Branch & Fallback Tests', () => {
 
     // 2. Vendors. Not seeded either — the roster is whatever has actually been
     // registered, so one is created here before the getters are exercised.
-    expect(storeService.getVendors()).toEqual([]);
+    expect(await storeService.getVendors()).toEqual([]);
     storeService.addVendor({
       name: 'Branch Coverage Supplier',
       email: 'branch@coverage.test',
       majorCategory: 'Engineering Spares - Mechanical',
     });
-    expect(storeService.getVendors().length).toBeGreaterThan(0);
-    const vendor = storeService.getVendors()[0];
+    expect((await storeService.getVendors()).length).toBeGreaterThan(0);
+    const vendor = (await storeService.getVendors())[0];
     expect(storeService.getVendorById(vendor.id)).toBeDefined();
     expect(storeService.getVendorById('invalid-vendor')).toBeUndefined();
 
@@ -129,7 +129,7 @@ describe('Store Service Deep Branch & Fallback Tests', () => {
     expect(storeService.getAzureHealth()).toBeDefined();
 
     // 8. Historical Data
-    const histRes = storeService.processHistoricalPurchaseData('1_year', [{ companyName: 'Vendor Hist', email: 'hist@v.com' }]);
+    const histRes = await storeService.processHistoricalPurchaseData('1_year', [{ companyName: 'Vendor Hist', email: 'hist@v.com' }]);
     expect(histRes.importedCount).toBe(1);
 
     // 9. Support Chat
@@ -167,7 +167,7 @@ describe('Store Service Deep Branch & Fallback Tests', () => {
     expect(storeService.triggerBatchChaser('invalid-rfq')).toBeNull();
 
     // 12. Bootstrap Data
-    const bootstrap = storeService.getBootstrapData();
+    const bootstrap = await storeService.getBootstrapData();
     expect(bootstrap.buyerAccounts).toBeDefined();
     expect(bootstrap.vendors).toBeDefined();
     // RFQs are not in this anonymous payload any more; they come from the

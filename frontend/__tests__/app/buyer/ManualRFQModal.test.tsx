@@ -292,7 +292,8 @@ describe('ManualRFQModal: validation', () => {
     expect(screen.getByText(MANUAL.itemNameRequired)).toBeInTheDocument();
     expect(screen.getByText(MANUAL.quantityRequired)).toBeInTheDocument();
     expect(screen.getByText(MANUAL.unitRequired)).toBeInTheDocument();
-    expect(screen.getByText(MANUAL.majorCategoryRequired)).toBeInTheDocument();
+    // Category is optional now — no error shown for a blank major/minor category.
+    expect(screen.queryByText(MANUAL.majorCategoryRequired)).not.toBeInTheDocument();
     expect(screen.getByText(MANUAL.deliveryLocationRequired)).toBeInTheDocument();
     expect(screen.getByText(MANUAL.deliveryPincodeRequired)).toBeInTheDocument();
   });

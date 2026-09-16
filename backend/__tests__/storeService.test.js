@@ -4,12 +4,12 @@ const domainQueries = require('../src/db/domainQueries');
 const mailerService = require('../src/services/mailerService');
 
 describe('Store Service & Business Operations', () => {
-  test('initializes with no records at all', () => {
+  test('initializes with no records at all', async () => {
     // Nothing is seeded. Every collection is filled from PostgreSQL by
     // hydrateFromDB, and an empty one means there are no rows — it is not a cue
     // to substitute fabricated vendors, evaluations or catalogue products, which
     // is what the constructor used to do.
-    expect(storeService.getVendors()).toEqual([]);
+    expect(await storeService.getVendors()).toEqual([]);
     expect(storeService.getEvaluations()).toEqual([]);
     expect(storeService.getVendorCatalogue()).toEqual([]);
     // Buyer accounts are not seeded either: the signed-in buyer's account is
@@ -19,7 +19,7 @@ describe('Store Service & Business Operations', () => {
     expect(storeService.getActiveBuyerAccount()).toBeNull();
     expect(storeService.getRFQs()).toEqual([]);
     expect(storeService.getAuditLogs()).toEqual([]);
-    expect(storeService.getBootstrapData()).not.toHaveProperty('rfqs');
+    expect(await storeService.getBootstrapData()).not.toHaveProperty('rfqs');
     // System config and the infrastructure list are static defaults, not records.
     expect(storeService.getAzureHealth().length).toBeGreaterThan(0);
     expect(storeService.getSystemConfig()).toBeTruthy();
@@ -112,6 +112,59 @@ describe('Store Service & Business Operations', () => {
     });
   });
 
+  describe('confirmVendorPersisted (surfaces a Postgres write failure that addVendor itself does not)', () => {
+    test('no-ops when no DB pool is configured', async () => {
+      const vendor = storeService.addVendor({ name: 'No Pool Vendor', email: 'no-pool-confirm@example.com', majorCategory: 'Fasteners' });
+      await expect(storeService.confirmVendorPersisted(vendor)).resolves.toEqual({ persisted: null });
+    });
+
+    test('rolls back the in-memory vendor and throws a 409 on a real duplicate-email conflict', async () => {
+      const vendor = storeService.addVendor({ name: 'Conflict Vendor', email: 'conflict-confirm@example.com', majorCategory: 'Fasteners' });
+      const originalPool = domainPool.pool;
+      domainPool.pool = { query: jest.fn() };
+      const conflictErr = new Error('duplicate key value violates unique constraint "vendors_email_key"');
+      conflictErr.code = '23505';
+      const spy = jest.spyOn(domainQueries, 'upsertVendorInDB').mockRejectedValue(conflictErr);
+
+      try {
+        await expect(storeService.confirmVendorPersisted(vendor)).rejects.toMatchObject({ statusCode: 409 });
+        expect(storeService.getVendorById(vendor.id, 'all')).toBeUndefined();
+      } finally {
+        domainPool.pool = originalPool;
+        spy.mockRestore();
+      }
+    });
+
+    test('leaves the in-memory vendor in place and throws a 500 on an unrelated DB failure', async () => {
+      const vendor = storeService.addVendor({ name: 'DB Down Vendor', email: 'db-down-confirm@example.com', majorCategory: 'Fasteners' });
+      const originalPool = domainPool.pool;
+      domainPool.pool = { query: jest.fn() };
+      const spy = jest.spyOn(domainQueries, 'upsertVendorInDB').mockRejectedValue(new Error('ECONNREFUSED'));
+
+      try {
+        await expect(storeService.confirmVendorPersisted(vendor)).rejects.toMatchObject({ statusCode: 500 });
+        expect(storeService.getVendorById(vendor.id, 'all')).toBeDefined();
+      } finally {
+        domainPool.pool = originalPool;
+        spy.mockRestore();
+      }
+    });
+
+    test('resolves persisted:true when the write actually succeeds', async () => {
+      const vendor = storeService.addVendor({ name: 'Real Write Vendor', email: 'real-write-confirm@example.com', majorCategory: 'Fasteners' });
+      const originalPool = domainPool.pool;
+      domainPool.pool = { query: jest.fn() };
+      const spy = jest.spyOn(domainQueries, 'upsertVendorInDB').mockResolvedValue(vendor);
+
+      try {
+        await expect(storeService.confirmVendorPersisted(vendor)).resolves.toEqual({ persisted: true });
+      } finally {
+        domainPool.pool = originalPool;
+        spy.mockRestore();
+      }
+    });
+  });
+
   describe('Bulk Vendor Import', () => {
     function row(overrides = {}) {
       return {
@@ -141,6 +194,10 @@ describe('Store Service & Business Operations', () => {
       jest.spyOn(domainQueries, 'bulkInsertVendorsInDB').mockImplementation(async (vendors) =>
         vendors.map((v) => v.email)
       );
+      // getVendors() re-syncs from Neon whenever a pool is configured; mocked
+      // to resolve empty so it's a no-op against the in-memory store these
+      // tests are actually exercising.
+      jest.spyOn(domainQueries, 'getVendorsFromDB').mockResolvedValue([]);
     });
     afterEach(() => {
       domainPool.pool = originalPool;
@@ -152,11 +209,11 @@ describe('Store Service & Business Operations', () => {
       await expect(storeService.bulkAddVendors([row({ rowNumber: 1, email: 'no-db@example.com' })])).rejects.toMatchObject({
         statusCode: 500,
       });
-      expect(storeService.getVendors().some((v) => v.email === 'no-db@example.com')).toBe(false);
+      expect((await storeService.getVendors()).some((v) => v.email === 'no-db@example.com')).toBe(false);
     });
 
     test('imports valid, distinct rows and reflects them in getVendors', async () => {
-      const before = storeService.getVendors().length;
+      const before = (await storeService.getVendors()).length;
       const { results, importedCount, duplicateCount } = await storeService.bulkAddVendors([
         row({ rowNumber: 1, email: 'bulk-a@example.com' }),
         row({ rowNumber: 2, email: 'bulk-b@example.com', name: '3S Industries' }),
@@ -165,8 +222,8 @@ describe('Store Service & Business Operations', () => {
       expect(importedCount).toBe(2);
       expect(duplicateCount).toBe(0);
       expect(results.every((r) => r.status === 'imported')).toBe(true);
-      expect(storeService.getVendors().length).toBe(before + 2);
-      expect(storeService.getVendors().some((v) => v.email === 'bulk-a@example.com')).toBe(true);
+      expect((await storeService.getVendors()).length).toBe(before + 2);
+      expect((await storeService.getVendors()).some((v) => v.email === 'bulk-a@example.com')).toBe(true);
     });
 
     test('flags a row whose email already exists in the store as a duplicate, without re-importing it', async () => {
@@ -180,7 +237,7 @@ describe('Store Service & Business Operations', () => {
       expect(duplicateCount).toBe(1);
       expect(results[0]).toMatchObject({ rowNumber: 5, status: 'duplicate' });
       // Not a second vendor row for the same email.
-      expect(storeService.getVendors().filter((v) => v.email === existing.email)).toHaveLength(1);
+      expect((await storeService.getVendors()).filter((v) => v.email === existing.email)).toHaveLength(1);
     });
 
     test('flags the second occurrence of the same email within one upload as a duplicate, keeping only the first', async () => {
@@ -196,12 +253,12 @@ describe('Store Service & Business Operations', () => {
     });
 
     test('an empty batch imports nothing without touching the store', async () => {
-      const before = storeService.getVendors().length;
+      const before = (await storeService.getVendors()).length;
       const { results, importedCount, duplicateCount } = await storeService.bulkAddVendors([]);
       expect(results).toEqual([]);
       expect(importedCount).toBe(0);
       expect(duplicateCount).toBe(0);
-      expect(storeService.getVendors().length).toBe(before);
+      expect((await storeService.getVendors()).length).toBe(before);
     });
 
     test('when a DB pool is configured, a row the bulk INSERT silently skipped (a race-condition duplicate) is reported as duplicate, not imported', async () => {
@@ -217,7 +274,7 @@ describe('Store Service & Business Operations', () => {
         expect(importedCount).toBe(0);
         expect(duplicateCount).toBe(1);
         expect(results[0]).toMatchObject({ rowNumber: 9, status: 'duplicate', email: 'raced-out@example.com' });
-        expect(storeService.getVendors().some((v) => v.email === 'raced-out@example.com')).toBe(false);
+        expect((await storeService.getVendors()).some((v) => v.email === 'raced-out@example.com')).toBe(false);
       } finally {
         domainPool.pool = originalPool;
         spy.mockRestore();
@@ -226,7 +283,7 @@ describe('Store Service & Business Operations', () => {
 
     test('imported vendors carry the source-tracking and default fields a bulk-Excel import implies', async () => {
       await storeService.bulkAddVendors([row({ rowNumber: 1, email: 'tagged@example.com' })]);
-      const created = storeService.getVendors().find((v) => v.email === 'tagged@example.com');
+      const created = (await storeService.getVendors()).find((v) => v.email === 'tagged@example.com');
       expect(created).toMatchObject({
         source: 'excel',
         status: 'REGISTERED / NOT EVALUATED',
@@ -378,13 +435,13 @@ describe('Store Service & Business Operations', () => {
       expect(storeService.getBuyerAccountByEmail(undefined)).toBeNull();
     });
 
-    test('processHistoricalPurchaseData attributes its audit log to the requesting buyer account, not the global active one', () => {
+    test('processHistoricalPurchaseData attributes its audit log to the requesting buyer account, not the global active one', async () => {
       const requestingBuyerAccount = storeService.addBuyerAccount({
         organizationName: 'Historical Ingest Test Co',
         corporateEmail: 'historical-ingest@example.com',
       });
 
-      storeService.processHistoricalPurchaseData(
+      await storeService.processHistoricalPurchaseData(
         '1_year',
         [{ companyName: 'Some Vendor', email: 'vendor@some.co' }],
         requestingBuyerAccount
@@ -392,6 +449,87 @@ describe('Store Service & Business Operations', () => {
 
       const lastLog = storeService.getAuditLogs()[0];
       expect(lastLog.userEmail).toBe('historical-ingest@example.com');
+    });
+
+    test('processHistoricalPurchaseData rolls back a row whose Postgres write collides with an existing email (409) and reports it as skipped', async () => {
+      const requestingBuyerAccount = storeService.addBuyerAccount({
+        organizationName: 'Rollback Ingest Test Co',
+        corporateEmail: 'rollback-ingest@example.com',
+      });
+      const originalPool = domainPool.pool;
+      domainPool.pool = { query: jest.fn() };
+      const conflictErr = new Error('duplicate key value violates unique constraint "vendors_email_key"');
+      conflictErr.code = '23505';
+      const spy = jest.spyOn(domainQueries, 'upsertVendorInDB').mockRejectedValue(conflictErr);
+
+      try {
+        const res = await storeService.processHistoricalPurchaseData(
+          '1_year',
+          [{ companyName: 'Colliding Hist Co', email: 'colliding-hist@example.com' }],
+          requestingBuyerAccount
+        );
+        expect(res.importedCount).toBe(0);
+        expect(res.skippedCount).toBe(1);
+        expect(res.skipped[0].reason).toBe('A vendor with the email colliding-hist@example.com already exists.');
+        expect(storeService.vendors.some((v) => v.email === 'colliding-hist@example.com')).toBe(false);
+      } finally {
+        domainPool.pool = originalPool;
+        spy.mockRestore();
+      }
+    });
+
+    test('processHistoricalPurchaseData rolls back a row on an unrelated DB failure (500) and reports it as skipped', async () => {
+      const requestingBuyerAccount = storeService.addBuyerAccount({
+        organizationName: 'DB Down Ingest Test Co',
+        corporateEmail: 'db-down-ingest@example.com',
+      });
+      const originalPool = domainPool.pool;
+      domainPool.pool = { query: jest.fn() };
+      const spy = jest.spyOn(domainQueries, 'upsertVendorInDB').mockRejectedValue(new Error('ECONNREFUSED'));
+
+      try {
+        const res = await storeService.processHistoricalPurchaseData(
+          '1_year',
+          [{ companyName: 'DB Down Hist Co', email: 'db-down-hist@example.com' }],
+          requestingBuyerAccount
+        );
+        expect(res.importedCount).toBe(0);
+        expect(res.skippedCount).toBe(1);
+        expect(res.skipped[0].reason).toBe('Could not be saved — try again.');
+        expect(storeService.vendors.some((v) => v.email === 'db-down-hist@example.com')).toBe(false);
+      } finally {
+        domainPool.pool = originalPool;
+        spy.mockRestore();
+      }
+    });
+
+    test('processHistoricalPurchaseData sends an onboarding reminder for a row that already exists within the same buyer scope', async () => {
+      const requestingBuyerAccount = storeService.addBuyerAccount({
+        organizationName: 'Repeat Ingest Test Co',
+        corporateEmail: 'repeat-ingest@example.com',
+      });
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
+
+      try {
+        const first = await storeService.processHistoricalPurchaseData(
+          '1_year',
+          [{ companyName: 'Repeat Vendor Co', email: 'repeat-vendor@example.com' }],
+          requestingBuyerAccount
+        );
+        expect(first.importedCount).toBe(1);
+
+        const second = await storeService.processHistoricalPurchaseData(
+          '1_year',
+          [{ companyName: 'Repeat Vendor Co', email: 'repeat-vendor@example.com' }],
+          requestingBuyerAccount
+        );
+        expect(second.importedCount).toBe(0);
+        expect(second.skippedCount).toBe(0);
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(sendSpy).toHaveBeenCalled();
+      } finally {
+        sendSpy.mockRestore();
+      }
     });
 
     test('updateRFQ & addQuoteToRFQ', () => {
@@ -653,6 +791,13 @@ describe('Store Service & Business Operations', () => {
       inviteEmailSpy = jest
         .spyOn(mailerService, 'sendRfqInviteEmail')
         .mockResolvedValue({ sent: false, reason: 'test environment' });
+      // getVendors() re-syncs from Neon whenever a pool is configured; guard
+      // against any pool.pool state leaked from another test in this file.
+      jest.spyOn(domainQueries, 'getVendorsFromDB').mockResolvedValue([]);
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
     });
 
     afterEach(() => {
@@ -1261,7 +1406,100 @@ describe('demo RFQ seeding', () => {
   // RFQs are no longer in the bootstrap payload at all. That endpoint is
   // anonymous, and shipping the global RFQ array from it is what put one
   // buyer's RFQs on another buyer's dashboard.
-  test('the bootstrap payload carries no RFQs', () => {
-    expect(storeService.getBootstrapData()).not.toHaveProperty('rfqs');
+  test('the bootstrap payload carries no RFQs', async () => {
+    expect(await storeService.getBootstrapData()).not.toHaveProperty('rfqs');
+  });
+
+  describe('getBootstrapData vendor cap', () => {
+    test('caps the vendor list and reports the true total separately, but always includes the caller\'s own vendor record even when it falls outside the cap', async () => {
+      // Fill past the cap with vendors that sort after (created later than,
+      // per created_at DESC ordering) the "own" vendor added first.
+      const own = storeService.addVendor({ name: 'My Own Vendor Co', email: 'own-vendor@example.com', majorCategory: 'Fasteners' });
+      for (let i = 0; i < 505; i++) {
+        storeService.addVendor({ name: `Filler Vendor ${i}`, email: `filler-${i}@example.com`, majorCategory: 'Cables' });
+      }
+
+      const withoutSession = await storeService.getBootstrapData();
+      expect(withoutSession.vendors.length).toBe(500);
+      expect(withoutSession.vendorsTotal).toBeGreaterThanOrEqual(506);
+      // The own vendor, created before all the fillers, is pushed outside the
+      // most-recent-500 window and is NOT force-included without a session.
+      expect(withoutSession.vendors.some((v) => v.email === own.email)).toBe(false);
+
+      const withSession = await storeService.getBootstrapData(null, own.email);
+      expect(withSession.vendors.some((v) => v.email === own.email)).toBe(true);
+      // Still capped overall — the own record is prepended, not added on top
+      // of an already-full 500.
+      expect(withSession.vendors.length).toBeLessThanOrEqual(501);
+    });
+
+    test('does not duplicate the own vendor when it already falls within the cap', async () => {
+      const own = storeService.addVendor({ name: 'Recent Own Vendor', email: 'recent-own@example.com', majorCategory: 'Fasteners' });
+      const withSession = await storeService.getBootstrapData(null, own.email);
+      expect(withSession.vendors.filter((v) => v.email === own.email)).toHaveLength(1);
+    });
+
+    test('a session email with no matching vendor record changes nothing', async () => {
+      const withoutMatch = await storeService.getBootstrapData(null, 'nobody-like-this@example.com');
+      expect(withoutMatch.vendors.every((v) => v.email !== 'nobody-like-this@example.com')).toBe(true);
+    });
+
+    describe('with a configured DB pool (the fast SQL path, not the in-memory resync)', () => {
+      let originalPool;
+      beforeEach(() => {
+        originalPool = domainPool.pool;
+        domainPool.pool = { query: jest.fn() };
+      });
+      afterEach(() => {
+        domainPool.pool = originalPool;
+        jest.restoreAllMocks();
+      });
+
+      test('unscoped bootstrap answers from getVendorsPageFromDB(publicOnly), not the full in-memory resync', async () => {
+        const pageSpy = jest
+          .spyOn(domainQueries, 'getVendorsPageFromDB')
+          .mockResolvedValue({ rows: [{ id: 'v-sql', name: 'SQL Vendor', email: 'sql-vendor@example.com' }], total: 87109 });
+        const getVendorsSpy = jest.spyOn(storeService, 'getVendors');
+
+        const result = await storeService.getBootstrapData();
+
+        expect(pageSpy).toHaveBeenCalledWith({ limit: 500, offset: 0, publicOnly: true });
+        expect(getVendorsSpy).not.toHaveBeenCalled();
+        expect(result.vendors).toEqual([{ id: 'v-sql', name: 'SQL Vendor', email: 'sql-vendor@example.com' }]);
+        expect(result.vendorsTotal).toBe(87109);
+      });
+
+      test('fetches the own vendor by email via a single-row lookup when not already in the fast-path page', async () => {
+        jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue({ rows: [{ id: 'v-1', email: 'other@example.com' }], total: 2 });
+        const ownLookupSpy = jest
+          .spyOn(domainQueries, 'getVendorByEmailFromDB')
+          .mockResolvedValue({ id: 'v-own', email: 'me@example.com' });
+
+        const result = await storeService.getBootstrapData(null, 'me@example.com');
+
+        expect(ownLookupSpy).toHaveBeenCalledWith('me@example.com');
+        expect(result.vendors[0]).toEqual({ id: 'v-own', email: 'me@example.com' });
+      });
+
+      test('does not do the single-row lookup when the own vendor is already in the fast-path page', async () => {
+        jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue({ rows: [{ id: 'v-own', email: 'me@example.com' }], total: 1 });
+        const ownLookupSpy = jest.spyOn(domainQueries, 'getVendorByEmailFromDB');
+
+        await storeService.getBootstrapData(null, 'me@example.com');
+
+        expect(ownLookupSpy).not.toHaveBeenCalled();
+      });
+
+      test('scoped (buyer-specific) bootstrap still uses the in-memory path even with a pool configured', async () => {
+        jest.spyOn(domainQueries, 'getVendorsFromDB').mockResolvedValue([]);
+        const pageSpy = jest.spyOn(domainQueries, 'getVendorsPageFromDB');
+        const own = storeService.addVendor({ name: 'Scoped Vendor', email: 'scoped-buyer-vendor@example.com', majorCategory: 'Cables', buyerId: 'buyer-123' });
+
+        const result = await storeService.getBootstrapData('buyer-123');
+
+        expect(pageSpy).not.toHaveBeenCalled();
+        expect(result.vendors.some((v) => v.id === own.id)).toBe(true);
+      });
+    });
   });
 });

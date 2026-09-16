@@ -116,6 +116,107 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('ORDER BY created_at DESC'), []);
     });
 
+    describe('getVendorsPageFromDB', () => {
+      test('no-ops when no pool is configured', async () => {
+        pool.pool = null;
+        await expect(domainQueries.getVendorsPageFromDB({ limit: 50, offset: 0 })).resolves.toEqual({ rows: [], total: 0 });
+      });
+
+      test('runs a plain LIMIT/OFFSET query with no WHERE clause when there is no search or publicOnly', async () => {
+        const vendor = { id: 'v-1', name: 'Apex' };
+        const query = jest
+          .fn()
+          .mockResolvedValueOnce({ rows: [{ total: 1 }] })
+          .mockResolvedValueOnce({ rows: [{ raw: vendor }] });
+        pool.pool = { query };
+
+        const result = await domainQueries.getVendorsPageFromDB({ limit: 50, offset: 100 });
+
+        expect(result).toEqual({ rows: [vendor], total: 1 });
+        const [countSql, countParams] = query.mock.calls[0];
+        expect(countSql).not.toContain('WHERE');
+        expect(countParams).toEqual([]);
+        const [dataSql, dataParams] = query.mock.calls[1];
+        expect(dataSql).toContain('ORDER BY created_at DESC LIMIT $1 OFFSET $2');
+        expect(dataParams).toEqual([50, 100]);
+      });
+
+      test('adds a search WHERE clause across name/email/category/minorCategories', async () => {
+        const query = jest
+          .fn()
+          .mockResolvedValueOnce({ rows: [{ total: 0 }] })
+          .mockResolvedValueOnce({ rows: [] });
+        pool.pool = { query };
+
+        await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, search: 'fastener' });
+
+        const [countSql, countParams] = query.mock.calls[0];
+        expect(countSql).toContain('WHERE');
+        expect(countSql).toContain('major_category ILIKE $1');
+        expect(countParams).toEqual(['%fastener%']);
+      });
+
+      test('adds the publicOnly filter (no buyerId/buyerAccountId inside raw)', async () => {
+        const query = jest
+          .fn()
+          .mockResolvedValueOnce({ rows: [{ total: 0 }] })
+          .mockResolvedValueOnce({ rows: [] });
+        pool.pool = { query };
+
+        await domainQueries.getVendorsPageFromDB({ limit: 500, offset: 0, publicOnly: true });
+
+        const [countSql] = query.mock.calls[0];
+        expect(countSql).toContain("(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL");
+      });
+
+      test('combines search and publicOnly with AND', async () => {
+        const query = jest
+          .fn()
+          .mockResolvedValueOnce({ rows: [{ total: 0 }] })
+          .mockResolvedValueOnce({ rows: [] });
+        pool.pool = { query };
+
+        await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, search: 'cables', publicOnly: true });
+
+        const [countSql] = query.mock.calls[0];
+        expect(countSql).toMatch(/WHERE[\s\S]* AND [\s\S]*buyerId/);
+      });
+
+      test('defaults total to 0 when the count query returns no row', async () => {
+        const query = jest
+          .fn()
+          .mockResolvedValueOnce({ rows: [] })
+          .mockResolvedValueOnce({ rows: [] });
+        pool.pool = { query };
+
+        await expect(domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0 })).resolves.toEqual({ rows: [], total: 0 });
+      });
+    });
+
+    describe('getVendorByEmailFromDB', () => {
+      test('no-ops when no pool is configured', async () => {
+        pool.pool = null;
+        await expect(domainQueries.getVendorByEmailFromDB('a@b.com')).resolves.toBeNull();
+      });
+
+      test('no-ops when no email is given', async () => {
+        pool.pool = { query: jest.fn() };
+        await expect(domainQueries.getVendorByEmailFromDB('')).resolves.toBeNull();
+        expect(pool.pool.query).not.toHaveBeenCalled();
+      });
+
+      test('returns the matching row', async () => {
+        const vendor = { id: 'v-1', email: 'a@b.com' };
+        pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: vendor }] }) };
+        await expect(domainQueries.getVendorByEmailFromDB('a@b.com')).resolves.toEqual(vendor);
+      });
+
+      test('returns null when nothing matches', async () => {
+        pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+        await expect(domainQueries.getVendorByEmailFromDB('nobody@x.com')).resolves.toBeNull();
+      });
+    });
+
     test('upsertVendorInDB serializes the vendor and returns the stored raw row', async () => {
       const vendor = {
         id: 'v-1',

@@ -110,8 +110,16 @@ describe('validateManualRFQLineItem', () => {
     expect(errors.itemName).toBe(MANUAL.itemNameRequired);
     expect(errors.quantity).toBe(MANUAL.quantityRequired);
     expect(errors.unit).toBe(MANUAL.unitRequired);
-    expect(errors.majorCategory).toBe(MANUAL.majorCategoryRequired);
-    expect(errors.minorCategory).toBe(MANUAL.minorCategoryRequired);
+    // Major/minor category are optional — a blank line item is not reported
+    // as an error for either.
+    expect(errors.majorCategory).toBeUndefined();
+    expect(errors.minorCategory).toBeUndefined();
+  });
+
+  it('accepts a row with no category set', () => {
+    const errors = validateManualRFQLineItem(completeItem({ majorCategory: '', minorCategory: '' }));
+    expect(errors).toEqual({});
+    expect(isManualRFQLineItemComplete(completeItem({ majorCategory: '', minorCategory: '' }))).toBe(true);
   });
 
   it.each([[null], [0], [-5], [Number.NaN]])('rejects a quantity of %p', (quantity) => {
@@ -122,11 +130,10 @@ describe('validateManualRFQLineItem', () => {
 
   it('treats whitespace as blank', () => {
     const errors = validateManualRFQLineItem(
-      completeItem({ itemName: '   ', unit: '  ', minorCategory: ' ' })
+      completeItem({ itemName: '   ', unit: '  ' })
     );
     expect(errors.itemName).toBeDefined();
     expect(errors.unit).toBeDefined();
-    expect(errors.minorCategory).toBeDefined();
   });
 
   // A specification is genuinely optional; plenty of commodity items have none.

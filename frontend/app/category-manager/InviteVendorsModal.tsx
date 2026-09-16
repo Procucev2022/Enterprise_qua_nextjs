@@ -10,12 +10,18 @@
 // category-chip pattern.
 // ==============================================================================
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { X, Send, CheckCircle2, Loader2, AlertTriangle, Users, Search } from 'lucide-react';
 import { useApp } from '@/lib/store';
 import { fetchAllVendors, fetchVendorCandidates, inviteVendorsToRFQ } from '@/lib/rfqClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import type { RFQItem, RFQVendorCandidate } from '@/lib/types';
+import type { RFQItem, RFQVendorCandidate, VendorPageMeta } from '@/lib/types';
+
+// "All Vendors" can legitimately span tens of thousands of rows (the real
+// directory is 80k+ vendors) — fetched and rendered a page at a time rather
+// than all at once, which previously crashed the browser tab.
+const ALL_VENDORS_PAGE_SIZE = 50;
+const SEARCH_DEBOUNCE_MS = 350;
 
 interface InviteVendorsModalProps {
   isOpen: boolean;
@@ -58,7 +64,10 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
   const [allVendors, setAllVendors] = useState<RFQVendorCandidate[] | null>(null);
   const [allVendorsError, setAllVendorsError] = useState<string | null>(null);
   const [allVendorsLoading, setAllVendorsLoading] = useState(false);
+  const [allVendorsLoadingMore, setAllVendorsLoadingMore] = useState(false);
+  const [allVendorsPagination, setAllVendorsPagination] = useState<VendorPageMeta | null>(null);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
 
@@ -66,11 +75,13 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     if (!isOpen || !rfq) return;
     setTab('category');
     setSearch('');
+    setDebouncedSearch('');
     setLoading(true);
     setError(null);
     setSelected(new Set());
     setAllVendors(null);
     setAllVendorsError(null);
+    setAllVendorsPagination(null);
     void fetchVendorCandidates(rfq.id).then((result) => {
       if (result.success) {
         setCandidates(result.candidates);
@@ -81,35 +92,73 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     });
   }, [isOpen, rfq]);
 
-  // Fetched lazily, only the first time the CM switches into "All Vendors".
+  // Debounce free-text search before it re-triggers a server-side page fetch.
   useEffect(() => {
-    if (!isOpen || !rfq || tab !== 'all' || allVendors !== null || allVendorsLoading || allVendorsError !== null) return;
+    const t = setTimeout(() => setDebouncedSearch(search), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const stampInvited = (vendors: RFQVendorCandidate[]): RFQVendorCandidate[] => {
+    const invitedIds = new Set((rfq?.assignedVendors || []).map((v) => v.id));
+    return vendors.map((v) => ({ ...v, alreadyInvited: invitedIds.has(v.id) }));
+  };
+
+  // Fetched lazily on first switch into "All Vendors", and re-fetched from
+  // page 1 whenever the (debounced) search term changes — search runs
+  // server-side over the whole directory, not just the pages already loaded.
+  // Switching tabs back and forth does NOT refetch once a search term has
+  // already been loaded, tracked via lastFetchedSearchRef.
+  const lastFetchedSearchRef = useRef<string | null>(null);
+  // Guards against a slower, earlier request (e.g. the initial unfiltered
+  // load) resolving AFTER a newer, filtered one and overwriting it with
+  // stale data — only the most recently *issued* request's response is ever
+  // applied.
+  const fetchSeqRef = useRef(0);
+  useEffect(() => {
+    if (!isOpen || !rfq || tab !== 'all') return;
+    if (allVendors !== null && lastFetchedSearchRef.current === debouncedSearch) return;
+    lastFetchedSearchRef.current = debouncedSearch;
+    const seq = ++fetchSeqRef.current;
     setAllVendorsLoading(true);
     setAllVendorsError(null);
-    void fetchAllVendors().then((result) => {
+    void fetchAllVendors({ page: 1, pageSize: ALL_VENDORS_PAGE_SIZE, search: debouncedSearch }).then((result) => {
+      if (seq !== fetchSeqRef.current) return;
       if (result.success) {
-        const invitedIds = new Set((rfq.assignedVendors || []).map((v) => v.id));
-        setAllVendors(result.candidates.map((v) => ({ ...v, alreadyInvited: invitedIds.has(v.id) })));
+        setAllVendors(stampInvited(result.candidates));
+        setAllVendorsPagination(result.pagination);
       } else {
         setAllVendorsError(result.error || S.allVendorsLoadFailed);
       }
       setAllVendorsLoading(false);
     });
-  }, [isOpen, rfq, tab, allVendors, allVendorsLoading, allVendorsError]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- rfq.assignedVendors is only read via stampInvited at fetch time, not a re-fetch trigger
+  }, [isOpen, rfq, tab, debouncedSearch]);
+
+  const loadMoreAllVendors = () => {
+    if (!allVendorsPagination || allVendorsLoadingMore) return;
+    const nextPage = allVendorsPagination.page + 1;
+    if (nextPage > allVendorsPagination.totalPages) return;
+    const seq = ++fetchSeqRef.current;
+    setAllVendorsLoadingMore(true);
+    void fetchAllVendors({ page: nextPage, pageSize: ALL_VENDORS_PAGE_SIZE, search: debouncedSearch }).then((result) => {
+      if (seq !== fetchSeqRef.current) return;
+      if (result.success) {
+        setAllVendors((prev) => [...(prev || []), ...stampInvited(result.candidates)]);
+        setAllVendorsPagination(result.pagination);
+      } else {
+        setAllVendorsError(result.error || S.allVendorsLoadFailed);
+      }
+      setAllVendorsLoadingMore(false);
+    });
+  };
 
   const categorySignals = useMemo(() => (rfq ? rfqCategorySignals(rfq) : []), [rfq]);
 
-  const visibleVendors = useMemo(() => {
-    if (tab === 'category') return candidates;
-    const query = search.trim().toLowerCase();
-    const source = allVendors || [];
-    if (!query) return source;
-    return source.filter((v) =>
-      [v.name, v.majorCategory, v.email, ...(v.minorCategories || [])].some((field) =>
-        String(field || '').toLowerCase().includes(query)
-      )
-    );
-  }, [tab, candidates, allVendors, search]);
+  // "All Vendors" is already server-paginated and server-searched — no
+  // further client-side filtering needed (or possible, since only the
+  // loaded pages exist in memory).
+  const visibleVendors = tab === 'category' ? candidates : allVendors || [];
+  const hasMoreAllVendors = !!allVendorsPagination && allVendorsPagination.page < allVendorsPagination.totalPages;
 
   if (!isOpen || !rfq) return null;
 
@@ -254,7 +303,12 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
               <>
                 <div className="flex items-center justify-between px-1">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-450">
-                    {formatString(S.candidateCount, { count: visibleVendors.length })}
+                    {tab === 'all' && allVendorsPagination
+                      ? formatString(S.candidateCountOfTotal, {
+                          count: visibleVendors.length,
+                          total: allVendorsPagination.total.toLocaleString(),
+                        })
+                      : formatString(S.candidateCount, { count: visibleVendors.length })}
                   </span>
                   {selectableIds.length > 0 && (
                     <button
@@ -318,6 +372,24 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                     );
                   })}
                 </div>
+
+                {tab === 'all' && hasMoreAllVendors && (
+                  <button
+                    type="button"
+                    data-testid="load-more-vendors"
+                    onClick={loadMoreAllVendors}
+                    disabled={allVendorsLoadingMore}
+                    className="w-full mt-2 py-2 rounded-lg border border-dashed border-slate-300 dark:border-gray-700 text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 disabled:opacity-50 inline-flex items-center justify-center gap-1.5"
+                  >
+                    {allVendorsLoadingMore ? (
+                      <>
+                        <Loader2 size={12} className="animate-spin" /> {S.loading}
+                      </>
+                    ) : (
+                      formatString(S.loadMoreVendors, { pageSize: ALL_VENDORS_PAGE_SIZE })
+                    )}
+                  </button>
+                )}
               </>
             )}
         </div>

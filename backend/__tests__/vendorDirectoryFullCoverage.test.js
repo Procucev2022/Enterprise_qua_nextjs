@@ -334,18 +334,18 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       expect(res.status).toHaveBeenCalledWith(502);
     });
 
-    test('ingestHistoricalData validation, processing, and error', () => {
+    test('ingestHistoricalData validation, processing, and error', async () => {
       const res = mockRes();
       const next = jest.fn();
 
-      buyerAccountController.ingestHistoricalData(
+      await buyerAccountController.ingestHistoricalData(
         { user: { role: 'buyer', email: 'b@b.com' }, body: { period: '' } },
         res,
         next
       );
       expect(res.status).toHaveBeenCalledWith(400);
 
-      buyerAccountController.ingestHistoricalData(
+      await buyerAccountController.ingestHistoricalData(
         {
           user: { role: 'buyer', email: 'b@b.com' },
           body: {
@@ -361,7 +361,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       jest.spyOn(storeService, 'processHistoricalPurchaseData').mockImplementation(() => {
         throw new Error('err');
       });
-      buyerAccountController.ingestHistoricalData(
+      await buyerAccountController.ingestHistoricalData(
         { user: { role: 'buyer', email: 'b@b.com' }, body: { period: 'FY2025-Q1' } },
         res,
         next
@@ -702,11 +702,11 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       expect(res3.status).not.toHaveBeenCalledWith(403);
     });
 
-    test('getVendors and getVendorById with buyer scoping and error branches', () => {
+    test('getVendors and getVendorById with buyer scoping and error branches', async () => {
       const res = mockRes();
       const next = jest.fn();
 
-      vendorController.getVendors({ user: { role: 'buyer', email: 'b@b.com' } }, res, next);
+      await vendorController.getVendors({ user: { role: 'buyer', email: 'b@b.com' }, query: {} }, res, next);
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
 
       vendorController.getVendorById(
@@ -719,7 +719,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       jest.spyOn(storeService, 'getVendors').mockImplementation(() => {
         throw new Error('fail');
       });
-      vendorController.getVendors({}, res, next);
+      await vendorController.getVendors({ query: {} }, res, next);
       expect(next).toHaveBeenCalled();
 
       jest.spyOn(storeService, 'getVendorById').mockImplementation(() => {
@@ -729,16 +729,101 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       expect(next).toHaveBeenCalled();
     });
 
-    test('createVendor role handling and validation', () => {
+    test('getVendors: explicit buyerId query param, search filtering, and pagination clamping', async () => {
+      const next = jest.fn();
+
+      storeService.addVendor({ name: 'Paginated Acme Co', email: 'paginated-acme@example.com', majorCategory: 'Fasteners' });
+      storeService.addVendor({ name: 'Paginated Zenith Co', email: 'paginated-zenith@example.com', majorCategory: 'Cables' });
+
+      // Non-buyer role reading an explicit ?buyerId= query param.
+      const res1 = mockRes();
+      await vendorController.getVendors({ user: { role: 'admin' }, query: { buyerId: 'some-buyer-id' } }, res1, next);
+      expect(res1.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      // Search narrows to matching rows only.
+      const res2 = mockRes();
+      await vendorController.getVendors({ query: { search: 'paginated-zenith' } }, res2, next);
+      const searchPayload = res2.json.mock.calls[0][0];
+      expect(searchPayload.data.some((v) => v.email === 'paginated-zenith@example.com')).toBe(true);
+      expect(searchPayload.data.some((v) => v.email === 'paginated-acme@example.com')).toBe(false);
+
+      // page=1 with an out-of-range/invalid pageSize clamps to the default,
+      // and requesting more than MAX_VENDOR_PAGE_SIZE clamps to the cap.
+      const res3 = mockRes();
+      await vendorController.getVendors({ query: { page: '1', pageSize: 'not-a-number' } }, res3, next);
+      const p1 = res3.json.mock.calls[0][0].pagination;
+      expect(p1).toMatchObject({ page: 1, pageSize: 50 });
+
+      const res4 = mockRes();
+      await vendorController.getVendors({ query: { page: '0', pageSize: '999999' } }, res4, next);
+      const p2 = res4.json.mock.calls[0][0].pagination;
+      expect(p2).toMatchObject({ page: 1, pageSize: 200 });
+
+      // A page beyond the last page returns an empty slice, not an error.
+      const res5 = mockRes();
+      await vendorController.getVendors({ query: { page: '999999', pageSize: '10' } }, res5, next);
+      expect(res5.json.mock.calls[0][0].data).toEqual([]);
+    });
+
+    test('getVendors: buyerId=all with a configured pool answers straight from Postgres (bypassing the in-memory resync)', async () => {
+      const next = jest.fn();
+      const domainQueries = require('../src/db/domainQueries');
+      const originalPool = pool.pool;
+      pool.pool = { query: jest.fn() };
+      const pageSpy = jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue({
+        rows: [{ id: 'v-sql-1', name: 'SQL Path Vendor', email: 'sql-path@example.com' }],
+        total: 12345,
+      });
+      const getVendorsSpy = jest.spyOn(storeService, 'getVendors');
+
+      try {
+        const res = mockRes();
+        await vendorController.getVendors(
+          { query: { buyerId: 'all', page: '3', pageSize: '25', search: 'sql' } },
+          res,
+          next
+        );
+
+        expect(pageSpy).toHaveBeenCalledWith({ limit: 25, offset: 50, search: 'sql' });
+        // The expensive full-table resync path must not run at all for this case.
+        expect(getVendorsSpy).not.toHaveBeenCalled();
+        expect(res.json).toHaveBeenCalledWith({
+          success: true,
+          source: 'persisted',
+          data: [{ id: 'v-sql-1', name: 'SQL Path Vendor', email: 'sql-path@example.com' }],
+          pagination: { page: 3, pageSize: 25, total: 12345, totalPages: Math.ceil(12345 / 25) },
+        });
+      } finally {
+        pool.pool = originalPool;
+        pageSpy.mockRestore();
+        getVendorsSpy.mockRestore();
+      }
+    });
+
+    test('getVendors: buyerId=all falls back to the in-memory path when no DB pool is configured', async () => {
+      const next = jest.fn();
+      const originalPool = pool.pool;
+      pool.pool = null;
+
+      try {
+        const res = mockRes();
+        await vendorController.getVendors({ query: { buyerId: 'all', page: '1', pageSize: '10' } }, res, next);
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+      } finally {
+        pool.pool = originalPool;
+      }
+    });
+
+    test('createVendor role handling and validation', async () => {
       const res = mockRes();
       const next = jest.fn();
 
       // Buyer forbidden to create vendor directly via this endpoint
-      vendorController.createVendor({ user: { role: 'buyer' }, body: {} }, res, next);
+      await vendorController.createVendor({ user: { role: 'buyer' }, body: {} }, res, next);
       expect(res.status).toHaveBeenCalledWith(403);
 
       // Missing name
-      vendorController.createVendor(
+      await vendorController.createVendor(
         { user: { role: 'admin' }, body: { majorCategory: 'Mechanical' } },
         res,
         next
@@ -746,7 +831,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       expect(res.status).toHaveBeenCalledWith(400);
 
       // Admin role with query buyerId
-      vendorController.createVendor(
+      await vendorController.createVendor(
         { user: { role: 'admin' }, query: { buyerId: 'ba-1' }, body: { name: 'Admin Vendor', majorCategory: 'Civil' } },
         res,
         next
@@ -754,7 +839,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       expect(res.status).toHaveBeenCalledWith(201);
 
       // Success
-      vendorController.createVendor(
+      await vendorController.createVendor(
         { user: { role: 'vendor', email: 'v@v.com' }, body: { name: 'Vendor 1', majorCategory: 'Mechanical' } },
         res,
         next
@@ -765,12 +850,66 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       jest.spyOn(storeService, 'addVendor').mockImplementation(() => {
         throw new Error('err');
       });
-      vendorController.createVendor(
+      await vendorController.createVendor(
         { user: { role: 'vendor', email: 'v@v.com' }, body: { name: 'Vendor 1', majorCategory: 'Mechanical' } },
         res,
         next
       );
       expect(next).toHaveBeenCalled();
+    });
+
+    test('createVendor: buyer with a linked account can add a vendor, scoped and whitelisted server-side', async () => {
+      const buyerAccount = storeService.addBuyerAccount({
+        organizationName: 'Real Buyer Co',
+        corporateEmail: 'real-buyer@example.com',
+      });
+
+      const res = mockRes();
+      const next = jest.fn();
+      await vendorController.createVendor(
+        {
+          user: { role: 'buyer', email: 'real-buyer@example.com' },
+          body: {
+            name: 'Direct Deal Vendor',
+            email: 'direct-deal@vendor.test',
+            phone: '9876543210',
+            majorCategory: 'Fasteners',
+            // Attempted spoofing of ownership/identity fields — must be
+            // ignored, not trusted from the request body.
+            buyerId: 'someone-elses-buyer-id',
+            addedByBuyerCompany: 'A Totally Different Company',
+            subscriptionPlan: 'select',
+          },
+        },
+        res,
+        next
+      );
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      const created = res.json.mock.calls[0][0].data;
+      expect(created.buyerId).toBe(buyerAccount.id);
+      expect(created.addedByBuyerCompany).toBe('Real Buyer Co');
+      expect(created.subscriptionPlan).not.toBe('select');
+    });
+
+    test('createVendor: buyer omitting a vendor email is rejected', async () => {
+      storeService.addBuyerAccount({
+        organizationName: 'Email Required Co',
+        corporateEmail: 'email-required-buyer@example.com',
+      });
+
+      const res = mockRes();
+      const next = jest.fn();
+      await vendorController.createVendor(
+        {
+          user: { role: 'buyer', email: 'email-required-buyer@example.com' },
+          body: { name: 'No Email Vendor', majorCategory: 'Cables' },
+        },
+        res,
+        next
+      );
+
+      expect(res.status).toHaveBeenCalledWith(400);
     });
   });
 
@@ -922,34 +1061,34 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       expect(decryptedToken).toHaveProperty('plaintext', 'test plaintext');
     });
 
-    test('vendors, vendor, buyerAccounts, buyerAccount resolvers', () => {
+    test('vendors, vendor, buyerAccounts, buyerAccount resolvers', async () => {
       // vendors with filters
-      const vList = rootResolvers.vendors(
+      const vList = await rootResolvers.vendors(
         { majorCategory: 'Mechanical', source: 'buyer_manual', search: 'Apex', limit: 10, offset: 0 },
         mockContext
       );
       expect(Array.isArray(vList)).toBe(true);
 
-      const vListBuyer = rootResolvers.vendors(
+      const vListBuyer = await rootResolvers.vendors(
         {},
         { req: { user: { role: 'buyer', email: 'b@b.com' } } }
       );
       expect(Array.isArray(vListBuyer)).toBe(true);
 
-      const vListBuyerIdArg = rootResolvers.vendors({ buyerId: 'ba-1' }, {});
+      const vListBuyerIdArg = await rootResolvers.vendors({ buyerId: 'ba-1' }, {});
       expect(Array.isArray(vListBuyerIdArg)).toBe(true);
 
       // vendor resolver by id and by buyerId
-      const singleV = rootResolvers.vendor({ id: 'non-existent' }, mockContext);
+      const singleV = await rootResolvers.vendor({ id: 'non-existent' }, mockContext);
       expect(singleV).toBeNull();
 
-      const singleVBuyer = rootResolvers.vendor(
+      const singleVBuyer = await rootResolvers.vendor(
         { id: 'v1' },
         { req: { user: { role: 'buyer', email: 'b@b.com' } } }
       );
       expect(singleVBuyer).toBeDefined();
 
-      const singleVBuyerArg = rootResolvers.vendor({ id: 'v1', buyerId: 'ba-1' }, {});
+      const singleVBuyerArg = await rootResolvers.vendor({ id: 'v1', buyerId: 'ba-1' }, {});
       expect(singleVBuyerArg).toBeDefined();
 
       // buyerAccounts and buyerAccount resolvers

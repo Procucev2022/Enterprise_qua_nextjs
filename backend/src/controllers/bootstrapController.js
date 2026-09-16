@@ -15,7 +15,7 @@ async function getBootstrap(req, res, next) {
     if (req.query && req.query.refresh === 'true') {
       await storeService.hydrateFromDB();
     }
-    const data = storeService.getBootstrapData(buyerId);
+    const data = await storeService.getBootstrapData(buyerId, user && user.email);
     res.json({
       success: true,
       source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory',

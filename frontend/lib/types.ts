@@ -276,6 +276,19 @@ export type RFQVendorCandidatesResult =
   | { success: true; candidates: RFQVendorCandidate[] }
   | { success: false; reason: RFQTransportFailure; error: string };
 
+/** Page metadata returned alongside a paginated vendor listing. */
+export interface VendorPageMeta {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
+/** Outcome of fetching one page of the full (unfiltered-by-category) vendor directory. */
+export type RFQVendorPageResult =
+  | { success: true; candidates: RFQVendorCandidate[]; pagination: VendorPageMeta }
+  | { success: false; reason: RFQTransportFailure; error: string };
+
 /** Outcome of inviting vendors to an RFQ. */
 export type RFQInviteVendorsResult =
   | { success: true; rfq: RFQItem; invitedCount: number }

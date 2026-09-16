@@ -154,7 +154,7 @@ interface AppContextType {
 
   // Buyer Uploaded Vendors, Database Check & Automated Onboarding Emails
   buyerVendors: VendorEntry[];
-  addBuyerVendor: (vendor: Omit<VendorEntry, 'id'>) => VendorEntry;
+  addBuyerVendor: (vendor: Omit<VendorEntry, 'id'>) => Promise<VendorEntry | null>;
   updateBuyerVendor: (vendorId: string, updates: Partial<VendorEntry>) => void;
   importBuyerVendors: (vendorsToImport: Omit<VendorEntry, 'id'>[]) => number;
   deleteBuyerVendor: (vendorId: string) => void;
@@ -1326,94 +1326,57 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return revisionRecord;
   };
 
-  // Buyer Vendor Management with Automated Database Verification & Email Dispatch
-  const addBuyerVendor = (vendor: Omit<VendorEntry, 'id'>): VendorEntry => {
-    const isExisting = checkVendorInPlatformDatabase(vendor);
-    const tempPassword = generateTempPassword(vendor.name);
-    const buyerCompany = activeBuyerAccount?.organizationName || 'Larsen & Toubro Limited';
-    const buyerName = activeBuyerAccount?.contactPerson || 'Rajesh Sharma (CPO)';
-    const nextDate = new Date(Date.now() + 3 * 86400000).toISOString().substring(0, 10) + ' (Day 3)';
-    const newId = `v-buyer-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+  // Buyer Vendor Management — a buyer adding one vendor they deal with
+  // directly. Persists through the real POST /api/vendors endpoint (buyer
+  // role, server-scoped to the buyer's own account); state is only updated
+  // once the backend confirms the write, and nothing here claims an email
+  // was sent, since this endpoint never sends one (unlike the category
+  // manager's bulk-import path, which does dispatch a real onboarding email).
+  const addBuyerVendor = async (vendor: Omit<VendorEntry, 'id'>): Promise<VendorEntry | null> => {
+    let res: Response;
+    try {
+      res = await fetch('/api/vendors', {
+        method: 'POST',
+        headers: authFetchHeaders(),
+        body: JSON.stringify(vendor),
+      });
+    } catch {
+      showToast(
+        'Could Not Add Vendor',
+        'The vendor could not be saved — check your connection and try again.',
+        'warning'
+      );
+      return null;
+    }
 
-    const newV: VendorEntry = {
-      ...vendor,
-      id: newId,
-      source: vendor.source || 'buyer_manual',
-      isExistingInDatabase: isExisting,
-      onboardingEmailStatus: 'sent',
-      onboardingEmailDispatchedAt: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
-      tempPassword,
-      firstLoginCompleted: false,
-      reminderCadence: 'every_3_days',
-      nextReminderDate: nextDate,
-      remindersSentCount: 0,
-      addedByBuyerCompany: buyerCompany,
-      addedByBuyerName: buyerName,
-      profileCompletionStatus: 'pending',
-    };
+    let body: { success?: boolean; data?: VendorEntry; error?: string } = {};
+    try {
+      body = await res.json();
+    } catch {
+      // body stays {}; handled by the !body.success check below
+    }
 
+    if (!res.ok || !body.success || !body.data) {
+      showToast(
+        'Could Not Add Vendor',
+        body.error || 'The vendor could not be saved. No changes were made — try again.',
+        'warning'
+      );
+      return null;
+    }
+
+    const newV = body.data;
     setBuyerVendors((prev) => [newV, ...prev]);
 
-    // Asynchronously persist to backend database via buyer historical-data endpoint
-    fetch('/api/buyer-accounts/historical-data', {
-      method: 'POST',
-      headers: { ...authFetchHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        period: '1_year',
-        vendors: [
-          {
-            id: newId,
-            companyName: newV.name,
-            brandName: newV.brandName || newV.name,
-            contactPerson: newV.contactPerson,
-            designation: newV.contactDesignation || 'Authorized Representative',
-            email: newV.email,
-            phone: newV.phone,
-            location: newV.location,
-            city: newV.city || '',
-            state: newV.state || '',
-            country: newV.country || 'India',
-            pincode: newV.pincode || '',
-            gstin: newV.gst || newV.gstin || '',
-            pan: newV.pan || '',
-            msme: newV.msme || '',
-            annualTurnover: newV.annualTurnover || '',
-            majorCategory: newV.majorCategory,
-            minorCategories: newV.minorCategories || [newV.majorCategory],
-            rating: newV.rating || 4.5,
-            status: newV.status || 'PREFERRED ENTERPRISE SUPPLIER',
-          },
-        ],
-      }),
-    }).catch((err) => {
-      console.error('Failed to sync created vendor to backend:', err);
-    });
-
-    // Dispatch Feed & Audit Log
     addFeedItem(
-      isExisting
-        ? `Existing Supplier Added: ${newV.name}`
-        : `New Supplier Onboarding Dispatched: ${newV.name}`,
-      isExisting
-        ? `Supplier exists in Procucev database. Association email dispatched to ${newV.email} with credentials (temp password: ${tempPassword}) and scheduled every 3rd day profile reminders.`
-        : `Supplier is NOT in database. Welcome onboarding invitation dispatched to ${newV.email} with first-time temporary password (${tempPassword}) and scheduled every 3rd day profile reminders.`,
+      `Vendor Added: ${newV.name}`,
+      `${newV.name} was added to your vendor directory.`,
       'invitation',
       undefined,
-      newV.name,
-      'email'
+      newV.name
     );
-
-    addAuditLog(
-      `Added vendor ${newV.name} (${newV.email}) — ${isExisting ? 'Existing in DB' : 'New Vendor'}; Dispatched onboarding email with first-time login credentials & 3-day reminder schedule.`
-    );
-
-    showToast(
-      isExisting ? 'Existing Vendor Associated' : 'New Vendor Added & Invited',
-      isExisting
-        ? `${newV.name} is in our database. Network association email sent to ${newV.email} with login details.`
-        : `${newV.name} is new to Procucev. Invitation email sent to ${newV.email} with temporary password and OTP instructions.`,
-      'success'
-    );
+    addAuditLog(`Added vendor ${newV.name} (${newV.email})`);
+    showToast('Vendor Added', `${newV.name} has been added to your vendor directory.`, 'success');
 
     return newV;
   };

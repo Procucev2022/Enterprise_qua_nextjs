@@ -1,4 +1,6 @@
 const storeService = require('../services/storeService');
+const domainQueries = require('../db/domainQueries');
+const pool = require('../db/pool');
 const { generateVendorOnboardingEmail } = require('../services/emailService');
 const zohoPaymentService = require('../services/zohoPaymentService');
 const { generateReceiptPdf } = require('../services/invoiceService');
@@ -82,7 +84,34 @@ function pickVendorSelfEditFields(body) {
   return picked;
 }
 
-function getVendors(req, res, next) {
+// A buyer adding a vendor they already deal with directly may set these
+// contact/profile fields, but never the record's identity/ownership fields
+// (buyerId, addedByBuyerCompany, subscriptionPlan, etc.) — those are always
+// resolved server-side from the authenticated buyer's own account below.
+const VENDOR_BUYER_CREATE_FIELDS = [
+  'name', 'brandName', 'email', 'phone', 'contactPerson', 'contactDesignation',
+  'gstin', 'gst', 'pan', 'msme', 'annualTurnover', 'location', 'city', 'state',
+  'country', 'pincode', 'majorCategory', 'minorCategories', 'products',
+];
+
+function pickVendorBuyerCreateFields(body) {
+  const picked = {};
+  VENDOR_BUYER_CREATE_FIELDS.forEach((field) => {
+    if (body[field] !== undefined) {
+      picked[field] = body[field];
+    }
+  });
+  return picked;
+}
+
+// Max rows a single page may request, regardless of what the client asks for.
+// Guards against a typo'd limit=100000 still shipping the whole vendor table
+// (the exact bug a real request hit: 87k vendors in one response crashed the
+// browser rendering an unpaginated "All Vendors" list).
+const MAX_VENDOR_PAGE_SIZE = 200;
+const DEFAULT_VENDOR_PAGE_SIZE = 50;
+
+async function getVendors(req, res, next) {
   try {
     const user = req.user;
     let buyerId = null;
@@ -93,7 +122,66 @@ function getVendors(req, res, next) {
       buyerId = req.query.buyerId;
     }
     logger.info('Fetching vendors with scoping', { buyerId, role: user && user.role }, 'VENDOR_CONTROLLER');
-    const vendors = storeService.getVendors(buyerId);
+
+    // Pagination is opt-in (passing `page`) so existing callers that expect
+    // the full array (vendor-console metrics, GraphQL, etc.) are unaffected.
+    const { page, search } = req.query || {};
+
+    // The unscoped ("all vendors") paginated case is answered straight from
+    // Postgres with LIMIT/OFFSET — it must never route through
+    // storeService.getVendors(), which re-syncs (and re-serializes) every row
+    // in the table on every single call. That was fine at a few hundred
+    // vendors; once the table reached 80k+ (a bulk Vendor Master import), it
+    // meant every "Load more" click in the Invite Vendors modal re-fetched
+    // the entire table just to keep 50 rows — slow/heavy enough to hang the
+    // browser mid-pagination. Buyer-scoped requests stay on the smaller,
+    // already-in-memory path below; only the fully-open, large-scale case
+    // gets its own SQL query.
+    if (page !== undefined && buyerId === 'all' && pool.pool) {
+      const pageNumber = Math.max(1, parseInt(page, 10) || 1);
+      const pageSize = Math.min(
+        MAX_VENDOR_PAGE_SIZE,
+        Math.max(1, parseInt(req.query.pageSize, 10) || DEFAULT_VENDOR_PAGE_SIZE)
+      );
+      const { rows, total } = await domainQueries.getVendorsPageFromDB({
+        limit: pageSize,
+        offset: (pageNumber - 1) * pageSize,
+        search: search ? String(search) : '',
+      });
+      return res.json({
+        success: true,
+        source: 'persisted',
+        data: rows,
+        pagination: { page: pageNumber, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) },
+      });
+    }
+
+    let vendors = await storeService.getVendors(buyerId);
+    if (search) {
+      const q = String(search).toLowerCase();
+      vendors = vendors.filter((v) =>
+        [v.name, v.email, v.majorCategory, ...(v.minorCategories || [])].some((field) =>
+          String(field || '').toLowerCase().includes(q)
+        )
+      );
+    }
+    if (page !== undefined) {
+      const pageNumber = Math.max(1, parseInt(page, 10) || 1);
+      const pageSize = Math.min(
+        MAX_VENDOR_PAGE_SIZE,
+        Math.max(1, parseInt(req.query.pageSize, 10) || DEFAULT_VENDOR_PAGE_SIZE)
+      );
+      const total = vendors.length;
+      const start = (pageNumber - 1) * pageSize;
+      const pageData = vendors.slice(start, start + pageSize);
+      return res.json({
+        success: true,
+        source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory',
+        data: pageData,
+        pagination: { page: pageNumber, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) },
+      });
+    }
+
     res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: vendors });
   } catch (err) {
     logger.error('Error fetching vendors', err, 'VENDOR_CONTROLLER');
@@ -125,16 +213,31 @@ function getVendorById(req, res, next) {
   }
 }
 
-function createVendor(req, res, next) {
+async function createVendor(req, res, next) {
   try {
-    const body = req.body;
+    let body = req.body;
     let buyerId = null;
+    let addedByBuyerCompany = null;
     // A vendor can only ever register themselves; the identity-DB session
     // email is authoritative, never whatever email the client body claims.
     if (req.user.role === 'vendor') {
       body.email = req.user.email;
     } else if (req.user.role === 'admin') {
       buyerId = (req.query && req.query.buyerId) || null;
+    } else if (req.user.role === 'buyer') {
+      // Whitelisted: a buyer may only set contact/profile fields for a vendor
+      // they deal with directly, never identity/ownership fields — those come
+      // from their own authenticated account, not the request body.
+      const buyerAccount = storeService.getBuyerAccountByEmail(req.user.email);
+      if (!buyerAccount) {
+        return res.status(403).json({
+          success: false,
+          error: 'Your account is not linked to a buyer organization yet, so a vendor cannot be added.',
+        });
+      }
+      buyerId = buyerAccount.id;
+      addedByBuyerCompany = buyerAccount.organizationName;
+      body = pickVendorBuyerCreateFields(body);
     } else {
       return res.status(403).json({ success: false, error: 'You do not have permission to create a vendor profile.' });
     }
@@ -142,8 +245,18 @@ function createVendor(req, res, next) {
       logger.warn('Failed to create vendor: Missing name or majorCategory', { body }, 'VENDOR_CONTROLLER');
       return res.status(400).json({ success: false, error: 'Vendor name and majorCategory are required.' });
     }
+    if (req.user.role === 'buyer' && !body.email) {
+      return res.status(400).json({ success: false, error: 'Vendor email is required.' });
+    }
+    if (addedByBuyerCompany) {
+      body.addedByBuyerCompany = addedByBuyerCompany;
+    }
     logger.info(`Creating new vendor: ${body.name}`, { name: body.name, majorCategory: body.majorCategory, buyerId }, 'VENDOR_CONTROLLER');
     const created = storeService.addVendor(body, req.user && req.user.email, buyerId);
+    // Confirms the write actually landed in Postgres before reporting
+    // success — a duplicate email (vendors.email is UNIQUE) used to fail
+    // silently in the background while this endpoint still returned 201.
+    await storeService.confirmVendorPersisted(created);
     res.status(201).json({ success: true, data: created });
   } catch (err) {
     logger.error('Error creating vendor', err, 'VENDOR_CONTROLLER');

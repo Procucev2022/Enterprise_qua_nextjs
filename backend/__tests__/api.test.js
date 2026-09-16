@@ -212,8 +212,57 @@ describe('API Route Endpoints', () => {
     });
 
     test('POST /api/vendors returns 403 for a role that cannot create a vendor profile', async () => {
-      const res = await request(app).post('/api/vendors').set(authHeader('buyer')).send({ name: 'X', majorCategory: 'Y' });
+      const res = await request(app).post('/api/vendors').set(authHeader('category_manager')).send({ name: 'X', majorCategory: 'Y' });
       expect(res.statusCode).toBe(403);
+    });
+
+    test('POST /api/vendors returns 403 for a buyer with no linked buyer account', async () => {
+      // TEST_USERS.buyer has no addBuyerAccount row in this suite's fixtures.
+      const res = await request(app)
+        .post('/api/vendors')
+        .set(authHeader('buyer'))
+        .send({ name: 'Unlinked Buyer Vendor', email: 'unlinked@vendor.test', majorCategory: 'Fasteners' });
+      expect(res.statusCode).toBe(403);
+    });
+
+    test('POST /api/vendors: a buyer with a linked account can add a vendor directly, scoped and whitelisted server-side', async () => {
+      const buyerAccount = storeService.addBuyerAccount({
+        organizationName: 'API Test Buyer Co',
+        corporateEmail: TEST_USERS.buyer.email,
+      });
+
+      const res = await request(app)
+        .post('/api/vendors')
+        .set(authHeader('buyer'))
+        .send({
+          name: 'Direct API Vendor',
+          email: 'direct-api-vendor@test.com',
+          phone: '9876543210',
+          majorCategory: 'Fasteners',
+          buyerId: 'someone-elses-id',
+          addedByBuyerCompany: 'Spoofed Company',
+        });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body.data.buyerId).toBe(buyerAccount.id);
+      expect(res.body.data.addedByBuyerCompany).toBe('API Test Buyer Co');
+    });
+
+    test('POST /api/vendors: a buyer omitting a vendor email is rejected', async () => {
+      storeService.addBuyerAccount({
+        organizationName: 'Email Required API Co',
+        corporateEmail: 'email-required-api-buyer@test.com',
+      });
+      const token = authService.generateSessionToken({
+        id: 'usr-buyer-002',
+        email: 'email-required-api-buyer@test.com',
+        role: 'buyer',
+      });
+      const res = await request(app)
+        .post('/api/vendors')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'No Email Vendor', majorCategory: 'Cables' });
+      expect(res.statusCode).toBe(400);
     });
 
     test('POST /api/vendors returns 400 when missing name or majorCategory', async () => {

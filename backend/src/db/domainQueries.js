@@ -21,6 +21,61 @@ async function getVendorsFromDB() {
   return result.rows.map((row) => row.raw);
 }
 
+/**
+ * One page of vendors, filtered and counted entirely in Postgres.
+ *
+ * getVendorsFromDB() fetches every row's full `raw` JSONB — fine for a
+ * one-time boot hydration, but a real request hit it on every single "Load
+ * more" click once the vendor table reached 80k+ rows (a bulk Vendor Master
+ * import): each click re-fetched and re-serialized the entire table just to
+ * throw away all but 50 rows, slow/heavy enough to hang the browser mid-
+ * pagination. This does the LIMIT/OFFSET/search filtering in SQL instead, so
+ * a page request only ever touches the rows it actually returns.
+ */
+async function getVendorsPageFromDB({ limit, offset, search = '', publicOnly = false } = {}) {
+  if (!pool.pool) return { rows: [], total: 0 };
+  const params = [];
+  const conditions = [];
+  if (search) {
+    params.push(`%${search}%`);
+    // major_category has its own indexed column; name/email/minor categories
+    // only exist inside `raw`, so those fall back to a JSONB text scan/cast.
+    conditions.push(`(major_category ILIKE $${params.length}
+      OR email ILIKE $${params.length}
+      OR raw->>'name' ILIKE $${params.length}
+      OR (raw->'minorCategories')::text ILIKE $${params.length})`);
+  }
+  if (publicOnly) {
+    // Mirrors storeService.getVendors' unscoped filter: a vendor tagged to a
+    // specific buyer (buyerId/buyerAccountId set inside `raw`) is only meant
+    // to be visible to that buyer, never in an anonymous/public listing.
+    conditions.push(`(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  // Separate param arrays for the count vs. data query — sharing and
+  // mutating one array across both calls works with a driver that sends the
+  // query immediately, but is a needless footgun (and confusing to inspect
+  // in tests) for no benefit.
+  const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM vendors ${where}`, [...params]);
+  const total = countResult.rows[0]?.total || 0;
+
+  const dataParams = [...params, limit, offset];
+  const dataResult = await pool.query(
+    `SELECT raw FROM vendors ${where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+    dataParams
+  );
+  return { rows: dataResult.rows.map((row) => row.raw), total };
+}
+
+/** Single-row lookup by email — used to guarantee a specific vendor is
+ * present in a capped/paginated listing without fetching the whole table. */
+async function getVendorByEmailFromDB(email) {
+  if (!pool.pool || !email) return null;
+  const result = await pool.query('SELECT raw FROM vendors WHERE email = $1 LIMIT 1', [email]);
+  return result.rows[0]?.raw || null;
+}
+
 async function upsertVendorInDB(vendor) {
   if (!pool.pool) return null;
   const { id, email, majorCategory, status, source } = vendor;
@@ -407,6 +462,8 @@ async function upsertPaymentLinkInDB(link) {
 
 module.exports = {
   getVendorsFromDB,
+  getVendorsPageFromDB,
+  getVendorByEmailFromDB,
   upsertVendorInDB,
   deleteVendorInDB,
   bulkInsertVendorsInDB,

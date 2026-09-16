@@ -54,7 +54,11 @@ beforeEach(() => {
   jest.clearAllMocks();
   (useApp as jest.Mock).mockReturnValue({ showToast: mockShowToast });
   mockFetchCandidates.mockResolvedValue({ success: true, candidates: [] });
-  mockFetchAllVendors.mockResolvedValue({ success: true, candidates: [] });
+  mockFetchAllVendors.mockResolvedValue({
+    success: true,
+    candidates: [],
+    pagination: { page: 1, pageSize: 50, total: 0, totalPages: 1 },
+  });
 });
 
 describe('InviteVendorsModal', () => {
@@ -274,13 +278,28 @@ describe('InviteVendorsModal — All Vendors tab', () => {
     await waitFor(() => expect(screen.getByText(S.noVendorsFound)).toBeInTheDocument());
   });
 
-  it('filters all-vendor rows by name/majorCategory/email/minorCategories substring match', async () => {
-    mockFetchAllVendors.mockResolvedValue({
+  it('sends the search term to the server (debounced) and renders only what it returns', async () => {
+    const alpha = candidate({ id: 'v-1', name: 'Alpha Traders', majorCategory: 'Cables', email: 'a@x.com', minorCategories: ['Copper'] });
+    const bolt = candidate({ id: 'v-2', name: 'Bolt Supplies', majorCategory: 'Fasteners', email: 'b@y.com', minorCategories: ['Steel'] });
+    const page = (candidates: RFQVendorCandidate[]) => ({
       success: true,
-      candidates: [
-        candidate({ id: 'v-1', name: 'Alpha Traders', majorCategory: 'Cables', email: 'a@x.com', minorCategories: ['Copper'] }),
-        candidate({ id: 'v-2', name: 'Bolt Supplies', majorCategory: 'Fasteners', email: 'b@y.com', minorCategories: ['Steel'] }),
-      ],
+      candidates,
+      pagination: { page: 1, pageSize: 50, total: candidates.length, totalPages: 1 },
+    });
+
+    // The real endpoint filters server-side; this mock stands in for that by
+    // inspecting the `search` option the component sent.
+    mockFetchAllVendors.mockImplementation(async (opts: { search?: string } = {}) => {
+      const q = (opts.search || '').toLowerCase();
+      if (!q) return page([alpha, bolt]);
+      const all = [alpha, bolt];
+      return page(
+        all.filter((v) =>
+          [v.name, v.majorCategory, v.email, ...(v.minorCategories || [])].some((f) =>
+            String(f || '').toLowerCase().includes(q)
+          )
+        )
+      );
     });
 
     render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
@@ -292,20 +311,61 @@ describe('InviteVendorsModal — All Vendors tab', () => {
     const search = screen.getByPlaceholderText(S.searchPlaceholder);
 
     fireEvent.change(search, { target: { value: 'bolt' } });
-    expect(screen.queryByText('Alpha Traders')).not.toBeInTheDocument();
+    await waitFor(() => expect(mockFetchAllVendors).toHaveBeenCalledWith(expect.objectContaining({ search: 'bolt' })));
+    await waitFor(() => expect(screen.queryByText('Alpha Traders')).not.toBeInTheDocument());
     expect(screen.getByText('Bolt Supplies')).toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: 'copper' } });
-    expect(screen.getByText('Alpha Traders')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Alpha Traders')).toBeInTheDocument());
     expect(screen.queryByText('Bolt Supplies')).not.toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: 'y.com' } });
+    await waitFor(() => expect(screen.getByText('Bolt Supplies')).toBeInTheDocument());
     expect(screen.queryByText('Alpha Traders')).not.toBeInTheDocument();
-    expect(screen.getByText('Bolt Supplies')).toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: '' } });
-    expect(screen.getByText('Alpha Traders')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Alpha Traders')).toBeInTheDocument());
     expect(screen.getByText('Bolt Supplies')).toBeInTheDocument();
+  });
+
+  it('shows a Load More button when more pages remain, and appends the next page on click', async () => {
+    const first = Array.from({ length: 2 }, (_, i) => candidate({ id: `v-${i}`, name: `Vendor ${i}` }));
+    const second = [candidate({ id: 'v-extra', name: 'Extra Vendor' })];
+    mockFetchAllVendors
+      .mockResolvedValueOnce({ success: true, candidates: first, pagination: { page: 1, pageSize: 2, total: 3, totalPages: 2 } })
+      .mockResolvedValueOnce({ success: true, candidates: second, pagination: { page: 2, pageSize: 2, total: 3, totalPages: 2 } });
+
+    render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+    await waitFor(() => expect(screen.getByText(S.noCandidates)).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('invite-tab-all'));
+    await waitFor(() => expect(screen.getByText('Vendor 0')).toBeInTheDocument());
+
+    const loadMore = screen.getByTestId('load-more-vendors');
+    fireEvent.click(loadMore);
+
+    await waitFor(() => expect(screen.getByText('Extra Vendor')).toBeInTheDocument());
+    expect(screen.getByText('Vendor 0')).toBeInTheDocument();
+    expect(mockFetchAllVendors).toHaveBeenCalledWith(expect.objectContaining({ page: 2 }));
+  });
+
+  it('shows an error and falls back to the default message when Load More itself fails', async () => {
+    const first = Array.from({ length: 2 }, (_, i) => candidate({ id: `v-${i}`, name: `Vendor ${i}` }));
+    mockFetchAllVendors
+      .mockResolvedValueOnce({ success: true, candidates: first, pagination: { page: 1, pageSize: 2, total: 4, totalPages: 2 } })
+      .mockResolvedValueOnce({ success: false, reason: 'SERVER', error: '' });
+
+    render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+    await waitFor(() => expect(screen.getByText(S.noCandidates)).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('invite-tab-all'));
+    await waitFor(() => expect(screen.getByText('Vendor 0')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('load-more-vendors'));
+
+    // allVendorsError is shared with the initial-load error state, so a
+    // failed Load More replaces the list with the error message rather than
+    // leaving the already-loaded first page visible underneath it.
+    await waitFor(() => expect(screen.getByText(S.allVendorsLoadFailed)).toBeInTheDocument());
+    expect(screen.queryByText('Vendor 0')).not.toBeInTheDocument();
   });
 
   it('shows the outside-category badge only for all-vendor rows whose category does not match the RFQ signals, including extractedEntities-derived signals', async () => {
