@@ -91,4 +91,116 @@ describe('VendorConsole — pagination over a large vendor roster', () => {
 
     await waitFor(() => expect(screen.getByText('Could not load vendors.')).toBeInTheDocument());
   });
+
+  test('highlights a card red when the vendor has no email, and green when it has one', async () => {
+    const withEmail = makeVendor(0);
+    const withoutEmail = { ...makeVendor(1), email: '' };
+    mockFetchAllVendors.mockResolvedValueOnce(page([withEmail, withoutEmail], 1, 2));
+
+    render(<VendorConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
+    await waitFor(() => expect(screen.getByText('Vendor 0')).toBeInTheDocument());
+
+    const emailCard = screen.getByText('Vendor 0').closest('.glass-panel');
+    const noEmailCard = screen.getByText('Vendor 1').closest('.glass-panel');
+    expect(emailCard?.className).toContain('border-emerald-300');
+    expect(noEmailCard?.className).toContain('border-rose-300');
+  });
+
+  test('surfaces an error and stops the loading-more spinner when a "Load More" fetch fails', async () => {
+    mockFetchAllVendors.mockResolvedValueOnce(page(ALL_VENDORS.slice(0, PAGE_SIZE), 1, 25));
+    render(<VendorConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
+    await waitFor(() => expect(screen.getByText('Vendor 0')).toBeInTheDocument());
+
+    mockFetchAllVendors.mockResolvedValueOnce({ success: false, reason: 'SERVER', error: 'Could not load more vendors.' });
+    fireEvent.click(screen.getByTestId('load-more-vendor-cards'));
+
+    await waitFor(() => expect(screen.getByText('Could not load more vendors.')).toBeInTheDocument());
+  });
+
+  test('opens and closes the Bulk Upload Vendors modal from its button', async () => {
+    mockFetchAllVendors.mockResolvedValueOnce(page([], 1, 0));
+    render(<VendorConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
+    await waitFor(() => expect(mockFetchAllVendors).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByText(/Bulk Upload Vendors/i));
+    expect(screen.getByTestId('vendor-upload-modal')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText('Close'));
+    expect(screen.queryByTestId('vendor-upload-modal')).not.toBeInTheDocument();
+  });
+
+  test('computes awarded spend only from PO-generated RFQs actually awarded to that vendor', async () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      rfqs: [
+        { status: 'PO Generated', awardedVendor: 'Vendor 0', awardedAmount: 50000 },
+        { status: 'PO Generated', awardedVendor: 'Someone Else', awardedAmount: 99999 },
+        { status: 'Quotes Pending', awardedVendor: 'Vendor 0', awardedAmount: 12345 },
+      ],
+    });
+    mockFetchAllVendors.mockResolvedValueOnce(page([makeVendor(0)], 1, 1));
+    render(<VendorConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
+    await waitFor(() => expect(screen.getByText('Vendor 0')).toBeInTheDocument());
+
+    expect(screen.getAllByText((_, el) => el?.textContent === '₹50,000').length).toBeGreaterThan(0);
+  });
+
+  test('does not re-fetch on an unrelated re-render when the search term is unchanged', async () => {
+    mockFetchAllVendors.mockResolvedValueOnce(page(ALL_VENDORS.slice(0, PAGE_SIZE), 1, 25));
+    const { rerender } = render(<VendorConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
+    await waitFor(() => expect(screen.getByText('Vendor 0')).toBeInTheDocument());
+    expect(mockFetchAllVendors).toHaveBeenCalledTimes(1);
+
+    rerender(<VendorConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
+    expect(mockFetchAllVendors).toHaveBeenCalledTimes(1);
+  });
+
+  test('shows real avg lead time / quote compliance and expands quote detail with a compliance badge', async () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      rfqs: [
+        {
+          rfqNumber: 'RFQ-1',
+          title: 'Test RFQ',
+          status: 'PO Generated',
+          awardedVendor: 'Vendor 0',
+          awardedAmount: 1000,
+          budget: 5000,
+          extractedEntities: [],
+          quotes: [{ vendorId: 'v-0', leadTimeDays: 7, complianceStatus: 'Fully Compliant', totalPrice: 4500 }],
+        },
+      ],
+    });
+    mockFetchAllVendors.mockResolvedValueOnce(page([makeVendor(0)], 1, 1));
+    render(<VendorConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
+    await waitFor(() => expect(screen.getByText('Vendor 0')).toBeInTheDocument());
+
+    expect(screen.getAllByText(/7 days/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('100%').length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByText(/Review Performance/i));
+    expect(screen.getAllByText(/7 days/).length).toBeGreaterThan(0);
+    expect(screen.getByText('Fully Compliant')).toBeInTheDocument();
+  });
+
+  test('falls back to a placeholder avatar/label when a vendor has no name, and shows the amber badge for a non-Fully-Compliant quote', async () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      rfqs: [
+        {
+          rfqNumber: 'RFQ-2',
+          title: 'Test RFQ 2',
+          status: 'Quotes Pending',
+          budget: 5000,
+          extractedEntities: [],
+          quotes: [{ vendorId: 'v-noname', leadTimeDays: 9, complianceStatus: 'Partially Compliant', totalPrice: 3000 }],
+        },
+      ],
+    });
+    mockFetchAllVendors.mockResolvedValueOnce(
+      page([{ ...makeVendor(0), id: 'v-noname', name: '' }], 1, 1)
+    );
+    render(<VendorConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
+    await waitFor(() => expect(screen.getAllByText('Unnamed Vendor').length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByText(/Review Performance/i));
+    expect(screen.getByText('Partially Compliant')).toBeInTheDocument();
+  });
 });
