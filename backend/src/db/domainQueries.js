@@ -32,24 +32,53 @@ async function getVendorsFromDB() {
  * pagination. This does the LIMIT/OFFSET/search filtering in SQL instead, so
  * a page request only ever touches the rows it actually returns.
  */
-async function getVendorsPageFromDB({ limit, offset, search = '', publicOnly = false } = {}) {
+async function getVendorsPageFromDB({ limit, offset, search = '', category = '', publicOnly = false, scopedBuyerId = '' } = {}) {
   if (!pool.pool) return { rows: [], total: 0 };
   const params = [];
   const conditions = [];
   if (search) {
     params.push(`%${search}%`);
-    // major_category has its own indexed column; name/email/minor categories
-    // only exist inside `raw`, so those fall back to a JSONB text scan/cast.
+    // major_category/email/name/minorCategories are all backed by a trigram
+    // GIN index (idx_vendors_*_trgm in schema.sql) so this substring ILIKE
+    // doesn't force a sequential scan of the whole table at 600k+ rows.
     conditions.push(`(major_category ILIKE $${params.length}
       OR email ILIKE $${params.length}
       OR raw->>'name' ILIKE $${params.length}
       OR (raw->'minorCategories')::text ILIKE $${params.length})`);
+  }
+  if (category) {
+    // An exact-match category filter (the CM's category dropdown), separate
+    // from the free-text `search` above — combinable with it via AND. Uses
+    // the existing plain btree idx_vendors_major_category index (an equality
+    // match, unlike search's leading-wildcard ILIKE, so no trigram needed).
+    params.push(category);
+    conditions.push(`major_category = $${params.length}`);
   }
   if (publicOnly) {
     // Mirrors storeService.getVendors' unscoped filter: a vendor tagged to a
     // specific buyer (buyerId/buyerAccountId set inside `raw`) is only meant
     // to be visible to that buyer, never in an anonymous/public listing.
     conditions.push(`(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`);
+  }
+  if (scopedBuyerId) {
+    // A buyer's paginated listing must include every public vendor (no
+    // buyerId/buyerAccountId at all) plus their own uploads — the same rule
+    // storeService.getVendors applies in memory. Previously only the fully-
+    // open ("all") listing got this SQL fast path; any buyer-scoped page
+    // request fell through to storeService.getVendors(buyerId), which
+    // re-fetches and re-serializes every one of 600k+ rows on every single
+    // call regardless of scope, since almost all vendors are public and thus
+    // visible to every buyer anyway. Backed by idx_vendors_buyer_id/
+    // idx_vendors_buyer_account_id (schema.sql) so the OR still uses indexes
+    // instead of a sequential scan.
+    params.push(scopedBuyerId);
+    const p = params.length;
+    conditions.push(`(
+      ((raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL)
+      OR lower(raw->>'buyerId') = lower($${p})
+      OR lower(raw->>'buyerAccountId') = lower($${p})
+      OR lower(raw->>'buyerEmail') = lower($${p})
+    )`);
   }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 

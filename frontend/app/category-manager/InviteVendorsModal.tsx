@@ -14,6 +14,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { X, Send, CheckCircle2, Loader2, AlertTriangle, Users, Search } from 'lucide-react';
 import { useApp } from '@/lib/store';
 import { fetchAllVendors, fetchVendorCandidates, inviteVendorsToRFQ } from '@/lib/rfqClient';
+import { fetchCategoryTaxonomy } from '@/lib/buyerProfileClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type { RFQItem, RFQVendorCandidate, VendorPageMeta } from '@/lib/types';
 
@@ -68,6 +69,8 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
   const [allVendorsPagination, setAllVendorsPagination] = useState<VendorPageMeta | null>(null);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [categoryOptions, setCategoryOptions] = useState<string[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
 
@@ -76,6 +79,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     setTab('category');
     setSearch('');
     setDebouncedSearch('');
+    setCategoryFilter('');
     setLoading(true);
     setError(null);
     setSelected(new Set());
@@ -89,6 +93,11 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
         setError(result.error || S.loadFailed);
       }
       setLoading(false);
+    });
+    void fetchCategoryTaxonomy().then((result) => {
+      if (result.success) {
+        setCategoryOptions(result.data.map((c) => c.majorCategory));
+      }
     });
   }, [isOpen, rfq]);
 
@@ -104,11 +113,12 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
   };
 
   // Fetched lazily on first switch into "All Vendors", and re-fetched from
-  // page 1 whenever the (debounced) search term changes — search runs
-  // server-side over the whole directory, not just the pages already loaded.
-  // Switching tabs back and forth does NOT refetch once a search term has
-  // already been loaded, tracked via lastFetchedSearchRef.
-  const lastFetchedSearchRef = useRef<string | null>(null);
+  // page 1 whenever the (debounced) search term or category filter changes —
+  // both run server-side over the whole directory, not just the pages
+  // already loaded. Switching tabs back and forth does NOT refetch once a
+  // given search+category combination has already been loaded, tracked via
+  // lastFetchedKeyRef.
+  const lastFetchedKeyRef = useRef<string | null>(null);
   // Guards against a slower, earlier request (e.g. the initial unfiltered
   // load) resolving AFTER a newer, filtered one and overwriting it with
   // stale data — only the most recently *issued* request's response is ever
@@ -116,12 +126,13 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
   const fetchSeqRef = useRef(0);
   useEffect(() => {
     if (!isOpen || !rfq || tab !== 'all') return;
-    if (allVendors !== null && lastFetchedSearchRef.current === debouncedSearch) return;
-    lastFetchedSearchRef.current = debouncedSearch;
+    const key = `${debouncedSearch}|${categoryFilter}`;
+    if (allVendors !== null && lastFetchedKeyRef.current === key) return;
+    lastFetchedKeyRef.current = key;
     const seq = ++fetchSeqRef.current;
     setAllVendorsLoading(true);
     setAllVendorsError(null);
-    void fetchAllVendors({ page: 1, pageSize: ALL_VENDORS_PAGE_SIZE, search: debouncedSearch }).then((result) => {
+    void fetchAllVendors({ page: 1, pageSize: ALL_VENDORS_PAGE_SIZE, search: debouncedSearch, category: categoryFilter }).then((result) => {
       if (seq !== fetchSeqRef.current) return;
       if (result.success) {
         setAllVendors(stampInvited(result.candidates));
@@ -132,7 +143,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       setAllVendorsLoading(false);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- rfq.assignedVendors is only read via stampInvited at fetch time, not a re-fetch trigger
-  }, [isOpen, rfq, tab, debouncedSearch]);
+  }, [isOpen, rfq, tab, debouncedSearch, categoryFilter]);
 
   const loadMoreAllVendors = () => {
     if (!allVendorsPagination || allVendorsLoadingMore) return;
@@ -140,7 +151,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     if (nextPage > allVendorsPagination.totalPages) return;
     const seq = ++fetchSeqRef.current;
     setAllVendorsLoadingMore(true);
-    void fetchAllVendors({ page: nextPage, pageSize: ALL_VENDORS_PAGE_SIZE, search: debouncedSearch }).then((result) => {
+    void fetchAllVendors({ page: nextPage, pageSize: ALL_VENDORS_PAGE_SIZE, search: debouncedSearch, category: categoryFilter }).then((result) => {
       if (seq !== fetchSeqRef.current) return;
       if (result.success) {
         setAllVendors((prev) => [...(prev || []), ...stampInvited(result.candidates)]);
@@ -249,8 +260,8 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
         </div>
 
         {tab === 'all' && (
-          <div className="px-5 pt-3">
-            <div className="relative">
+          <div className="px-5 pt-3 flex gap-2">
+            <div className="relative flex-1">
               <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
@@ -260,6 +271,18 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                 className="w-full pl-8 pr-3 py-2 rounded-lg border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
               />
             </div>
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              className="w-48 px-2 py-2 rounded-lg border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            >
+              <option value="">All categories</option>
+              {categoryOptions.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
           </div>
         )}
 
