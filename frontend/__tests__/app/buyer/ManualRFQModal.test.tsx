@@ -14,6 +14,7 @@ jest.mock('@/lib/rfqClient', () => ({
   createRFQ: jest.fn(),
   uploadRFQAttachment: jest.fn(),
   extractLineItemsFromDocument: jest.fn(),
+  fetchAllVendors: jest.fn(),
 }));
 
 // The modal reads buyerVendors from useApp() inside a try/catch, since it can
@@ -176,6 +177,11 @@ beforeEach(() => {
     });
   });
   rfqClient.extractLineItemsFromDocument.mockResolvedValue(extractionResult());
+  rfqClient.fetchAllVendors.mockResolvedValue({
+    success: true,
+    candidates: [],
+    pagination: { page: 1, pageSize: 50, total: 0, totalPages: 0 },
+  });
 });
 
 describe('ManualRFQModal: visibility', () => {
@@ -292,7 +298,8 @@ describe('ManualRFQModal: validation', () => {
     expect(screen.getByText(MANUAL.itemNameRequired)).toBeInTheDocument();
     expect(screen.getByText(MANUAL.quantityRequired)).toBeInTheDocument();
     expect(screen.getByText(MANUAL.unitRequired)).toBeInTheDocument();
-    expect(screen.getByText(MANUAL.majorCategoryRequired)).toBeInTheDocument();
+    // Category is optional now — no error shown for a blank major/minor category.
+    expect(screen.queryByText(MANUAL.majorCategoryRequired)).not.toBeInTheDocument();
     expect(screen.getByText(MANUAL.deliveryLocationRequired)).toBeInTheDocument();
     expect(screen.getByText(MANUAL.deliveryPincodeRequired)).toBeInTheDocument();
   });
@@ -826,15 +833,25 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
   });
 
   describe('Mode 2 and Mode 3 category-matched vendor previews', () => {
-    it('filters Procucev vendors in Mode 2 and Mode 3 to only category-matching suppliers', () => {
+    it('filters Procucev vendors in Mode 2 and Mode 3 to only category-matching suppliers', async () => {
       const testMajor = 'Professional Services';
       const testMinor = 'Security Service';
+
+      // Mode 2/3 matches are now fetched from the real searchable directory
+      // (fetchAllVendors), not scored against the capped buyerVendors list —
+      // the mock only ever returns the real match, matching what the server's
+      // search would actually filter to.
+      rfqClient.fetchAllVendors.mockResolvedValue({
+        success: true,
+        candidates: [
+          { id: 'proc-serv', name: 'Procucev Security Corp', majorCategory: testMajor, minorCategories: [testMinor], source: 'procucev_network' },
+        ],
+        pagination: { page: 1, pageSize: 50, total: 1, totalPages: 1 },
+      });
 
       (useApp as jest.Mock).mockReturnValue({
         buyerVendors: [
           { id: 'v-hist-1', name: 'Private Vendor', source: 'buyer_uploaded' },
-          { id: 'proc-serv', name: 'Procucev Security Corp', majorCategory: testMajor, minorCategories: [testMinor], source: 'procucev_network' },
-          { id: 'proc-civil', name: 'Procucev Civil Works Ltd', majorCategory: 'Civil Works', minorCategories: ['Excavation'], source: 'procucev_network' },
         ],
       });
       renderModal();
@@ -852,7 +869,8 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       fireEvent.click(modes[1]); // Mode 2
 
       expect(screen.getByText(/Mode 2: Hybrid Sourcing Pool/i)).toBeInTheDocument();
-      expect(screen.getByText('Procucev Security Corp')).toBeInTheDocument();
+      await waitFor(() => expect(rfqClient.fetchAllVendors).toHaveBeenCalled());
+      await waitFor(() => expect(screen.getByText('Procucev Security Corp')).toBeInTheDocument());
       expect(screen.getAllByText(testMinor).length).toBeGreaterThanOrEqual(1);
       expect(screen.queryByText('Procucev Civil Works Ltd')).not.toBeInTheDocument();
 
@@ -866,7 +884,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       // Select Mode 3
       fireEvent.click(modes[2]); // Mode 3
       expect(screen.getByText(/Mode 3: Double-Blind Anonymous Verification/i)).toBeInTheDocument();
-      expect(screen.getByText('Procucev Security Corp')).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByText('Procucev Security Corp')).toBeInTheDocument());
       expect(screen.getAllByText(testMinor).length).toBeGreaterThanOrEqual(1);
       expect(screen.queryByText('Procucev Civil Works Ltd')).not.toBeInTheDocument();
 

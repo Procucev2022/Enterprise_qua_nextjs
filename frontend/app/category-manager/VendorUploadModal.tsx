@@ -55,6 +55,10 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
 
   const validRows = useMemo(() => rows.filter((r) => r.isValid), [rows]);
   const invalidRows = useMemo(() => rows.filter((r) => !r.isValid), [rows]);
+  // A row with no email still uploads (not rejected, not fabricated an
+  // email) — highlighted here so it's visible before the import even runs,
+  // not just in a downloadable report afterward.
+  const missingEmailRows = useMemo(() => validRows.filter((r) => r.missingEmail), [validRows]);
 
   const filteredRows = useMemo(() => {
     if (previewFilter === 'valid') return validRows;
@@ -128,10 +132,14 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
   }
 
   async function handleImport() {
-    if (validRows.length === 0) return;
+    // Every parsed (non-blank) row is imported, not just the ones that
+    // passed every check — a row with a bad email/phone format or a missing
+    // name still becomes a real vendor record, just one flagged with
+    // `hasIssues` so it's visible, not silently dropped.
+    if (rows.length === 0) return;
     setStep('importing');
-    setImportProgress({ total: 0, imported: 0, duplicates: 0, failed: 0, results: [] });
-    const result = await bulkImportVendorRows(validRows, (soFar) => setImportProgress(soFar));
+    setImportProgress({ total: 0, imported: 0, missingEmail: 0, duplicates: 0, failed: 0, results: [] });
+    const result = await bulkImportVendorRows(rows, (soFar) => setImportProgress(soFar));
     setImportResult(result);
     setStep('result');
     if (result.imported > 0) {
@@ -261,7 +269,7 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                 {blankRowCount > 0 && <span>({blankRowCount} blank row(s) skipped)</span>}
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-4 gap-2">
                 <div className="p-2.5 rounded-lg border border-slate-200 dark:border-gray-800 text-center">
                   <div className="text-lg font-black text-slate-900 dark:text-white">{rows.length}</div>
                   <div className="text-[10px] uppercase text-slate-450 dark:text-gray-500">Total Rows</div>
@@ -270,9 +278,13 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                   <div className="text-lg font-black text-emerald-700 dark:text-emerald-300">{validRows.length}</div>
                   <div className="text-[10px] uppercase text-slate-450 dark:text-gray-500">Valid</div>
                 </div>
+                <div className="p-2.5 rounded-lg border border-amber-200 dark:border-amber-900/60 bg-amber-50/40 dark:bg-amber-950/20 text-center">
+                  <div className="text-lg font-black text-amber-700 dark:text-amber-300">{missingEmailRows.length}</div>
+                  <div className="text-[10px] uppercase text-slate-450 dark:text-gray-500">Missing Email</div>
+                </div>
                 <div className="p-2.5 rounded-lg border border-rose-200 dark:border-rose-900/60 bg-rose-50/40 dark:bg-rose-950/20 text-center">
                   <div className="text-lg font-black text-rose-700 dark:text-rose-300">{invalidRows.length}</div>
-                  <div className="text-[10px] uppercase text-slate-450 dark:text-gray-500">Errors</div>
+                  <div className="text-[10px] uppercase text-slate-450 dark:text-gray-500">Issues (still imported)</div>
                 </div>
               </div>
 
@@ -307,21 +319,30 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                   </thead>
                   <tbody>
                     {pageRows.map((r) => (
-                      <tr key={r.rowNumber} className="border-b border-slate-100 dark:border-gray-850">
+                      <tr
+                        key={r.rowNumber}
+                        className={`border-b border-slate-100 dark:border-gray-850 ${
+                          r.missingEmail ? 'bg-amber-50/60 dark:bg-amber-950/20' : ''
+                        }`}
+                      >
                         <td className="p-2 font-mono">{r.rowNumber}</td>
                         <td className="p-2">
-                          {r.isValid ? (
-                            <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-bold">
-                              <CheckCircle2 size={12} /> Ready
+                          {!r.isValid ? (
+                            <span className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400 font-bold">
+                              <AlertTriangle size={12} /> Issue — imported anyway
+                            </span>
+                          ) : r.missingEmail ? (
+                            <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 font-bold">
+                              <AlertTriangle size={12} /> No Email
                             </span>
                           ) : (
-                            <span className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400 font-bold">
-                              <AlertTriangle size={12} /> Error
+                            <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-bold">
+                              <CheckCircle2 size={12} /> Ready
                             </span>
                           )}
                         </td>
                         <td className="p-2">{r.vendor.name || '—'}</td>
-                        <td className="p-2">{r.vendor.email || '—'}</td>
+                        <td className="p-2">{r.vendor.email || <span className="text-amber-600 dark:text-amber-400 font-bold">No Email</span>}</td>
                         <td className="p-2">{r.vendor.phone || '—'}</td>
                         <td className="p-2">{r.vendor.gstin || '—'}</td>
                         <td className="p-2">{r.vendor.city || '—'}</td>
@@ -360,10 +381,11 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                 </button>
                 <button
                   onClick={handleImport}
-                  disabled={validRows.length === 0}
+                  disabled={rows.length === 0}
                   className="btn btn-primary btn-sm font-bold disabled:opacity-40"
                 >
-                  Import {validRows.length} Valid Vendor{validRows.length === 1 ? '' : 's'}
+                  Import {rows.length} Vendor{rows.length === 1 ? '' : 's'}
+                  {invalidRows.length > 0 && ` (${invalidRows.length} with issues)`}
                 </button>
               </div>
             </div>
@@ -375,8 +397,9 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
               <p className="font-bold">Importing vendors…</p>
               {importProgress && (
                 <p className="text-[11px] text-slate-450 dark:text-gray-500">
-                  {importProgress.total} of {validRows.length} processed — {importProgress.imported} imported,{' '}
-                  {importProgress.duplicates} duplicate, {importProgress.failed} failed
+                  {importProgress.total} of {rows.length} processed — {importProgress.imported} imported (
+                  {importProgress.missingEmail} missing email), {importProgress.duplicates} duplicate,{' '}
+                  {importProgress.failed} failed
                 </p>
               )}
             </div>
@@ -395,6 +418,11 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                   Total: {rows.length} · Imported: {importResult.imported} · Failed: {importResult.failed} · Duplicates:{' '}
                   {importResult.duplicates}
                 </p>
+                {importResult.missingEmail > 0 && (
+                  <p className="text-[11px] font-bold text-amber-600 dark:text-amber-400">
+                    {importResult.missingEmail} imported vendor(s) had no email — highlighted above, review when convenient.
+                  </p>
+                )}
               </div>
 
               {(importResult.failed > 0 || importResult.duplicates > 0) && (

@@ -279,8 +279,19 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     // record). The server allocates the RFQ number, so the created record carries
     // one the caller did not supply — which is exactly what the store must adopt.
     let allocated = 0;
+    let allocatedVendors = 0;
     mockFetch.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
       const isRfqEndpoint = typeof url === 'string' && /\/api\/rfqs(\?|$)/.test(url);
+      const isVendorsEndpoint = typeof url === 'string' && /\/api\/vendors(\?|$)/.test(url);
+      if (isVendorsEndpoint && init?.method === 'POST') {
+        allocatedVendors += 1;
+        const sent = JSON.parse(init.body || '{}');
+        return Promise.resolve({
+          ok: true,
+          status: 201,
+          json: async () => ({ success: true, data: { ...sent, id: `v-added-${allocatedVendors}` } }),
+        });
+      }
       if (isRfqEndpoint && init?.method === 'POST') {
         allocated += 1;
         const sent = JSON.parse(init.body || '{}');
@@ -580,9 +591,9 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     await waitFor(() => expect(contextValue.buyerVendors.length).toBeGreaterThan(0));
 
     // 1. Add single Buyer Vendor (new and existing in DB)
-    let addedVendor: VendorEntry;
-    act(() => {
-      addedVendor = contextValue.addBuyerVendor({
+    let addedVendor: VendorEntry | null = null;
+    await act(async () => {
+      addedVendor = await contextValue.addBuyerVendor({
         name: 'Precision Hydro Pumps',
         contactPerson: 'Karan Sharma',
         email: 'karan@precisionhydro.in',
@@ -599,7 +610,7 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
         evaluated: true,
       });
       // Add existing vendor in DB
-      contextValue.addBuyerVendor({
+      await contextValue.addBuyerVendor({
         name: 'Apex Industrial Dynamics Pvt Ltd',
         contactPerson: 'Rajesh Nair',
         email: 'rajesh@apexindustrial.in',

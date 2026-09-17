@@ -102,7 +102,7 @@ const rootResolvers = {
     return rfq;
   },
 
-  vendors: (args = {}, context = {}) => {
+  vendors: async (args = {}, context = {}) => {
     const { majorCategory, source, search, limit = 50, offset = 0 } = args;
     const user = context && context.req ? context.req.user : null;
     let buyerId = null;
@@ -112,7 +112,7 @@ const rootResolvers = {
     } else if (args.buyerId) {
       buyerId = args.buyerId;
     }
-    let result = storeService.getVendors(buyerId);
+    let result = await storeService.getVendors(buyerId);
     if (majorCategory) {
       result = result.filter((v) => v.majorCategory && v.majorCategory.toLowerCase().includes(majorCategory.toLowerCase()));
     }
@@ -126,7 +126,7 @@ const rootResolvers = {
     return result.slice(offset, offset + limit);
   },
 
-  vendor: (args = {}, context = {}) => {
+  vendor: async (args = {}, context = {}) => {
     const user = context && context.req ? context.req.user : null;
     let buyerId = null;
     if (user && user.role === 'buyer') {
@@ -139,7 +139,8 @@ const rootResolvers = {
       return storeService.getVendorById(args.id, buyerId) || null;
     }
     if (args.email) {
-      return storeService.getVendors(buyerId).find((v) => v.email && v.email.toLowerCase() === args.email.toLowerCase()) || null;
+      const vendors = await storeService.getVendors(buyerId);
+      return vendors.find((v) => v.email && v.email.toLowerCase() === args.email.toLowerCase()) || null;
     }
     return null;
   },
@@ -268,7 +269,9 @@ const rootResolvers = {
   createVendor: async ({ input }, context) => {
     const user = await requireAuth(context);
     logger.info('GraphQL Mutation: createVendor', { name: input.name }, 'GRAPHQL_MUTATION');
-    return storeService.addVendor(input, user.email);
+    const created = storeService.addVendor(input, user.email);
+    await storeService.confirmVendorPersisted(created);
+    return created;
   },
 
   updateVendor: async ({ id, input }, context) => {

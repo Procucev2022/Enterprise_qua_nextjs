@@ -99,7 +99,8 @@ describe('vendorUploadClient', () => {
     test('reports required-field errors without fabricating a fallback value', async () => {
       // A row where every mapped field is blank is dropped as a blank row entirely
       // (see the blank-row test below) — City carries a value so the row survives
-      // into `rows` while still triggering the required-field checks.
+      // into `rows` while still triggering the required-field checks. Email is no
+      // longer a required-field error — see the missing-email test below.
       const file = xlsxFile([{ 'Company Name': '', 'Email Id': '', 'Mobile No': '', City: 'Mumbai' }]);
       const result = await parseVendorUploadFile(file);
       expect(result.success).toBe(true);
@@ -107,9 +108,41 @@ describe('vendorUploadClient', () => {
       const row = result.data.rows[0];
       expect(row.isValid).toBe(false);
       expect(row.vendor.name).toBe('');
-      expect(row.errors).toEqual(
-        expect.arrayContaining(['Company name is required.', 'Email is required.', 'Mobile number is required.'])
-      );
+      expect(row.missingEmail).toBe(true);
+      expect(row.errors).toEqual(expect.arrayContaining(['Company name is required.', 'Mobile number is required.']));
+      expect(row.errors).not.toEqual(expect.arrayContaining(['Email is required.']));
+    });
+
+    test('a row with no email is not rejected — it is flagged missingEmail and stays valid', async () => {
+      const file = xlsxFile([
+        { 'Company Name': 'No Email Co', 'Email Id': '', 'Mobile No': '9876543210' },
+      ]);
+      const result = await parseVendorUploadFile(file);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      const row = result.data.rows[0];
+      expect(row.missingEmail).toBe(true);
+      expect(row.isValid).toBe(true);
+      expect(row.errors).toEqual([]);
+      expect(row.vendor.email).toBe('');
+    });
+
+    test('normalizes the "Phone number" and "Categorys" header aliases', async () => {
+      const file = xlsxFile([
+        {
+          'Company Name': 'Alias Co',
+          'Email Id': 'alias@example.com',
+          'Phone number': '9876543210',
+          Categorys: 'Fasteners',
+        },
+      ]);
+      const result = await parseVendorUploadFile(file);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      const row = result.data.rows[0];
+      expect(row.isValid).toBe(true);
+      expect(row.vendor.phone).toBe('9876543210');
+      expect(row.vendor.majorCategory).toBe('Fasteners');
     });
 
     test('flags an invalid email/phone/GSTIN/pincode format without rejecting the whole row silently', async () => {
@@ -256,6 +289,7 @@ describe('vendorUploadClient', () => {
         vendor: { name: `Co ${rowNumber}`, email, phone: '9876543210' },
         isValid: true,
         errors: [],
+        missingEmail: !email,
       };
     }
 
@@ -268,14 +302,30 @@ describe('vendorUploadClient', () => {
         ok: true,
         json: async () => ({
           success: true,
-          data: { total: 2, imported: 2, duplicates: 0, failed: 0, results: [{ rowNumber: 1, status: 'imported' }, { rowNumber: 2, status: 'imported' }] },
+          data: {
+            sessionId: 'bulk-import-1',
+            total: 2,
+            imported: 2,
+            missingEmail: 0,
+            duplicates: 0,
+            failed: 0,
+            results: [{ rowNumber: 1, status: 'imported' }, { rowNumber: 2, status: 'imported' }],
+          },
         }),
       });
 
       const onProgress = jest.fn();
       const result = await bulkImportVendorRows([makeRow(1, 'a@x.com'), makeRow(2, 'b@x.com')], onProgress);
 
-      expect(result).toEqual({ total: 2, imported: 2, duplicates: 0, failed: 0, results: [{ rowNumber: 1, status: 'imported' }, { rowNumber: 2, status: 'imported' }] });
+      expect(result).toEqual({
+        sessionId: 'bulk-import-1',
+        total: 2,
+        imported: 2,
+        missingEmail: 0,
+        duplicates: 0,
+        failed: 0,
+        results: [{ rowNumber: 1, status: 'imported' }, { rowNumber: 2, status: 'imported' }],
+      });
       expect(onProgress).toHaveBeenCalledTimes(1);
       const [url, options] = (global.fetch as jest.Mock).mock.calls[0];
       expect(url).toBe('/api/vendors/bulk-import');
@@ -283,24 +333,59 @@ describe('vendorUploadClient', () => {
       expect(JSON.parse(options.body).vendors).toHaveLength(2);
     });
 
-    test('splits more than 200 rows into multiple chunk requests', async () => {
+    test('splits more than 1000 rows into multiple chunk requests', async () => {
       global.fetch = jest.fn().mockImplementation(async (_url, options) => {
         const sent = JSON.parse(options.body).vendors;
         return {
           ok: true,
           json: async () => ({
             success: true,
-            data: { total: sent.length, imported: sent.length, duplicates: 0, failed: 0, results: sent.map((v: any) => ({ rowNumber: v.rowNumber, status: 'imported' })) },
+            data: { total: sent.length, imported: sent.length, missingEmail: 0, duplicates: 0, failed: 0, results: sent.map((v: any) => ({ rowNumber: v.rowNumber, status: 'imported' })) },
           }),
         };
       });
 
-      const rows = Array.from({ length: 450 }, (_, i) => makeRow(i + 1, `row${i}@example.com`));
+      const rows = Array.from({ length: 2250 }, (_, i) => makeRow(i + 1, `row${i}@example.com`));
       const result = await bulkImportVendorRows(rows);
 
-      expect(global.fetch).toHaveBeenCalledTimes(3); // 200 + 200 + 50
-      expect(result.total).toBe(450);
-      expect(result.imported).toBe(450);
+      expect(global.fetch).toHaveBeenCalledTimes(3); // 1000 + 1000 + 250
+      expect(result.total).toBe(2250);
+      expect(result.imported).toBe(2250);
+    });
+
+    test('passes sessionId and totalRowsDeclared in the request body and aggregates missingEmail across chunks', async () => {
+      global.fetch = jest.fn().mockImplementation(async (_url, options) => {
+        const body = JSON.parse(options.body);
+        expect(body.totalRowsDeclared).toBe(2);
+        expect(body.sessionId).toBeUndefined();
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            data: {
+              sessionId: 'session-abc',
+              total: 2,
+              imported: 1,
+              missingEmail: 1,
+              duplicates: 0,
+              failed: 0,
+              results: [
+                { rowNumber: 1, status: 'imported', missingEmail: true },
+                { rowNumber: 2, status: 'imported' },
+              ],
+            },
+          }),
+        };
+      });
+
+      const result = await bulkImportVendorRows([makeRow(1, ''), makeRow(2, 'b@x.com')]);
+
+      expect(result.sessionId).toBe('session-abc');
+      expect(result.missingEmail).toBe(1);
+      const [, options] = (global.fetch as jest.Mock).mock.calls[0];
+      const sentBody = JSON.parse(options.body);
+      expect(sentBody.sessionId).toBeUndefined();
+      expect(sentBody.totalRowsDeclared).toBe(2);
     });
 
     test('a network failure for one chunk is reported as failed rows, not a thrown error', async () => {
@@ -335,7 +420,7 @@ describe('vendorUploadClient', () => {
     test('an empty row list resolves immediately with all-zero totals', async () => {
       global.fetch = jest.fn();
       const result = await bulkImportVendorRows([]);
-      expect(result).toEqual({ total: 0, imported: 0, duplicates: 0, failed: 0, results: [] });
+      expect(result).toEqual({ sessionId: undefined, total: 0, imported: 0, missingEmail: 0, duplicates: 0, failed: 0, results: [] });
       expect(global.fetch).not.toHaveBeenCalled();
     });
   });

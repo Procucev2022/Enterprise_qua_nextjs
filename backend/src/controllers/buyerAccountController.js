@@ -283,7 +283,7 @@ async function downloadInvoice(req, res, next) {
   }
 }
 
-function ingestHistoricalData(req, res, next) {
+async function ingestHistoricalData(req, res, next) {
   try {
     if (!assertBuyerAccountRole(req, res)) return;
     const { period, vendorRecords } = req.body;
@@ -293,7 +293,7 @@ function ingestHistoricalData(req, res, next) {
     }
     logger.info(`Ingesting historical purchase data for period: ${period}`, { period }, 'BUYER_ACCOUNT_CONTROLLER');
     const requestingBuyerAccount = storeService.getBuyerAccountByEmail(req.user.email);
-    const result = storeService.processHistoricalPurchaseData(period, vendorRecords || [], requestingBuyerAccount);
+    const result = await storeService.processHistoricalPurchaseData(period, vendorRecords || [], requestingBuyerAccount);
     res.json(result);
   } catch (err) {
     logger.error('Error ingesting historical purchase data', err, 'BUYER_ACCOUNT_CONTROLLER');

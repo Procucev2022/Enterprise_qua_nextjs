@@ -17,6 +17,8 @@ import type {
   RFQUpdatePayload,
   RFQVendorCandidate,
   RFQVendorCandidatesResult,
+  RFQVendorPageResult,
+  VendorPageMeta,
 } from './types';
 
 /**
@@ -440,19 +442,25 @@ export async function fetchVendorCandidates(rfqId: string): Promise<RFQVendorCan
  * inviteVendorsToRFQ never validates category match server-side, so any real
  * vendor id already invites successfully.
  */
-export async function fetchAllVendors(): Promise<RFQVendorCandidatesResult> {
+export async function fetchAllVendors(
+  options: { page?: number; pageSize?: number; search?: string } = {}
+): Promise<RFQVendorPageResult> {
   const token = authClient.getToken();
+  const { page = 1, pageSize = 50, search = '' } = options;
+
+  const params = new URLSearchParams({ buyerId: 'all', page: String(page), pageSize: String(pageSize) });
+  if (search.trim()) params.set('search', search.trim());
 
   let res: Response;
   try {
-    res = await fetch('/api/vendors?buyerId=all', {
+    res = await fetch(`/api/vendors?${params.toString()}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
   } catch {
     return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
   }
 
-  let body: { success?: boolean; data?: RFQVendorCandidate[]; error?: string } = {};
+  let body: { success?: boolean; data?: RFQVendorCandidate[]; error?: string; pagination?: VendorPageMeta } = {};
   try {
     body = await res.json();
   } catch {
@@ -466,14 +474,18 @@ export async function fetchAllVendors(): Promise<RFQVendorCandidatesResult> {
   if (res.status === 401 || res.status === 403) {
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
-  if (!res.ok || !body.success || !Array.isArray(body.data)) {
+  if (!res.ok || !body.success || !Array.isArray(body.data) || !body.pagination) {
     return { success: false, reason: 'SERVER', error: body.error || UI_STRINGS.rfqDetails.loadFailed };
   }
 
   // alreadyInvited isn't computed server-side for this endpoint (unlike
   // vendor-candidates) — the caller derives it from the RFQ's own
   // assignedVendors list.
-  return { success: true, candidates: body.data.map((v) => ({ ...v, alreadyInvited: false })) };
+  return {
+    success: true,
+    candidates: body.data.map((v) => ({ ...v, alreadyInvited: false })),
+    pagination: body.pagination,
+  };
 }
 
 /**

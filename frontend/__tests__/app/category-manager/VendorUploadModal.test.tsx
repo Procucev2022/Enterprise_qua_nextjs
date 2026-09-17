@@ -25,6 +25,7 @@ function validRow(overrides: Partial<VendorUploadRow> = {}, n = 2): VendorUpload
     vendor: { name: `Vendor ${n}`, email: `vendor${n}@example.com`, phone: '9876543210', gstin: '', city: 'Pune' },
     isValid: true,
     errors: [],
+    missingEmail: false,
     ...overrides,
   };
 }
@@ -34,7 +35,8 @@ function invalidRow(overrides: Partial<VendorUploadRow> = {}, n = 3): VendorUplo
     rowNumber: n,
     vendor: { name: '', email: '', phone: '' },
     isValid: false,
-    errors: ['Company name is required.', 'Email is required.'],
+    errors: ['Company name is required.'],
+    missingEmail: true,
     ...overrides,
   };
 }
@@ -121,9 +123,50 @@ describe('VendorUploadModal', () => {
 
     await screen.findByText('vendors.xlsx');
     expect(screen.getByText('(1 blank row(s) skipped)')).toBeInTheDocument();
-    expect(screen.getByText('Import 1 Valid Vendor')).toBeInTheDocument();
+    expect(screen.getByText(/Import 2 Vendors/)).toBeInTheDocument();
+    expect(screen.getByText(/\(1 with issues\)/)).toBeInTheDocument();
     expect(screen.getByText('Vendor 2')).toBeInTheDocument();
-    expect(screen.getByText('Company name is required.; Email is required.')).toBeInTheDocument();
+    expect(screen.getByText('Company name is required.')).toBeInTheDocument();
+  });
+
+  test('shows the Missing Email stat tile with the right count in the preview step', async () => {
+    (vendorUploadClient.parseVendorUploadFile as jest.Mock).mockResolvedValue({
+      success: true,
+      data: {
+        rows: [
+          validRow({}, 2),
+          validRow({ vendor: { name: 'No Email Co', email: '', phone: '9876543210' }, missingEmail: true }, 4),
+          invalidRow({}, 3),
+        ],
+        blankRowCount: 0,
+      },
+    });
+    render(<VendorUploadModal isOpen onClose={onClose} />);
+    pickFile(new File(['x'], 'vendors.xlsx'));
+    await screen.findByText('vendors.xlsx');
+
+    expect(screen.getByText('Missing Email')).toBeInTheDocument();
+    const tile = screen.getByText('Missing Email').closest('div');
+    expect(tile).not.toBeNull();
+    expect(within(tile!.parentElement as HTMLElement).getByText('1')).toBeInTheDocument();
+  });
+
+  test('highlights a missing-email row amber and badges it "No Email" in the preview table', async () => {
+    (vendorUploadClient.parseVendorUploadFile as jest.Mock).mockResolvedValue({
+      success: true,
+      data: {
+        rows: [validRow({ vendor: { name: 'No Email Co', email: '', phone: '9876543210' }, missingEmail: true }, 5)],
+        blankRowCount: 0,
+      },
+    });
+    render(<VendorUploadModal isOpen onClose={onClose} />);
+    pickFile(new File(['x'], 'vendors.xlsx'));
+    await screen.findByText('vendors.xlsx');
+
+    expect(screen.getByText('No Email Co')).toBeInTheDocument();
+    expect(screen.getAllByText('No Email').length).toBeGreaterThan(0);
+    const row = screen.getByText('No Email Co').closest('tr');
+    expect(row?.className).toContain('bg-amber-50');
   });
 
   test('filters the preview table between all/valid/invalid', async () => {
@@ -137,11 +180,11 @@ describe('VendorUploadModal', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'valid' }));
     expect(screen.getByText('Vendor 2')).toBeInTheDocument();
-    expect(screen.queryByText('Company name is required.; Email is required.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Company name is required.')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'invalid' }));
     expect(screen.queryByText('Vendor 2')).not.toBeInTheDocument();
-    expect(screen.getByText('Company name is required.; Email is required.')).toBeInTheDocument();
+    expect(screen.getByText('Company name is required.')).toBeInTheDocument();
   });
 
   test('paginates the preview table beyond 50 rows', async () => {
@@ -179,7 +222,7 @@ describe('VendorUploadModal', () => {
     expect(clickSpy).toHaveBeenCalled();
   });
 
-  test('the import button is disabled when there are zero valid rows', async () => {
+  test('the import button is enabled (imports issue rows too) even when there are zero valid rows', async () => {
     (vendorUploadClient.parseVendorUploadFile as jest.Mock).mockResolvedValue({
       success: true,
       data: { rows: [invalidRow({}, 2)], blankRowCount: 0 },
@@ -187,7 +230,7 @@ describe('VendorUploadModal', () => {
     render(<VendorUploadModal isOpen onClose={onClose} />);
     pickFile(new File(['x'], 'vendors.xlsx'));
     await screen.findByText('vendors.xlsx');
-    expect(screen.getByText('Import 0 Valid Vendors')).toBeDisabled();
+    expect(screen.getByText(/Import 1 Vendor/)).not.toBeDisabled();
     expect(vendorUploadClient.bulkImportVendorRows).not.toHaveBeenCalled();
   });
 
@@ -213,7 +256,7 @@ describe('VendorUploadModal', () => {
     (vendorUploadClient.bulkImportVendorRows as jest.Mock).mockImplementation(
       (rows, onProgress) =>
         new Promise((resolve) => {
-          onProgress?.({ total: 1, imported: 1, duplicates: 0, failed: 0, results: [] });
+          onProgress?.({ total: 1, imported: 1, missingEmail: 0, duplicates: 0, failed: 0, results: [] });
           resolveImport = resolve;
         })
     );
@@ -222,16 +265,25 @@ describe('VendorUploadModal', () => {
     pickFile(new File(['x'], 'vendors.xlsx'));
     await screen.findByText('vendors.xlsx');
 
-    fireEvent.click(screen.getByText('Import 1 Valid Vendor'));
+    fireEvent.click(screen.getByText(/Import 2 Vendors/));
 
     expect(vendorUploadClient.bulkImportVendorRows).toHaveBeenCalledWith(
-      [expect.objectContaining({ rowNumber: 2 })],
+      [expect.objectContaining({ rowNumber: 2 }), expect.objectContaining({ rowNumber: 3 })],
       expect.any(Function)
     );
     await screen.findByText('Importing vendors…');
-    expect(screen.getByText('1 of 1 processed — 1 imported, 0 duplicate, 0 failed')).toBeInTheDocument();
+    expect(
+      screen.getByText('1 of 2 processed — 1 imported (0 missing email), 0 duplicate, 0 failed')
+    ).toBeInTheDocument();
 
-    resolveImport({ total: 1, imported: 1, duplicates: 0, failed: 0, results: [{ rowNumber: 2, status: 'imported' }] });
+    resolveImport({
+      total: 1,
+      imported: 1,
+      missingEmail: 0,
+      duplicates: 0,
+      failed: 0,
+      results: [{ rowNumber: 2, status: 'imported' }],
+    });
 
     await screen.findByText('Upload Completed');
     expect(screen.getByText('Total: 2 · Imported: 1 · Failed: 0 · Duplicates: 0')).toBeInTheDocument();
@@ -247,6 +299,7 @@ describe('VendorUploadModal', () => {
     (vendorUploadClient.bulkImportVendorRows as jest.Mock).mockResolvedValue({
       total: 1,
       imported: 0,
+      missingEmail: 0,
       duplicates: 1,
       failed: 0,
       results: [{ rowNumber: 2, status: 'duplicate', email: 'vendor2@example.com' }],
@@ -255,7 +308,7 @@ describe('VendorUploadModal', () => {
     render(<VendorUploadModal isOpen onClose={onClose} onImportComplete={onImportComplete} />);
     pickFile(new File(['x'], 'vendors.xlsx'));
     await screen.findByText('vendors.xlsx');
-    fireEvent.click(screen.getByText('Import 1 Valid Vendor'));
+    fireEvent.click(screen.getByText('Import 1 Vendor'));
 
     await screen.findByText('Upload Completed');
     expect(mockRefreshFromDB).not.toHaveBeenCalled();
@@ -271,6 +324,7 @@ describe('VendorUploadModal', () => {
     (vendorUploadClient.bulkImportVendorRows as jest.Mock).mockResolvedValue({
       total: 1,
       imported: 0,
+      missingEmail: 0,
       duplicates: 1,
       failed: 0,
       results: [{ rowNumber: 2, status: 'duplicate', email: 'vendor2@example.com', reason: 'Already exists' }],
@@ -287,7 +341,7 @@ describe('VendorUploadModal', () => {
     render(<VendorUploadModal isOpen onClose={onClose} />);
     pickFile(new File(['x'], 'vendors.xlsx'));
     await screen.findByText('vendors.xlsx');
-    fireEvent.click(screen.getByText('Import 1 Valid Vendor'));
+    fireEvent.click(screen.getByText('Import 1 Vendor'));
     await screen.findByText('Upload Completed');
 
     fireEvent.click(screen.getByText('Download Error Report'));
@@ -307,6 +361,7 @@ describe('VendorUploadModal', () => {
     (vendorUploadClient.bulkImportVendorRows as jest.Mock).mockResolvedValue({
       total: 1,
       imported: 1,
+      missingEmail: 0,
       duplicates: 0,
       failed: 0,
       results: [{ rowNumber: 2, status: 'imported' }],
@@ -315,7 +370,7 @@ describe('VendorUploadModal', () => {
     render(<VendorUploadModal isOpen onClose={onClose} />);
     pickFile(new File(['x'], 'vendors.xlsx'));
     await screen.findByText('vendors.xlsx');
-    fireEvent.click(screen.getByText('Import 1 Valid Vendor'));
+    fireEvent.click(screen.getByText('Import 1 Vendor'));
     await screen.findByText('Upload Completed');
 
     fireEvent.click(screen.getByText('Upload Another File'));
@@ -330,6 +385,7 @@ describe('VendorUploadModal', () => {
     (vendorUploadClient.bulkImportVendorRows as jest.Mock).mockResolvedValue({
       total: 1,
       imported: 1,
+      missingEmail: 0,
       duplicates: 0,
       failed: 0,
       results: [{ rowNumber: 2, status: 'imported' }],
@@ -338,7 +394,7 @@ describe('VendorUploadModal', () => {
     render(<VendorUploadModal isOpen onClose={onClose} />);
     pickFile(new File(['x'], 'vendors.xlsx'));
     await screen.findByText('vendors.xlsx');
-    fireEvent.click(screen.getByText('Import 1 Valid Vendor'));
+    fireEvent.click(screen.getByText('Import 1 Vendor'));
     await screen.findByText('Upload Completed');
 
     fireEvent.click(screen.getByText('Done'));
@@ -355,7 +411,7 @@ describe('VendorUploadModal', () => {
     render(<VendorUploadModal isOpen onClose={onClose} />);
     pickFile(new File(['x'], 'vendors.xlsx'));
     await screen.findByText('vendors.xlsx');
-    fireEvent.click(screen.getByText('Import 1 Valid Vendor'));
+    fireEvent.click(screen.getByText('Import 1 Vendor'));
     await screen.findByText('Importing vendors…');
 
     fireEvent.click(screen.getByLabelText('Close'));
@@ -396,7 +452,7 @@ describe('VendorUploadModal', () => {
     render(<VendorUploadModal isOpen onClose={onClose} />);
     pickFile(new File(['x'], 'vendors.xlsx'));
     await screen.findByText('vendors.xlsx');
-    fireEvent.click(screen.getByText('Import 1 Valid Vendor'));
+    fireEvent.click(screen.getByText('Import 1 Vendor'));
     await screen.findByText('Upload Completed');
 
     expect(() => fireEvent.click(screen.getByText('Download Error Report'))).not.toThrow();

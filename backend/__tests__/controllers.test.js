@@ -629,7 +629,7 @@ describe('Controllers Error & Edge-Case Coverage', () => {
 
     // Over the per-request row cap.
     const tooManyRes = mockRes();
-    const tooMany = Array.from({ length: 1001 }, (_, i) => validRow({ rowNumber: i + 1, email: `row${i}@example.com` }));
+    const tooMany = Array.from({ length: 2001 }, (_, i) => validRow({ rowNumber: i + 1, email: `row${i}@example.com` }));
     await vendorController.bulkImportVendors({ body: { vendors: tooMany }, user: categoryManagerUser }, tooManyRes, next);
     expect(tooManyRes.status).toHaveBeenCalledWith(400);
 
@@ -642,6 +642,10 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     const insertSpy = jest.spyOn(domainQueries, 'bulkInsertVendorsInDB').mockImplementation(async (vendors) =>
       vendors.map((v) => v.email)
     );
+    // Session tracking is a real Postgres round trip too — mocked directly
+    // rather than through the fake pool object, same reasoning as insertSpy.
+    const createSessionSpy = jest.spyOn(domainQueries, 'createBulkImportSessionInDB').mockResolvedValue({ id: 'bulk-import-test-session' });
+    const incrementSessionSpy = jest.spyOn(domainQueries, 'incrementBulkImportSessionInDB').mockResolvedValue({ id: 'bulk-import-test-session' });
 
     const mixedRes = mockRes();
     await vendorController.bulkImportVendors(
@@ -659,10 +663,16 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     );
     expect(mixedRes.json).toHaveBeenCalled();
     const mixedPayload = mixedRes.json.mock.calls[0][0];
-    expect(mixedPayload.data.imported).toBe(1);
-    expect(mixedPayload.data.failed).toBe(1);
-    expect(mixedPayload.data.results.find((r) => r.rowNumber === 2).status).toBe('failed');
-    expect(mixedPayload.data.results.find((r) => r.rowNumber === 2).errors.length).toBeGreaterThan(0);
+    // A row that fails validation is no longer rejected — it still imports,
+    // tagged hasIssues/issues, since the real marketplace scrape this feeds
+    // from routinely has incomplete rows (see vendorBulkImportRow's comment).
+    expect(mixedPayload.data.imported).toBe(2);
+    expect(mixedPayload.data.failed).toBe(0);
+    expect(mixedPayload.data.issues).toBe(1);
+    const row2 = mixedPayload.data.results.find((r) => r.rowNumber === 2);
+    expect(row2.status).toBe('imported');
+    expect(row2.hasIssues).toBe(true);
+    expect(row2.issues.length).toBeGreaterThan(0);
 
     // Admin may also bulk-import, same as category_manager.
     const adminRes = mockRes();
@@ -676,6 +686,8 @@ describe('Controllers Error & Edge-Case Coverage', () => {
 
     domainPool.pool = originalPool;
     insertSpy.mockRestore();
+    createSessionSpy.mockRestore();
+    incrementSessionSpy.mockRestore();
   });
 
   test('vendorController.bulkImportVendors: no DB pool configured surfaces as a 500 via next(err), not a silent in-memory import', async () => {
@@ -684,7 +696,7 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     const originalPool = domainPool.pool;
     domainPool.pool = null;
 
-    const before = storeService.getVendors().length;
+    const before = (await storeService.getVendors()).length;
     const res = mockRes();
     await vendorController.bulkImportVendors(
       {
@@ -700,8 +712,104 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     expect(res.json).not.toHaveBeenCalled();
     expect(next).toHaveBeenCalled();
     expect(next.mock.calls[0][0]).toMatchObject({ statusCode: 500 });
-    expect(storeService.getVendors().some((v) => v.email === 'no-db-pool@example.com')).toBe(false);
-    expect(storeService.getVendors().length).toBe(before);
+    expect((await storeService.getVendors()).some((v) => v.email === 'no-db-pool@example.com')).toBe(false);
+    expect((await storeService.getVendors()).length).toBe(before);
+  });
+
+  test('vendorController.bulkImportVendors: creates a session on the first chunk, resumes it on a later chunk, and reports missing-email rows separately', async () => {
+    const next = jest.fn();
+    const categoryManagerUser = { role: 'category_manager', email: 'cm@procucev.com' };
+    const originalPool = domainPool.pool;
+    domainPool.pool = { query: jest.fn() };
+    const insertSpy = jest.spyOn(domainQueries, 'bulkInsertVendorsInDB').mockImplementation(async (vendors) =>
+      vendors.map((v) => v.email)
+    );
+    const createSessionSpy = jest.spyOn(domainQueries, 'createBulkImportSessionInDB').mockImplementation(
+      async (id) => ({ id, status: 'IN_PROGRESS' })
+    );
+    const incrementSessionSpy = jest.spyOn(domainQueries, 'incrementBulkImportSessionInDB').mockResolvedValue({ status: 'IN_PROGRESS' });
+
+    try {
+      // First chunk: no sessionId supplied — one gets created.
+      const firstRes = mockRes();
+      await vendorController.bulkImportVendors(
+        {
+          body: {
+            totalRowsDeclared: 2,
+            vendors: [{ rowNumber: 1, name: 'Session Chunk One Co', email: undefined, phone: '9876543210' }],
+          },
+          user: categoryManagerUser,
+        },
+        firstRes,
+        next
+      );
+
+      expect(createSessionSpy).toHaveBeenCalledTimes(1);
+      const firstPayload = firstRes.json.mock.calls[0][0];
+      expect(firstPayload.data.sessionId).toBeDefined();
+      expect(firstPayload.data.missingEmail).toBe(1);
+      expect(incrementSessionSpy).toHaveBeenCalledWith(
+        firstPayload.data.sessionId,
+        expect.objectContaining({ processed: 1, imported: 1, missingEmail: 1, duplicate: 0, invalid: 0 })
+      );
+
+      // Second chunk: reuses the returned sessionId — no new session created.
+      const getSessionSpy = jest.spyOn(domainQueries, 'getBulkImportSessionFromDB').mockResolvedValue({
+        id: firstPayload.data.sessionId,
+        status: 'IN_PROGRESS',
+      });
+      const secondRes = mockRes();
+      await vendorController.bulkImportVendors(
+        {
+          body: {
+            sessionId: firstPayload.data.sessionId,
+            vendors: [{ rowNumber: 2, name: 'Session Chunk Two Co', email: 'chunk-two@example.com', phone: '9876543211' }],
+          },
+          user: categoryManagerUser,
+        },
+        secondRes,
+        next
+      );
+
+      expect(createSessionSpy).toHaveBeenCalledTimes(1);
+      const secondPayload = secondRes.json.mock.calls[0][0];
+      expect(secondPayload.data.sessionId).toBe(firstPayload.data.sessionId);
+      expect(secondPayload.data.missingEmail).toBe(0);
+      getSessionSpy.mockRestore();
+    } finally {
+      domainPool.pool = originalPool;
+      insertSpy.mockRestore();
+      createSessionSpy.mockRestore();
+      incrementSessionSpy.mockRestore();
+    }
+  });
+
+  test('vendorController.getBulkImportSessionStatus: role gating, not-found, and success', async () => {
+    const next = jest.fn();
+    const categoryManagerUser = { role: 'category_manager', email: 'cm@procucev.com' };
+    const buyerUser = { role: 'buyer', email: 'buyer@procucev.com' };
+
+    const unauthedRes = mockRes();
+    await vendorController.getBulkImportSessionStatus({ params: { sessionId: 's-1' } }, unauthedRes, next);
+    expect(unauthedRes.status).toHaveBeenCalledWith(401);
+
+    const forbiddenRes = mockRes();
+    await vendorController.getBulkImportSessionStatus({ params: { sessionId: 's-1' }, user: buyerUser }, forbiddenRes, next);
+    expect(forbiddenRes.status).toHaveBeenCalledWith(403);
+
+    const notFoundSpy = jest.spyOn(domainQueries, 'getBulkImportSessionFromDB').mockResolvedValueOnce(null);
+    const notFoundRes = mockRes();
+    await vendorController.getBulkImportSessionStatus({ params: { sessionId: 's-missing' }, user: categoryManagerUser }, notFoundRes, next);
+    expect(notFoundRes.status).toHaveBeenCalledWith(404);
+
+    const sessionRow = { id: 's-1', status: 'IN_PROGRESS', processed_count: 10 };
+    const foundSpy = jest.spyOn(domainQueries, 'getBulkImportSessionFromDB').mockResolvedValueOnce(sessionRow);
+    const foundRes = mockRes();
+    await vendorController.getBulkImportSessionStatus({ params: { sessionId: 's-1' }, user: categoryManagerUser }, foundRes, next);
+    expect(foundRes.json).toHaveBeenCalledWith({ success: true, data: sessionRow });
+
+    notFoundSpy.mockRestore();
+    foundSpy.mockRestore();
   });
 });
 
@@ -794,7 +902,7 @@ describe('rfqController scope and fallback branches', () => {
   test('generateEmailPreview resolves a named vendor', async () => {
     const res = mockRes();
     const storeSvc = require('../src/services/storeService');
-    const vendor = storeSvc.getVendors()[0];
+    const vendor = (await storeSvc.getVendors())[0];
 
     await rfqController.generateEmailPreview(
       scopedReq({ params: { id: seededRfq.id }, query: { vendorId: vendor.id } }),

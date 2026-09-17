@@ -262,6 +262,52 @@ global.fetch = jest.fn().mockImplementation((url: string, init?: { method?: stri
       if (typeof url === 'string' && url.includes('/api/ai-feed')) {
         return { success: true, data: [] };
       }
+      // GET /api/vendors?buyerId=all&page=...&pageSize=... — the real
+      // paginated vendor directory fetch used by VendorConsole and the
+      // Invite Vendors modal. Served from the same 2-vendor fixture set as
+      // bootstrap so tests exercising the fetched-vendor UI have real data.
+      if (typeof url === 'string' && /\/api\/vendors(\?|$)/.test(url) && (!init || init.method === undefined)) {
+        const vendorFixtures = [
+          {
+            id: 'vendor-1',
+            name: 'Apex Supplies Ltd.',
+            email: 'sales@apexsupplies.com',
+            phone: '+91 98201 11223',
+            status: 'PREFERRED ENTERPRISE SUPPLIER',
+            majorCategory: 'Heavy Industrial Fluid Dynamics & Valves',
+            minorCategories: ['Control Valves', 'Industrial Flanges'],
+            evaluated: true,
+            rating: 4.8,
+          },
+          {
+            id: 'vendor-2',
+            name: 'Kiran Valves & Actuators',
+            email: 'amit@kiranvalves.com',
+            phone: '+91 98202 22334',
+            status: 'VERIFIED SUPPLIER',
+            majorCategory: 'Heavy Industrial Fluid Dynamics & Valves',
+            minorCategories: ['Ball Valves', 'Butterfly Valves'],
+            evaluated: false,
+            rating: 4.5,
+          },
+        ];
+        const parsedUrl = new URL(url, 'http://localhost');
+        const search = (parsedUrl.searchParams.get('search') || '').toLowerCase();
+        const filtered = search
+          ? vendorFixtures.filter(
+              (v) =>
+                v.name.toLowerCase().includes(search) ||
+                v.email.toLowerCase().includes(search) ||
+                v.majorCategory.toLowerCase().includes(search) ||
+                v.minorCategories.some((c) => c.toLowerCase().includes(search))
+            )
+          : vendorFixtures;
+        return {
+          success: true,
+          data: filtered,
+          pagination: { page: 1, pageSize: 20, total: filtered.length, totalPages: 1 },
+        };
+      }
       return { success: true, data: {} };
     },
     text: async () => '',

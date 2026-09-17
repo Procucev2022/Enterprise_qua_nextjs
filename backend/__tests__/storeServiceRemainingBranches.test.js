@@ -31,8 +31,8 @@ describe('Store Service — remaining branch coverage', () => {
       expect(freshStore.getActiveBuyerAccount()).toBeNull();
     });
 
-    test('processHistoricalPurchaseData and approvePurchaseOrder fall back userEmail when there is no active buyer account', () => {
-      const res = freshStore.processHistoricalPurchaseData('FY2026', [
+    test('processHistoricalPurchaseData and approvePurchaseOrder fall back userEmail when there is no active buyer account', async () => {
+      const res = await freshStore.processHistoricalPurchaseData('FY2026', [
         { companyName: 'No Active Buyer Co', email: 'nab@co.com' },
       ]);
       expect(res.success).toBe(true);
@@ -106,12 +106,12 @@ describe('Store Service — remaining branch coverage', () => {
     // used to be imported with an invented name, address, phone, category, rating
     // and score, and marked `evaluated: true` — producing a vendor master full of
     // suppliers that could not be contacted but that RFQ routing would still pick.
-    test('rejects unidentifiable rows instead of inventing their details', () => {
-      const emptyRes = storeService.processHistoricalPurchaseData('FY2026-empty');
+    test('rejects unidentifiable rows instead of inventing their details', async () => {
+      const emptyRes = await storeService.processHistoricalPurchaseData('FY2026-empty');
       expect(emptyRes.importedCount).toBe(0);
       expect(emptyRes.skippedCount).toBe(0);
 
-      const res = storeService.processHistoricalPurchaseData('FY2026-fallbacks', [
+      const res = await storeService.processHistoricalPurchaseData('FY2026-fallbacks', [
         { name: 'Only-Name Supplier Co' },
         {},
       ]);
@@ -124,15 +124,15 @@ describe('Store Service — remaining branch coverage', () => {
       ]);
     });
 
-    test('imports a row carrying both a name and an email, without scoring it', () => {
-      const res = storeService.processHistoricalPurchaseData('FY2026-identified', [
+    test('imports a row carrying both a name and an email, without scoring it', async () => {
+      const res = await storeService.processHistoricalPurchaseData('FY2026-identified', [
         { companyName: 'Identified Supplier Co', email: 'identified@supplier.test' },
       ]);
 
       expect(res.importedCount).toBe(1);
       expect(res.skippedCount).toBe(0);
 
-      const imported = storeService.getVendors().find((v) => v.email === 'identified@supplier.test');
+      const imported = (await storeService.getVendors()).find((v) => v.email === 'identified@supplier.test');
       // Nothing has assessed this supplier yet, so it carries no rating or score
       // and is not marked as evaluated.
       expect(imported.rating).toBeNull();
@@ -210,7 +210,7 @@ describe('Store Service — remaining branch coverage', () => {
 
       expect(result).toEqual({ hydrated: true, source: 'postgres' });
       expect(freshStore.isHydratedFromDB).toBe(true);
-      expect(freshStore.getVendors()).toEqual(dbVendors);
+      expect(await freshStore.getVendors()).toEqual(dbVendors);
       expect(freshStore.getRFQs()).toEqual(dbRfqs);
     });
 
@@ -296,7 +296,7 @@ describe('Store Service — remaining branch coverage', () => {
 
       expect(result).toEqual({ hydrated: true, source: 'postgres' });
       expect(freshStore.isHydratedFromDB).toBe(true);
-      expect(freshStore.getVendors()).toEqual([]);
+      expect(await freshStore.getVendors()).toEqual([]);
       expect(freshStore.getRFQs()).toEqual([]);
       expect(freshStore.getActiveBuyerAccount()).toBeNull();
     });
@@ -318,13 +318,17 @@ describe('Store Service — remaining branch coverage', () => {
       expect(result).toMatchObject({ hydrated: false, source: 'unavailable' });
       expect(result.error).toBe('ECONNREFUSED');
       expect(freshStore.isHydratedFromDB).toBe(false);
-      expect(freshStore.getVendors()).toEqual([]);
+      // Checked directly against the raw in-memory array rather than through
+      // getVendors() — that method itself re-queries Neon on every call (see
+      // the "no in-memory-only vendor storage" fix), and this mock always
+      // rejects, so a second call here would just throw again.
+      expect(freshStore.vendors).toEqual([]);
     });
   });
 
   describe('processHistoricalPurchaseData without a domain persistence layer', () => {
-    test('imports vendors into the in-memory store and reports the count', () => {
-      const res = storeService.processHistoricalPurchaseData('FY2026-nodb', [
+    test('imports vendors into the in-memory store and reports the count', async () => {
+      const res = await storeService.processHistoricalPurchaseData('FY2026-nodb', [
         { companyName: 'In Memory Historical Co', email: 'inmemory@historical.com' },
       ]);
 
@@ -632,8 +636,8 @@ describe('Store Service — remaining branch coverage', () => {
       expect(po.lineItems).toEqual([{ description: 'Bearing', quantity: 10, unit: 'pcs' }]);
     });
 
-    test('getVendors returns all vendors when scopedBuyerId is all', () => {
-      expect(storeService.getVendors('all')).toBe(storeService.vendors);
+    test('getVendors returns all vendors when scopedBuyerId is all', async () => {
+      expect(await storeService.getVendors('all')).toBe(storeService.vendors);
     });
 
     test('getVendorById returns undefined when vendor is scoped to a buyer but no scopedBuyerId is provided', () => {
@@ -675,4 +679,3 @@ describe('Store Service — remaining branch coverage', () => {
     });
   });
 });
-

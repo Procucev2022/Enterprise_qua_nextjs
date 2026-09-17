@@ -34,6 +34,12 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       await expect(domainQueries.bulkInsertVendorsInDB([{ id: 'v-1', email: 'a@x.com' }])).resolves.toEqual([]);
     });
 
+    test('createBulkImportSessionInDB / getBulkImportSessionFromDB / incrementBulkImportSessionInDB all return null', async () => {
+      await expect(domainQueries.createBulkImportSessionInDB('s-1', 'cm@x.com', 100)).resolves.toBeNull();
+      await expect(domainQueries.getBulkImportSessionFromDB('s-1')).resolves.toBeNull();
+      await expect(domainQueries.incrementBulkImportSessionInDB('s-1', { processed: 1 })).resolves.toBeNull();
+    });
+
     test('getRFQsFromDB returns an empty array', async () => {
       await expect(domainQueries.getRFQsFromDB()).resolves.toEqual([]);
     });
@@ -116,6 +122,107 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       expect(pool.pool.query).toHaveBeenCalledWith(expect.stringContaining('ORDER BY created_at DESC'), []);
     });
 
+    describe('getVendorsPageFromDB', () => {
+      test('no-ops when no pool is configured', async () => {
+        pool.pool = null;
+        await expect(domainQueries.getVendorsPageFromDB({ limit: 50, offset: 0 })).resolves.toEqual({ rows: [], total: 0 });
+      });
+
+      test('runs a plain LIMIT/OFFSET query with no WHERE clause when there is no search or publicOnly', async () => {
+        const vendor = { id: 'v-1', name: 'Apex' };
+        const query = jest
+          .fn()
+          .mockResolvedValueOnce({ rows: [{ total: 1 }] })
+          .mockResolvedValueOnce({ rows: [{ raw: vendor }] });
+        pool.pool = { query };
+
+        const result = await domainQueries.getVendorsPageFromDB({ limit: 50, offset: 100 });
+
+        expect(result).toEqual({ rows: [vendor], total: 1 });
+        const [countSql, countParams] = query.mock.calls[0];
+        expect(countSql).not.toContain('WHERE');
+        expect(countParams).toEqual([]);
+        const [dataSql, dataParams] = query.mock.calls[1];
+        expect(dataSql).toContain('ORDER BY created_at DESC LIMIT $1 OFFSET $2');
+        expect(dataParams).toEqual([50, 100]);
+      });
+
+      test('adds a search WHERE clause across name/email/category/minorCategories', async () => {
+        const query = jest
+          .fn()
+          .mockResolvedValueOnce({ rows: [{ total: 0 }] })
+          .mockResolvedValueOnce({ rows: [] });
+        pool.pool = { query };
+
+        await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, search: 'fastener' });
+
+        const [countSql, countParams] = query.mock.calls[0];
+        expect(countSql).toContain('WHERE');
+        expect(countSql).toContain('major_category ILIKE $1');
+        expect(countParams).toEqual(['%fastener%']);
+      });
+
+      test('adds the publicOnly filter (no buyerId/buyerAccountId inside raw)', async () => {
+        const query = jest
+          .fn()
+          .mockResolvedValueOnce({ rows: [{ total: 0 }] })
+          .mockResolvedValueOnce({ rows: [] });
+        pool.pool = { query };
+
+        await domainQueries.getVendorsPageFromDB({ limit: 500, offset: 0, publicOnly: true });
+
+        const [countSql] = query.mock.calls[0];
+        expect(countSql).toContain("(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL");
+      });
+
+      test('combines search and publicOnly with AND', async () => {
+        const query = jest
+          .fn()
+          .mockResolvedValueOnce({ rows: [{ total: 0 }] })
+          .mockResolvedValueOnce({ rows: [] });
+        pool.pool = { query };
+
+        await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, search: 'cables', publicOnly: true });
+
+        const [countSql] = query.mock.calls[0];
+        expect(countSql).toMatch(/WHERE[\s\S]* AND [\s\S]*buyerId/);
+      });
+
+      test('defaults total to 0 when the count query returns no row', async () => {
+        const query = jest
+          .fn()
+          .mockResolvedValueOnce({ rows: [] })
+          .mockResolvedValueOnce({ rows: [] });
+        pool.pool = { query };
+
+        await expect(domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0 })).resolves.toEqual({ rows: [], total: 0 });
+      });
+    });
+
+    describe('getVendorByEmailFromDB', () => {
+      test('no-ops when no pool is configured', async () => {
+        pool.pool = null;
+        await expect(domainQueries.getVendorByEmailFromDB('a@b.com')).resolves.toBeNull();
+      });
+
+      test('no-ops when no email is given', async () => {
+        pool.pool = { query: jest.fn() };
+        await expect(domainQueries.getVendorByEmailFromDB('')).resolves.toBeNull();
+        expect(pool.pool.query).not.toHaveBeenCalled();
+      });
+
+      test('returns the matching row', async () => {
+        const vendor = { id: 'v-1', email: 'a@b.com' };
+        pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: vendor }] }) };
+        await expect(domainQueries.getVendorByEmailFromDB('a@b.com')).resolves.toEqual(vendor);
+      });
+
+      test('returns null when nothing matches', async () => {
+        pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+        await expect(domainQueries.getVendorByEmailFromDB('nobody@x.com')).resolves.toBeNull();
+      });
+    });
+
     test('upsertVendorInDB serializes the vendor and returns the stored raw row', async () => {
       const vendor = {
         id: 'v-1',
@@ -183,6 +290,53 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
         'v-1', 'a@x.com', 'Mechanical', 'REGISTERED / NOT EVALUATED', 'excel', JSON.stringify(v1),
         'v-2', 'b@x.com', null, null, null, JSON.stringify(v2),
       ]);
+    });
+
+    test('createBulkImportSessionInDB inserts a new session row and returns it', async () => {
+      const sessionRow = { id: 's-1', status: 'IN_PROGRESS', total_rows_declared: 500 };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [sessionRow] }) };
+
+      const result = await domainQueries.createBulkImportSessionInDB('s-1', 'cm@x.com', 500);
+
+      expect(result).toEqual(sessionRow);
+      const [sql, params] = pool.pool.query.mock.calls[0];
+      expect(sql).toContain('INSERT INTO bulk_vendor_import_sessions');
+      expect(params).toEqual(['s-1', 'cm@x.com', 500]);
+    });
+
+    test('createBulkImportSessionInDB defaults totalRowsDeclared to 0 when omitted', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{}] }) };
+      await domainQueries.createBulkImportSessionInDB('s-1', 'cm@x.com', undefined);
+      expect(pool.pool.query.mock.calls[0][1]).toEqual(['s-1', 'cm@x.com', 0]);
+    });
+
+    test('getBulkImportSessionFromDB returns null when no row matches', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      await expect(domainQueries.getBulkImportSessionFromDB('missing')).resolves.toBeNull();
+    });
+
+    test('getBulkImportSessionFromDB returns the matching row', async () => {
+      const sessionRow = { id: 's-1', status: 'IN_PROGRESS' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [sessionRow] }) };
+      await expect(domainQueries.getBulkImportSessionFromDB('s-1')).resolves.toEqual(sessionRow);
+      expect(pool.pool.query.mock.calls[0][1]).toEqual(['s-1']);
+    });
+
+    test('incrementBulkImportSessionInDB adds every delta field, defaulting missing ones to 0', async () => {
+      const updated = { id: 's-1', status: 'IN_PROGRESS', processed_count: 10 };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [updated] }) };
+
+      const result = await domainQueries.incrementBulkImportSessionInDB('s-1', { processed: 10, imported: 8 });
+
+      expect(result).toEqual(updated);
+      const [sql, params] = pool.pool.query.mock.calls[0];
+      expect(sql).toContain('UPDATE bulk_vendor_import_sessions');
+      expect(params).toEqual(['s-1', 10, 8, 0, 0, 0]);
+    });
+
+    test('incrementBulkImportSessionInDB returns null when the session id does not exist', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      await expect(domainQueries.incrementBulkImportSessionInDB('missing', {})).resolves.toBeNull();
     });
   });
 

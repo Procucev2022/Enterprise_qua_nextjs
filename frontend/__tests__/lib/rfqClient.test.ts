@@ -1112,8 +1112,10 @@ describe('rfqClient RFQ persistence', () => {
   });
 
   describe('fetchAllVendors', () => {
-    test('reads every vendor in the system and marks them all not-yet-invited', async () => {
-      global.fetch = reply(200, { success: true, data: [{ id: 'v-1' }, { id: 'v-2' }] });
+    const pagination = { page: 1, pageSize: 50, total: 2, totalPages: 1 };
+
+    test('reads one page of vendors and marks them all not-yet-invited', async () => {
+      global.fetch = reply(200, { success: true, data: [{ id: 'v-1' }, { id: 'v-2' }], pagination });
 
       const res = await fetchAllVendors();
 
@@ -1123,13 +1125,22 @@ describe('rfqClient RFQ persistence', () => {
           { id: 'v-1', alreadyInvited: false },
           { id: 'v-2', alreadyInvited: false },
         ],
+        pagination,
       });
-      expect(lastPath()).toBe('/api/vendors?buyerId=all');
+      expect(lastPath()).toBe('/api/vendors?buyerId=all&page=1&pageSize=50');
+    });
+
+    test('includes a non-empty search term in the query string', async () => {
+      global.fetch = reply(200, { success: true, data: [], pagination: { ...pagination, total: 0 } });
+
+      await fetchAllVendors({ page: 2, pageSize: 25, search: '  bolt  ' });
+
+      expect(lastPath()).toBe('/api/vendors?buyerId=all&page=2&pageSize=25&search=bolt');
     });
 
     test('attaches the session token when one is held', async () => {
       signIn();
-      global.fetch = reply(200, { success: true, data: [] });
+      global.fetch = reply(200, { success: true, data: [], pagination });
 
       await fetchAllVendors();
 
@@ -1137,7 +1148,7 @@ describe('rfqClient RFQ persistence', () => {
     });
 
     test('sends no headers when there is no session', async () => {
-      global.fetch = reply(200, { success: true, data: [] });
+      global.fetch = reply(200, { success: true, data: [], pagination });
 
       await fetchAllVendors();
 
@@ -1187,12 +1198,20 @@ describe('rfqClient RFQ persistence', () => {
     });
 
     test('rejects a body whose data is not an array', async () => {
-      global.fetch = reply(200, { success: true, data: null });
+      global.fetch = reply(200, { success: true, data: null, pagination });
 
       const res = await fetchAllVendors();
 
       expect(res.success === false && res.reason).toBe('SERVER');
       expect(res.success === false && res.error).toBe(UI_STRINGS.rfqDetails.loadFailed);
+    });
+
+    test('rejects a body missing pagination metadata', async () => {
+      global.fetch = reply(200, { success: true, data: [{ id: 'v-1' }] });
+
+      const res = await fetchAllVendors();
+
+      expect(res.success === false && res.reason).toBe('SERVER');
     });
   });
 

@@ -707,6 +707,8 @@ export const UI_STRINGS = {
     outsideCategoryBadge: 'Outside Category',
     noVendorsFound: 'No vendors match your search.',
     allVendorsLoadFailed: 'The vendor list could not be loaded.',
+    loadMoreVendors: 'Load {pageSize} more vendors',
+    candidateCountOfTotal: 'Showing {count} of {total} vendors',
   },
 
   notifications: {
