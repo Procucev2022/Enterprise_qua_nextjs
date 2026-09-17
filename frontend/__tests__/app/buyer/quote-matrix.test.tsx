@@ -327,5 +327,47 @@ describe('QuoteMatrix Component Tests', () => {
       expect(screen.getByText('L: 0')).toBeInTheDocument();
       expect(screen.getByText('W: 25')).toBeInTheDocument();
     });
+
+    test('renders source badges correctly for both Portal and Email quotes', () => {
+      const rfqWithMixedSources = {
+        ...mockRFQs[0],
+        quotes: [
+          {
+            ...mockRFQs[0].quotes[0],
+            vendorId: 'v-portal-1',
+            vendorName: 'Apex Portal Vendor',
+            source: 'portal' as const,
+          },
+          {
+            ...mockRFQs[0].quotes[1],
+            vendorId: 'v-email-2',
+            vendorName: 'Kiran Email Vendor',
+            source: 'email' as const,
+          },
+        ],
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        rfqs: [rfqWithMixedSources],
+        selectedRFQForMatrix: rfqWithMixedSources,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        showToast: mockShowToast,
+        openRFQDeepDive: mockOpenRFQDeepDive,
+        deepDiveModalOpen: false,
+        setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+        selectedRFQForDeepDive: null,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+
+      const portalBadge = screen.getByTestId('quote-source-v-portal-1');
+      expect(portalBadge).toBeInTheDocument();
+      expect(portalBadge).toHaveTextContent('🌐 Portal');
+
+      const emailBadge = screen.getByTestId('quote-source-v-email-2');
+      expect(emailBadge).toBeInTheDocument();
+      expect(emailBadge).toHaveTextContent('✉️ Email');
+    });
   });
 });
+

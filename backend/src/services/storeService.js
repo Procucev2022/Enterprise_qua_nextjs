@@ -1067,17 +1067,40 @@ class StoreService {
     if (!rfq) return null;
 
     // A resubmission from the same vendor replaces their previous quote on
-    // this RFQ rather than piling up duplicates (nothing enforced this before).
+    // this RFQ rather than piling up duplicates, preserving quotation integrity.
     const existingQuotes = rfq.quotes || [];
     const quotes = quote.vendorId
       ? [...existingQuotes.filter((q) => q.vendorId !== quote.vendorId), quote]
       : [...existingQuotes, quote];
-    const updated = this.updateRFQ(rfq.id, { quotes });
+
+    // Update followUpData telemetry if present
+    let followUpData = rfq.followUpData;
+    if (followUpData && Array.isArray(followUpData.vendors)) {
+      const vIdx = followUpData.vendors.findIndex(
+        (v) => v.vendorId === quote.vendorId || (quote.vendorName && v.vendorName === quote.vendorName)
+      );
+      if (vIdx !== -1) {
+        const wasSubmitted = followUpData.vendors[vIdx].bidStatus === 'Submitted';
+        followUpData.vendors[vIdx] = {
+          ...followUpData.vendors[vIdx],
+          bidStatus: 'Submitted',
+          overallStatus: 'Responded',
+          lastInteraction: quote.submittedAt || new Date().toISOString(),
+        };
+        if (!wasSubmitted) {
+          followUpData.respondedCount = (followUpData.respondedCount || 0) + 1;
+        }
+      }
+    }
+
+    const updated = this.updateRFQ(rfq.id, {
+      quotes,
+      quotesCount: quotes.length,
+      status: rfq.status === 'PO Generated' ? 'PO Generated' : 'Quotes Received',
+      followUpData,
+    });
 
     // Tell the RFQ's owning buyer a quote has landed — in-app and by email.
-    // `rfq` was just resolved by id above, so updateRFQ always finds it — no
-    // need to re-guard on `updated`. The pre-update `rfq` carries the identity
-    // fields, which updateRFQ preserves.
     this.notifyBuyerOfQuote(rfq, quote);
     this.emailQuoteToBuyer(rfq, quote);
 

@@ -1317,5 +1317,101 @@ describe('demo RFQ seeding', () => {
         domainQueries.getRFQsFromDB = origGetRFQsFromDB;
       }
     });
+
+    test('addQuoteToRFQ adds quote, updates vendor telemetry, and evaluates scores', () => {
+      const testRfq = {
+        id: 'rfq-quote-test-1',
+        rfqNumber: 'RFQ-QT-001',
+        title: 'Industrial Valves',
+        budget: 100000,
+        quotes: [],
+        followUpData: {
+          totalInvited: 2,
+          respondedCount: 0,
+          vendors: [
+            { vendorId: 'v-101', vendorName: 'Vendor One', bidStatus: 'Pending', overallStatus: 'Chasing' },
+            { vendorId: 'v-102', vendorName: 'Vendor Two', bidStatus: 'Pending', overallStatus: 'Chasing' },
+          ],
+        },
+      };
+
+      storeService.rfqs.push(testRfq);
+
+      const nullResult = storeService.addQuoteToRFQ('non-existent-rfq', { vendorId: 'v-101' });
+      expect(nullResult).toBeNull();
+
+      // First quote submission
+      const quote1 = {
+        vendorId: 'v-101',
+        vendorName: 'Vendor One',
+        vendorCategory: 'Client List',
+        unitPrice: 5000,
+        totalPrice: 50000,
+        leadTimeDays: 14,
+        warrantyYears: 2,
+        paymentTerms: 'Net 30 Days',
+        remarks: 'First bid',
+        source: 'portal',
+        submissionMethod: 'web_portal',
+      };
+
+      const updatedRfq1 = storeService.addQuoteToRFQ(testRfq.id, quote1);
+      expect(updatedRfq1).toBeDefined();
+      expect(updatedRfq1.quotes.length).toBe(1);
+      expect(updatedRfq1.quotesCount).toBe(1);
+      expect(updatedRfq1.status).toBe('Quotes Received');
+      expect(updatedRfq1.quotes[0].source).toBe('portal');
+      expect(updatedRfq1.quotes[0].isBestPrice).toBe(true);
+      expect(updatedRfq1.followUpData.respondedCount).toBe(1);
+      expect(updatedRfq1.followUpData.vendors[0].bidStatus).toBe('Submitted');
+      expect(updatedRfq1.followUpData.vendors[0].overallStatus).toBe('Responded');
+
+      // Second quote from different vendor (Email)
+      const quote2 = {
+        vendorId: 'v-102',
+        vendorName: 'Vendor Two',
+        vendorCategory: 'Procucev Network',
+        unitPrice: 4000,
+        totalPrice: 40000,
+        leadTimeDays: 10,
+        warrantyYears: 3,
+        paymentTerms: 'Net 15 Days',
+        remarks: 'Email quote',
+        source: 'email',
+        submissionMethod: 'email',
+      };
+
+      const updatedRfq2 = storeService.addQuoteToRFQ(testRfq.id, quote2);
+      expect(updatedRfq2.quotes.length).toBe(2);
+      expect(updatedRfq2.quotesCount).toBe(2);
+      expect(updatedRfq2.quotes.find((q) => q.vendorId === 'v-102').source).toBe('email');
+      expect(updatedRfq2.quotes.find((q) => q.vendorId === 'v-102').isBestPrice).toBe(true);
+      expect(updatedRfq2.quotes.find((q) => q.vendorId === 'v-101').isBestPrice).toBe(false);
+
+      // Third quote from vendor 1 revising their quote via email
+      const quote1Revision = {
+        vendorId: 'v-101',
+        vendorName: 'Vendor One',
+        vendorCategory: 'Client List',
+        unitPrice: 3500,
+        totalPrice: 35000,
+        leadTimeDays: 7,
+        warrantyYears: 3,
+        paymentTerms: 'Net 30 Days',
+        remarks: 'Revised offer via email',
+        source: 'email',
+        submissionMethod: 'email',
+      };
+
+      const updatedRfq3 = storeService.addQuoteToRFQ(testRfq.id, quote1Revision);
+      // Must NOT create duplicate quote for v-101
+      expect(updatedRfq3.quotes.length).toBe(2);
+      expect(updatedRfq3.quotesCount).toBe(2);
+      const v1Updated = updatedRfq3.quotes.find((q) => q.vendorId === 'v-101');
+      expect(v1Updated.unitPrice).toBe(3500);
+      expect(v1Updated.source).toBe('email');
+      expect(v1Updated.isBestPrice).toBe(true);
+    });
   });
 });
+

@@ -453,6 +453,249 @@ async function generateJson(input = {}) {
   return { ...base, status: EXTRACTION_STATUS.AI_FAILED, error: failures.join(' | ') };
 }
 
+/**
+ * Fallback heuristic/regex extraction when Gemini AI is not configured or fails.
+ */
+function extractQuotationFallback(text = '', rfqContext = {}) {
+  const clean = String(text || '').replace(/\r?\n/g, ' ');
+
+  let unitPrice = 0;
+  let totalPrice = 0;
+
+  const unitMatch = clean.match(/(?:unit\s*price|rate|price\s*per\s*unit|unit\s*rate)[\s:=₹RsINR\.]*([\d,]+(?:\.\d+)?)/i);
+  const totalMatch = clean.match(/(?:total\s*price|total\s*amount|grand\s*total|total\s*bid|total\s*quote|total)[\s:=₹RsINR\.]*([\d,]+(?:\.\d+)?)/i);
+  const generalPriceMatch = clean.match(/(?:(?:INR|Rs\.?|₹)\s*([\d,]+(?:\.\d+)?))/i) || clean.match(/(?:price|quote|bid)[\s:=]*([\d,]+(?:\.\d+)?)/i);
+
+  const parseNum = (str) => (str ? Number(String(str).replace(/,/g, '')) : 0);
+
+  if (unitMatch) unitPrice = parseNum(unitMatch[1]);
+  if (totalMatch) totalPrice = parseNum(totalMatch[1]);
+  if (!unitPrice && generalPriceMatch) unitPrice = parseNum(generalPriceMatch[1]);
+
+  const rfqItems = rfqContext.extractedEntities || rfqContext.lineItems || [];
+  const rfqQty = rfqItems.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0) || 1;
+
+  if (unitPrice > 0 && (!totalPrice || totalPrice === 0)) {
+    totalPrice = unitPrice * rfqQty;
+  } else if (totalPrice > 0 && (!unitPrice || unitPrice === 0)) {
+    unitPrice = Math.round(totalPrice / rfqQty);
+  }
+
+  let leadTimeDays = 7;
+  const leadMatch = clean.match(/(?:lead\s*time|delivery\s*time|delivery\s*period|dispatch\s*in)[\s:=]*(\d+)\s*(days?|weeks?|months?)/i) ||
+    clean.match(/(\d+)\s*(?:working\s*)?(days?|weeks?)\s*(?:delivery|lead\s*time|dispatch)/i);
+  if (leadMatch) {
+    const val = Number(leadMatch[1]);
+    const unit = (leadMatch[2] || '').toLowerCase();
+    if (unit.startsWith('week')) leadTimeDays = val * 7;
+    else if (unit.startsWith('month')) leadTimeDays = val * 30;
+    else leadTimeDays = val;
+  }
+
+  let warrantyYears = 1;
+  const warMatch = clean.match(/(?:warranty|guarantee)[\s:=]*(\d+)\s*(years?|months?)/i) ||
+    clean.match(/(\d+)\s*(years?|months?)\s*(?:warranty|guarantee)/i);
+  if (warMatch) {
+    const val = Number(warMatch[1]);
+    const unit = (warMatch[2] || '').toLowerCase();
+    if (unit.startsWith('month')) warrantyYears = Math.max(1, Math.round(val / 12));
+    else warrantyYears = val;
+  }
+
+  let paymentTerms = 'Standard Terms';
+  const payMatch = text.match(/(?:payment\s*terms?|payment)[\s:=]*([^\n\r,;\.]{2,40})/i);
+  if (payMatch) {
+    paymentTerms = payMatch[1].replace(/(?:taxes|gst|freight|remarks|delivery).*/i, '').trim();
+  }
+
+  let taxes = 0;
+  const taxMatch = clean.match(/(?:gst|tax(?:es)?)[\s:=@]*(\d+(?:\.\d+)?)\s*%/i);
+  if (taxMatch && totalPrice > 0) {
+    taxes = Math.round((totalPrice * Number(taxMatch[1])) / 100);
+  }
+
+  let deliveryCharges = 0;
+  const delMatch = clean.match(/(?:delivery\s*charges?|freight\s*charges?|freight|shipping)[\s:=₹RsINR\.]*([\d,]+(?:\.\d+)?)/i);
+  if (delMatch) {
+    deliveryCharges = parseNum(delMatch[1]);
+  }
+
+  const lineItemQuotes = rfqItems.map((rfqItem, idx) => {
+    const itemName = rfqItem.itemName || rfqItem.description || `Item ${idx + 1}`;
+    const qty = Number(rfqItem.quantity) || 1;
+    let itemUnitPrice = unitPrice;
+
+    // Search for item-specific price in the email text
+    const escaped = itemName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').split(/\s+/).slice(0, 2).join('\\s+');
+    const itemRegex = new RegExp(
+      `(?:${escaped})[^\\n\\r]*?(?:INR|Rs\\.?|₹)?\\s*([\\d,]+(?:\\.\\d+)?)\\s*(?:per|/|unit|each|piece)?`,
+      'i'
+    );
+    const itemMatch = text.match(itemRegex);
+    if (itemMatch) {
+      const parsed = parseNum(itemMatch[1]);
+      if (parsed > 0) itemUnitPrice = parsed;
+    }
+
+    return {
+      itemName,
+      quantity: qty,
+      unit: rfqItem.unit || 'Units',
+      unitPrice: itemUnitPrice || 0,
+      totalPrice: (itemUnitPrice || 0) * qty,
+      tax: taxes ? Math.round(taxes / (rfqItems.length || 1)) : 0,
+      deliveryDate: rfqItem.targetDate || rfqContext.targetDeliveryDate || '',
+    };
+  });
+
+  const calculatedTotal = lineItemQuotes.reduce((acc, it) => acc + (it.totalPrice || 0), 0);
+  if (calculatedTotal > 0) {
+    totalPrice = calculatedTotal;
+  }
+
+  return {
+    unitPrice,
+    totalPrice: totalPrice || unitPrice,
+    leadTimeDays,
+    warrantyYears,
+    paymentTerms,
+    remarks: 'Extracted from vendor email quotation reply',
+    taxes,
+    deliveryCharges,
+    complianceStatus: 'Fully Compliant',
+    lineItemQuotes,
+    extractionMethod: 'heuristic_fallback',
+  };
+}
+
+/**
+ * Extract structured vendor quotation details from email content for an RFQ.
+ *
+ * @param {object} input
+ * @param {string} input.bodyText - Email body text (or flattened HTML)
+ * @param {string} [input.subject] - Email subject
+ * @param {string} [input.fromAddress] - Vendor email
+ * @param {object} [rfqContext] - Target RFQ metadata for matching line items
+ * @returns {Promise<object>} Extracted quotation payload
+ */
+async function extractQuotationFromEmail(input = {}, rfqContext = {}) {
+  const text = input.bodyText || input.text || '';
+  const rfqItems = rfqContext.extractedEntities || rfqContext.lineItems || [];
+
+  if (!isConfigured()) {
+    logger.info('Extracting quotation details via heuristic parser (API key not configured)', {}, 'GEMINI');
+    return extractQuotationFallback(text, rfqContext);
+  }
+
+  const rfqSummary = {
+    rfqNumber: rfqContext.rfqNumber || 'RFQ',
+    title: rfqContext.title || '',
+    category: rfqContext.category || '',
+    budget: rfqContext.budget || 0,
+    lineItems: rfqItems.map((item, idx) => ({
+      index: idx + 1,
+      itemName: item.itemName || item.description || '',
+      quantity: Number(item.quantity) || 1,
+      unit: item.unit || 'Units',
+      specification: item.technicalSpecs || item.specification || '',
+    })),
+  };
+
+  const prompt = `You are an enterprise procurement bid extraction system.
+Analyze the following vendor email quotation response for the given RFQ and extract all commercial and technical bid parameters in strict JSON format.
+
+RFQ DETAILS:
+${JSON.stringify(rfqSummary, null, 2)}
+
+VENDOR EMAIL CONTENT:
+Subject: ${input.subject || ''}
+From: ${input.fromAddress || ''}
+Body:
+${text}
+
+Extract and return ONLY a JSON object with this EXACT structure:
+{
+  "unitPrice": Number (primary or base unit price per item, non-negative number),
+  "totalPrice": Number (grand total quoted amount for the RFQ, non-negative number),
+  "leadTimeDays": Number (delivery lead time in days, integer >= 0),
+  "warrantyYears": Number (warranty period in years, integer >= 0),
+  "paymentTerms": "String (e.g. Net 30, 100% advance, 30 days against invoice, or as stated)",
+  "complianceStatus": "String (one of: 'Fully Compliant', 'Minor Exception', 'Pending Review')",
+  "remarks": "String (any vendor notes, exclusions, or commercial conditions stated in the email)",
+  "taxes": Number (total tax or GST amount if stated or calculated, else 0),
+  "deliveryCharges": Number (freight or delivery charges if stated, else 0),
+  "deliveryDate": "String in YYYY-MM-DD if explicit delivery date is stated, else null",
+  "quotationValidity": "String (quotation validity period e.g. '30 days', '15 days', or null)",
+  "lineItemQuotes": [
+    {
+      "itemName": "String (matched RFQ line item name)",
+      "quantity": Number (quoted quantity),
+      "unitPrice": Number (unit rate quoted for this specific item),
+      "totalPrice": Number (line total quoted for this specific item),
+      "tax": Number (tax amount for this line item, else 0),
+      "deliveryDate": "String in YYYY-MM-DD or null"
+    }
+  ]
+}
+
+If specific values are missing from the email, provide reasonable procurement defaults (e.g. leadTimeDays: 7, warrantyYears: 1, paymentTerms: "Standard Terms", complianceStatus: "Fully Compliant") based on the text.
+Do NOT include markdown fences, prose or explanation outside the JSON object.`;
+
+  const result = await generateJson({ prompt, label: 'vendor-quote-extraction' });
+
+  if (result.status === EXTRACTION_STATUS.SUCCESS && result.data && typeof result.data === 'object') {
+    const data = result.data;
+    const unitPrice = Number(data.unitPrice) || 0;
+    const totalPrice = Number(data.totalPrice) || (unitPrice * (rfqItems.length || 1));
+    const leadTimeDays = Number(data.leadTimeDays) || 7;
+    const warrantyYears = Number(data.warrantyYears) || 1;
+    const paymentTerms = String(data.paymentTerms || 'Standard Terms').trim();
+    const complianceStatus = ['Fully Compliant', 'Minor Exception', 'Pending Review'].includes(data.complianceStatus)
+      ? data.complianceStatus
+      : 'Fully Compliant';
+    const remarks = String(data.remarks || '').trim();
+    const taxes = Number(data.taxes) || 0;
+    const deliveryCharges = Number(data.deliveryCharges) || 0;
+
+    let lineItemQuotes = Array.isArray(data.lineItemQuotes) && data.lineItemQuotes.length > 0
+      ? data.lineItemQuotes.map((lq, idx) => ({
+          itemName: lq.itemName || rfqItems[idx]?.itemName || `Item ${idx + 1}`,
+          quantity: Number(lq.quantity) || Number(rfqItems[idx]?.quantity) || 1,
+          unitPrice: Number(lq.unitPrice) || unitPrice || 0,
+          totalPrice: Number(lq.totalPrice) || (Number(lq.unitPrice || unitPrice || 0) * (Number(lq.quantity) || 1)),
+          tax: Number(lq.tax) || 0,
+          deliveryDate: lq.deliveryDate || null,
+        }))
+      : rfqItems.map((rfqItem, idx) => ({
+          itemName: rfqItem.itemName || rfqItem.description || `Item ${idx + 1}`,
+          quantity: Number(rfqItem.quantity) || 1,
+          unitPrice: unitPrice || 0,
+          totalPrice: (unitPrice || 0) * (Number(rfqItem.quantity) || 1),
+          tax: taxes ? Math.round(taxes / (rfqItems.length || 1)) : 0,
+          deliveryDate: rfqItem.targetDate || rfqContext.targetDeliveryDate || null,
+        }));
+
+    return {
+      unitPrice,
+      totalPrice: totalPrice || unitPrice,
+      leadTimeDays,
+      warrantyYears,
+      paymentTerms,
+      complianceStatus,
+      remarks,
+      taxes,
+      deliveryCharges,
+      deliveryDate: data.deliveryDate || null,
+      quotationValidity: data.quotationValidity || null,
+      lineItemQuotes,
+      extractionMethod: 'gemini_ai',
+    };
+  }
+
+  logger.warn('Gemini quotation extraction fell back to heuristic parser', { status: result.status, error: result.error }, 'GEMINI');
+  return extractQuotationFallback(text, rfqContext);
+}
+
 module.exports = {
   EXTRACTION_STATUS,
   EXTRACTION_PROMPT,
@@ -466,4 +709,6 @@ module.exports = {
   toRawLineItems,
   buildRequestBody,
   extractLineItems,
+  extractQuotationFromEmail,
+  extractQuotationFallback,
 };

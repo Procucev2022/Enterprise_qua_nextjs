@@ -827,6 +827,9 @@ const EMAIL_GATEWAY_MESSAGES = {
   NO_ITEMS_ACCEPTED: 'No usable procurement line items were found in the message.',
   LINE_ITEMS_EXCEED_LIMIT: 'Maximum {max} line items per RFQ exceeded (received {count}).',
   INGESTED_DETAIL: 'Raised with {count} line item(s), {needsReview} needing category review.',
+  QUOTE_INGESTED_DETAIL: 'Vendor quotation for RFQ {rfqNumber} successfully ingested from email ({vendorName}).',
+  INVALID_RFQ_REFERENCED: 'The referenced RFQ {rfqNumber} was not found in the system.',
+  VENDOR_NOT_FOUND_FOR_QUOTE: 'No vendor profile found for sender {address}.',
 };
 
 /** Notification email content for unauthorized email senders. */

@@ -1952,6 +1952,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       complianceStatus: 'Fully Compliant',
       paymentTerms: 'Net 30 Days',
       remarks,
+      source: 'portal',
+      submissionMethod: 'web_portal',
     };
 
     setRfqs((prev) =>
