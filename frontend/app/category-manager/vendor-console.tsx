@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQItem, RFQVendorCandidate, VendorPageMeta } from '@/lib/types';
 import { fetchAllVendors } from '@/lib/rfqClient';
+import { fetchCategoryTaxonomy } from '@/lib/buyerProfileClient';
 import { formatCurrency } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import {
@@ -60,6 +61,8 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
   const [vendorsError, setVendorsError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [categoryOptions, setCategoryOptions] = useState<string[]>([]);
   const [selectedVendorId, setSelectedVendorId] = useState<string | null>(null);
   const [expandedQuoteNumber, setExpandedQuoteNumber] = useState<string | null>(null);
   // Tracks an explicit user collapse ("Hide Details") so dropdown-driven
@@ -76,19 +79,28 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
     return () => clearTimeout(t);
   }, [searchTerm]);
 
-  const lastFetchedSearchRef = useRef<string | null>(null);
+  useEffect(() => {
+    void fetchCategoryTaxonomy().then((result) => {
+      if (result.success) {
+        setCategoryOptions(result.data.map((c) => c.majorCategory));
+      }
+    });
+  }, []);
+
+  const lastFetchedKeyRef = useRef<string | null>(null);
   // Guards against a slower, earlier request (e.g. the initial unfiltered
   // load) resolving AFTER a newer, filtered one and overwriting it with
   // stale data — only the most recently *issued* request's response is ever
   // applied.
   const fetchSeqRef = useRef(0);
   useEffect(() => {
-    if (fetchedVendors.length > 0 && lastFetchedSearchRef.current === debouncedSearch) return;
-    lastFetchedSearchRef.current = debouncedSearch;
+    const key = `${debouncedSearch}|${categoryFilter}`;
+    if (fetchedVendors.length > 0 && lastFetchedKeyRef.current === key) return;
+    lastFetchedKeyRef.current = key;
     const seq = ++fetchSeqRef.current;
     setVendorsLoading(true);
     setVendorsError(null);
-    void fetchAllVendors({ page: 1, pageSize: VENDOR_CARDS_PAGE_SIZE, search: debouncedSearch }).then((result) => {
+    void fetchAllVendors({ page: 1, pageSize: VENDOR_CARDS_PAGE_SIZE, search: debouncedSearch, category: categoryFilter }).then((result) => {
       if (seq !== fetchSeqRef.current) return;
       if (result.success) {
         setFetchedVendors(result.candidates);
@@ -99,7 +111,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
       setVendorsLoading(false);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch]);
+  }, [debouncedSearch, categoryFilter]);
 
   const loadMoreVendors = () => {
     if (!vendorsPagination || vendorsLoadingMore) return;
@@ -107,7 +119,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
     if (nextPage > vendorsPagination.totalPages) return;
     const seq = ++fetchSeqRef.current;
     setVendorsLoadingMore(true);
-    void fetchAllVendors({ page: nextPage, pageSize: VENDOR_CARDS_PAGE_SIZE, search: debouncedSearch }).then((result) => {
+    void fetchAllVendors({ page: nextPage, pageSize: VENDOR_CARDS_PAGE_SIZE, search: debouncedSearch, category: categoryFilter }).then((result) => {
       if (seq !== fetchSeqRef.current) return;
       if (result.success) {
         setFetchedVendors((prev) => [...prev, ...result.candidates]);
@@ -380,18 +392,33 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
             {vendorsPagination ? ` of ${vendorsPagination.total.toLocaleString()}` : ''} Vendors)
           </h3>
 
-          {/* Search Box */}
-          <div className="relative max-w-xs">
-            <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
-              <Search size={13} />
-            </span>
-            <input
-              type="text"
-              placeholder="Search Vendor name or category..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="input pl-8 py-1.5 text-xs w-full sm:w-64"
-            />
+          <div className="flex gap-2">
+            {/* Search Box */}
+            <div className="relative max-w-xs">
+              <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
+                <Search size={13} />
+              </span>
+              <input
+                type="text"
+                placeholder="Search Vendor name or category..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="input pl-8 py-1.5 text-xs w-full sm:w-64"
+              />
+            </div>
+            {/* Category filter */}
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              className="input py-1.5 text-xs w-40"
+            >
+              <option value="">All categories</option>
+              {categoryOptions.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 

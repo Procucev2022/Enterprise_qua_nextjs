@@ -125,7 +125,7 @@ async function getVendors(req, res, next) {
 
     // Pagination is opt-in (passing `page`) so existing callers that expect
     // the full array (vendor-console metrics, GraphQL, etc.) are unaffected.
-    const { page, search } = req.query || {};
+    const { page, search, category } = req.query || {};
 
     // Any paginated request is answered straight from Postgres with
     // LIMIT/OFFSET — it must never route through storeService.getVendors(),
@@ -151,6 +151,7 @@ async function getVendors(req, res, next) {
         limit: pageSize,
         offset: (pageNumber - 1) * pageSize,
         search: search ? String(search) : '',
+        category: category ? String(category) : '',
         scopedBuyerId: buyerId && buyerId !== 'all' ? buyerId : '',
       });
       return res.json({
@@ -169,6 +170,9 @@ async function getVendors(req, res, next) {
           String(field || '').toLowerCase().includes(q)
         )
       );
+    }
+    if (category) {
+      vendors = vendors.filter((v) => v.majorCategory === category);
     }
     if (page !== undefined) {
       const pageNumber = Math.max(1, parseInt(page, 10) || 1);

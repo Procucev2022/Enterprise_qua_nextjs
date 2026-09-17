@@ -32,7 +32,7 @@ async function getVendorsFromDB() {
  * pagination. This does the LIMIT/OFFSET/search filtering in SQL instead, so
  * a page request only ever touches the rows it actually returns.
  */
-async function getVendorsPageFromDB({ limit, offset, search = '', publicOnly = false, scopedBuyerId = '' } = {}) {
+async function getVendorsPageFromDB({ limit, offset, search = '', category = '', publicOnly = false, scopedBuyerId = '' } = {}) {
   if (!pool.pool) return { rows: [], total: 0 };
   const params = [];
   const conditions = [];
@@ -45,6 +45,14 @@ async function getVendorsPageFromDB({ limit, offset, search = '', publicOnly = f
       OR email ILIKE $${params.length}
       OR raw->>'name' ILIKE $${params.length}
       OR (raw->'minorCategories')::text ILIKE $${params.length})`);
+  }
+  if (category) {
+    // An exact-match category filter (the CM's category dropdown), separate
+    // from the free-text `search` above — combinable with it via AND. Uses
+    // the existing plain btree idx_vendors_major_category index (an equality
+    // match, unlike search's leading-wildcard ILIKE, so no trigram needed).
+    params.push(category);
+    conditions.push(`major_category = $${params.length}`);
   }
   if (publicOnly) {
     // Mirrors storeService.getVendors' unscoped filter: a vendor tagged to a

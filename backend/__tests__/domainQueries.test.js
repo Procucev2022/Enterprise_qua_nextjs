@@ -237,6 +237,38 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
         expect(countParams).toEqual([]);
       });
 
+      test('adds an exact-match category filter', async () => {
+        const query = jest
+          .fn()
+          .mockResolvedValueOnce({ rows: [{ total: 5 }] })
+          .mockResolvedValueOnce({ rows: [{ raw: { id: 'v-1' } }] });
+        pool.pool = { query };
+
+        await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, category: 'Fasteners' });
+
+        const [countSql, countParams] = query.mock.calls[0];
+        expect(countSql).toContain('major_category = $1');
+        expect(countParams).toEqual(['Fasteners']);
+
+        const [dataSql, dataParams] = query.mock.calls[1];
+        expect(dataSql).toContain('ORDER BY created_at DESC LIMIT $2 OFFSET $3');
+        expect(dataParams).toEqual(['Fasteners', 10, 0]);
+      });
+
+      test('combines search and category with AND, using separate placeholders', async () => {
+        const query = jest
+          .fn()
+          .mockResolvedValueOnce({ rows: [{ total: 0 }] })
+          .mockResolvedValueOnce({ rows: [] });
+        pool.pool = { query };
+
+        await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, search: 'steel', category: 'Fasteners' });
+
+        const [countSql, countParams] = query.mock.calls[0];
+        expect(countSql).toMatch(/WHERE[\s\S]* AND [\s\S]*major_category = \$2/);
+        expect(countParams).toEqual(['%steel%', 'Fasteners']);
+      });
+
       test('defaults total to 0 when the count query returns no row', async () => {
         const query = jest
           .fn()
