@@ -131,16 +131,16 @@ describe('POST /api/notifications/read-all', () => {
 describe('notificationController.resolveRecipient', () => {
   const { resolveRecipient } = require('../src/controllers/notificationController');
 
-  test('returns null when there is no user', () => {
-    expect(resolveRecipient({})).toBeNull();
+  test('returns null when there is no user', async () => {
+    expect(await resolveRecipient({})).toBeNull();
   });
 
-  test('returns null for a vendor with no vendor record', () => {
-    expect(resolveRecipient({ user: { role: 'vendor', email: 'ghost-vendor@nowhere.test' } })).toBeNull();
+  test('returns null for a vendor with no vendor record', async () => {
+    expect(await resolveRecipient({ user: { role: 'vendor', email: 'ghost-vendor@nowhere.test' } })).toBeNull();
   });
 
-  test('returns null for a buyer with no buyer account', () => {
-    expect(resolveRecipient({ user: { role: 'buyer', email: 'ghost-buyer@nowhere.test' } })).toBeNull();
+  test('returns null for a buyer with no buyer account', async () => {
+    expect(await resolveRecipient({ user: { role: 'buyer', email: 'ghost-buyer@nowhere.test' } })).toBeNull();
   });
 });
 

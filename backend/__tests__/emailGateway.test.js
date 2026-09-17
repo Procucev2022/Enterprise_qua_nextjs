@@ -120,65 +120,65 @@ describe('emailGatewayService.resolveSenderAuthorisation', () => {
 
   const config = (env = {}) => emailGatewayService.resolveConfig({ ...FULL_ENV, ...env });
 
-  test('refuses a message with no sender address', () => {
-    const result = emailGatewayService.resolveSenderAuthorisation('', config());
+  test('refuses a message with no sender address', async () => {
+    const result = await emailGatewayService.resolveSenderAuthorisation('', config());
     expect(result.allowed).toBe(false);
     expect(result.reason).toBe(EMAIL_GATEWAY_MESSAGES.SENDER_MISSING);
   });
 
-  test('allows a sender registered as a buyer account', () => {
+  test('allows a sender registered as a buyer account', async () => {
     jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue(buyerAccount());
-    const result = emailGatewayService.resolveSenderAuthorisation(SENDER, config());
+    const result = await emailGatewayService.resolveSenderAuthorisation(SENDER, config());
     expect(result.allowed).toBe(true);
     expect(result.buyerAccount.id).toBe('buyer-acc-101');
   });
 
-  test('refuses a sender with no buyer account', () => {
+  test('refuses a sender with no buyer account', async () => {
     jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue(null);
-    const result = emailGatewayService.resolveSenderAuthorisation('stranger@example.com', config());
+    const result = await emailGatewayService.resolveSenderAuthorisation('stranger@example.com', config());
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain('No buyer account is registered');
   });
 
-  test('matches the address case-insensitively', () => {
+  test('matches the address case-insensitively', async () => {
     jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue(buyerAccount());
-    expect(emailGatewayService.resolveSenderAuthorisation(SENDER.toUpperCase(), config()).allowed).toBe(true);
+    expect((await emailGatewayService.resolveSenderAuthorisation(SENDER.toUpperCase(), config())).allowed).toBe(true);
   });
 
-  test('an explicit sender list excludes everyone else', () => {
+  test('an explicit sender list excludes everyone else', async () => {
     jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue(buyerAccount());
     const cfg = config({ EMAIL_GATEWAY_ALLOWED_SENDERS: 'someone.else@corp.com' });
-    const result = emailGatewayService.resolveSenderAuthorisation(SENDER, cfg);
+    const result = await emailGatewayService.resolveSenderAuthorisation(SENDER, cfg);
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain('not on EMAIL_GATEWAY_ALLOWED_SENDERS');
   });
 
-  test('an explicit sender list still requires an owning account', () => {
+  test('an explicit sender list still requires an owning account', async () => {
     jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue(null);
     const cfg = config({ EMAIL_GATEWAY_ALLOWED_SENDERS: SENDER });
-    const result = emailGatewayService.resolveSenderAuthorisation(SENDER, cfg);
+    const result = await emailGatewayService.resolveSenderAuthorisation(SENDER, cfg);
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain('No buyer account is registered');
   });
 
-  test('a listed sender with an account is allowed', () => {
+  test('a listed sender with an account is allowed', async () => {
     jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue(buyerAccount());
     const cfg = config({ EMAIL_GATEWAY_ALLOWED_SENDERS: SENDER });
-    expect(emailGatewayService.resolveSenderAuthorisation(SENDER, cfg).allowed).toBe(true);
+    expect((await emailGatewayService.resolveSenderAuthorisation(SENDER, cfg)).allowed).toBe(true);
   });
 
-  test('a domain list narrows the baseline rule', () => {
+  test('a domain list narrows the baseline rule', async () => {
     jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue(buyerAccount());
     const cfg = config({ EMAIL_GATEWAY_ALLOWED_DOMAINS: 'other.com' });
-    const result = emailGatewayService.resolveSenderAuthorisation(SENDER, cfg);
+    const result = await emailGatewayService.resolveSenderAuthorisation(SENDER, cfg);
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain('not on EMAIL_GATEWAY_ALLOWED_DOMAINS');
   });
 
-  test('a sender on a listed domain with an account is allowed', () => {
+  test('a sender on a listed domain with an account is allowed', async () => {
     jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue(buyerAccount());
     const cfg = config({ EMAIL_GATEWAY_ALLOWED_DOMAINS: 'lt-heavy.com' });
-    expect(emailGatewayService.resolveSenderAuthorisation(SENDER, cfg).allowed).toBe(true);
+    expect((await emailGatewayService.resolveSenderAuthorisation(SENDER, cfg)).allowed).toBe(true);
   });
 });
 
@@ -940,14 +940,14 @@ describe('emailGatewayService configuration helpers and connection diagnostics',
     expect(res.reason).toContain('smtp.gmail.com');
   });
 
-  test('handles default arguments and edge cases in helpers', () => {
+  test('handles default arguments and edge cases in helpers', async () => {
     expect(typeof emailGatewayService.isConfigured()).toBe('boolean');
     expect(emailGatewayService.describeConfigurationFault()).toBeNull();
     expect(emailGatewayService.describeConnectionError(null)).toBe(EMAIL_GATEWAY_MESSAGES.CONNECTION_FAILED_FALLBACK);
     expect(emailGatewayService.describeConnectionError({})).toBe(EMAIL_GATEWAY_MESSAGES.CONNECTION_FAILED_FALLBACK);
-    expect(typeof emailGatewayService.resolveSenderAuthorisation('test@corp.com').allowed).toBe('boolean');
+    expect(typeof (await emailGatewayService.resolveSenderAuthorisation('test@corp.com')).allowed).toBe('boolean');
     expect(
-      emailGatewayService.resolveSenderAuthorisation('noatsign', { allowedDomains: ['corp.com'], allowedSenders: [] })
+      (await emailGatewayService.resolveSenderAuthorisation('noatsign', { allowedDomains: ['corp.com'], allowedSenders: [] }))
         .allowed
     ).toBe(false);
   });

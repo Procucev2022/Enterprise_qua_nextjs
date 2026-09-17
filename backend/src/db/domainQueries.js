@@ -292,6 +292,15 @@ async function getBuyerAccountsFromDB() {
   return { accounts, activeId: activeRow ? activeRow.id : null };
 }
 
+// Reads straight from Postgres rather than an in-memory cache, so a plan/role
+// change made by any other process (a script, another instance) is visible on
+// the very next request instead of requiring this process to restart.
+async function getBuyerAccountByEmailFromDB(email) {
+  if (!pool.pool || !email) return null;
+  const result = await pool.query('SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1', [email]);
+  return result.rows[0]?.raw || null;
+}
+
 async function upsertBuyerAccountInDB(account) {
   if (!pool.pool) return null;
   const { id, corporateEmail, status } = account;
@@ -523,6 +532,7 @@ module.exports = {
   upsertCatalogueProductInDB,
   deleteCatalogueProductInDB,
   getBuyerAccountsFromDB,
+  getBuyerAccountByEmailFromDB,
   upsertBuyerAccountInDB,
   deleteBuyerAccountInDB,
   setActiveBuyerAccountInDB,

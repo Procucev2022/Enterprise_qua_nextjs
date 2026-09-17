@@ -441,14 +441,14 @@ describe('Store Service & Business Operations', () => {
       expect(rfq.status).toBe('Quotes Pending');
     });
 
-    test('getBuyerAccountByEmail resolves case-insensitively, and returns null when unmatched or unset', () => {
+    test('getBuyerAccountByEmail resolves case-insensitively, and returns null when unmatched or unset', async () => {
       const acc = storeService.addBuyerAccount({
         organizationName: 'Lookup Test Co',
         corporateEmail: 'Lookup-Test@Example.com',
       });
-      expect(storeService.getBuyerAccountByEmail('lookup-test@example.com')).toEqual(acc);
-      expect(storeService.getBuyerAccountByEmail('nobody@example.com')).toBeNull();
-      expect(storeService.getBuyerAccountByEmail(undefined)).toBeNull();
+      expect(await storeService.getBuyerAccountByEmail('lookup-test@example.com')).toEqual(acc);
+      expect(await storeService.getBuyerAccountByEmail('nobody@example.com')).toBeNull();
+      expect(await storeService.getBuyerAccountByEmail(undefined)).toBeNull();
     });
 
     test('processHistoricalPurchaseData attributes its audit log to the requesting buyer account, not the global active one', async () => {
@@ -1259,7 +1259,7 @@ describe('Store Service & Business Operations', () => {
       expect(storeService.activateVendorSubscriptionFromPayment(link.id)).toBeNull();
     });
 
-    test('activateBuyerSubscriptionFromPayment grants a paid plan, marks the link activated, and audits it', () => {
+    test('activateBuyerSubscriptionFromPayment grants a paid plan, marks the link activated, and audits it', async () => {
       const buyer = storeService.addBuyerAccount({ organizationName: 'Payment Flow Buyer Co', corporateEmail: 'paymentflowbuyer@ex.com' });
       const link = storeService.createPaymentLinkRecord({
         id: 'pl-buyer-activate-1',
@@ -1276,12 +1276,12 @@ describe('Store Service & Business Operations', () => {
       const result = storeService.activateBuyerSubscriptionFromPayment(link.id);
 
       expect(result.activated).toBe(true);
-      expect(storeService.getBuyerAccountByEmail('paymentflowbuyer@ex.com')).toMatchObject({ subscriptionPlan: 'version_2' });
+      expect(await storeService.getBuyerAccountByEmail('paymentflowbuyer@ex.com')).toMatchObject({ subscriptionPlan: 'version_2' });
       expect(storeService.getAuditLogs().length).toBeGreaterThan(auditBefore);
       expect(storeService.getAuditLogs()[0].action).toContain('version_2');
     });
 
-    test('activateBuyerSubscriptionFromPayment resets remainingFreeRFQs to 5 only when the plan is free_trial', () => {
+    test('activateBuyerSubscriptionFromPayment resets remainingFreeRFQs to 5 only when the plan is free_trial', async () => {
       const buyer = storeService.addBuyerAccount({
         organizationName: 'Trial Reset Buyer Co',
         corporateEmail: 'trialresetbuyer@ex.com',
@@ -1300,7 +1300,7 @@ describe('Store Service & Business Operations', () => {
 
       storeService.activateBuyerSubscriptionFromPayment(link.id);
 
-      expect(storeService.getBuyerAccountByEmail('trialresetbuyer@ex.com')).toMatchObject({
+      expect(await storeService.getBuyerAccountByEmail('trialresetbuyer@ex.com')).toMatchObject({
         subscriptionPlan: 'free_trial',
         remainingFreeRFQs: 5,
       });

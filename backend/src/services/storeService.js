@@ -272,11 +272,43 @@ class StoreService {
     return this.activeBuyerAccount;
   }
 
-  /** Resolves a buyer account by its login email, case-insensitively. */
-  getBuyerAccountByEmail(email) {
+  /**
+   * Resolves a buyer account by its login email, case-insensitively — reads
+   * straight from Postgres on every call rather than the in-memory
+   * `buyerAccounts` cache, so a plan/role change made by another process (a
+   * one-off script, another running instance) is visible immediately instead
+   * of only after this process restarts and re-hydrates.
+   *
+   * Falls back to the in-memory cache when no database is configured
+   * (`pool.pool` unset — the same guard every other DB-backed read in this
+   * file uses, and how the test suite runs: `jest.setup.js` blanks
+   * `DATABASE_URL` so tests never touch the real, shared Neon database).
+   *
+   * The in-memory cache entry is refreshed as a side effect so the handful of
+   * other in-process paths that still iterate `this.buyerAccounts` directly
+   * (e.g. `getBuyerAccounts()`) stay consistent with what was just read.
+   */
+  async getBuyerAccountByEmail(email) {
     if (!email) return null;
     const target = email.toLowerCase();
-    return this.buyerAccounts.find((a) => (a.corporateEmail || '').toLowerCase() === target) || null;
+
+    if (!pool.pool) {
+      return this.buyerAccounts.find((a) => (a.corporateEmail || '').toLowerCase() === target) || null;
+    }
+
+    const fresh = await domainQueries.getBuyerAccountByEmailFromDB(email);
+    if (!fresh) return null;
+
+    const idx = this.buyerAccounts.findIndex((a) => a.id === fresh.id);
+    if (idx === -1) {
+      this.buyerAccounts.unshift(fresh);
+    } else {
+      this.buyerAccounts[idx] = fresh;
+    }
+    if (this.activeBuyerAccount && this.activeBuyerAccount.id === fresh.id) {
+      this.activeBuyerAccount = fresh;
+    }
+    return fresh;
   }
 
   addBuyerAccount(accData) {
