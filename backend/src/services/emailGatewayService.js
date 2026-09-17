@@ -41,6 +41,8 @@ const {
   EMAIL_GATEWAY_SMTP_PORTS,
   EMAIL_INGESTION_STATUS,
   resolveBuyerSourcingMode,
+  SYSTEM_ACTOR_EMAIL,
+  VENDOR_QUOTE_SUPPORT_CC,
 } = require('../config/constants');
 
 const { INGESTION_OUTCOME } = emailGatewayQueries;
@@ -448,6 +450,41 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     targetRfq
   );
 
+  const unitPriceNum = Number(extraction.unitPrice);
+  if (!extraction.unitPrice || isNaN(unitPriceNum) || unitPriceNum <= 0) {
+    logger.warn(
+      `Vendor quote from ${vendorRecord.name} for RFQ ${targetRfq.rfqNumber} failed validation: missing or invalid unit price (${extraction.unitPrice})`,
+      { rfqNumber: targetRfq.rfqNumber, vendorId: vendorRecord.id, fromAddress: message.fromAddress },
+      'EMAIL_GATEWAY'
+    );
+
+    const buyerEmail = storeService.resolveBuyerEmailForRFQ(targetRfq);
+    const ccList = [buyerEmail, VENDOR_QUOTE_SUPPORT_CC].filter(Boolean);
+
+    try {
+      await mailerService.sendQuoteFailureEmail(message.fromAddress, {
+        rfqNumber: targetRfq.rfqNumber,
+        rfqTitle: targetRfq.title,
+        vendorName: vendorRecord.name,
+        reason: 'Unit Price (₹) is mandatory and must be greater than 0.',
+        missingFields: ['Unit Price (₹)'],
+        cc: ccList.length > 0 ? ccList.join(', ') : undefined,
+      });
+    } catch (mailErr) {
+      logger.error('Failed to send vendor quote failure email', mailErr, 'EMAIL_GATEWAY');
+    }
+
+    return {
+      status: INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED,
+      detail: EMAIL_GATEWAY_MESSAGES.QUOTE_VALIDATION_FAILED_DETAIL
+        .replace('{rfqNumber}', targetRfq.rfqNumber)
+        .replace('{vendorName}', vendorRecord.name)
+        .replace('{reason}', 'Missing mandatory unit price'),
+      message,
+      rfq: targetRfq,
+    };
+  }
+
   const quote = {
     vendorId: vendorRecord.id,
     vendorName: vendorRecord.name,
@@ -491,6 +528,21 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
       source: 'email',
     }
   );
+
+  const buyerEmail = storeService.resolveBuyerEmailForRFQ(targetRfq);
+  const ccList = [buyerEmail, VENDOR_QUOTE_SUPPORT_CC].filter(Boolean);
+
+  try {
+    await mailerService.sendQuoteAcknowledgementEmail(message.fromAddress, {
+      rfqNumber: targetRfq.rfqNumber,
+      rfqTitle: targetRfq.title,
+      vendorName: vendorRecord.name,
+      quote,
+      cc: ccList.length > 0 ? ccList.join(', ') : undefined,
+    });
+  } catch (mailErr) {
+    logger.error('Failed to send vendor quote acknowledgement email', mailErr, 'EMAIL_GATEWAY');
+  }
 
   return {
     status: INGESTION_OUTCOME.QUOTE_INGESTED,
@@ -542,6 +594,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
       message,
     };
   }
+
 
   // 2. Otherwise process as Inbound Buyer RFQ Requisition
   const authorisation = resolveSenderAuthorisation(message.fromAddress, config);
@@ -799,7 +852,7 @@ async function pollOnce(config = resolveConfig()) {
                 : null,
           });
 
-          if (result.status === INGESTION_OUTCOME.INGESTED) {
+          if (result.status === INGESTION_OUTCOME.INGESTED || result.status === INGESTION_OUTCOME.QUOTE_INGESTED) {
             runtime.ingestedThisRun += 1;
             // Marked read only for a message we actually acted on, and only after
             // the ledger write, so a failed write leaves it to be retried. Mail

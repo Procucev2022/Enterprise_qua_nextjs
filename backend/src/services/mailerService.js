@@ -217,6 +217,14 @@ async function sendOtpEmail(to, code, expiresInSeconds) {
 
 // ── New RFQ → matched vendors (buyer raised an enquiry in their category) ─────
 
+function normalizeToAndContext(toOrParams, maybeContext) {
+  if (typeof toOrParams === 'object' && toOrParams !== null && !maybeContext) {
+    const { to, ...rest } = toOrParams;
+    return { to, context: rest };
+  }
+  return { to: toOrParams, context: maybeContext || {} };
+}
+
 function buildRfqInviteEmail(to, { rfq, recipientName }) {
   const items = Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : [];
   const itemRows = items
@@ -224,7 +232,7 @@ function buildRfqInviteEmail(to, { rfq, recipientName }) {
     .map(
       (it, idx) =>
         `<tr>
-          <td style="padding: 6px 10px; border: 1px solid #e2e8f0;">${idx + 1}. ${it.itemName || 'Line item'}</td>
+          <td style="padding: 6px 10px; border: 1px solid #e2e8f0;">${idx + 1}. ${it.itemName || 'Line item'}${it.technicalSpecs || it.specifications ? `<br/><span style="font-size: 11px; color: #64748b;">Specs: ${it.technicalSpecs || it.specifications}</span>` : ''}</td>
           <td style="padding: 6px 10px; border: 1px solid #e2e8f0; text-align: center;">${it.quantity != null ? it.quantity : ''} ${it.unit || ''}</td>
         </tr>`
     )
@@ -235,6 +243,8 @@ function buildRfqInviteEmail(to, { rfq, recipientName }) {
     ? `New RFQ ${rfq.rfqNumber} in ${category}`
     : `New RFQ ${rfq.rfqNumber}`;
 
+  const budgetFormatted = rfq.budget != null && rfq.budget !== '' ? `₹${Number(rfq.budget).toLocaleString('en-IN')}` : null;
+
   const inner = `
     <p>${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}</p>
     <p>${rfq.buyerAccountName ? `<strong>${rfq.buyerAccountName}</strong> has` : 'A buyer has'} raised a request for quotation your organisation is matched to.</p>
@@ -244,6 +254,7 @@ function buildRfqInviteEmail(to, { rfq, recipientName }) {
       ${row('Category', category)}
       ${row('Target delivery', rfq.targetDeliveryDate || rfq.deadline)}
       ${row('Delivery location', rfq.deliveryLocation)}
+      ${budgetFormatted ? row('Budget', budgetFormatted) : ''}
     </table>
     ${
       itemRows
@@ -256,6 +267,21 @@ function buildRfqInviteEmail(to, { rfq, recipientName }) {
            </table>`
         : ''
     }
+    <div style="margin: 20px 0; padding: 16px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px;">
+      <h4 style="margin: 0 0 8px 0; color: #1e40af; font-size: 14px;">How to Submit Your Quotation</h4>
+      <p style="margin: 0 0 10px 0; font-size: 13px; color: #1e293b;">
+        You can submit your bid by <strong>replying directly to this email</strong> (keep the subject line intact with RFQ number <strong>#${rfq.rfqNumber}</strong>), or via the Procucev vendor portal.
+      </p>
+      <p style="margin: 0 0 6px 0; font-size: 13px; font-weight: 600; color: #1e293b;">Please provide the following quotation fields:</p>
+      <ul style="margin: 0 0 10px 0; padding-left: 20px; font-size: 13px; color: #334155;">
+        <li><strong>Unit Price (₹)*</strong> — Mandatory</li>
+        <li><strong>Lead Time (Days)</strong> — Expected delivery timeline</li>
+        <li><strong>Warranty (Years)</strong> — Warranty period</li>
+        <li><strong>Payment Terms</strong> — e.g., Net 30, Advance, etc.</li>
+        <li><strong>Remarks</strong> — Any inclusions, exclusions or terms</li>
+      </ul>
+      ${items.length > 1 ? '<p style="margin: 0; font-size: 12px; color: #475569;"><em>For multi-item RFQs, please quote unit price per item in your reply.</em></p>' : ''}
+    </div>
     <p style="font-size: 13px; color: #64748b;">Sign in to your Procucev vendor account to review the full enquiry and submit a quotation.</p>
   `;
 
@@ -269,6 +295,75 @@ function buildRfqInviteEmail(to, { rfq, recipientName }) {
 
 async function sendRfqInviteEmail(to, context) {
   return deliver(buildRfqInviteEmail(to, context), 'RFQ invite email');
+}
+
+// ── Vendor quote acknowledgement → vendor (with buyer & support CC) ─────────
+
+function buildQuoteAcknowledgementEmail(toOrParams, maybeContext) {
+  const { to, context } = normalizeToAndContext(toOrParams, maybeContext);
+  const { rfqNumber, rfqTitle, vendorName, quote = {}, cc } = context;
+  const subject = `Quotation Received – RFQ ${rfqNumber}`;
+  const inner = `
+    <p>${vendorName ? `Dear <strong>${vendorName}</strong>,` : 'Hello,'}</p>
+    <p>Your quotation for RFQ <strong>#${rfqNumber}</strong>${rfqTitle ? ` (${rfqTitle})` : ''} has been received and successfully recorded in Enterprise QUA.</p>
+    <table style="width: 100%; border-collapse: collapse; margin: 16px 0; background: #f8fafc;">
+      ${row('RFQ Number', rfqNumber)}
+      ${row('Unit Price', quote.unitPrice != null ? `₹${quote.unitPrice}` : '')}
+      ${row('Total Price', quote.totalPrice != null ? `₹${quote.totalPrice}` : '')}
+      ${row('Lead Time', quote.leadTimeDays != null ? `${quote.leadTimeDays} days` : '')}
+      ${row('Warranty', quote.warrantyYears != null ? `${quote.warrantyYears} year(s)` : '')}
+      ${row('Payment Terms', quote.paymentTerms)}
+      ${row('Remarks', quote.remarks)}
+    </table>
+    <p style="font-size: 13px; color: #64748b;">The buyer has been notified and your quotation is now available under Vendor Comparison.</p>
+  `;
+
+  return {
+    from: fromAddress(),
+    to,
+    cc: cc || undefined,
+    subject,
+    html: wrapEmail('PROCUCEV ENTERPRISE', 'Quotation Submission Confirmation', inner),
+  };
+}
+
+async function sendQuoteAcknowledgementEmail(toOrParams, maybeContext) {
+  return deliver(buildQuoteAcknowledgementEmail(toOrParams, maybeContext), 'quote acknowledgement email');
+}
+
+// ── Vendor quote failure notification → vendor (with buyer & support CC) ─────
+
+function buildQuoteFailureEmail(toOrParams, maybeContext) {
+  const { to, context } = normalizeToAndContext(toOrParams, maybeContext);
+  const { rfqNumber, rfqTitle, vendorName, reason, missingFields, cc } = context;
+  const subject = `Action Required – Quotation Could Not Be Processed for RFQ ${rfqNumber}`;
+  const inner = `
+    <p>${vendorName ? `Dear <strong>${vendorName}</strong>,` : 'Hello,'}</p>
+    <p>We received your email response regarding RFQ <strong>#${rfqNumber}</strong>${rfqTitle ? ` (${rfqTitle})` : ''}, but your quotation could not be processed due to the following reason:</p>
+    <div style="background: #fef2f2; border: 1px solid #f87171; color: #991b1b; padding: 12px; border-radius: 6px; margin: 16px 0;">
+      <strong>Validation Issue:</strong> ${reason || (missingFields && missingFields.length ? `Missing required field(s): ${missingFields.join(', ')}` : 'Incomplete quotation details')}
+    </div>
+    <p><strong>Required Information:</strong></p>
+    <ul style="color: #334155; line-height: 1.6;">
+      <li><strong>Unit Price (₹)*:</strong> A valid unit price greater than 0 is mandatory.</li>
+      <li><strong>Lead Time (Days):</strong> Expected delivery timeline.</li>
+      <li><strong>Warranty (Years):</strong> Warranty period if applicable.</li>
+      <li><strong>Payment Terms:</strong> Accepted commercial payment terms.</li>
+    </ul>
+    <p style="font-size: 13px; color: #64748b;">Please reply to this email with the required quotation details or submit your quotation directly via the Procucev vendor portal.</p>
+  `;
+
+  return {
+    from: fromAddress(),
+    to,
+    cc: cc || undefined,
+    subject,
+    html: wrapEmail('PROCUCEV ENTERPRISE', 'Quotation Submission Notice', inner),
+  };
+}
+
+async function sendQuoteFailureEmail(toOrParams, maybeContext) {
+  return deliver(buildQuoteFailureEmail(toOrParams, maybeContext), 'quote failure notification email');
 }
 
 // ── Vendor quote → owning buyer ─────────────────────────────────────────────
@@ -750,6 +845,10 @@ module.exports = {
   sendVendorIngestionEmail,
   buildRfqAcknowledgementEmail,
   sendRfqAcknowledgementEmail,
+  buildQuoteAcknowledgementEmail,
+  sendQuoteAcknowledgementEmail,
+  buildQuoteFailureEmail,
+  sendQuoteFailureEmail,
   isConfigured,
 };
 

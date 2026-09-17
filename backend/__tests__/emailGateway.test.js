@@ -864,6 +864,23 @@ describe('emailGatewayService.pollOnce edge paths', () => {
     expect(result.considered).toBe(0);
     expect(emailGatewayService.runtime.isPolling).toBe(false);
   });
+
+  test('marks \\Seen flag when outcome is QUOTE_INGESTED', async () => {
+    const client = fakeImap();
+    emailGatewayService.ImapFlow = jest.fn(() => client);
+    jest.spyOn(emailGatewayQueries, 'hasProcessed').mockResolvedValue(false);
+    jest.spyOn(emailGatewayService, 'processMessage').mockResolvedValue({
+      status: INGESTION_OUTCOME.QUOTE_INGESTED,
+      detail: 'Quote ingested',
+      message: { fromAddress: 'v@x.com', subject: 'Quote' },
+      rfq: { id: 'rfq-1', rfqNumber: 'RFQ-2026-00001' },
+    });
+
+    const result = await emailGatewayService.pollOnce(emailGatewayService.resolveConfig(FULL_ENV));
+
+    expect(client.messageFlagsAdd).toHaveBeenCalledWith('1', ['\\Seen']);
+    expect(result.ingested).toBe(1);
+  });
 });
 
 describe('emailGatewayService configuration helpers and connection diagnostics', () => {
@@ -1657,6 +1674,77 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       expect(savedQuote.vendorName).toBe(sampleVendor.name);
       expect(savedQuote.unitPrice).toBe(12000);
       expect(auditSpy).toHaveBeenCalled();
+    });
+
+    test('processVendorQuoteMessage rejects quotation when unitPrice is 0 or missing and sends failure email', async () => {
+      const emailRecord = {
+        messageId: '<quote-zero-001@apexsupplies.com>',
+        fromAddress: VENDOR_EMAIL,
+        subject: `Re: Quotation Submission [${RFQ_NUMBER}]`,
+        bodyText: 'Quotation without price',
+      };
+
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+        unitPrice: 0,
+        totalPrice: 0,
+        leadTimeDays: 7,
+      });
+
+      const addQuoteSpy = jest.spyOn(storeService, 'addQuoteToRFQ');
+      const failMailSpy = jest.spyOn(mailerService, 'sendQuoteFailureEmail').mockResolvedValue({ sent: true });
+
+      const outcome = await emailGatewayService.processVendorQuoteMessage(
+        emailRecord,
+        sampleRfq,
+        sampleVendor
+      );
+
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED);
+      expect(addQuoteSpy).not.toHaveBeenCalled();
+      expect(failMailSpy).toHaveBeenCalledWith(
+        VENDOR_EMAIL,
+        expect.objectContaining({
+          rfqNumber: RFQ_NUMBER,
+          reason: expect.stringContaining('mandatory'),
+        })
+      );
+    });
+
+    test('processVendorQuoteMessage handles email sending errors gracefully', async () => {
+      const emailRecord = {
+        messageId: '<quote-zero-err@apexsupplies.com>',
+        fromAddress: VENDOR_EMAIL,
+        subject: `Re: Quotation Submission [${RFQ_NUMBER}]`,
+        bodyText: 'Quotation without price',
+      };
+
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+        unitPrice: null,
+      });
+      jest.spyOn(mailerService, 'sendQuoteFailureEmail').mockRejectedValue(new Error('SMTP down'));
+
+      const outcome = await emailGatewayService.processVendorQuoteMessage(
+        emailRecord,
+        sampleRfq,
+        sampleVendor
+      );
+
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED);
+
+      // Also test error in success ack
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+        unitPrice: 500,
+        totalPrice: 500,
+      });
+      jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue(sampleRfq);
+      jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockRejectedValue(new Error('SMTP down'));
+
+      const successOutcome = await emailGatewayService.processVendorQuoteMessage(
+        emailRecord,
+        sampleRfq,
+        sampleVendor
+      );
+      expect(successOutcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
     });
 
     test('processMessage routes RFQ vendor reply directly to vendor quote ingestion', async () => {

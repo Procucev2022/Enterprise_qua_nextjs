@@ -828,9 +828,16 @@ const EMAIL_GATEWAY_MESSAGES = {
   LINE_ITEMS_EXCEED_LIMIT: 'Maximum {max} line items per RFQ exceeded (received {count}).',
   INGESTED_DETAIL: 'Raised with {count} line item(s), {needsReview} needing category review.',
   QUOTE_INGESTED_DETAIL: 'Vendor quotation for RFQ {rfqNumber} successfully ingested from email ({vendorName}).',
+  QUOTE_VALIDATION_FAILED_DETAIL: 'Vendor quotation for RFQ {rfqNumber} from {vendorName} failed validation: {reason}.',
+  QUOTE_ACK_SUBJECT: 'Quotation Received – RFQ {rfqNumber}',
+  QUOTE_FAILURE_SUBJECT: 'Action Required – Quotation Could Not Be Processed for RFQ {rfqNumber}',
   INVALID_RFQ_REFERENCED: 'The referenced RFQ {rfqNumber} was not found in the system.',
   VENDOR_NOT_FOUND_FOR_QUOTE: 'No vendor profile found for sender {address}.',
 };
+
+/** Support email address included as CC on all vendor quotation acknowledgements. */
+const VENDOR_QUOTE_SUPPORT_CC = 'support@procucev.com';
+
 
 /** Notification email content for unauthorized email senders. */
 const UNAUTHORIZED_BUYER_NOTIFICATION = {
@@ -1382,6 +1389,7 @@ module.exports = {
   validatePayload,
   BUYER_SUBSCRIPTION_TO_SOURCING_MODE,
   resolveBuyerSourcingMode,
+  VENDOR_QUOTE_SUPPORT_CC,
 };
 
 

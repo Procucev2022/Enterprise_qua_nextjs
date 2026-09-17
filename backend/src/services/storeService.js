@@ -1519,6 +1519,22 @@ class StoreService {
     return true;
   }
 
+  /**
+   * Resolve the owning buyer's corporate email for an RFQ.
+   *
+   * Used by the email gateway to CC the buyer on vendor quotation
+   * acknowledgements and failure notifications. Falls back to the RFQ's
+   * `raisedByEmail` when no buyer account is attributed.
+   */
+  resolveBuyerEmailForRFQ(rfq) {
+    if (!rfq) return null;
+    if (rfq.buyerAccountId) {
+      const buyer = this.buyerAccounts.find((a) => a.id === rfq.buyerAccountId);
+      if (buyer && buyer.corporateEmail) return buyer.corporateEmail;
+    }
+    return rfq.raisedByEmail || null;
+  }
+
   // ==========================================
   // 4. EVALUATIONS
   // ==========================================

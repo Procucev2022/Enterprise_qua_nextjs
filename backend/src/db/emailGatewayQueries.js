@@ -17,6 +17,7 @@ const { logger } = require('../services/loggerService');
 const INGESTION_OUTCOME = {
   INGESTED: 'INGESTED',
   QUOTE_INGESTED: 'QUOTE_INGESTED',
+  QUOTE_VALIDATION_FAILED: 'QUOTE_VALIDATION_FAILED',
   SENDER_NOT_ALLOWED: 'SENDER_NOT_ALLOWED',
   NO_LINE_ITEMS: 'NO_LINE_ITEMS',
   UNREADABLE: 'UNREADABLE',
@@ -25,6 +26,7 @@ const INGESTION_OUTCOME = {
   INVALID_RFQ: 'INVALID_RFQ',
   VENDOR_NOT_FOUND: 'VENDOR_NOT_FOUND',
 };
+
 
 /**
  * Has this message already been considered?

@@ -1412,6 +1412,36 @@ describe('demo RFQ seeding', () => {
       expect(v1Updated.source).toBe('email');
       expect(v1Updated.isBestPrice).toBe(true);
     });
+
+    test('resolveBuyerEmailForRFQ resolves corporateEmail, falls back to raisedByEmail, or returns null', () => {
+      expect(storeService.resolveBuyerEmailForRFQ(null)).toBeNull();
+
+      storeService.buyerAccounts = [
+        { id: 'buyer-acc-1', corporateEmail: 'buyer1@corp.com' },
+        { id: 'buyer-acc-2' }, // no corporate email
+      ];
+
+      // 1. Found with corporateEmail
+      expect(storeService.resolveBuyerEmailForRFQ({ buyerAccountId: 'buyer-acc-1', raisedByEmail: 'fallback@mail.com' }))
+        .toBe('buyer1@corp.com');
+
+      // 2. Found without corporateEmail, falls back to raisedByEmail
+      expect(storeService.resolveBuyerEmailForRFQ({ buyerAccountId: 'buyer-acc-2', raisedByEmail: 'fallback@mail.com' }))
+        .toBe('fallback@mail.com');
+
+      // 3. buyerAccountId not in buyerAccounts, falls back to raisedByEmail
+      expect(storeService.resolveBuyerEmailForRFQ({ buyerAccountId: 'buyer-acc-unknown', raisedByEmail: 'fallback@mail.com' }))
+        .toBe('fallback@mail.com');
+
+      // 4. No buyerAccountId, falls back to raisedByEmail
+      expect(storeService.resolveBuyerEmailForRFQ({ raisedByEmail: 'fallback@mail.com' }))
+        .toBe('fallback@mail.com');
+
+      // 5. No emails anywhere
+      expect(storeService.resolveBuyerEmailForRFQ({}))
+        .toBeNull();
+    });
   });
 });
+
 
