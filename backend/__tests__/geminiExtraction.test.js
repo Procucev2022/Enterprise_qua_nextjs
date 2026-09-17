@@ -42,7 +42,7 @@ describe('Gemini document extraction service', () => {
       expect(gemini.parseExtractionJson('Here you go:\n{"items":[]}\nHope that helps.')).toEqual({ items: [] });
     });
 
-    test.each(['', '   ', 'no json here', '{ broken', 'null'])('returns null for %p', (input) => {
+    test.each(['', '   ', 'no json here', '{ broken', 'null', '{ invalid json syntax }'])('returns null for %p', (input) => {
       expect(gemini.parseExtractionJson(input)).toBeNull();
     });
   });
@@ -380,6 +380,72 @@ describe('Gemini document extraction service', () => {
       const res = await gemini.extractLineItems({ documentText: 'Pump' });
 
       expect(res.status).toBe(EXTRACTION_STATUS.AI_FAILED);
+    });
+
+    describe('callModel and multi-key support', () => {
+      test('throws error when no API key is configured', async () => {
+        GEMINI_CONFIG.API_KEY = '';
+        await expect(gemini.callModel('gemini-1.5-flash', {})).rejects.toThrow('No Gemini API key available');
+      });
+
+      test('fails over to next API key when first key returns error response', async () => {
+        GEMINI_CONFIG.API_KEY = 'key-primary, key-backup';
+        global.fetch = jest
+          .fn()
+          .mockResolvedValueOnce({ ok: false, status: 429, text: async () => 'Quota exceeded' })
+          .mockResolvedValueOnce(geminiReply('{"items":[{"itemDescription":"Valve"}]}'));
+
+        const parsed = await gemini.callModel('gemini-1.5-flash', {});
+        expect(parsed).toEqual({ items: [{ itemDescription: 'Valve' }] });
+        expect(global.fetch).toHaveBeenCalledTimes(2);
+        expect(global.fetch.mock.calls[0][1].headers['x-goog-api-key']).toBe('key-primary');
+        expect(global.fetch.mock.calls[1][1].headers['x-goog-api-key']).toBe('key-backup');
+      });
+
+      test('fails over to next key on network error and throws if all fail', async () => {
+        GEMINI_CONFIG.API_KEY = 'key-primary, key-backup';
+        global.fetch = jest
+          .fn()
+          .mockRejectedValueOnce(new Error('Network drop on primary'))
+          .mockRejectedValueOnce(new Error('Network drop on backup'));
+
+        await expect(gemini.callModel('gemini-1.5-flash', {})).rejects.toThrow('Network drop on backup');
+        expect(global.fetch).toHaveBeenCalledTimes(2);
+      });
+
+      test('immediately throws without retry on AbortError', async () => {
+        GEMINI_CONFIG.API_KEY = 'key-primary, key-backup';
+        const abortErr = new Error('The operation was aborted');
+        abortErr.name = 'AbortError';
+        global.fetch = jest.fn().mockRejectedValue(abortErr);
+
+        await expect(gemini.callModel('gemini-1.5-flash', {})).rejects.toThrow('The operation was aborted');
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    describe('resolveApiKeys and isConfigured', () => {
+      test('resolveApiKeys returns empty array when API_KEY is empty or whitespace', () => {
+        GEMINI_CONFIG.API_KEY = '';
+        expect(gemini.resolveApiKeys()).toEqual([]);
+        GEMINI_CONFIG.API_KEY = '   ';
+        expect(gemini.resolveApiKeys()).toEqual([]);
+      });
+
+      test('resolveApiKeys parses single and multiple comma-separated keys with trimming', () => {
+        GEMINI_CONFIG.API_KEY = 'key-one';
+        expect(gemini.resolveApiKeys()).toEqual(['key-one']);
+
+        GEMINI_CONFIG.API_KEY = ' key1 , key2,  key3  ';
+        expect(gemini.resolveApiKeys()).toEqual(['key1', 'key2', 'key3']);
+      });
+
+      test('isConfigured returns true when at least one key is present', () => {
+        GEMINI_CONFIG.API_KEY = ' key1 ';
+        expect(gemini.isConfigured()).toBe(true);
+        GEMINI_CONFIG.API_KEY = '   ';
+        expect(gemini.isConfigured()).toBe(false);
+      });
     });
   });
 });

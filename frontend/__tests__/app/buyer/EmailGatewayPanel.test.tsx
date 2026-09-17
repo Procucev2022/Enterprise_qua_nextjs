@@ -297,4 +297,54 @@ describe('EmailGatewayPanel Requisition Composer & Submission Flow', () => {
     await screen.findByTestId('gateway-panel');
     expect(screen.getByDisplayValue('project.procurement@lt-heavy.com')).toBeInTheDocument();
   });
+
+  test('submits RFQ with mode_1 when buyer has version_1 subscription', async () => {
+    (useApp as jest.Mock).mockReturnValue({
+      showToast: mockShowToast,
+      activeBuyerAccount: { corporateEmail: 'v1.buyer@company.com', subscriptionPlan: 'version_1' },
+      adoptCreatedRFQ: mockAdoptCreatedRFQ,
+    });
+
+    render(<EmailGatewayPanel />);
+    await screen.findByTestId('gateway-panel');
+
+    const subjectInput = screen.getByPlaceholderText(/e\.g\. URGENT: Requisition/i);
+    fireEvent.change(subjectInput, { target: { value: 'Subject for Version 1' } });
+    const bodyTextarea = screen.getByPlaceholderText(/Paste or write line items/i);
+    fireEvent.change(bodyTextarea, { target: { value: 'Item Specs' } });
+
+    const submitBtn = screen.getByRole('button', { name: new RegExp(GATEWAY.submitAction, 'i') });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(mockCreateRFQ).toHaveBeenCalledWith(
+        expect.objectContaining({ sourcingMode: 'mode_1' })
+      );
+    });
+  });
+
+  test('submits RFQ with mode_3 when buyer has version_3 subscription', async () => {
+    (useApp as jest.Mock).mockReturnValue({
+      showToast: mockShowToast,
+      activeBuyerAccount: { corporateEmail: 'v3.buyer@company.com', subscriptionPlan: 'version_3' },
+      adoptCreatedRFQ: mockAdoptCreatedRFQ,
+    });
+
+    render(<EmailGatewayPanel />);
+    await screen.findByTestId('gateway-panel');
+
+    const subjectInput = screen.getByPlaceholderText(/e\.g\. URGENT: Requisition/i);
+    fireEvent.change(subjectInput, { target: { value: 'Subject for Version 3' } });
+    const bodyTextarea = screen.getByPlaceholderText(/Paste or write line items/i);
+    fireEvent.change(bodyTextarea, { target: { value: 'Item Specs' } });
+
+    const submitBtn = screen.getByRole('button', { name: new RegExp(GATEWAY.submitAction, 'i') });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(mockCreateRFQ).toHaveBeenCalledWith(
+        expect.objectContaining({ sourcingMode: 'mode_3' })
+      );
+    });
+  });
 });

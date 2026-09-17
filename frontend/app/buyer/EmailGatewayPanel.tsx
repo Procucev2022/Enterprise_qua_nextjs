@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { createRFQ, extractLineItemsFromDocument } from '@/lib/rfqClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
+import { resolveBuyerSourcingMode } from '@/lib/constants';
 import { logger } from '@/lib/logger';
 import type { ExtractedEntity, RFQItem } from '@/lib/types';
 import {
@@ -85,7 +86,7 @@ export default function EmailGatewayPanel({ onRFQCreated }: EmailGatewayPanelPro
       const saveRes = await createRFQ({
         title: emailSubject || 'Inbound Email Requisition',
         category,
-        sourcingMode: 'mode_1',
+        sourcingMode: resolveBuyerSourcingMode(activeBuyerAccount),
         status: 'Parsing',
         source: 'email_gateway',
         sourceFileName: 'inbound-email.eml',

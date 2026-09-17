@@ -94,7 +94,17 @@ If the document contains no procurement line items at all, return {"items": []}.
 
 /** True when a real extraction call can be attempted. */
 function isConfigured() {
-  return Boolean(GEMINI_CONFIG.API_KEY);
+  return resolveApiKeys().length > 0;
+}
+
+/** Resolve API keys pool from GEMINI_CONFIG.API_KEY (supports comma-separated multiple keys). */
+function resolveApiKeys() {
+  const raw = String(GEMINI_CONFIG.API_KEY || '').trim();
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((k) => k.trim())
+    .filter(Boolean);
 }
 
 /** Models to attempt, primary first. */
@@ -214,38 +224,54 @@ function buildRequestBody({ documentText, inlineData, mimeType, fileName }) {
 
 /**
  * Call one model, returning its parsed JSON or throwing so the caller can try
- * the next model in the chain.
+ * the next model in the chain. Supports multiple API keys with failover.
  */
 async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_TIMEOUT_MS) {
   const url = `${GEMINI_CONFIG.BASE_URL}/${model}:generateContent`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const keys = resolveApiKeys();
+  if (keys.length === 0) {
+    throw new Error('No Gemini API key available');
+  }
 
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        // Header auth keeps the key out of the URL and therefore out of logs.
-        'x-goog-api-key': GEMINI_CONFIG.API_KEY,
-      },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    });
+  for (let i = 0; i < keys.length; i++) {
+    const apiKey = keys[i];
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-    if (!res.ok) {
-      const detail = await res.text().catch(() => '');
-      throw new Error(`Gemini ${model} responded ${res.status}: ${detail.slice(0, 200)}`);
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          // Header auth keeps the key out of the URL and therefore out of logs.
+          'x-goog-api-key': apiKey,
+        },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        throw new Error(`Gemini ${model} responded ${res.status}: ${detail.slice(0, 200)}`);
+      }
+
+      const payload = await res.json();
+      const parsed = parseExtractionJson(extractResponseText(payload));
+      if (!parsed) {
+        throw new Error(`Gemini ${model} returned no parseable JSON`);
+      }
+      return parsed;
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        throw err;
+      }
+      if (i < keys.length - 1) {
+        continue;
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
     }
-
-    const payload = await res.json();
-    const parsed = parseExtractionJson(extractResponseText(payload));
-    if (!parsed) {
-      throw new Error(`Gemini ${model} returned no parseable JSON`);
-    }
-    return parsed;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -432,6 +458,8 @@ module.exports = {
   EXTRACTION_PROMPT,
   isConfigured,
   resolveModelChain,
+  resolveApiKeys,
+  callModel,
   generateJson,
   extractResponseText,
   parseExtractionJson,
