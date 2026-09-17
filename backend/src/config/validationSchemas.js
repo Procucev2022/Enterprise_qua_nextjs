@@ -95,7 +95,13 @@ const ORGANIZATION_TYPES = [
 const VALIDATION_SCHEMAS = {
   createRFQ: {
     title: { type: 'string', required: true, minLength: 3, maxLength: 200 },
-    category: { type: 'string', required: true, minLength: 2 },
+    // A buyer may not know the exact taxonomy slot for every line item up
+    // front (see ingestion-wizard.tsx / manualRfqModel.ts) — an RFQ dispatched
+    // with no line item categorized ends up with no derivable top-level
+    // category either, and that must not block dispatch. storeService.createRFQ
+    // already handles a missing category (falls back to null / per-line-item
+    // signals), so nothing downstream assumes this is always present.
+    category: { type: 'string', required: false, minLength: 2 },
     // Optional. A document that prices nothing yields no budget, and requiring
     // one forced the buyer to invent a ceiling vendors would then quote against.
     budget: { type: 'number', required: false, min: 0 },

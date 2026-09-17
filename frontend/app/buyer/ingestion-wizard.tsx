@@ -824,11 +824,11 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                 <tr>
                   <th className="px-3 py-2.5 font-bold">{MODAL.colItem}</th>
                   <th className="px-3 py-2.5 font-bold">{MODAL.colSpecs}</th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colMajor}</th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colMinor}</th>
                   <th className="px-3 py-2.5 font-bold">{MODAL.colQty}</th>
                   <th className="px-3 py-2.5 font-bold">{MODAL.colUnit}</th>
                   <th className="px-3 py-2.5 font-bold">{MODAL.colTargetDate}</th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colMajor}</th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colMinor}</th>
                   <th className="px-3 py-2.5 text-center font-bold">Action</th>
                 </tr>
               </thead>
@@ -860,46 +860,6 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                           placeholder={MODAL.specsPlaceholder}
                           className="w-48 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-indigo-500"
                         />
-                      </td>
-
-                      {/* Major Category */}
-                      <td className="px-3 py-2.5 align-top">
-                        <select
-                          aria-label={MODAL.colMajor}
-                          value={item.majorCategory}
-                          onChange={(e) => patchItem(item.id, { majorCategory: e.target.value })}
-                          className="w-44 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium focus:ring-2 focus:ring-indigo-500"
-                        >
-                          <option value="">{MODAL.selectPlaceholder}</option>
-                          <option value={ALL_CATEGORIES_OPTION}>All Categories</option>
-                          {taxonomyMajors().map((major) => (
-                            <option key={major} value={major}>
-                              {major}
-                            </option>
-                          ))}
-                        </select>
-                        <FieldError message={errors.majorCategory} />
-                      </td>
-
-                      {/* Minor Category */}
-                      <td className="px-3 py-2.5 align-top">
-                        <select
-                          aria-label={MODAL.colMinor}
-                          value={item.minorCategory}
-                          disabled={!item.majorCategory || item.majorCategory === ALL_CATEGORIES_OPTION}
-                          onChange={(e) => patchItem(item.id, { minorCategory: e.target.value })}
-                          className="w-44 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium disabled:opacity-40 focus:ring-2 focus:ring-indigo-500"
-                        >
-                          <option value="">
-                            {item.majorCategory === ALL_CATEGORIES_OPTION ? 'Not required' : MODAL.selectPlaceholder}
-                          </option>
-                          {minorsFor(item.majorCategory).map((minor) => (
-                            <option key={minor} value={minor}>
-                              {minor}
-                            </option>
-                          ))}
-                        </select>
-                        <FieldError message={errors.minorCategory} />
                       </td>
 
                       {/* Quantity */}
@@ -942,6 +902,46 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                           onChange={(e) => patchItem(item.id, { targetDate: e.target.value })}
                           className="w-36 px-2 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-indigo-500"
                         />
+                      </td>
+
+                      {/* Major Category */}
+                      <td className="px-3 py-2.5 align-top">
+                        <select
+                          aria-label={MODAL.colMajor}
+                          value={item.majorCategory}
+                          onChange={(e) => patchItem(item.id, { majorCategory: e.target.value })}
+                          className="w-44 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium focus:ring-2 focus:ring-indigo-500"
+                        >
+                          <option value="">{MODAL.selectPlaceholder}</option>
+                          <option value={ALL_CATEGORIES_OPTION}>All Categories</option>
+                          {taxonomyMajors().map((major) => (
+                            <option key={major} value={major}>
+                              {major}
+                            </option>
+                          ))}
+                        </select>
+                        <FieldError message={errors.majorCategory} />
+                      </td>
+
+                      {/* Minor Category */}
+                      <td className="px-3 py-2.5 align-top">
+                        <select
+                          aria-label={MODAL.colMinor}
+                          value={item.minorCategory}
+                          disabled={!item.majorCategory || item.majorCategory === ALL_CATEGORIES_OPTION}
+                          onChange={(e) => patchItem(item.id, { minorCategory: e.target.value })}
+                          className="w-44 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium disabled:opacity-40 focus:ring-2 focus:ring-indigo-500"
+                        >
+                          <option value="">
+                            {item.majorCategory === ALL_CATEGORIES_OPTION ? 'Not required' : MODAL.selectPlaceholder}
+                          </option>
+                          {minorsFor(item.majorCategory).map((minor) => (
+                            <option key={minor} value={minor}>
+                              {minor}
+                            </option>
+                          ))}
+                        </select>
+                        <FieldError message={errors.minorCategory} />
                       </td>
 
                       {/* Delete */}

@@ -69,9 +69,22 @@ describe('Backend Validation Schemas Unit Tests', () => {
     const res = validatePayload(VALIDATION_SCHEMAS.createRFQ, invalidRFQ);
     expect(res.isValid).toBe(false);
     expect(res.errors.title).toBeDefined();
-    expect(res.errors.category).toBeDefined();
     expect(res.errors.budget).toBeDefined();
     expect(res.errors.targetDeliveryDate).toBeDefined();
+  });
+
+  // Major/Minor Category are optional per line item (manualRfqModel.ts) — an
+  // RFQ with no categorized line item has no derivable top-level category
+  // either, and that must not block dispatch.
+  test('does not require category on createRFQ — an uncategorised RFQ can still dispatch', () => {
+    const rfqWithNoCategory = {
+      title: 'Uncategorised RFQ',
+      deliveryLocation: 'Pune',
+      deliveryPincode: '411001',
+      lineItems: [{ name: 'Widget', qty: 5 }],
+    };
+    const res = validatePayload(VALIDATION_SCHEMAS.createRFQ, rfqWithNoCategory);
+    expect(res.errors.category).toBeUndefined();
   });
 
   test('validates vendorRegistration schema including email and GSTIN format', () => {

@@ -137,15 +137,60 @@ function buildRequisitionEmail(to, rfq = {}, fromEmail = '') {
 }
 
 /**
+ * Sends one message through Resend's HTTPS API instead of raw SMTP.
+ *
+ * Render (and several other PaaS hosts) block outbound SMTP (ports
+ * 25/465/587) at the network level on every plan — no transporter config
+ * (IPv4-forcing, port 465, etc.) can work around that, since the TCP
+ * connection itself never completes (ETIMEDOUT/CONN). An HTTPS API call is
+ * unaffected. Used automatically whenever RESEND_API_KEY is set; falls back
+ * to SMTP otherwise, so local dev (where raw SMTP works fine) is unchanged.
+ */
+async function deliverViaResend(message, label) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.RESEND_FROM_EMAIL || fromAddress();
+
+  logger.info(`Dispatching ${label} to ${message.to} via Resend`, { subject: message.subject }, 'MAILER_SERVICE');
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from,
+      to: message.to,
+      subject: message.subject,
+      html: message.html,
+    }),
+  });
+
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(body.message || `Resend responded ${res.status}`);
+    err.code = 'RESEND_API_ERROR';
+    throw err;
+  }
+
+  logger.info(`${label} sent successfully to ${message.to}`, { messageId: body.id }, 'MAILER_SERVICE');
+  return { sent: true, messageId: body.id };
+}
+
+/**
  * Send one message through the shared transporter.
  *
- * No-ops (without throwing) during test runs and when SMTP isn't configured,
- * so every caller can fire-and-forget. A genuine transport failure is
- * propagated to the caller — it is real and worth logging/retrying.
+ * No-ops (without throwing) during test runs and when neither Resend nor
+ * SMTP is configured, so every caller can fire-and-forget. A genuine
+ * transport failure is propagated to the caller — it is real and worth
+ * logging/retrying.
  */
 async function deliver(message, label) {
   if (process.env.NODE_ENV === 'test') {
     return { sent: false, reason: 'test environment' };
+  }
+
+  if (process.env.RESEND_API_KEY) {
+    return deliverViaResend(message, label);
   }
 
   const activeTransporter = getTransporter();
@@ -401,22 +446,9 @@ async function sendQuoteReceivedEmail(to, context) {
  * Sends a requisition notification email when a buyer creates/ingests an RFQ.
  */
 async function sendRequisitionNotificationEmail(to, rfq, fromEmail) {
-  if (process.env.NODE_ENV === 'test') {
-    return { sent: false, reason: 'test environment' };
-  }
-
-  const activeTransporter = getTransporter();
-  if (!activeTransporter) {
-    logger.warn('SMTP not configured — requisition notification email not sent', { to, rfqNumber: rfq && rfq.rfqNumber }, 'MAILER_SERVICE');
-    return { sent: false, reason: 'SMTP not configured' };
-  }
-
+  const safeRfq = rfq || {};
   try {
-    const safeRfq = rfq || {};
-    const emailData = buildRequisitionEmail(to, safeRfq, fromEmail);
-    const info = await activeTransporter.sendMail(emailData);
-    logger.info(`Requisition notification email sent to ${to}`, { messageId: info.messageId, rfqNumber: safeRfq.rfqNumber }, 'MAILER_SERVICE');
-    return { sent: true, messageId: info.messageId };
+    return await deliver(buildRequisitionEmail(to, safeRfq, fromEmail), 'requisition notification email');
   } catch (err) {
     logger.error(`Failed to send requisition email to ${to}`, err, 'MAILER_SERVICE');
     return { sent: false, error: err.message };
