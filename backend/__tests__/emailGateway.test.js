@@ -8,7 +8,12 @@ const rfqIngestionService = require('../src/services/rfqIngestionService');
 const storeService = require('../src/services/storeService');
 const mailerService = require('../src/services/mailerService');
 const dbPool = require('../src/db/pool');
-const { EMAIL_GATEWAY_CONFIG, EMAIL_GATEWAY_MESSAGES } = require('../src/config/constants');
+const {
+  EMAIL_GATEWAY_CONFIG,
+  EMAIL_GATEWAY_MESSAGES,
+  resolveBuyerSourcingMode,
+  BUYER_SUBSCRIPTION_TO_SOURCING_MODE,
+} = require('../src/config/constants');
 const { authHeader } = require('./testHelpers');
 const fixtures = require('./fixtures/sampleRequisitionEmail');
 const taxonomyFixture = require('./fixtures/categoryTaxonomy');
@@ -1409,6 +1414,95 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
     expect(poll2.outcomes[0].status).toBe(EMAIL_GATEWAY_MESSAGES.ALREADY_PROCESSED);
     // Verified: Exactly 1 RFQ created across both poll runs
     expect(createRfqSpy).toHaveBeenCalledTimes(1);
+  });
+
+  describe('Subscription-Based Sourcing Mode Resolution (resolveBuyerSourcingMode)', () => {
+    beforeEach(() => {
+      rfqIngestionService.primeTaxonomyIndex(taxonomyFixture.CATEGORY_TAXONOMY_FIXTURE);
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+      rfqIngestionService.resetTaxonomyIndex();
+    });
+
+    const raw = () => Buffer.from(fixtures.PLAIN_REQUISITION_EML, 'utf8');
+    const config = () => emailGatewayService.resolveConfig(FULL_ENV);
+
+    const mockExtraction = (overrides = {}) =>
+      jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
+        status: geminiService.EXTRACTION_STATUS.SUCCESS,
+        model: 'gemini-test',
+        documentTitle: 'Centrifugal Pumps',
+        lineItems: [{ itemName: 'Centrifugal Pump 150 m3/hr', quantity: 4, unit: 'Nos' }],
+        ...overrides,
+      });
+
+    test('resolves version_1 plan to mode_1', () => {
+      expect(resolveBuyerSourcingMode({ subscriptionPlan: 'version_1' })).toBe('mode_1');
+      expect(resolveBuyerSourcingMode('version_1')).toBe('mode_1');
+      expect(resolveBuyerSourcingMode('v1')).toBe('mode_1');
+      expect(resolveBuyerSourcingMode('mode_1')).toBe('mode_1');
+    });
+
+    test('resolves version_2 plan to mode_2', () => {
+      expect(resolveBuyerSourcingMode({ subscriptionPlan: 'version_2' })).toBe('mode_2');
+      expect(resolveBuyerSourcingMode('version_2')).toBe('mode_2');
+      expect(resolveBuyerSourcingMode('v2')).toBe('mode_2');
+      expect(resolveBuyerSourcingMode('mode_2')).toBe('mode_2');
+    });
+
+    test('resolves version_3 plan to mode_3', () => {
+      expect(resolveBuyerSourcingMode({ subscriptionPlan: 'version_3' })).toBe('mode_3');
+      expect(resolveBuyerSourcingMode('version_3')).toBe('mode_3');
+      expect(resolveBuyerSourcingMode('v3')).toBe('mode_3');
+      expect(resolveBuyerSourcingMode('mode_3')).toBe('mode_3');
+    });
+
+    test('defaults to mode_2 for free_trial, unknown plan, or empty account', () => {
+      expect(resolveBuyerSourcingMode({ subscriptionPlan: 'free_trial' })).toBe('mode_2');
+      expect(resolveBuyerSourcingMode({ subscriptionPlan: 'unknown_plan' })).toBe('mode_2');
+      expect(resolveBuyerSourcingMode({})).toBe('mode_2');
+      expect(resolveBuyerSourcingMode(null)).toBe('mode_2');
+      expect(resolveBuyerSourcingMode(undefined)).toBe('mode_2');
+      expect(resolveBuyerSourcingMode(42)).toBe('mode_2');
+    });
+
+    test('processMessage assigns mode_1 for buyer on version_1 plan', async () => {
+      mockExtraction();
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue(buyerAccount({ subscriptionPlan: 'version_1' }));
+      const created = jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-v1', rfqNumber: 'RFQ-V1-0001' });
+
+      const result = await emailGatewayService.processMessage(raw(), config());
+
+      expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+      const [payload] = created.mock.calls[0];
+      expect(payload.sourcingMode).toBe('mode_1');
+    });
+
+    test('processMessage assigns mode_3 for buyer on version_3 plan', async () => {
+      mockExtraction();
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue(buyerAccount({ subscriptionPlan: 'version_3' }));
+      const created = jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-v3', rfqNumber: 'RFQ-V3-0001' });
+
+      const result = await emailGatewayService.processMessage(raw(), config());
+
+      expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+      const [payload] = created.mock.calls[0];
+      expect(payload.sourcingMode).toBe('mode_3');
+    });
+
+    test('processMessage defaults to mode_2 for buyer on free_trial plan', async () => {
+      mockExtraction();
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue(buyerAccount({ subscriptionPlan: 'free_trial' }));
+      const created = jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-trial', rfqNumber: 'RFQ-TRIAL-0001' });
+
+      const result = await emailGatewayService.processMessage(raw(), config());
+
+      expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+      const [payload] = created.mock.calls[0];
+      expect(payload.sourcingMode).toBe('mode_2');
+    });
   });
 });
 

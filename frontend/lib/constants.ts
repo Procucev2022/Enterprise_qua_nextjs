@@ -6,6 +6,7 @@ import type {
   RoleWorkspaceMeta,
   UserRole,
   OrganizationType,
+  SourcingMode,
 } from './types';
 import { UI_STRINGS } from './uiStrings';
 
@@ -41,6 +42,49 @@ export const SOURCING_MODES: SourcingModeDetail[] = [
     badgeColor: 'border-purple-500/40 text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-500/10',
   },
 ];
+
+/**
+ * Mapping between buyer subscription plans and their corresponding RFQ sourcing / version mode.
+ * - version_1: mode_1 (Version 1: Client Roster Sourcing Plan)
+ * - version_2: mode_2 (Version 2: Hybrid Sourcing Plan)
+ * - version_3: mode_3 (Version 3: AI Autonomous Sourcing Plan)
+ */
+export const BUYER_SUBSCRIPTION_TO_SOURCING_MODE: Record<string, SourcingMode> = {
+  version_1: 'mode_1',
+  version_2: 'mode_2',
+  version_3: 'mode_3',
+  v1: 'mode_1',
+  v2: 'mode_2',
+  v3: 'mode_3',
+  mode_1: 'mode_1',
+  mode_2: 'mode_2',
+  mode_3: 'mode_3',
+};
+
+/**
+ * Resolves the RFQ version / sourcing mode based upon the subscription of the buyer.
+ * Defaults to Version 2 ('mode_2').
+ *
+ * @param buyerAccountOrPlan - Buyer account object or subscription plan string
+ * @returns Sourcing mode ('mode_1' | 'mode_2' | 'mode_3')
+ */
+export function resolveBuyerSourcingMode(
+  buyerAccountOrPlan?: { subscriptionPlan?: string } | string | null
+): SourcingMode {
+  const plan =
+    typeof buyerAccountOrPlan === 'object' && buyerAccountOrPlan !== null
+      ? buyerAccountOrPlan.subscriptionPlan
+      : buyerAccountOrPlan;
+
+  if (typeof plan === 'string') {
+    const normalized = plan.trim().toLowerCase();
+    if (BUYER_SUBSCRIPTION_TO_SOURCING_MODE[normalized]) {
+      return BUYER_SUBSCRIPTION_TO_SOURCING_MODE[normalized];
+    }
+  }
+
+  return 'mode_2';
+}
 
 export const BUYER_SUBSCRIPTION_PLANS = [
   {

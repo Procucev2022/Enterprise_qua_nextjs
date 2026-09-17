@@ -967,7 +967,7 @@ REQUIRED EDGE CASES
 If the RFQ email does NOT mention a delivery date:
 
 - Automatically set the delivery date to:
-  
+
   current date + 5 calendar days
 
 Example:
@@ -1578,4 +1578,110 @@ give  me the commint title for this  entire rfq creation via email
 raise the pr for this use  commit implementation email-to-RFQ in enterprise QUA
 ```
 
+---
 
+### Prompt 33
+
+**Timestamp**: 2026-09-16T06:49:10Z
+
+```text
+run the back buyer is sending the email for rfq  give me the commads
+```
+
+---
+
+### Prompt 34
+
+**Timestamp**: 2026-09-16T06:57:17Z
+
+```text
+@[TerminalName: node, ProcessId: 12348]
+```
+
+---
+
+### Prompt 35
+
+**Timestamp**: 2026-09-16T06:59:06Z
+
+```text
+raise the pr for this brach RFQ to main
+```
+
+---
+
+### Prompt 36
+
+**Timestamp**: 2026-09-16T07:10:00Z
+
+```text
+i push the code only for rfq fix this
+```
+
+---
+
+### Prompt 37
+
+**Timestamp**: 2026-09-16T07:43:36Z
+
+```text
+@[TerminalName: powershell, ProcessId: 12348] 
+use this DB
+postgresql://neondb_owner:npg_qVOce9y8tTsj@ep-patient-poetry-a5gcx2i6-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require
+```
+
+---
+
+### Prompt 38
+
+**Timestamp**: 2026-09-16T09:32:12Z
+
+```text
+@[TerminalName: powershell, ProcessId: 12348]
+```
+
+---
+
+### Prompt 39
+
+**Timestamp**: 2026-09-16T10:40:54Z
+
+```text
+run locally i want frontend url
+```
+
+---
+
+### Prompt 40
+
+**Timestamp**: 2026-09-16T11:20:25Z
+
+```text
+@[TerminalName: node, ProcessId: 12348]
+```
+
+---
+
+### Prompt 41
+
+**Timestamp**: 2026-09-16T11:58:03Z
+
+```text
+[REDACTED_GEMINI_API_KEY_1]
+
+[REDACTED_GEMINI_API_KEY_2]
+
+[REDACTED_GEMINI_API_KEY_3]
+
+use this 3 api keys
+```
+
+---
+
+### Prompt 42
+
+**Timestamp**: 2026-09-17T05:57:47Z
+
+```text
+Raise pr for the  RFQ Branch
+```

@@ -719,14 +719,54 @@ const EMAIL_GATEWAY_CONFIG = {
   // Inbound requisitions are held for a category manager to check. The kanban
   // already renders this column and nothing else writes to it.
   INGESTED_STATUS: 'Parsing',
-  // Conservative default: the buyer's own roster only. Widening the vendor pool is
-  // a commercial decision and must not be made by an unattended process.
-  INGESTED_SOURCING_MODE: 'mode_1',
+  // Default sourcing mode for email-ingested RFQs: Version 2 (Hybrid Sourcing).
+  INGESTED_SOURCING_MODE: 'mode_2',
   // Emails have no file name; this stands in wherever one is recorded.
   SYNTHETIC_FILE_NAME: 'inbound-email.eml',
   DEFAULT_GATEWAY_ADDRESS: 'RFQ@procucev.com',
   MAX_LINE_ITEMS_PER_RFQ: 49,
 };
+
+/**
+ * Mapping between buyer subscription plans and their corresponding RFQ sourcing / version mode.
+ * - version_1: mode_1 (Version 1: Client Roster Sourcing Plan)
+ * - version_2: mode_2 (Version 2: Hybrid Sourcing Plan)
+ * - version_3: mode_3 (Version 3: AI Autonomous Sourcing Plan)
+ */
+const BUYER_SUBSCRIPTION_TO_SOURCING_MODE = {
+  version_1: 'mode_1',
+  version_2: 'mode_2',
+  version_3: 'mode_3',
+  v1: 'mode_1',
+  v2: 'mode_2',
+  v3: 'mode_3',
+  mode_1: 'mode_1',
+  mode_2: 'mode_2',
+  mode_3: 'mode_3',
+};
+
+/**
+ * Resolves the RFQ version / sourcing mode based upon the subscription of the buyer.
+ * Defaults to Version 2 ('mode_2') as specified in EMAIL_GATEWAY_CONFIG.INGESTED_SOURCING_MODE.
+ *
+ * @param {Object|string|null|undefined} buyerAccountOrPlan - Buyer account object or subscription plan string
+ * @returns {string} Sourcing mode ('mode_1' | 'mode_2' | 'mode_3')
+ */
+function resolveBuyerSourcingMode(buyerAccountOrPlan) {
+  const plan =
+    typeof buyerAccountOrPlan === 'object' && buyerAccountOrPlan !== null
+      ? buyerAccountOrPlan.subscriptionPlan
+      : buyerAccountOrPlan;
+
+  if (typeof plan === 'string') {
+    const normalized = plan.trim().toLowerCase();
+    if (BUYER_SUBSCRIPTION_TO_SOURCING_MODE[normalized]) {
+      return BUYER_SUBSCRIPTION_TO_SOURCING_MODE[normalized];
+    }
+  }
+
+  return EMAIL_GATEWAY_CONFIG.INGESTED_SOURCING_MODE || 'mode_2';
+}
 
 /** Connection state reported to the gateway panel. */
 const EMAIL_GATEWAY_STATE = {
@@ -1337,6 +1377,8 @@ module.exports = {
   PASSWORD_MIN_LENGTH,
   VALIDATION_SCHEMAS,
   validatePayload,
+  BUYER_SUBSCRIPTION_TO_SOURCING_MODE,
+  resolveBuyerSourcingMode,
 };
 
 
