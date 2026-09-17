@@ -80,6 +80,8 @@ export const UI_STRINGS = {
     aesEncrypted: 'AES-256-GCM Encrypted',
     aesGcmProtected: 'AES-256 AEAD Protected',
     cryptoVerified: 'Cryptographically Verified',
+    emailQuoteSource: '✉️ Email',
+    portalQuoteSource: '🌐 Portal',
   },
 
 

@@ -3,7 +3,8 @@
 import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { formatCurrency } from '@/lib/constants';
-import { RFQItem, QuoteComparison } from '@/lib/types';
+import { UI_STRINGS } from '@/lib/uiStrings';
+import type { RFQItem, QuoteComparison } from '@/lib/types';
 import { PurchaseOrderModal, RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
 import {
   Sparkles,
@@ -209,11 +210,23 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                     >
                       <div className="flex items-center justify-between">
                         <span className="font-extrabold text-sm text-slate-900 dark:text-white">{quote.vendorName}</span>
-                        {quote.isPreferred && (
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-500/40 flex items-center gap-1">
-                            <Sparkles size={11} /> AI Rec
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            data-testid={`quote-source-${quote.vendorId}`}
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold border flex items-center gap-1 ${
+                              quote.source === 'email'
+                                ? 'bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-500/40'
+                                : 'bg-sky-100 dark:bg-sky-500/20 text-sky-800 dark:text-sky-300 border-sky-300 dark:border-sky-500/40'
+                            }`}
+                          >
+                            {quote.source === 'email' ? UI_STRINGS.badges.emailQuoteSource : UI_STRINGS.badges.portalQuoteSource}
                           </span>
-                        )}
+                          {quote.isPreferred && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-500/40 flex items-center gap-1">
+                              <Sparkles size={11} /> AI Rec
+                            </span>
+                          )}
+                        </div>
                       </div>
                       <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-1 flex items-center gap-1.5">
                         <span className="px-2 py-0.5 rounded bg-slate-200 dark:bg-gray-800 text-[10px] text-slate-700 dark:text-gray-300 font-semibold">

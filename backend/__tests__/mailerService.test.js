@@ -216,6 +216,106 @@ describe('mailerService', () => {
     });
   });
 
+  describe('buildQuoteAcknowledgementEmail / sendQuoteAcknowledgementEmail', () => {
+    test('builds full acknowledgement email with all quote fields and cc', () => {
+      const msg = mailerService.buildQuoteAcknowledgementEmail('vendor@example.com', {
+        rfqNumber: 'RFQ-2026-00100',
+        rfqTitle: 'Pumps Procurement',
+        vendorName: 'Apex Supplies',
+        quote: {
+          unitPrice: 5000,
+          totalPrice: 10000,
+          leadTimeDays: 14,
+          warrantyYears: 2,
+          paymentTerms: 'Net 30',
+          remarks: 'Valid for 30 days',
+        },
+        cc: 'buyer@example.com, support@procucev.com',
+      });
+
+      expect(msg.to).toBe('vendor@example.com');
+      expect(msg.cc).toBe('buyer@example.com, support@procucev.com');
+      expect(msg.subject).toBe('Quotation Received – RFQ RFQ-2026-00100');
+      expect(msg.html).toContain('Dear <strong>Apex Supplies</strong>');
+      expect(msg.html).toContain('₹5000');
+      expect(msg.html).toContain('₹10000');
+      expect(msg.html).toContain('14 days');
+      expect(msg.html).toContain('2 year(s)');
+      expect(msg.html).toContain('Net 30');
+      expect(msg.html).toContain('Valid for 30 days');
+    });
+
+    test('builds bare acknowledgement email and supports object parameter signature', async () => {
+      const msg = mailerService.buildQuoteAcknowledgementEmail({
+        to: 'vendor@example.com',
+        rfqNumber: 'RFQ-2026-00100',
+      });
+      expect(msg.html).toContain('Hello,');
+      expect(msg.cc).toBeUndefined();
+
+      const res = await mailerService.sendQuoteAcknowledgementEmail('vendor@example.com', {
+        rfqNumber: 'RFQ-2026-00100',
+      });
+      expect(res).toEqual({ sent: false, reason: 'test environment' });
+    });
+  });
+
+  describe('buildQuoteFailureEmail / sendQuoteFailureEmail', () => {
+    test('builds full failure email with reason, missing fields, and cc', () => {
+      const msg = mailerService.buildQuoteFailureEmail('vendor@example.com', {
+        rfqNumber: 'RFQ-2026-00100',
+        rfqTitle: 'Pumps Procurement',
+        vendorName: 'Apex Supplies',
+        reason: 'Unit price must be > 0',
+        missingFields: ['Unit Price (₹)'],
+        cc: 'buyer@example.com',
+      });
+
+      expect(msg.to).toBe('vendor@example.com');
+      expect(msg.cc).toBe('buyer@example.com');
+      expect(msg.subject).toBe('Action Required – Quotation Could Not Be Processed for RFQ RFQ-2026-00100');
+      expect(msg.html).toContain('Unit price must be > 0');
+      expect(msg.html).toContain('Unit Price (₹)*');
+    });
+
+    test('builds bare failure email and supports object parameter signature', async () => {
+      const msg = mailerService.buildQuoteFailureEmail({
+        to: 'vendor@example.com',
+        rfqNumber: 'RFQ-2026-00100',
+      });
+      expect(msg.html).toContain('Hello,');
+      expect(msg.html).toContain('Incomplete quotation details');
+
+      const res = await mailerService.sendQuoteFailureEmail({
+        to: 'vendor@example.com',
+        rfqNumber: 'RFQ-2026-00100',
+      });
+      expect(res).toEqual({ sent: false, reason: 'test environment' });
+    });
+  });
+
+  describe('buildRfqInviteEmail expanded features', () => {
+    test('renders technical specifications, budget, and multiple items note', () => {
+      const rfqWithSpecs = {
+        rfqNumber: 'RFQ-2026-00999',
+        title: 'Industrial Valves',
+        category: 'Valves',
+        budget: 500000,
+        extractedEntities: [
+          { itemName: 'Gate Valve', quantity: 10, unit: 'pcs', technicalSpecs: 'DN100 PN16' },
+          { itemName: 'Check Valve', quantity: 5, unit: 'pcs', specifications: 'DN50 PN16' },
+        ],
+      };
+      const msg = mailerService.buildRfqInviteEmail('vendor@example.com', { rfq: rfqWithSpecs });
+      expect(msg.html).toContain('DN100 PN16');
+      expect(msg.html).toContain('DN50 PN16');
+      expect(msg.html).toContain('₹5,00,000');
+      expect(msg.html).toContain('How to Submit Your Quotation');
+      expect(msg.html).toContain('For multi-item RFQs, please quote unit price per item');
+    });
+  });
+
+
   test('isConfigured reflects whether both SMTP_USER and SMTP_PASSWORD are set', () => {
     const originalUser = process.env.SMTP_USER;
     const originalPass = process.env.SMTP_PASSWORD;
