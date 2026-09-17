@@ -595,7 +595,6 @@ async function processMessage(rawSource, config = resolveConfig()) {
     };
   }
 
-
   // 2. Otherwise process as Inbound Buyer RFQ Requisition
   const authorisation = await resolveSenderAuthorisation(message.fromAddress, config);
   if (!authorisation.allowed) {

@@ -244,6 +244,28 @@ CREATE TABLE IF NOT EXISTS vendors (
 
 CREATE INDEX IF NOT EXISTS idx_vendors_email ON vendors (email);
 CREATE INDEX IF NOT EXISTS idx_vendors_major_category ON vendors (major_category);
+-- Default listing/pagination sort (getVendorsPageFromDB's ORDER BY created_at
+-- DESC LIMIT/OFFSET) — without this, every "Load more" page at 600k+ rows
+-- requires a full sort of the whole table.
+CREATE INDEX IF NOT EXISTS idx_vendors_created_at ON vendors (created_at DESC);
+
+-- getVendorsPageFromDB's vendor search matches `ILIKE '%term%'` — a leading
+-- wildcard, which a plain btree index (idx_vendors_email/major_category
+-- above) cannot accelerate at all, forcing a sequential scan of the whole
+-- table on every keystroke once the directory reaches 600k+ rows (the real
+-- vendor-master-import scale). pg_trgm's trigram GIN indexes are what make a
+-- substring ILIKE use an index instead.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS idx_vendors_email_trgm ON vendors USING gin (email gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_vendors_major_category_trgm ON vendors USING gin (major_category gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_vendors_name_trgm ON vendors USING gin ((raw->>'name') gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_vendors_minor_categories_trgm ON vendors USING gin (((raw->'minorCategories')::text) gin_trgm_ops);
+
+-- getVendorsPageFromDB's scopedBuyerId clause (public-or-mine) matches on
+-- these two fields inside `raw` — without an expression index, that OR
+-- forces a full-table JSONB scan on every buyer's own paginated vendor list.
+CREATE INDEX IF NOT EXISTS idx_vendors_raw_buyer_id ON vendors ((raw->>'buyerId'));
+CREATE INDEX IF NOT EXISTS idx_vendors_raw_buyer_account_id ON vendors ((raw->>'buyerAccountId'));
 
 CREATE TABLE IF NOT EXISTS rfqs (
   id VARCHAR(64) PRIMARY KEY,

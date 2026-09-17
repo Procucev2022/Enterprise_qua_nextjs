@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react';
 import { useApp } from '@/lib/store';
 import {
   SOURCING_MODES,
@@ -13,6 +13,7 @@ import {
   extractLineItemsFromDocument,
   classifyLineItems,
   uploadRFQAttachment,
+  fetchAllVendors,
 } from '@/lib/rfqClient';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
 import {
@@ -32,7 +33,9 @@ import type {
   ManualRFQLineItem,
   RFQAttachment,
   RFQExtractionResult,
+  RFQVendorCandidate,
   SourcingMode,
+  VendorPageMeta,
 } from '@/lib/types';
 import {
   UploadCloud,
@@ -61,6 +64,16 @@ import {
 
 const EXTRACTION = UI_STRINGS.rfqExtraction;
 const MODAL = UI_STRINGS.manualRfqModal;
+
+// A synthetic major-category value, never sent to the server as a real
+// category (sanitized back to '' before submission) — opts a line item out
+// of category-narrowed supplier matching so the marketplace-suppliers panel
+// shows the whole real directory instead. Distinct from the "" placeholder
+// value so the Minor Category select and validation still treat it as "a
+// category was chosen", not "nothing chosen yet".
+const ALL_CATEGORIES_OPTION = 'All Categories';
+const ALL_VENDORS_PAGE_SIZE = 30;
+const ALL_VENDORS_SEARCH_DEBOUNCE_MS = 350;
 
 function taxonomyMajors(): string[] {
   return getMajorCategories();
@@ -100,6 +113,122 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [isDispatching, setIsDispatching] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // "All Categories" opts a line item out of category-narrowed matching — the
+  // marketplace-suppliers panel then browses the whole real vendor directory
+  // instead (search + pagination, same server-backed pattern as the Invite
+  // Vendors "All Vendors" tab), rather than the always-0-at-scale client match
+  // that would otherwise run against the capped bootstrap vendor list.
+  const isAllCategories = form.lineItems.some((item) => item.majorCategory === ALL_CATEGORIES_OPTION);
+  const [allVendorsSearch, setAllVendorsSearch] = useState('');
+  const [debouncedAllVendorsSearch, setDebouncedAllVendorsSearch] = useState('');
+  const [allVendorsList, setAllVendorsList] = useState<RFQVendorCandidate[]>([]);
+  const [allVendorsPagination, setAllVendorsPagination] = useState<VendorPageMeta | null>(null);
+  const [allVendorsLoading, setAllVendorsLoading] = useState(false);
+  const [allVendorsLoadingMore, setAllVendorsLoadingMore] = useState(false);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedAllVendorsSearch(allVendorsSearch), ALL_VENDORS_SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [allVendorsSearch]);
+
+  const lastAllVendorsKeyRef = useRef<string | null>(null);
+  // Guards against a slower, earlier request resolving AFTER a newer,
+  // re-searched one and overwriting it with stale results.
+  const allVendorsFetchSeqRef = useRef(0);
+  useEffect(() => {
+    if (!isAllCategories) return;
+    if (allVendorsList.length > 0 && lastAllVendorsKeyRef.current === debouncedAllVendorsSearch) return;
+    lastAllVendorsKeyRef.current = debouncedAllVendorsSearch;
+    const seq = ++allVendorsFetchSeqRef.current;
+    setAllVendorsLoading(true);
+    void fetchAllVendors({ page: 1, pageSize: ALL_VENDORS_PAGE_SIZE, search: debouncedAllVendorsSearch }).then((result) => {
+      if (seq !== allVendorsFetchSeqRef.current) return;
+      if (result.success) {
+        setAllVendorsList(result.candidates);
+        setAllVendorsPagination(result.pagination);
+      }
+      setAllVendorsLoading(false);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- allVendorsList is only read as a "has loaded yet" guard, not a re-fetch trigger
+  }, [isAllCategories, debouncedAllVendorsSearch]);
+
+  const loadMoreAllVendors = () => {
+    if (!allVendorsPagination || allVendorsLoadingMore) return;
+    const nextPage = allVendorsPagination.page + 1;
+    if (nextPage > allVendorsPagination.totalPages) return;
+    const seq = ++allVendorsFetchSeqRef.current;
+    setAllVendorsLoadingMore(true);
+    void fetchAllVendors({ page: nextPage, pageSize: ALL_VENDORS_PAGE_SIZE, search: debouncedAllVendorsSearch }).then((result) => {
+      if (seq !== allVendorsFetchSeqRef.current) return;
+      if (result.success) {
+        setAllVendorsList((prev) => [...prev, ...result.candidates]);
+        setAllVendorsPagination(result.pagination);
+      }
+      setAllVendorsLoadingMore(false);
+    });
+  };
+
+  /**
+   * The "All Categories" branch of the marketplace-suppliers panel: a real
+   * server-searched, paginated browse of the whole vendor directory, in
+   * place of the client-side category match (which has nothing to match
+   * against once "All Categories" is chosen). Shared between Mode 2 and
+   * Mode 3 — only the accent color and "no results" copy differ.
+   */
+  function renderAllVendorsBrowsePanel(accent: 'emerald' | 'indigo') {
+    const ring = accent === 'emerald' ? 'focus:ring-emerald-300' : 'focus:ring-indigo-300';
+    const border = accent === 'emerald' ? 'border-emerald-200/70 dark:border-emerald-900/50' : 'border-indigo-200/70 dark:border-indigo-900/50';
+    const hoverBorder = accent === 'emerald' ? 'hover:border-emerald-400' : 'hover:border-indigo-400';
+    const text = accent === 'emerald' ? 'text-emerald-700 dark:text-emerald-300' : 'text-indigo-700 dark:text-indigo-300';
+    const btnBorder = accent === 'emerald' ? 'border-emerald-200 dark:border-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/40' : 'border-indigo-200 dark:border-indigo-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/40';
+
+    return (
+      <>
+        <input
+          type="text"
+          value={allVendorsSearch}
+          onChange={(e) => setAllVendorsSearch(e.target.value)}
+          placeholder="Search suppliers by name, email or category..."
+          className={`w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-xs focus:outline-none focus:ring-2 ${ring}`}
+        />
+
+        {allVendorsLoading ? (
+          <div className="p-3.5 text-center text-[11px] text-slate-400 dark:text-gray-500">Loading suppliers…</div>
+        ) : allVendorsList.length === 0 ? (
+          <div className="p-3.5 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500">
+            No suppliers match this search.
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-60 overflow-y-auto pr-1">
+              {allVendorsList.map((v) => (
+                <div key={v.id} className={`p-3 rounded-xl bg-white dark:bg-gray-900 border ${border} space-y-1 shadow-2xs ${hoverBorder} transition-colors`}>
+                  <span className="text-xs font-bold text-slate-900 dark:text-white truncate block" title={v.name}>
+                    {v.name}
+                  </span>
+                  <div className="text-[10px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
+                    <span className={`truncate font-semibold ${text}`}>{v.majorCategory || 'General Industrial'}</span>
+                    <span className="truncate">{v.city || v.state || v.location || 'India'}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {allVendorsPagination && allVendorsPagination.page < allVendorsPagination.totalPages && (
+              <button
+                type="button"
+                onClick={loadMoreAllVendors}
+                disabled={allVendorsLoadingMore}
+                className={`w-full text-[11px] font-semibold ${text} py-2 rounded-lg border ${btnBorder} disabled:opacity-50`}
+              >
+                {allVendorsLoadingMore ? 'Loading…' : 'Load more suppliers'}
+              </button>
+            )}
+          </>
+        )}
+      </>
+    );
+  }
 
   // Document Upload & AI Extraction State
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
@@ -315,7 +444,16 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
         }
       }
 
-      const payload = toRFQCreatePayload(updatedForm, mode1AssignedVendors);
+      // ALL_CATEGORIES_OPTION is a UI-only sentinel that opts a line item out
+      // of category-narrowed matching — never a real taxonomy value, so it
+      // must never reach the server as this item's majorCategory.
+      const sanitizedForm: ManualRFQForm = {
+        ...updatedForm,
+        lineItems: updatedForm.lineItems.map((item) =>
+          item.majorCategory === ALL_CATEGORIES_OPTION ? { ...item, majorCategory: '' } : item
+        ),
+      };
+      const payload = toRFQCreatePayload(sanitizedForm, mode1AssignedVendors);
       const result = await createRFQ(payload);
 
       if (!result.success) {
@@ -733,6 +871,7 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                           className="w-44 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium focus:ring-2 focus:ring-indigo-500"
                         >
                           <option value="">{MODAL.selectPlaceholder}</option>
+                          <option value={ALL_CATEGORIES_OPTION}>All Categories</option>
                           {taxonomyMajors().map((major) => (
                             <option key={major} value={major}>
                               {major}
@@ -747,11 +886,13 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                         <select
                           aria-label={MODAL.colMinor}
                           value={item.minorCategory}
-                          disabled={!item.majorCategory}
+                          disabled={!item.majorCategory || item.majorCategory === ALL_CATEGORIES_OPTION}
                           onChange={(e) => patchItem(item.id, { minorCategory: e.target.value })}
                           className="w-44 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium disabled:opacity-40 focus:ring-2 focus:ring-indigo-500"
                         >
-                          <option value="">{MODAL.selectPlaceholder}</option>
+                          <option value="">
+                            {item.majorCategory === ALL_CATEGORIES_OPTION ? 'Not required' : MODAL.selectPlaceholder}
+                          </option>
                           {minorsFor(item.majorCategory).map((minor) => (
                             <option key={minor} value={minor}>
                               {minor}
@@ -1092,11 +1233,13 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                           <span>Mode 2: Hybrid Sourcing Pool (Private Roster + Procucev Marketplace)</span>
                           <span className="badge badge-emerald text-[10px] font-bold">
-                            {myVendors.length + matchedProcucev.length} Suppliers Matched
+                            {myVendors.length + (isAllCategories ? (allVendorsPagination?.total ?? allVendorsList.length) : matchedProcucev.length)} Suppliers Matched
                           </span>
                         </h3>
                         <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                          Combines your approved roster ({myVendors.length}) with AI category-matched Procucev marketplace suppliers ({matchedProcucev.length}) for optimal price discovery.
+                          {isAllCategories
+                            ? `Combines your approved roster (${myVendors.length}) with the whole Procucev marketplace directory (${(allVendorsPagination?.total ?? allVendorsList.length).toLocaleString()} suppliers, searchable) since "All Categories" was chosen.`
+                            : `Combines your approved roster (${myVendors.length}) with AI category-matched Procucev marketplace suppliers (${matchedProcucev.length}) for optimal price discovery.`}
                         </p>
                       </div>
                     </div>
@@ -1190,12 +1333,19 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                     <div className="flex items-center justify-between">
                       <h4 className="text-xs font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1.5">
                         <Sparkles size={13} className="text-emerald-600 dark:text-emerald-400" />
-                        <span>Procucev Verified Marketplace Suppliers ({matchedProcucev.length} Matched)</span>
+                        <span>
+                          Procucev Verified Marketplace Suppliers (
+                          {isAllCategories ? (allVendorsPagination ? allVendorsPagination.total.toLocaleString() : allVendorsList.length) : matchedProcucev.length} Matched)
+                        </span>
                       </h4>
-                      <span className="text-[10px] text-emerald-700 dark:text-emerald-300 font-semibold">Category Matched</span>
+                      <span className="text-[10px] text-emerald-700 dark:text-emerald-300 font-semibold">
+                        {isAllCategories ? 'All Categories' : 'Category Matched'}
+                      </span>
                     </div>
 
-                    {matchedProcucev.length === 0 ? (
+                    {isAllCategories ? (
+                      renderAllVendorsBrowsePanel('emerald')
+                    ) : matchedProcucev.length === 0 ? (
                       <div className="p-3.5 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500 space-y-1">
                         <p className="font-semibold text-slate-600 dark:text-gray-400">No marketplace suppliers directly matching this category yet.</p>
                         <p className="text-[10px] text-slate-400">Your RFQ will dispatch to your private roster, and category managers will assist with extended sourcing.</p>
@@ -1282,11 +1432,13 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                           <span>Mode 3: Autonomous Sourcing & Double-Blind Verification Protocol</span>
                           <span className="badge badge-indigo text-[10px] font-bold">
-                            {matchedProcucev.length} Database Suppliers Queued
+                            {isAllCategories ? (allVendorsPagination?.total ?? allVendorsList.length) : matchedProcucev.length} Database Suppliers Queued
                           </span>
                         </h3>
                         <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                          Suppliers with &gt;80% category match receive an anonymous capability questionnaire. Your corporate identity remains confidential.
+                          {isAllCategories
+                            ? 'Browsing the whole verified marketplace directory since "All Categories" was chosen — search below to narrow it. Your corporate identity remains confidential.'
+                            : 'Suppliers with >80% category match receive an anonymous capability questionnaire. Your corporate identity remains confidential.'}
                         </p>
                       </div>
                     </div>
@@ -1350,7 +1502,9 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                       <span>Evaluation-First Protocol Active</span>
                     </div>
                     <p>
-                      The RFQ will be sent immediately to your private roster. Simultaneously, the {matchedProcucev.length} category-matched Procucev database vendors below will receive an anonymous RFQ evaluation invite with specifications, while your company identity stays 100% confidential.
+                      {isAllCategories
+                        ? `The RFQ will be sent immediately to your private roster. Simultaneously, suppliers you invite from the whole verified marketplace directory below will receive an anonymous RFQ evaluation invite with specifications, while your company identity stays 100% confidential.`
+                        : `The RFQ will be sent immediately to your private roster. Simultaneously, the ${matchedProcucev.length} category-matched Procucev database vendors below will receive an anonymous RFQ evaluation invite with specifications, while your company identity stays 100% confidential.`}
                     </p>
                   </div>
 
@@ -1361,10 +1515,14 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                         <Users size={13} className="text-indigo-600 dark:text-indigo-400" />
                         <span>Vetted Procucev Database Suppliers (Invited for Double-Blind Evaluation)</span>
                       </h4>
-                      <span className="text-[10px] text-indigo-700 dark:text-indigo-300 font-semibold">{matchedProcucev.length} Database Matches</span>
+                      <span className="text-[10px] text-indigo-700 dark:text-indigo-300 font-semibold">
+                        {isAllCategories ? (allVendorsPagination?.total ?? allVendorsList.length) : matchedProcucev.length} {isAllCategories ? 'Suppliers' : 'Database Matches'}
+                      </span>
                     </div>
 
-                    {matchedProcucev.length === 0 ? (
+                    {isAllCategories ? (
+                      renderAllVendorsBrowsePanel('indigo')
+                    ) : matchedProcucev.length === 0 ? (
                       <div className="p-3.5 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500 space-y-1">
                         <p className="font-semibold text-slate-600 dark:text-gray-400">No database vendors with &gt;80% match in this category.</p>
                         <p className="text-[10px] text-slate-400">The RFQ will be routed to your private roster while our AI category desk identifies qualified suppliers.</p>
