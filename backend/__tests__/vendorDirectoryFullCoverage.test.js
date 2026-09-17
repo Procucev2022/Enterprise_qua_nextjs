@@ -784,7 +784,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
           next
         );
 
-        expect(pageSpy).toHaveBeenCalledWith({ limit: 25, offset: 50, search: 'sql' });
+        expect(pageSpy).toHaveBeenCalledWith({ limit: 25, offset: 50, search: 'sql', scopedBuyerId: '' });
         // The expensive full-table resync path must not run at all for this case.
         expect(getVendorsSpy).not.toHaveBeenCalled();
         expect(res.json).toHaveBeenCalledWith({
@@ -811,6 +811,47 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
       } finally {
         pool.pool = originalPool;
+      }
+    });
+
+    test('getVendors: a buyer-scoped paginated request also answers straight from Postgres, scoped to public-or-mine', async () => {
+      const next = jest.fn();
+      const domainQueries = require('../src/db/domainQueries');
+      const originalPool = pool.pool;
+      pool.pool = { query: jest.fn() };
+      const pageSpy = jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue({
+        rows: [{ id: 'v-scoped-1', name: 'Scoped Vendor' }],
+        total: 42,
+      });
+      const getVendorsSpy = jest.spyOn(storeService, 'getVendors');
+      const buyerAccountSpy = jest
+        .spyOn(storeService, 'getBuyerAccountByEmail')
+        .mockResolvedValue({ id: 'ba-scoped-1' });
+
+      try {
+        const res = mockRes();
+        await vendorController.getVendors(
+          { user: { role: 'buyer', email: 'scoped-buyer@example.com' }, query: { page: '1', pageSize: '10' } },
+          res,
+          next
+        );
+
+        expect(pageSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ limit: 10, offset: 0, scopedBuyerId: expect.any(String) })
+        );
+        const call = pageSpy.mock.calls[0][0];
+        expect(call.scopedBuyerId).not.toBe('');
+        // Buyer-scoped pagination must not trigger the whole-table resync either —
+        // the real fix for 600k-row scale, not just the 'all' listing.
+        expect(getVendorsSpy).not.toHaveBeenCalled();
+        expect(res.json).toHaveBeenCalledWith(
+          expect.objectContaining({ success: true, source: 'persisted', data: [{ id: 'v-scoped-1', name: 'Scoped Vendor' }] })
+        );
+      } finally {
+        pool.pool = originalPool;
+        pageSpy.mockRestore();
+        getVendorsSpy.mockRestore();
+        buyerAccountSpy.mockRestore();
       }
     });
 

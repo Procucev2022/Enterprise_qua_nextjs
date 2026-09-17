@@ -127,17 +127,21 @@ async function getVendors(req, res, next) {
     // the full array (vendor-console metrics, GraphQL, etc.) are unaffected.
     const { page, search } = req.query || {};
 
-    // The unscoped ("all vendors") paginated case is answered straight from
-    // Postgres with LIMIT/OFFSET — it must never route through
-    // storeService.getVendors(), which re-syncs (and re-serializes) every row
-    // in the table on every single call. That was fine at a few hundred
-    // vendors; once the table reached 80k+ (a bulk Vendor Master import), it
-    // meant every "Load more" click in the Invite Vendors modal re-fetched
-    // the entire table just to keep 50 rows — slow/heavy enough to hang the
-    // browser mid-pagination. Buyer-scoped requests stay on the smaller,
-    // already-in-memory path below; only the fully-open, large-scale case
-    // gets its own SQL query.
-    if (page !== undefined && buyerId === 'all' && pool.pool) {
+    // Any paginated request is answered straight from Postgres with
+    // LIMIT/OFFSET — it must never route through storeService.getVendors(),
+    // which re-syncs (and re-serializes) every row in the table on every
+    // single call. That was fine at a few hundred vendors; once the table
+    // reached 80k+ (a bulk Vendor Master import), it meant every "Load more"
+    // click re-fetched the entire table just to keep 50 rows — slow/heavy
+    // enough to hang the browser mid-pagination. This used to only cover
+    // buyerId === 'all'; a buyer-scoped page request fell through to the
+    // in-memory path below, which still fetched the whole table anyway
+    // (almost every vendor is public and thus visible to every buyer), so at
+    // 600k+ rows a buyer merely opening their vendor list re-pulled and
+    // re-parsed the entire directory on every click — the actual scale risk.
+    // getVendorsPageFromDB applies the same public-or-mine scoping in SQL
+    // when scopedBuyerId is set (skipped entirely for 'all').
+    if (page !== undefined && pool.pool) {
       const pageNumber = Math.max(1, parseInt(page, 10) || 1);
       const pageSize = Math.min(
         MAX_VENDOR_PAGE_SIZE,
@@ -147,6 +151,7 @@ async function getVendors(req, res, next) {
         limit: pageSize,
         offset: (pageNumber - 1) * pageSize,
         search: search ? String(search) : '',
+        scopedBuyerId: buyerId && buyerId !== 'all' ? buyerId : '',
       });
       return res.json({
         success: true,

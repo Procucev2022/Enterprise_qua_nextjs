@@ -188,6 +188,55 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
         expect(countSql).toMatch(/WHERE[\s\S]* AND [\s\S]*buyerId/);
       });
 
+      test('adds the scopedBuyerId filter (public vendors OR this buyer\'s own)', async () => {
+        const query = jest
+          .fn()
+          .mockResolvedValueOnce({ rows: [{ total: 3 }] })
+          .mockResolvedValueOnce({ rows: [{ raw: { id: 'v-1' } }] });
+        pool.pool = { query };
+
+        await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, scopedBuyerId: 'ba-42' });
+
+        const [countSql, countParams] = query.mock.calls[0];
+        expect(countSql).toContain("(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL");
+        expect(countSql).toContain("lower(raw->>'buyerId') = lower($1)");
+        expect(countSql).toContain("lower(raw->>'buyerAccountId') = lower($1)");
+        expect(countSql).toContain("lower(raw->>'buyerEmail') = lower($1)");
+        expect(countParams).toEqual(['ba-42']);
+
+        const [dataSql, dataParams] = query.mock.calls[1];
+        expect(dataSql).toContain('ORDER BY created_at DESC LIMIT $2 OFFSET $3');
+        expect(dataParams).toEqual(['ba-42', 10, 0]);
+      });
+
+      test('combines search and scopedBuyerId with AND, using separate placeholders', async () => {
+        const query = jest
+          .fn()
+          .mockResolvedValueOnce({ rows: [{ total: 0 }] })
+          .mockResolvedValueOnce({ rows: [] });
+        pool.pool = { query };
+
+        await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, search: 'pump', scopedBuyerId: 'ba-7' });
+
+        const [countSql, countParams] = query.mock.calls[0];
+        expect(countSql).toMatch(/WHERE[\s\S]* AND [\s\S]*buyerId/);
+        expect(countParams).toEqual(['%pump%', 'ba-7']);
+      });
+
+      test('does not add a scopedBuyerId filter when it is empty/falsy', async () => {
+        const query = jest
+          .fn()
+          .mockResolvedValueOnce({ rows: [{ total: 0 }] })
+          .mockResolvedValueOnce({ rows: [] });
+        pool.pool = { query };
+
+        await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, scopedBuyerId: '' });
+
+        const [countSql, countParams] = query.mock.calls[0];
+        expect(countSql).not.toContain('WHERE');
+        expect(countParams).toEqual([]);
+      });
+
       test('defaults total to 0 when the count query returns no row', async () => {
         const query = jest
           .fn()
