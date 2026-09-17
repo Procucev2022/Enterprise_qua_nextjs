@@ -2024,3 +2024,24 @@ please solve this issue and i want to change the branch to main
 ```text
 the invite vendor rfq details  is  share via portal but not get the rfq deatils via email use this email rfqprocucevgmail.com   and send the reply mandtory data for the quotes in that email both that format and rfq detaisl
 ```
+
+---
+
+### Prompt 52
+
+**Timestamp**: 2026-09-17T16:36:54Z
+
+```text
+run locally
+```
+
+---
+
+### Prompt 53
+
+**Timestamp**: 2026-09-17T16:54:33Z
+
+```text
+raise the pr for this code from rfq branch
+```
+
