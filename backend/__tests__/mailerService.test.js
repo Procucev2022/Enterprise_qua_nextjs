@@ -312,6 +312,7 @@ describe('mailerService', () => {
       expect(msg.html).toContain('₹5,00,000');
       expect(msg.html).toContain('How to Submit Your Quotation');
       expect(msg.html).toContain('For multi-item RFQs, please quote unit price per item');
+      expect(msg.html).toContain('Open in Vendor Web Portal');
     });
   });
 

@@ -282,7 +282,10 @@ function buildRfqInviteEmail(to, { rfq, recipientName }) {
       </ul>
       ${items.length > 1 ? '<p style="margin: 0; font-size: 12px; color: #475569;"><em>For multi-item RFQs, please quote unit price per item in your reply.</em></p>' : ''}
     </div>
-    <p style="font-size: 13px; color: #64748b;">Sign in to your Procucev vendor account to review the full enquiry and submit a quotation.</p>
+    <div style="text-align: center; margin: 24px 0;">
+      <a href="${vendorSignInUrl()}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 14px;">Open in Vendor Web Portal</a>
+    </div>
+    <p style="font-size: 13px; color: #64748b; text-align: center;">Sign in to your Procucev vendor account to review the full enquiry and submit a quotation.</p>
   `;
 
   return {
