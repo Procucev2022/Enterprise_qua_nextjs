@@ -181,13 +181,13 @@ function resolveConnectionState(config, { lastError, watching } = {}) {
  * Returns `{ allowed, reason, buyerAccount }`. `buyerAccount` is needed by the
  * caller regardless, to scope the RFQ.
  */
-function resolveSenderAuthorisation(fromAddress, config = resolveConfig()) {
+async function resolveSenderAuthorisation(fromAddress, config = resolveConfig()) {
   const address = String(fromAddress || '').trim().toLowerCase();
   if (!address) {
     return { allowed: false, reason: EMAIL_GATEWAY_MESSAGES.SENDER_MISSING, buyerAccount: null };
   }
 
-  const buyerAccount = storeService.getBuyerAccountByEmail(address) || null;
+  const buyerAccount = (await storeService.getBuyerAccountByEmail(address)) || null;
 
   if (config.allowedSenders.length > 0) {
     if (!config.allowedSenders.includes(address)) {
@@ -392,7 +392,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
 
   const { message } = prepared;
 
-  const authorisation = resolveSenderAuthorisation(message.fromAddress, config);
+  const authorisation = await resolveSenderAuthorisation(message.fromAddress, config);
   if (!authorisation.allowed) {
     if (message.fromAddress) {
       try {

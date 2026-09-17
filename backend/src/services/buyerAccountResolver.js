@@ -32,7 +32,7 @@ const LOG_CATEGORY = 'BUYER_ACCOUNT';
  * fabricated strings in the seed; they are now derived from real RFQ rows by the
  * caller, or left at zero when nothing has been raised.
  */
-function mapProfileToBuyerAccount(profile, extras = {}) {
+async function mapProfileToBuyerAccount(profile, extras = {}) {
   // The identity DB (user/organization) has no subscription columns at all —
   // that state lives on the legacy storeService.buyerAccounts record instead
   // (created at registration, updated on a real Zoho payment). Matched by
@@ -41,7 +41,7 @@ function mapProfileToBuyerAccount(profile, extras = {}) {
   // buyer-account creation flow — has no such record, so it defaults to the
   // same free_trial/5 a brand new account starts with, rather than reporting
   // nothing at all.
-  const legacyAccount = storeService.getBuyerAccountByEmail(profile.contactEmail);
+  const legacyAccount = await storeService.getBuyerAccountByEmail(profile.contactEmail);
   return {
     id: profile.organizationId,
     organizationId: profile.organizationId,
@@ -128,7 +128,7 @@ async function resolveActiveBuyerAccount(sessionUser) {
     };
   }
 
-  return { ok: true, account: mapProfileToBuyerAccount(result.profile) };
+  return { ok: true, account: await mapProfileToBuyerAccount(result.profile) };
 }
 
 module.exports = {

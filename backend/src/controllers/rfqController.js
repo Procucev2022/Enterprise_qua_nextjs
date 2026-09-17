@@ -53,10 +53,10 @@ const ATTACHMENT_ERRORS = {
  * supplier. Category managers and admins see the full cross-buyer list
  * (quote-matrix.tsx's own CM route depends on this).
  */
-function resolveRfqReadScope(req) {
+async function resolveRfqReadScope(req) {
   const role = req.user && req.user.role;
   if (role === 'buyer') {
-    const account = storeService.getBuyerAccountByEmail(req.user.email);
+    const account = await storeService.getBuyerAccountByEmail(req.user.email);
     return { role, restricted: true, buyerAccountId: account ? account.id : null };
   }
   if (role === 'vendor') {
@@ -74,8 +74,8 @@ function resolveRfqReadScope(req) {
  * "not found" covers both, so a caller can't enumerate other parties' RFQ ids.
  * CM/admin are unrestricted.
  */
-function canAccessRfq(req, rfq) {
-  const scope = resolveRfqReadScope(req);
+async function canAccessRfq(req, rfq) {
+  const scope = await resolveRfqReadScope(req);
   if (!scope.restricted) return true;
   if (scope.role === 'vendor') return storeService.vendorCoversRFQ(scope.vendor, rfq);
   return !!scope.buyerAccountId && rfq.buyerAccountId === scope.buyerAccountId;
@@ -128,7 +128,7 @@ function pickUpdatableRfqFields(body) {
 async function getRFQs(req, res, next) {
   try {
     await storeService.syncRFQsFromDB();
-    const scope = resolveRfqReadScope(req);
+    const scope = await resolveRfqReadScope(req);
     const rfqs = scopedRfqList(scope);
     logger.info('Fetching RFQs list', { role: scope.role, restricted: scope.restricted, count: rfqs.length }, 'RFQ_CONTROLLER');
     res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: rfqs });
@@ -227,7 +227,7 @@ async function getRFQById(req, res, next) {
     const { id } = req.params;
     logger.info(`Fetching RFQ by ID: ${id}`, { id }, 'RFQ_CONTROLLER');
     const rfq = await storeService.getRFQByIdAsync(id);
-    if (!rfq || !canAccessRfq(req, rfq)) {
+    if (!rfq || !(await canAccessRfq(req, rfq))) {
       logger.warn(`RFQ not found for ID: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
@@ -270,7 +270,7 @@ async function createRFQ(req, res, next) {
     // Resolved server-side from the authenticated session, never trusted from
     // the request body, so the RFQ is attributed to whoever is actually
     // logged in rather than a client-supplied or globally-shared value.
-    const requestingBuyerAccount = req.user ? storeService.getBuyerAccountByEmail(req.user.email) : null;
+    const requestingBuyerAccount = req.user ? await storeService.getBuyerAccountByEmail(req.user.email) : null;
 
     // Server-side re-validation of the buyer's subscription entitlement —
     // mirrors the vendor download-quota check below (generateEmailPreview).
@@ -554,7 +554,7 @@ async function extractRFQFromDocument(req, res, next) {
 async function getRFQSummary(req, res, next) {
   try {
     await storeService.syncRFQsFromDB();
-    const scope = resolveRfqReadScope(req);
+    const scope = await resolveRfqReadScope(req);
     const rfqs = scopedRfqList(scope);
     logger.info('Building RFQ portfolio summary', { role: scope.role, restricted: scope.restricted, count: rfqs.length }, 'RFQ_CONTROLLER');
     res.json({ success: true, data: rfqSummaryService.buildPortfolioSummary(rfqs) });
@@ -646,11 +646,11 @@ async function downloadRFQAttachment(req, res, next) {
  * same 404 either way (see canAccessRfq). Only RFQ_UPDATABLE_FIELDS are ever
  * written — ownership/identity fields are not part of a plain edit.
  */
-function updateRFQ(req, res, next) {
+async function updateRFQ(req, res, next) {
   const { id } = req.params;
   try {
     const existing = storeService.getRFQById(id);
-    if (!existing || !canAccessRfq(req, existing)) {
+    if (!existing || !(await canAccessRfq(req, existing))) {
       logger.warn(`RFQ not found for update: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
@@ -683,11 +683,11 @@ function updateRFQ(req, res, next) {
  * that doesn't exist, so the response cannot be used to discover which ids
  * exist elsewhere.
  */
-function deleteRFQ(req, res, next) {
+async function deleteRFQ(req, res, next) {
   const { id } = req.params;
   try {
     const existing = storeService.getRFQById(id);
-    if (!existing || !canAccessRfq(req, existing)) {
+    if (!existing || !(await canAccessRfq(req, existing))) {
       logger.warn(`RFQ not found for deletion: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
@@ -707,7 +707,7 @@ function deleteRFQ(req, res, next) {
   }
 }
 
-function addQuote(req, res, next) {
+async function addQuote(req, res, next) {
   try {
     const { id } = req.params;
     // A quote's vendor identity must come from the authenticated session, not
@@ -729,7 +729,7 @@ function addQuote(req, res, next) {
     // enquiry outside their category (and not one they were invited onto)
     // reports the same 404 as an unknown id — they had no way to reach it.
     const targetRfq = storeService.getRFQById(id);
-    if (!targetRfq || !canAccessRfq(req, targetRfq)) {
+    if (!targetRfq || !(await canAccessRfq(req, targetRfq))) {
       logger.warn(`RFQ not found or out of scope for quote submission: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
@@ -760,13 +760,13 @@ function addQuote(req, res, next) {
   }
 }
 
-function generateEmailPreview(req, res, next) {
+async function generateEmailPreview(req, res, next) {
   try {
     const { id } = req.params;
     const { vendorId } = req.query;
     logger.info(`Generating email preview for RFQ ${id}`, { id, vendorId }, 'RFQ_CONTROLLER');
     const rfq = storeService.getRFQById(id);
-    if (!rfq || !canAccessRfq(req, rfq)) {
+    if (!rfq || !(await canAccessRfq(req, rfq))) {
       logger.warn(`RFQ not found for email preview: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }

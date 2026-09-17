@@ -11,22 +11,22 @@ const { logger } = require('../services/loggerService');
  * they resolve to null and every endpoint treats that as an empty inbox rather
  * than an error — a shared notification bell can call this for any role.
  */
-function resolveRecipient(req) {
+async function resolveRecipient(req) {
   if (!req.user) return null;
   if (req.user.role === 'vendor') {
     const vendor = storeService.getVendorById(req.user.email);
     return vendor ? { type: 'vendor', id: vendor.id } : null;
   }
   if (req.user.role === 'buyer') {
-    const account = storeService.getBuyerAccountByEmail(req.user.email);
+    const account = await storeService.getBuyerAccountByEmail(req.user.email);
     return account ? { type: 'buyer', id: account.id } : null;
   }
   return null;
 }
 
-function listNotifications(req, res, next) {
+async function listNotifications(req, res, next) {
   try {
-    const recipient = resolveRecipient(req);
+    const recipient = await resolveRecipient(req);
     if (!recipient) {
       return res.json({ success: true, data: [], unreadCount: 0 });
     }
@@ -44,9 +44,9 @@ function listNotifications(req, res, next) {
   }
 }
 
-function markRead(req, res, next) {
+async function markRead(req, res, next) {
   try {
-    const recipient = resolveRecipient(req);
+    const recipient = await resolveRecipient(req);
     if (!recipient) {
       return res.status(404).json({ success: false, error: 'Notification not found.' });
     }
@@ -63,9 +63,9 @@ function markRead(req, res, next) {
   }
 }
 
-function markAllRead(req, res, next) {
+async function markAllRead(req, res, next) {
   try {
-    const recipient = resolveRecipient(req);
+    const recipient = await resolveRecipient(req);
     if (!recipient) {
       return res.json({ success: true, updated: 0 });
     }

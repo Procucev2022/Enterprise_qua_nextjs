@@ -252,7 +252,7 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
   });
 
   test('aiFeed, systemConfig, dbHealth, optimizationMetrics, diagnoseLogErrors, auditPerformance resolvers execute', async () => {
-    const feed = rootResolvers.aiFeed({ limit: 5 });
+    const feed = await rootResolvers.aiFeed({ limit: 5 });
     expect(feed.length).toBeLessThanOrEqual(5);
 
     const config = rootResolvers.systemConfig();

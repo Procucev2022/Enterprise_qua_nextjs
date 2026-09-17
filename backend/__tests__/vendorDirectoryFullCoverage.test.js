@@ -442,7 +442,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
   });
 
   describe('vendorController.js', () => {
-    test('assertVendorOwnership and update/delete branches', () => {
+    test('assertVendorOwnership and update/delete branches', async () => {
       const res = mockRes();
       const next = jest.fn();
 
@@ -454,12 +454,12 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       jest.spyOn(storeService, 'getVendorById').mockReturnValue(existingVendor);
 
       // No user on existing vendor
-      vendorController.updateVendor({ user: null, params: { id: existingVendor.id }, body: {} }, res, next);
+      await vendorController.updateVendor({ user: null, params: { id: existingVendor.id }, body: {} }, res, next);
       expect(res.status).toHaveBeenCalledWith(401);
 
       // Vendor role editing own profile
       const resVendorSelf = mockRes();
-      vendorController.updateVendor(
+      await vendorController.updateVendor(
         {
           user: { role: 'vendor', email: 'vendor-owner@test.com' },
           params: { id: existingVendor.id },
@@ -472,7 +472,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
 
       // Admin role is always allowed
       const resAdmin = mockRes();
-      vendorController.updateVendor(
+      await vendorController.updateVendor(
         { user: { role: 'admin' }, params: { id: existingVendor.id }, body: { name: 'Admin Updated' } },
         resAdmin,
         next
@@ -483,7 +483,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       const resBuyer = mockRes();
       const histVendor = { id: 'v-hist-123', email: 'hist@test.com' };
       jest.spyOn(storeService, 'getVendorById').mockReturnValue(histVendor);
-      vendorController.updateVendor(
+      await vendorController.updateVendor(
         { user: { role: 'buyer', email: 'buyer@test.com' }, params: { id: histVendor.id }, body: { name: 'Hist Updated' } },
         resBuyer,
         next
@@ -491,17 +491,17 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       expect(resBuyer.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
 
       // Buyer owning vendor via v-buyer-, v-navin-, v-1788, vm- prefixes
-      ['v-buyer-1', 'v-navin-1', 'v-1788-1', 'vm-1'].forEach((testId) => {
+      for (const testId of ['v-buyer-1', 'v-navin-1', 'v-1788-1', 'vm-1']) {
         const resB = mockRes();
         const vPrefix = { id: testId, email: `${testId}@test.com` };
         jest.spyOn(storeService, 'getVendorById').mockReturnValue(vPrefix);
-        vendorController.updateVendor(
+        await vendorController.updateVendor(
           { user: { role: 'buyer', email: 'buyer@test.com' }, params: { id: testId }, body: { name: 'Prefix Update' } },
           resB,
           next
         );
         expect(resB.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
-      });
+      }
 
       // Buyer owning vendor via buyerAccountId or buyerEmail matching
       const resBuyerAccountMatch = mockRes();
@@ -510,7 +510,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
         buyerAccountId: 'ba-buyer-1',
       });
       jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue({ id: 'ba-buyer-1' });
-      vendorController.updateVendor(
+      await vendorController.updateVendor(
         { user: { role: 'buyer', email: 'b@b.com' }, params: { id: 'v-match-ba' }, body: { name: 'Matched' } },
         resBuyerAccountMatch,
         next
@@ -523,7 +523,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
         buyerEmail: 'b@b.com',
       });
       jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue({ id: 'b@b.com' });
-      vendorController.updateVendor(
+      await vendorController.updateVendor(
         { user: { role: 'buyer', email: 'b@b.com' }, params: { id: 'v-match-email' }, body: { name: 'Matched Email' } },
         resBuyerEmailMatch,
         next
@@ -537,7 +537,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
         buyerId: 'ba-other-org',
       });
       jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue({ id: 'ba-buyer-1' });
-      vendorController.updateVendor(
+      await vendorController.updateVendor(
         { user: { role: 'buyer', email: 'b@b.com' }, params: { id: 'v-other' }, body: { name: 'Other' } },
         resBuyerForbidden,
         next
@@ -545,20 +545,20 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       expect(resBuyerForbidden.status).toHaveBeenCalledWith(403);
 
       // Deleting non-existent vendor with buyer pattern (idempotent delete)
-      ['v-hist-999', 'v-buyer-999', 'v-navin-999', 'v-1788-999', 'vm-999', 'v-ingest-999', 'v-bulk-999'].forEach((delId) => {
+      for (const delId of ['v-hist-999', 'v-buyer-999', 'v-navin-999', 'v-1788-999', 'vm-999', 'v-ingest-999', 'v-bulk-999']) {
         const resDelIdempotent = mockRes();
         jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
-        vendorController.deleteVendor(
+        await vendorController.deleteVendor(
           { user: { role: 'buyer', email: 'b@b.com' }, params: { id: delId } },
           resDelIdempotent,
           next
         );
         expect(resDelIdempotent.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
-      });
+      }
 
       // Deleting non-existent vendor with non-buyer pattern -> 404
       const resDel404 = mockRes();
-      vendorController.deleteVendor(
+      await vendorController.deleteVendor(
         { user: { role: 'buyer', email: 'b@b.com' }, params: { id: 'some-random-id' } },
         resDel404,
         next
@@ -568,7 +568,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       // Deleting existing vendor successfully
       const resDelOk = mockRes();
       jest.spyOn(storeService, 'getVendorById').mockReturnValue(existingVendor);
-      vendorController.deleteVendor(
+      await vendorController.deleteVendor(
         { user: { role: 'admin' }, params: { id: existingVendor.id } },
         resDelOk,
         next
@@ -576,14 +576,14 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       expect(resDelOk.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
     });
 
-    test('reviseRating validation and success flows', () => {
+    test('reviseRating validation and success flows', async () => {
       const res = mockRes();
       const next = jest.fn();
 
       jest.spyOn(storeService, 'getVendorById').mockReturnValue({ id: 'v1', name: 'Vendor 1' });
 
       // Vendor role cannot rate
-      vendorController.reviseRating(
+      await vendorController.reviseRating(
         { user: { role: 'vendor' }, params: { id: 'v1' }, body: {} },
         res,
         next
@@ -592,7 +592,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
 
       // Missing scores
       const resMissing = mockRes();
-      vendorController.reviseRating(
+      await vendorController.reviseRating(
         { user: { role: 'buyer', email: 'b@b.com' }, params: { id: 'v1' }, body: { qualityScore: 90, costScore: 90 } },
         resMissing,
         next
@@ -601,7 +601,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
 
       // Out of range score (> 100)
       const resRange = mockRes();
-      vendorController.reviseRating(
+      await vendorController.reviseRating(
         { user: { role: 'buyer', email: 'b@b.com' }, params: { id: 'v1' }, body: { qualityScore: 150, costScore: 90, deliveryScore: 90 } },
         resRange,
         next
@@ -611,7 +611,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       // Vendor not found in storeService
       const res404 = mockRes();
       jest.spyOn(storeService, 'reviseVendorRating').mockReturnValueOnce(null);
-      vendorController.reviseRating(
+      await vendorController.reviseRating(
         { user: { role: 'buyer', email: 'buyer@test.com' }, params: { id: 'v1' }, body: { qualityScore: 90, costScore: 90, deliveryScore: 90 } },
         res404,
         next
@@ -621,7 +621,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       // Success
       const resOk = mockRes();
       jest.spyOn(storeService, 'reviseVendorRating').mockReturnValueOnce({ id: 'v-revised', rating: 4.8 });
-      vendorController.reviseRating(
+      await vendorController.reviseRating(
         { user: { role: 'buyer', email: 'buyer@test.com' }, params: { id: 'v1' }, body: { qualityScore: 95, costScore: 90, deliveryScore: 92 } },
         resOk,
         next
@@ -632,7 +632,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       jest.spyOn(storeService, 'reviseVendorRating').mockImplementation(() => {
         throw new Error('crash');
       });
-      vendorController.reviseRating(
+      await vendorController.reviseRating(
         { user: { role: 'buyer', email: 'buyer@test.com' }, params: { id: 'v1' }, body: { qualityScore: 95, costScore: 90, deliveryScore: 92 } },
         resOk,
         next
@@ -640,14 +640,14 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       expect(next).toHaveBeenCalled();
     });
 
-    test('updateCategories and generateOnboardingEmailPreview validation and success flows', () => {
+    test('updateCategories and generateOnboardingEmailPreview validation and success flows', async () => {
       const res = mockRes();
       const next = jest.fn();
 
       jest.spyOn(storeService, 'getVendorById').mockReturnValue({ id: 'v1', email: 'vendor@test.com' });
 
       // Non-owner updating categories -> 403
-      vendorController.updateCategories(
+      await vendorController.updateCategories(
         { user: { role: 'vendor', email: 'other@vendor.com' }, params: { id: 'v1' }, body: {} },
         res,
         next
@@ -657,7 +657,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       // Owner (admin) updating categories
       const resAdmin = mockRes();
       jest.spyOn(storeService, 'updateVendorCategories').mockReturnValueOnce({ id: 'v1', clientMappedCategories: ['Valves'] });
-      vendorController.updateCategories(
+      await vendorController.updateCategories(
         { user: { role: 'admin' }, params: { id: 'v1' }, body: { clientMappedCategories: ['Valves'] } },
         resAdmin,
         next
@@ -666,7 +666,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
 
       // generateOnboardingEmailPreview: vendor role forbidden (403)
       const resEmailVendor = mockRes();
-      vendorController.generateOnboardingEmailPreview(
+      await vendorController.generateOnboardingEmailPreview(
         { user: { role: 'vendor' }, params: { id: 'v1' } },
         resEmailVendor,
         next
@@ -675,7 +675,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
 
       // generateOnboardingEmailPreview: buyer success
       const resEmailBuyer = mockRes();
-      vendorController.generateOnboardingEmailPreview(
+      await vendorController.generateOnboardingEmailPreview(
         { user: { role: 'buyer' }, params: { id: 'v1' } },
         resEmailBuyer,
         next
@@ -709,7 +709,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       await vendorController.getVendors({ user: { role: 'buyer', email: 'b@b.com' }, query: {} }, res, next);
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
 
-      vendorController.getVendorById(
+      await vendorController.getVendorById(
         { user: { role: 'buyer', email: 'b@b.com' }, params: { id: 'non-existent' } },
         res,
         next
@@ -725,7 +725,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       jest.spyOn(storeService, 'getVendorById').mockImplementation(() => {
         throw new Error('fail');
       });
-      vendorController.getVendorById({ params: { id: 'v1' } }, res, next);
+      await vendorController.getVendorById({ params: { id: 'v1' } }, res, next);
       expect(next).toHaveBeenCalled();
     });
 

@@ -396,12 +396,12 @@ describe('API Route Endpoints', () => {
           organizationName: 'Entitlement Trial Buyer',
           corporateEmail: email,
         });
-        expect(storeService.getBuyerAccountByEmail(email)).toMatchObject({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 5 });
+        expect(await storeService.getBuyerAccountByEmail(email)).toMatchObject({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 5 });
 
         const res = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload());
 
         expect(res.statusCode).toBe(201);
-        expect(storeService.getBuyerAccountByEmail(email).remainingFreeRFQs).toBe(4);
+        expect((await storeService.getBuyerAccountByEmail(email)).remainingFreeRFQs).toBe(4);
         void acc;
       });
 
@@ -411,7 +411,7 @@ describe('API Route Endpoints', () => {
           organizationName: 'Entitlement Exhausted Buyer',
           corporateEmail: email,
         });
-        storeService.updateBuyerAccount(storeService.getBuyerAccountByEmail(email).id, { remainingFreeRFQs: 0 });
+        storeService.updateBuyerAccount((await storeService.getBuyerAccountByEmail(email)).id, { remainingFreeRFQs: 0 });
 
         const res = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload());
 
@@ -447,7 +447,7 @@ describe('API Route Endpoints', () => {
         expect(mode3Res.statusCode).toBe(403);
 
         // A paid plan has no numeric quota to decrement.
-        expect(storeService.getBuyerAccountByEmail(email).remainingFreeRFQs).toBe(5);
+        expect((await storeService.getBuyerAccountByEmail(email)).remainingFreeRFQs).toBe(5);
       });
 
       test('a version_3 buyer may raise mode_3', async () => {
@@ -993,7 +993,7 @@ describe('API Route Endpoints', () => {
       const pool = require('../src/db/pool');
       const buyerProfileQueries = require('../src/db/buyerProfileQueries');
       const originalPool = pool.pool;
-      pool.pool = { stub: true };
+      pool.pool = { stub: true, query: jest.fn().mockResolvedValue({ rows: [] }) };
       const spy = jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({
         profile: {
           organizationId: 'org-real-01',

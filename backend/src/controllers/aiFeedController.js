@@ -9,7 +9,7 @@ const { logger } = require('../services/loggerService');
  * explicitly requested via query parameter ?buyerAccountId=... / ?buyerId=...).
  * Cross-buyer follow-up events or telemetry are never leaked across accounts.
  */
-function resolveAiFeedReadScope(req) {
+async function resolveAiFeedReadScope(req) {
   // 1. Explicit query parameter
   const queryBuyerId = req.query && (req.query.buyerAccountId || req.query.buyerId);
   if (queryBuyerId) {
@@ -18,7 +18,7 @@ function resolveAiFeedReadScope(req) {
 
   // 2. Authenticated buyer session
   if (req.user && req.user.role === 'buyer') {
-    const account = storeService.getBuyerAccountByEmail(req.user.email);
+    const account = await storeService.getBuyerAccountByEmail(req.user.email);
     const buyerAccountId = (account && account.id) || req.user.orgId || req.user.sub || null;
     return { restricted: true, buyerAccountId };
   }
@@ -26,9 +26,9 @@ function resolveAiFeedReadScope(req) {
   return { restricted: false, buyerAccountId: null };
 }
 
-function getAIFeed(req, res, next) {
+async function getAIFeed(req, res, next) {
   try {
-    const scope = resolveAiFeedReadScope(req);
+    const scope = await resolveAiFeedReadScope(req);
     logger.info('Fetching AI opportunity feed alerts', { restricted: scope.restricted, buyerAccountId: scope.buyerAccountId }, 'AI_FEED_CONTROLLER');
     const all = storeService.getAIFeed();
     let feed = all;
@@ -59,7 +59,7 @@ function getAIFeed(req, res, next) {
   }
 }
 
-function createFeedItem(req, res, next) {
+async function createFeedItem(req, res, next) {
   try {
     const body = req.body;
     if (!body.title || !body.message) {
@@ -69,7 +69,7 @@ function createFeedItem(req, res, next) {
 
     let buyerAccountId = body.buyerAccountId || null;
     if (!buyerAccountId && req.user && req.user.role === 'buyer') {
-      const account = storeService.getBuyerAccountByEmail(req.user.email);
+      const account = await storeService.getBuyerAccountByEmail(req.user.email);
       if (account) {
         buyerAccountId = account.id;
       }

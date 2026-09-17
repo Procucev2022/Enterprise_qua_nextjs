@@ -57,43 +57,43 @@ describe('aiFeedController & resolvers coverage', () => {
   });
 
   describe('resolveAiFeedReadScope', () => {
-    test('resolves scope by query buyerAccountId', () => {
-      const scope = aiFeedController.resolveAiFeedReadScope({ query: { buyerAccountId: 'acc-123' } });
+    test('resolves scope by query buyerAccountId', async () => {
+      const scope = await aiFeedController.resolveAiFeedReadScope({ query: { buyerAccountId: 'acc-123' } });
       expect(scope).toEqual({ restricted: true, buyerAccountId: 'acc-123' });
     });
 
-    test('resolves scope by query buyerId', () => {
-      const scope = aiFeedController.resolveAiFeedReadScope({ query: { buyerId: 'acc-456' } });
+    test('resolves scope by query buyerId', async () => {
+      const scope = await aiFeedController.resolveAiFeedReadScope({ query: { buyerId: 'acc-456' } });
       expect(scope).toEqual({ restricted: true, buyerAccountId: 'acc-456' });
     });
 
-    test('resolves scope for authenticated buyer session with known email', () => {
-      const scope = aiFeedController.resolveAiFeedReadScope({
+    test('resolves scope for authenticated buyer session with known email', async () => {
+      const scope = await aiFeedController.resolveAiFeedReadScope({
         user: { role: 'buyer', email: 'aifeed.buyer@test.com' },
       });
       expect(scope).toEqual({ restricted: true, buyerAccountId: createdBuyerAccount.id });
     });
 
-    test('resolves scope for authenticated buyer session with orgId/sub fallback', () => {
-      const scope1 = aiFeedController.resolveAiFeedReadScope({
+    test('resolves scope for authenticated buyer session with orgId/sub fallback', async () => {
+      const scope1 = await aiFeedController.resolveAiFeedReadScope({
         user: { role: 'buyer', email: 'unknown@test.com', orgId: 'org-fallback-1' },
       });
       expect(scope1).toEqual({ restricted: true, buyerAccountId: 'org-fallback-1' });
 
-      const scope2 = aiFeedController.resolveAiFeedReadScope({
+      const scope2 = await aiFeedController.resolveAiFeedReadScope({
         user: { role: 'buyer', email: 'unknown2@test.com', sub: 'sub-fallback-2' },
       });
       expect(scope2).toEqual({ restricted: true, buyerAccountId: 'sub-fallback-2' });
 
-      const scope3 = aiFeedController.resolveAiFeedReadScope({
+      const scope3 = await aiFeedController.resolveAiFeedReadScope({
         user: { role: 'buyer', email: 'unknown3@test.com' },
       });
       expect(scope3).toEqual({ restricted: true, buyerAccountId: null });
     });
 
-    test('unrestricted for unauthenticated or non-buyer', () => {
-      expect(aiFeedController.resolveAiFeedReadScope({})).toEqual({ restricted: false, buyerAccountId: null });
-      expect(aiFeedController.resolveAiFeedReadScope({ user: { role: 'vendor' } })).toEqual({
+    test('unrestricted for unauthenticated or non-buyer', async () => {
+      expect(await aiFeedController.resolveAiFeedReadScope({})).toEqual({ restricted: false, buyerAccountId: null });
+      expect(await aiFeedController.resolveAiFeedReadScope({ user: { role: 'vendor' } })).toEqual({
         restricted: false,
         buyerAccountId: null,
       });
@@ -101,12 +101,12 @@ describe('aiFeedController & resolvers coverage', () => {
   });
 
   describe('getAIFeed controller', () => {
-    test('filters feed items by buyer account ID query', () => {
+    test('filters feed items by buyer account ID query', async () => {
       const req = { query: { buyerAccountId: createdBuyerAccount.id } };
       const res = mockRes();
       const next = jest.fn();
 
-      aiFeedController.getAIFeed(req, res, next);
+      await aiFeedController.getAIFeed(req, res, next);
       expect(res.json).toHaveBeenCalled();
       const data = res.json.mock.calls[0][0].data;
       expect(data.some((i) => i.title === 'Feed Item Direct Buyer')).toBe(true);
@@ -115,53 +115,53 @@ describe('aiFeedController & resolvers coverage', () => {
       expect(data.some((i) => i.title === 'Orphan Feed Item')).toBe(false);
     });
 
-    test('returns empty array when buyer account ID is null in restricted scope', () => {
+    test('returns empty array when buyer account ID is null in restricted scope', async () => {
       const req = { user: { role: 'buyer', email: 'noaccount@nowhere.test' } };
       const res = mockRes();
       const next = jest.fn();
 
-      aiFeedController.getAIFeed(req, res, next);
+      await aiFeedController.getAIFeed(req, res, next);
       expect(res.json).toHaveBeenCalledWith({ success: true, data: [] });
     });
 
-    test('returns all feed items for unrestricted non-buyer', () => {
+    test('returns all feed items for unrestricted non-buyer', async () => {
       const req = {};
       const res = mockRes();
       const next = jest.fn();
 
-      aiFeedController.getAIFeed(req, res, next);
+      await aiFeedController.getAIFeed(req, res, next);
       expect(res.json).toHaveBeenCalled();
       const data = res.json.mock.calls[0][0].data;
       expect(data.length).toBeGreaterThan(0);
     });
 
-    test('calls next on error', () => {
+    test('calls next on error', async () => {
       const res = mockRes();
       const next = jest.fn();
       jest.spyOn(storeService, 'getAIFeed').mockImplementationOnce(() => {
         throw new Error('Test getAIFeed error');
       });
 
-      aiFeedController.getAIFeed({}, res, next);
+      await aiFeedController.getAIFeed({}, res, next);
       expect(next).toHaveBeenCalled();
     });
   });
 
   describe('createFeedItem controller', () => {
-    test('creates feed item stamped with explicit buyerAccountId in body', () => {
+    test('creates feed item stamped with explicit buyerAccountId in body', async () => {
       const req = {
         body: { title: 'Explicit Buyer', message: 'Test message', buyerAccountId: 'explicit-acc-1' },
       };
       const res = mockRes();
       const next = jest.fn();
 
-      aiFeedController.createFeedItem(req, res, next);
+      await aiFeedController.createFeedItem(req, res, next);
       expect(res.status).toHaveBeenCalledWith(201);
       const created = res.json.mock.calls[0][0].data;
       expect(created.buyerAccountId).toBe('explicit-acc-1');
     });
 
-    test('creates feed item stamped with buyer session account', () => {
+    test('creates feed item stamped with buyer session account', async () => {
       const req = {
         user: { role: 'buyer', email: 'aifeed.buyer@test.com' },
         body: { title: 'Session Stamped', message: 'Test message' },
@@ -169,13 +169,13 @@ describe('aiFeedController & resolvers coverage', () => {
       const res = mockRes();
       const next = jest.fn();
 
-      aiFeedController.createFeedItem(req, res, next);
+      await aiFeedController.createFeedItem(req, res, next);
       expect(res.status).toHaveBeenCalledWith(201);
       const created = res.json.mock.calls[0][0].data;
       expect(created.buyerAccountId).toBe(createdBuyerAccount.id);
     });
 
-    test('creates feed item stamped with buyer session without matched account', () => {
+    test('creates feed item stamped with buyer session without matched account', async () => {
       const req = {
         user: { role: 'buyer', email: 'unmatched.buyer@test.com' },
         body: { title: 'Unmatched Session Stamped', message: 'Test message' },
@@ -183,85 +183,85 @@ describe('aiFeedController & resolvers coverage', () => {
       const res = mockRes();
       const next = jest.fn();
 
-      aiFeedController.createFeedItem(req, res, next);
+      await aiFeedController.createFeedItem(req, res, next);
       expect(res.status).toHaveBeenCalledWith(201);
       const created = res.json.mock.calls[0][0].data;
       expect(created.buyerAccountId).toBeNull();
     });
 
-    test('creates feed item stamped with rfqNumber buyerAccountId', () => {
+    test('creates feed item stamped with rfqNumber buyerAccountId', async () => {
       const req = {
         body: { title: 'RFQ Stamped', message: 'Test message', rfqNumber: testRfq.rfqNumber },
       };
       const res = mockRes();
       const next = jest.fn();
 
-      aiFeedController.createFeedItem(req, res, next);
+      await aiFeedController.createFeedItem(req, res, next);
       expect(res.status).toHaveBeenCalledWith(201);
       const created = res.json.mock.calls[0][0].data;
       expect(created.buyerAccountId).toBe(createdBuyerAccount.id);
     });
 
-    test('creates feed item stamped with non-existent rfqNumber', () => {
+    test('creates feed item stamped with non-existent rfqNumber', async () => {
       const req = {
         body: { title: 'Non-existent RFQ Stamped', message: 'Test message', rfqNumber: 'NON_EXISTENT_RFQ' },
       };
       const res = mockRes();
       const next = jest.fn();
 
-      aiFeedController.createFeedItem(req, res, next);
+      await aiFeedController.createFeedItem(req, res, next);
       expect(res.status).toHaveBeenCalledWith(201);
       const created = res.json.mock.calls[0][0].data;
       expect(created.buyerAccountId).toBeNull();
     });
 
-    test('rejects missing title or message', () => {
+    test('rejects missing title or message', async () => {
       const res = mockRes();
       const next = jest.fn();
 
-      aiFeedController.createFeedItem({ body: { title: 'Only Title' } }, res, next);
+      await aiFeedController.createFeedItem({ body: { title: 'Only Title' } }, res, next);
       expect(res.status).toHaveBeenCalledWith(400);
 
-      aiFeedController.createFeedItem({ body: { message: 'Only Message' } }, res, next);
+      await aiFeedController.createFeedItem({ body: { message: 'Only Message' } }, res, next);
       expect(res.status).toHaveBeenCalledWith(400);
     });
 
-    test('calls next on creation error', () => {
+    test('calls next on creation error', async () => {
       const res = mockRes();
       const next = jest.fn();
       jest.spyOn(storeService, 'addAIFeedItem').mockImplementationOnce(() => {
         throw new Error('Test addAIFeedItem error');
       });
 
-      aiFeedController.createFeedItem({ body: { title: 'Err', message: 'Err' } }, res, next);
+      await aiFeedController.createFeedItem({ body: { title: 'Err', message: 'Err' } }, res, next);
       expect(next).toHaveBeenCalled();
     });
   });
 
   describe('GraphQL aiFeed resolver', () => {
-    test('scopes feed for buyer session in context', () => {
+    test('scopes feed for buyer session in context', async () => {
       const ctx = {
         req: { user: { role: 'buyer', email: 'aifeed.buyer@test.com' } },
       };
-      const feed = rootResolvers.aiFeed({ limit: 10 }, ctx);
+      const feed = await rootResolvers.aiFeed({ limit: 10 }, ctx);
       expect(Array.isArray(feed)).toBe(true);
       expect(feed.some((i) => i.title === 'Feed Item Direct Buyer')).toBe(true);
       expect(feed.some((i) => i.title === 'Other Buyer Feed Item')).toBe(false);
     });
 
-    test('returns empty for buyer session with no matched account', () => {
+    test('returns empty for buyer session with no matched account', async () => {
       const ctx = {
         req: { user: { role: 'buyer', email: 'unregistered@test.com' } },
       };
-      const feed = rootResolvers.aiFeed({}, ctx);
+      const feed = await rootResolvers.aiFeed({}, ctx);
       expect(feed).toEqual([]);
     });
 
-    test('returns all for non-buyer or unauthenticated GraphQL context', () => {
-      const feed1 = rootResolvers.aiFeed({});
+    test('returns all for non-buyer or unauthenticated GraphQL context', async () => {
+      const feed1 = await rootResolvers.aiFeed({});
       expect(feed1.length).toBeGreaterThan(0);
 
-      const feed2 = rootResolvers.aiFeed({}, { req: { user: { role: 'admin' } } });
+      const feed2 = await rootResolvers.aiFeed({}, { req: { user: { role: 'admin' } } });
       expect(feed2.length).toBeGreaterThan(0);
     });
   });

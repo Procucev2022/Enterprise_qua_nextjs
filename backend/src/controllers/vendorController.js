@@ -15,7 +15,7 @@ const { ZOHO_CONFIG, computeZohoPlanAmount, VENDOR_SUBSCRIPTION_PLANS } = requir
  * and rate vendors elsewhere but have no business editing a vendor's own
  * registration details.
  */
-function assertVendorOwnership(req, res, vendorOrEmail) {
+async function assertVendorOwnership(req, res, vendorOrEmail) {
   const user = req.user;
   if (!user) {
     res.status(401).json({ success: false, error: 'Authentication required.' });
@@ -29,7 +29,7 @@ function assertVendorOwnership(req, res, vendorOrEmail) {
   }
 
   if (user.role === 'buyer' && typeof vendorOrEmail === 'object' && vendorOrEmail !== null) {
-    const buyerAccount = storeService.getBuyerAccountByEmail(user.email);
+    const buyerAccount = await storeService.getBuyerAccountByEmail(user.email);
     const buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
     const sId = String(buyerId).toLowerCase();
     const isOwner =
@@ -116,7 +116,7 @@ async function getVendors(req, res, next) {
     const user = req.user;
     let buyerId = null;
     if (user && user.role === 'buyer') {
-      const buyerAccount = storeService.getBuyerAccountByEmail(user.email);
+      const buyerAccount = await storeService.getBuyerAccountByEmail(user.email);
       buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
     } else if (req.query && req.query.buyerId) {
       buyerId = req.query.buyerId;
@@ -189,13 +189,13 @@ async function getVendors(req, res, next) {
   }
 }
 
-function getVendorById(req, res, next) {
+async function getVendorById(req, res, next) {
   try {
     const { id } = req.params;
     const user = req.user;
     let buyerId = null;
     if (user && user.role === 'buyer') {
-      const buyerAccount = storeService.getBuyerAccountByEmail(user.email);
+      const buyerAccount = await storeService.getBuyerAccountByEmail(user.email);
       buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
     } else if (req.query && req.query.buyerId) {
       buyerId = req.query.buyerId;
@@ -228,7 +228,7 @@ async function createVendor(req, res, next) {
       // Whitelisted: a buyer may only set contact/profile fields for a vendor
       // they deal with directly, never identity/ownership fields — those come
       // from their own authenticated account, not the request body.
-      const buyerAccount = storeService.getBuyerAccountByEmail(req.user.email);
+      const buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
       if (!buyerAccount) {
         return res.status(403).json({
           success: false,
@@ -264,7 +264,7 @@ async function createVendor(req, res, next) {
   }
 }
 
-function updateVendor(req, res, next) {
+async function updateVendor(req, res, next) {
   try {
     const { id } = req.params;
     const existing = storeService.getVendorById(id, 'all');
@@ -272,7 +272,7 @@ function updateVendor(req, res, next) {
       logger.warn(`Vendor not found for update: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
-    if (!assertVendorOwnership(req, res, existing)) return;
+    if (!(await assertVendorOwnership(req, res, existing))) return;
     // A vendor editing their own record only gets the self-service field set;
     // an admin or buyer retains full field access.
     const updates = req.user.role === 'vendor' ? pickVendorSelfEditFields(req.body) : req.body;
@@ -285,7 +285,7 @@ function updateVendor(req, res, next) {
   }
 }
 
-function deleteVendor(req, res, next) {
+async function deleteVendor(req, res, next) {
   try {
     const { id } = req.params;
     const existing = storeService.getVendorById(id, 'all');
@@ -302,7 +302,7 @@ function deleteVendor(req, res, next) {
       logger.warn(`Vendor not found for deletion: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
-    if (!assertVendorOwnership(req, res, existing)) return;
+    if (!(await assertVendorOwnership(req, res, existing))) return;
     logger.info(`Deleting vendor ${id}`, { id }, 'VENDOR_CONTROLLER');
     storeService.deleteVendor(existing.id, req.user && req.user.email);
     res.json({ success: true, message: `Vendor ${id} deleted successfully.` });
@@ -312,7 +312,7 @@ function deleteVendor(req, res, next) {
   }
 }
 
-function reviseRating(req, res, next) {
+async function reviseRating(req, res, next) {
   try {
     const { id } = req.params;
     const ratingData = req.body;
@@ -341,7 +341,7 @@ function reviseRating(req, res, next) {
     // Resolve buyer scope for buyer-owned vendors (v-hist-, v-buyer-, etc.)
     let buyerId = null;
     if (req.user.role === 'buyer') {
-      const buyerAccount = storeService.getBuyerAccountByEmail(req.user.email);
+      const buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
       if (buyerAccount) {
         buyerId = buyerAccount.id;
       } else {
@@ -396,7 +396,7 @@ function generateOnboardingEmailPreview(req, res, next) {
 // possible and let a vendor self-grant a paid plan for free.
 const VALID_VENDOR_SUBSCRIPTION_PLANS = ['premium'];
 
-function updateSubscription(req, res, next) {
+async function updateSubscription(req, res, next) {
   try {
     const { id } = req.params;
     const { plan } = req.body;
@@ -405,7 +405,7 @@ function updateSubscription(req, res, next) {
       logger.warn(`Vendor not found for subscription update: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
-    if (!assertVendorOwnership(req, res, existing.email)) return;
+    if (!(await assertVendorOwnership(req, res, existing.email))) return;
     if (!VALID_VENDOR_SUBSCRIPTION_PLANS.includes(plan)) {
       logger.warn(`Failed to update subscription for vendor ${id}: invalid plan`, { id, plan }, 'VENDOR_CONTROLLER');
       return res.status(400).json({
@@ -434,7 +434,7 @@ async function createSubscriptionPaymentLink(req, res, next) {
     if (!existing) {
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
-    if (!assertVendorOwnership(req, res, existing.email)) return;
+    if (!(await assertVendorOwnership(req, res, existing.email))) return;
     if (!ZOHO_PAYABLE_PLANS.includes(plan)) {
       return res.status(400).json({ success: false, error: `plan must be one of: ${ZOHO_PAYABLE_PLANS.join(', ')}.` });
     }
@@ -485,7 +485,7 @@ async function getPaymentLinks(req, res, next) {
     if (!existing) {
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
-    if (!assertVendorOwnership(req, res, existing.email)) return;
+    if (!(await assertVendorOwnership(req, res, existing.email))) return;
     const links = await storeService.getPaymentLinksForVendor(existing.id);
     res.json({ success: true, data: links });
   } catch (err) {
@@ -502,7 +502,7 @@ async function downloadInvoice(req, res, next) {
     if (!existing) {
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
-    if (!assertVendorOwnership(req, res, existing.email)) return;
+    if (!(await assertVendorOwnership(req, res, existing.email))) return;
 
     const link = await storeService.getPaymentLinkById(linkId);
     if (!link || link.payerType !== 'vendor' || link.vendorId !== existing.id) {
@@ -527,7 +527,7 @@ async function downloadInvoice(req, res, next) {
   }
 }
 
-function updateCategories(req, res, next) {
+async function updateCategories(req, res, next) {
   try {
     const { id } = req.params;
     const { clientMappedCategories, vendorSelectedCategories } = req.body;
@@ -536,7 +536,7 @@ function updateCategories(req, res, next) {
       logger.warn(`Vendor not found for taxonomy update: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
-    if (!assertVendorOwnership(req, res, existing.email)) return;
+    if (!(await assertVendorOwnership(req, res, existing.email))) return;
     logger.info(`Updating category taxonomy for vendor ${id}`, { id, clientMappedCategories, vendorSelectedCategories }, 'VENDOR_CONTROLLER');
     const updated = storeService.updateVendorCategories(existing.id, { clientMappedCategories, vendorSelectedCategories });
     res.json({ success: true, data: updated });
