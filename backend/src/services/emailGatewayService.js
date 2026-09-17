@@ -40,6 +40,7 @@ const {
   EMAIL_GATEWAY_STATE,
   EMAIL_GATEWAY_SMTP_PORTS,
   EMAIL_INGESTION_STATUS,
+  resolveBuyerSourcingMode,
 } = require('../config/constants');
 
 const { INGESTION_OUTCOME } = emailGatewayQueries;
@@ -471,11 +472,13 @@ async function processMessage(rawSource, config = resolveConfig()) {
     totalAccepted += classification.accepted;
     totalNeedsReview += classification.needsReview;
 
+    const sourcingMode = resolveBuyerSourcingMode(authorisation.buyerAccount);
+
     const created = storeService.createRFQ(
       {
         title: draft.title,
         category: draft.category,
-        sourcingMode: EMAIL_GATEWAY_CONFIG.INGESTED_SOURCING_MODE,
+        sourcingMode,
         // Held for review rather than circulated. Nothing has checked this yet.
         status: EMAIL_GATEWAY_CONFIG.INGESTED_STATUS,
         source: 'email_gateway',

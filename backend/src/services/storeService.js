@@ -4,6 +4,7 @@ const {
   DATABASE_HEALTH_SERVICE_LABEL,
   SYSTEM_ACTOR_EMAIL,
   RFQ_DEFAULTS,
+  resolveBuyerSourcingMode,
 } = require('../config/constants');
 const pool = require('../db/pool');
 const domainQueries = require('../db/domainQueries');
@@ -975,7 +976,7 @@ class StoreService {
       buyerAccountName: requestingBuyerAccount
         ? requestingBuyerAccount.organizationName
         : this.activeBuyerAccount ? this.activeBuyerAccount.organizationName : null,
-      sourcingMode: rfqData.sourcingMode || 'mode_1',
+      sourcingMode: rfqData.sourcingMode || (requestingBuyerAccount ? resolveBuyerSourcingMode(requestingBuyerAccount) : 'mode_1'),
       quotesCount: rfqData.quotes ? rfqData.quotes.length : 0,
       chasingActive: rfqData.chasingActive !== undefined ? rfqData.chasingActive : true,
       allocatedTime: rfqData.allocatedTime || RFQ_DEFAULTS.ALLOCATED_TIME,

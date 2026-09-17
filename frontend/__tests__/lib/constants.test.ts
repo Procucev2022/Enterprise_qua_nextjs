@@ -18,6 +18,8 @@ import {
   RFQ_STATUSES,
   formatIndianDate,
   formatIndianDateTime,
+  BUYER_SUBSCRIPTION_TO_SOURCING_MODE,
+  resolveBuyerSourcingMode,
 } from '@/lib/constants';
 
 
@@ -233,5 +235,42 @@ describe('RFQ_STATUSES', () => {
       'AI Recommended',
       'PO Generated',
     ]);
+  });
+});
+
+describe('resolveBuyerSourcingMode & BUYER_SUBSCRIPTION_TO_SOURCING_MODE', () => {
+  it('maps subscription plan IDs to corresponding sourcing modes', () => {
+    expect(BUYER_SUBSCRIPTION_TO_SOURCING_MODE.version_1).toBe('mode_1');
+    expect(BUYER_SUBSCRIPTION_TO_SOURCING_MODE.version_2).toBe('mode_2');
+    expect(BUYER_SUBSCRIPTION_TO_SOURCING_MODE.version_3).toBe('mode_3');
+  });
+
+  it('resolves version_1 plan to mode_1', () => {
+    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'version_1' })).toBe('mode_1');
+    expect(resolveBuyerSourcingMode('version_1')).toBe('mode_1');
+    expect(resolveBuyerSourcingMode('v1')).toBe('mode_1');
+    expect(resolveBuyerSourcingMode('mode_1')).toBe('mode_1');
+  });
+
+  it('resolves version_2 plan to mode_2', () => {
+    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'version_2' })).toBe('mode_2');
+    expect(resolveBuyerSourcingMode('version_2')).toBe('mode_2');
+    expect(resolveBuyerSourcingMode('v2')).toBe('mode_2');
+    expect(resolveBuyerSourcingMode('mode_2')).toBe('mode_2');
+  });
+
+  it('resolves version_3 plan to mode_3', () => {
+    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'version_3' })).toBe('mode_3');
+    expect(resolveBuyerSourcingMode('version_3')).toBe('mode_3');
+    expect(resolveBuyerSourcingMode('v3')).toBe('mode_3');
+    expect(resolveBuyerSourcingMode('mode_3')).toBe('mode_3');
+  });
+
+  it('defaults to mode_2 for free_trial, unknown plan, empty object or null', () => {
+    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'free_trial' })).toBe('mode_2');
+    expect(resolveBuyerSourcingMode({ subscriptionPlan: 'starter_plan' })).toBe('mode_2');
+    expect(resolveBuyerSourcingMode({})).toBe('mode_2');
+    expect(resolveBuyerSourcingMode(null)).toBe('mode_2');
+    expect(resolveBuyerSourcingMode(undefined)).toBe('mode_2');
   });
 });
