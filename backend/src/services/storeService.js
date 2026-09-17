@@ -453,7 +453,12 @@ class StoreService {
       evaluated: vendorData.evaluated !== undefined ? vendorData.evaluated : false,
       hasRecord: vendorData.hasRecord !== undefined ? vendorData.hasRecord : false,
       isExistingInDatabase: vendorData.isExistingInDatabase !== undefined ? vendorData.isExistingInDatabase : true,
-      onboardingEmailStatus: vendorData.onboardingEmailStatus || 'sent',
+      // Was defaulting to 'sent' unconditionally even though nothing below
+      // ever actually sent an email — a buyer adding a vendor by email saw a
+      // "sent" status that was simply a lie. Now starts 'pending' and only
+      // flips to 'sent' once mailerService confirms real delivery, mirroring
+      // bulkAddVendors' already-correct pattern below.
+      onboardingEmailStatus: vendorData.email ? 'pending' : (vendorData.onboardingEmailStatus || 'sent'),
       isCategoryAligned: vendorData.isCategoryAligned !== undefined ? vendorData.isCategoryAligned : true,
       // Every vendor starts on the free client-uploaded tier with a clean
       // download counter — these used to exist only as frontend useState
@@ -471,7 +476,75 @@ class StoreService {
       action: `Registered vendor ${newVendor.name} in category ${newVendor.majorCategory}`,
     });
 
+    if (newVendor.email) {
+      // Sequenced, not two independent fire-and-forgets: the email promises
+      // real credentials, so it must never go out until the account those
+      // credentials unlock actually exists. A transient identity-DB blip
+      // (real failure mode: ETIMEDOUT) used to leave the two out of sync —
+      // vendor gets a "your account is ready" email whose password matches
+      // no account at all. One retry absorbs a transient blip; a real
+      // failure marks the status 'failed' (visible to the buyer/CM) instead
+      // of silently mailing broken credentials.
+      this._provisionVendorOnboarding(newVendor, actorEmail).catch((err) => {
+        logger.error(`Onboarding provisioning failed for ${newVendor.email}`, err, 'STORE_SERVICE');
+      });
+    }
+
     return newVendor;
+  }
+
+  async _provisionVendorOnboarding(vendor, actorEmail = null) {
+    const tempPassword = this._generateTempPassword();
+
+    let identityCreated = false;
+    for (let attempt = 1; attempt <= 2 && !identityCreated; attempt += 1) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await identityQueries.insertVendorAccount({
+          email: vendor.email,
+          password: tempPassword,
+          phone: vendor.phone || null,
+          fullName: vendor.contactPerson || vendor.name,
+          organizationName: vendor.name,
+          createdBy: actorEmail || 'buyer-manual-add',
+        });
+        identityCreated = true;
+      } catch (err) {
+        logger.error(
+          `Failed to create vendor identity account for ${vendor.email} (attempt ${attempt}/2)`,
+          err,
+          'STORE_SERVICE'
+        );
+      }
+    }
+
+    if (!identityCreated) {
+      this.updateVendor(vendor.id, { onboardingEmailStatus: 'failed' });
+      return;
+    }
+
+    const emailPayload = mailerService.buildVendorOnboardingEmail({
+      to: vendor.email,
+      recipientName: vendor.contactPerson || vendor.name,
+      buyerOrganizationName: 'Procucev Enterprise',
+      vendorCode: vendor.id,
+      tempPassword,
+      contactPhone: vendor.phone,
+    });
+
+    try {
+      const delivery = await mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding');
+      if (delivery.sent) {
+        this.updateVendor(vendor.id, { onboardingEmailStatus: 'sent', tempPassword });
+        logger.info(`Onboarding email sent to ${vendor.email}`, { vendorId: vendor.id }, 'STORE_SERVICE');
+      } else {
+        this.updateVendor(vendor.id, { onboardingEmailStatus: 'failed' });
+        logger.warn(`Failed to send onboarding email to ${vendor.email}`, { reason: delivery.reason }, 'STORE_SERVICE');
+      }
+    } catch (err) {
+      this.updateVendor(vendor.id, { onboardingEmailStatus: 'failed' });
+      logger.error(`Error sending onboarding email to ${vendor.email}`, err, 'STORE_SERVICE');
+    }
   }
 
   /**
