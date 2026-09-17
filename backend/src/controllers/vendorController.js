@@ -260,11 +260,25 @@ async function createVendor(req, res, next) {
     if (addedByBuyerCompany) {
       body.addedByBuyerCompany = addedByBuyerCompany;
     }
+    // Checked before addVendor runs at all, not just before reporting success:
+    // addVendor kicks off real side effects (an identity-account write with a
+    // fresh temp password, a real onboarding email) as soon as it's called.
+    // Deferring the uniqueness check to confirmVendorPersisted (below) let a
+    // vendor-add for an email that already had its own identity account
+    // silently overwrite that account's real password/phone on every retried
+    // duplicate submission, even though the vendor record itself never
+    // persisted — a real account got its login clobbered this way.
+    if (body.email && storeService.getVendorById(body.email, 'all')) {
+      return res.status(409).json({ success: false, error: `A vendor with the email ${body.email} already exists.` });
+    }
     logger.info(`Creating new vendor: ${body.name}`, { name: body.name, majorCategory: body.majorCategory, buyerId }, 'VENDOR_CONTROLLER');
     const created = storeService.addVendor(body, req.user && req.user.email, buyerId);
     // Confirms the write actually landed in Postgres before reporting
     // success — a duplicate email (vendors.email is UNIQUE) used to fail
     // silently in the background while this endpoint still returned 201.
+    // Still the authoritative check for a genuine race (two concurrent
+    // requests for the same new email) that the in-memory check above can't
+    // catch — the pre-check above only stops the common, already-hydrated case.
     await storeService.confirmVendorPersisted(created);
     res.status(201).json({ success: true, data: created });
   } catch (err) {

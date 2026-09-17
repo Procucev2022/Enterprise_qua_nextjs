@@ -308,14 +308,12 @@ describe('API Route Endpoints', () => {
     });
 
     test('PUT /api/vendors/:id updates the profile as the owning vendor, ignoring smuggled fields', async () => {
-      const created = await request(app).post('/api/vendors').set(authHeader('vendor')).send({
-        name: 'Whitelist Test Vendor',
-        majorCategory: 'Engineering Spares - Electrical',
-      });
-      const id = created.body.data.id;
-
+      // Reuses testVendorId (already created above, under this same vendor
+      // session's email) rather than creating a second one for the same
+      // vendor identity — createVendor now rejects a duplicate email before
+      // ever calling addVendor.
       const res = await request(app)
-        .put(`/api/vendors/${id}`)
+        .put(`/api/vendors/${testVendorId}`)
         .set(authHeader('vendor'))
         .send({ contactPerson: 'Updated Contact', rating: 999, status: 'HACKED' });
 

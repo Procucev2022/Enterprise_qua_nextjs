@@ -932,12 +932,32 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       );
       expect(res.status).toHaveBeenCalledWith(201);
 
-      // Exception handling
+      // A duplicate-email add is rejected before addVendor is ever called —
+      // not after. addVendor fires real side effects (an identity-account
+      // write with a fresh temp password, a real onboarding email); a
+      // duplicate that only got caught afterward, by confirmVendorPersisted's
+      // DB check, used to let that fire anyway and silently overwrite the
+      // existing account's real password/phone even though the vendor record
+      // itself was rejected.
+      const addVendorSpy = jest.spyOn(storeService, 'addVendor');
+      await vendorController.createVendor(
+        { user: { role: 'vendor', email: 'v@v.com' }, body: { name: 'Vendor 1 Again', majorCategory: 'Mechanical' } },
+        res,
+        next
+      );
+      expect(res.status).toHaveBeenCalledWith(409);
+      expect(addVendorSpy).not.toHaveBeenCalled();
+      addVendorSpy.mockRestore();
+
+      // Exception handling. A distinct email from the "Success" case above —
+      // createVendor now checks for an existing vendor email before addVendor
+      // is ever called, so reusing v@v.com here would short-circuit to a 409
+      // and never reach the mocked throw this test is exercising.
       jest.spyOn(storeService, 'addVendor').mockImplementation(() => {
         throw new Error('err');
       });
       await vendorController.createVendor(
-        { user: { role: 'vendor', email: 'v@v.com' }, body: { name: 'Vendor 1', majorCategory: 'Mechanical' } },
+        { user: { role: 'vendor', email: 'v2@v.com' }, body: { name: 'Vendor 2', majorCategory: 'Mechanical' } },
         res,
         next
       );
