@@ -1605,15 +1605,15 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       ).toBeNull();
     });
 
-    test('resolveVendorFromEmail finds registered vendor by email or assigned RFQ list', () => {
+    test('resolveVendorFromEmail finds registered vendor by email or assigned RFQ list', async () => {
       jest.spyOn(storeService, 'getVendors').mockReturnValue([sampleVendor]);
 
-      const found = emailGatewayService.resolveVendorFromEmail(VENDOR_EMAIL, sampleRfq);
+      const found = await emailGatewayService.resolveVendorFromEmail(VENDOR_EMAIL, sampleRfq);
       expect(found).toBeDefined();
       expect(found.id).toBe('v-apex-1');
       expect(found.name).toBe('Apex Supplies Ltd.');
 
-      const notFound = emailGatewayService.resolveVendorFromEmail('unknown@other.com', sampleRfq);
+      const notFound = await emailGatewayService.resolveVendorFromEmail('unknown@other.com', sampleRfq);
       expect(notFound).toBeNull();
     });
 

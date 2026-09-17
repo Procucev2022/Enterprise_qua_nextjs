@@ -414,14 +414,14 @@ function extractRfqReferenceFromEmail(message) {
 /**
  * Resolve vendor record from sender email address or vendor directory.
  */
-function resolveVendorFromEmail(fromAddress) {
+async function resolveVendorFromEmail(fromAddress) {
   if (!fromAddress) return null;
   const email = String(fromAddress).trim().toLowerCase();
 
   const direct = storeService.getVendorById(email);
   if (direct) return direct;
 
-  const allVendors = storeService.getVendors ? storeService.getVendors() : [];
+  const allVendors = storeService.getVendors ? await storeService.getVendors() : [];
   const found = allVendors.find(
     (v) => (v.email && v.email.toLowerCase() === email) || (v.corporateEmail && v.corporateEmail.toLowerCase() === email)
   );
@@ -581,7 +581,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
 
   // 1. Check if this message is a vendor quotation reply for an existing RFQ
   const { targetRfq, referencedNumber } = extractRfqReferenceFromEmail(message);
-  const vendorRecord = resolveVendorFromEmail(message.fromAddress);
+  const vendorRecord = await resolveVendorFromEmail(message.fromAddress);
 
   if (targetRfq && vendorRecord) {
     return await processVendorQuoteMessage(message, targetRfq, vendorRecord);
@@ -597,7 +597,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
 
 
   // 2. Otherwise process as Inbound Buyer RFQ Requisition
-  const authorisation = resolveSenderAuthorisation(message.fromAddress, config);
+  const authorisation = await resolveSenderAuthorisation(message.fromAddress, config);
   if (!authorisation.allowed) {
     if (message.fromAddress) {
       try {
