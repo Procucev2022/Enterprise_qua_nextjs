@@ -911,4 +911,101 @@ describe('geminiService.generateJson', () => {
       GEMINI_CONFIG.TOTAL_BUDGET_MS = originalBudget;
     }
   });
+
+  describe('extractQuotationFallback & extractQuotationFromEmail', () => {
+    const sampleRfq = {
+      id: 'rfq-test-1',
+      rfqNumber: 'RFQ-2026-00421',
+      extractedEntities: [
+        { itemName: 'Centrifugal Pump 150 m3/hr', quantity: 4, unit: 'Nos' },
+        { itemName: 'Gate Valve 100mm', quantity: 10, unit: 'Nos' },
+      ],
+    };
+
+    test('extractQuotationFallback extracts prices, terms, and line items via regex', () => {
+      const emailText = `
+        Dear Buyer,
+        Here is our bid for RFQ-2026-00421:
+        1. Centrifugal Pump: INR 12500 per unit, qty 4
+        2. Gate Valve: Rs. 3500 per unit, qty 10
+        Lead Time: 14 days
+        Warranty: 2 years
+        Payment Terms: Net 30 Days
+        Taxes: 18% GST extra
+        Freight charges: INR 5000
+        Remarks: Standard warranty included
+      `;
+
+      const result = gemini.extractQuotationFallback(emailText, sampleRfq);
+      expect(result).toBeDefined();
+      expect(result.extractionMethod).toBe('heuristic_fallback');
+      expect(result.leadTimeDays).toBe(14);
+      expect(result.warrantyYears).toBe(2);
+      expect(result.paymentTerms).toBe('Net 30 Days');
+      expect(result.taxes).toBeGreaterThan(0);
+      expect(result.deliveryCharges).toBe(5000);
+      expect(result.lineItemQuotes.length).toBe(2);
+      expect(result.lineItemQuotes[0].unitPrice).toBe(12500);
+      expect(result.lineItemQuotes[1].unitPrice).toBe(3500);
+      expect(result.totalPrice).toBe(4 * 12500 + 10 * 3500);
+    });
+
+    test('extractQuotationFallback uses default values when fields are missing', () => {
+      const emailText = 'We cannot provide pricing at this moment.';
+      const result = gemini.extractQuotationFallback(emailText, sampleRfq);
+      expect(result).toBeDefined();
+      expect(result.unitPrice).toBe(0);
+      expect(result.leadTimeDays).toBe(7);
+      expect(result.warrantyYears).toBe(1);
+    });
+
+    test('extractQuotationFromEmail returns parsed AI quote when Gemini succeeds', async () => {
+      GEMINI_CONFIG.API_KEY = 'test-key';
+      const aiResponse = {
+        unitPrice: 15000,
+        totalPrice: 60000,
+        leadTimeDays: 10,
+        warrantyYears: 3,
+        paymentTerms: '100% Against Dispatch',
+        complianceStatus: 'Fully Compliant',
+        taxes: 18,
+        deliveryCharges: 2500,
+        deliveryDate: '2026-10-15',
+        remarks: 'All items ex-stock',
+        lineItemQuotes: [
+          {
+            itemName: 'Centrifugal Pump 150 m3/hr',
+            quantity: 4,
+            unitPrice: 15000,
+            totalPrice: 60000,
+            leadTimeDays: 10,
+            warrantyYears: 3,
+            remarks: 'Ex-stock',
+          },
+        ],
+      };
+
+      global.fetch = jest.fn(async () => geminiReply(JSON.stringify(aiResponse)));
+
+      const result = await gemini.extractQuotationFromEmail({ bodyText: 'Quotation body' }, sampleRfq);
+      expect(result).toBeDefined();
+      expect(result.unitPrice).toBe(15000);
+      expect(result.leadTimeDays).toBe(10);
+      expect(result.warrantyYears).toBe(3);
+      expect(result.lineItemQuotes.length).toBe(1);
+    });
+
+    test('extractQuotationFromEmail falls back to regex parser when Gemini fails or key is missing', async () => {
+      delete GEMINI_CONFIG.API_KEY;
+      const emailText = 'Unit price: INR 8500, Lead time: 7 days, Warranty: 2 years, Payment terms: Net 45';
+      const result = await gemini.extractQuotationFromEmail({ bodyText: emailText }, sampleRfq);
+
+      expect(result).toBeDefined();
+      expect(result.extractionMethod).toBe('heuristic_fallback');
+      expect(result.unitPrice).toBe(8500);
+      expect(result.leadTimeDays).toBe(7);
+      expect(result.warrantyYears).toBe(2);
+    });
+  });
 });
+

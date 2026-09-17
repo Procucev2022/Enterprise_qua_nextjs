@@ -41,6 +41,8 @@ const {
   EMAIL_GATEWAY_SMTP_PORTS,
   EMAIL_INGESTION_STATUS,
   resolveBuyerSourcingMode,
+  SYSTEM_ACTOR_EMAIL,
+  VENDOR_QUOTE_SUPPORT_CC,
 } = require('../config/constants');
 
 const { INGESTION_OUTCOME } = emailGatewayQueries;
@@ -369,7 +371,192 @@ function processLineItemsAndGroups(lineItems, extraction = {}, buyerLocation = {
 }
 
 /**
- * Turn one raw message into an RFQ.
+ * Extract referenced RFQ number and lookup target RFQ from subject, body, or thread references.
+ */
+function extractRfqReferenceFromEmail(message) {
+  if (!message) return { targetRfq: null, referencedNumber: null };
+  const sources = [
+    message.subject || '',
+    message.bodyText || '',
+    message.textBody || '',
+    message.text || '',
+    message.inReplyTo || '',
+    message.references || '',
+  ].join(' ');
+
+  const rfqRegex = /#?(RFQ[-\w\d]+)/gi;
+  const rawMatches = [];
+  let m;
+  while ((m = rfqRegex.exec(sources)) !== null) {
+    rawMatches.push(m[1]);
+  }
+  if (rawMatches.length === 0) return { targetRfq: null, referencedNumber: null };
+
+  const candidates = [];
+  for (const raw of rawMatches) {
+    const trimmed = raw.trim();
+    const standardMatch = trimmed.match(/RFQ-?\d{4}-\d{4,6}/i) || trimmed.match(/RFQ\d{10,14}/i);
+    if (standardMatch) {
+      candidates.push(standardMatch[0].toUpperCase());
+    }
+    const stripped = trimmed.replace(/-(?:dispatch|reply|notification|mailer|inbound|gateway|update)$/i, '');
+    candidates.push(stripped.toUpperCase());
+    candidates.push(trimmed.toUpperCase());
+  }
+
+  for (const cand of candidates) {
+    const foundRfq = storeService.getRFQById(cand);
+    if (foundRfq) return { targetRfq: foundRfq, referencedNumber: foundRfq.rfqNumber || cand };
+  }
+  return { targetRfq: null, referencedNumber: (candidates[0] || rawMatches[0].trim()).toUpperCase() };
+}
+
+/**
+ * Resolve vendor record from sender email address or vendor directory.
+ */
+async function resolveVendorFromEmail(fromAddress) {
+  if (!fromAddress) return null;
+  const email = String(fromAddress).trim().toLowerCase();
+
+  const direct = storeService.getVendorById(email);
+  if (direct) return direct;
+
+  const allVendors = storeService.getVendors ? await storeService.getVendors() : [];
+  const found = allVendors.find(
+    (v) => (v.email && v.email.toLowerCase() === email) || (v.corporateEmail && v.corporateEmail.toLowerCase() === email)
+  );
+  if (found) return found;
+
+  return null;
+}
+
+/**
+ * Ingests a vendor quotation received via email into the referenced RFQ.
+ */
+async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
+  logger.info(
+    `Processing inbound vendor quotation email for RFQ ${targetRfq.rfqNumber} from ${vendorRecord.name} (${message.fromAddress})`,
+    { rfqNumber: targetRfq.rfqNumber, vendorId: vendorRecord.id, fromAddress: message.fromAddress },
+    'EMAIL_GATEWAY'
+  );
+
+  const extraction = await geminiService.extractQuotationFromEmail(
+    {
+      bodyText: message.bodyText || message.textBody || message.text,
+      subject: message.subject,
+      fromAddress: message.fromAddress,
+      attachments: message.attachments || [],
+    },
+    targetRfq
+  );
+
+  const unitPriceNum = Number(extraction.unitPrice);
+  if (!extraction.unitPrice || isNaN(unitPriceNum) || unitPriceNum <= 0) {
+    logger.warn(
+      `Vendor quote from ${vendorRecord.name} for RFQ ${targetRfq.rfqNumber} failed validation: missing or invalid unit price (${extraction.unitPrice})`,
+      { rfqNumber: targetRfq.rfqNumber, vendorId: vendorRecord.id, fromAddress: message.fromAddress },
+      'EMAIL_GATEWAY'
+    );
+
+    const buyerEmail = storeService.resolveBuyerEmailForRFQ(targetRfq);
+    const ccList = [buyerEmail, VENDOR_QUOTE_SUPPORT_CC].filter(Boolean);
+
+    try {
+      await mailerService.sendQuoteFailureEmail(message.fromAddress, {
+        rfqNumber: targetRfq.rfqNumber,
+        rfqTitle: targetRfq.title,
+        vendorName: vendorRecord.name,
+        reason: 'Unit Price (₹) is mandatory and must be greater than 0.',
+        missingFields: ['Unit Price (₹)'],
+        cc: ccList.length > 0 ? ccList.join(', ') : undefined,
+      });
+    } catch (mailErr) {
+      logger.error('Failed to send vendor quote failure email', mailErr, 'EMAIL_GATEWAY');
+    }
+
+    return {
+      status: INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED,
+      detail: EMAIL_GATEWAY_MESSAGES.QUOTE_VALIDATION_FAILED_DETAIL
+        .replace('{rfqNumber}', targetRfq.rfqNumber)
+        .replace('{vendorName}', vendorRecord.name)
+        .replace('{reason}', 'Missing mandatory unit price'),
+      message,
+      rfq: targetRfq,
+    };
+  }
+
+  const quote = {
+    vendorId: vendorRecord.id,
+    vendorName: vendorRecord.name,
+    vendorCategory: vendorRecord.category || 'Client List',
+    unitPrice: extraction.unitPrice,
+    totalPrice: extraction.totalPrice || extraction.unitPrice,
+    leadTimeDays: extraction.leadTimeDays || 7,
+    aiMatchScore: 0,
+    warrantyYears: extraction.warrantyYears || 1,
+    complianceStatus: extraction.complianceStatus || 'Fully Compliant',
+    paymentTerms: extraction.paymentTerms || '',
+    remarks: extraction.remarks || 'Email quotation submitted',
+    submittedAt: new Date().toISOString(),
+    source: 'email',
+    submissionMethod: 'Email Submission',
+    sourceMessageId: message.messageId || null,
+    lineItemQuotes: extraction.lineItemQuotes || [],
+    taxes: extraction.taxes || 0,
+    deliveryCharges: extraction.deliveryCharges || 0,
+    deliveryDate: extraction.deliveryDate || null,
+    quotationValidity: extraction.quotationValidity || null,
+  };
+
+  const updatedRFQ = storeService.addQuoteToRFQ(targetRfq.id, quote);
+
+  storeService.addAuditLog({
+    userEmail: message.fromAddress || SYSTEM_ACTOR_EMAIL,
+    action: `Quotation for ${targetRfq.rfqNumber} received via email from ${vendorRecord.name} (Total: ₹${quote.totalPrice})`,
+    rfqNumber: targetRfq.rfqNumber,
+  });
+
+  logger.audit(
+    `Quotation for ${targetRfq.rfqNumber} received via email from ${vendorRecord.name} (Total: ₹${quote.totalPrice})`,
+    message.fromAddress,
+    {
+      rfqNumber: targetRfq.rfqNumber,
+      vendorId: vendorRecord.id,
+      vendorName: vendorRecord.name,
+      totalPrice: quote.totalPrice,
+      unitPrice: quote.unitPrice,
+      source: 'email',
+    }
+  );
+
+  const buyerEmail = storeService.resolveBuyerEmailForRFQ(targetRfq);
+  const ccList = [buyerEmail, VENDOR_QUOTE_SUPPORT_CC].filter(Boolean);
+
+  try {
+    await mailerService.sendQuoteAcknowledgementEmail(message.fromAddress, {
+      rfqNumber: targetRfq.rfqNumber,
+      rfqTitle: targetRfq.title,
+      vendorName: vendorRecord.name,
+      quote,
+      cc: ccList.length > 0 ? ccList.join(', ') : undefined,
+    });
+  } catch (mailErr) {
+    logger.error('Failed to send vendor quote acknowledgement email', mailErr, 'EMAIL_GATEWAY');
+  }
+
+  return {
+    status: INGESTION_OUTCOME.QUOTE_INGESTED,
+    detail: EMAIL_GATEWAY_MESSAGES.QUOTE_INGESTED_DETAIL
+      .replace('{rfqNumber}', targetRfq.rfqNumber)
+      .replace('{vendorName}', vendorRecord.name),
+    message,
+    quote,
+    rfq: updatedRFQ || targetRfq,
+  };
+}
+
+/**
+ * Turn one raw message into an RFQ or vendor quote.
  *
  * Resolves to the ledger outcome rather than throwing, so one unusable message
  * cannot abort the rest of the batch. Every path records why.
@@ -392,6 +579,23 @@ async function processMessage(rawSource, config = resolveConfig()) {
 
   const { message } = prepared;
 
+  // 1. Check if this message is a vendor quotation reply for an existing RFQ
+  const { targetRfq, referencedNumber } = extractRfqReferenceFromEmail(message);
+  const vendorRecord = await resolveVendorFromEmail(message.fromAddress);
+
+  if (targetRfq && vendorRecord) {
+    return await processVendorQuoteMessage(message, targetRfq, vendorRecord);
+  }
+
+  if (!targetRfq && referencedNumber && vendorRecord) {
+    return {
+      status: INGESTION_OUTCOME.INVALID_RFQ,
+      detail: EMAIL_GATEWAY_MESSAGES.INVALID_RFQ_REFERENCED.replace('{rfqNumber}', referencedNumber),
+      message,
+    };
+  }
+
+  // 2. Otherwise process as Inbound Buyer RFQ Requisition
   const authorisation = await resolveSenderAuthorisation(message.fromAddress, config);
   if (!authorisation.allowed) {
     if (message.fromAddress) {
@@ -647,7 +851,7 @@ async function pollOnce(config = resolveConfig()) {
                 : null,
           });
 
-          if (result.status === INGESTION_OUTCOME.INGESTED) {
+          if (result.status === INGESTION_OUTCOME.INGESTED || result.status === INGESTION_OUTCOME.QUOTE_INGESTED) {
             runtime.ingestedThisRun += 1;
             // Marked read only for a message we actually acted on, and only after
             // the ledger write, so a failed write leaves it to be retried. Mail
@@ -803,6 +1007,9 @@ const emailGateway = {
   resolveSenderAuthorisation,
   resolveBuyerRegisteredLocation,
   processLineItemsAndGroups,
+  extractRfqReferenceFromEmail,
+  resolveVendorFromEmail,
+  processVendorQuoteMessage,
   processMessage,
   pollOnce,
   startPolling,

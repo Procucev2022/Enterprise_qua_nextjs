@@ -864,6 +864,23 @@ describe('emailGatewayService.pollOnce edge paths', () => {
     expect(result.considered).toBe(0);
     expect(emailGatewayService.runtime.isPolling).toBe(false);
   });
+
+  test('marks \\Seen flag when outcome is QUOTE_INGESTED', async () => {
+    const client = fakeImap();
+    emailGatewayService.ImapFlow = jest.fn(() => client);
+    jest.spyOn(emailGatewayQueries, 'hasProcessed').mockResolvedValue(false);
+    jest.spyOn(emailGatewayService, 'processMessage').mockResolvedValue({
+      status: INGESTION_OUTCOME.QUOTE_INGESTED,
+      detail: 'Quote ingested',
+      message: { fromAddress: 'v@x.com', subject: 'Quote' },
+      rfq: { id: 'rfq-1', rfqNumber: 'RFQ-2026-00001' },
+    });
+
+    const result = await emailGatewayService.pollOnce(emailGatewayService.resolveConfig(FULL_ENV));
+
+    expect(client.messageFlagsAdd).toHaveBeenCalledWith('1', ['\\Seen']);
+    expect(result.ingested).toBe(1);
+  });
 });
 
 describe('emailGatewayService configuration helpers and connection diagnostics', () => {
@@ -1504,6 +1521,321 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       expect(payload.sourcingMode).toBe('mode_2');
     });
   });
+
+  // ==============================================================================
+  // VENDOR EMAIL QUOTATION INGESTION & COMPARISON INTEGRATION
+  // ==============================================================================
+  describe('Vendor quotation email ingestion', () => {
+    const VENDOR_EMAIL = 'sales@apexsupplies.com';
+    const RFQ_NUMBER = 'RFQ-2026-00421';
+
+    const sampleRfq = {
+      id: 'rfq-421',
+      rfqNumber: RFQ_NUMBER,
+      title: 'Centrifugal Pumps & Valves',
+      category: 'Industrial Machinery',
+      budget: 500000,
+      targetDeliveryDate: '2026-10-20',
+      extractedEntities: [
+        { itemName: 'Centrifugal Pump 150 m3/hr', quantity: 4, unit: 'Nos' },
+        { itemName: 'Gate Valve 100mm', quantity: 10, unit: 'Nos' },
+      ],
+      quotes: [],
+      followUpData: {
+        totalInvited: 3,
+        respondedCount: 0,
+        vendors: [
+          {
+            vendorId: 'v-apex-1',
+            vendorName: 'Apex Supplies Ltd.',
+            bidStatus: 'Pending',
+            overallStatus: 'Chasing',
+          },
+        ],
+      },
+    };
+
+    const sampleVendor = {
+      id: 'v-apex-1',
+      name: 'Apex Supplies Ltd.',
+      email: VENDOR_EMAIL,
+      contactPerson: 'Vikram Mehta',
+      phone: '+91 98200 12345',
+      category: 'Industrial Machinery',
+      status: 'PREFERRED ENTERPRISE SUPPLIER',
+    };
+
+    beforeEach(() => {
+      jest.spyOn(emailGatewayQueries, 'hasProcessed').mockResolvedValue(false);
+      jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    test('extractRfqReferenceFromEmail correctly identifies RFQ reference in subject, body, and headers', () => {
+      expect(
+        emailGatewayService.extractRfqReferenceFromEmail({
+          subject: 'Re: Quotation for RFQ-2026-00421 from Apex',
+          textBody: 'Please find our pricing',
+        }).referencedNumber
+      ).toBe('RFQ-2026-00421');
+
+      expect(
+        emailGatewayService.extractRfqReferenceFromEmail({
+          subject: 'Our Official Quotation',
+          textBody: 'In reference to RFQ #RFQ-2026-00421, here is our commercial offer.',
+        }).referencedNumber
+      ).toBe('RFQ-2026-00421');
+
+      expect(
+        emailGatewayService.extractRfqReferenceFromEmail({
+          subject: 'Quotation',
+          textBody: 'Pricing attached',
+          inReplyTo: '<rfq-2026-00421-dispatch@procucev.com>',
+        }).referencedNumber
+      ).toBe('RFQ-2026-00421');
+
+      expect(
+        emailGatewayService.extractRfqReferenceFromEmail({
+          subject: 'General enquiry',
+          textBody: 'Hello, no RFQ mentioned here.',
+        }).referencedNumber
+      ).toBeNull();
+    });
+
+    test('resolveVendorFromEmail finds registered vendor by email or assigned RFQ list', async () => {
+      jest.spyOn(storeService, 'getVendors').mockReturnValue([sampleVendor]);
+
+      const found = await emailGatewayService.resolveVendorFromEmail(VENDOR_EMAIL, sampleRfq);
+      expect(found).toBeDefined();
+      expect(found.id).toBe('v-apex-1');
+      expect(found.name).toBe('Apex Supplies Ltd.');
+
+      const notFound = await emailGatewayService.resolveVendorFromEmail('unknown@other.com', sampleRfq);
+      expect(notFound).toBeNull();
+    });
+
+    test('processVendorQuoteMessage successfully ingests email quotation, updates RFQ, and records ledger', async () => {
+      const emailRecord = {
+        messageId: '<quote-msg-001@apexsupplies.com>',
+        fromAddress: VENDOR_EMAIL,
+        subject: `Re: Quotation Submission [${RFQ_NUMBER}]`,
+        bodyText: `
+          Dear Sourcing Team,
+          We quote INR 12,000 per unit for Centrifugal Pump and INR 3,000 for Gate Valve.
+          Lead time: 10 days.
+          Warranty: 2 years.
+          Payment Terms: Net 30 Days.
+          Taxes: 18% GST extra.
+          Delivery Charges: INR 3000.
+        `,
+        date: new Date().toISOString(),
+      };
+
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+        unitPrice: 12000,
+        totalPrice: 4 * 12000 + 10 * 3000,
+        leadTimeDays: 10,
+        warrantyYears: 2,
+        paymentTerms: 'Net 30 Days',
+        complianceStatus: 'Fully Compliant',
+        taxes: 18,
+        deliveryCharges: 3000,
+        remarks: 'Standard quotation',
+        lineItemQuotes: [
+          { itemName: 'Centrifugal Pump 150 m3/hr', quantity: 4, unitPrice: 12000, totalPrice: 48000 },
+          { itemName: 'Gate Valve 100mm', quantity: 10, unitPrice: 3000, totalPrice: 30000 },
+        ],
+      });
+
+      const auditSpy = jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+      const addQuoteSpy = jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue({
+        ...sampleRfq,
+        quotesCount: 1,
+        status: 'Quotes Received',
+      });
+
+      const outcome = await emailGatewayService.processVendorQuoteMessage(
+        emailRecord,
+        sampleRfq,
+        sampleVendor
+      );
+
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
+      expect(outcome.rfq.rfqNumber).toBe(RFQ_NUMBER);
+      expect(addQuoteSpy).toHaveBeenCalledTimes(1);
+
+      const [calledRfqId, savedQuote] = addQuoteSpy.mock.calls[0];
+      expect(calledRfqId).toBe(sampleRfq.id);
+      expect(savedQuote.source).toBe('email');
+      expect(savedQuote.submissionMethod).toBe('Email Submission');
+      expect(savedQuote.vendorName).toBe(sampleVendor.name);
+      expect(savedQuote.unitPrice).toBe(12000);
+      expect(auditSpy).toHaveBeenCalled();
+    });
+
+    test('processVendorQuoteMessage rejects quotation when unitPrice is 0 or missing and sends failure email', async () => {
+      const emailRecord = {
+        messageId: '<quote-zero-001@apexsupplies.com>',
+        fromAddress: VENDOR_EMAIL,
+        subject: `Re: Quotation Submission [${RFQ_NUMBER}]`,
+        bodyText: 'Quotation without price',
+      };
+
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+        unitPrice: 0,
+        totalPrice: 0,
+        leadTimeDays: 7,
+      });
+
+      const addQuoteSpy = jest.spyOn(storeService, 'addQuoteToRFQ');
+      const failMailSpy = jest.spyOn(mailerService, 'sendQuoteFailureEmail').mockResolvedValue({ sent: true });
+
+      const outcome = await emailGatewayService.processVendorQuoteMessage(
+        emailRecord,
+        sampleRfq,
+        sampleVendor
+      );
+
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED);
+      expect(addQuoteSpy).not.toHaveBeenCalled();
+      expect(failMailSpy).toHaveBeenCalledWith(
+        VENDOR_EMAIL,
+        expect.objectContaining({
+          rfqNumber: RFQ_NUMBER,
+          reason: expect.stringContaining('mandatory'),
+        })
+      );
+    });
+
+    test('processVendorQuoteMessage handles email sending errors gracefully', async () => {
+      const emailRecord = {
+        messageId: '<quote-zero-err@apexsupplies.com>',
+        fromAddress: VENDOR_EMAIL,
+        subject: `Re: Quotation Submission [${RFQ_NUMBER}]`,
+        bodyText: 'Quotation without price',
+      };
+
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+        unitPrice: null,
+      });
+      jest.spyOn(mailerService, 'sendQuoteFailureEmail').mockRejectedValue(new Error('SMTP down'));
+
+      const outcome = await emailGatewayService.processVendorQuoteMessage(
+        emailRecord,
+        sampleRfq,
+        sampleVendor
+      );
+
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED);
+
+      // Also test error in success ack
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+        unitPrice: 500,
+        totalPrice: 500,
+      });
+      jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue(sampleRfq);
+      jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockRejectedValue(new Error('SMTP down'));
+
+      const successOutcome = await emailGatewayService.processVendorQuoteMessage(
+        emailRecord,
+        sampleRfq,
+        sampleVendor
+      );
+      expect(successOutcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
+    });
+
+    test('processMessage routes RFQ vendor reply directly to vendor quote ingestion', async () => {
+      const emlContent = `From: ${VENDOR_EMAIL}
+To: rfq@procucev.com
+Subject: Re: [RFQ-2026-00421] Official Quotation
+Message-ID: <vendor-reply-123@apexsupplies.com>
+Date: Wed, 16 Sep 2026 10:00:00 +0530
+Content-Type: text/plain
+
+Dear Buyer,
+Here is our bid for RFQ-2026-00421.
+Unit price: INR 14,000. Lead time: 12 days. Warranty: 2 years.
+`;
+
+      jest.spyOn(storeService, 'getRFQById').mockReturnValue(sampleRfq);
+      jest.spyOn(storeService, 'getVendors').mockReturnValue([sampleVendor]);
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+        unitPrice: 14000,
+        totalPrice: 56000,
+        leadTimeDays: 12,
+        warrantyYears: 2,
+        paymentTerms: 'Net 30 Days',
+        complianceStatus: 'Fully Compliant',
+        remarks: 'Email quote',
+        lineItemQuotes: [],
+      });
+
+      const addQuoteSpy = jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue({
+        ...sampleRfq,
+        quotesCount: 1,
+      });
+
+      const raw = Buffer.from(emlContent, 'utf8');
+      const outcome = await emailGatewayService.processMessage(
+        raw,
+        emailGatewayService.resolveConfig(FULL_ENV)
+      );
+
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
+      expect(outcome.rfq.rfqNumber).toBe(RFQ_NUMBER);
+      expect(addQuoteSpy).toHaveBeenCalled();
+    });
+
+    test('processMessage handles vendor quotation when RFQ is not found', async () => {
+      const emlContent = `From: ${VENDOR_EMAIL}
+To: rfq@procucev.com
+Subject: Re: [RFQ-NON-EXISTENT] Quote
+Message-ID: <invalid-rfq-msg@apexsupplies.com>
+Date: Wed, 16 Sep 2026 10:00:00 +0530
+Content-Type: text/plain
+
+Price INR 5000
+`;
+
+      jest.spyOn(storeService, 'getRFQById').mockReturnValue(null);
+      jest.spyOn(storeService, 'getVendors').mockReturnValue([sampleVendor]);
+
+      const raw = Buffer.from(emlContent, 'utf8');
+      const outcome = await emailGatewayService.processMessage(
+        raw,
+        emailGatewayService.resolveConfig(FULL_ENV)
+      );
+
+      expect(outcome.status).toBe(INGESTION_OUTCOME.INVALID_RFQ);
+    });
+
+    test('processMessage handles vendor quotation when sender vendor is unknown', async () => {
+      const emlContent = `From: unknown-vendor@random.com
+To: rfq@procucev.com
+Subject: Re: [RFQ-2026-00421] Quote
+Message-ID: <unknown-vendor-msg@random.com>
+Date: Wed, 16 Sep 2026 10:00:00 +0530
+Content-Type: text/plain
+
+Price INR 5000
+`;
+
+      jest.spyOn(storeService, 'getRFQById').mockReturnValue(sampleRfq);
+      jest.spyOn(storeService, 'getVendors').mockReturnValue([]);
+
+      const raw = Buffer.from(emlContent, 'utf8');
+      const outcome = await emailGatewayService.processMessage(
+        raw,
+        emailGatewayService.resolveConfig(FULL_ENV)
+      );
+
+      expect(outcome.status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
+    });
+  });
 });
+
 
 

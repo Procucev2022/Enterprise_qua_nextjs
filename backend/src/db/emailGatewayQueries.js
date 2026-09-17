@@ -16,12 +16,17 @@ const { logger } = require('../services/loggerService');
 /** Outcomes recorded against a considered message. */
 const INGESTION_OUTCOME = {
   INGESTED: 'INGESTED',
+  QUOTE_INGESTED: 'QUOTE_INGESTED',
+  QUOTE_VALIDATION_FAILED: 'QUOTE_VALIDATION_FAILED',
   SENDER_NOT_ALLOWED: 'SENDER_NOT_ALLOWED',
   NO_LINE_ITEMS: 'NO_LINE_ITEMS',
   UNREADABLE: 'UNREADABLE',
   FAILED: 'FAILED',
   LINE_ITEMS_EXCEED_LIMIT: 'LINE_ITEMS_EXCEED_LIMIT',
+  INVALID_RFQ: 'INVALID_RFQ',
+  VENDOR_NOT_FOUND: 'VENDOR_NOT_FOUND',
 };
+
 
 /**
  * Has this message already been considered?

@@ -52,6 +52,18 @@ export interface LineItemBid {
   paymentTerms: string;
 }
 
+export interface LineItemQuote {
+  lineItemId?: string;
+  itemName: string;
+  quantity: number;
+  unit?: string;
+  unitPrice: number;
+  totalPrice: number;
+  leadTimeDays?: number;
+  warrantyYears?: number;
+  remarks?: string;
+}
+
 export interface QuoteComparison {
   vendorId: string;
   vendorName: string;
@@ -66,6 +78,12 @@ export interface QuoteComparison {
   complianceStatus: 'Fully Compliant' | 'Minor Exception' | 'Pending Review';
   paymentTerms: string;
   remarks: string;
+  source?: 'email' | 'portal' | 'web_portal';
+  submissionMethod?: 'email' | 'portal' | 'web_portal';
+  taxes?: number;
+  deliveryCharges?: number;
+  deliveryDate?: string;
+  lineItemQuotes?: LineItemQuote[];
   scoreBreakdown?: {
     price: { score: number; weighted: number; maxWeight: number };
     leadTime: { score: number; weighted: number; maxWeight: number };
