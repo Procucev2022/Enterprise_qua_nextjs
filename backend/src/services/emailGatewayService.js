@@ -36,6 +36,7 @@ const pool = require('../db/pool');
 const { logger } = require('./loggerService');
 const {
   EMAIL_GATEWAY_CONFIG,
+  VENDOR_EMAIL_GATEWAY_CONFIG,
   EMAIL_GATEWAY_MESSAGES,
   EMAIL_GATEWAY_STATE,
   EMAIL_GATEWAY_SMTP_PORTS,
@@ -53,6 +54,19 @@ const runtime = {
   isPolling: false,
   // Mail older than this is never considered. Set when watching begins so an
   // existing backlog is left alone; see the search call in pollOnce.
+  watchingSince: new Date().toISOString(),
+  lastPollAt: null,
+  lastPollDurationMs: null,
+  lastError: null,
+  lastConnectedAt: null,
+  consideredThisRun: 0,
+  ingestedThisRun: 0,
+};
+
+/** Live state for dedicated vendor quotation mailbox watcher (srinu20252026@gmail.com). */
+const vendorRuntime = {
+  pollTimer: null,
+  isPolling: false,
   watchingSince: new Date().toISOString(),
   lastPollAt: null,
   lastPollDurationMs: null,
@@ -100,6 +114,51 @@ function resolveConfig(env = process.env) {
     // Optional extra restriction on top of the buyer-account requirement.
     allowedDomains: splitList(env.EMAIL_GATEWAY_ALLOWED_DOMAINS),
     allowedSenders: splitList(env.EMAIL_GATEWAY_ALLOWED_SENDERS),
+  };
+}
+
+/**
+ * Resolve vendor gateway configuration from the environment (srinu20252026@gmail.com).
+ */
+function resolveVendorConfig(env = process.env) {
+  return {
+    enabled: String(
+      env.VENDOR_EMAIL_GATEWAY_ENABLED !== undefined
+        ? env.VENDOR_EMAIL_GATEWAY_ENABLED
+        : env.EMAIL_GATEWAY_ENABLED || 'true'
+    ).toLowerCase() === 'true',
+    host: (env.VENDOR_EMAIL_GATEWAY_HOST || env.EMAIL_GATEWAY_HOST || 'imap.gmail.com').trim(),
+    port: Number(env.VENDOR_EMAIL_GATEWAY_PORT || env.EMAIL_GATEWAY_PORT || 993),
+    secure: String(
+      env.VENDOR_EMAIL_GATEWAY_SECURE !== undefined
+        ? env.VENDOR_EMAIL_GATEWAY_SECURE
+        : env.EMAIL_GATEWAY_SECURE || 'true'
+    ).toLowerCase() !== 'false',
+    user: (env.VENDOR_EMAIL_GATEWAY_USER || 'srinu20252026@gmail.com').trim(),
+    password: env.VENDOR_EMAIL_GATEWAY_PASSWORD || 'oycrikpkvnjirwgo',
+    address: (
+      env.VENDOR_EMAIL_GATEWAY_ADDRESS ||
+      env.VENDOR_EMAIL_GATEWAY_USER ||
+      'srinu20252026@gmail.com'
+    ).trim(),
+    mailbox: (env.VENDOR_EMAIL_GATEWAY_MAILBOX || 'INBOX').trim(),
+    pollIntervalMs: Math.max(
+      Number(
+        env.VENDOR_EMAIL_GATEWAY_POLL_MS ||
+        env.EMAIL_GATEWAY_POLL_MS ||
+        EMAIL_GATEWAY_CONFIG.DEFAULT_POLL_MS
+      ),
+      EMAIL_GATEWAY_CONFIG.MIN_POLL_MS
+    ),
+    maxPerPoll: Math.max(
+      Number(
+        env.VENDOR_EMAIL_GATEWAY_MAX_PER_POLL ||
+        env.EMAIL_GATEWAY_MAX_PER_POLL ||
+        EMAIL_GATEWAY_CONFIG.DEFAULT_MAX_PER_POLL
+      ),
+      1
+    ),
+    isVendorMailbox: true,
   };
 }
 
@@ -433,7 +492,13 @@ async function resolveVendorFromEmail(fromAddress, targetRfq = null) {
     if (assignedMatch) return assignedMatch;
 
     const gatewayAddr = (process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || 'rfqprocucev@gmail.com').toLowerCase();
-    if (email === gatewayAddr || email === 'rfqprocucev@gmail.com') {
+    const vendorGatewayAddr = (process.env.VENDOR_EMAIL_GATEWAY_ADDRESS || process.env.VENDOR_EMAIL_GATEWAY_USER || 'srinu20252026@gmail.com').toLowerCase();
+    if (
+      email === gatewayAddr ||
+      email === 'rfqprocucev@gmail.com' ||
+      email === vendorGatewayAddr ||
+      email === 'srinu20252026@gmail.com'
+    ) {
       if (assigned.length > 0) {
         return assigned[0];
       }
@@ -443,6 +508,18 @@ async function resolveVendorFromEmail(fromAddress, targetRfq = null) {
         email,
         contactPerson: 'Vendor Rep',
       };
+    }
+
+    // Match vendor by domain if assigned to this RFQ
+    const domain = email.split('@')[1];
+    if (domain) {
+      const domainMatch = assigned.find((v) => v.email && v.email.toLowerCase().endsWith(`@${domain}`));
+      if (domainMatch) return domainMatch;
+    }
+
+    // If only one vendor was assigned to this RFQ, attribute response to that vendor
+    if (assigned.length === 1) {
+      return assigned[0];
     }
   }
 
@@ -614,6 +691,15 @@ async function processMessage(rawSource, config = resolveConfig()) {
     };
   }
 
+  // If message arrived on the vendor quotation mailbox, reject buyer RFQ creation:
+  // vendor mailbox only ingests quotations for existing RFQs.
+  if (config && config.isVendorMailbox) {
+    return {
+      status: INGESTION_OUTCOME.INVALID_RFQ,
+      detail: EMAIL_GATEWAY_MESSAGES.VENDOR_GATEWAY_REQUIRES_RFQ,
+      message,
+    };
+  }
 
   // 2. Otherwise process as Inbound Buyer RFQ Requisition
   const authorisation = await resolveSenderAuthorisation(message.fromAddress, config);
@@ -931,74 +1017,244 @@ async function pollOnce(config = resolveConfig()) {
  * refuses to start twice, does nothing when unconfigured or disabled, and unrefs
  * the timer so it can never hold the process open on shutdown.
  */
-function startPolling(config = resolveConfig()) {
+/**
+ * Read the vendor mailbox (srinu20252026@gmail.com) once and ingest vendor quote replies.
+ */
+async function pollVendorOnce(config = resolveVendorConfig()) {
+  if (vendorRuntime.isPolling) {
+    return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.POLL_ALREADY_RUNNING };
+  }
+  if (!isConfigured(config)) {
+    return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
+  }
+
+  const configurationFault = describeConfigurationFault(config);
+  if (configurationFault) {
+    vendorRuntime.lastError = configurationFault;
+    logger.error(
+      'Vendor email gateway is misconfigured and was not contacted',
+      new Error(configurationFault),
+      'EMAIL_GATEWAY'
+    );
+    return { skipped: true, reason: configurationFault };
+  }
+
+  vendorRuntime.isPolling = true;
+  vendorRuntime.consideredThisRun = 0;
+  vendorRuntime.ingestedThisRun = 0;
+  const startedAt = Date.now();
+  const outcomes = [];
+
+  const client = new emailGateway.ImapFlow({
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    auth: { user: config.user, pass: config.password },
+    logger: false,
+  });
+
+  try {
+    await client.connect();
+    vendorRuntime.lastConnectedAt = new Date().toISOString();
+    const lock = await client.getMailboxLock(config.mailbox);
+    try {
+      const unseenUids = await client.search({ seen: false, since: new Date(vendorRuntime.watchingSince) });
+      const batch = (unseenUids || []).slice(0, config.maxPerPoll);
+
+      for (const uid of batch) {
+        vendorRuntime.consideredThisRun += 1;
+        let messageId = null;
+        try {
+          const fetched = await client.fetchOne(String(uid), { source: true, envelope: true });
+          if (!fetched || !fetched.source) {
+            outcomes.push({ uid, status: INGESTION_OUTCOME.UNREADABLE });
+            continue;
+          }
+          messageId = fetched.envelope && fetched.envelope.messageId ? fetched.envelope.messageId : null;
+          const dedupeKey = messageId || `uid-${uid}@vendor-${config.mailbox}`;
+
+          if (await emailGatewayQueries.hasProcessed(dedupeKey)) {
+            await client.messageFlagsAdd(String(uid), ['\\Seen']);
+            outcomes.push({ uid, messageId: dedupeKey, status: EMAIL_GATEWAY_MESSAGES.ALREADY_PROCESSED });
+            continue;
+          }
+
+          const result = await emailGateway.processMessage(fetched.source, config);
+          const resolvedMessageId =
+            messageId || (result.message && result.message.messageId) || `uid-${uid}@vendor-${config.mailbox}`;
+
+          await emailGatewayQueries.recordProcessed({
+            messageId: resolvedMessageId,
+            status: result.status,
+            detail: result.detail,
+            fromAddress: result.message ? result.message.fromAddress : null,
+            subject: result.message ? result.message.subject : null,
+            rfqId: result.rfq ? result.rfq.id : null,
+            rfqNumber: result.rfq ? result.rfq.rfqNumber : null,
+          });
+
+          if (result.status === INGESTION_OUTCOME.INGESTED || result.status === INGESTION_OUTCOME.QUOTE_INGESTED) {
+            vendorRuntime.ingestedThisRun += 1;
+            await client.messageFlagsAdd(String(uid), ['\\Seen']);
+          }
+          outcomes.push({ uid, messageId: resolvedMessageId, status: result.status });
+        } catch (err) {
+          logger.error('Inbound vendor message could not be processed', err, 'EMAIL_GATEWAY');
+          if (messageId) {
+            await emailGatewayQueries.recordProcessed({
+              messageId,
+              status: INGESTION_OUTCOME.FAILED,
+              detail: err.message,
+            });
+          }
+          outcomes.push({ uid, messageId, status: INGESTION_OUTCOME.FAILED });
+        }
+      }
+
+      vendorRuntime.lastError = null;
+      return {
+        skipped: false,
+        considered: vendorRuntime.consideredThisRun,
+        ingested: vendorRuntime.ingestedThisRun,
+        pending: Math.max((unseenUids || []).length - batch.length, 0),
+        outcomes,
+      };
+    } finally {
+      lock.release();
+    }
+  } catch (err) {
+    vendorRuntime.lastError = err.message;
+    logger.error(`Vendor email gateway poll failed: ${err.message}`, err, 'EMAIL_GATEWAY');
+    return { skipped: false, error: err.message, considered: vendorRuntime.consideredThisRun, outcomes };
+  } finally {
+    try {
+      await client.logout();
+    } catch {
+      // Already disconnected
+    }
+    vendorRuntime.isPolling = false;
+    vendorRuntime.lastPollAt = new Date().toISOString();
+    vendorRuntime.lastPollDurationMs = Date.now() - startedAt;
+  }
+}
+
+/**
+ * Start background watching for buyer requisition mailbox.
+ */
+function startBuyerPolling(config = resolveConfig()) {
   if (runtime.pollTimer) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.ALREADY_STARTED };
   if (!config.enabled) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.DISABLED };
   if (!isConfigured(config)) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
 
-  // Surfaced at boot rather than on the first tick, so a bad host or port is in
-  // the startup log instead of appearing two minutes later as a TLS error.
   const configurationFault = describeConfigurationFault(config);
   if (configurationFault) {
     runtime.lastError = configurationFault;
     return { started: false, reason: configurationFault };
   }
 
-  // Anchored here so only mail arriving from now on is considered.
   runtime.watchingSince = new Date().toISOString();
   runtime.pollTimer = setInterval(() => {
     emailGateway.pollOnce(resolveConfig()).catch((err) => {
-      logger.error('Email gateway interval poll threw', err, 'EMAIL_GATEWAY');
+      logger.error('Buyer email gateway interval poll threw', err, 'EMAIL_GATEWAY');
     });
   }, config.pollIntervalMs);
   if (typeof runtime.pollTimer.unref === 'function') runtime.pollTimer.unref();
 
   logger.info(
-    `Email ingestion gateway watching ${config.user} every ${Math.round(config.pollIntervalMs / 1000)}s`,
+    `Buyer email ingestion gateway watching ${config.user} every ${Math.round(config.pollIntervalMs / 1000)}s`,
     { mailbox: config.mailbox, host: config.host },
     'EMAIL_GATEWAY'
   );
   return { started: true, pollIntervalMs: config.pollIntervalMs };
 }
 
-/** Stop the interval. Safe to call when it was never started. */
-function stopPolling() {
-  if (!runtime.pollTimer) return false;
-  clearInterval(runtime.pollTimer);
-  runtime.pollTimer = null;
-  return true;
+/**
+ * Start background watching for vendor quotation mailbox.
+ */
+function startVendorPolling(config = resolveVendorConfig()) {
+  if (vendorRuntime.pollTimer) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.ALREADY_STARTED };
+  if (!config.enabled) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.DISABLED };
+  if (!isConfigured(config)) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
+
+  const configurationFault = describeConfigurationFault(config);
+  if (configurationFault) {
+    vendorRuntime.lastError = configurationFault;
+    return { started: false, reason: configurationFault };
+  }
+
+  vendorRuntime.watchingSince = new Date().toISOString();
+  vendorRuntime.pollTimer = setInterval(() => {
+    emailGateway.pollVendorOnce(resolveVendorConfig()).catch((err) => {
+      logger.error('Vendor quotation gateway interval poll threw', err, 'EMAIL_GATEWAY');
+    });
+  }, config.pollIntervalMs);
+  if (typeof vendorRuntime.pollTimer.unref === 'function') vendorRuntime.pollTimer.unref();
+
+  logger.info(
+    `Vendor quotation gateway watching ${config.user} every ${Math.round(config.pollIntervalMs / 1000)}s`,
+    { mailbox: config.mailbox, host: config.host },
+    'EMAIL_GATEWAY'
+  );
+  return { started: true, pollIntervalMs: config.pollIntervalMs };
 }
 
 /**
- * Everything the gateway panel needs.
- *
- * Credentials are never included — only the account being watched, which the buyer
- * has to see to know which address to forward requisitions to.
+ * Begin polling on intervals for both buyer and vendor mailboxes.
+ */
+function startPolling(config = resolveConfig(), vendorConfig = null) {
+  const buyerResult = startBuyerPolling(config);
+  if (!buyerResult.started) {
+    return buyerResult;
+  }
+
+  // Start vendor watcher if enabled and configured
+  const effectiveVendorConfig = vendorConfig || resolveVendorConfig();
+  if (effectiveVendorConfig.enabled && isConfigured(effectiveVendorConfig)) {
+    startVendorPolling(effectiveVendorConfig);
+  }
+
+  return buyerResult;
+}
+
+/** Stop intervals for both buyer and vendor mailboxes. */
+function stopPolling() {
+  const buyerWasRunning = !!runtime.pollTimer;
+  if (runtime.pollTimer) {
+    clearInterval(runtime.pollTimer);
+    runtime.pollTimer = null;
+  }
+  if (vendorRuntime.pollTimer) {
+    clearInterval(vendorRuntime.pollTimer);
+    vendorRuntime.pollTimer = null;
+  }
+  return buyerWasRunning;
+}
+
+/**
+ * Everything the gateway panel needs for both buyer and vendor channels.
  */
 async function getStatus() {
-  const config = resolveConfig();
+  const config = emailGateway.resolveConfig();
   const configured = isConfigured(config);
+  const vendorConfig = emailGateway.resolveVendorConfig();
+  const vendorConfigured = isConfigured(vendorConfig);
 
   const configurationFault = configured ? describeConfigurationFault(config) : null;
-  // A configuration fault is reported as the last error even before a connection
-  // has been tried, because the outcome is already known.
   const lastError = configurationFault || runtime.lastError;
+
+  const vendorFault = vendorConfigured ? describeConfigurationFault(vendorConfig) : null;
+  const vendorLastError = vendorFault || vendorRuntime.lastError;
 
   return {
     enabled: config.enabled,
     configured,
     watching: !!runtime.pollTimer,
     connectionState: resolveConnectionState(config, { lastError, watching: !!runtime.pollTimer }),
-    // What a buyer addresses their requisition to.
     gatewayAddress: config.address || null,
-    // The IMAP account the backend reads it from. Operational detail, shown as
-    // such rather than presented to the buyer as a destination.
     mailboxUser: config.user || null,
     mailbox: config.mailbox,
     host: config.host || null,
     pollIntervalMs: config.pollIntervalMs,
-    // Empty means "any address that maps to a buyer account", which is the
-    // baseline rule and worth stating explicitly in the panel.
     allowedSenders: config.allowedSenders,
     allowedDomains: config.allowedDomains,
     watchingSince: runtime.watchingSince,
@@ -1009,8 +1265,23 @@ async function getStatus() {
     isPolling: runtime.isPolling,
     counts: configured ? await emailGatewayQueries.countsByStatus() : {},
     recent: configured ? await emailGatewayQueries.listRecent() : [],
-    // So the panel can say where an ingested RFQ ends up without hardcoding it.
     ingestedStatus: EMAIL_GATEWAY_CONFIG.INGESTED_STATUS,
+    vendorGateway: {
+      enabled: vendorConfig.enabled,
+      configured: vendorConfigured,
+      watching: !!vendorRuntime.pollTimer,
+      gatewayAddress: vendorConfig.address || null,
+      mailboxUser: vendorConfig.user || null,
+      mailbox: vendorConfig.mailbox,
+      host: vendorConfig.host || null,
+      pollIntervalMs: vendorConfig.pollIntervalMs,
+      watchingSince: vendorRuntime.watchingSince,
+      lastPollAt: vendorRuntime.lastPollAt,
+      lastPollDurationMs: vendorRuntime.lastPollDurationMs,
+      lastConnectedAt: vendorRuntime.lastConnectedAt,
+      lastError: vendorLastError,
+      isPolling: vendorRuntime.isPolling,
+    },
   };
 }
 
@@ -1018,8 +1289,10 @@ async function getStatus() {
 // pollOnce resolve their collaborators at call time and stay substitutable.
 const emailGateway = {
   runtime,
+  vendorRuntime,
   INGESTION_OUTCOME,
   resolveConfig,
+  resolveVendorConfig,
   isConfigured,
   describeConfigurationFault,
   describeConnectionError,
@@ -1032,7 +1305,10 @@ const emailGateway = {
   processVendorQuoteMessage,
   processMessage,
   pollOnce,
+  pollVendorOnce,
   startPolling,
+  startBuyerPolling,
+  startVendorPolling,
   stopPolling,
   getStatus,
   ImapFlow,
