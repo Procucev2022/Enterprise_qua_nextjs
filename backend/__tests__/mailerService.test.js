@@ -312,6 +312,45 @@ describe('mailerService', () => {
       expect(msg.html).toContain('₹5,00,000');
       expect(msg.html).toContain('How to Submit Your Quotation');
       expect(msg.html).toContain('For multi-item RFQs, please quote unit price per item');
+      expect(msg.html).toContain('Open in Vendor Web Portal');
+      expect(msg.html).toContain('Email Reply Format (Copy, Fill & Send)');
+      expect(msg.replyTo).toBeTruthy();
+    });
+
+    test('supports fallback to items and single-item quotation reply format', () => {
+      const rfqSingle = {
+        rfqNumber: 'RFQ-2026-00101',
+        title: 'Heavy Machinery Part',
+        category: 'Machinery',
+        items: [{ itemName: 'CNC Milling Bit', quantity: 1, unit: 'unit' }],
+      };
+      const msg = mailerService.buildRfqInviteEmail('vendor@example.com', { rfq: rfqSingle });
+      expect(msg.html).toContain('CNC Milling Bit');
+      expect(msg.html).toContain('Item: CNC Milling Bit');
+      expect(msg.html).toContain('Unit Price: ₹[Enter Unit Price]');
+    });
+
+    test('supports empty items and defaults to gateway reply format', () => {
+      const rfqEmpty = {
+        rfqNumber: 'RFQ-2026-00102',
+        title: 'General Enquiry',
+      };
+      const msg = mailerService.buildRfqInviteEmail('vendor@example.com', { rfq: rfqEmpty });
+      expect(msg.html).toContain('Unit Price: ₹[Enter Unit Price]');
+      expect(msg.html).toContain('Total Price: ₹[Enter Total Price]');
+    });
+
+    test('emailGatewayAddress returns default when unset or custom when set', () => {
+      const original = process.env.EMAIL_GATEWAY_ADDRESS;
+      delete process.env.EMAIL_GATEWAY_ADDRESS;
+      delete process.env.EMAIL_GATEWAY_USER;
+      expect(mailerService.emailGatewayAddress()).toBe('rfqprocucev@gmail.com');
+
+      process.env.EMAIL_GATEWAY_ADDRESS = 'custom@procucev.com';
+      expect(mailerService.emailGatewayAddress()).toBe('custom@procucev.com');
+
+      if (original !== undefined) process.env.EMAIL_GATEWAY_ADDRESS = original;
+      else delete process.env.EMAIL_GATEWAY_ADDRESS;
     });
   });
 

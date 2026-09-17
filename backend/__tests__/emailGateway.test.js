@@ -1613,6 +1613,21 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       expect(found.id).toBe('v-apex-1');
       expect(found.name).toBe('Apex Supplies Ltd.');
 
+      const assignedVendor = { id: 'v-assigned-99', name: 'Assigned Vendor Inc', email: 'assigned@vendor.com' };
+      const rfqWithAssigned = { ...sampleRfq, assignedVendors: [assignedVendor] };
+      const foundAssigned = await emailGatewayService.resolveVendorFromEmail('assigned@vendor.com', rfqWithAssigned);
+      expect(foundAssigned).toEqual(assignedVendor);
+
+      const foundGateway = await emailGatewayService.resolveVendorFromEmail('rfqprocucev@gmail.com', rfqWithAssigned);
+      expect(foundGateway).toEqual(assignedVendor);
+
+      const rfqEmptyAssigned = { ...sampleRfq, assignedVendors: [] };
+      const foundGatewayFallback = await emailGatewayService.resolveVendorFromEmail('rfqprocucev@gmail.com', rfqEmptyAssigned);
+      expect(foundGatewayFallback.id).toBe('v-email-gateway');
+
+      const nullCheck = await emailGatewayService.resolveVendorFromEmail(null);
+      expect(nullCheck).toBeNull();
+
       const notFound = await emailGatewayService.resolveVendorFromEmail('unknown@other.com', sampleRfq);
       expect(notFound).toBeNull();
     });

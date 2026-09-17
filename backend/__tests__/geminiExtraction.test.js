@@ -1006,6 +1006,227 @@ describe('geminiService.generateJson', () => {
       expect(result.leadTimeDays).toBe(7);
       expect(result.warrantyYears).toBe(2);
     });
+
+    test('extractQuotationFromEmail handles empty lineItemQuotes and calculates defaults from rfqItems', async () => {
+      GEMINI_CONFIG.API_KEY = 'test-key';
+      const aiResponse = {
+        unitPrice: 5000,
+        complianceStatus: 'Minor Exception',
+        taxes: 1000,
+        deliveryCharges: 200,
+        deliveryDate: '2026-12-01',
+        quotationValidity: '45 days',
+        lineItemQuotes: [], // triggers rfqItems mapping
+      };
+
+      global.fetch = jest.fn(async () => geminiReply(JSON.stringify(aiResponse)));
+      const result = await gemini.extractQuotationFromEmail(
+        { bodyText: 'Quoted 5000', subject: 'Bid RFQ', fromAddress: 'vendor@test.com' },
+        { ...sampleRfq, targetDeliveryDate: '2026-12-15' }
+      );
+
+      expect(result.complianceStatus).toBe('Minor Exception');
+      expect(result.taxes).toBe(1000);
+      expect(result.deliveryCharges).toBe(200);
+      expect(result.quotationValidity).toBe('45 days');
+      expect(result.lineItemQuotes.length).toBe(2);
+      expect(result.lineItemQuotes[0].unitPrice).toBe(5000);
+      expect(result.lineItemQuotes[0].tax).toBe(500);
+    });
+
+    test('extractQuotationFromEmail maps partial lineItemQuotes with missing fields and handles invalid complianceStatus', async () => {
+      GEMINI_CONFIG.API_KEY = 'test-key';
+      const aiResponse = {
+        unitPrice: 1200,
+        complianceStatus: 'InvalidStatusThatDefaults',
+        lineItemQuotes: [
+          {
+            // missing itemName, quantity, unitPrice, totalPrice, tax, deliveryDate
+          },
+        ],
+      };
+
+      global.fetch = jest.fn(async () => geminiReply(JSON.stringify(aiResponse)));
+      const result = await gemini.extractQuotationFromEmail({ text: 'Quote details' }, sampleRfq);
+
+      expect(result.complianceStatus).toBe('Fully Compliant');
+      expect(result.lineItemQuotes[0].itemName).toBe('Centrifugal Pump 150 m3/hr');
+      expect(result.lineItemQuotes[0].unitPrice).toBe(1200);
+    });
+
+    test('extractQuotationFromEmail falls through to fallback when Gemini result is not successful or non-object', async () => {
+      GEMINI_CONFIG.API_KEY = 'test-key';
+      global.fetch = jest.fn(async () => ({ ok: false, status: 500, text: async () => 'error' }));
+
+      const result = await gemini.extractQuotationFromEmail({ bodyText: 'Price is INR 4500' }, sampleRfq);
+      expect(result.extractionMethod).toBe('heuristic_fallback');
+      expect(result.unitPrice).toBe(4500);
+    });
+
+    test('extractQuotationFallback exercises alternate fields, shipping, freight, and item matching', () => {
+      const emailText = `
+        Quote for items:
+        Centrifugal Pump: Rs 9000 each
+        Shipping charges: INR 1500
+        Total amount: Rs 45000
+        Payment terms: 30 days advance
+        Remarks: Delivery within 10 days
+      `;
+      const rfqWithLineItems = {
+        rfqNumber: 'RFQ-LINE-1',
+        title: 'Line Item Test',
+        targetDeliveryDate: '2026-11-20',
+        lineItems: [
+          { description: 'Centrifugal Pump 150 m3/hr', quantity: 2, unit: 'Nos', targetDate: '2026-11-20' },
+        ],
+      };
+
+      const result = gemini.extractQuotationFallback(emailText, rfqWithLineItems);
+      expect(result.deliveryCharges).toBe(1500);
+      expect(result.lineItemQuotes[0].unitPrice).toBe(9000);
+      expect(result.paymentTerms).toBe('30 days advance');
+      expect(result.totalPrice).toBe(18000);
+    });
+
+    test('extractQuotationFallback exercises week/month lead times, warranty months, total-only pricing and taxes', () => {
+      const emailText = 'Total price: INR 60000, 2 weeks delivery, 24 months warranty, GST: 18%';
+      const rfqCtx = {
+        lineItems: [{ itemName: 'Item A', quantity: 2 }, { itemName: 'Item B', quantity: 1 }],
+      };
+      const res = gemini.extractQuotationFallback(emailText, rfqCtx);
+      expect(res.unitPrice).toBe(20000);
+      expect(res.leadTimeDays).toBe(14);
+      expect(res.warrantyYears).toBe(2);
+      expect(res.taxes).toBeGreaterThan(0);
+
+      const emailText2 = 'Dispatch in 1 month, 3 years guarantee';
+      const res2 = gemini.extractQuotationFallback(emailText2, {});
+      expect(res2.leadTimeDays).toBe(30);
+      expect(res2.warrantyYears).toBe(3);
+    });
+
+    test('extractQuotationFallback covers unitPrice without totalPrice, freight charges, and missing descriptions', () => {
+      const emailText = 'Unit price: INR 1500, freight charges: 300, payment: 100% advance, remarks: prompt dispatch';
+      const rfqCtx = {
+        lineItems: [
+          { quantity: 4 }, // missing itemName and description -> triggers "Item 1"
+          { description: 'Secondary Component', quantity: 2, targetDate: '2026-12-01' }
+        ]
+      };
+      const result = gemini.extractQuotationFallback(emailText, rfqCtx);
+      expect(result.unitPrice).toBe(1500);
+      expect(result.totalPrice).toBe(9000); // 1500 * (4 + 2)
+      expect(result.deliveryCharges).toBe(300);
+      expect(result.paymentTerms).toBe('100% advance');
+      expect(result.lineItemQuotes[0].itemName).toBe('Item 1');
+      expect(result.lineItemQuotes[1].itemName).toBe('Secondary Component');
+    });
+
+    test('extractQuotationFromEmail covers branch where lineItemQuotes is empty and uses rfqItems mapping with location and specs', async () => {
+      GEMINI_CONFIG.API_KEY = 'test-key';
+      const aiResponse = {
+        unitPrice: 2500,
+        totalPrice: 5000,
+        leadTimeDays: 10,
+        warrantyYears: 2,
+        paymentTerms: 'Net 45',
+        complianceStatus: 'Pending Review',
+        deliveryDate: '2026-11-15',
+        quotationValidity: '60 days',
+        taxes: 500,
+        deliveryCharges: 100,
+        lineItemQuotes: [], // empty -> triggers rfqItems.map fallback branch (lines 669-676)
+      };
+
+      global.fetch = jest.fn(async () => geminiReply(JSON.stringify(aiResponse)));
+      const rfqContext = {
+        rfqNumber: 'RFQ-BRANCH-TEST',
+        title: 'Branch Test RFQ',
+        category: 'Electronics',
+        budget: 10000,
+        lineItems: [
+          { itemName: 'Relay Board', quantity: 2, technicalSpecs: '24V DC', targetDate: '2026-11-15' },
+          { description: 'Sensor Module', quantity: 1, specification: '4-20mA' },
+        ],
+      };
+
+      const result = await gemini.extractQuotationFromEmail(
+        { bodyText: 'Quotation details', subject: 'Quote RFQ-BRANCH-TEST', fromAddress: 'vendor@branch.com' },
+        rfqContext
+      );
+
+      expect(result.extractionMethod).toBe('gemini_ai');
+      expect(result.complianceStatus).toBe('Pending Review');
+      expect(result.unitPrice).toBe(2500);
+      expect(result.totalPrice).toBe(5000);
+      expect(result.lineItemQuotes.length).toBe(2);
+      expect(result.lineItemQuotes[0].itemName).toBe('Relay Board');
+      expect(result.lineItemQuotes[1].itemName).toBe('Sensor Module');
+      expect(result.lineItemQuotes[0].tax).toBe(250);
+    });
+
+    test('extractLineItems covers delivery location strings and default empty input', async () => {
+      GEMINI_CONFIG.API_KEY = 'test-key';
+      global.fetch = jest.fn(async () => geminiReply(JSON.stringify({
+        documentTitle: 'Industrial Order',
+        category: 'Valves',
+        deliveryDate: '2026-12-31',
+        deliveryLocation: 'Gate 4 Industrial Estate',
+        deliveryCity: 'Pune',
+        deliveryState: 'Maharashtra',
+        deliveryPincode: '411001',
+        estimatedBudget: 75000,
+        items: [{ itemDescription: 'Control Valve DN50', quantity: 5 }]
+      })));
+
+      // Call extractLineItems with delivery location fields
+      const res = await gemini.extractLineItems({
+        documentText: 'Control Valve DN50 qty 5',
+        fileName: 'valves.txt',
+      });
+
+      expect(res.status).toBe(EXTRACTION_STATUS.SUCCESS);
+      expect(res.deliveryLocation).toBe('Gate 4 Industrial Estate');
+      expect(res.deliveryCity).toBe('Pune');
+      expect(res.deliveryState).toBe('Maharashtra');
+      expect(res.deliveryPincode).toBe('411001');
+
+      // Call extractLineItems() with default empty parameter
+      const emptyRes = await gemini.extractLineItems();
+      expect(emptyRes.status).toBe(EXTRACTION_STATUS.NO_CONTENT);
+    });
+
+    test('covers extractQuotationFallback and extractQuotationFromEmail defaults and total price fallbacks', async () => {
+      // 1. extractQuotationFallback() with no arguments
+      const emptyFallback = gemini.extractQuotationFallback();
+      expect(emptyFallback.unitPrice).toBe(0);
+      expect(emptyFallback.totalPrice).toBe(0);
+
+      // 2. extractQuotationFromEmail() with no arguments (uses heuristic fallback when GEMINI_CONFIG.API_KEY is empty)
+      GEMINI_CONFIG.API_KEY = '';
+      const emptyEmailQuote = await gemini.extractQuotationFromEmail();
+      expect(emptyEmailQuote.unitPrice).toBe(0);
+
+      // 3. extractQuotationFromEmail with AI success where totalPrice is 0 and lineItemQuotes has full fields
+      GEMINI_CONFIG.API_KEY = 'test-key';
+      const aiResponse = {
+        unitPrice: 300,
+        totalPrice: 0, // tests totalPrice || unitPrice branch
+        lineItemQuotes: [
+          { itemName: 'Component Alpha', quantity: 2, unitPrice: 300, totalPrice: 600, tax: 60, deliveryDate: '2026-10-10' }
+        ]
+      };
+      global.fetch = jest.fn(async () => geminiReply(JSON.stringify(aiResponse)));
+      const resWithDefaults = await gemini.extractQuotationFromEmail(
+        { bodyText: 'Quoting 300' },
+        { lineItems: [{ description: 'Component Alpha', quantity: 2 }] } // tests rfqItems fallback to lineItems & description
+      );
+      expect(resWithDefaults.unitPrice).toBe(300);
+      expect(resWithDefaults.totalPrice).toBe(300);
+      expect(resWithDefaults.lineItemQuotes[0].itemName).toBe('Component Alpha');
+    });
   });
 });
+
+
 
