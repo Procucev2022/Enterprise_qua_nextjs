@@ -221,10 +221,17 @@ const VALIDATION_SCHEMAS = {
   // vendor form — the reference app's own bulk path only ever required
   // company name, email and mobile, so that's what's required here too;
   // everything else is format-checked only when the row actually supplies it.
+  // A row failing any check here (a missing name/phone, or a malformed
+  // email/phone/GSTIN/pincode) is not rejected — vendorController.
+  // bulkImportVendors still imports it, tagged `hasIssues`/`issues`. The
+  // marketplace-directory scrape this feeds from routinely has incomplete
+  // real rows, and rejecting or fabricating a value for one both hide real
+  // data from the CM reviewing the import; this schema only decides what
+  // counts as "worth flagging," not what counts as "allowed to import."
   vendorBulkImportRow: {
-    name: { type: 'string', required: true, minLength: 2, maxLength: 200, message: 'Company name is required.' },
-    email: { type: 'string', required: true, pattern: EMAIL_REGEX, message: 'A valid email address is required.' },
-    phone: { type: 'string', required: true, pattern: INDIAN_MOBILE_REGEX, message: INDIAN_MOBILE_MESSAGE },
+    name: { type: 'string', required: false, minLength: 2, maxLength: 200, message: 'Company name is required.' },
+    email: { type: 'string', required: false, pattern: EMAIL_REGEX, message: 'A valid email address is required.' },
+    phone: { type: 'string', required: false, pattern: INDIAN_MOBILE_REGEX, message: INDIAN_MOBILE_MESSAGE },
     gstin: { type: 'string', required: false, pattern: GSTIN_REGEX, message: GSTIN_MESSAGE },
     pincode: { type: 'string', required: false, pattern: INDIAN_PINCODE_REGEX, message: INDIAN_PINCODE_MESSAGE },
     contactPerson: { type: 'string', required: false, maxLength: 150 },

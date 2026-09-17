@@ -37,8 +37,8 @@ function profile(overrides = {}) {
 }
 
 describe('mapProfileToBuyerAccount', () => {
-  test('maps the organisation onto the account shape the dashboard reads', () => {
-    const account = buyerAccountResolver.mapProfileToBuyerAccount(profile());
+  test('maps the organisation onto the account shape the dashboard reads', async () => {
+    const account = await buyerAccountResolver.mapProfileToBuyerAccount(profile());
 
     expect(account.id).toBe('org-real-01');
     expect(account.organizationId).toBe('org-real-01');
@@ -52,14 +52,14 @@ describe('mapProfileToBuyerAccount', () => {
 
   // The seed carried '$4,280,000' as a hardcoded string. These are counted from
   // real rows or left at zero, never invented.
-  test('reports spend and RFQ counts as zero rather than inventing them', () => {
-    const account = buyerAccountResolver.mapProfileToBuyerAccount(profile());
+  test('reports spend and RFQ counts as zero rather than inventing them', async () => {
+    const account = await buyerAccountResolver.mapProfileToBuyerAccount(profile());
     expect(account.totalSpend).toBe(0);
     expect(account.totalRFQsCreated).toBe(0);
   });
 
-  test('accepts counted totals from the caller', () => {
-    const account = buyerAccountResolver.mapProfileToBuyerAccount(profile(), {
+  test('accepts counted totals from the caller', async () => {
+    const account = await buyerAccountResolver.mapProfileToBuyerAccount(profile(), {
       totalRFQsCreated: 4,
       totalSpend: 125000,
     });
@@ -67,8 +67,8 @@ describe('mapProfileToBuyerAccount', () => {
     expect(account.totalSpend).toBe(125000);
   });
 
-  test('joins the plant location from city and state', () => {
-    expect(buyerAccountResolver.mapProfileToBuyerAccount(profile()).primaryPlantLocation).toBe(
+  test('joins the plant location from city and state', async () => {
+    expect((await buyerAccountResolver.mapProfileToBuyerAccount(profile())).primaryPlantLocation).toBe(
       'Navi Mumbai, Maharashtra'
     );
   });
@@ -77,8 +77,8 @@ describe('mapProfileToBuyerAccount', () => {
     [{ city: '', state: 'Maharashtra' }, 'Maharashtra'],
     [{ city: 'Pune', state: '' }, 'Pune'],
     [{ city: '', state: '' }, ''],
-  ])('tolerates a partial address %j', (address, expected) => {
-    expect(buyerAccountResolver.mapProfileToBuyerAccount(profile(address)).primaryPlantLocation).toBe(
+  ])('tolerates a partial address %j', async (address, expected) => {
+    expect((await buyerAccountResolver.mapProfileToBuyerAccount(profile(address))).primaryPlantLocation).toBe(
       expected
     );
   });
@@ -89,8 +89,8 @@ describe('mapProfileToBuyerAccount', () => {
   // taxonomy endpoint's grouped { majorCategory, minorCategories } shape, which
   // the resolver also read; both arrays therefore came out empty on every real
   // account and a buyer appeared to have no procurement scope at all.
-  test('de-duplicates majors and minors from the flat pair list', () => {
-    const account = buyerAccountResolver.mapProfileToBuyerAccount(
+  test('de-duplicates majors and minors from the flat pair list', async () => {
+    const account = await buyerAccountResolver.mapProfileToBuyerAccount(
       profile({
         categories: [
           { major: 'Mechanical', minor: 'Pumps' },
@@ -107,14 +107,14 @@ describe('mapProfileToBuyerAccount', () => {
     expect(account.supportedMinorCategories).toEqual(['Pumps', 'Valves', 'Bearings', 'Panels']);
   });
 
-  test.each([[undefined], [null], [[]]])('tolerates categories of %p', (categories) => {
-    const account = buyerAccountResolver.mapProfileToBuyerAccount(profile({ categories }));
+  test.each([[undefined], [null], [[]]])('tolerates categories of %p', async (categories) => {
+    const account = await buyerAccountResolver.mapProfileToBuyerAccount(profile({ categories }));
     expect(account.supportedMajorCategories).toEqual([]);
     expect(account.supportedMinorCategories).toEqual([]);
   });
 
-  test('skips a pair missing either half rather than emitting a blank entry', () => {
-    const account = buyerAccountResolver.mapProfileToBuyerAccount(
+  test('skips a pair missing either half rather than emitting a blank entry', async () => {
+    const account = await buyerAccountResolver.mapProfileToBuyerAccount(
       profile({ categories: [{ major: 'Mechanical' }, { minor: 'Pumps' }, {}] })
     );
     expect(account.supportedMajorCategories).toEqual(['Mechanical']);
@@ -131,7 +131,7 @@ describe('resolveActiveBuyerAccount', () => {
   });
 
   test('returns the caller\'s own organisation', async () => {
-    dbPool.pool = { stub: true };
+    dbPool.pool = { stub: true, query: jest.fn().mockResolvedValue({ rows: [] }) };
     jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ profile: profile() });
 
     const resolved = await buyerAccountResolver.resolveActiveBuyerAccount(SESSION);
@@ -143,7 +143,7 @@ describe('resolveActiveBuyerAccount', () => {
   // Looked up by the session's own user id, so one session cannot resolve
   // another organisation's account.
   test('looks the account up by the session user id', async () => {
-    dbPool.pool = { stub: true };
+    dbPool.pool = { stub: true, query: jest.fn().mockResolvedValue({ rows: [] }) };
     const spy = jest
       .spyOn(buyerProfileQueries, 'findProfileByUserId')
       .mockResolvedValue({ profile: profile() });
@@ -176,7 +176,7 @@ describe('resolveActiveBuyerAccount', () => {
   });
 
   test('reports 503 when the lookup throws', async () => {
-    dbPool.pool = { stub: true };
+    dbPool.pool = { stub: true, query: jest.fn().mockResolvedValue({ rows: [] }) };
     jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockRejectedValue(new Error('timeout'));
 
     const resolved = await buyerAccountResolver.resolveActiveBuyerAccount(SESSION);
@@ -186,7 +186,7 @@ describe('resolveActiveBuyerAccount', () => {
   });
 
   test('reports 404 when no account matches the session', async () => {
-    dbPool.pool = { stub: true };
+    dbPool.pool = { stub: true, query: jest.fn().mockResolvedValue({ rows: [] }) };
     jest
       .spyOn(buyerProfileQueries, 'findProfileByUserId')
       .mockResolvedValue({ reason: 'USER_NOT_FOUND' });
@@ -199,7 +199,7 @@ describe('resolveActiveBuyerAccount', () => {
 
   // A real state in the shared schema: a user row can exist with no organisation.
   test('reports 409 when the account has no linked organisation', async () => {
-    dbPool.pool = { stub: true };
+    dbPool.pool = { stub: true, query: jest.fn().mockResolvedValue({ rows: [] }) };
     jest
       .spyOn(buyerProfileQueries, 'findProfileByUserId')
       .mockResolvedValue({ reason: 'ORG_NOT_LINKED' });
@@ -213,7 +213,7 @@ describe('resolveActiveBuyerAccount', () => {
   test.each([[null], [{}], [{ profile: null }]])(
     'treats a lookup result of %p as not found',
     async (result) => {
-      dbPool.pool = { stub: true };
+      dbPool.pool = { stub: true, query: jest.fn().mockResolvedValue({ rows: [] }) };
       jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue(result);
 
       const resolved = await buyerAccountResolver.resolveActiveBuyerAccount(SESSION);

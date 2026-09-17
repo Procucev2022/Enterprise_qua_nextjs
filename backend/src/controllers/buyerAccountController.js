@@ -177,7 +177,7 @@ async function createSubscriptionPaymentLink(req, res, next) {
     // or via the identity DB only) gets one created on first use rather than
     // 404ing. req.user is guaranteed present here — assertBuyerAccountRole
     // above already rejected the request otherwise.
-    let existing = storeService.getBuyerAccountByEmail(req.user.email);
+    let existing = await storeService.getBuyerAccountByEmail(req.user.email);
     if (!existing && req.user.email) {
       existing = storeService.addBuyerAccount({
         organizationName: req.user.orgName || req.user.email,
@@ -238,7 +238,7 @@ async function createSubscriptionPaymentLink(req, res, next) {
 async function getPaymentLinks(req, res, next) {
   try {
     if (!assertBuyerAccountRole(req, res)) return;
-    const existing = storeService.getBuyerAccountByEmail(req.user.email);
+    const existing = await storeService.getBuyerAccountByEmail(req.user.email);
     if (!existing) {
       return res.json({ success: true, data: [] });
     }
@@ -255,7 +255,7 @@ async function downloadInvoice(req, res, next) {
   try {
     if (!assertBuyerAccountRole(req, res)) return;
     const { linkId } = req.params;
-    const existing = storeService.getBuyerAccountByEmail(req.user.email);
+    const existing = await storeService.getBuyerAccountByEmail(req.user.email);
     if (!existing) {
       return res.status(404).json({ success: false, error: 'No buyer account found for this session.' });
     }
@@ -283,7 +283,7 @@ async function downloadInvoice(req, res, next) {
   }
 }
 
-function ingestHistoricalData(req, res, next) {
+async function ingestHistoricalData(req, res, next) {
   try {
     if (!assertBuyerAccountRole(req, res)) return;
     const { period, vendorRecords } = req.body;
@@ -292,8 +292,8 @@ function ingestHistoricalData(req, res, next) {
       return res.status(400).json({ success: false, error: 'period is required.' });
     }
     logger.info(`Ingesting historical purchase data for period: ${period}`, { period }, 'BUYER_ACCOUNT_CONTROLLER');
-    const requestingBuyerAccount = storeService.getBuyerAccountByEmail(req.user.email);
-    const result = storeService.processHistoricalPurchaseData(period, vendorRecords || [], requestingBuyerAccount);
+    const requestingBuyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
+    const result = await storeService.processHistoricalPurchaseData(period, vendorRecords || [], requestingBuyerAccount);
     res.json(result);
   } catch (err) {
     logger.error('Error ingesting historical purchase data', err, 'BUYER_ACCOUNT_CONTROLLER');

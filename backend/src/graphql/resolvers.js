@@ -54,7 +54,7 @@ async function requireAdmin(context) {
 async function requireRfqReadScope(context) {
   const user = await requireAuth(context);
   if (user.role === 'buyer') {
-    const account = storeService.getBuyerAccountByEmail(user.email);
+    const account = await storeService.getBuyerAccountByEmail(user.email);
     return { user, role: user.role, restricted: true, buyerAccountId: account ? account.id : null };
   }
   if (user.role === 'vendor') {
@@ -102,17 +102,17 @@ const rootResolvers = {
     return rfq;
   },
 
-  vendors: (args = {}, context = {}) => {
+  vendors: async (args = {}, context = {}) => {
     const { majorCategory, source, search, limit = 50, offset = 0 } = args;
     const user = context && context.req ? context.req.user : null;
     let buyerId = null;
     if (user && user.role === 'buyer') {
-      const buyerAccount = storeService.getBuyerAccountByEmail(user.email);
+      const buyerAccount = await storeService.getBuyerAccountByEmail(user.email);
       buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
     } else if (args.buyerId) {
       buyerId = args.buyerId;
     }
-    let result = storeService.getVendors(buyerId);
+    let result = await storeService.getVendors(buyerId);
     if (majorCategory) {
       result = result.filter((v) => v.majorCategory && v.majorCategory.toLowerCase().includes(majorCategory.toLowerCase()));
     }
@@ -126,11 +126,11 @@ const rootResolvers = {
     return result.slice(offset, offset + limit);
   },
 
-  vendor: (args = {}, context = {}) => {
+  vendor: async (args = {}, context = {}) => {
     const user = context && context.req ? context.req.user : null;
     let buyerId = null;
     if (user && user.role === 'buyer') {
-      const buyerAccount = storeService.getBuyerAccountByEmail(user.email);
+      const buyerAccount = await storeService.getBuyerAccountByEmail(user.email);
       buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
     } else if (args.buyerId) {
       buyerId = args.buyerId;
@@ -139,7 +139,8 @@ const rootResolvers = {
       return storeService.getVendorById(args.id, buyerId) || null;
     }
     if (args.email) {
-      return storeService.getVendors(buyerId).find((v) => v.email && v.email.toLowerCase() === args.email.toLowerCase()) || null;
+      const vendors = await storeService.getVendors(buyerId);
+      return vendors.find((v) => v.email && v.email.toLowerCase() === args.email.toLowerCase()) || null;
     }
     return null;
   },
@@ -184,11 +185,11 @@ const rootResolvers = {
     return items;
   },
 
-  aiFeed: (args = {}, context) => {
+  aiFeed: async (args = {}, context) => {
     const limit = args.limit || 20;
     const all = storeService.getAIFeed();
     if (context && context.req && context.req.user && context.req.user.role === 'buyer') {
-      const account = storeService.getBuyerAccountByEmail(context.req.user.email);
+      const account = await storeService.getBuyerAccountByEmail(context.req.user.email);
       const buyerAccountId = account ? account.id : null;
       if (!buyerAccountId) return [];
       const buyerRfqs = storeService.getRFQs().filter((r) => r.buyerAccountId === buyerAccountId);
@@ -251,7 +252,7 @@ const rootResolvers = {
       { ...input, extractedEntities: lineItems },
       { orgName: user.orgName || '' }
     );
-    const requestingBuyerAccount = storeService.getBuyerAccountByEmail(user.email);
+    const requestingBuyerAccount = await storeService.getBuyerAccountByEmail(user.email);
     return storeService.createRFQ({ ...input, extractedEntities: lineItems, aiSummary }, requestingBuyerAccount);
   },
 
@@ -268,7 +269,9 @@ const rootResolvers = {
   createVendor: async ({ input }, context) => {
     const user = await requireAuth(context);
     logger.info('GraphQL Mutation: createVendor', { name: input.name }, 'GRAPHQL_MUTATION');
-    return storeService.addVendor(input, user.email);
+    const created = storeService.addVendor(input, user.email);
+    await storeService.confirmVendorPersisted(created);
+    return created;
   },
 
   updateVendor: async ({ id, input }, context) => {

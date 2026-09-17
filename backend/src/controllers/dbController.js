@@ -34,7 +34,7 @@ async function getDBStatus(req, res, next) {
       loadedRecords: {
         isLoadedFromDatabase: storeService.isHydratedFromDB,
         buyerAccounts: storeService.getBuyerAccounts().length,
-        vendors: storeService.getVendors().length,
+        vendors: (await storeService.getVendors()).length,
         rfqs: storeService.getRFQs().length,
       },
     });

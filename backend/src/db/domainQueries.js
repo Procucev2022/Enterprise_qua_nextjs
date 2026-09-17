@@ -21,6 +21,61 @@ async function getVendorsFromDB() {
   return result.rows.map((row) => row.raw);
 }
 
+/**
+ * One page of vendors, filtered and counted entirely in Postgres.
+ *
+ * getVendorsFromDB() fetches every row's full `raw` JSONB — fine for a
+ * one-time boot hydration, but a real request hit it on every single "Load
+ * more" click once the vendor table reached 80k+ rows (a bulk Vendor Master
+ * import): each click re-fetched and re-serialized the entire table just to
+ * throw away all but 50 rows, slow/heavy enough to hang the browser mid-
+ * pagination. This does the LIMIT/OFFSET/search filtering in SQL instead, so
+ * a page request only ever touches the rows it actually returns.
+ */
+async function getVendorsPageFromDB({ limit, offset, search = '', publicOnly = false } = {}) {
+  if (!pool.pool) return { rows: [], total: 0 };
+  const params = [];
+  const conditions = [];
+  if (search) {
+    params.push(`%${search}%`);
+    // major_category has its own indexed column; name/email/minor categories
+    // only exist inside `raw`, so those fall back to a JSONB text scan/cast.
+    conditions.push(`(major_category ILIKE $${params.length}
+      OR email ILIKE $${params.length}
+      OR raw->>'name' ILIKE $${params.length}
+      OR (raw->'minorCategories')::text ILIKE $${params.length})`);
+  }
+  if (publicOnly) {
+    // Mirrors storeService.getVendors' unscoped filter: a vendor tagged to a
+    // specific buyer (buyerId/buyerAccountId set inside `raw`) is only meant
+    // to be visible to that buyer, never in an anonymous/public listing.
+    conditions.push(`(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  // Separate param arrays for the count vs. data query — sharing and
+  // mutating one array across both calls works with a driver that sends the
+  // query immediately, but is a needless footgun (and confusing to inspect
+  // in tests) for no benefit.
+  const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM vendors ${where}`, [...params]);
+  const total = countResult.rows[0]?.total || 0;
+
+  const dataParams = [...params, limit, offset];
+  const dataResult = await pool.query(
+    `SELECT raw FROM vendors ${where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+    dataParams
+  );
+  return { rows: dataResult.rows.map((row) => row.raw), total };
+}
+
+/** Single-row lookup by email — used to guarantee a specific vendor is
+ * present in a capped/paginated listing without fetching the whole table. */
+async function getVendorByEmailFromDB(email) {
+  if (!pool.pool || !email) return null;
+  const result = await pool.query('SELECT raw FROM vendors WHERE email = $1 LIMIT 1', [email]);
+  return result.rows[0]?.raw || null;
+}
+
 async function upsertVendorInDB(vendor) {
   if (!pool.pool) return null;
   const { id, email, majorCategory, status, source } = vendor;
@@ -77,6 +132,50 @@ async function bulkInsertVendorsInDB(vendors) {
     values
   );
   return result.rows.map((row) => row.email);
+}
+
+// ── Bulk vendor import sessions ─────────────────────────────────────────────
+
+async function createBulkImportSessionInDB(id, createdByEmail, totalRowsDeclared) {
+  if (!pool.pool) return null;
+  const result = await pool.query(
+    `INSERT INTO bulk_vendor_import_sessions (id, created_by_email, total_rows_declared)
+     VALUES ($1, $2, $3)
+     RETURNING id, status, total_rows_declared, processed_count, imported_count,
+               missing_email_count, duplicate_count, invalid_count`,
+    [id, createdByEmail, totalRowsDeclared || 0]
+  );
+  return result.rows[0] || null;
+}
+
+async function getBulkImportSessionFromDB(id) {
+  if (!pool.pool) return null;
+  const result = await pool.query(
+    `SELECT id, status, total_rows_declared, processed_count, imported_count,
+            missing_email_count, duplicate_count, invalid_count
+     FROM bulk_vendor_import_sessions WHERE id = $1`,
+    [id]
+  );
+  return result.rows[0] || null;
+}
+
+async function incrementBulkImportSessionInDB(id, delta) {
+  if (!pool.pool) return null;
+  const result = await pool.query(
+    `UPDATE bulk_vendor_import_sessions SET
+       processed_count = processed_count + $2,
+       imported_count = imported_count + $3,
+       missing_email_count = missing_email_count + $4,
+       duplicate_count = duplicate_count + $5,
+       invalid_count = invalid_count + $6,
+       status = CASE WHEN processed_count + $2 >= total_rows_declared THEN 'COMPLETED' ELSE status END,
+       updated_at = now()
+     WHERE id = $1
+     RETURNING id, status, total_rows_declared, processed_count, imported_count,
+               missing_email_count, duplicate_count, invalid_count`,
+    [id, delta.processed || 0, delta.imported || 0, delta.missingEmail || 0, delta.duplicate || 0, delta.invalid || 0]
+  );
+  return result.rows[0] || null;
 }
 
 // ── RFQs ─────────────────────────────────────────────────────────────────────
@@ -191,6 +290,15 @@ async function getBuyerAccountsFromDB() {
   const accounts = result.rows.map((row) => row.raw);
   const activeRow = result.rows.find((row) => row.is_active);
   return { accounts, activeId: activeRow ? activeRow.id : null };
+}
+
+// Reads straight from Postgres rather than an in-memory cache, so a plan/role
+// change made by any other process (a script, another instance) is visible on
+// the very next request instead of requiring this process to restart.
+async function getBuyerAccountByEmailFromDB(email) {
+  if (!pool.pool || !email) return null;
+  const result = await pool.query('SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1', [email]);
+  return result.rows[0]?.raw || null;
 }
 
 async function upsertBuyerAccountInDB(account) {
@@ -407,6 +515,11 @@ async function upsertPaymentLinkInDB(link) {
 
 module.exports = {
   getVendorsFromDB,
+  getVendorsPageFromDB,
+  getVendorByEmailFromDB,
+  createBulkImportSessionInDB,
+  getBulkImportSessionFromDB,
+  incrementBulkImportSessionInDB,
   upsertVendorInDB,
   deleteVendorInDB,
   bulkInsertVendorsInDB,
@@ -419,6 +532,7 @@ module.exports = {
   upsertCatalogueProductInDB,
   deleteCatalogueProductInDB,
   getBuyerAccountsFromDB,
+  getBuyerAccountByEmailFromDB,
   upsertBuyerAccountInDB,
   deleteBuyerAccountInDB,
   setActiveBuyerAccountInDB,

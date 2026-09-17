@@ -124,12 +124,9 @@ export function validateManualRFQLineItem(item: ManualRFQLineItem): ManualRFQLin
   if (clean(item.unit) === '') {
     errors.unit = MANUAL.unitRequired;
   }
-  if (clean(item.majorCategory) === '') {
-    errors.majorCategory = MANUAL.majorCategoryRequired;
-  }
-  if (clean(item.minorCategory) === '') {
-    errors.minorCategory = MANUAL.minorCategoryRequired;
-  }
+  // Major/minor category are no longer mandatory to dispatch a manual RFQ —
+  // a buyer may not know the exact taxonomy slot for an item up front, and
+  // an uncategorised line can still be reviewed/reclassified later.
 
   return errors;
 }

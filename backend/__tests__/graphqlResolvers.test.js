@@ -129,7 +129,7 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
     expect(await rootResolvers.rfq({ rfqNumber: seededRfq.rfqNumber }, orphanCtx)).toBeNull();
   });
 
-  test('vendors resolver filters by majorCategory, source, search and pagination', () => {
+  test('vendors resolver filters by majorCategory, source, search and pagination', async () => {
     // Registered here because nothing is seeded: the roster is empty until a
     // vendor is actually created.
     storeService.addVendor({
@@ -139,37 +139,37 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
       source: 'buyer_manual',
     });
 
-    const all = rootResolvers.vendors();
+    const all = await rootResolvers.vendors();
     expect(all.length).toBeGreaterThan(0);
 
-    const byCat = rootResolvers.vendors({ majorCategory: 'Mechanical' });
+    const byCat = await rootResolvers.vendors({ majorCategory: 'Mechanical' });
     expect(byCat.length).toBeGreaterThan(0);
 
-    const bySource = rootResolvers.vendors({ source: 'buyer_manual' });
+    const bySource = await rootResolvers.vendors({ source: 'buyer_manual' });
     expect(bySource.length).toBeGreaterThan(0);
 
-    const bySearchName = rootResolvers.vendors({ search: 'Resolver Filter' });
+    const bySearchName = await rootResolvers.vendors({ search: 'Resolver Filter' });
     expect(bySearchName.length).toBeGreaterThan(0);
 
-    const bySearchEmail = rootResolvers.vendors({ search: '@' });
+    const bySearchEmail = await rootResolvers.vendors({ search: '@' });
     expect(bySearchEmail.length).toBeGreaterThan(0);
 
     // A search that matches nothing returns empty rather than the whole roster.
-    expect(rootResolvers.vendors({ search: 'no-such-vendor-anywhere' })).toEqual([]);
+    expect(await rootResolvers.vendors({ search: 'no-such-vendor-anywhere' })).toEqual([]);
   });
 
-  test('vendor resolver looks up by id and email or returns null', () => {
+  test('vendor resolver looks up by id and email or returns null', async () => {
     const created = storeService.addVendor({
       name: 'Resolver Lookup Vendor',
       email: 'lookup@resolver-vendor.test',
       majorCategory: 'Engineering Spares - Electrical',
     });
 
-    expect(rootResolvers.vendor({ id: created.id })).toEqual(created);
-    expect(rootResolvers.vendor({ email: created.email })).toEqual(created);
-    expect(rootResolvers.vendor({ id: 'non-existent-vendor' })).toBeNull();
-    expect(rootResolvers.vendor({ email: 'unknown@email.com' })).toBeNull();
-    expect(rootResolvers.vendor({})).toBeNull();
+    expect(await rootResolvers.vendor({ id: created.id })).toEqual(created);
+    expect(await rootResolvers.vendor({ email: created.email })).toEqual(created);
+    expect(await rootResolvers.vendor({ id: 'non-existent-vendor' })).toBeNull();
+    expect(await rootResolvers.vendor({ email: 'unknown@email.com' })).toBeNull();
+    expect(await rootResolvers.vendor({})).toBeNull();
   });
 
   // The seeded companies are gone, so these start empty. An account created at
@@ -252,7 +252,7 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
   });
 
   test('aiFeed, systemConfig, dbHealth, optimizationMetrics, diagnoseLogErrors, auditPerformance resolvers execute', async () => {
-    const feed = rootResolvers.aiFeed({ limit: 5 });
+    const feed = await rootResolvers.aiFeed({ limit: 5 });
     expect(feed.length).toBeLessThanOrEqual(5);
 
     const config = rootResolvers.systemConfig();

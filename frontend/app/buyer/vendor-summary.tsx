@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
-import { VendorEvaluationRecord, VendorEntry } from '@/lib/types';
+import { fetchAllVendors } from '@/lib/rfqClient';
+import { VendorEvaluationRecord, VendorEntry, VendorPageMeta } from '@/lib/types';
 import {
   Search,
   Building2,
@@ -86,10 +87,24 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
   const [activeTab, setActiveTab] = useState<'BUYER_UPLOADED' | 'PROCUCEV_VENDORS'>('BUYER_UPLOADED');
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('ALL');
+  // The Procucev network list is the real, 80k+-row marketplace directory —
+  // the old `buyerVendors` context list was capped at 500 by the bootstrap
+  // payload (see the "no in-memory-only vendor storage" fix), which silently
+  // hid the vast majority of it. Fetched a page at a time straight from the
+  // real endpoint instead, same pattern as the CM's vendor-console.tsx.
+  const PROCUCEV_VENDORS_PAGE_SIZE = 20;
+  const [fetchedProcucevVendors, setFetchedProcucevVendors] = useState<VendorEntry[]>([]);
+  const [procucevPagination, setProcucevPagination] = useState<VendorPageMeta | null>(null);
+  const [procucevLoading, setProcucevLoading] = useState(true);
+  const [procucevLoadingMore, setProcucevLoadingMore] = useState(false);
+  const [procucevError, setProcucevError] = useState<string | null>(null);
   const [selectedStatus, setSelectedStatus] = useState('ALL');
 
   // CRUD Modals State
+  const [addModalOpen, setAddModalOpen] = useState(false);
+  const [isSubmittingAdd, setIsSubmittingAdd] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [viewModalOpen, setViewModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -147,6 +162,76 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       'Instrumentation & Automation',
     ])
   ).filter(Boolean);
+
+  // Open Add Vendor Modal — reuses the same form field state as Edit, reset
+  // to blanks/defaults since there is no existing vendor to populate from.
+  const handleOpenAddModal = () => {
+    setFormName('');
+    setFormBrandName('');
+    setFormMajorCategory(availableMajorCategories[0] || 'Mechanical');
+    setFormMinorCategories([]);
+    setFormMinorInput('');
+    setFormContactPerson('');
+    setFormContactDesignation('Authorized Representative');
+    setFormEmail('');
+    setFormPhone('');
+    setFormLocation('');
+    setFormCity('');
+    setFormState('');
+    setFormCountry('India');
+    setFormPincode('');
+    setFormGst('');
+    setFormPan('');
+    setFormMsme('');
+    setFormAnnualTurnover('');
+    setFormRating(4.5);
+    setFormStatus('REGISTERED / NOT EVALUATED');
+    setAddModalOpen(true);
+  };
+
+  // Form Submission: Add Vendor — persists through the real POST /api/vendors
+  // endpoint (see addBuyerVendor in store.tsx); only closes the modal and
+  // clears the form once the backend actually confirms the write.
+  const handleAddVendorSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formName.trim() || !formMajorCategory || !formEmail.trim() || !formContactPerson.trim()) {
+      showToast('Validation Error', 'Please complete all required fields.', 'warning');
+      return;
+    }
+
+    setIsSubmittingAdd(true);
+    const created = await addBuyerVendor({
+      name: formName.trim(),
+      brandName: formBrandName.trim() || formName.trim(),
+      majorCategory: formMajorCategory,
+      minorCategories: formMinorCategories.length > 0 ? formMinorCategories : [formMajorCategory],
+      contactPerson: formContactPerson.trim(),
+      contactDesignation: formContactDesignation.trim(),
+      email: formEmail.trim().toLowerCase(),
+      phone: formPhone.trim(),
+      location: formLocation.trim() || `${formCity}, ${formState}`,
+      city: formCity.trim(),
+      state: formState.trim(),
+      country: formCountry.trim() || 'India',
+      pincode: formPincode.trim(),
+      gst: formGst.trim().toUpperCase(),
+      gstin: formGst.trim().toUpperCase(),
+      pan: formPan.trim().toUpperCase(),
+      msme: formMsme.trim(),
+      annualTurnover: formAnnualTurnover.trim(),
+      rating: Number(formRating) || 4.5,
+      score: Math.round((Number(formRating) || 4.5) * 20),
+      status: formStatus,
+      source: 'buyer_manual',
+    });
+    setIsSubmittingAdd(false);
+
+    // On failure, addBuyerVendor already showed the error toast — keep the
+    // modal open with the form intact so nothing the buyer typed is lost.
+    if (created) {
+      setAddModalOpen(false);
+    }
+  };
 
   // Open Edit Vendor Modal
   const handleOpenEditModal = (vendor: any) => {
@@ -393,30 +478,38 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setSelectedVendorForRevision(null);
   };
 
-  // Merge evaluations in store with buyerVendors from context
+  // Merge evaluations in store onto a vendor list, shared by both tabs.
   const allEvaluations = [...vendorEvaluations];
-  const mergedVendors = buyerVendors.map((bv) => {
-    const storeEval = allEvaluations.find((e) => e.vendorName === bv.name || e.vendorId === bv.id);
-    if (storeEval) {
-      return {
-        ...bv,
-        status: storeEval.status,
-        score: storeEval.overallScore,
-        evaluated: true,
-        hasRecord: true,
-        storeRecord: storeEval,
-      };
-    }
-    return {
-      ...bv,
-    };
-  });
+  const mergeWithEvaluations = (list: VendorEntry[]) =>
+    list.map((bv) => {
+      const storeEval = allEvaluations.find((e) => e.vendorName === bv.name || e.vendorId === bv.id);
+      if (storeEval) {
+        return {
+          ...bv,
+          status: storeEval.status,
+          score: storeEval.overallScore,
+          evaluated: true,
+          hasRecord: true,
+          storeRecord: storeEval,
+        };
+      }
+      return { ...bv };
+    });
+
+  // "Uploaded by Buyer" is the buyer's own (small) set from context.
+  // "Procucev Vendors" is the real marketplace directory (80k+ rows) —
+  // fetched separately below, never from the capped bootstrap list.
+  const mergedVendors = mergeWithEvaluations(buyerVendors);
+  const mergedProcucevVendors = mergeWithEvaluations(fetchedProcucevVendors).filter(isProcucevVendor);
 
   const buyerUploadedVendorsList = mergedVendors.filter(isBuyerUploaded);
-  const procucevVendorsList = mergedVendors.filter(isProcucevVendor);
+  const procucevVendorsList = mergedProcucevVendors;
 
   // Filter categories dynamically
-  const categories = ['ALL', ...Array.from(new Set(mergedVendors.map((v) => v.majorCategory || 'General Industrial')))];
+  const categories = [
+    'ALL',
+    ...Array.from(new Set([...mergedVendors, ...mergedProcucevVendors].map((v) => v.majorCategory || 'General Industrial'))),
+  ];
 
   // Helper filter function
   const filterVendorItem = (v: any) => {
@@ -454,7 +547,70 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   };
 
   const buyerFilteredVendors = buyerUploadedVendorsList.filter(filterVendorItem);
-  const procucevFilteredVendors = procucevVendorsList.filter(filterVendorItem);
+  // Search already happened server-side (see the fetch effect below) — only
+  // category/status still filter client-side over the loaded pages.
+  const matchesCategoryAndStatus = (v: any) => {
+    const rawCategory = v.majorCategory || '';
+    const matchesCategory = selectedCategory === 'ALL' || rawCategory.toLowerCase() === selectedCategory.toLowerCase();
+    const matchesStatus =
+      selectedStatus === 'ALL' ||
+      (selectedStatus === 'EVALUATED' && v.evaluated) ||
+      (selectedStatus === 'NOT_EVALUATED' && !v.evaluated) ||
+      (selectedStatus === 'PREFERRED' && v.status === 'PREFERRED ENTERPRISE SUPPLIER') ||
+      (selectedStatus === 'CONDITIONAL' && v.status === 'CONDITIONAL / UNDER REVIEW');
+    return matchesCategory && matchesStatus;
+  };
+  const procucevFilteredVendors = procucevVendorsList.filter(matchesCategoryAndStatus);
+  const procucevPagedVendors = procucevFilteredVendors;
+  const hasMoreProcucevVendors = !!procucevPagination && procucevPagination.page < procucevPagination.totalPages;
+
+  // Debounce free-text search before it re-triggers a server-side page fetch.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearchQuery(searchQuery), 350);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
+  const lastFetchedProcucevSearchRef = useRef<string | null>(null);
+  // Guards against a slower, earlier request resolving after a newer one
+  // and overwriting it with stale data.
+  const procucevFetchSeqRef = useRef(0);
+  useEffect(() => {
+    if (activeTab !== 'PROCUCEV_VENDORS') return;
+    if (fetchedProcucevVendors.length > 0 && lastFetchedProcucevSearchRef.current === debouncedSearchQuery) return;
+    lastFetchedProcucevSearchRef.current = debouncedSearchQuery;
+    const seq = ++procucevFetchSeqRef.current;
+    setProcucevLoading(true);
+    setProcucevError(null);
+    void fetchAllVendors({ page: 1, pageSize: PROCUCEV_VENDORS_PAGE_SIZE, search: debouncedSearchQuery }).then((result) => {
+      if (seq !== procucevFetchSeqRef.current) return;
+      if (result.success) {
+        setFetchedProcucevVendors(result.candidates);
+        setProcucevPagination(result.pagination);
+      } else {
+        setProcucevError(result.error);
+      }
+      setProcucevLoading(false);
+    });
+  }, [activeTab, debouncedSearchQuery, fetchedProcucevVendors.length]);
+
+  const loadMoreProcucevVendors = () => {
+    if (!procucevPagination || procucevLoadingMore) return;
+    const nextPage = procucevPagination.page + 1;
+    if (nextPage > procucevPagination.totalPages) return;
+    const seq = ++procucevFetchSeqRef.current;
+    setProcucevLoadingMore(true);
+    void fetchAllVendors({ page: nextPage, pageSize: PROCUCEV_VENDORS_PAGE_SIZE, search: debouncedSearchQuery }).then((result) => {
+      if (seq !== procucevFetchSeqRef.current) return;
+      if (result.success) {
+        setFetchedProcucevVendors((prev) => [...prev, ...result.candidates]);
+        setProcucevPagination(result.pagination);
+      } else {
+        setProcucevError(result.error);
+      }
+      setProcucevLoadingMore(false);
+    });
+  };
+
   const allFilteredVendors = mergedVendors.filter(filterVendorItem);
 
   const getStatusStyle = (status: string) => {
@@ -473,12 +629,15 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     const originDetails = getVendorOriginDetails(vendor);
 
     // Check if this vendor has submitted a quote in any RFQ
+    const vendorNameLower = (vendor.name || '').toLowerCase();
     const hasSubmittedQuote = rfqs.some((r) =>
-      r.quotes.some(
-        (q) =>
-          q.vendorName.toLowerCase().includes(vendor.name.toLowerCase()) ||
-          vendor.name.toLowerCase().includes(q.vendorName.toLowerCase())
-      )
+      (r.quotes || []).some((q) => {
+        const qNameLower = (q.vendorName || '').toLowerCase();
+        return (
+          (qNameLower && qNameLower.includes(vendorNameLower)) ||
+          (vendorNameLower && vendorNameLower.includes(qNameLower))
+        );
+      })
     );
 
     // Version Rules
@@ -856,6 +1015,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            data-testid="open-add-vendor-modal"
+            onClick={handleOpenAddModal}
+            className="btn btn-primary btn-sm flex items-center gap-1.5 shadow-sm"
+          >
+            <Plus size={14} /> Add Vendor
+          </button>
           {/* Upload Vendor Wizard Button */}
           {onNavigateToWizard && (
             <button
@@ -911,7 +1078,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 : 'bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-gray-300'
             }`}
           >
-            {procucevVendorsList.length}
+            {procucevPagination ? procucevPagination.total.toLocaleString() : procucevVendorsList.length}
           </span>
         </button>
       </div>
@@ -1060,7 +1227,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                     Procucev Vendors
                     <span className="text-[11px] font-normal px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200/50 font-mono">
-                      {procucevFilteredVendors.length} Suppliers
+                      {procucevPagedVendors.length}
+                      {procucevPagination ? ` of ${procucevPagination.total.toLocaleString()}` : ''} Suppliers
                     </span>
                   </h2>
                   <p className="text-[11px] text-slate-500 dark:text-gray-400">
@@ -1071,11 +1239,28 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             </div>
 
             <div className="space-y-3">
-              {procucevFilteredVendors.map(renderVendorCard)}
-              {procucevFilteredVendors.length === 0 && (
+              {procucevLoading && (
+                <p className="text-xs text-slate-400 dark:text-gray-500 py-8 text-center">Loading vendors…</p>
+              )}
+              {!procucevLoading && procucevError && (
+                <p className="text-xs text-rose-500 py-8 text-center">{procucevError}</p>
+              )}
+              {!procucevLoading && !procucevError && procucevPagedVendors.map(renderVendorCard)}
+              {!procucevLoading && !procucevError && procucevFilteredVendors.length === 0 && (
                 <div className="p-6 text-center text-slate-500 border border-dashed border-slate-200 dark:border-gray-800 rounded-2xl bg-slate-50/50 dark:bg-gray-950/40">
                   <p className="text-xs">No Procucev vendors match the selected filters.</p>
                 </div>
+              )}
+              {hasMoreProcucevVendors && (
+                <button
+                  type="button"
+                  data-testid="load-more-procucev-vendors"
+                  onClick={loadMoreProcucevVendors}
+                  disabled={procucevLoadingMore}
+                  className="w-full py-2 rounded-lg border border-dashed border-slate-300 dark:border-gray-700 text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 disabled:opacity-50"
+                >
+                  {procucevLoadingMore ? 'Loading…' : `Load ${PROCUCEV_VENDORS_PAGE_SIZE} more vendors`}
+                </button>
               )}
             </div>
           </div>
@@ -1083,6 +1268,206 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       </div>
 
 
+
+      {/* ========================================================================= */}
+      {/* ADD VENDOR MODAL */}
+      {/* ========================================================================= */}
+      {addModalOpen && (
+        <div className="modal-overlay !z-[1100]">
+          <div className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-indigo-200 dark:border-indigo-800 animate-fade-in max-h-[92vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-gray-800 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2.5 rounded-xl bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/60">
+                  <Plus size={22} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">Add Vendor</h3>
+                  <p className="text-xs text-slate-500 dark:text-gray-400">
+                    Add a vendor you deal with directly — added to your vendor directory only.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                data-testid="close-add-vendor-modal"
+                onClick={() => setAddModalOpen(false)}
+                disabled={isSubmittingAdd}
+                className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 disabled:opacity-40"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddVendorSubmit} className="overflow-y-auto my-3 space-y-3 pr-1 text-xs">
+              <div>
+                <label htmlFor="add-vendor-name" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                  Company Name <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  id="add-vendor-name"
+                  type="text"
+                  required
+                  value={formName}
+                  onChange={(e) => setFormName(e.target.value)}
+                  className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="add-vendor-contact" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    Contact Person <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    id="add-vendor-contact"
+                    type="text"
+                    required
+                    value={formContactPerson}
+                    onChange={(e) => setFormContactPerson(e.target.value)}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="add-vendor-phone" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">Phone</label>
+                  <input
+                    id="add-vendor-phone"
+                    type="tel"
+                    value={formPhone}
+                    onChange={(e) => setFormPhone(e.target.value)}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="add-vendor-email" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                  Email <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  id="add-vendor-email"
+                  type="email"
+                  required
+                  value={formEmail}
+                  onChange={(e) => setFormEmail(e.target.value)}
+                  className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="add-vendor-major-category" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                  Major Category <span className="text-rose-500">*</span>
+                </label>
+                <select
+                  id="add-vendor-major-category"
+                  required
+                  value={formMajorCategory}
+                  onChange={(e) => setFormMajorCategory(e.target.value)}
+                  className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                >
+                  {availableMajorCategories.map((cat) => (
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">Minor Categories</label>
+                <div className="flex flex-wrap gap-1.5 mb-1.5">
+                  {formMinorCategories.map((tag) => (
+                    <span
+                      key={tag}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 text-[10px] font-semibold"
+                    >
+                      {tag}
+                      <button type="button" onClick={() => handleRemoveMinorCategoryTag(tag)}>
+                        <X size={10} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                <input
+                  type="text"
+                  value={formMinorInput}
+                  onChange={(e) => setFormMinorInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleAddMinorCategoryTag(formMinorInput);
+                    }
+                  }}
+                  placeholder="Type a minor category and press Enter"
+                  className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label htmlFor="add-vendor-city" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">City</label>
+                  <input
+                    id="add-vendor-city"
+                    type="text"
+                    value={formCity}
+                    onChange={(e) => setFormCity(e.target.value)}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="add-vendor-state" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">State</label>
+                  <input
+                    id="add-vendor-state"
+                    type="text"
+                    value={formState}
+                    onChange={(e) => setFormState(e.target.value)}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="add-vendor-pincode" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">Pincode</label>
+                  <input
+                    id="add-vendor-pincode"
+                    type="text"
+                    value={formPincode}
+                    onChange={(e) => setFormPincode(e.target.value)}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="add-vendor-gstin" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">GSTIN</label>
+                <input
+                  id="add-vendor-gstin"
+                  type="text"
+                  value={formGst}
+                  onChange={(e) => setFormGst(e.target.value)}
+                  className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-gray-800">
+                <button
+                  type="button"
+                  onClick={() => setAddModalOpen(false)}
+                  disabled={isSubmittingAdd}
+                  className="btn btn-secondary btn-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingAdd}
+                  data-testid="submit-add-vendor"
+                  className="btn btn-primary btn-sm inline-flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {isSubmittingAdd ? 'Adding…' : 'Add Vendor'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* EDIT VENDOR MODAL */}

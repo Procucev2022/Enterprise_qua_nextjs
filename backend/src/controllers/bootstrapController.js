@@ -7,7 +7,7 @@ async function getBootstrap(req, res, next) {
     const user = req.user;
     let buyerId = null;
     if (user && user.role === 'buyer') {
-      const buyerAccount = storeService.getBuyerAccountByEmail(user.email);
+      const buyerAccount = await storeService.getBuyerAccountByEmail(user.email);
       buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
     } else if (req.query && req.query.buyerId) {
       buyerId = req.query.buyerId;
@@ -15,7 +15,7 @@ async function getBootstrap(req, res, next) {
     if (req.query && req.query.refresh === 'true') {
       await storeService.hydrateFromDB();
     }
-    const data = storeService.getBootstrapData(buyerId);
+    const data = await storeService.getBootstrapData(buyerId, user && user.email);
     res.json({
       success: true,
       source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory',

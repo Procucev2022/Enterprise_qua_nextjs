@@ -294,6 +294,19 @@ export type RFQVendorCandidatesResult =
   | { success: true; candidates: RFQVendorCandidate[] }
   | { success: false; reason: RFQTransportFailure; error: string };
 
+/** Page metadata returned alongside a paginated vendor listing. */
+export interface VendorPageMeta {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
+/** Outcome of fetching one page of the full (unfiltered-by-category) vendor directory. */
+export type RFQVendorPageResult =
+  | { success: true; candidates: RFQVendorCandidate[]; pagination: VendorPageMeta }
+  | { success: false; reason: RFQTransportFailure; error: string };
+
 /** Outcome of inviting vendors to an RFQ. */
 export type RFQInviteVendorsResult =
   | { success: true; rfq: RFQItem; invitedCount: number }
@@ -906,6 +919,13 @@ export interface VendorUploadRow {
   };
   isValid: boolean;
   errors: string[];
+  /**
+   * True when the row has no email at all. Not treated as invalid — the row
+   * still uploads (email is nullable in Postgres, never fabricated) — but
+   * surfaced distinctly so a buyer/CM reviewing a large import can see and
+   * export exactly which rows need a manual follow-up.
+   */
+  missingEmail: boolean;
 }
 
 /** One row's outcome as reported back by POST /api/vendors/bulk-import. */
@@ -915,12 +935,17 @@ export interface VendorUploadRowResult {
   email?: string;
   errors?: string[];
   reason?: string;
+  missingEmail?: boolean;
 }
 
 /** Aggregate response from one bulk-import chunk request. */
 export interface VendorUploadImportResponse {
+  /** Ties every chunk of one upload run together — see bulkImportVendorRows. */
+  sessionId?: string;
   total: number;
   imported: number;
+  /** Successfully imported rows that carried no email. */
+  missingEmail: number;
   duplicates: number;
   failed: number;
   results: VendorUploadRowResult[];

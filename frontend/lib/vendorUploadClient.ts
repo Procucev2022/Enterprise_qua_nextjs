@@ -104,14 +104,17 @@ export function parseVendorUploadFile(file: File): Promise<ParseVendorFileResult
         const nameCol = findColumn(headerKeys, ['companyname', 'company name', 'vendor name', 'name']);
         const contactCol = findColumn(headerKeys, ['personname', 'person name', 'contactperson', 'contact person']);
         const emailCol = findColumn(headerKeys, ['emailid', 'email id', 'email']);
-        const phoneCol = findColumn(headerKeys, ['mobileno', 'mobile no', 'mobile', 'phone']);
+        const phoneCol = findColumn(headerKeys, ['mobileno', 'mobile no', 'mobile', 'phone', 'phone number', 'phonenumber']);
         const gstinCol = findColumn(headerKeys, ['gstin']);
         const pincodeCol = findColumn(headerKeys, ['pincode', 'pin code']);
         const cityCol = findColumn(headerKeys, ['city']);
         const stateCol = findColumn(headerKeys, ['state']);
         const productsCol = findColumn(headerKeys, ['products']);
-        // Category may be one combined column or the sheet's real Cate-1..5 spread.
-        const categoryCols = headerKeys.filter((k) => /^cate\s*-?\s*[1-5]$/i.test(k.trim()) || /^category$/i.test(k.trim()));
+        // Category may be one combined column (including the marketplace
+        // scrape's misspelled "Categorys") or the sheet's real Cate-1..5 spread.
+        const categoryCols = headerKeys.filter(
+          (k) => /^cate\s*-?\s*[1-5]$/i.test(k.trim()) || /^categor(y|ys|ies)$/i.test(k.trim())
+        );
 
         if (!nameCol && !emailCol && !phoneCol) {
           resolve({
@@ -146,8 +149,13 @@ export function parseVendorUploadFile(file: File): Promise<ParseVendorFileResult
 
           const errors: string[] = [];
           if (!name) errors.push('Company name is required.');
-          if (!email) errors.push('Email is required.');
-          else if (!EMAIL_PATTERN.test(email)) errors.push('Email is not a valid email address.');
+          // A row with no email is not rejected — it still uploads with a
+          // null email (never fabricated) and is flagged via `missingEmail`
+          // instead, so a large marketplace-directory import doesn't drop or
+          // invent contact data for the many real rows that genuinely have
+          // none. A row that DOES supply an email is still format-checked.
+          const missingEmail = !email;
+          if (email && !EMAIL_PATTERN.test(email)) errors.push('Email is not a valid email address.');
           if (!phone) errors.push('Mobile number is required.');
           else if (!INDIAN_MOBILE_PATTERN.test(phone)) errors.push('Mobile number must be a valid 10-digit Indian number.');
           if (gstin && !GSTIN_PATTERN.test(gstin)) errors.push('GSTIN format is invalid.');
@@ -167,6 +175,7 @@ export function parseVendorUploadFile(file: File): Promise<ParseVendorFileResult
             vendor: { name, email, phone, contactPerson, gstin, city, state, pincode, majorCategory, products },
             isValid: errors.length === 0,
             errors,
+            missingEmail,
           });
         });
 
@@ -209,24 +218,42 @@ export function downloadVendorUploadTemplate(): void {
   URL.revokeObjectURL(url);
 }
 
-const BULK_IMPORT_CHUNK_SIZE = 200;
+// 1000 rows/chunk against a batched multi-row INSERT (never one query per
+// row server-side) cuts a 634k-row upload down to ~635 requests instead of
+// ~3,200 at the old 200/chunk size.
+const BULK_IMPORT_CHUNK_SIZE = 1000;
 
 /**
  * Sends only the already-valid rows to the backend, in bounded chunks —
  * never one request per vendor, never the whole file in a single request.
  * `onProgress` fires after each chunk so the caller can show a running
- * imported/duplicate/failed count while a large upload is still in flight.
+ * imported/missing-email/duplicate/failed count while a large upload is
+ * still in flight.
+ *
+ * `resumeSessionId` lets a later call (e.g. after a page reload) attach to
+ * an upload run already in progress on the server, so a dropped
+ * connection/tab doesn't lose the running totals a very large upload has
+ * already accumulated.
  */
 export async function bulkImportVendorRows(
   validRows: VendorUploadRow[],
-  onProgress?: (soFar: VendorUploadImportResponse) => void
+  onProgress?: (soFar: VendorUploadImportResponse) => void,
+  resumeSessionId?: string
 ): Promise<VendorUploadImportResponse> {
   const token = authClient.getToken();
-  const aggregate: VendorUploadImportResponse = { total: 0, imported: 0, duplicates: 0, failed: 0, results: [] };
+  const aggregate: VendorUploadImportResponse = {
+    sessionId: resumeSessionId,
+    total: 0,
+    imported: 0,
+    missingEmail: 0,
+    duplicates: 0,
+    failed: 0,
+    results: [],
+  };
 
   for (let i = 0; i < validRows.length; i += BULK_IMPORT_CHUNK_SIZE) {
     const chunk = validRows.slice(i, i + BULK_IMPORT_CHUNK_SIZE);
-    const payload = chunk.map((r) => ({ rowNumber: r.rowNumber, ...r.vendor }));
+    const payload = chunk.map((r) => ({ rowNumber: r.rowNumber, ...r.vendor, email: r.vendor.email || undefined }));
 
     let res: Response;
     try {
@@ -236,7 +263,11 @@ export async function bulkImportVendorRows(
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ vendors: payload }),
+        body: JSON.stringify({
+          vendors: payload,
+          sessionId: aggregate.sessionId,
+          totalRowsDeclared: validRows.length,
+        }),
       });
     } catch {
       const results: VendorUploadRowResult[] = chunk.map((r) => ({
@@ -268,8 +299,10 @@ export async function bulkImportVendorRows(
       aggregate.failed += chunk.length;
       aggregate.results.push(...results);
     } else {
+      aggregate.sessionId = body.data.sessionId || aggregate.sessionId;
       aggregate.total += body.data.total;
       aggregate.imported += body.data.imported;
+      aggregate.missingEmail += body.data.missingEmail || 0;
       aggregate.duplicates += body.data.duplicates;
       aggregate.failed += body.data.failed;
       aggregate.results.push(...body.data.results);

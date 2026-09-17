@@ -917,9 +917,11 @@ describe('Category Manager Screens Suite', () => {
         expect(screen.getAllByText(/Apex Supplies Ltd\./i)[0]).toBeInTheDocument();
       });
 
-      // Test search
+      // Test search (server-side, debounced — wait for the re-fetch to land
+      // and Apex, which does not match "Kiran", to actually drop out).
       const searchInput = screen.getByPlaceholderText(/Search Vendor name or category/i);
       fireEvent.change(searchInput, { target: { value: 'Kiran' } });
+      await waitFor(() => expect(screen.queryByText(/Apex Supplies Ltd\./i)).not.toBeInTheDocument(), { timeout: 2000 });
       expect(screen.getAllByText(/Kiran Valves & Actuators/i)[0]).toBeInTheDocument();
 
       // Test company filter dropdown and dependent contact dropdown
@@ -927,24 +929,28 @@ describe('Category Manager Screens Suite', () => {
       if (selects.length >= 2) {
         fireEvent.change(selects[0], { target: { value: 'Kiran Valves & Actuators' } });
         fireEvent.change(selects[1], { target: { value: 'vendor-2' } });
+        fireEvent.change(selects[1], { target: { value: 'all' } });
         fireEvent.change(selects[0], { target: { value: 'all' } });
       }
 
       // Test vendor with no active bids — the bootstrap mock's only quote
       // belongs to vendor-1 (Apex), so vendor-2 (Kiran) genuinely has none.
-      fireEvent.change(searchInput, { target: { value: 'Kiran' } });
+      // Search is already 'Kiran' from above, so Apex is already excluded.
       const kiranVendor = screen.getAllByText(/Kiran Valves & Actuators/i)[0];
       fireEvent.click(kiranVendor);
       const reviewBtnsForKiran = screen.queryAllByRole('button', { name: /Review Performance/i });
       if (reviewBtnsForKiran.length > 0) {
         fireEvent.click(reviewBtnsForKiran[0]);
-        expect(screen.getByText(/No active bids or quotes found in category database for this vendor/i)).toBeInTheDocument();
+        await waitFor(() =>
+          expect(screen.getByText(/No active bids or quotes found in category database for this vendor/i)).toBeInTheDocument()
+        );
         const hideBtn = screen.getByRole('button', { name: /Hide Details/i });
         fireEvent.click(hideBtn);
       }
 
       // Test review performance for first vendor
       fireEvent.change(searchInput, { target: { value: '' } });
+      await waitFor(() => expect(screen.getAllByText(/Apex Supplies Ltd\./i)[0]).toBeInTheDocument());
       const reviewBtns = screen.queryAllByRole('button', { name: /Review Performance/i });
       if (reviewBtns.length > 0) {
         fireEvent.click(reviewBtns[0]);

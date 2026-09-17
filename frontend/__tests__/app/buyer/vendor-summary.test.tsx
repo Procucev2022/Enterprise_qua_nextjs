@@ -2,10 +2,16 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import VendorSummary, { isBuyerUploaded, isProcucevVendor } from '@/app/buyer/vendor-summary';
 import { useApp } from '@/lib/store';
+import * as rfqClient from '@/lib/rfqClient';
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
 }));
+jest.mock('@/lib/rfqClient', () => ({
+  fetchAllVendors: jest.fn(),
+}));
+
+const mockFetchAllVendors = rfqClient.fetchAllVendors as jest.Mock;
 
 describe('app/buyer/vendor-summary.tsx', () => {
   const mockOnViewEvaluation = jest.fn();
@@ -141,6 +147,12 @@ describe('app/buyer/vendor-summary.tsx', () => {
     },
   ];
 
+  // The "Procucev Vendors" tab is fetched via fetchAllVendors (the real
+  // 80k+-row marketplace directory), never from buyerVendors — mockBuyerVendors
+  // above still carries these for other fixtures (rfqs reference them by id),
+  // but the mock below is what the tab itself actually renders from.
+  const mockProcucevVendors = mockBuyerVendors.filter((v) => v.source === 'procucev_network');
+
   beforeEach(() => {
     jest.clearAllMocks();
     (useApp as jest.Mock).mockReturnValue({
@@ -159,6 +171,22 @@ describe('app/buyer/vendor-summary.tsx', () => {
       reviseVendorRating: mockReviseVendorRating,
       openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
       activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
+    });
+    mockFetchAllVendors.mockImplementation(async (opts: { search?: string } = {}) => {
+      const q = (opts.search || '').toLowerCase();
+      const candidates = q
+        ? mockProcucevVendors.filter(
+            (v) =>
+              v.name.toLowerCase().includes(q) ||
+              (v.majorCategory || '').toLowerCase().includes(q) ||
+              (v.email || '').toLowerCase().includes(q)
+          )
+        : mockProcucevVendors;
+      return {
+        success: true,
+        candidates,
+        pagination: { page: 1, pageSize: 20, total: candidates.length, totalPages: 1 },
+      };
     });
   });
 
@@ -202,7 +230,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
     expect(screen.getByText(/Vendors added through Buyer Initial Setup/i)).toBeInTheDocument();
   });
 
-  it('handles tab switches between Uploaded by Buyer and Procucev Vendors', () => {
+  it('handles tab switches between Uploaded by Buyer and Procucev Vendors', async () => {
     render(
       <VendorSummary
         onViewEvaluation={mockOnViewEvaluation}
@@ -219,7 +247,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
     fireEvent.click(procucevTabBtn);
 
     expect(screen.queryByText('Apex Supplies Ltd.')).not.toBeInTheDocument();
-    expect(screen.getByText('TechnoForce Electricals Ltd')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('TechnoForce Electricals Ltd')).toBeInTheDocument());
 
     // Click "Uploaded by Buyer" tab button
     const buyerTabBtn = screen.getByRole('button', { name: /Uploaded by Buyer/i });
@@ -229,7 +257,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
     expect(screen.queryByText('TechnoForce Electricals Ltd')).not.toBeInTheDocument();
   });
 
-  it('renders stats counters, vendor cards, and handles search & filters', () => {
+  it('renders stats counters, vendor cards, and handles search & filters', async () => {
     render(
       <VendorSummary
         onViewEvaluation={mockOnViewEvaluation}
@@ -270,7 +298,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
     // Switch to Procucev Vendors tab to test NOT_EVALUATED
     fireEvent.click(screen.getByRole('button', { name: /Procucev Vendors/i }));
     fireEvent.change(selects[1], { target: { value: 'NOT_EVALUATED' } });
-    expect(screen.getByText('TechnoForce Electricals Ltd')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('TechnoForce Electricals Ltd')).toBeInTheDocument());
 
     // Switch back to Uploaded by Buyer tab
     fireEvent.click(screen.getByRole('button', { name: /Uploaded by Buyer/i }));
@@ -288,7 +316,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
     expect(screen.getByText(/No buyer-uploaded vendors match the selected filters/i)).toBeInTheDocument();
   });
 
-  it('handles viewing 360° evaluation report and triggering AI evaluation request', () => {
+  it('handles viewing 360° evaluation report and triggering AI evaluation request', async () => {
     render(
       <VendorSummary
         onViewEvaluation={mockOnViewEvaluation}
@@ -305,6 +333,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
     // Trigger evaluation on non-evaluated vendor in Mode 3 (in Procucev Vendors tab)
     fireEvent.click(screen.getByRole('button', { name: /Procucev Vendors/i }));
+    await waitFor(() => expect(screen.getByText('TechnoForce Electricals Ltd')).toBeInTheDocument());
     const triggerBtns = screen.getAllByText(/Trigger Evaluation/i);
     fireEvent.click(triggerBtns[0]);
     expect(mockShowToast).toHaveBeenCalledWith(
@@ -314,7 +343,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
     );
   });
 
-  it('handles rating revision modal workflow for vendor with and without prior revision', () => {
+  it('handles rating revision modal workflow for vendor with and without prior revision', async () => {
     render(
       <VendorSummary
         onViewEvaluation={mockOnViewEvaluation}
@@ -361,6 +390,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
     // 3. Click Revise Rating for HydraFlow Systems (net-5, network vendor active in RFQ, in Procucev tab)
     fireEvent.click(screen.getByRole('button', { name: /Procucev Vendors/i }));
+    await waitFor(() => expect(screen.getByText('TechnoForce Electricals Ltd')).toBeInTheDocument());
     const procucevReviseBtns = screen.getAllByText(/Revise Rating/i);
     fireEvent.click(procucevReviseBtns[0]);
     expect(screen.getByText('Revise Supplier Performance Rating')).toBeInTheDocument();
@@ -376,7 +406,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
     expect(mockOpenRatingRevisionEmailModal).toHaveBeenCalled();
   });
 
-  it('handles locked rating revision on unengaged vendors and empty remarks warning', () => {
+  it('handles locked rating revision on unengaged vendors and empty remarks warning', async () => {
     render(
       <VendorSummary
         onViewEvaluation={mockOnViewEvaluation}
@@ -386,6 +416,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
     // Switch to Procucev tab to find locked vendor net-4
     fireEvent.click(screen.getByRole('button', { name: /Procucev Vendors/i }));
+    await waitFor(() => expect(screen.getByText(/Rating Locked/i)).toBeInTheDocument());
 
     // Click locked rating button on unengaged vendor (net-4)
     const lockedBtn = screen.getByText(/Rating Locked/i);
@@ -411,7 +442,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
     );
   });
 
-  it('handles Mode 1 and Mode 2 rendering rules, non-overlap, and quote submissions', () => {
+  it('handles Mode 1 and Mode 2 rendering rules, non-overlap, and quote submissions', async () => {
     // Mode 1: Private Roster only
     (useApp as jest.Mock).mockReturnValue({
       vendorEvaluations: mockEvaluationRecords,
@@ -431,7 +462,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       />
     );
     fireEvent.click(screen.getByRole('button', { name: /Procucev Vendors/i }));
-    expect(screen.getAllByText('UNAVAILABLE IN V1')[0]).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText('UNAVAILABLE IN V1')[0]).toBeInTheDocument());
 
     // Mode 2: Hybrid Sourcing with quote lock on network partners
     (useApp as jest.Mock).mockReturnValue({
@@ -452,7 +483,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       />
     );
     // Already in Procucev Vendors tab from previous step:
-    expect(screen.getAllByText('LOCKED (PENDING BID)')[0]).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText('LOCKED (PENDING BID)')[0]).toBeInTheDocument());
 
     // Switch to Uploaded by Buyer tab:
     fireEvent.click(screen.getByRole('button', { name: /Uploaded by Buyer/i }));
@@ -484,7 +515,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       />
     );
     fireEvent.click(screen.getByRole('button', { name: /Procucev Vendors/i }));
-    expect(screen.getAllByText(/Trigger Evaluation/i)[0]).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText(/Trigger Evaluation/i)[0]).toBeInTheDocument());
   });
 
   describe('Vendor CRUD Operations', () => {
@@ -507,6 +538,126 @@ describe('app/buyer/vendor-summary.tsx', () => {
       // Close modal
       fireEvent.click(screen.getByRole('button', { name: 'Close' }));
       expect(screen.queryByText('Comprehensive supplier registration, compliance, and taxonomy profile.')).not.toBeInTheDocument();
+    });
+
+    it('handles Add Vendor modal workflow (open, fill required fields, submit, persists via addBuyerVendor)', async () => {
+      mockAddBuyerVendor.mockResolvedValue({ id: 'v-new', name: 'New Direct Vendor', email: 'new-direct@vendor.test' });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
+      expect(screen.getByRole('heading', { name: 'Add Vendor' })).toBeInTheDocument();
+
+      // Submitting with required fields blank (whitespace passes HTML5
+      // `required` but fails the handler's own .trim() check) shows a
+      // validation toast and never calls the backend.
+      fireEvent.change(screen.getByLabelText(/Company Name/i), { target: { value: '   ' } });
+      fireEvent.change(screen.getByLabelText(/Contact Person/i), { target: { value: '   ' } });
+      fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'a@b.com' } });
+      fireEvent.click(screen.getByTestId('submit-add-vendor'));
+      expect(mockShowToast).toHaveBeenCalledWith('Validation Error', expect.any(String), 'warning');
+      expect(mockAddBuyerVendor).not.toHaveBeenCalled();
+
+      fireEvent.change(screen.getByLabelText(/Company Name/i), { target: { value: 'New Direct Vendor' } });
+      fireEvent.change(screen.getByLabelText(/Contact Person/i), { target: { value: 'Priya Singh' } });
+      fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'new-direct@vendor.test' } });
+      fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '9876543210' } });
+      fireEvent.change(screen.getByLabelText(/Major Category/i), { target: { value: 'Electrical' } });
+      fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Mumbai' } });
+      fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
+      fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '400001' } });
+      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27AAAAA0000A1Z5' } });
+
+      fireEvent.click(screen.getByTestId('submit-add-vendor'));
+
+      await waitFor(() => expect(mockAddBuyerVendor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'New Direct Vendor',
+          contactPerson: 'Priya Singh',
+          email: 'new-direct@vendor.test',
+          phone: '9876543210',
+          majorCategory: 'Electrical',
+          city: 'Mumbai',
+          state: 'Maharashtra',
+          pincode: '400001',
+        })
+      ));
+      // Modal closes only after the backend confirms the write.
+      await waitFor(() => expect(screen.queryByRole('heading', { name: 'Add Vendor' })).not.toBeInTheDocument());
+    });
+
+    it('closes the Add Vendor modal via the header close button', () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
+      fireEvent.click(screen.getByTestId('close-add-vendor-modal'));
+      expect(screen.queryByRole('heading', { name: 'Add Vendor' })).not.toBeInTheDocument();
+      expect(mockAddBuyerVendor).not.toHaveBeenCalled();
+    });
+
+    it('keeps the Add Vendor modal open with the form intact when the backend rejects the write', async () => {
+      mockAddBuyerVendor.mockResolvedValue(null);
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
+      fireEvent.change(screen.getByLabelText(/Company Name/i), { target: { value: 'Rejected Vendor Co' } });
+      fireEvent.change(screen.getByLabelText(/Contact Person/i), { target: { value: 'Someone' } });
+      fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'rejected@vendor.test' } });
+      fireEvent.click(screen.getByTestId('submit-add-vendor'));
+
+      await waitFor(() => expect(mockAddBuyerVendor).toHaveBeenCalled());
+      // addBuyerVendor itself is responsible for the failure toast; the modal
+      // just stays open so nothing typed is lost.
+      expect(screen.getByRole('heading', { name: 'Add Vendor' })).toBeInTheDocument();
+      expect(screen.getByDisplayValue('Rejected Vendor Co')).toBeInTheDocument();
+    });
+
+    it('adds and removes a minor category tag in the Add Vendor form', () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
+      const minorInput = screen.getByPlaceholderText(/Type a minor category and press Enter/i);
+      fireEvent.change(minorInput, { target: { value: 'Custom Category' } });
+      fireEvent.keyDown(minorInput, { key: 'Enter' });
+      expect(screen.getByText('Custom Category')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByText('Custom Category').closest('span')!.querySelector('button')!);
+      expect(screen.queryByText('Custom Category')).not.toBeInTheDocument();
+    });
+
+    it('closes the Add Vendor modal via Cancel without calling addBuyerVendor', () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(screen.queryByRole('heading', { name: 'Add Vendor' })).not.toBeInTheDocument();
+      expect(mockAddBuyerVendor).not.toHaveBeenCalled();
     });
 
     it('handles Edit Vendor modal workflow (open, update fields, save changes)', () => {
@@ -560,7 +711,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(mockDeleteBuyerVendor).toHaveBeenCalledWith('v-1');
     });
 
-    it('handles tab navigation, search input, status filter, and category filter', () => {
+    it('handles tab navigation, search input, status filter, and category filter', async () => {
       render(
         <VendorSummary
           onViewEvaluation={mockOnViewEvaluation}
@@ -581,7 +732,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       // Switch to Procucev Network Tab
       const procucevTab = screen.getByRole('button', { name: /Procucev Vendors/i });
       fireEvent.click(procucevTab);
-      expect(screen.getByText('TechnoForce Electricals Ltd')).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByText('TechnoForce Electricals Ltd')).toBeInTheDocument());
 
       // Switch back to Buyer Uploaded Tab
       const buyerTab = screen.getByRole('button', { name: /Uploaded by Buyer/i });
@@ -856,7 +1007,12 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
     });
 
-    it('covers all vendor-origin badge classification branches', () => {
+    it('covers all vendor-origin badge classification branches', async () => {
+      // Every source string here is non-buyer-uploaded (see isBuyerUploaded),
+      // so all of these are only ever reachable via the "Procucev Vendors" tab
+      // — which is fetched from the server (fetchAllVendors), never from the
+      // buyerVendors context. Overriding the fetch mock for this test is what
+      // actually exercises each origin-badge classification branch.
       const originVendors = [
         { ...mockBuyerVendors[0], id: 'o-1', source: 'historical_purchase_dump' },
         { ...mockBuyerVendors[0], id: 'o-2', source: 'vendor_master_ingestion' },
@@ -872,13 +1028,18 @@ describe('app/buyer/vendor-summary.tsx', () => {
           addedByBuyerCompany: 'Larsen & Toubro Limited',
         },
       ];
+      mockFetchAllVendors.mockResolvedValue({
+        success: true,
+        candidates: originVendors,
+        pagination: { page: 1, pageSize: 20, total: originVendors.length, totalPages: 1 },
+      });
 
       (useApp as jest.Mock).mockReturnValue({
         vendorEvaluations: mockEvaluationRecords,
         currentMode: 'mode_3',
         rfqs: mockRFQs,
         showToast: mockShowToast,
-        buyerVendors: originVendors,
+        buyerVendors: mockBuyerVendors,
         addBuyerVendor: mockAddBuyerVendor,
         updateBuyerVendor: mockUpdateBuyerVendor,
         deleteBuyerVendor: mockDeleteBuyerVendor,
@@ -902,10 +1063,10 @@ describe('app/buyer/vendor-summary.tsx', () => {
       // Excel / category-manager / self-onboarded sources are classified as non-buyer-uploaded,
       // so they render under the Procucev Vendors tab.
       fireEvent.click(screen.getByRole('button', { name: /Procucev Vendors/i }));
-      expect(screen.getAllByText('Apex Supplies Ltd.').length).toBeGreaterThan(0);
+      await waitFor(() => expect(screen.getAllByText('Apex Supplies Ltd.').length).toBeGreaterThan(0));
     });
 
-    it('renders View Profile / Origin / Engagement default fallbacks for a vendor with minimal fields', () => {
+    it('renders View Profile / Origin / Engagement default fallbacks for a vendor with minimal fields', async () => {
       const minimalVendor = {
         id: '',
         name: 'Bare Minimum Traders',
@@ -913,6 +1074,13 @@ describe('app/buyer/vendor-summary.tsx', () => {
         source: 'totally_unknown_source',
         evaluated: false,
       };
+      // Non-buyer-uploaded, unrecognized source -> only reachable via the
+      // "Procucev Vendors" tab, which is fetched from the server.
+      mockFetchAllVendors.mockResolvedValue({
+        success: true,
+        candidates: [minimalVendor],
+        pagination: { page: 1, pageSize: 20, total: 1, totalPages: 1 },
+      });
 
       (useApp as jest.Mock).mockReturnValue({
         vendorEvaluations: [],
@@ -925,7 +1093,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
           },
         ],
         showToast: mockShowToast,
-        buyerVendors: [minimalVendor],
+        buyerVendors: [],
         addBuyerVendor: mockAddBuyerVendor,
         updateBuyerVendor: mockUpdateBuyerVendor,
         deleteBuyerVendor: mockDeleteBuyerVendor,
@@ -944,7 +1112,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       // Non-buyer-uploaded, unrecognized source -> Procucev Vendors tab
       fireEvent.click(screen.getByRole('button', { name: /Procucev Vendors/i }));
-      expect(screen.getByText('Bare Minimum Traders')).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByText('Bare Minimum Traders')).toBeInTheDocument());
 
       // Rating locked (not engaged in any RFQ, not buyer-uploaded)
       fireEvent.click(screen.getByText(/Rating Locked/i));
@@ -1010,6 +1178,64 @@ describe('app/buyer/vendor-summary.tsx', () => {
           country: 'India',
         })
       );
+    });
+  });
+
+  describe('Procucev Vendors server pagination', () => {
+    it('loads a second page via the "Load more" button', async () => {
+      mockFetchAllVendors.mockResolvedValueOnce({
+        success: true,
+        candidates: [mockProcucevVendors[0]],
+        pagination: { page: 1, pageSize: 1, total: 2, totalPages: 2 },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Procucev Vendors/i }));
+      await waitFor(() =>
+        expect(screen.getByTestId('load-more-procucev-vendors')).toBeInTheDocument()
+      );
+
+      mockFetchAllVendors.mockResolvedValueOnce({
+        success: true,
+        candidates: [mockProcucevVendors[1]],
+        pagination: { page: 2, pageSize: 1, total: 2, totalPages: 2 },
+      });
+      fireEvent.click(screen.getByTestId('load-more-procucev-vendors'));
+
+      await waitFor(() =>
+        expect(mockFetchAllVendors).toHaveBeenCalledWith(
+          expect.objectContaining({ page: 2 })
+        )
+      );
+      await waitFor(() =>
+        expect(screen.queryByTestId('load-more-procucev-vendors')).not.toBeInTheDocument()
+      );
+    });
+
+    it('shows the fetch error message instead of the vendor list when the server call fails', async () => {
+      mockFetchAllVendors.mockResolvedValueOnce({
+        success: false,
+        error: 'Network error loading vendors.',
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Procucev Vendors/i }));
+      await waitFor(() =>
+        expect(screen.getByText('Network error loading vendors.')).toBeInTheDocument()
+      );
+      expect(screen.queryByText('TechnoForce Electricals Ltd')).not.toBeInTheDocument();
     });
   });
 });

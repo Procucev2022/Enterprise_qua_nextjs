@@ -212,8 +212,57 @@ describe('API Route Endpoints', () => {
     });
 
     test('POST /api/vendors returns 403 for a role that cannot create a vendor profile', async () => {
-      const res = await request(app).post('/api/vendors').set(authHeader('buyer')).send({ name: 'X', majorCategory: 'Y' });
+      const res = await request(app).post('/api/vendors').set(authHeader('category_manager')).send({ name: 'X', majorCategory: 'Y' });
       expect(res.statusCode).toBe(403);
+    });
+
+    test('POST /api/vendors returns 403 for a buyer with no linked buyer account', async () => {
+      // TEST_USERS.buyer has no addBuyerAccount row in this suite's fixtures.
+      const res = await request(app)
+        .post('/api/vendors')
+        .set(authHeader('buyer'))
+        .send({ name: 'Unlinked Buyer Vendor', email: 'unlinked@vendor.test', majorCategory: 'Fasteners' });
+      expect(res.statusCode).toBe(403);
+    });
+
+    test('POST /api/vendors: a buyer with a linked account can add a vendor directly, scoped and whitelisted server-side', async () => {
+      const buyerAccount = storeService.addBuyerAccount({
+        organizationName: 'API Test Buyer Co',
+        corporateEmail: TEST_USERS.buyer.email,
+      });
+
+      const res = await request(app)
+        .post('/api/vendors')
+        .set(authHeader('buyer'))
+        .send({
+          name: 'Direct API Vendor',
+          email: 'direct-api-vendor@test.com',
+          phone: '9876543210',
+          majorCategory: 'Fasteners',
+          buyerId: 'someone-elses-id',
+          addedByBuyerCompany: 'Spoofed Company',
+        });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body.data.buyerId).toBe(buyerAccount.id);
+      expect(res.body.data.addedByBuyerCompany).toBe('API Test Buyer Co');
+    });
+
+    test('POST /api/vendors: a buyer omitting a vendor email is rejected', async () => {
+      storeService.addBuyerAccount({
+        organizationName: 'Email Required API Co',
+        corporateEmail: 'email-required-api-buyer@test.com',
+      });
+      const token = authService.generateSessionToken({
+        id: 'usr-buyer-002',
+        email: 'email-required-api-buyer@test.com',
+        role: 'buyer',
+      });
+      const res = await request(app)
+        .post('/api/vendors')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'No Email Vendor', majorCategory: 'Cables' });
+      expect(res.statusCode).toBe(400);
     });
 
     test('POST /api/vendors returns 400 when missing name or majorCategory', async () => {
@@ -347,12 +396,12 @@ describe('API Route Endpoints', () => {
           organizationName: 'Entitlement Trial Buyer',
           corporateEmail: email,
         });
-        expect(storeService.getBuyerAccountByEmail(email)).toMatchObject({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 5 });
+        expect(await storeService.getBuyerAccountByEmail(email)).toMatchObject({ subscriptionPlan: 'free_trial', remainingFreeRFQs: 5 });
 
         const res = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload());
 
         expect(res.statusCode).toBe(201);
-        expect(storeService.getBuyerAccountByEmail(email).remainingFreeRFQs).toBe(4);
+        expect((await storeService.getBuyerAccountByEmail(email)).remainingFreeRFQs).toBe(4);
         void acc;
       });
 
@@ -362,7 +411,7 @@ describe('API Route Endpoints', () => {
           organizationName: 'Entitlement Exhausted Buyer',
           corporateEmail: email,
         });
-        storeService.updateBuyerAccount(storeService.getBuyerAccountByEmail(email).id, { remainingFreeRFQs: 0 });
+        storeService.updateBuyerAccount((await storeService.getBuyerAccountByEmail(email)).id, { remainingFreeRFQs: 0 });
 
         const res = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload());
 
@@ -398,7 +447,7 @@ describe('API Route Endpoints', () => {
         expect(mode3Res.statusCode).toBe(403);
 
         // A paid plan has no numeric quota to decrement.
-        expect(storeService.getBuyerAccountByEmail(email).remainingFreeRFQs).toBe(5);
+        expect((await storeService.getBuyerAccountByEmail(email)).remainingFreeRFQs).toBe(5);
       });
 
       test('a version_3 buyer may raise mode_3', async () => {
@@ -944,7 +993,7 @@ describe('API Route Endpoints', () => {
       const pool = require('../src/db/pool');
       const buyerProfileQueries = require('../src/db/buyerProfileQueries');
       const originalPool = pool.pool;
-      pool.pool = { stub: true };
+      pool.pool = { stub: true, query: jest.fn().mockResolvedValue({ rows: [] }) };
       const spy = jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({
         profile: {
           organizationId: 'org-real-01',

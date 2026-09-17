@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
-import { RFQItem } from '@/lib/types';
+import { RFQItem, RFQVendorCandidate, VendorPageMeta } from '@/lib/types';
+import { fetchAllVendors } from '@/lib/rfqClient';
 import { formatCurrency } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import {
@@ -41,9 +42,24 @@ function avatarStyleFor(name: string) {
   return AVATAR_PALETTE[hash % AVATAR_PALETTE.length];
 }
 
+// Fetched a page at a time straight from the real vendor directory (which
+// reached 80k+ rows via a bulk Vendor Master import) — the bootstrap payload
+// this screen used to read from is capped at 500, so it silently hid the
+// vast majority of real vendors. Same pagination pattern as the Invite
+// Vendors modal (see InviteVendorsModal.tsx), including the same
+// "aggregate metrics only cover loaded pages" caveat.
+const VENDOR_CARDS_PAGE_SIZE = 20;
+const SEARCH_DEBOUNCE_MS = 350;
+
 export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluation }: VendorConsoleProps) {
-  const { rfqs, buyerVendors } = useApp();
+  const { rfqs } = useApp();
+  const [fetchedVendors, setFetchedVendors] = useState<RFQVendorCandidate[]>([]);
+  const [vendorsPagination, setVendorsPagination] = useState<VendorPageMeta | null>(null);
+  const [vendorsLoading, setVendorsLoading] = useState(true);
+  const [vendorsLoadingMore, setVendorsLoadingMore] = useState(false);
+  const [vendorsError, setVendorsError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedVendorId, setSelectedVendorId] = useState<string | null>(null);
   const [expandedQuoteNumber, setExpandedQuoteNumber] = useState<string | null>(null);
   // Tracks an explicit user collapse ("Hide Details") so dropdown-driven
@@ -55,19 +71,70 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
   const [selectedContactFilterId, setSelectedContactFilterId] = useState<string>('all');
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
 
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchTerm), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [searchTerm]);
+
+  const lastFetchedSearchRef = useRef<string | null>(null);
+  // Guards against a slower, earlier request (e.g. the initial unfiltered
+  // load) resolving AFTER a newer, filtered one and overwriting it with
+  // stale data — only the most recently *issued* request's response is ever
+  // applied.
+  const fetchSeqRef = useRef(0);
+  useEffect(() => {
+    if (fetchedVendors.length > 0 && lastFetchedSearchRef.current === debouncedSearch) return;
+    lastFetchedSearchRef.current = debouncedSearch;
+    const seq = ++fetchSeqRef.current;
+    setVendorsLoading(true);
+    setVendorsError(null);
+    void fetchAllVendors({ page: 1, pageSize: VENDOR_CARDS_PAGE_SIZE, search: debouncedSearch }).then((result) => {
+      if (seq !== fetchSeqRef.current) return;
+      if (result.success) {
+        setFetchedVendors(result.candidates);
+        setVendorsPagination(result.pagination);
+      } else {
+        setVendorsError(result.error);
+      }
+      setVendorsLoading(false);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedSearch]);
+
+  const loadMoreVendors = () => {
+    if (!vendorsPagination || vendorsLoadingMore) return;
+    const nextPage = vendorsPagination.page + 1;
+    if (nextPage > vendorsPagination.totalPages) return;
+    const seq = ++fetchSeqRef.current;
+    setVendorsLoadingMore(true);
+    void fetchAllVendors({ page: nextPage, pageSize: VENDOR_CARDS_PAGE_SIZE, search: debouncedSearch }).then((result) => {
+      if (seq !== fetchSeqRef.current) return;
+      if (result.success) {
+        setFetchedVendors((prev) => [...prev, ...result.candidates]);
+        setVendorsPagination(result.pagination);
+      } else {
+        setVendorsError(result.error);
+      }
+      setVendorsLoadingMore(false);
+    });
+  };
+
+  const hasMoreVendorCards = !!vendorsPagination && vendorsPagination.page < vendorsPagination.totalPages;
+
   // Was a hardcoded list of 6 fake vendor profiles with invented ratings,
   // SLAs and awarded-spend figures. Every metric below is now derived from
   // the real vendor directory and the real quotes vendors have actually
-  // submitted (both already loaded via useApp()) — nothing here is invented.
+  // submitted — nothing here is invented. Metrics reflect only the vendor
+  // pages fetched so far, same limitation as the loaded-count display below.
   const compiledVendors = useMemo(() => {
-    return buyerVendors.map((vendor) => {
+    return fetchedVendors.map((vendor) => {
       // Quote submission (Phase 6) always resolves vendorId server-side from
       // the authenticated vendor, so matching by id alone is reliable here —
       // no need to also match by name.
-      const rfqsList = rfqs.filter((r) => r.quotes.some((q) => q.vendorId === vendor.id));
+      const rfqsList = rfqs.filter((r) => (r.quotes || []).some((q) => q.vendorId === vendor.id));
 
       const myQuotes = rfqsList
-        .map((r) => r.quotes.find((q) => q.vendorId === vendor.id))
+        .map((r) => (r.quotes || []).find((q) => q.vendorId === vendor.id))
         .filter((q): q is NonNullable<typeof q> => !!q);
 
       const avgLeadTimeDays =
@@ -85,14 +152,14 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
         .filter((r) => r.status === 'PO Generated' && r.awardedVendor === vendor.name)
         .reduce((sum, r) => sum + (r.awardedAmount as number), 0);
 
-      const style = avatarStyleFor(vendor.name);
+      const style = avatarStyleFor(vendor.name || '?');
 
       return {
         id: vendor.id,
-        name: vendor.contactPerson || vendor.name,
+        name: vendor.contactPerson || vendor.name || 'Unnamed Vendor',
         email: vendor.email,
-        company: vendor.name,
-        logoLetter: vendor.name.charAt(0).toUpperCase(),
+        company: vendor.name || 'Unnamed Vendor',
+        logoLetter: (vendor.name || '?').charAt(0).toUpperCase(),
         logoBg: style.bg,
         avatarColor: style.avatar,
         category: vendor.majorCategory,
@@ -105,22 +172,17 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
         activeBidsCount: rfqsList.filter((r) => r.status !== 'PO Generated').length,
       };
     });
-  }, [buyerVendors, rfqs]);
+  }, [fetchedVendors, rfqs]);
 
-  // Filter vendors based on dropdown selector values
+  // Search is server-side (see the fetch effect above) — only the company/
+  // contact dropdowns still filter client-side, over whatever pages have
+  // been loaded so far.
   const filteredByDropdownVendors = compiledVendors.filter((v) => {
     const matchCompany = selectedCompany === 'all' || v.company === selectedCompany;
     const matchContact = selectedContactFilterId === 'all' || v.id === selectedContactFilterId;
     return matchCompany && matchContact;
   });
-
-  // Filter vendors based on search input (name, company, category)
-  const filteredVendors = filteredByDropdownVendors.filter(
-    (v) =>
-      v.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      v.company.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      v.category.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const pagedVendors = filteredByDropdownVendors;
 
   // Overall Analytics computations based on dropdown filter scope
   const totalAwardedSpend = filteredByDropdownVendors.reduce((sum, v) => sum + v.awardedSpend, 0);
@@ -314,7 +376,8 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <h3 className="text-xs font-bold text-slate-800 dark:text-gray-200 uppercase tracking-wider flex items-center gap-2">
             <Users size={15} className="text-indigo-600 dark:text-indigo-400" />
-            Vendor wise Performance & Bid Summary ({filteredVendors.length} Vendors)
+            Vendor wise Performance & Bid Summary (showing {pagedVendors.length}
+            {vendorsPagination ? ` of ${vendorsPagination.total.toLocaleString()}` : ''} Vendors)
           </h3>
 
           {/* Search Box */}
@@ -332,12 +395,25 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
           </div>
         </div>
 
+        {vendorsLoading && (
+          <p className="text-[11px] text-slate-400 dark:text-gray-500 py-8 text-center">Loading vendors…</p>
+        )}
+
+        {!vendorsLoading && vendorsError && (
+          <p className="text-[11px] text-rose-500 py-8 text-center">{vendorsError}</p>
+        )}
+
+        {!vendorsLoading && !vendorsError && pagedVendors.length === 0 && (
+          <p className="text-[11px] text-slate-400 dark:text-gray-500 py-8 text-center">No vendors match the current selection.</p>
+        )}
+
         {/* Vendors Performance Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {filteredVendors.map((v) => {
+          {pagedVendors.map((v) => {
             // Reflect the resolved panel state so the toggle label always matches
             // what is actually on screen, including dropdown-driven expansion.
             const isSelected = activeVendorId === v.id;
+            const missingEmail = !v.email;
 
             return (
               <div
@@ -345,7 +421,9 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                 className={`glass-panel p-5 rounded-2xl border-2 transition-all flex flex-col justify-between space-y-4 ${
                   isSelected
                     ? 'border-emerald-650 dark:border-emerald-500 bg-emerald-50/10 dark:bg-emerald-950/10 shadow-md'
-                    : 'border-slate-200 dark:border-gray-800 hover:border-slate-300 dark:hover:border-gray-700 bg-white dark:bg-gray-900/80 shadow-sm'
+                    : missingEmail
+                      ? 'border-rose-300 dark:border-rose-800 bg-rose-50/40 dark:bg-rose-950/20'
+                      : 'border-emerald-300 dark:border-emerald-800 bg-emerald-50/40 dark:bg-emerald-950/20'
                 }`}
               >
                 {/* Upper Block: Profile */}
@@ -420,6 +498,18 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
             );
           })}
         </div>
+
+        {hasMoreVendorCards && (
+          <button
+            type="button"
+            data-testid="load-more-vendor-cards"
+            onClick={loadMoreVendors}
+            disabled={vendorsLoadingMore}
+            className="w-full py-2 rounded-lg border border-dashed border-slate-300 dark:border-gray-700 text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 disabled:opacity-50"
+          >
+            {vendorsLoadingMore ? 'Loading…' : `Load ${VENDOR_CARDS_PAGE_SIZE} more vendors`}
+          </button>
+        )}
       </div>
 
       {/* ═══════════════════════════════════════════════════════════════ */}
