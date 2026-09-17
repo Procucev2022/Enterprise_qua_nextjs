@@ -470,7 +470,7 @@ function extractQuotationFallback(text = '', rfqContext = {}) {
 
   if (unitMatch) unitPrice = parseNum(unitMatch[1]);
   if (totalMatch) totalPrice = parseNum(totalMatch[1]);
-  if (!unitPrice && generalPriceMatch) unitPrice = parseNum(generalPriceMatch[1]);
+  if (!unitPrice && !totalMatch && generalPriceMatch) unitPrice = parseNum(generalPriceMatch[1]);
 
   const rfqItems = rfqContext.extractedEntities || rfqContext.lineItems || [];
   const rfqQty = rfqItems.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0) || 1;
@@ -515,7 +515,7 @@ function extractQuotationFallback(text = '', rfqContext = {}) {
   }
 
   let deliveryCharges = 0;
-  const delMatch = clean.match(/(?:delivery\s*charges?|freight\s*charges?|freight|shipping)[\s:=₹RsINR\.]*([\d,]+(?:\.\d+)?)/i);
+  const delMatch = clean.match(/(?:delivery\s*charges?|freight\s*charges?|freight|shipping(?:\s*charges?)?)[\s:=₹RsINR\.]*([\d,]+(?:\.\d+)?)/i);
   if (delMatch) {
     deliveryCharges = parseNum(delMatch[1]);
   }

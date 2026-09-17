@@ -414,7 +414,7 @@ function extractRfqReferenceFromEmail(message) {
 /**
  * Resolve vendor record from sender email address or vendor directory.
  */
-async function resolveVendorFromEmail(fromAddress) {
+async function resolveVendorFromEmail(fromAddress, targetRfq = null) {
   if (!fromAddress) return null;
   const email = String(fromAddress).trim().toLowerCase();
 
@@ -426,6 +426,25 @@ async function resolveVendorFromEmail(fromAddress) {
     (v) => (v.email && v.email.toLowerCase() === email) || (v.corporateEmail && v.corporateEmail.toLowerCase() === email)
   );
   if (found) return found;
+
+  if (targetRfq) {
+    const assigned = Array.isArray(targetRfq.assignedVendors) ? targetRfq.assignedVendors : [];
+    const assignedMatch = assigned.find((v) => v.email && v.email.toLowerCase() === email);
+    if (assignedMatch) return assignedMatch;
+
+    const gatewayAddr = (process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || 'rfqprocucev@gmail.com').toLowerCase();
+    if (email === gatewayAddr || email === 'rfqprocucev@gmail.com') {
+      if (assigned.length > 0) {
+        return assigned[0];
+      }
+      return {
+        id: 'v-email-gateway',
+        name: 'Email Vendor (rfqprocucev)',
+        email,
+        contactPerson: 'Vendor Rep',
+      };
+    }
+  }
 
   return null;
 }
@@ -581,7 +600,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
 
   // 1. Check if this message is a vendor quotation reply for an existing RFQ
   const { targetRfq, referencedNumber } = extractRfqReferenceFromEmail(message);
-  const vendorRecord = await resolveVendorFromEmail(message.fromAddress);
+  const vendorRecord = await resolveVendorFromEmail(message.fromAddress, targetRfq);
 
   if (targetRfq && vendorRecord) {
     return await processVendorQuoteMessage(message, targetRfq, vendorRecord);
