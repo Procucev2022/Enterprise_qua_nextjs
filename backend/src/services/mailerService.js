@@ -11,6 +11,7 @@ if (typeof dns.setDefaultResultOrder === 'function') {
 }
 
 let transporter;
+let vendorTransporter;
 
 /**
  * Lazily builds a Gmail / SMTP transporter from SMTP_USER/SMTP_PASSWORD.
@@ -73,6 +74,96 @@ function fromAddress() {
     return user;
   }
   return `"Procucev Enterprise" <${user}>`;
+}
+
+/**
+ * Lazily builds a Gmail / SMTP transporter for vendor notifications and invites
+ * from VENDOR_SMTP_USER/VENDOR_SMTP_PASSWORD (defaults strictly to srinu20252026@gmail.com).
+ * Vendor communications NEVER fall back to buyer SMTP (rfqprocucev@gmail.com).
+ */
+function getVendorTransporter() {
+  if (vendorTransporter) return vendorTransporter;
+
+  const user = process.env.VENDOR_SMTP_USER;
+  const rawPass = process.env.VENDOR_SMTP_PASSWORD;
+  if (!user || !rawPass) return undefined;
+
+  const pass = rawPass.replace(/\s+/g, '');
+  const host = process.env.VENDOR_SMTP_HOST || 'smtp.gmail.com';
+  const isGmail =
+    (process.env.VENDOR_SMTP_SERVICE && process.env.VENDOR_SMTP_SERVICE.toLowerCase() === 'gmail') ||
+    host.toLowerCase().includes('gmail');
+
+  let port;
+  let secure;
+
+  if (process.env.VENDOR_SMTP_PORT) {
+    port = Number(process.env.VENDOR_SMTP_PORT);
+    secure = process.env.VENDOR_SMTP_SECURE !== undefined ? process.env.VENDOR_SMTP_SECURE === 'true' : port === 465;
+  } else if (process.env.VENDOR_SMTP_SECURE !== undefined) {
+    secure = process.env.VENDOR_SMTP_SECURE === 'true';
+    port = secure ? 465 : 587;
+  } else if (isGmail) {
+    port = 465;
+    secure = true;
+  } else {
+    port = 587;
+    secure = false;
+  }
+
+  const transportConfig = {
+    host,
+    port,
+    secure,
+    family: 4,
+    auth: { user, pass },
+    tls: {
+      rejectUnauthorized: false,
+    },
+    connectionTimeout: 25000,
+    greetingTimeout: 25000,
+    socketTimeout: 30000,
+  };
+
+  vendorTransporter = nodemailer.createTransport(transportConfig);
+  return vendorTransporter;
+}
+
+function vendorFromAddress() {
+  const user = process.env.VENDOR_SMTP_FROM || process.env.VENDOR_SMTP_USER || 'srinu20252026@gmail.com';
+  if (user.includes('<') && user.includes('>')) {
+    return user;
+  }
+  return `"Procucev Enterprise" <${user}>`;
+}
+
+function vendorGatewayAddress() {
+  return (
+    process.env.VENDOR_EMAIL_GATEWAY_ADDRESS ||
+    process.env.VENDOR_EMAIL_GATEWAY_USER ||
+    process.env.VENDOR_SMTP_USER ||
+    'srinu20252026@gmail.com'
+  );
+}
+
+/**
+ * Send one message through the vendor transporter.
+ */
+async function deliverVendor(message, label) {
+  if (process.env.NODE_ENV === 'test') {
+    return { sent: false, reason: 'test environment' };
+  }
+
+  const activeTransporter = getVendorTransporter();
+  if (!activeTransporter) {
+    logger.warn(`Vendor SMTP not configured (VENDOR_SMTP_USER/VENDOR_SMTP_PASSWORD unset) — ${label} not sent`, { to: message.to }, 'MAILER_SERVICE');
+    return { sent: false, reason: 'SMTP not configured' };
+  }
+
+  logger.info(`Dispatching ${label} to ${message.to}`, { subject: message.subject }, 'MAILER_SERVICE');
+  const info = await activeTransporter.sendMail(message);
+  logger.info(`${label} sent successfully to ${message.to}`, { messageId: info.messageId }, 'MAILER_SERVICE');
+  return { sent: true, messageId: info.messageId };
 }
 
 // ── Autonomous email-gateway: buyer requisition inbound notification ─────────
@@ -270,15 +361,28 @@ function normalizeToAndContext(toOrParams, maybeContext) {
   return { to: toOrParams, context: maybeContext || {} };
 }
 
-function buildRfqInviteEmail(to, { rfq, recipientName }) {
-  const items = Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : [];
+function emailGatewayAddress() {
+  return process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || 'rfqprocucev@gmail.com';
+}
+
+function buildRfqInviteEmail(to, context = {}) {
+  const { rfq = {}, recipientName, buyerEmail, cc } = context;
+  const items = Array.isArray(rfq.extractedEntities) && rfq.extractedEntities.length > 0
+    ? rfq.extractedEntities
+    : Array.isArray(rfq.items) && rfq.items.length > 0
+      ? rfq.items
+      : Array.isArray(rfq.lineItems)
+        ? rfq.lineItems
+        : [];
+
   const itemRows = items
     .slice(0, 20)
     .map(
       (it, idx) =>
         `<tr>
-          <td style="padding: 6px 10px; border: 1px solid #e2e8f0;">${idx + 1}. ${it.itemName || 'Line item'}${it.technicalSpecs || it.specifications ? `<br/><span style="font-size: 11px; color: #64748b;">Specs: ${it.technicalSpecs || it.specifications}</span>` : ''}</td>
-          <td style="padding: 6px 10px; border: 1px solid #e2e8f0; text-align: center;">${it.quantity != null ? it.quantity : ''} ${it.unit || ''}</td>
+          <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-weight: 600; color: #0f172a;">${idx + 1}. ${it.itemName || it.name || it.item_name || 'Line item'}${it.technicalSpecs || it.specifications || it.specs || it.description ? `<br/><span style="font-weight: normal; font-size: 11px; color: #64748b;">Specs: ${it.technicalSpecs || it.specifications || it.specs || it.description}</span>` : ''}</td>
+          <td style="padding: 8px 10px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #1e293b;">${it.quantity != null ? it.quantity : 1} ${it.unit || it.uom || 'Units'}</td>
+          <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-size: 12px; color: #475569;">${it.deliveryLocation || it.location || rfq.deliveryLocation || '-'}</td>
         </tr>`
     )
     .join('');
@@ -289,6 +393,15 @@ function buildRfqInviteEmail(to, { rfq, recipientName }) {
     : `New RFQ ${rfq.rfqNumber}`;
 
   const budgetFormatted = rfq.budget != null && rfq.budget !== '' ? `₹${Number(rfq.budget).toLocaleString('en-IN')}` : null;
+
+  const sampleReplyFormat = items.length > 1
+    ? items.map((it, idx) => `${idx + 1}. ${it.itemName || it.name || `Item ${idx + 1}`}: Unit Price ₹[Enter Price] (Qty: ${it.quantity != null ? it.quantity : 1} ${it.unit || it.uom || 'Units'})`).join('\n') + '\n\nLead Time: [e.g. 7] Days\nWarranty: [e.g. 1] Year(s)\nPayment Terms: [e.g. Net 30 Days]\nRemarks: [e.g. Inclusions / Delivery terms]'
+    : items.length === 1
+      ? `Item: ${items[0].itemName || items[0].name || 'Line Item'}\nUnit Price: ₹[Enter Unit Price]\nLead Time: [e.g. 7] Days\nWarranty: [e.g. 1] Year(s)\nPayment Terms: [e.g. Net 30 Days]\nRemarks: [e.g. Inclusions / Delivery terms]`
+      : `Unit Price: ₹[Enter Unit Price]\nTotal Price: ₹[Enter Total Price]\nLead Time: [e.g. 7] Days\nWarranty: [e.g. 1] Year(s)\nPayment Terms: [e.g. Net 30 Days]\nRemarks: [e.g. Inclusions / Delivery terms]`;
+
+  const gatewayEmail = vendorGatewayAddress();
+  const buyerCc = cc || buyerEmail || undefined;
 
   const inner = `
     <p>${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}</p>
@@ -305,41 +418,52 @@ function buildRfqInviteEmail(to, { rfq, recipientName }) {
       itemRows
         ? `<table style="width: 100%; border-collapse: collapse; margin-bottom: 16px;">
              <thead><tr style="background: #f1f5f9; text-align: left;">
-               <th style="padding: 6px 10px; border: 1px solid #cbd5e1;">Item</th>
-               <th style="padding: 6px 10px; border: 1px solid #cbd5e1; text-align: center;">Quantity</th>
+               <th style="padding: 8px 10px; border: 1px solid #cbd5e1; font-size: 12px; color: #475569;">Item Description</th>
+               <th style="padding: 8px 10px; border: 1px solid #cbd5e1; text-align: center; font-size: 12px; color: #475569;">Quantity</th>
+               <th style="padding: 8px 10px; border: 1px solid #cbd5e1; font-size: 12px; color: #475569;">Delivery Location</th>
              </tr></thead>
              <tbody>${itemRows}</tbody>
            </table>`
         : ''
     }
-    <div style="margin: 20px 0; padding: 16px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px;">
-      <h4 style="margin: 0 0 8px 0; color: #1e40af; font-size: 14px;">How to Submit Your Quotation</h4>
-      <p style="margin: 0 0 10px 0; font-size: 13px; color: #1e293b;">
-        You can submit your bid by <strong>replying directly to this email</strong> (keep the subject line intact with RFQ number <strong>#${rfq.rfqNumber}</strong>), or via the Procucev vendor portal.
+    <div style="margin: 20px 0; padding: 18px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px;">
+      <h4 style="margin: 0 0 10px 0; color: #1e40af; font-size: 15px; font-weight: 700;">How to Submit Your Quotation</h4>
+      <p style="margin: 0 0 10px 0; font-size: 13px; color: #1e293b; line-height: 1.5;">
+        You can submit your bid either by <strong>replying directly to this email at <a href="mailto:${gatewayEmail}" style="color: #0284c7; font-weight: bold;">${gatewayEmail}</a></strong> (keep the subject line intact with RFQ number <strong>#${rfq.rfqNumber}</strong>${buyerCc ? ` and keep buyer CC'd: <strong>${buyerCc}</strong>` : ''}), or online via the Procucev Vendor Portal.
       </p>
-      <p style="margin: 0 0 6px 0; font-size: 13px; font-weight: 600; color: #1e293b;">Please provide the following quotation fields:</p>
-      <ul style="margin: 0 0 10px 0; padding-left: 20px; font-size: 13px; color: #334155;">
-        <li><strong>Unit Price (₹)*</strong> — Mandatory</li>
-        <li><strong>Lead Time (Days)</strong> — Expected delivery timeline</li>
-        <li><strong>Warranty (Years)</strong> — Warranty period</li>
-        <li><strong>Payment Terms</strong> — e.g., Net 30, Advance, etc.</li>
-        <li><strong>Remarks</strong> — Any inclusions, exclusions or terms</li>
+
+      <p style="margin: 12px 0 6px 0; font-size: 13px; font-weight: 700; color: #1e293b;">Mandatory Quotation Information Required:</p>
+      <ul style="margin: 0 0 12px 0; padding-left: 20px; font-size: 13px; color: #334155; line-height: 1.6;">
+        <li><strong>Unit Price (₹)*</strong> — <span style="color: #b91c1c; font-weight: bold;">Mandatory</span>: Quoted unit rate (must be greater than ₹0) for each line item.</li>
+        <li><strong>Lead Time (Days)</strong> — Expected delivery timeline from PO issuance.</li>
+        <li><strong>Warranty (Years)</strong> — Product warranty period.</li>
+        <li><strong>Payment Terms</strong> — Commercial terms (e.g., Net 30, Advance).</li>
+        <li><strong>Remarks</strong> — Any inclusions, exclusions, or terms.</li>
       </ul>
-      ${items.length > 1 ? '<p style="margin: 0; font-size: 12px; color: #475569;"><em>For multi-item RFQs, please quote unit price per item in your reply.</em></p>' : ''}
+
+      <p style="margin: 14px 0 6px 0; font-size: 13px; font-weight: 700; color: #1e293b;">Email Reply Format (Copy, Fill & Send):</p>
+      <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; font-family: monospace; font-size: 12px; color: #1e293b; white-space: pre-wrap; line-height: 1.4;">${sampleReplyFormat}</div>
+      <p style="margin: 8px 0 0 0; font-size: 11px; color: #64748b;"><em>Our automated AI Email Gateway will parse your reply and immediately reflect your bid in Enterprise QUA Vendor Comparison.</em></p>
+      ${items.length > 1 ? '<p style="margin: 8px 0 0 0; font-size: 12px; color: #475569;"><em>For multi-item RFQs, please quote unit price per item in your reply.</em></p>' : ''}
     </div>
-    <p style="font-size: 13px; color: #64748b;">Sign in to your Procucev vendor account to review the full enquiry and submit a quotation.</p>
+    <div style="text-align: center; margin: 24px 0;">
+      <a href="${vendorSignInUrl()}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 14px;">Open in Vendor Web Portal</a>
+    </div>
+    <p style="font-size: 13px; color: #64748b; text-align: center;">Sign in to your Procucev vendor account to review the full enquiry and submit a quotation.</p>
   `;
 
   return {
-    from: fromAddress(),
+    from: vendorFromAddress(),
     to,
+    replyTo: gatewayEmail,
+    cc: buyerCc,
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'New Sourcing Enquiry', inner),
   };
 }
 
 async function sendRfqInviteEmail(to, context) {
-  return deliver(buildRfqInviteEmail(to, context), 'RFQ invite email');
+  return deliverVendor(buildRfqInviteEmail(to, context), 'RFQ invite email');
 }
 
 // ── Vendor quote acknowledgement → vendor (with buyer & support CC) ─────────
@@ -364,8 +488,9 @@ function buildQuoteAcknowledgementEmail(toOrParams, maybeContext) {
   `;
 
   return {
-    from: fromAddress(),
+    from: vendorFromAddress(),
     to,
+    replyTo: vendorGatewayAddress(),
     cc: cc || undefined,
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Quotation Submission Confirmation', inner),
@@ -373,7 +498,7 @@ function buildQuoteAcknowledgementEmail(toOrParams, maybeContext) {
 }
 
 async function sendQuoteAcknowledgementEmail(toOrParams, maybeContext) {
-  return deliver(buildQuoteAcknowledgementEmail(toOrParams, maybeContext), 'quote acknowledgement email');
+  return deliverVendor(buildQuoteAcknowledgementEmail(toOrParams, maybeContext), 'quote acknowledgement email');
 }
 
 // ── Vendor quote failure notification → vendor (with buyer & support CC) ─────
@@ -399,8 +524,9 @@ function buildQuoteFailureEmail(toOrParams, maybeContext) {
   `;
 
   return {
-    from: fromAddress(),
+    from: vendorFromAddress(),
     to,
+    replyTo: vendorGatewayAddress(),
     cc: cc || undefined,
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Quotation Submission Notice', inner),
@@ -408,7 +534,7 @@ function buildQuoteFailureEmail(toOrParams, maybeContext) {
 }
 
 async function sendQuoteFailureEmail(toOrParams, maybeContext) {
-  return deliver(buildQuoteFailureEmail(toOrParams, maybeContext), 'quote failure notification email');
+  return deliverVendor(buildQuoteFailureEmail(toOrParams, maybeContext), 'quote failure notification email');
 }
 
 // ── Vendor quote → owning buyer ─────────────────────────────────────────────
@@ -762,7 +888,7 @@ function buildRatingRevisionEmail({ to, recipientName, vendorName, buyerCompany,
  * unconfigured server show up as retryable failures instead of silent success.
  */
 async function sendVendorIngestionEmail(message, template) {
-  return deliver(message, `vendor ingestion ${template} email`);
+  return deliverVendor(message, `vendor ingestion ${template} email`);
 }
 
 /**
@@ -855,8 +981,16 @@ function isConfigured() {
   return Boolean(process.env.SMTP_USER && process.env.SMTP_PASSWORD);
 }
 
+function isVendorConfigured() {
+  return Boolean(process.env.VENDOR_SMTP_USER && process.env.VENDOR_SMTP_PASSWORD);
+}
+
 module.exports = {
   getTransporter,
+  getVendorTransporter,
+  vendorFromAddress,
+  vendorGatewayAddress,
+  deliverVendor,
   sendOtpEmail,
   sendRfqInviteEmail,
   sendQuoteReceivedEmail,
@@ -865,6 +999,7 @@ module.exports = {
   sendRequisitionNotificationEmail,
   buildRequisitionEmail,
   fromAddress,
+  emailGatewayAddress,
   vendorSignInUrl,
   buyerPortalUrl,
   buildUnauthorizedBuyerEmail,
@@ -882,5 +1017,6 @@ module.exports = {
   buildQuoteFailureEmail,
   sendQuoteFailureEmail,
   isConfigured,
+  isVendorConfigured,
 };
 

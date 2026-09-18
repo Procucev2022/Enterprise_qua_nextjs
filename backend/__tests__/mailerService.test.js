@@ -1,6 +1,16 @@
 const mailerService = require('../src/services/mailerService');
 
 describe('mailerService', () => {
+  beforeEach(() => {
+    process.env.NODE_ENV = 'test';
+  });
+
+  afterEach(() => {
+    process.env.NODE_ENV = 'test';
+    delete process.env.VENDOR_SMTP_USER;
+    delete process.env.VENDOR_SMTP_PASSWORD;
+  });
+
   test('sendOtpEmail no-ops during test environment (NODE_ENV=test)', async () => {
     const res = await mailerService.sendOtpEmail('someone@example.com', '1234', 600);
     expect(res.sent).toBe(false);
@@ -178,6 +188,8 @@ describe('mailerService', () => {
         process.env.NODE_ENV = 'development';
         delete process.env.SMTP_USER;
         delete process.env.SMTP_PASSWORD;
+        delete process.env.VENDOR_SMTP_USER;
+        delete process.env.VENDOR_SMTP_PASSWORD;
         fresh = require('../src/services/mailerService');
       });
       expect(await fresh.sendRfqInviteEmail('v@x.com', ctxRfq)).toMatchObject({ sent: false, reason: 'SMTP not configured' });
@@ -201,18 +213,20 @@ describe('mailerService', () => {
 
       jest.isolateModules(() => {
         process.env.NODE_ENV = 'development';
-        process.env.SMTP_USER = 'test@example.com';
-        process.env.SMTP_PASSWORD = 'pw';
+        process.env.VENDOR_SMTP_USER = 'vendor-test@example.com';
+        process.env.VENDOR_SMTP_PASSWORD = 'pw';
         jest.doMock('nodemailer', () => ({
           createTransport: jest.fn(() => ({ sendMail: jest.fn().mockRejectedValue(new Error('smtp down')) })),
         }));
         fresh = require('../src/services/mailerService');
       });
-      await expect(fresh.sendRfqInviteEmail('v@x.com', ctxRfq)).rejects.toThrow('smtp down');
-
-      delete process.env.SMTP_USER;
-      delete process.env.SMTP_PASSWORD;
-      process.env.NODE_ENV = 'test';
+      try {
+        await expect(fresh.sendRfqInviteEmail('v@x.com', ctxRfq)).rejects.toThrow('smtp down');
+      } finally {
+        delete process.env.VENDOR_SMTP_USER;
+        delete process.env.VENDOR_SMTP_PASSWORD;
+        process.env.NODE_ENV = 'test';
+      }
     });
   });
 
@@ -312,6 +326,45 @@ describe('mailerService', () => {
       expect(msg.html).toContain('₹5,00,000');
       expect(msg.html).toContain('How to Submit Your Quotation');
       expect(msg.html).toContain('For multi-item RFQs, please quote unit price per item');
+      expect(msg.html).toContain('Open in Vendor Web Portal');
+      expect(msg.html).toContain('Email Reply Format (Copy, Fill & Send)');
+      expect(msg.replyTo).toBeTruthy();
+    });
+
+    test('supports fallback to items and single-item quotation reply format', () => {
+      const rfqSingle = {
+        rfqNumber: 'RFQ-2026-00101',
+        title: 'Heavy Machinery Part',
+        category: 'Machinery',
+        items: [{ itemName: 'CNC Milling Bit', quantity: 1, unit: 'unit' }],
+      };
+      const msg = mailerService.buildRfqInviteEmail('vendor@example.com', { rfq: rfqSingle });
+      expect(msg.html).toContain('CNC Milling Bit');
+      expect(msg.html).toContain('Item: CNC Milling Bit');
+      expect(msg.html).toContain('Unit Price: ₹[Enter Unit Price]');
+    });
+
+    test('supports empty items and defaults to gateway reply format', () => {
+      const rfqEmpty = {
+        rfqNumber: 'RFQ-2026-00102',
+        title: 'General Enquiry',
+      };
+      const msg = mailerService.buildRfqInviteEmail('vendor@example.com', { rfq: rfqEmpty });
+      expect(msg.html).toContain('Unit Price: ₹[Enter Unit Price]');
+      expect(msg.html).toContain('Total Price: ₹[Enter Total Price]');
+    });
+
+    test('emailGatewayAddress returns default when unset or custom when set', () => {
+      const original = process.env.EMAIL_GATEWAY_ADDRESS;
+      delete process.env.EMAIL_GATEWAY_ADDRESS;
+      delete process.env.EMAIL_GATEWAY_USER;
+      expect(mailerService.emailGatewayAddress()).toBe('rfqprocucev@gmail.com');
+
+      process.env.EMAIL_GATEWAY_ADDRESS = 'custom@procucev.com';
+      expect(mailerService.emailGatewayAddress()).toBe('custom@procucev.com');
+
+      if (original !== undefined) process.env.EMAIL_GATEWAY_ADDRESS = original;
+      else delete process.env.EMAIL_GATEWAY_ADDRESS;
     });
   });
 
@@ -841,5 +894,150 @@ describe('mailerService', () => {
       process.env.NODE_ENV = 'test';
     });
   });
+
+  describe('Vendor Transporter & Gateway Address', () => {
+    test('vendorFromAddress and vendorGatewayAddress support custom and fallback envs', () => {
+      expect(mailerService.vendorFromAddress()).toContain('srinu20252026@gmail.com');
+      expect(mailerService.vendorGatewayAddress()).toBe('srinu20252026@gmail.com');
+
+      const origFrom = process.env.VENDOR_SMTP_FROM;
+      const origAddr = process.env.VENDOR_EMAIL_GATEWAY_ADDRESS;
+      try {
+        process.env.VENDOR_SMTP_FROM = '"Custom Vendor Gateway" <custom@vendor.com>';
+        process.env.VENDOR_EMAIL_GATEWAY_ADDRESS = 'custom-gateway@vendor.com';
+
+        expect(mailerService.vendorFromAddress()).toBe('"Custom Vendor Gateway" <custom@vendor.com>');
+        expect(mailerService.vendorGatewayAddress()).toBe('custom-gateway@vendor.com');
+      } finally {
+        if (origFrom !== undefined) process.env.VENDOR_SMTP_FROM = origFrom;
+        else delete process.env.VENDOR_SMTP_FROM;
+        if (origAddr !== undefined) process.env.VENDOR_EMAIL_GATEWAY_ADDRESS = origAddr;
+        else delete process.env.VENDOR_EMAIL_GATEWAY_ADDRESS;
+      }
+    });
+
+    test('isVendorConfigured checks vendor SMTP credentials', () => {
+      const origUser = process.env.VENDOR_SMTP_USER;
+      const origPass = process.env.VENDOR_SMTP_PASSWORD;
+      const origSmtpUser = process.env.SMTP_USER;
+      const origSmtpPass = process.env.SMTP_PASSWORD;
+
+      try {
+        delete process.env.VENDOR_SMTP_USER;
+        delete process.env.VENDOR_SMTP_PASSWORD;
+        delete process.env.SMTP_USER;
+        delete process.env.SMTP_PASSWORD;
+        expect(mailerService.isVendorConfigured()).toBe(false);
+
+        process.env.VENDOR_SMTP_USER = 'srinu20252026@gmail.com';
+        process.env.VENDOR_SMTP_PASSWORD = 'app-password';
+        expect(mailerService.isVendorConfigured()).toBe(true);
+      } finally {
+        if (origUser !== undefined) process.env.VENDOR_SMTP_USER = origUser;
+        else delete process.env.VENDOR_SMTP_USER;
+        if (origPass !== undefined) process.env.VENDOR_SMTP_PASSWORD = origPass;
+        else delete process.env.VENDOR_SMTP_PASSWORD;
+        if (origSmtpUser !== undefined) process.env.SMTP_USER = origSmtpUser;
+        else delete process.env.SMTP_USER;
+        if (origSmtpPass !== undefined) process.env.SMTP_PASSWORD = origSmtpPass;
+        else delete process.env.SMTP_PASSWORD;
+      }
+    });
+
+    test('getVendorTransporter handles custom VENDOR_SMTP_PORT, VENDOR_SMTP_SECURE, and host configs', () => {
+      let fresh;
+      jest.isolateModules(() => {
+        process.env.VENDOR_SMTP_USER = 'srinu20252026@gmail.com';
+        process.env.VENDOR_SMTP_PASSWORD = 'password';
+        process.env.VENDOR_SMTP_HOST = 'mail.custom.com';
+        process.env.VENDOR_SMTP_PORT = '2525';
+        process.env.VENDOR_SMTP_SECURE = 'false';
+        process.env.VENDOR_SMTP_SERVICE = 'custom';
+        jest.doMock('nodemailer', () => ({
+          createTransport: jest.fn((cfg) => ({ cfg, sendMail: jest.fn() })),
+        }));
+        fresh = require('../src/services/mailerService');
+      });
+
+      const trans1 = fresh.getVendorTransporter();
+      expect(trans1).toBeDefined();
+      expect(trans1.cfg.port).toBe(2525);
+      expect(trans1.cfg.secure).toBe(false);
+      // Caching check:
+      expect(fresh.getVendorTransporter()).toBe(trans1);
+
+      // Branch: VENDOR_SMTP_SECURE set without port
+      jest.isolateModules(() => {
+        process.env.VENDOR_SMTP_USER = 'srinu20252026@gmail.com';
+        process.env.VENDOR_SMTP_PASSWORD = 'password';
+        delete process.env.VENDOR_SMTP_PORT;
+        process.env.VENDOR_SMTP_SECURE = 'true';
+        delete process.env.VENDOR_SMTP_SERVICE;
+        process.env.VENDOR_SMTP_HOST = 'smtp.office365.com';
+        jest.doMock('nodemailer', () => ({
+          createTransport: jest.fn((cfg) => ({ cfg })),
+        }));
+        fresh = require('../src/services/mailerService');
+      });
+      const trans2 = fresh.getVendorTransporter();
+      expect(trans2.cfg.port).toBe(465);
+
+      // Branch: Non-gmail without port or secure
+      jest.isolateModules(() => {
+        process.env.VENDOR_SMTP_USER = 'srinu20252026@gmail.com';
+        process.env.VENDOR_SMTP_PASSWORD = 'password';
+        delete process.env.VENDOR_SMTP_PORT;
+        delete process.env.VENDOR_SMTP_SECURE;
+        process.env.VENDOR_SMTP_HOST = 'smtp.sendgrid.net';
+        delete process.env.VENDOR_SMTP_SERVICE;
+        jest.doMock('nodemailer', () => ({
+          createTransport: jest.fn((cfg) => ({ cfg })),
+        }));
+        fresh = require('../src/services/mailerService');
+      });
+      const trans3 = fresh.getVendorTransporter();
+      expect(trans3.cfg.port).toBe(587);
+      expect(trans3.cfg.secure).toBe(false);
+    });
+
+    test('deliverVendor delivers email in dev mode with mock transporter', async () => {
+      let fresh;
+      let deliveredMsg;
+      jest.isolateModules(() => {
+        process.env.NODE_ENV = 'development';
+        process.env.VENDOR_SMTP_USER = 'srinu20252026@gmail.com';
+        process.env.VENDOR_SMTP_PASSWORD = 'password';
+        jest.doMock('nodemailer', () => ({
+          createTransport: jest.fn(() => ({
+            sendMail: jest.fn((msg) => {
+              deliveredMsg = msg;
+              return Promise.resolve({ messageId: 'vendor-msg-123' });
+            }),
+          })),
+        }));
+        fresh = require('../src/services/mailerService');
+      });
+
+      const res = await fresh.deliverVendor({ to: 'vendor@abc.com', subject: 'RFQ Invite' }, 'Vendor Invite');
+      expect(res.sent).toBe(true);
+      expect(res.messageId).toBe('vendor-msg-123');
+      expect(deliveredMsg.to).toBe('vendor@abc.com');
+
+      // Failure case
+      jest.isolateModules(() => {
+        process.env.NODE_ENV = 'development';
+        process.env.VENDOR_SMTP_USER = 'srinu20252026@gmail.com';
+        process.env.VENDOR_SMTP_PASSWORD = 'password';
+        jest.doMock('nodemailer', () => ({
+          createTransport: jest.fn(() => ({
+            sendMail: jest.fn().mockRejectedValue(new Error('Vendor SMTP down')),
+          })),
+        }));
+        fresh = require('../src/services/mailerService');
+      });
+      await expect(fresh.deliverVendor({ to: 'vendor@abc.com' }, 'Vendor Invite')).rejects.toThrow('Vendor SMTP down');
+    });
+  });
 });
+
 

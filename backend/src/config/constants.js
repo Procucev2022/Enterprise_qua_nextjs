@@ -727,6 +727,14 @@ const EMAIL_GATEWAY_CONFIG = {
   MAX_LINE_ITEMS_PER_RFQ: 49,
 };
 
+const VENDOR_EMAIL_GATEWAY_CONFIG = {
+  DEFAULT_POLL_MS: 120000,
+  MIN_POLL_MS: 30000,
+  DEFAULT_MAX_PER_POLL: 10,
+  DEFAULT_GATEWAY_ADDRESS: 'srinu20252026@gmail.com',
+  DEFAULT_FROM_NAME: 'Procucev Enterprise',
+};
+
 /**
  * Mapping between buyer subscription plans and their corresponding RFQ sourcing / version mode.
  * - version_1: mode_1 (Version 1: Client Roster Sourcing Plan)
@@ -833,6 +841,7 @@ const EMAIL_GATEWAY_MESSAGES = {
   QUOTE_FAILURE_SUBJECT: 'Action Required – Quotation Could Not Be Processed for RFQ {rfqNumber}',
   INVALID_RFQ_REFERENCED: 'The referenced RFQ {rfqNumber} was not found in the system.',
   VENDOR_NOT_FOUND_FOR_QUOTE: 'No vendor profile found for sender {address}.',
+  VENDOR_GATEWAY_REQUIRES_RFQ: 'Vendor email gateway only processes quotation replies for existing RFQs.',
 };
 
 /** Notification email content for unauthorized email senders. */
@@ -1351,6 +1360,7 @@ module.exports = {
   EMAIL_INGESTION_STATUS,
   EMAIL_INGESTION_MESSAGES,
   EMAIL_GATEWAY_CONFIG,
+  VENDOR_EMAIL_GATEWAY_CONFIG,
   EMAIL_GATEWAY_MESSAGES,
   EMAIL_GATEWAY_STATE,
   EMAIL_GATEWAY_SMTP_PORTS,

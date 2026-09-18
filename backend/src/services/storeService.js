@@ -1605,8 +1605,14 @@ class StoreService {
 
       // Real invite email, if the vendor has an address.
       if (vendor.email) {
+        const buyerEmail = this.resolveBuyerEmailForRFQ(updatedRFQ);
         mailerService
-          .sendRfqInviteEmail(vendor.email, { rfq: updatedRFQ, recipientName: vendor.contactPerson || vendor.name })
+          .sendRfqInviteEmail(vendor.email, {
+            rfq: updatedRFQ,
+            recipientName: vendor.contactPerson || vendor.name,
+            buyerEmail,
+            cc: buyerEmail || undefined,
+          })
           .catch((err) => logger.error('Failed to email RFQ invite to vendor', err, 'STORE_SERVICE'));
       }
     }
@@ -1742,6 +1748,9 @@ class StoreService {
 
   /** Email a newly-created RFQ to its top matched vendors and assigned vendors. Fired from createRFQ. */
   emailRFQToMatchedVendors(rfq) {
+    if (!rfq || rfq.status === 'Parsing' || rfq.status === 'Draft') {
+      return 0;
+    }
     const recipients = this.selectVendorsForRFQEmail(rfq);
     const assigned = (Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : []).filter((v) => v && v.email);
     const allEmails = new Set();
@@ -1791,7 +1800,7 @@ class StoreService {
       const buyer = this.buyerAccounts.find((a) => a.id === rfq.buyerAccountId);
       if (buyer && buyer.corporateEmail) return buyer.corporateEmail;
     }
-    return rfq.raisedByEmail || null;
+    return rfq.raisedByEmail || rfq.sourceEmail || rfq.buyerEmail || null;
   }
 
   // ==========================================

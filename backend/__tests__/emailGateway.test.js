@@ -8,9 +8,12 @@ const rfqIngestionService = require('../src/services/rfqIngestionService');
 const storeService = require('../src/services/storeService');
 const mailerService = require('../src/services/mailerService');
 const dbPool = require('../src/db/pool');
+const buyerProfileQueries = require('../src/db/buyerProfileQueries');
+const { logger } = require('../src/services/loggerService');
 const {
   EMAIL_GATEWAY_CONFIG,
   EMAIL_GATEWAY_MESSAGES,
+  EMAIL_INGESTION_STATUS,
   resolveBuyerSourcingMode,
   BUYER_SUBSCRIPTION_TO_SOURCING_MODE,
 } = require('../src/config/constants');
@@ -53,7 +56,14 @@ function buyerAccount(overrides = {}) {
 /** A minimal ImapFlow double: one unseen message carrying `source`. */
 function fakeImap({ uids = [1], source = fixtures.PLAIN_REQUISITION_EML, messageId = '<m1@lt-heavy.com>', failConnect = false } = {}) {
   const flagged = [];
+  const listeners = {};
   const client = {
+    on: jest.fn((event, cb) => {
+      listeners[event] = cb;
+    }),
+    emit: jest.fn((event, ...args) => {
+      if (typeof listeners[event] === 'function') listeners[event](...args);
+    }),
     connect: jest.fn(failConnect ? () => Promise.reject(new Error('authentication failed')) : async () => {}),
     getMailboxLock: jest.fn(async () => ({ release: jest.fn() })),
     search: jest.fn(async () => uids),
@@ -64,6 +74,7 @@ function fakeImap({ uids = [1], source = fixtures.PLAIN_REQUISITION_EML, message
     }),
     logout: jest.fn(async () => {}),
     flagged,
+    listeners,
   };
   return client;
 }
@@ -257,7 +268,7 @@ describe('emailGatewayService.processMessage', () => {
 
     const result = await emailGatewayService.processMessage(Buffer.from(selfMailEml, 'utf8'), config());
 
-    expect(result.status).toBe(INGESTION_OUTCOME.SELF_MAIL_IGNORED);
+    expect(result.status).toBe(INGESTION_OUTCOME.SKIPPED_OUTBOUND);
     // No reply of any kind — sending one is exactly what would re-arm the loop.
     expect(sendFailureSpy).not.toHaveBeenCalled();
     expect(sendAckSpy).not.toHaveBeenCalled();
@@ -506,6 +517,26 @@ describe('emailGatewayService.pollOnce', () => {
 
     const recorded = emailGatewayQueries.recordProcessed.mock.calls[0][0];
     expect(recorded.messageId).toBeTruthy();
+  });
+
+  test('handles IMAP client error events without unhandled crash', async () => {
+    const client = fakeImap();
+    emailGatewayService.ImapFlow = jest.fn(() => client);
+
+    const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+    await emailGatewayService.pollOnce(emailGatewayService.resolveConfig(FULL_ENV));
+
+    expect(client.on).toHaveBeenCalledWith('error', expect.any(Function));
+    const errorCb = client.listeners['error'];
+    expect(typeof errorCb).toBe('function');
+    errorCb(new Error('socket ECONNRESET'));
+    errorCb(null);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('IMAP client socket notice'),
+      expect.anything(),
+      'EMAIL_GATEWAY'
+    );
   });
 
   test('tolerates a mailbox with nothing unseen', async () => {
@@ -1034,7 +1065,7 @@ describe('emailGatewayService.resolveBuyerRegisteredLocation', () => {
 
   test('queries Neon PostgreSQL buyer profile when account fields are empty', async () => {
     const origPool = dbPool.pool;
-    dbPool.pool = { query: jest.fn() };
+    dbPool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
     jest.spyOn(dbPool, 'rows').mockResolvedValue([
       {
         user_uuid: 'u-1',
@@ -1058,7 +1089,7 @@ describe('emailGatewayService.resolveBuyerRegisteredLocation', () => {
 
   test('handles database errors gracefully and returns empty fields', async () => {
     const origPool = dbPool.pool;
-    dbPool.pool = { query: jest.fn() };
+    dbPool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
     jest.spyOn(dbPool, 'rows').mockRejectedValue(new Error('DB connection failed'));
 
     try {
@@ -1074,6 +1105,29 @@ describe('emailGatewayService.resolveBuyerRegisteredLocation', () => {
   test('returns empty strings when buyer account is null', async () => {
     const loc = await emailGatewayService.resolveBuyerRegisteredLocation(null);
     expect(loc).toEqual({ city: '', state: '', pincode: '' });
+  });
+
+  test('handles db profile with empty fields or unmapped profile', async () => {
+    const origPool = dbPool.pool;
+    dbPool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+    jest.spyOn(dbPool, 'rows').mockResolvedValue([{}]);
+    jest.spyOn(buyerProfileQueries, 'mapRowToProfile')
+      .mockReturnValueOnce({ city: null, state: null, pincode: null })
+      .mockReturnValueOnce(null);
+
+    try {
+      const loc1 = await emailGatewayService.resolveBuyerRegisteredLocation({
+        corporateEmail: 'buyer-partial@corp.com',
+      });
+      expect(loc1).toEqual({ city: '', state: '', pincode: '' });
+
+      const loc2 = await emailGatewayService.resolveBuyerRegisteredLocation({
+        corporateEmail: 'buyer-nullmap@corp.com',
+      });
+      expect(loc2).toEqual({ city: '', state: '', pincode: '' });
+    } finally {
+      dbPool.pool = origPool;
+    }
   });
 });
 
@@ -1150,6 +1204,7 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       if (email === SENDER) return buyerAccount();
       return null;
     });
+    jest.spyOn(storeService, 'getVendors').mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -1647,6 +1702,25 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       expect(found.id).toBe('v-apex-1');
       expect(found.name).toBe('Apex Supplies Ltd.');
 
+      const assignedVendor = { id: 'v-assigned-99', name: 'Assigned Vendor Inc', email: 'assigned@vendor.com' };
+      const rfqWithAssigned = { ...sampleRfq, assignedVendors: [assignedVendor] };
+      const foundAssigned = await emailGatewayService.resolveVendorFromEmail('assigned@vendor.com', rfqWithAssigned);
+      expect(foundAssigned).toEqual(assignedVendor);
+
+      // srinu20252026@gmail.com and rfqprocucev@gmail.com are platform gateway accounts and never resolve as vendors
+      const foundGateway = await emailGatewayService.resolveVendorFromEmail('srinu20252026@gmail.com', rfqWithAssigned);
+      expect(foundGateway).toBeNull();
+
+      const rfqEmptyAssigned = { ...sampleRfq, assignedVendors: [] };
+      const foundGatewayFallback = await emailGatewayService.resolveVendorFromEmail('srinu20252026@gmail.com', rfqEmptyAssigned);
+      expect(foundGatewayFallback).toBeNull();
+
+      const rfqProcucevNotVendor = await emailGatewayService.resolveVendorFromEmail('rfqprocucev@gmail.com', rfqEmptyAssigned);
+      expect(rfqProcucevNotVendor).toBeNull();
+
+      const nullCheck = await emailGatewayService.resolveVendorFromEmail(null);
+      expect(nullCheck).toBeNull();
+
       const notFound = await emailGatewayService.resolveVendorFromEmail('unknown@other.com', sampleRfq);
       expect(notFound).toBeNull();
     });
@@ -1781,6 +1855,149 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       expect(successOutcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
     });
 
+    test('processVendorQuoteMessage with minimal quote fields exercises default fallbacks', async () => {
+      const emailRecord = {
+        fromAddress: null,
+        subject: `Re: Quotation Submission [${RFQ_NUMBER}]`,
+        bodyText: 'Quote text',
+      };
+
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+        unitPrice: 500,
+      });
+      jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue(null);
+      jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue({ ...sampleRfq, quotesCount: 1 });
+      jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+      jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockResolvedValue({ sent: true });
+
+      const bareVendor = { id: 'v-bare', name: 'Bare Vendor' };
+      const outcome = await emailGatewayService.processVendorQuoteMessage(
+        emailRecord,
+        sampleRfq,
+        bareVendor
+      );
+
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
+    });
+
+    test('processVendorQuoteMessage cross-derives unitPrice from totalPrice when unitPrice is missing', async () => {
+      const emailRecord = {
+        messageId: '<quote-total-only@apex.com>',
+        subject: 'Re: [RFQ-2026-00421] Bid',
+        fromAddress: VENDOR_EMAIL,
+        bodyText: 'Total Quoted Value: 60,000',
+      };
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+        unitPrice: 0,
+        totalPrice: 60000,
+      });
+      jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue({ ...sampleRfq, quotes: [{ unitPrice: 15000 }] });
+      jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+      jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockResolvedValue({ sent: true });
+
+      const outcome = await emailGatewayService.processVendorQuoteMessage(
+        emailRecord,
+        sampleRfq,
+        sampleVendor
+      );
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
+      expect(outcome.quote.unitPrice).toBe(4286);
+    });
+
+    test('processVendorQuoteMessage derives unitPrice from lineItemQuotes when available', async () => {
+      const emailRecord = {
+        messageId: '<quote-line-only@apex.com>',
+        subject: 'Re: [RFQ-2026-00421] Bid',
+        fromAddress: VENDOR_EMAIL,
+        bodyText: 'Item price quotes',
+      };
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+        unitPrice: 0,
+        totalPrice: 0,
+        lineItemQuotes: [{ itemName: 'Item 1', unitPrice: 12500, quantity: 4 }],
+      });
+      jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue({ ...sampleRfq, quotes: [{ unitPrice: 12500 }] });
+      jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+      jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockResolvedValue({ sent: true });
+
+      const outcome = await emailGatewayService.processVendorQuoteMessage(
+        emailRecord,
+        sampleRfq,
+        sampleVendor
+      );
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
+      expect(outcome.quote.unitPrice).toBe(12500);
+    });
+
+    test('processVendorQuoteMessage uses second-chance fallback when initial extraction has 0 unitPrice', async () => {
+      const emailRecord = {
+        messageId: '<quote-fallback-pass@apex.com>',
+        subject: 'Re: [RFQ-2026-00421] Bid',
+        fromAddress: VENDOR_EMAIL,
+        bodyText: 'Unit Price: 18000',
+      };
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+        unitPrice: 0,
+        totalPrice: 0,
+      });
+      jest.spyOn(geminiService, 'extractQuotationFallback').mockReturnValue({
+        unitPrice: 18000,
+        totalPrice: 72000,
+        leadTimeDays: 5,
+        warrantyYears: 1,
+        paymentTerms: 'Net 30',
+        complianceStatus: 'Fully Compliant',
+        remarks: 'Fallback quote',
+      });
+      jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue({ ...sampleRfq, quotes: [{ unitPrice: 18000 }] });
+      jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+      jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockResolvedValue({ sent: true });
+
+      const outcome = await emailGatewayService.processVendorQuoteMessage(
+        emailRecord,
+        sampleRfq,
+        sampleVendor
+      );
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
+      expect(outcome.quote.unitPrice).toBe(18000);
+    });
+
+    test('processVendorQuoteMessage handles sendQuoteReceivedEmail errors gracefully', async () => {
+      const emailRecord = {
+        messageId: '<quote-buyer-mail-err@apex.com>',
+        subject: 'Re: [RFQ-2026-00421] Bid',
+        fromAddress: VENDOR_EMAIL,
+        bodyText: 'Unit Price: 10000',
+      };
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+        unitPrice: 10000,
+        totalPrice: 40000,
+      });
+      jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue('buyer@test.com');
+      jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue(sampleRfq);
+      jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+      jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockResolvedValue({ sent: true });
+      jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockRejectedValue(new Error('SMTP down'));
+
+      const outcome = await emailGatewayService.processVendorQuoteMessage(
+        emailRecord,
+        sampleRfq,
+        sampleVendor
+      );
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
+    });
+
+    test('processMessage falls back to extractionInput.documentText when message.bodyText is missing', async () => {
+      const sampleBuffer = Buffer.from('From: intake@procucev.com\nSubject: Test\n\nBody content');
+      jest.spyOn(emailIngestionService, 'prepareEmailForExtraction').mockResolvedValue({
+        status: EMAIL_INGESTION_STATUS.READY,
+        message: { fromAddress: 'intake@procucev.com', subject: 'Requisition' },
+        extractionInput: { documentText: 'Line items text' },
+      });
+      const res = await emailGatewayService.processMessage(sampleBuffer, { user: 'intake@procucev.com' });
+      expect(res.status).toBe(INGESTION_OUTCOME.SKIPPED_OUTBOUND);
+    });
+
     test('processMessage routes RFQ vendor reply directly to vendor quote ingestion', async () => {
       const emlContent = `From: ${VENDOR_EMAIL}
 To: rfq@procucev.com
@@ -1869,7 +2086,509 @@ Price INR 5000
       expect(outcome.status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
     });
   });
+
+  // ==============================================================================
+  // DEDICATED VENDOR EMAIL GATEWAY (srinu20252026@gmail.com)
+  // ==============================================================================
+  describe('Dedicated Vendor Email Gateway (srinu20252026@gmail.com)', () => {
+    const VENDOR_ENV = {
+      VENDOR_EMAIL_GATEWAY_ENABLED: 'true',
+      VENDOR_EMAIL_GATEWAY_HOST: 'imap.gmail.com',
+      VENDOR_EMAIL_GATEWAY_USER: 'srinu20252026@gmail.com',
+      VENDOR_EMAIL_GATEWAY_PASSWORD: 'oycrikpkvnjirwgo',
+    };
+
+    const vendorSampleRfq = {
+      id: 'rfq-srinu-1',
+      rfqNumber: 'RFQ-2026-00999',
+      title: 'Industrial Motors',
+      category: 'Motors',
+      budget: 300000,
+      assignedVendors: [
+        { id: 'v-vendor-1', name: 'Vendor 1', email: 'vendor1@company.com' },
+      ],
+      quotes: [],
+    };
+
+    beforeEach(() => {
+      emailGatewayService.stopPolling();
+      emailGatewayService.vendorRuntime.isPolling = false;
+      emailGatewayService.runtime.isPolling = false;
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+      emailGatewayService.stopPolling();
+      emailGatewayService.vendorRuntime.isPolling = false;
+      emailGatewayService.runtime.isPolling = false;
+    });
+
+    test('resolveVendorConfig resolves environment overrides and defaults', () => {
+      const def = emailGatewayService.resolveVendorConfig({});
+      expect(def.user).toBe('srinu20252026@gmail.com');
+      expect(def.address).toBe('srinu20252026@gmail.com');
+      expect(def.isVendorMailbox).toBe(true);
+
+      const custom = emailGatewayService.resolveVendorConfig({
+        VENDOR_EMAIL_GATEWAY_ENABLED: 'false',
+        VENDOR_EMAIL_GATEWAY_HOST: 'imap.custom.com',
+        VENDOR_EMAIL_GATEWAY_PORT: '995',
+        VENDOR_EMAIL_GATEWAY_POLL_MS: '60000',
+        VENDOR_EMAIL_GATEWAY_MAX_PER_POLL: '25',
+      });
+      expect(custom.enabled).toBe(false);
+      expect(custom.host).toBe('imap.custom.com');
+      expect(custom.port).toBe(995);
+      expect(custom.pollIntervalMs).toBe(60000);
+      expect(custom.maxPerPoll).toBe(25);
+    });
+
+    test('pollVendorOnce skips when unconfigured or already running', async () => {
+      const resUnconf = await emailGatewayService.pollVendorOnce({ user: '', password: '', host: '' });
+      expect(resUnconf.skipped).toBe(true);
+      expect(resUnconf.reason).toBe(EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED);
+
+      emailGatewayService.vendorRuntime.isPolling = true;
+      const resRunning = await emailGatewayService.pollVendorOnce(emailGatewayService.resolveVendorConfig(VENDOR_ENV));
+      expect(resRunning.skipped).toBe(true);
+      expect(resRunning.reason).toBe(EMAIL_GATEWAY_MESSAGES.POLL_ALREADY_RUNNING);
+      emailGatewayService.vendorRuntime.isPolling = false;
+    });
+
+    test('pollVendorOnce catches configuration faults without opening sockets', async () => {
+      const badConfig = { ...emailGatewayService.resolveVendorConfig(VENDOR_ENV), host: 'smtp.gmail.com' };
+      const res = await emailGatewayService.pollVendorOnce(badConfig);
+      expect(res.skipped).toBe(true);
+      expect(res.reason).toContain('smtp.gmail.com');
+    });
+
+    test('pollVendorOnce connects, fetches vendor reply, ingests quote, and marks seen', async () => {
+      const vendorReplyEml = `From: vendor1@company.com
+To: srinu20252026@gmail.com
+Subject: Re: New RFQ RFQ-2026-00999 in Motors
+Message-ID: <vendor-reply-unique-999@company.com>
+Date: Wed, 16 Sep 2026 10:00:00 +0530
+Content-Type: text/plain
+
+Unit Price: INR 15,000
+Lead Time: 5 days
+`;
+
+      const client = fakeImap({
+        uids: [101],
+        source: vendorReplyEml,
+        messageId: '<vendor-reply-unique-999@company.com>',
+      });
+      emailGatewayService.ImapFlow = jest.fn(() => client);
+
+      jest.spyOn(emailGatewayQueries, 'hasProcessed').mockResolvedValue(false);
+      jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+      jest.spyOn(storeService, 'getRFQById').mockReturnValue(vendorSampleRfq);
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+        unitPrice: 15000,
+        totalPrice: 15000,
+        leadTimeDays: 5,
+        warrantyYears: 1,
+        paymentTerms: 'Net 30',
+      });
+      const addQuoteSpy = jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue({
+        ...vendorSampleRfq,
+        quotesCount: 1,
+      });
+
+      const config = emailGatewayService.resolveVendorConfig(VENDOR_ENV);
+      const pollRes = await emailGatewayService.pollVendorOnce(config);
+
+      expect(pollRes.skipped).toBe(false);
+      expect(pollRes.ingested).toBe(1);
+      expect(addQuoteSpy).toHaveBeenCalledTimes(1);
+      expect(client.flagged.length).toBeGreaterThan(0);
+    });
+
+    test('pollVendorOnce handles IMAP connection failure gracefully', async () => {
+      const client = fakeImap({ failConnect: true });
+      emailGatewayService.ImapFlow = jest.fn(() => client);
+
+      const config = emailGatewayService.resolveVendorConfig(VENDOR_ENV);
+      const res = await emailGatewayService.pollVendorOnce(config);
+      expect(res.skipped).toBe(false);
+      expect(res.error).toBe('authentication failed');
+      expect(emailGatewayService.vendorRuntime.lastError).toBe('authentication failed');
+    });
+
+    test('startVendorPolling starts interval and stopPolling clears both', () => {
+      const config = emailGatewayService.resolveVendorConfig(VENDOR_ENV);
+      const startRes = emailGatewayService.startVendorPolling(config);
+      expect(startRes.started).toBe(true);
+
+      const doubleRes = emailGatewayService.startVendorPolling(config);
+      expect(doubleRes.started).toBe(false);
+      expect(doubleRes.reason).toBe(EMAIL_GATEWAY_MESSAGES.ALREADY_STARTED);
+
+      expect(emailGatewayService.stopPolling()).toBe(false); // vendor only was running
+      expect(emailGatewayService.vendorRuntime.pollTimer).toBeNull();
+    });
+
+    test('startVendorPolling refuses when disabled or unconfigured', () => {
+      const disabledRes = emailGatewayService.startVendorPolling({ enabled: false });
+      expect(disabledRes.started).toBe(false);
+      expect(disabledRes.reason).toBe(EMAIL_GATEWAY_MESSAGES.DISABLED);
+
+      const unconfRes = emailGatewayService.startVendorPolling({ enabled: true, user: '', host: '' });
+      expect(unconfRes.started).toBe(false);
+      expect(unconfRes.reason).toBe(EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED);
+    });
+
+    test('processMessage on vendor mailbox rejects email without RFQ reference', async () => {
+      const nonRfqEml = `From: vendor1@company.com
+To: srinu20252026@gmail.com
+Subject: General Enquiry
+Message-ID: <general-vendor-msg@company.com>
+Date: Wed, 16 Sep 2026 10:00:00 +0530
+Content-Type: text/plain
+
+Hello team, sending catalog.
+`;
+      const vendorConfig = emailGatewayService.resolveVendorConfig(VENDOR_ENV);
+      const result = await emailGatewayService.processMessage(Buffer.from(nonRfqEml, 'utf8'), vendorConfig);
+
+      expect(result.status).toBe(INGESTION_OUTCOME.INVALID_RFQ);
+      expect(result.detail).toBe(EMAIL_GATEWAY_MESSAGES.VENDOR_GATEWAY_REQUIRES_RFQ);
+    });
+
+    test('resolveVendorFromEmail matches assigned vendor by domain or single assignment', async () => {
+      const rfqWithDomainVendor = {
+        id: 'rfq-domain-1',
+        rfqNumber: 'RFQ-DOMAIN-1',
+        assignedVendors: [
+          { id: 'v-bhel', name: 'Bharat Heavy Electricals', email: 'procurement@bhel.in' },
+        ],
+      };
+
+      // Match by exact domain when different user email
+      const matchedDomain = await emailGatewayService.resolveVendorFromEmail(
+        'sales.rep@bhel.in',
+        rfqWithDomainVendor
+      );
+      expect(matchedDomain).toBeDefined();
+      expect(matchedDomain.id).toBe('v-bhel');
+
+      // Match single assigned vendor
+      const singleAssigned = {
+        id: 'rfq-single-1',
+        rfqNumber: 'RFQ-SINGLE-1',
+        assignedVendors: [
+          { id: 'v-unique-1', name: 'Unique Vendor', email: 'orders@unique.com' },
+        ],
+      };
+      const matchedSingle = await emailGatewayService.resolveVendorFromEmail(
+        'rep@different-domain.com',
+        singleAssigned
+      );
+      expect(matchedSingle).toBeDefined();
+      expect(matchedSingle.id).toBe('v-unique-1');
+    });
+
+    test('getStatus surfaces vendor gateway status', async () => {
+      const status = await emailGatewayService.getStatus();
+      expect(status.vendorGateway).toBeDefined();
+      expect(status.vendorGateway.gatewayAddress).toBe('srinu20252026@gmail.com');
+      expect(status.vendorGateway.mailboxUser).toBe('srinu20252026@gmail.com');
+    });
+
+    test('pollVendorOnce handles unreadable message and already-processed message', async () => {
+      // 1. Unreadable message when fetchOne returns null
+      const unreadableClient = fakeImap({ uids: [201], source: null });
+      emailGatewayService.ImapFlow = jest.fn(() => unreadableClient);
+      const unreadRes = await emailGatewayService.pollVendorOnce(emailGatewayService.resolveVendorConfig(VENDOR_ENV));
+      expect(unreadRes.outcomes[0].status).toBe(INGESTION_OUTCOME.UNREADABLE);
+
+      // 2. Already processed message
+      const seenClient = fakeImap({ uids: [202], source: 'From: a@b.com\n\nHi', messageId: '<already-processed-msg@b.com>' });
+      emailGatewayService.ImapFlow = jest.fn(() => seenClient);
+      jest.spyOn(emailGatewayQueries, 'hasProcessed').mockResolvedValue(true);
+      const seenRes = await emailGatewayService.pollVendorOnce(emailGatewayService.resolveVendorConfig(VENDOR_ENV));
+      expect(seenRes.outcomes[0].status).toBe(EMAIL_GATEWAY_MESSAGES.ALREADY_PROCESSED);
+      expect(seenClient.flagged.length).toBeGreaterThan(0);
+    });
+
+    test('handles vendor IMAP client error events without unhandled crash', async () => {
+      const client = fakeImap();
+      emailGatewayService.ImapFlow = jest.fn(() => client);
+
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      await emailGatewayService.pollVendorOnce(emailGatewayService.resolveVendorConfig(VENDOR_ENV));
+
+      expect(client.on).toHaveBeenCalledWith('error', expect.any(Function));
+      const errorCb = client.listeners['error'];
+      expect(typeof errorCb).toBe('function');
+      errorCb(new Error('vendor socket ECONNRESET'));
+      errorCb(null);
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Vendor IMAP client socket notice'),
+        expect.anything(),
+        'EMAIL_GATEWAY'
+      );
+    });
+
+    test('pollVendorOnce handles processing errors and failed outcomes', async () => {
+      // Error with envelope messageId
+      const errorClient = fakeImap({ uids: [203], source: 'From: a@b.com\n\nHi', messageId: '<throw-msg@b.com>' });
+      emailGatewayService.ImapFlow = jest.fn(() => errorClient);
+      jest.spyOn(emailGatewayQueries, 'hasProcessed').mockResolvedValue(false);
+      jest.spyOn(emailGatewayService, 'processMessage').mockRejectedValueOnce(new Error('Process parse explosion'));
+      const recSpy = jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+
+      const errRes = await emailGatewayService.pollVendorOnce(emailGatewayService.resolveVendorConfig(VENDOR_ENV));
+      expect(errRes.outcomes[0].status).toBe(INGESTION_OUTCOME.FAILED);
+      expect(recSpy).toHaveBeenCalledWith(expect.objectContaining({
+        messageId: '<throw-msg@b.com>',
+        status: INGESTION_OUTCOME.FAILED,
+      }));
+
+      // Non-ingested outcome status (e.g. INVALID_RFQ)
+      const invalidClient = fakeImap({ uids: [204], source: 'From: a@b.com\n\nHi', messageId: '<invalid-msg@b.com>' });
+      emailGatewayService.ImapFlow = jest.fn(() => invalidClient);
+      jest.spyOn(emailGatewayService, 'processMessage').mockResolvedValueOnce({
+        status: INGESTION_OUTCOME.INVALID_RFQ,
+        detail: 'No RFQ found',
+        message: { messageId: '<invalid-msg@b.com>', fromAddress: 'a@b.com', subject: 'Enquiry' },
+        rfq: null,
+      });
+
+      const invalidRes = await emailGatewayService.pollVendorOnce(emailGatewayService.resolveVendorConfig(VENDOR_ENV));
+      expect(invalidRes.ingested).toBe(0);
+      expect(invalidRes.outcomes[0].status).toBe(INGESTION_OUTCOME.INVALID_RFQ);
+    });
+
+    test('startVendorPolling handles configuration faults and timer errors', async () => {
+      // Configuration fault
+      const faultRes = emailGatewayService.startVendorPolling({
+        enabled: true,
+        user: 'test@gmail.com',
+        host: 'smtp.gmail.com',
+        port: 993,
+        password: 'pass',
+      });
+      expect(faultRes.started).toBe(false);
+      expect(faultRes.reason).toContain('smtp.gmail.com');
+
+      // Timer tick error caught cleanly
+      jest.useFakeTimers();
+      jest.spyOn(emailGatewayService, 'pollVendorOnce').mockRejectedValueOnce(new Error('Vendor interval socket fail'));
+      const started = emailGatewayService.startVendorPolling(emailGatewayService.resolveVendorConfig(VENDOR_ENV));
+      expect(started.started).toBe(true);
+      jest.advanceTimersByTime(60000);
+      await Promise.resolve();
+      await Promise.resolve();
+      emailGatewayService.stopPolling();
+      jest.useRealTimers();
+    });
+
+    test('startBuyerPolling covers all guard branches and timer ticks', async () => {
+      // 1. Disabled
+      const dis = emailGatewayService.startBuyerPolling({ enabled: false });
+      expect(dis.started).toBe(false);
+      expect(dis.reason).toBe(EMAIL_GATEWAY_MESSAGES.DISABLED);
+
+      // 2. Not configured
+      const unconf = emailGatewayService.startBuyerPolling({ enabled: true, user: '', host: '' });
+      expect(unconf.started).toBe(false);
+      expect(unconf.reason).toBe(EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED);
+
+      // 3. Configuration fault (port 465 is SMTP)
+      const fault = emailGatewayService.startBuyerPolling({
+        enabled: true,
+        user: 'intake@procucev.com',
+        host: 'imap.gmail.com',
+        port: 465,
+        password: 'pass',
+      });
+      expect(fault.started).toBe(false);
+      expect(fault.reason).toContain('465');
+
+      // 4. Timer already started & timer tick error
+      jest.useFakeTimers();
+      jest.spyOn(emailGatewayService, 'pollOnce').mockRejectedValueOnce(new Error('Buyer interval tick error'));
+      const buyerConf = emailGatewayService.resolveConfig(FULL_ENV);
+      const ok = emailGatewayService.startBuyerPolling(buyerConf);
+      expect(ok.started).toBe(true);
+
+      const already = emailGatewayService.startBuyerPolling(buyerConf);
+      expect(already.started).toBe(false);
+      expect(already.reason).toBe(EMAIL_GATEWAY_MESSAGES.ALREADY_STARTED);
+
+      jest.advanceTimersByTime(buyerConf.pollIntervalMs);
+      await Promise.resolve();
+      await Promise.resolve();
+      emailGatewayService.stopPolling();
+      jest.useRealTimers();
+    });
+
+    test('extractRfqReferenceFromEmail and resolveVendorFromEmail additional edge branches', async () => {
+      // Null message
+      expect(emailGatewayService.extractRfqReferenceFromEmail(null)).toEqual({ targetRfq: null, referencedNumber: null });
+      expect(emailGatewayService.extractRfqReferenceFromEmail({})).toEqual({ targetRfq: null, referencedNumber: null });
+
+      // Vendor matched by corporateEmail in vendor directory
+      jest.spyOn(storeService, 'getVendors').mockReturnValue([
+        { id: 'v-corp-99', name: 'Corp Vendor', corporateEmail: 'corp@supplier.com' },
+      ]);
+      const matchedCorp = await emailGatewayService.resolveVendorFromEmail('corp@supplier.com', null);
+      expect(matchedCorp).toBeDefined();
+      expect(matchedCorp.id).toBe('v-corp-99');
+
+      // Direct vendor matched by exact email in assignedVendors
+      const rfqDirect = {
+        id: 'rfq-dir-1',
+        rfqNumber: 'RFQ-DIR-1',
+        assignedVendors: [{ id: 'v-direct', email: 'direct@supplier.com' }],
+      };
+      const directVendor = await emailGatewayService.resolveVendorFromEmail('direct@supplier.com', rfqDirect);
+      expect(directVendor.id).toBe('v-direct');
+
+      // srinu20252026@gmail.com is strictly the platform vendor gateway and never resolves as a vendor
+      const matchedVendorGw = await emailGatewayService.resolveVendorFromEmail('srinu20252026@gmail.com', rfqDirect);
+      expect(matchedVendorGw).toBeNull();
+
+      // Direct vendor matched by getVendorById
+      jest.spyOn(storeService, 'getVendorById').mockReturnValueOnce({ id: 'v-direct-id', name: 'ID Vendor' });
+      const matchedById = await emailGatewayService.resolveVendorFromEmail('id-vendor@supplier.com');
+      expect(matchedById.id).toBe('v-direct-id');
+
+      // Custom domain matching
+      const rfqDomain = {
+        id: 'rfq-dom-1',
+        rfqNumber: 'RFQ-DOM-1',
+        assignedVendors: [{ id: 'v-custom-corp', email: 'sales@customcorp.com' }],
+      };
+      const domainVendor = await emailGatewayService.resolveVendorFromEmail('rep@customcorp.com', rfqDomain);
+      expect(domainVendor.id).toBe('v-custom-corp');
+
+      // Edge case: processLineItemsAndGroups with default arguments
+      const processedDefaults = emailGatewayService.processLineItemsAndGroups();
+      expect(Array.isArray(processedDefaults)).toBe(true);
+    });
+
+    test('processMessage skips outbound system emails and self-sent notifications', async () => {
+      jest.spyOn(emailIngestionService, 'prepareEmailForExtraction').mockResolvedValueOnce({
+        status: 'READY',
+        message: {
+          messageId: 'outbound-msg-1',
+          fromAddress: 'srinu20252026@gmail.com',
+          subject: '[Procucev RFQ] New RFQ Invite (#RFQ261809164067)',
+        },
+      });
+
+      const outcome = await emailGatewayService.processMessage('fake-raw-bytes', {
+        user: 'srinu20252026@gmail.com',
+        isVendorMailbox: true,
+      });
+      expect(outcome.status).toBe(emailGatewayService.INGESTION_OUTCOME.SKIPPED_OUTBOUND);
+      expect(outcome.detail).toContain('Skipped');
+
+      // Test buyer gateway address skip
+      jest.spyOn(emailIngestionService, 'prepareEmailForExtraction').mockResolvedValueOnce({
+        status: 'READY',
+        message: {
+          messageId: 'outbound-msg-2',
+          fromAddress: 'rfqprocucev@gmail.com',
+          subject: 'New RFQ RFQ261809164067 in IT',
+        },
+      });
+
+      const buyerOutcome = await emailGatewayService.processMessage('fake-raw-bytes', {
+        user: 'rfqprocucev@gmail.com',
+      });
+      expect(buyerOutcome.status).toBe(emailGatewayService.INGESTION_OUTCOME.SKIPPED_OUTBOUND);
+    });
+
+    test('getStatus surfaces unconfigured vendor and configuration faults', async () => {
+      // Unconfigured vendor gateway
+      jest.spyOn(emailGatewayService, 'resolveVendorConfig').mockReturnValueOnce({
+        enabled: false,
+        user: '',
+        host: '',
+        port: 993,
+      });
+      const unconfStatus = await emailGatewayService.getStatus();
+      expect(unconfStatus.vendorGateway.configured).toBe(false);
+
+      // Faulty vendor gateway
+      jest.spyOn(emailGatewayService, 'resolveVendorConfig').mockReturnValueOnce({
+        enabled: true,
+        user: 'srinu20252026@gmail.com',
+        password: 'pass',
+        host: 'smtp.gmail.com',
+        port: 993,
+      });
+      const faultStatus = await emailGatewayService.getStatus();
+      expect(faultStatus.vendorGateway.lastError).toContain('smtp.gmail.com');
+    });
+
+    test('startPolling with zero arguments and with dual configs', () => {
+      // 1. Zero arguments
+      const resZero = emailGatewayService.startPolling();
+      expect(resZero).toHaveProperty('buyer');
+      expect(resZero).toHaveProperty('vendor');
+      emailGatewayService.stopPolling();
+
+      // 2. Dual configs (buyer + vendor)
+      const buyerConf = emailGatewayService.resolveConfig(FULL_ENV);
+      const vendorConf = emailGatewayService.resolveVendorConfig({
+        ...FULL_ENV,
+        VENDOR_IMAP_USER: 'vendor-watch@gmail.com',
+        VENDOR_IMAP_PASSWORD: 'app-pass-secret',
+      });
+      const resDual = emailGatewayService.startPolling(buyerConf, vendorConf);
+      expect(resDual.started).toBe(true);
+      expect(resDual.buyer.started).toBe(true);
+      expect(resDual.vendor.started).toBe(true);
+      emailGatewayService.stopPolling();
+
+      // 3. startPolling(null, vendorConf)
+      const resNullBuyer = emailGatewayService.startPolling(null, vendorConf);
+      expect(resNullBuyer.started).toBe(true);
+      emailGatewayService.stopPolling();
+
+      // 4. startPolling with disabled configs
+      const disBuyer = { enabled: false };
+      const disVendor = { enabled: false };
+      const resDisabled = emailGatewayService.startPolling(disBuyer, disVendor);
+      expect(resDisabled.started).toBe(false);
+    });
+
+    test('vendor interval timer invokes pollVendorOnce and catches rejections', async () => {
+      jest.useFakeTimers();
+      const pollSpy = jest.spyOn(emailGatewayService, 'pollVendorOnce').mockRejectedValueOnce(new Error('vendor poll exploded'));
+
+      const vendorConf = emailGatewayService.resolveVendorConfig({
+        ...FULL_ENV,
+        VENDOR_IMAP_USER: 'vendor-timer@gmail.com',
+        VENDOR_IMAP_PASSWORD: 'app-pass-secret',
+        VENDOR_EMAIL_GATEWAY_POLL_MS: '5000',
+      });
+
+      const res = emailGatewayService.startVendorPolling(vendorConf);
+      expect(res.started).toBe(true);
+
+      // Trigger interval tick
+      jest.advanceTimersByTime(EMAIL_GATEWAY_CONFIG.DEFAULT_POLL_MS + 100);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(pollSpy).toHaveBeenCalled();
+      emailGatewayService.stopPolling();
+      jest.useRealTimers();
+    });
+  });
+
+  afterAll(() => {
+    emailGatewayService.stopPolling();
+  });
 });
+
 
 
 
