@@ -73,7 +73,7 @@ const MODAL = UI_STRINGS.manualRfqModal;
 // value so the Minor Category select and validation still treat it as "a
 // category was chosen", not "nothing chosen yet".
 const ALL_CATEGORIES_OPTION = 'All Categories';
-const ALL_VENDORS_PAGE_SIZE = 30;
+const ALL_VENDORS_PAGE_SIZE = 100;
 const ALL_VENDORS_SEARCH_DEBOUNCE_MS = 350;
 
 function taxonomyMajors(): string[] {
@@ -1290,16 +1290,16 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                       </div>
                       <div>
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                          <span>Mode 2: Hybrid Sourcing Pool (Private Roster + Procucev Marketplace)</span>
+                          <span>Mode 2: Hybrid Sourcing Pool (Private Roster + Top 100 Procucev Marketplace)</span>
                           <span className="badge badge-emerald text-[10px] font-bold">
-                            {myVendors.length + marketplaceCount} Suppliers Matched
+                            {myVendors.length + Math.min(100, marketplaceCount)} Suppliers Matched
                           </span>
                         </h3>
                         <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
                           {isAllCategories
-                            ? `Combines your approved roster (${myVendors.length}) with the whole Procucev marketplace directory (${marketplaceCount.toLocaleString()} suppliers, searchable) since "All Categories" was chosen.`
+                            ? `Combines your approved roster (${myVendors.length}) with the top 100 Procucev marketplace suppliers (${Math.min(100, marketplaceCount)} shown of ${marketplaceCount.toLocaleString()}) across all categories.`
                             : usesRealVendorSearch
-                            ? `Combines your approved roster (${myVendors.length}) with category-matched Procucev marketplace suppliers (${marketplaceCount.toLocaleString()} found).`
+                            ? `Combines your approved roster (${myVendors.length}) with top 100 category-matched Procucev marketplace suppliers (${Math.min(100, marketplaceCount)} found).`
                             : `Combines your approved roster (${myVendors.length}) with AI category-matched Procucev marketplace suppliers (0) — set a category on a line item to search the marketplace.`}
                         </p>
                       </div>
@@ -1389,12 +1389,12 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                     )}
                   </div>
 
-                  {/* Procucev Verified Vendors from Real Database (real, server-paginated search) */}
+                  {/* Procucev Verified Vendors from Real Database (top 100 server-paginated search) */}
                   <div className="space-y-2 pt-2 border-t border-emerald-100 dark:border-emerald-900/40">
                     <div className="flex items-center justify-between">
                       <h4 className="text-xs font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1.5">
                         <Sparkles size={13} className="text-emerald-600 dark:text-emerald-400" />
-                        <span>Procucev Verified Marketplace Suppliers ({marketplaceCount.toLocaleString()} Matched)</span>
+                        <span>Top 100 Procucev Verified Marketplace Suppliers ({Math.min(100, marketplaceCount)} Matched)</span>
                       </h4>
                       <span className="text-[10px] text-emerald-700 dark:text-emerald-300 font-semibold">
                         {isAllCategories ? 'All Categories' : usesRealVendorSearch ? 'Category Matched' : 'No Category Selected'}
