@@ -57,6 +57,10 @@ function installCrashHandlers(proc = process) {
   });
 
   proc.on('uncaughtException', (err) => {
+    if (err && (err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || err.code === 'EPIPE' || err.code === 'ECONNABORTED')) {
+      logger.error('Ignored transient network socket reset', err, 'SERVER');
+      return;
+    }
     logger.error('Uncaught exception — the process is exiting', err, 'SERVER');
     proc.exit(1);
   });

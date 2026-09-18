@@ -18,7 +18,7 @@ const pool = require('./pool');
 async function getVendorsFromDB() {
   if (!pool.pool) return [];
   const result = await pool.query('SELECT raw FROM vendors ORDER BY created_at DESC');
-  return result.rows.map((row) => row.raw);
+  return (result && result.rows) ? result.rows.map((row) => row.raw) : [];
 }
 
 /**

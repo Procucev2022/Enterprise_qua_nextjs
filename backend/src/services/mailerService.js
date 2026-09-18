@@ -11,6 +11,7 @@ if (typeof dns.setDefaultResultOrder === 'function') {
 }
 
 let transporter;
+let vendorTransporter;
 
 /**
  * Lazily builds a Gmail / SMTP transporter from SMTP_USER/SMTP_PASSWORD.
@@ -73,6 +74,96 @@ function fromAddress() {
     return user;
   }
   return `"Procucev Enterprise" <${user}>`;
+}
+
+/**
+ * Lazily builds a Gmail / SMTP transporter for vendor notifications and invites
+ * from VENDOR_SMTP_USER/VENDOR_SMTP_PASSWORD (defaults strictly to srinu20252026@gmail.com).
+ * Vendor communications NEVER fall back to buyer SMTP (rfqprocucev@gmail.com).
+ */
+function getVendorTransporter() {
+  if (vendorTransporter) return vendorTransporter;
+
+  const user = process.env.VENDOR_SMTP_USER;
+  const rawPass = process.env.VENDOR_SMTP_PASSWORD;
+  if (!user || !rawPass) return undefined;
+
+  const pass = rawPass.replace(/\s+/g, '');
+  const host = process.env.VENDOR_SMTP_HOST || 'smtp.gmail.com';
+  const isGmail =
+    (process.env.VENDOR_SMTP_SERVICE && process.env.VENDOR_SMTP_SERVICE.toLowerCase() === 'gmail') ||
+    host.toLowerCase().includes('gmail');
+
+  let port;
+  let secure;
+
+  if (process.env.VENDOR_SMTP_PORT) {
+    port = Number(process.env.VENDOR_SMTP_PORT);
+    secure = process.env.VENDOR_SMTP_SECURE !== undefined ? process.env.VENDOR_SMTP_SECURE === 'true' : port === 465;
+  } else if (process.env.VENDOR_SMTP_SECURE !== undefined) {
+    secure = process.env.VENDOR_SMTP_SECURE === 'true';
+    port = secure ? 465 : 587;
+  } else if (isGmail) {
+    port = 465;
+    secure = true;
+  } else {
+    port = 587;
+    secure = false;
+  }
+
+  const transportConfig = {
+    host,
+    port,
+    secure,
+    family: 4,
+    auth: { user, pass },
+    tls: {
+      rejectUnauthorized: false,
+    },
+    connectionTimeout: 25000,
+    greetingTimeout: 25000,
+    socketTimeout: 30000,
+  };
+
+  vendorTransporter = nodemailer.createTransport(transportConfig);
+  return vendorTransporter;
+}
+
+function vendorFromAddress() {
+  const user = process.env.VENDOR_SMTP_FROM || process.env.VENDOR_SMTP_USER || 'srinu20252026@gmail.com';
+  if (user.includes('<') && user.includes('>')) {
+    return user;
+  }
+  return `"Procucev Enterprise" <${user}>`;
+}
+
+function vendorGatewayAddress() {
+  return (
+    process.env.VENDOR_EMAIL_GATEWAY_ADDRESS ||
+    process.env.VENDOR_EMAIL_GATEWAY_USER ||
+    process.env.VENDOR_SMTP_USER ||
+    'srinu20252026@gmail.com'
+  );
+}
+
+/**
+ * Send one message through the vendor transporter.
+ */
+async function deliverVendor(message, label) {
+  if (process.env.NODE_ENV === 'test') {
+    return { sent: false, reason: 'test environment' };
+  }
+
+  const activeTransporter = getVendorTransporter();
+  if (!activeTransporter) {
+    logger.warn(`Vendor SMTP not configured (VENDOR_SMTP_USER/VENDOR_SMTP_PASSWORD unset) — ${label} not sent`, { to: message.to }, 'MAILER_SERVICE');
+    return { sent: false, reason: 'SMTP not configured' };
+  }
+
+  logger.info(`Dispatching ${label} to ${message.to}`, { subject: message.subject }, 'MAILER_SERVICE');
+  const info = await activeTransporter.sendMail(message);
+  logger.info(`${label} sent successfully to ${message.to}`, { messageId: info.messageId }, 'MAILER_SERVICE');
+  return { sent: true, messageId: info.messageId };
 }
 
 // ── Autonomous email-gateway: buyer requisition inbound notification ─────────
@@ -263,7 +354,7 @@ function buildRfqInviteEmail(to, { rfq, recipientName }) {
       ? `Item: ${items[0].itemName || items[0].name || 'Line Item'}\nUnit Price: ₹[Enter Unit Price]\nLead Time: [e.g. 7] Days\nWarranty: [e.g. 1] Year(s)\nPayment Terms: [e.g. Net 30 Days]\nRemarks: [e.g. Inclusions / Delivery terms]`
       : `Unit Price: ₹[Enter Unit Price]\nTotal Price: ₹[Enter Total Price]\nLead Time: [e.g. 7] Days\nWarranty: [e.g. 1] Year(s)\nPayment Terms: [e.g. Net 30 Days]\nRemarks: [e.g. Inclusions / Delivery terms]`;
 
-  const gatewayEmail = emailGatewayAddress();
+  const gatewayEmail = vendorGatewayAddress();
 
   const inner = `
     <p>${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}</p>
@@ -315,7 +406,7 @@ function buildRfqInviteEmail(to, { rfq, recipientName }) {
   `;
 
   return {
-    from: fromAddress(),
+    from: vendorFromAddress(),
     to,
     replyTo: gatewayEmail,
     subject,
@@ -324,7 +415,7 @@ function buildRfqInviteEmail(to, { rfq, recipientName }) {
 }
 
 async function sendRfqInviteEmail(to, context) {
-  return deliver(buildRfqInviteEmail(to, context), 'RFQ invite email');
+  return deliverVendor(buildRfqInviteEmail(to, context), 'RFQ invite email');
 }
 
 // ── Vendor quote acknowledgement → vendor (with buyer & support CC) ─────────
@@ -349,8 +440,9 @@ function buildQuoteAcknowledgementEmail(toOrParams, maybeContext) {
   `;
 
   return {
-    from: fromAddress(),
+    from: vendorFromAddress(),
     to,
+    replyTo: vendorGatewayAddress(),
     cc: cc || undefined,
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Quotation Submission Confirmation', inner),
@@ -358,7 +450,7 @@ function buildQuoteAcknowledgementEmail(toOrParams, maybeContext) {
 }
 
 async function sendQuoteAcknowledgementEmail(toOrParams, maybeContext) {
-  return deliver(buildQuoteAcknowledgementEmail(toOrParams, maybeContext), 'quote acknowledgement email');
+  return deliverVendor(buildQuoteAcknowledgementEmail(toOrParams, maybeContext), 'quote acknowledgement email');
 }
 
 // ── Vendor quote failure notification → vendor (with buyer & support CC) ─────
@@ -384,8 +476,9 @@ function buildQuoteFailureEmail(toOrParams, maybeContext) {
   `;
 
   return {
-    from: fromAddress(),
+    from: vendorFromAddress(),
     to,
+    replyTo: vendorGatewayAddress(),
     cc: cc || undefined,
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Quotation Submission Notice', inner),
@@ -393,7 +486,7 @@ function buildQuoteFailureEmail(toOrParams, maybeContext) {
 }
 
 async function sendQuoteFailureEmail(toOrParams, maybeContext) {
-  return deliver(buildQuoteFailureEmail(toOrParams, maybeContext), 'quote failure notification email');
+  return deliverVendor(buildQuoteFailureEmail(toOrParams, maybeContext), 'quote failure notification email');
 }
 
 // ── Vendor quote → owning buyer ─────────────────────────────────────────────
@@ -760,7 +853,7 @@ function buildRatingRevisionEmail({ to, recipientName, vendorName, buyerCompany,
  * unconfigured server show up as retryable failures instead of silent success.
  */
 async function sendVendorIngestionEmail(message, template) {
-  return deliver(message, `vendor ingestion ${template} email`);
+  return deliverVendor(message, `vendor ingestion ${template} email`);
 }
 
 /**
@@ -853,8 +946,16 @@ function isConfigured() {
   return Boolean(process.env.SMTP_USER && process.env.SMTP_PASSWORD);
 }
 
+function isVendorConfigured() {
+  return Boolean(process.env.VENDOR_SMTP_USER && process.env.VENDOR_SMTP_PASSWORD);
+}
+
 module.exports = {
   getTransporter,
+  getVendorTransporter,
+  vendorFromAddress,
+  vendorGatewayAddress,
+  deliverVendor,
   sendOtpEmail,
   sendRfqInviteEmail,
   sendQuoteReceivedEmail,
@@ -881,5 +982,6 @@ module.exports = {
   buildQuoteFailureEmail,
   sendQuoteFailureEmail,
   isConfigured,
+  isVendorConfigured,
 };
 

@@ -186,6 +186,24 @@ describe('installCrashHandlers', () => {
     expect(proc.exit).toHaveBeenCalledWith(1);
   });
 
+  test('logs and ignores transient socket reset exceptions without exiting', () => {
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+    const proc = installCrashHandlers(fakeProcess());
+
+    const resetError = new Error('read ECONNRESET');
+    resetError.code = 'ECONNRESET';
+    proc.emit('uncaughtException', resetError);
+
+    expect(errorSpy).toHaveBeenCalledWith('Ignored transient network socket reset', resetError, 'SERVER');
+    expect(proc.exit).not.toHaveBeenCalled();
+
+    const timeoutError = new Error('connect ETIMEDOUT');
+    timeoutError.code = 'ETIMEDOUT';
+    proc.emit('uncaughtException', timeoutError);
+    expect(errorSpy).toHaveBeenCalledWith('Ignored transient network socket reset', timeoutError, 'SERVER');
+    expect(proc.exit).not.toHaveBeenCalled();
+  });
+
   test('defaults to the real process when called with no argument', () => {
     const onSpy = jest.spyOn(process, 'on').mockImplementation(() => process);
 

@@ -23,6 +23,18 @@ describe('PerformanceOptimizer Unit Tests', () => {
 
   test('auditPerformance evaluates all grade branches: A, B, and C', () => {
     // 1. Grade A branch (score 85)
+    jest.spyOn(process, 'memoryUsage')
+      .mockReturnValueOnce({
+        heapUsed: 50 * 1024 * 1024,
+        heapTotal: 100 * 1024 * 1024,
+        rss: 120 * 1024 * 1024,
+      })
+      .mockReturnValueOnce({
+        heapUsed: 50 * 1024 * 1024,
+        heapTotal: 100 * 1024 * 1024,
+        rss: 120 * 1024 * 1024,
+      });
+
     jest.spyOn(queryAuditor, 'getAuditReport').mockReturnValueOnce({
       averageQueryDurationMs: 150, // -15 => 85 => Grade A
       slowQueriesCount: 1,
