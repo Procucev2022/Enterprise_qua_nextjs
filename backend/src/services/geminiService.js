@@ -453,18 +453,37 @@ async function generateJson(input = {}) {
   return { ...base, status: EXTRACTION_STATUS.AI_FAILED, error: failures.join(' | ') };
 }
 
+function cleanEmailText(text = '') {
+  return String(text || '')
+    .replace(/\u00e2\u201a\u00b9/g, '₹') // mojibake â‚¹
+    .replace(/&#8377;|&amp;#8377;|&#x20b9;|&amp;#x20b9;|&rupee;/gi, '₹')
+    .replace(/&nbsp;|&amp;nbsp;|\u00a0/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+}
+
 /**
  * Fallback heuristic/regex extraction when Gemini AI is not configured or fails.
  */
 function extractQuotationFallback(text = '', rfqContext = {}) {
-  const clean = String(text || '').replace(/\r?\n/g, ' ');
+  const sanitized = cleanEmailText(text);
+  const clean = sanitized.replace(/\r?\n/g, ' ');
 
   let unitPrice = 0;
   let totalPrice = 0;
 
-  const unitMatch = clean.match(/(?:unit\s*price|rate|price\s*per\s*unit|unit\s*rate)[\s:=₹RsINR\.]*([\d,]+(?:\.\d+)?)/i);
-  const totalMatch = clean.match(/(?:total\s*price|total\s*amount|grand\s*total|total\s*bid|total\s*quote|total)[\s:=₹RsINR\.]*([\d,]+(?:\.\d+)?)/i);
-  const generalPriceMatch = clean.match(/(?:(?:INR|Rs\.?|₹)\s*([\d,]+(?:\.\d+)?))/i) || clean.match(/(?:price|quote|bid)[\s:=]*([\d,]+(?:\.\d+)?)/i);
+  const unitMatch = clean.match(
+    /(?:unit\s*price|price\s*per\s*unit|unit\s*rate|unit\s*cost|rate\s*per\s*unit|\brate\b)(?:\s*\([^)]*\)|\[[^\]]*\])?[\s:=~–—\-\/₹RsINR\.]*([\d,]+(?:\.\d+)?)/i
+  );
+  const totalMatch = clean.match(
+    /(?:total\s*quoted\s*value|total\s*quoted\s*amount|total\s*order\s*value|total\s*value|total\s*cost|total\s*price|total\s*amount|grand\s*total|total\s*bid|total\s*quote|quoted\s*value)(?:\s*\([^)]*\)|\[[^\]]*\])?[\s:=~–—\-\/₹RsINR\.]*([\d,]+(?:\.\d+)?)/i
+  ) || clean.match(/(?:\btotal\b)(?:\s*\([^)]*\)|\[[^\]]*\])?[\s:=~–—\-\/₹RsINR\.]*([\d,]+(?:\.\d+)?)(?!\s*(?:units?|nos?|items?|pcs?|pieces?|quantity|qty))/i);
+  const generalPriceMatch =
+    clean.match(/(?:(?:INR|Rs\.?|₹)\s*([\d,]+(?:\.\d+)?))/i) ||
+    clean.match(/(?:price|quote|bid)[\s:=~–—\-\/]*([\d,]+(?:\.\d+)?)/i);
 
   const parseNum = (str) => (str ? Number(String(str).replace(/,/g, '')) : 0);
 
@@ -475,9 +494,9 @@ function extractQuotationFallback(text = '', rfqContext = {}) {
   const rfqItems = rfqContext.extractedEntities || rfqContext.lineItems || [];
   const rfqQty = rfqItems.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0) || 1;
 
-  if (unitPrice > 0 && (!totalPrice || totalPrice === 0)) {
+  if (unitPrice > 0 && !totalPrice) {
     totalPrice = unitPrice * rfqQty;
-  } else if (totalPrice > 0 && (!unitPrice || unitPrice === 0)) {
+  } else if (totalPrice > 0 && !unitPrice) {
     unitPrice = Math.round(totalPrice / rfqQty);
   }
 
@@ -503,7 +522,7 @@ function extractQuotationFallback(text = '', rfqContext = {}) {
   }
 
   let paymentTerms = 'Standard Terms';
-  const payMatch = text.match(/(?:payment\s*terms?|payment)[\s:=]*([^\n\r,;\.]{2,40})/i);
+  const payMatch = sanitized.match(/(?:payment\s*terms?|payment)[\s:=]*([^\n\r,;\.]{2,40})/i);
   if (payMatch) {
     paymentTerms = payMatch[1].replace(/(?:taxes|gst|freight|remarks|delivery).*/i, '').trim();
   }
@@ -531,7 +550,14 @@ function extractQuotationFallback(text = '', rfqContext = {}) {
       `(?:${escaped})[^\\n\\r]*?(?:INR|Rs\\.?|₹)?\\s*([\\d,]+(?:\\.\\d+)?)\\s*(?:per|/|unit|each|piece)?`,
       'i'
     );
-    const itemMatch = text.match(itemRegex);
+    let itemMatch = sanitized.match(itemRegex);
+    if (!itemMatch) {
+      const itemBlockRegex = new RegExp(
+        `(?:${escaped})[\\s\\S]{0,140}?(?:unit\\s*price|rate|price|quote)[\\s:=~–—\\-\\/₹RsINR\\.]*([\\d,]+(?:\\.\\d+)?)`,
+        'i'
+      );
+      itemMatch = sanitized.match(itemBlockRegex);
+    }
     if (itemMatch) {
       const parsed = parseNum(itemMatch[1]);
       if (parsed > 0) itemUnitPrice = parsed;
@@ -551,6 +577,10 @@ function extractQuotationFallback(text = '', rfqContext = {}) {
   const calculatedTotal = lineItemQuotes.reduce((acc, it) => acc + (it.totalPrice || 0), 0);
   if (calculatedTotal > 0) {
     totalPrice = calculatedTotal;
+  }
+
+  if (!unitPrice && lineItemQuotes.length > 0 && lineItemQuotes[0].unitPrice > 0) {
+    unitPrice = lineItemQuotes[0].unitPrice;
   }
 
   return {
@@ -645,8 +675,13 @@ Do NOT include markdown fences, prose or explanation outside the JSON object.`;
 
   if (result.status === EXTRACTION_STATUS.SUCCESS && result.data && typeof result.data === 'object') {
     const data = result.data;
-    const unitPrice = Number(data.unitPrice) || 0;
-    const totalPrice = Number(data.totalPrice) || (unitPrice * (rfqItems.length || 1));
+    let unitPrice = normalizeAmount(data.unitPrice) || 0;
+    let totalPrice = normalizeAmount(data.totalPrice) || (unitPrice * (rfqItems.length || 1));
+
+    if (totalPrice > 0 && (!unitPrice || unitPrice === 0)) {
+      unitPrice = Math.round(totalPrice / (rfqItems.length || 1));
+    }
+
     const leadTimeDays = Number(data.leadTimeDays) || 7;
     const warrantyYears = Number(data.warrantyYears) || 1;
     const paymentTerms = String(data.paymentTerms || 'Standard Terms').trim();
@@ -654,18 +689,23 @@ Do NOT include markdown fences, prose or explanation outside the JSON object.`;
       ? data.complianceStatus
       : 'Fully Compliant';
     const remarks = String(data.remarks || '').trim();
-    const taxes = Number(data.taxes) || 0;
-    const deliveryCharges = Number(data.deliveryCharges) || 0;
+    const taxes = normalizeAmount(data.taxes) || 0;
+    const deliveryCharges = normalizeAmount(data.deliveryCharges) || 0;
 
     let lineItemQuotes = Array.isArray(data.lineItemQuotes) && data.lineItemQuotes.length > 0
-      ? data.lineItemQuotes.map((lq, idx) => ({
-          itemName: lq.itemName || rfqItems[idx]?.itemName || `Item ${idx + 1}`,
-          quantity: Number(lq.quantity) || Number(rfqItems[idx]?.quantity) || 1,
-          unitPrice: Number(lq.unitPrice) || unitPrice || 0,
-          totalPrice: Number(lq.totalPrice) || (Number(lq.unitPrice || unitPrice || 0) * (Number(lq.quantity) || 1)),
-          tax: Number(lq.tax) || 0,
-          deliveryDate: lq.deliveryDate || null,
-        }))
+      ? data.lineItemQuotes.map((lq, idx) => {
+          const lqUnit = normalizeAmount(lq.unitPrice) || unitPrice || 0;
+          const lqQty = Number(lq.quantity) || Number(rfqItems[idx]?.quantity) || 1;
+          const lqTotal = normalizeAmount(lq.totalPrice) || (lqUnit * lqQty);
+          return {
+            itemName: lq.itemName || rfqItems[idx]?.itemName || `Item ${idx + 1}`,
+            quantity: lqQty,
+            unitPrice: lqUnit,
+            totalPrice: lqTotal,
+            tax: normalizeAmount(lq.tax) || 0,
+            deliveryDate: lq.deliveryDate || null,
+          };
+        })
       : rfqItems.map((rfqItem, idx) => ({
           itemName: rfqItem.itemName || rfqItem.description || `Item ${idx + 1}`,
           quantity: Number(rfqItem.quantity) || 1,
@@ -674,6 +714,13 @@ Do NOT include markdown fences, prose or explanation outside the JSON object.`;
           tax: taxes ? Math.round(taxes / (rfqItems.length || 1)) : 0,
           deliveryDate: rfqItem.targetDate || rfqContext.targetDeliveryDate || null,
         }));
+
+    if (!unitPrice && lineItemQuotes.length > 0 && lineItemQuotes[0].unitPrice > 0) {
+      unitPrice = lineItemQuotes[0].unitPrice;
+      if (!totalPrice) {
+        totalPrice = lineItemQuotes.reduce((acc, it) => acc + (it.totalPrice || 0), 0);
+      }
+    }
 
     return {
       unitPrice,

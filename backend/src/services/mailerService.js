@@ -320,7 +320,8 @@ function emailGatewayAddress() {
   return process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || 'rfqprocucev@gmail.com';
 }
 
-function buildRfqInviteEmail(to, { rfq, recipientName }) {
+function buildRfqInviteEmail(to, context = {}) {
+  const { rfq = {}, recipientName, buyerEmail, cc } = context;
   const items = Array.isArray(rfq.extractedEntities) && rfq.extractedEntities.length > 0
     ? rfq.extractedEntities
     : Array.isArray(rfq.items) && rfq.items.length > 0
@@ -355,6 +356,7 @@ function buildRfqInviteEmail(to, { rfq, recipientName }) {
       : `Unit Price: ₹[Enter Unit Price]\nTotal Price: ₹[Enter Total Price]\nLead Time: [e.g. 7] Days\nWarranty: [e.g. 1] Year(s)\nPayment Terms: [e.g. Net 30 Days]\nRemarks: [e.g. Inclusions / Delivery terms]`;
 
   const gatewayEmail = vendorGatewayAddress();
+  const buyerCc = cc || buyerEmail || undefined;
 
   const inner = `
     <p>${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}</p>
@@ -382,7 +384,7 @@ function buildRfqInviteEmail(to, { rfq, recipientName }) {
     <div style="margin: 20px 0; padding: 18px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px;">
       <h4 style="margin: 0 0 10px 0; color: #1e40af; font-size: 15px; font-weight: 700;">How to Submit Your Quotation</h4>
       <p style="margin: 0 0 10px 0; font-size: 13px; color: #1e293b; line-height: 1.5;">
-        You can submit your bid either by <strong>replying directly to this email at <a href="mailto:${gatewayEmail}" style="color: #0284c7; font-weight: bold;">${gatewayEmail}</a></strong> (keep the subject line intact with RFQ number <strong>#${rfq.rfqNumber}</strong>), or online via the Procucev Vendor Portal.
+        You can submit your bid either by <strong>replying directly to this email at <a href="mailto:${gatewayEmail}" style="color: #0284c7; font-weight: bold;">${gatewayEmail}</a></strong> (keep the subject line intact with RFQ number <strong>#${rfq.rfqNumber}</strong>${buyerCc ? ` and keep buyer CC'd: <strong>${buyerCc}</strong>` : ''}), or online via the Procucev Vendor Portal.
       </p>
 
       <p style="margin: 12px 0 6px 0; font-size: 13px; font-weight: 700; color: #1e293b;">Mandatory Quotation Information Required:</p>
@@ -409,6 +411,7 @@ function buildRfqInviteEmail(to, { rfq, recipientName }) {
     from: vendorFromAddress(),
     to,
     replyTo: gatewayEmail,
+    cc: buyerCc,
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'New Sourcing Enquiry', inner),
   };

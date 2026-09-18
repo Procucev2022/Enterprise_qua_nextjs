@@ -365,5 +365,35 @@ describe('emailIngestionService.buildDocumentText', () => {
   });
 });
 
+describe('emailIngestionService.extractCcAddresses and resolveBodyText edge cases', () => {
+  test('extractCcAddresses handles null, value array with edge cases, text fallback and empty objects', () => {
+    expect(emailIngestionService.extractCcAddresses(null)).toEqual([]);
+    expect(emailIngestionService.extractCcAddresses(undefined)).toEqual([]);
+    expect(emailIngestionService.extractCcAddresses({})).toEqual([]);
+    expect(
+      emailIngestionService.extractCcAddresses({
+        value: [
+          { address: ' Buyer@example.com ' },
+          { address: null },
+          null,
+          { address: '' },
+          { address: 'cc2@example.com' },
+        ],
+      })
+    ).toEqual(['buyer@example.com', 'cc2@example.com']);
+    expect(
+      emailIngestionService.extractCcAddresses({
+        text: 'Buyer@Example.com, Manager@example.com, ,',
+      })
+    ).toEqual(['buyer@example.com', 'manager@example.com']);
+  });
+
+  test('resolveBodyText returns empty string when text is not a string and html is missing', () => {
+    expect(emailIngestionService.resolveBodyText({})).toBe('');
+    expect(emailIngestionService.resolveBodyText({ text: null })).toBe('');
+  });
+});
+
+
 // Fallback copy for a status the message table does not name, so a new refusal
 // reason can never surface as an empty error string.

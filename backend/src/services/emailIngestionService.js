@@ -128,6 +128,23 @@ function classifyAttachment(attachment) {
   return 'manual';
 }
 
+/** Extract list of lowercase email addresses from mailparser address object. */
+function extractCcAddresses(addressObject) {
+  if (!addressObject) return [];
+  if (Array.isArray(addressObject.value)) {
+    return addressObject.value
+      .map((entry) => (entry && typeof entry.address === 'string' ? entry.address.trim().toLowerCase() : ''))
+      .filter(Boolean);
+  }
+  if (typeof addressObject.text === 'string') {
+    return addressObject.text
+      .split(',')
+      .map((a) => a.trim().toLowerCase())
+      .filter(Boolean);
+  }
+  return [];
+}
+
 /**
  * Parse a raw RFC822 message.
  *
@@ -156,6 +173,7 @@ async function parseEmailMessage(rawBuffer) {
     fromAddress,
     fromName: firstAddressName(parsed.from, fromAddress),
     toAddress: firstAddress(parsed.to),
+    cc: extractCcAddresses(parsed.cc),
     sentAt: parsed.date instanceof Date ? parsed.date.toISOString() : null,
     bodyText: stripQuotedReplies(resolveBodyText(parsed)),
     attachments,
@@ -296,6 +314,7 @@ const emailIngestion = {
   buildDocumentText,
   parseEmailMessage,
   prepareEmailForExtraction,
+  extractCcAddresses,
 };
 
 module.exports = emailIngestion;
