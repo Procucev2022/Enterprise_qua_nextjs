@@ -211,11 +211,15 @@ async function processVendorMasterBatch(sessionId, organizationId, batch) {
   const invalid = [];
 
   for (const row of batch) {
-    if (!row.companyName || row.companyName.trim() === '') {
+    const companyName = row.companyName || row.company_name || row.vendorName || row.name || '';
+    if (!companyName || String(companyName).trim() === '') {
       invalid.push({ row, reason: 'Company Name is required' });
       continue;
     }
-    valid.push(row);
+    valid.push({
+      ...row,
+      companyName: String(companyName).trim(),
+    });
   }
 
   let imported = 0;
@@ -224,7 +228,7 @@ async function processVendorMasterBatch(sessionId, organizationId, batch) {
   if (valid.length > 0) {
     try {
       const stored = await queries.bulkUpsertVendorMasterRecords(sessionId, organizationId, valid);
-      imported = stored.length;
+      imported = Array.isArray(stored) ? stored.length : (typeof stored === 'number' ? stored : valid.length);
     } catch (err) {
       logger.error('Failed to upsert vendor master batch', err, LOG_CATEGORY);
       skipped += valid.length;
@@ -242,7 +246,9 @@ async function processPoDumpBatch(sessionId, organizationId, batch, session) {
   const invalid = [];
 
   for (const row of batch) {
-    if (!row.vendorName && !row.vendorCode) {
+    const vendorName = row.vendorName || row.vendorIdentifier || row.vendor_name || row.supplierName || row.companyName || '';
+    const vendorCode = row.vendorCode || row.vendor_code || row.supplierCode || '';
+    if (!vendorName && !vendorCode) {
       invalid.push({ row, reason: 'Vendor Name or Vendor Code is required' });
       continue;
     }
@@ -254,6 +260,10 @@ async function processPoDumpBatch(sessionId, organizationId, batch, session) {
 
     valid.push({
       ...row,
+      vendorName: vendorName || (vendorCode ? `Vendor ${vendorCode}` : 'Unknown Vendor'),
+      itemDescription: row.itemDescription || row.itemName || row.description || 'Industrial Item',
+      quantity: row.quantity !== undefined ? Number(row.quantity) || 1 : 1,
+      spend: row.spend !== undefined ? Number(row.spend) || 0 : (Number(row.totalSpend) || 0),
       inHorizon,
     });
   }
@@ -264,7 +274,7 @@ async function processPoDumpBatch(sessionId, organizationId, batch, session) {
   if (valid.length > 0) {
     try {
       const stored = await queries.bulkInsertPoLineItems(sessionId, organizationId, valid);
-      imported = stored.length;
+      imported = typeof stored === 'number' ? stored : (Array.isArray(stored) ? stored.length : valid.length);
     } catch (err) {
       logger.error('Failed to insert PO dump batch', err, LOG_CATEGORY);
       skipped += valid.length;

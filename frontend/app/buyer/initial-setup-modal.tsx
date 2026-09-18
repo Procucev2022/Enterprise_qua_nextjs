@@ -660,13 +660,18 @@ export default function InitialSetupModal() {
               id: `po-upload-${Date.now()}-${idx}`,
               poNumber,
               poDate,
+              vendorName: vendorIdentifier,
               vendorIdentifier,
               itemName,
+              itemDescription: itemName,
               specs,
+              specification: specs,
               quantity,
               unit,
+              uom: unit,
               unitPrice,
               totalSpend,
+              spend: totalSpend,
               department,
             };
           });
