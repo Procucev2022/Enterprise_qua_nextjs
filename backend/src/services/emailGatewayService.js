@@ -471,11 +471,54 @@ function extractRfqReferenceFromEmail(message) {
 }
 
 /**
+ * Detects whether an email is outbound or sent from the platform itself,
+ * so it is never treated as an inbound requisition or vendor quotation reply.
+ */
+function isOutgoingSystemMessage(message, config = {}) {
+  if (!message || !message.fromAddress) return false;
+  const senderEmail = String(message.fromAddress).trim().toLowerCase();
+  const mailboxUser = String(config.user || '').trim().toLowerCase();
+  const vendorUser = String(
+    process.env.VENDOR_EMAIL_GATEWAY_USER ||
+    process.env.VENDOR_SMTP_USER ||
+    'srinu20252026@gmail.com'
+  ).trim().toLowerCase();
+  const buyerUser = String(
+    process.env.EMAIL_GATEWAY_USER ||
+    process.env.SMTP_USER ||
+    'rfqprocucev@gmail.com'
+  ).trim().toLowerCase();
+
+  return (
+    senderEmail === mailboxUser ||
+    senderEmail === vendorUser ||
+    senderEmail === buyerUser ||
+    senderEmail === 'srinu20252026@gmail.com' ||
+    senderEmail === 'rfqprocucev@gmail.com'
+  );
+}
+
+/**
  * Resolve vendor record from sender email address or vendor directory.
+ * Internal platform / gateway addresses (srinu20252026@gmail.com, rfqprocucev@gmail.com)
+ * are NEVER resolved as a vendor.
  */
 async function resolveVendorFromEmail(fromAddress, targetRfq = null) {
   if (!fromAddress) return null;
   const email = String(fromAddress).trim().toLowerCase();
+
+  const vendorGatewayAddr = (process.env.VENDOR_EMAIL_GATEWAY_ADDRESS || process.env.VENDOR_EMAIL_GATEWAY_USER || 'srinu20252026@gmail.com').toLowerCase();
+  const buyerGatewayAddr = (process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || 'rfqprocucev@gmail.com').toLowerCase();
+
+  // Internal gateway accounts can NEVER be a vendor
+  if (
+    email === vendorGatewayAddr ||
+    email === buyerGatewayAddr ||
+    email === 'srinu20252026@gmail.com' ||
+    email === 'rfqprocucev@gmail.com'
+  ) {
+    return null;
+  }
 
   const direct = storeService.getVendorById(email);
   if (direct) return direct;
@@ -491,33 +534,15 @@ async function resolveVendorFromEmail(fromAddress, targetRfq = null) {
     const assignedMatch = assigned.find((v) => v.email && v.email.toLowerCase() === email);
     if (assignedMatch) return assignedMatch;
 
-    const gatewayAddr = (process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || 'rfqprocucev@gmail.com').toLowerCase();
-    const vendorGatewayAddr = (process.env.VENDOR_EMAIL_GATEWAY_ADDRESS || process.env.VENDOR_EMAIL_GATEWAY_USER || 'srinu20252026@gmail.com').toLowerCase();
-    if (
-      email === gatewayAddr ||
-      email === 'rfqprocucev@gmail.com' ||
-      email === vendorGatewayAddr ||
-      email === 'srinu20252026@gmail.com'
-    ) {
-      if (assigned.length > 0) {
-        return assigned[0];
-      }
-      return {
-        id: 'v-email-gateway',
-        name: 'Email Vendor (rfqprocucev)',
-        email,
-        contactPerson: 'Vendor Rep',
-      };
-    }
-
-    // Match vendor by domain if assigned to this RFQ
+    // Match vendor by domain if assigned to this RFQ (excluding generic webmail providers)
     const domain = email.split('@')[1];
-    if (domain) {
+    const genericDomains = ['gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'icloud.com', 'live.com', 'protonmail.com'];
+    if (domain && !genericDomains.includes(domain)) {
       const domainMatch = assigned.find((v) => v.email && v.email.toLowerCase().endsWith(`@${domain}`));
       if (domainMatch) return domainMatch;
     }
 
-    // If only one vendor was assigned to this RFQ, attribute response to that vendor
+    // If only one vendor was assigned to this RFQ, attribute non-gateway response to that vendor
     if (assigned.length === 1) {
       return assigned[0];
     }
@@ -674,6 +699,16 @@ async function processMessage(rawSource, config = resolveConfig()) {
   }
 
   const { message } = prepared;
+
+  // Guard: Never process outbound emails, self-sent copies, or system notifications as inbound requisitions/quotes
+  if (isOutgoingSystemMessage(message, config)) {
+    logger.info(`Skipping outbound system message from ${message.fromAddress}`, { subject: message.subject }, 'EMAIL_GATEWAY');
+    return {
+      status: INGESTION_OUTCOME.SKIPPED_OUTBOUND,
+      detail: 'Skipped self-sent or outbound system message',
+      message,
+    };
+  }
 
   // 1. Check if this message is a vendor quotation reply for an existing RFQ
   const { targetRfq, referencedNumber } = extractRfqReferenceFromEmail(message);
@@ -967,13 +1002,14 @@ async function pollOnce(config = resolveConfig()) {
                 : null,
           });
 
-          if (result.status === INGESTION_OUTCOME.INGESTED || result.status === INGESTION_OUTCOME.QUOTE_INGESTED) {
-            runtime.ingestedThisRun += 1;
-            // Marked read only for a message we actually acted on, and only after
-            // the ledger write, so a failed write leaves it to be retried. Mail
-            // the gateway rejected is left untouched: it belongs to the mailbox
-            // owner, not to us, and the ledger already stops it being
-            // reconsidered on the next poll.
+          if (
+            result.status === INGESTION_OUTCOME.INGESTED ||
+            result.status === INGESTION_OUTCOME.QUOTE_INGESTED ||
+            result.status === INGESTION_OUTCOME.SKIPPED_OUTBOUND
+          ) {
+            if (result.status !== INGESTION_OUTCOME.SKIPPED_OUTBOUND) {
+              runtime.ingestedThisRun += 1;
+            }
             await client.messageFlagsAdd(String(uid), ['\\Seen']);
           }
           outcomes.push({ uid, messageId: resolvedMessageId, status: result.status });
@@ -1113,8 +1149,14 @@ async function pollVendorOnce(config = resolveVendorConfig()) {
             rfqNumber: result.rfq ? result.rfq.rfqNumber : null,
           });
 
-          if (result.status === INGESTION_OUTCOME.INGESTED || result.status === INGESTION_OUTCOME.QUOTE_INGESTED) {
-            vendorRuntime.ingestedThisRun += 1;
+          if (
+            result.status === INGESTION_OUTCOME.INGESTED ||
+            result.status === INGESTION_OUTCOME.QUOTE_INGESTED ||
+            result.status === INGESTION_OUTCOME.SKIPPED_OUTBOUND
+          ) {
+            if (result.status !== INGESTION_OUTCOME.SKIPPED_OUTBOUND) {
+              vendorRuntime.ingestedThisRun += 1;
+            }
             await client.messageFlagsAdd(String(uid), ['\\Seen']);
           }
           outcomes.push({ uid, messageId: resolvedMessageId, status: result.status });
@@ -1220,17 +1262,30 @@ function startVendorPolling(config = resolveVendorConfig()) {
 
 /**
  * Begin polling on intervals for both buyer and vendor mailboxes.
+ * When called without arguments (e.g. from server.js), launches both buyer and vendor watchers.
+ * When called with an explicit config (e.g. unit tests or specific runner), controls that target.
  */
-function startPolling(config = resolveConfig(), vendorConfig = null) {
-  const buyerResult = startBuyerPolling(config);
-  if (!buyerResult.started) {
-    return buyerResult;
+function startPolling(config, vendorConfig) {
+  if (arguments.length === 0) {
+    const buyerResult = startBuyerPolling(resolveConfig());
+    const vendorResult = startVendorPolling(resolveVendorConfig());
+    return {
+      started: buyerResult.started || vendorResult.started,
+      pollIntervalMs: buyerResult.pollIntervalMs || vendorResult.pollIntervalMs,
+      buyer: buyerResult,
+      vendor: vendorResult,
+    };
   }
 
-  // Start vendor watcher if enabled and configured
-  const effectiveVendorConfig = vendorConfig || resolveVendorConfig();
-  if (effectiveVendorConfig.enabled && isConfigured(effectiveVendorConfig)) {
-    startVendorPolling(effectiveVendorConfig);
+  const buyerResult = startBuyerPolling(config || resolveConfig());
+  if (vendorConfig) {
+    const vendorResult = startVendorPolling(vendorConfig);
+    return {
+      started: buyerResult.started || vendorResult.started,
+      pollIntervalMs: buyerResult.pollIntervalMs || vendorResult.pollIntervalMs,
+      buyer: buyerResult,
+      vendor: vendorResult,
+    };
   }
 
   return buyerResult;

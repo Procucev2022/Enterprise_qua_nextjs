@@ -1,6 +1,16 @@
 const mailerService = require('../src/services/mailerService');
 
 describe('mailerService', () => {
+  beforeEach(() => {
+    process.env.NODE_ENV = 'test';
+  });
+
+  afterEach(() => {
+    process.env.NODE_ENV = 'test';
+    delete process.env.VENDOR_SMTP_USER;
+    delete process.env.VENDOR_SMTP_PASSWORD;
+  });
+
   test('sendOtpEmail no-ops during test environment (NODE_ENV=test)', async () => {
     const res = await mailerService.sendOtpEmail('someone@example.com', '1234', 600);
     expect(res.sent).toBe(false);
@@ -178,6 +188,8 @@ describe('mailerService', () => {
         process.env.NODE_ENV = 'development';
         delete process.env.SMTP_USER;
         delete process.env.SMTP_PASSWORD;
+        delete process.env.VENDOR_SMTP_USER;
+        delete process.env.VENDOR_SMTP_PASSWORD;
         fresh = require('../src/services/mailerService');
       });
       expect(await fresh.sendRfqInviteEmail('v@x.com', ctxRfq)).toMatchObject({ sent: false, reason: 'SMTP not configured' });
@@ -201,18 +213,20 @@ describe('mailerService', () => {
 
       jest.isolateModules(() => {
         process.env.NODE_ENV = 'development';
-        process.env.SMTP_USER = 'test@example.com';
-        process.env.SMTP_PASSWORD = 'pw';
+        process.env.VENDOR_SMTP_USER = 'vendor-test@example.com';
+        process.env.VENDOR_SMTP_PASSWORD = 'pw';
         jest.doMock('nodemailer', () => ({
           createTransport: jest.fn(() => ({ sendMail: jest.fn().mockRejectedValue(new Error('smtp down')) })),
         }));
         fresh = require('../src/services/mailerService');
       });
-      await expect(fresh.sendRfqInviteEmail('v@x.com', ctxRfq)).rejects.toThrow('smtp down');
-
-      delete process.env.SMTP_USER;
-      delete process.env.SMTP_PASSWORD;
-      process.env.NODE_ENV = 'test';
+      try {
+        await expect(fresh.sendRfqInviteEmail('v@x.com', ctxRfq)).rejects.toThrow('smtp down');
+      } finally {
+        delete process.env.VENDOR_SMTP_USER;
+        delete process.env.VENDOR_SMTP_PASSWORD;
+        process.env.NODE_ENV = 'test';
+      }
     });
   });
 

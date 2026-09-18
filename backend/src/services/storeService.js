@@ -1603,6 +1603,9 @@ class StoreService {
 
   /** Email a newly-created RFQ to its top matched vendors and assigned vendors. Fired from createRFQ. */
   emailRFQToMatchedVendors(rfq) {
+    if (!rfq || rfq.status === 'Parsing' || rfq.status === 'Draft') {
+      return 0;
+    }
     const recipients = this.selectVendorsForRFQEmail(rfq);
     const assigned = (Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : []).filter((v) => v && v.email);
     const allEmails = new Set();

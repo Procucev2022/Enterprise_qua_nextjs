@@ -78,17 +78,18 @@ function fromAddress() {
 
 /**
  * Lazily builds a Gmail / SMTP transporter for vendor notifications and invites
- * from VENDOR_SMTP_USER/VENDOR_SMTP_PASSWORD (falling back to SMTP_USER/SMTP_PASSWORD).
+ * from VENDOR_SMTP_USER/VENDOR_SMTP_PASSWORD (defaults strictly to srinu20252026@gmail.com).
+ * Vendor communications NEVER fall back to buyer SMTP (rfqprocucev@gmail.com).
  */
 function getVendorTransporter() {
   if (vendorTransporter) return vendorTransporter;
 
-  const user = process.env.VENDOR_SMTP_USER || process.env.SMTP_USER;
-  const rawPass = process.env.VENDOR_SMTP_PASSWORD || process.env.SMTP_PASSWORD;
+  const user = process.env.VENDOR_SMTP_USER;
+  const rawPass = process.env.VENDOR_SMTP_PASSWORD;
   if (!user || !rawPass) return undefined;
 
   const pass = rawPass.replace(/\s+/g, '');
-  const host = process.env.VENDOR_SMTP_HOST || process.env.SMTP_HOST || 'smtp.gmail.com';
+  const host = process.env.VENDOR_SMTP_HOST || 'smtp.gmail.com';
   const isGmail =
     (process.env.VENDOR_SMTP_SERVICE && process.env.VENDOR_SMTP_SERVICE.toLowerCase() === 'gmail') ||
     host.toLowerCase().includes('gmail');
@@ -153,7 +154,7 @@ async function deliverVendor(message, label) {
     return { sent: false, reason: 'test environment' };
   }
 
-  const activeTransporter = getVendorTransporter() || getTransporter();
+  const activeTransporter = getVendorTransporter();
   if (!activeTransporter) {
     logger.warn(`Vendor SMTP not configured (VENDOR_SMTP_USER/VENDOR_SMTP_PASSWORD unset) — ${label} not sent`, { to: message.to }, 'MAILER_SERVICE');
     return { sent: false, reason: 'SMTP not configured' };
@@ -441,6 +442,7 @@ function buildQuoteAcknowledgementEmail(toOrParams, maybeContext) {
   return {
     from: vendorFromAddress(),
     to,
+    replyTo: vendorGatewayAddress(),
     cc: cc || undefined,
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Quotation Submission Confirmation', inner),
@@ -476,6 +478,7 @@ function buildQuoteFailureEmail(toOrParams, maybeContext) {
   return {
     from: vendorFromAddress(),
     to,
+    replyTo: vendorGatewayAddress(),
     cc: cc || undefined,
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Quotation Submission Notice', inner),
@@ -850,7 +853,7 @@ function buildRatingRevisionEmail({ to, recipientName, vendorName, buyerCompany,
  * unconfigured server show up as retryable failures instead of silent success.
  */
 async function sendVendorIngestionEmail(message, template) {
-  return deliver(message, `vendor ingestion ${template} email`);
+  return deliverVendor(message, `vendor ingestion ${template} email`);
 }
 
 /**
@@ -944,10 +947,7 @@ function isConfigured() {
 }
 
 function isVendorConfigured() {
-  return Boolean(
-    (process.env.VENDOR_SMTP_USER && process.env.VENDOR_SMTP_PASSWORD) ||
-    (process.env.SMTP_USER && process.env.SMTP_PASSWORD)
-  );
+  return Boolean(process.env.VENDOR_SMTP_USER && process.env.VENDOR_SMTP_PASSWORD);
 }
 
 module.exports = {

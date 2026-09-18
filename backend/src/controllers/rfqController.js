@@ -324,22 +324,6 @@ async function createRFQ(req, res, next) {
       );
     }
 
-    // Share RFQ creation acknowledgement to the buyer
-    const buyerEmail = body.sourceEmail || (requestingBuyerAccount && requestingBuyerAccount.corporateEmail) || (req.user && req.user.email);
-    if (buyerEmail) {
-      const buyerName =
-        requestingBuyerAccount?.contactPerson ||
-        requestingBuyerAccount?.organizationName ||
-        (req.user && req.user.fullName) ||
-        'Valued Buyer';
-      void mailerService.sendRfqAcknowledgementEmail({
-        to: buyerEmail,
-        buyerName,
-        rfqNumber: created.rfqNumber,
-        rfqTitle: created.title,
-      });
-    }
-
     res.status(201).json({ success: true, data: created });
   } catch (err) {
     logger.error('Error creating RFQ', err, 'RFQ_CONTROLLER');
