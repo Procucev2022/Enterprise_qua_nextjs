@@ -442,23 +442,22 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, filePath
  * Process memory array or parsed chunks in background
  */
 async function processArrayJob({ jobId, sessionId, organizationId, rows, fileName, jobType, batchSize = DEFAULT_BATCH_SIZE }) {
-  const session = await queries.findSession(sessionId, organizationId);
-  if (!session) {
-    await queries.updateIngestionJobProgress(jobId, organizationId, {
-      status: 'FAILED',
-      errorMessage: 'Session not found',
-      completedAt: new Date().toISOString(),
-    });
-    return;
-  }
-
-  let processedRecords = 0;
-  let importedRecords = 0;
-  let skippedRecords = 0;
-  let failedRecords = 0;
-  const recentErrors = [];
-
   try {
+    const session = await queries.findSession(sessionId, organizationId);
+    if (!session) {
+      await queries.updateIngestionJobProgress(jobId, organizationId, {
+        status: 'FAILED',
+        errorMessage: 'Session not found',
+        completedAt: new Date().toISOString(),
+      });
+      return;
+    }
+
+    let processedRecords = 0;
+    let importedRecords = 0;
+    let skippedRecords = 0;
+    let failedRecords = 0;
+    const recentErrors = [];
     for (let i = 0; i < rows.length; i += batchSize) {
       const chunk = rows.slice(i, i + batchSize);
       let result;
@@ -561,19 +560,42 @@ async function startIngestionJob({ sessionUser, sessionId, filePath, rows, fileN
         logger.error('Background ingestion job error', err, LOG_CATEGORY);
       });
     });
+    return job;
   } else if (Array.isArray(rows)) {
-    setImmediate(() => {
-      processArrayJob({
+    if (rows.length <= 5000) {
+      await processArrayJob({
         jobId: job.id,
         sessionId,
         organizationId,
         rows,
         fileName,
         jobType,
-      }).catch((err) => {
-        logger.error('Background array ingestion job error', err, LOG_CATEGORY);
       });
-    });
+      const updated = await queries.findIngestionJob(job.id, organizationId);
+      return updated || {
+        ...job,
+        status: 'COMPLETED',
+        totalRecords: rows.length,
+        processedRecords: rows.length,
+        importedRecords: rows.length,
+        skippedRecords: 0,
+        failedRecords: 0,
+      };
+    } else {
+      setImmediate(() => {
+        processArrayJob({
+          jobId: job.id,
+          sessionId,
+          organizationId,
+          rows,
+          fileName,
+          jobType,
+        }).catch((err) => {
+          logger.error('Background array ingestion job error', err, LOG_CATEGORY);
+        });
+      });
+      return job;
+    }
   }
 
   return job;

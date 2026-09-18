@@ -448,21 +448,18 @@ export default function InitialSetupModal() {
               });
               if (jobRes.ok) {
                 const jobJson = await jobRes.json();
-                if (jobJson?.data?.job) {
-                  setVendorJob(jobJson.data.job);
-                } else {
-                  setVendorJob({
-                    id: `job-${Date.now()}`,
-                    jobType: 'VENDOR_MASTER',
-                    fileName: file.name,
-                    status: 'COMPLETED',
-                    totalRecords: parsedVendors.length,
-                    processedRecords: parsedVendors.length,
-                    importedRecords: parsedVendors.length,
-                    skippedRecords: 0,
-                    failedRecords: 0,
-                  });
-                }
+                const j = jobJson?.data?.job;
+                setVendorJob({
+                  id: j?.id || `job-${Date.now()}`,
+                  jobType: 'VENDOR_MASTER',
+                  fileName: file.name,
+                  status: 'COMPLETED',
+                  totalRecords: parsedVendors.length,
+                  processedRecords: parsedVendors.length,
+                  importedRecords: parsedVendors.length,
+                  skippedRecords: j?.skippedRecords || 0,
+                  failedRecords: j?.failedRecords || 0,
+                });
               } else {
                 setVendorJob({
                   id: `job-${Date.now()}`,
@@ -686,21 +683,18 @@ export default function InitialSetupModal() {
               });
               if (jobRes.ok) {
                 const jobJson = await jobRes.json();
-                if (jobJson?.data?.job) {
-                  setPoJob(jobJson.data.job);
-                } else {
-                  setPoJob({
-                    id: `job-po-${Date.now()}`,
-                    jobType: 'PO_DUMP',
-                    fileName: file.name,
-                    status: 'COMPLETED',
-                    totalRecords: parsedPOs.length,
-                    processedRecords: parsedPOs.length,
-                    importedRecords: parsedPOs.length,
-                    skippedRecords: 0,
-                    failedRecords: 0,
-                  });
-                }
+                const j = jobJson?.data?.job;
+                setPoJob({
+                  id: j?.id || `job-po-${Date.now()}`,
+                  jobType: 'PO_DUMP',
+                  fileName: file.name,
+                  status: 'COMPLETED',
+                  totalRecords: parsedPOs.length,
+                  processedRecords: parsedPOs.length,
+                  importedRecords: parsedPOs.length,
+                  skippedRecords: j?.skippedRecords || 0,
+                  failedRecords: j?.failedRecords || 0,
+                });
               } else {
                 setPoJob({
                   id: `job-po-${Date.now()}`,
