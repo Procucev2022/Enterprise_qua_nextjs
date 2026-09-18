@@ -4,6 +4,7 @@ const zohoPaymentService = require('../services/zohoPaymentService');
 const { generateReceiptPdf } = require('../services/invoiceService');
 const { logger } = require('../services/loggerService');
 const { ZOHO_CONFIG, computeZohoBuyerPlanAmount, BUYER_SUBSCRIPTION_PLANS } = require('../config/constants');
+const identityQueries = require('../db/identityQueries');
 
 /**
  * Buyer accounts are buyer-side org records: only a buyer (or an admin acting
@@ -195,6 +196,22 @@ async function createSubscriptionPaymentLink(req, res, next) {
       return res.status(400).json({ success: false, error: 'Buyer account has no email on file to create a payment link for.' });
     }
 
+    // The legacy storeService.buyerAccounts record (`existing`) often has no
+    // mobileNumber — e.g. it's auto-created above with '' on first payment
+    // attempt, before the buyer ever fills in a profile mobile field. Login
+    // itself requires email+mobile+password though, so the identity DB
+    // always has a real phone for this user; Zoho's paymentlinks API 400s
+    // ("Invalid data provided") on an empty phone, so fall back to the
+    // identity record rather than sending a blank value.
+    let phone = existing.mobileNumber || '';
+    if (!phone) {
+      const identityUser = await identityQueries.findUserByEmail(existing.corporateEmail).catch(() => null);
+      phone = (identityUser && identityUser.mobile) || '';
+    }
+    if (!phone) {
+      return res.status(400).json({ success: false, error: 'No mobile number on file for this account. Please update your profile with a mobile number before subscribing.' });
+    }
+
     const amount = computeZohoBuyerPlanAmount(plan);
     const planLabel = (BUYER_SUBSCRIPTION_PLANS.find((p) => p.id === plan) || {}).name || plan;
     const returnUrl = `${ZOHO_CONFIG.RETURN_URL_BASE}/buyer/subscription-center?payment=success`;
@@ -204,7 +221,7 @@ async function createSubscriptionPaymentLink(req, res, next) {
       planLabel,
       amountInr: amount,
       email: existing.corporateEmail,
-      phone: existing.mobileNumber || '',
+      phone,
       returnUrl,
     });
 

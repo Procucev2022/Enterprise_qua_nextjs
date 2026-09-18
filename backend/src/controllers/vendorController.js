@@ -397,7 +397,7 @@ function generateOnboardingEmailPreview(req, res, next) {
       return res.status(403).json({ success: false, error: 'You do not have permission to view vendor onboarding credentials.' });
     }
     logger.info(`Generating onboarding email preview for vendor ${id}`, { id }, 'VENDOR_CONTROLLER');
-    const vendor = storeService.getVendorById(id);
+    const vendor = storeService.getVendorById(id, 'all'); // resolving by route-param id for an action on this vendor, not a buyer-scoped list
     if (!vendor) {
       logger.warn(`Vendor not found for onboarding email: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
@@ -423,7 +423,7 @@ async function updateSubscription(req, res, next) {
   try {
     const { id } = req.params;
     const { plan } = req.body;
-    const existing = storeService.getVendorById(id);
+    const existing = storeService.getVendorById(id, 'all'); // resolving by route-param id for an action on this vendor, not a buyer-scoped list
     if (!existing) {
       logger.warn(`Vendor not found for subscription update: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
@@ -453,7 +453,7 @@ async function createSubscriptionPaymentLink(req, res, next) {
   try {
     const { id } = req.params;
     const { plan } = req.body;
-    const existing = storeService.getVendorById(id);
+    const existing = storeService.getVendorById(id, 'all'); // resolving by route-param id for an action on this vendor, not a buyer-scoped list
     if (!existing) {
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
@@ -504,7 +504,7 @@ async function createSubscriptionPaymentLink(req, res, next) {
 async function getPaymentLinks(req, res, next) {
   try {
     const { id } = req.params;
-    const existing = storeService.getVendorById(id);
+    const existing = storeService.getVendorById(id, 'all'); // resolving by route-param id for an action on this vendor, not a buyer-scoped list
     if (!existing) {
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
@@ -521,7 +521,7 @@ async function getPaymentLinks(req, res, next) {
 async function downloadInvoice(req, res, next) {
   try {
     const { id, linkId } = req.params;
-    const existing = storeService.getVendorById(id);
+    const existing = storeService.getVendorById(id, 'all'); // resolving by route-param id for an action on this vendor, not a buyer-scoped list
     if (!existing) {
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
@@ -554,7 +554,7 @@ async function updateCategories(req, res, next) {
   try {
     const { id } = req.params;
     const { clientMappedCategories, vendorSelectedCategories } = req.body;
-    const existing = storeService.getVendorById(id);
+    const existing = storeService.getVendorById(id, 'all'); // resolving by route-param id for an action on this vendor, not a buyer-scoped list
     if (!existing) {
       logger.warn(`Vendor not found for taxonomy update: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });

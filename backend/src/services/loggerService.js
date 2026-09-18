@@ -103,9 +103,13 @@ class LoggerService {
 
     // Output to console in non-test environment so cloud dashboards (Render, Railway) stream logs live
     if (process.env.NODE_ENV !== 'test') {
-      const metaStr = meta && Object.keys(meta).length > 0 ? ` ${JSON.stringify(meta)}` : '';
+      // Use entry.metadata/entry.stackTrace (already normalized by createLogEntry) rather than the
+      // raw `meta` — a plain Error's message/stack are non-enumerable, so Object.keys(meta) on the
+      // raw value is empty and JSON.stringify(meta) silently drops the actual error detail.
+      const metaStr = entry.metadata && Object.keys(entry.metadata).length > 0 ? ` ${JSON.stringify(entry.metadata)}` : '';
+      const stackStr = entry.stackTrace ? `\n${entry.stackTrace}` : '';
       if (level === 'ERROR') {
-        console.error(`[${level}] [${category}] ${message}${metaStr}`);
+        console.error(`[${level}] [${category}] ${message}${metaStr}${stackStr}`);
       } else if (level === 'WARN') {
         console.warn(`[${level}] [${category}] ${message}${metaStr}`);
       } else {

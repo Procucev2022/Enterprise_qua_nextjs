@@ -799,7 +799,7 @@ async function generateEmailPreview(req, res, next) {
       }
     }
 
-    const vendor = vendorId ? storeService.getVendorById(vendorId) : null;
+    const vendor = vendorId ? storeService.getVendorById(vendorId, 'all') : null;
     const emailPayload = generateStandardRFQEmail(rfq, vendor);
     res.json({ success: true, data: emailPayload });
   } catch (err) {
