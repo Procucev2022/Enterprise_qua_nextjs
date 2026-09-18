@@ -12,6 +12,7 @@ describe('app/buyer/subscription-center.tsx', () => {
   const mockShowToast = jest.fn();
   const mockRefreshActiveBuyerAccount = jest.fn();
   const mockCreateBuyerPaymentLink = jest.fn();
+  const mockCheckBuyerPaymentLinkStatus = jest.fn();
   const originalFetch = global.fetch;
 
   function mockStore(overrides: Record<string, unknown> = {}) {
@@ -22,6 +23,7 @@ describe('app/buyer/subscription-center.tsx', () => {
       activeBuyerAccount: { id: 'buyer-1', subscriptionPlan: 'free_trial', remainingFreeRFQs: 4 },
       refreshActiveBuyerAccount: mockRefreshActiveBuyerAccount,
       createBuyerPaymentLink: mockCreateBuyerPaymentLink,
+      checkBuyerPaymentLinkStatus: mockCheckBuyerPaymentLinkStatus,
       ...overrides,
     });
   }
@@ -168,16 +170,19 @@ describe('app/buyer/subscription-center.tsx', () => {
     expect(screen.getByText('Active Subscription')).toBeInTheDocument();
   });
 
-  it('shows a toast and re-syncs on a successful Zoho redirect back, then strips the query param', async () => {
+  it('shows a toast and re-syncs when the real payment link status comes back PAID, then strips the query param', async () => {
     const originalLocation = window.location.href;
-    window.history.pushState({}, '', '/buyer/subscription-center?payment=success');
+    mockCheckBuyerPaymentLinkStatus.mockResolvedValue('PAID');
+    window.history.pushState({}, '', '/buyer/subscription-center?linkId=pl-1');
 
     try {
       render(<SubscriptionCenter />);
       await act(async () => {
         await Promise.resolve();
+        await Promise.resolve();
       });
 
+      expect(mockCheckBuyerPaymentLinkStatus).toHaveBeenCalledWith('pl-1');
       expect(mockShowToast).toHaveBeenCalledWith('Payment Received', expect.any(String), 'success');
       expect(mockRefreshActiveBuyerAccount).toHaveBeenCalled();
       expect(window.location.search).toBe('');
@@ -186,45 +191,95 @@ describe('app/buyer/subscription-center.tsx', () => {
     }
   });
 
-  it('shows a toast on a cancelled Zoho redirect back, preserving any other query params', async () => {
+  it('shows a cancelled toast when the real payment link status comes back CANCELED, preserving any other query params', async () => {
     const originalLocation = window.location.href;
-    window.history.pushState({}, '', '/buyer/subscription-center?ref=email&payment=cancelled');
+    mockCheckBuyerPaymentLinkStatus.mockResolvedValue('CANCELED');
+    window.history.pushState({}, '', '/buyer/subscription-center?ref=email&linkId=pl-1');
 
     try {
       render(<SubscriptionCenter />);
       await act(async () => {
         await Promise.resolve();
+        await Promise.resolve();
       });
 
       expect(mockShowToast).toHaveBeenCalledWith('Payment Cancelled', expect.any(String), 'info');
+      expect(mockRefreshActiveBuyerAccount).not.toHaveBeenCalled();
       expect(window.location.search).toBe('?ref=email');
     } finally {
       window.history.pushState({}, '', originalLocation);
     }
   });
 
-  it('shows a toast on a plain cancelled redirect with no other query params', async () => {
+  it('shows an expired toast when the real payment link status comes back EXPIRED', async () => {
     const originalLocation = window.location.href;
-    window.history.pushState({}, '', '/buyer/subscription-center?payment=cancelled');
+    mockCheckBuyerPaymentLinkStatus.mockResolvedValue('EXPIRED');
+    window.history.pushState({}, '', '/buyer/subscription-center?linkId=pl-1');
 
     try {
       render(<SubscriptionCenter />);
       await act(async () => {
         await Promise.resolve();
+        await Promise.resolve();
       });
 
-      expect(mockShowToast).toHaveBeenCalledWith('Payment Cancelled', expect.any(String), 'info');
+      expect(mockShowToast).toHaveBeenCalledWith('Payment Link Expired', expect.any(String), 'warning');
     } finally {
       window.history.pushState({}, '', originalLocation);
     }
   });
 
-  it('does nothing on mount when there is no payment query param', async () => {
+  it('shows a processing toast when the status is still unresolved (CREATED, or the lookup failed)', async () => {
+    const originalLocation = window.location.href;
+    mockCheckBuyerPaymentLinkStatus.mockResolvedValue(null);
+    window.history.pushState({}, '', '/buyer/subscription-center?linkId=pl-1');
+
+    try {
+      render(<SubscriptionCenter />);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(mockShowToast).toHaveBeenCalledWith('Payment Processing', expect.any(String), 'info');
+      expect(mockRefreshActiveBuyerAccount).toHaveBeenCalled();
+    } finally {
+      window.history.pushState({}, '', originalLocation);
+    }
+  });
+
+  it('does nothing on mount when there is no linkId query param', async () => {
     render(<SubscriptionCenter />);
     await act(async () => {
       await Promise.resolve();
     });
     expect(mockShowToast).not.toHaveBeenCalled();
     expect(mockRefreshActiveBuyerAccount).not.toHaveBeenCalled();
+    expect(mockCheckBuyerPaymentLinkStatus).not.toHaveBeenCalled();
+  });
+
+  it('waits for activeBuyerAccount to load before resolving the payment link status', async () => {
+    const originalLocation = window.location.href;
+    mockCheckBuyerPaymentLinkStatus.mockResolvedValue('PAID');
+    mockStore({ activeBuyerAccount: null });
+    window.history.pushState({}, '', '/buyer/subscription-center?linkId=pl-1');
+
+    try {
+      const { rerender } = render(<SubscriptionCenter />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(mockCheckBuyerPaymentLinkStatus).not.toHaveBeenCalled();
+
+      mockStore({ activeBuyerAccount: { id: 'buyer-1', subscriptionPlan: 'free_trial', remainingFreeRFQs: 4 } });
+      rerender(<SubscriptionCenter />);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(mockCheckBuyerPaymentLinkStatus).toHaveBeenCalledWith('pl-1');
+    } finally {
+      window.history.pushState({}, '', originalLocation);
+    }
   });
 });

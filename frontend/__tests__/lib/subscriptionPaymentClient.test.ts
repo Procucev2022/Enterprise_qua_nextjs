@@ -1,4 +1,4 @@
-import { createPaymentLink, createBuyerPaymentLink } from '@/lib/subscriptionPaymentClient';
+import { createPaymentLink, createBuyerPaymentLink, getVendorPaymentLinkStatus, getBuyerPaymentLinkStatus } from '@/lib/subscriptionPaymentClient';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 
@@ -240,5 +240,113 @@ describe('subscriptionPaymentClient.createBuyerPaymentLink', () => {
     const res = await createBuyerPaymentLink('buyer-1', 'version_1');
 
     expect(res.success === false && res.reason).toBe('SERVER');
+  });
+});
+
+describe('subscriptionPaymentClient.getVendorPaymentLinkStatus / getBuyerPaymentLinkStatus', () => {
+  const originalFetch = global.fetch;
+  const lastInit = () => (global.fetch as jest.Mock).mock.calls[0][1];
+  const lastPath = () => (global.fetch as jest.Mock).mock.calls[0][0];
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    authClient.setSession(null, null);
+    jest.restoreAllMocks();
+  });
+
+  test('getVendorPaymentLinkStatus returns the matching link\'s status', async () => {
+    authClient.setSession({ id: 'u1', email: 'v@x.com', name: 'V', role: 'vendor', orgId: 'o1', orgName: 'O' }, 'jwt-token');
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true, data: [{ id: 'pl-1', status: 'PAID' }, { id: 'pl-2', status: 'CREATED' }] }),
+    });
+
+    const status = await getVendorPaymentLinkStatus('v-1', 'pl-1');
+
+    expect(status).toBe('PAID');
+    expect(lastPath()).toBe('/api/vendors/v-1/payment-links');
+    expect(lastInit().headers).toEqual({ Authorization: 'Bearer jwt-token' });
+  });
+
+  test('getVendorPaymentLinkStatus sends no Authorization header when there is no session', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ success: true, data: [] }) });
+
+    await getVendorPaymentLinkStatus('v-1', 'pl-1');
+
+    expect(lastInit().headers).toEqual({});
+  });
+
+  test('getVendorPaymentLinkStatus returns null when the link id is not in the list', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ success: true, data: [{ id: 'pl-other', status: 'PAID' }] }) });
+
+    expect(await getVendorPaymentLinkStatus('v-1', 'pl-1')).toBeNull();
+  });
+
+  test('getVendorPaymentLinkStatus returns null on a non-ok response', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, json: async () => ({ success: false }) });
+
+    expect(await getVendorPaymentLinkStatus('v-1', 'pl-1')).toBeNull();
+  });
+
+  test('getVendorPaymentLinkStatus returns null when data is not an array', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ success: true, data: null }) });
+
+    expect(await getVendorPaymentLinkStatus('v-1', 'pl-1')).toBeNull();
+  });
+
+  test('getVendorPaymentLinkStatus returns null when the response body cannot be parsed', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => { throw new Error('bad json'); } });
+
+    expect(await getVendorPaymentLinkStatus('v-1', 'pl-1')).toBeNull();
+  });
+
+  test('getVendorPaymentLinkStatus returns null when the network call throws', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error('offline'));
+
+    expect(await getVendorPaymentLinkStatus('v-1', 'pl-1')).toBeNull();
+  });
+
+  test('getBuyerPaymentLinkStatus returns the matching link\'s status', async () => {
+    authClient.setSession({ id: 'u1', email: 'b@x.com', name: 'B', role: 'buyer', orgId: 'o1', orgName: 'O' }, 'jwt-token');
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true, data: [{ id: 'pl-b1', status: 'CANCELED' }] }),
+    });
+
+    const status = await getBuyerPaymentLinkStatus('buyer-1', 'pl-b1');
+
+    expect(status).toBe('CANCELED');
+    expect(lastPath()).toBe('/api/buyer-accounts/buyer-1/payment-links');
+    expect(lastInit().headers).toEqual({ Authorization: 'Bearer jwt-token' });
+  });
+
+  test('getBuyerPaymentLinkStatus returns null when the network call throws', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error('offline'));
+
+    expect(await getBuyerPaymentLinkStatus('buyer-1', 'pl-b1')).toBeNull();
+  });
+
+  test('getBuyerPaymentLinkStatus returns null on a non-ok response', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, json: async () => ({ success: false }) });
+
+    expect(await getBuyerPaymentLinkStatus('buyer-1', 'pl-b1')).toBeNull();
+  });
+
+  test('getBuyerPaymentLinkStatus returns null when data is not an array', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ success: true, data: null }) });
+
+    expect(await getBuyerPaymentLinkStatus('buyer-1', 'pl-b1')).toBeNull();
+  });
+
+  test('getBuyerPaymentLinkStatus returns null when the link id is not in the list', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ success: true, data: [{ id: 'pl-other', status: 'PAID' }] }) });
+
+    expect(await getBuyerPaymentLinkStatus('buyer-1', 'pl-b1')).toBeNull();
+  });
+
+  test('getBuyerPaymentLinkStatus returns null when the response body cannot be parsed', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => { throw new Error('bad json'); } });
+
+    expect(await getBuyerPaymentLinkStatus('buyer-1', 'pl-b1')).toBeNull();
   });
 });

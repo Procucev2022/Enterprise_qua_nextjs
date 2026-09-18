@@ -3,6 +3,7 @@ const domainQueries = require('../db/domainQueries');
 const pool = require('../db/pool');
 const { generateVendorOnboardingEmail } = require('../services/emailService');
 const zohoPaymentService = require('../services/zohoPaymentService');
+const zohoReconciliationService = require('../services/zohoReconciliationService');
 const { generateReceiptPdf } = require('../services/invoiceService');
 const { normalizePhone } = require('../db/identityQueries');
 const { logger } = require('../services/loggerService');
@@ -470,7 +471,12 @@ async function createSubscriptionPaymentLink(req, res, next) {
     // so this can never actually be null for a plan that passed that gate.
     const amount = computeZohoPlanAmount(plan);
     const planLabel = (VENDOR_SUBSCRIPTION_PLANS.find((p) => p.id === plan) || {}).name || plan;
-    const returnUrl = `${ZOHO_CONFIG.RETURN_URL_BASE}/vendor/vendor-subscription?payment=success`;
+    // Generated before the Zoho call so it can be embedded in returnUrl — see
+    // the matching comment in buyerAccountController.createSubscriptionPaymentLink
+    // for why a hardcoded `?payment=success` here would misreport a real
+    // cancellation.
+    const linkId = `pl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const returnUrl = `${ZOHO_CONFIG.RETURN_URL_BASE}/vendor/vendor-subscription?linkId=${linkId}`;
 
     const result = await zohoPaymentService.createPaymentLink({
       planId: plan,
@@ -482,7 +488,7 @@ async function createSubscriptionPaymentLink(req, res, next) {
     });
 
     const link = storeService.createPaymentLinkRecord({
-      id: `pl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id: linkId,
       zohoPaymentLinkId: result.zohoPaymentLinkId,
       vendorId: existing.id,
       planId: plan,
@@ -509,7 +515,14 @@ async function getPaymentLinks(req, res, next) {
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
     if (!(await assertVendorOwnership(req, res, existing.email))) return;
-    const links = await storeService.getPaymentLinksForVendor(existing.id);
+    let links = await storeService.getPaymentLinksForVendor(existing.id);
+    // Live re-check any of this vendor's own still-pending links against Zoho
+    // before responding — see zohoReconciliationService.reconcilePendingLinks'
+    // docstring for why (the sandbox webhook has proven unreliable).
+    const reconciled = await zohoReconciliationService.reconcilePendingLinks(links);
+    if (reconciled > 0) {
+      links = await storeService.getPaymentLinksForVendor(existing.id);
+    }
     res.json({ success: true, data: links });
   } catch (err) {
     logger.error(`Error fetching payment links for vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');

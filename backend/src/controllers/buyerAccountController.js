@@ -1,6 +1,7 @@
 const storeService = require('../services/storeService');
 const buyerAccountResolver = require('../services/buyerAccountResolver');
 const zohoPaymentService = require('../services/zohoPaymentService');
+const zohoReconciliationService = require('../services/zohoReconciliationService');
 const { generateReceiptPdf } = require('../services/invoiceService');
 const { logger } = require('../services/loggerService');
 const { ZOHO_CONFIG, computeZohoBuyerPlanAmount, BUYER_SUBSCRIPTION_PLANS } = require('../config/constants');
@@ -214,7 +215,15 @@ async function createSubscriptionPaymentLink(req, res, next) {
 
     const amount = computeZohoBuyerPlanAmount(plan);
     const planLabel = (BUYER_SUBSCRIPTION_PLANS.find((p) => p.id === plan) || {}).name || plan;
-    const returnUrl = `${ZOHO_CONFIG.RETURN_URL_BASE}/buyer/subscription-center?payment=success`;
+    // Generated before the Zoho call (not after, like the payment link record's
+    // id used to be) so it can be embedded in returnUrl — Zoho's hosted
+    // checkout redirects back to this exact URL regardless of whether the
+    // buyer actually paid or cancelled, so a hardcoded `?payment=success`
+    // here would lie about a real cancellation. The frontend instead looks
+    // this id up against GET .../payment-links on return to show the link's
+    // real status (PAID/CANCELED/EXPIRED/still CREATED).
+    const linkId = `pl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const returnUrl = `${ZOHO_CONFIG.RETURN_URL_BASE}/buyer/subscription-center?linkId=${linkId}`;
 
     const result = await zohoPaymentService.createPaymentLink({
       planId: plan,
@@ -226,7 +235,7 @@ async function createSubscriptionPaymentLink(req, res, next) {
     });
 
     const link = storeService.createPaymentLinkRecord({
-      id: `pl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id: linkId,
       zohoPaymentLinkId: result.zohoPaymentLinkId,
       buyerAccountId: existing.id,
       payerType: 'buyer',
@@ -249,8 +258,15 @@ async function createSubscriptionPaymentLink(req, res, next) {
  * The caller's own billing history — resolved by session email, same
  * reasoning as createSubscriptionPaymentLink above (never trust :id to
  * already be the right storeService.buyerAccounts record). No auto-create
- * here, unlike the payment-link endpoint: a GET should have no side effects,
- * so a buyer with no legacy billing record yet just sees an empty list.
+ * here, unlike the payment-link endpoint: a buyer with no legacy billing
+ * record yet just sees an empty list.
+ *
+ * Any of the caller's own links still sitting in a non-terminal status get
+ * live re-checked against Zoho before responding (zohoReconciliationService's
+ * on-demand path — see its docstring for why: the sandbox webhook has proven
+ * unreliable, and a buyer actively opening this list to check "did my
+ * payment go through" should get a real answer immediately, not one that
+ * depends on a webhook that may never arrive or the 10-minute interval poll).
  */
 async function getPaymentLinks(req, res, next) {
   try {
@@ -259,7 +275,11 @@ async function getPaymentLinks(req, res, next) {
     if (!existing) {
       return res.json({ success: true, data: [] });
     }
-    const links = await storeService.getPaymentLinksForBuyer(existing.id);
+    let links = await storeService.getPaymentLinksForBuyer(existing.id);
+    const reconciled = await zohoReconciliationService.reconcilePendingLinks(links);
+    if (reconciled > 0) {
+      links = await storeService.getPaymentLinksForBuyer(existing.id);
+    }
     res.json({ success: true, data: links });
   } catch (err) {
     logger.error(`Error fetching payment links for buyer account ${req.params.id}`, err, 'BUYER_ACCOUNT_CONTROLLER');
