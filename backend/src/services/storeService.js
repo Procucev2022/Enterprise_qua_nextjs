@@ -1346,10 +1346,16 @@ class StoreService {
       }
     }
 
+    // 'Quotes Received' isn't a real RFQItem status (the type only allows
+    // 'Parsing' | 'In Evaluation' | 'AI Recommended' | 'PO Generated' |
+    // 'Quotes Pending') — writing it here left every quoted RFQ in a status
+    // no screen recognises, so nothing ever showed the RFQ as under
+    // evaluation once a vendor bid. 'In Evaluation' is the real state a
+    // quote actually puts an RFQ into.
     const updated = this.updateRFQ(rfq.id, {
       quotes,
       quotesCount: quotes.length,
-      status: rfq.status === 'PO Generated' ? 'PO Generated' : 'Quotes Received',
+      status: rfq.status === 'PO Generated' ? 'PO Generated' : 'In Evaluation',
       followUpData,
     });
 

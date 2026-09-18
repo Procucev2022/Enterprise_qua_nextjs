@@ -476,6 +476,7 @@ describe("QuotationForm Comprehensive Suite", () => {
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
         "/api/vendors/vendor%40test.com",
+        { headers: { "Content-Type": "application/json", Authorization: "Bearer test-vendor-token" } },
       );
     });
     // Flush the rest of the async load chain (res.json() + state updates)
@@ -517,6 +518,7 @@ describe("QuotationForm Comprehensive Suite", () => {
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
         "/api/vendors/vendor%40test.com",
+        { headers: { "Content-Type": "application/json", Authorization: "Bearer test-vendor-token" } },
       );
     });
 

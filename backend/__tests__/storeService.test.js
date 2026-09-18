@@ -1720,7 +1720,7 @@ describe('demo RFQ seeding', () => {
       expect(updatedRfq1).toBeDefined();
       expect(updatedRfq1.quotes.length).toBe(1);
       expect(updatedRfq1.quotesCount).toBe(1);
-      expect(updatedRfq1.status).toBe('Quotes Received');
+      expect(updatedRfq1.status).toBe('In Evaluation');
       expect(updatedRfq1.quotes[0].source).toBe('portal');
       expect(updatedRfq1.quotes[0].isBestPrice).toBe(true);
       expect(updatedRfq1.followUpData.respondedCount).toBe(1);

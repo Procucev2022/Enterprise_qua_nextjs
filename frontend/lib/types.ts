@@ -589,6 +589,10 @@ export interface VendorOpportunity {
   deliveryLocation: string;
   status: 'pending_bid' | 'submitted' | 'under_review';
   lineItems: LineItemBid[];
+  /** The RFQ's real category (RFQItem.category) — empty when the buyer never set one. */
+  majorCategory: string;
+  /** From the leading line item's real minorCategory — empty when none was classified. */
+  minorCategory: string;
 }
 
 export interface AuditLogEntry {

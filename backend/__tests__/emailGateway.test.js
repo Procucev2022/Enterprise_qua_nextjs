@@ -1688,7 +1688,7 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       const addQuoteSpy = jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue({
         ...sampleRfq,
         quotesCount: 1,
-        status: 'Quotes Received',
+        status: 'In Evaluation',
       });
 
       const outcome = await emailGatewayService.processVendorQuoteMessage(

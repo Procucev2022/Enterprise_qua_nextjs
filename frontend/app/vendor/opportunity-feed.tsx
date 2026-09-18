@@ -61,6 +61,36 @@ export default function OpportunityFeed({
   const openUpgradeModal = () => setShowUpgradeModal(true);
   const closeUpgradeModal = () => setShowUpgradeModal(false);
 
+  // This vendor's own real registered category — used to flag a genuine
+  // category match against an RFQ's real category (opp.majorCategory/
+  // minorCategory), replacing a badge that used to fire off two hardcoded
+  // strings ('Pumps & Valves' / 'Mechanical & Fluid Equipment') regardless
+  // of what the vendor or the RFQ were actually categorised as.
+  const [myMajorCategory, setMyMajorCategory] = React.useState<string>('');
+  const [myMinorCategories, setMyMinorCategories] = React.useState<string[]>([]);
+  React.useEffect(() => {
+    let cancelled = false;
+    const email = currentUserSession?.email;
+    if (!email) return;
+    fetch(`/api/vendors/${encodeURIComponent(email)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled || !data?.success || !data.data) return;
+        setMyMajorCategory(data.data.majorCategory || '');
+        setMyMinorCategories(Array.isArray(data.data.minorCategories) ? data.data.minorCategories : []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUserSession?.email]);
+  const isRealCategoryMatch = (opp: VendorOpportunity) => {
+    if (!myMajorCategory) return false;
+    const normalize = (s: string) => s.trim().toLowerCase();
+    if (opp.majorCategory && normalize(opp.majorCategory) === normalize(myMajorCategory)) return true;
+    return !!opp.minorCategory && myMinorCategories.some((m) => normalize(m) === normalize(opp.minorCategory));
+  };
+
   // 1. Direct Invitations Filter States
   const [selectedBuyerDirect, setSelectedBuyerDirect] = React.useState('all');
   const [selectedMajorCategoryDirect, setSelectedMajorCategoryDirect] = React.useState('all');
@@ -611,7 +641,7 @@ export default function OpportunityFeed({
                 // 'premium_network'.
                 const isLocked = !isOwnBuyerRfq(opp) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
                 const categories = getOpportunityCategories(opp);
-                const isCategoryMatch = categories.minor === 'Pumps & Valves' || categories.major === 'Mechanical & Fluid Equipment';
+                const isCategoryMatch = isRealCategoryMatch(opp);
                 const catalogueMatches = vendorCatalogue || [];
                 const hasCatalogueMatch = catalogueMatches.length > 0;
 
@@ -974,7 +1004,7 @@ export default function OpportunityFeed({
               networkOpps.map((opp) => {
                 const isLocked = !isOwnBuyerRfq(opp) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
                 const categories = getOpportunityCategories(opp);
-                const isCategoryMatch = categories.minor === 'Pumps & Valves' || categories.major === 'Mechanical & Fluid Equipment';
+                const isCategoryMatch = isRealCategoryMatch(opp);
                 const catalogueMatches = vendorCatalogue || [];
                 const hasCatalogueMatch = catalogueMatches.length > 0;
 

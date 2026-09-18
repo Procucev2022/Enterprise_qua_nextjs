@@ -207,6 +207,23 @@ async function getVendorById(req, res, next) {
     if (user && user.role === 'buyer') {
       const buyerAccount = await storeService.getBuyerAccountByEmail(user.email);
       buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
+    } else if (
+      user &&
+      user.role === 'vendor' &&
+      user.email &&
+      id &&
+      id.toLowerCase() === user.email.toLowerCase()
+    ) {
+      // A vendor looking up their own record by their own email. Without
+      // this, storeService.getVendorById's ownership scoping (only ever
+      // populated for the 'buyer' role above) requires a scope to return
+      // ANY vendor a buyer has uploaded — which every buyer-uploaded vendor
+      // is — so a buyer-uploaded vendor could never resolve their own record
+      // at all. That resolution is what quotation-form.tsx uses to find "my
+      // submitted quotes" (matched by vendorId), so it silently showed 0
+      // submitted quotes for every buyer-uploaded vendor regardless of how
+      // many they'd actually sent.
+      buyerId = 'all';
     } else if (req.query && req.query.buyerId) {
       buyerId = req.query.buyerId;
     }

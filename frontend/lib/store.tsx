@@ -90,6 +90,8 @@ function buildOpportunityFromRFQ(rfq: RFQItem): VendorOpportunity {
     estimatedValue: rfq.budget > 0 ? formatCurrency(rfq.budget) : undefined,
     deliveryLocation: rfq.deliveryLocation || '',
     status: rfq.quotes && rfq.quotes.length > 0 ? 'under_review' : 'pending_bid',
+    majorCategory: rfq.category || '',
+    minorCategory: rfq.extractedEntities?.[0]?.minorCategory || '',
     lineItems: (rfq.extractedEntities || []).map((ent: ExtractedEntity, idx: number) => ({
       id: ent.id || `item-${idx}`,
       description: ent.itemName,
