@@ -906,6 +906,16 @@ async function pollOnce(config = resolveConfig()) {
     logger: false,
   });
 
+  if (typeof client.on === 'function') {
+    client.on('error', (err) => {
+      logger.warn(
+        `IMAP client socket notice: ${err ? err.message : 'Unknown'}`,
+        { code: err && err.code, connId: err && err._connId },
+        'EMAIL_GATEWAY'
+      );
+    });
+  }
+
   try {
     await client.connect();
     runtime.lastConnectedAt = new Date().toISOString();
@@ -1052,6 +1062,16 @@ async function pollVendorOnce(config = resolveVendorConfig()) {
     auth: { user: config.user, pass: config.password },
     logger: false,
   });
+
+  if (typeof client.on === 'function') {
+    client.on('error', (err) => {
+      logger.warn(
+        `Vendor IMAP client socket notice: ${err ? err.message : 'Unknown'}`,
+        { code: err && err.code, connId: err && err._connId },
+        'EMAIL_GATEWAY'
+      );
+    });
+  }
 
   try {
     await client.connect();

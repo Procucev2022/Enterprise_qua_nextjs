@@ -8,6 +8,7 @@ const rfqIngestionService = require('../src/services/rfqIngestionService');
 const storeService = require('../src/services/storeService');
 const mailerService = require('../src/services/mailerService');
 const dbPool = require('../src/db/pool');
+const { logger } = require('../src/services/loggerService');
 const {
   EMAIL_GATEWAY_CONFIG,
   EMAIL_GATEWAY_MESSAGES,
@@ -53,7 +54,14 @@ function buyerAccount(overrides = {}) {
 /** A minimal ImapFlow double: one unseen message carrying `source`. */
 function fakeImap({ uids = [1], source = fixtures.PLAIN_REQUISITION_EML, messageId = '<m1@lt-heavy.com>', failConnect = false } = {}) {
   const flagged = [];
+  const listeners = {};
   const client = {
+    on: jest.fn((event, cb) => {
+      listeners[event] = cb;
+    }),
+    emit: jest.fn((event, ...args) => {
+      if (typeof listeners[event] === 'function') listeners[event](...args);
+    }),
     connect: jest.fn(failConnect ? () => Promise.reject(new Error('authentication failed')) : async () => {}),
     getMailboxLock: jest.fn(async () => ({ release: jest.fn() })),
     search: jest.fn(async () => uids),
@@ -64,6 +72,7 @@ function fakeImap({ uids = [1], source = fixtures.PLAIN_REQUISITION_EML, message
     }),
     logout: jest.fn(async () => {}),
     flagged,
+    listeners,
   };
   return client;
 }
@@ -472,6 +481,26 @@ describe('emailGatewayService.pollOnce', () => {
 
     const recorded = emailGatewayQueries.recordProcessed.mock.calls[0][0];
     expect(recorded.messageId).toBeTruthy();
+  });
+
+  test('handles IMAP client error events without unhandled crash', async () => {
+    const client = fakeImap();
+    emailGatewayService.ImapFlow = jest.fn(() => client);
+
+    const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+    await emailGatewayService.pollOnce(emailGatewayService.resolveConfig(FULL_ENV));
+
+    expect(client.on).toHaveBeenCalledWith('error', expect.any(Function));
+    const errorCb = client.listeners['error'];
+    expect(typeof errorCb).toBe('function');
+    errorCb(new Error('socket ECONNRESET'));
+    errorCb(null);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('IMAP client socket notice'),
+      expect.anything(),
+      'EMAIL_GATEWAY'
+    );
   });
 
   test('tolerates a mailbox with nothing unseen', async () => {
@@ -2074,6 +2103,26 @@ Hello team, sending catalog.
       const seenRes = await emailGatewayService.pollVendorOnce(emailGatewayService.resolveVendorConfig(VENDOR_ENV));
       expect(seenRes.outcomes[0].status).toBe(EMAIL_GATEWAY_MESSAGES.ALREADY_PROCESSED);
       expect(seenClient.flagged.length).toBeGreaterThan(0);
+    });
+
+    test('handles vendor IMAP client error events without unhandled crash', async () => {
+      const client = fakeImap();
+      emailGatewayService.ImapFlow = jest.fn(() => client);
+
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      await emailGatewayService.pollVendorOnce(emailGatewayService.resolveVendorConfig(VENDOR_ENV));
+
+      expect(client.on).toHaveBeenCalledWith('error', expect.any(Function));
+      const errorCb = client.listeners['error'];
+      expect(typeof errorCb).toBe('function');
+      errorCb(new Error('vendor socket ECONNRESET'));
+      errorCb(null);
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Vendor IMAP client socket notice'),
+        expect.anything(),
+        'EMAIL_GATEWAY'
+      );
     });
 
     test('pollVendorOnce handles processing errors and failed outcomes', async () => {
