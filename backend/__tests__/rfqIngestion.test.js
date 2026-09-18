@@ -709,13 +709,17 @@ describe('RFQ ingestion & summary HTTP routes', () => {
       // tier so this block's mode_2 RFQs aren't gated by the new entitlement check.
       storeService.updateBuyerAccount(buyerRes.body.data.id, { subscriptionPlan: 'version_3' });
 
+      // mode_3 deliberately, not mode_2: createRFQ now auto-invites
+      // category-matched vendors for mode_1/mode_2 (2026-09-18), which would
+      // defeat the whole point of this block — mode_3 is the one mode still
+      // requiring an explicit CM invite, which is what's under test here.
       const inCat = await request(app).post('/api/rfqs').set(authHeader('buyer')).send({
         title: 'Vendor-visible scoped enquiry',
         category: 'Vendor-Scope-Cat',
         budget: 1000,
         targetDeliveryDate: '2026-12-01',
         deadline: '2026-12-01',
-        sourcingMode: 'mode_2',
+        sourcingMode: 'mode_3',
         deliveryLocation: 'Plant A',
         deliveryPincode: '400001',
       });
@@ -728,7 +732,7 @@ describe('RFQ ingestion & summary HTTP routes', () => {
         budget: 1000,
         targetDeliveryDate: '2026-12-01',
         deadline: '2026-12-01',
-        sourcingMode: 'mode_2',
+        sourcingMode: 'mode_3',
         deliveryLocation: 'Plant A',
         deliveryPincode: '400001',
       });

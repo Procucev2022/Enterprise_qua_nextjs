@@ -27,7 +27,7 @@ import {
 } from '@/lib/manualRfqModel';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
-import { extractRfqCategorySignals, getCategoryMatchedProcucevVendors } from '@/lib/vendorMatching';
+import { extractRfqCategorySignals, getCategoryMatchedProcucevVendors, matchVendorAgainstSignals } from '@/lib/vendorMatching';
 import type {
   ManualRFQForm,
   ManualRFQLineItem,
@@ -449,7 +449,14 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
       let mode1AssignedVendors: AssignedVendorEntry[] | undefined = undefined;
 
       if ((form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2') && Array.isArray(buyerVendors)) {
-        const myUploadedVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+        const allMyUploadedVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+        // Category-filtered to match what the panel above actually displays
+        // (and what the buyer sees as "matched") — falls back to the full
+        // roster only when no category signal exists yet to filter by.
+        const { signals: dispatchSignals } = extractRfqCategorySignals(updatedForm);
+        const myUploadedVendors = dispatchSignals.length > 0
+          ? allMyUploadedVendors.filter((v) => matchVendorAgainstSignals(v, dispatchSignals).isMatch)
+          : allMyUploadedVendors;
         if (myUploadedVendors.length > 0) {
           mode1AssignedVendors = myUploadedVendors.map(toAssignedVendorEntry);
         }
@@ -1107,7 +1114,13 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                   <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                     <span>Mode 1: Buyer&apos;s Approved Vendor Roster</span>
                     <span className="badge badge-blue text-[10px] font-bold">
-                      {buyerVendors.filter((v) => isBuyerUploaded(v)).length} Suppliers Found
+                      {(() => {
+                        const uploaded = buyerVendors.filter((v) => isBuyerUploaded(v));
+                        const { signals } = extractRfqCategorySignals(form);
+                        return signals.length > 0
+                          ? uploaded.filter((v) => matchVendorAgainstSignals(v, signals).isMatch).length
+                          : uploaded.length;
+                      })()} Suppliers Found
                     </span>
                   </h3>
                   <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
@@ -1121,7 +1134,11 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
             </div>
 
             {(() => {
-              const myVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+              const allMyVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+              const { signals: mode1Signals } = extractRfqCategorySignals(form);
+              const myVendors = mode1Signals.length > 0
+                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, mode1Signals).isMatch)
+                : allMyVendors;
               if (myVendors.length === 0) {
                 return (
                   <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-2">
@@ -1229,8 +1246,16 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
         {form.sourcingMode === 'mode_2' && (
           <div className="mt-5 rounded-2xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
             {(() => {
-              const myVendors = buyerVendors.filter(isBuyerUploaded);
+              const allMyVendors = buyerVendors.filter(isBuyerUploaded);
               const { signals: rfqSignals } = extractRfqCategorySignals(form);
+              // Was showing the buyer's entire private roster unconditionally,
+              // never re-filtering when the line-item category changed — only
+              // the Procucev marketplace half below reacted. Now applies the
+              // same category-match rule to the private roster too, so both
+              // halves of "Hybrid" actually respond to the category dropdown.
+              const myVendors = rfqSignals.length > 0
+                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals).isMatch)
+                : allMyVendors;
               const matchedProcucev = getCategoryMatchedProcucevVendors(buyerVendors, rfqSignals, 80);
 
               return (

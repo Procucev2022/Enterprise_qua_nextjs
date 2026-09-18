@@ -834,14 +834,19 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
       target: { value: 'Centrifugal Water Pump' },
     });
     const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
-    fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    fireEvent.change(majorSelect, { target: { value: 'Engineering Spares - Mechanical' } });
+    fireEvent.change(minorSelect, { target: { value: 'Abrasives' } });
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '10' } });
     fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
 
     fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
 
     await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
+    // v-hist-2 has no majorCategory (its whole purpose in this fixture is
+    // testing the display fallback above) — it correctly cannot match the
+    // "Engineering Spares - Mechanical" category selected on the line item,
+    // so it's excluded from the dispatch payload even though the preview
+    // above showed it (that happened before a category was selected).
     expect(mockCreateRFQ.mock.calls[0][0].assignedVendors).toEqual([
       {
         id: 'v-hist-1',
@@ -850,19 +855,17 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
         contactPerson: 'Rajesh Nair',
         phone: '+91 98200 11111',
       },
-      {
-        id: 'v-hist-2',
-        name: 'Enterprise Vendor',
-        email: null,
-        contactPerson: null,
-        phone: null,
-      },
     ]);
   });
 
   it('Mode 2 (default) also assigns the buyer\'s private roster — a category match alone no longer grants vendor visibility, so it must actually be invited', async () => {
     serveBootstrap([
-      { id: 'v-hist-1', name: 'Apex Industrial Dynamics', source: 'historical_purchase_dump' },
+      {
+        id: 'v-hist-1',
+        name: 'Apex Industrial Dynamics',
+        source: 'historical_purchase_dump',
+        majorCategory: 'Engineering Spares - Mechanical',
+      },
     ]);
     renderWizard();
     // Wait for the bootstrap vendor to actually hydrate into buyerVendors
@@ -881,8 +884,8 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
       target: { value: 'Centrifugal Water Pump' },
     });
     const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
-    fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
-    fireEvent.change(minorSelect, { target: { value: categoriesData[0].minorCategories[0] } });
+    fireEvent.change(majorSelect, { target: { value: 'Engineering Spares - Mechanical' } });
+    fireEvent.change(minorSelect, { target: { value: 'Abrasives' } });
     fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '10' } });
     fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
 
