@@ -571,16 +571,42 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     targetRfq
   );
 
-  const unitPriceNum = Number(extraction.unitPrice);
+  const rfqItems = targetRfq.extractedEntities || targetRfq.lineItems || [];
+  const rfqQty = rfqItems.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0) || 1;
+
+  let unitPriceNum = Number(extraction.unitPrice);
+  if ((!extraction.unitPrice || isNaN(unitPriceNum) || unitPriceNum <= 0) && Number(extraction.totalPrice) > 0) {
+    extraction.unitPrice = Math.round(Number(extraction.totalPrice) / rfqQty);
+    unitPriceNum = extraction.unitPrice;
+  }
+  if ((!extraction.unitPrice || isNaN(unitPriceNum) || unitPriceNum <= 0) && Array.isArray(extraction.lineItemQuotes)) {
+    const firstPriced = extraction.lineItemQuotes.find((lq) => Number(lq.unitPrice) > 0);
+    if (firstPriced) {
+      extraction.unitPrice = Number(firstPriced.unitPrice);
+      unitPriceNum = extraction.unitPrice;
+    }
+  }
+
+  // Second-chance extraction fallback if initial pass missed the price
+  if (!extraction.unitPrice || isNaN(unitPriceNum) || unitPriceNum <= 0) {
+    const fallbackText = [message.bodyText, message.textBody, message.text, message.subject].filter(Boolean).join('\n');
+    const fallback = geminiService.extractQuotationFallback(fallbackText, targetRfq);
+    if (Number(fallback.unitPrice) > 0) {
+      Object.assign(extraction, fallback);
+      unitPriceNum = Number(extraction.unitPrice);
+    }
+  }
+
+  const buyerEmail = storeService.resolveBuyerEmailForRFQ(targetRfq);
+  const incomingCc = Array.isArray(message.cc) ? message.cc : (message.cc ? [message.cc] : []);
+  const ccList = Array.from(new Set([buyerEmail, ...incomingCc, VENDOR_QUOTE_SUPPORT_CC].filter(Boolean)));
+
   if (!extraction.unitPrice || isNaN(unitPriceNum) || unitPriceNum <= 0) {
     logger.warn(
       `Vendor quote from ${vendorRecord.name} for RFQ ${targetRfq.rfqNumber} failed validation: missing or invalid unit price (${extraction.unitPrice})`,
       { rfqNumber: targetRfq.rfqNumber, vendorId: vendorRecord.id, fromAddress: message.fromAddress },
       'EMAIL_GATEWAY'
     );
-
-    const buyerEmail = storeService.resolveBuyerEmailForRFQ(targetRfq);
-    const ccList = [buyerEmail, VENDOR_QUOTE_SUPPORT_CC].filter(Boolean);
 
     try {
       await mailerService.sendQuoteFailureEmail(message.fromAddress, {
@@ -650,9 +676,6 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     }
   );
 
-  const buyerEmail = storeService.resolveBuyerEmailForRFQ(targetRfq);
-  const ccList = [buyerEmail, VENDOR_QUOTE_SUPPORT_CC].filter(Boolean);
-
   try {
     await mailerService.sendQuoteAcknowledgementEmail(message.fromAddress, {
       rfqNumber: targetRfq.rfqNumber,
@@ -663,6 +686,18 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     });
   } catch (mailErr) {
     logger.error('Failed to send vendor quote acknowledgement email', mailErr, 'EMAIL_GATEWAY');
+  }
+
+  if (buyerEmail) {
+    try {
+      await mailerService.sendQuoteReceivedEmail(buyerEmail, {
+        rfq: updatedRFQ || targetRfq,
+        quote,
+        recipientName: targetRfq.buyerAccountName || 'Buyer',
+      });
+    } catch (mailErr) {
+      logger.error('Failed to send buyer quote received email', mailErr, 'EMAIL_GATEWAY');
+    }
   }
 
   return {
@@ -699,6 +734,9 @@ async function processMessage(rawSource, config = resolveConfig()) {
   }
 
   const { message } = prepared;
+  if (message && !message.bodyText && prepared.extractionInput?.documentText) {
+    message.bodyText = prepared.extractionInput.documentText;
+  }
 
   // Guard: Never process outbound emails, self-sent copies, or system notifications as inbound requisitions/quotes
   if (isOutgoingSystemMessage(message, config)) {

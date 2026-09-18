@@ -13,6 +13,7 @@ const { logger } = require('../src/services/loggerService');
 const {
   EMAIL_GATEWAY_CONFIG,
   EMAIL_GATEWAY_MESSAGES,
+  EMAIL_INGESTION_STATUS,
   resolveBuyerSourcingMode,
   BUYER_SUBSCRIPTION_TO_SOURCING_MODE,
 } = require('../src/config/constants');
@@ -1843,6 +1844,124 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       );
 
       expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
+    });
+
+    test('processVendorQuoteMessage cross-derives unitPrice from totalPrice when unitPrice is missing', async () => {
+      const emailRecord = {
+        messageId: '<quote-total-only@apex.com>',
+        subject: 'Re: [RFQ-2026-00421] Bid',
+        fromAddress: VENDOR_EMAIL,
+        bodyText: 'Total Quoted Value: 60,000',
+      };
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+        unitPrice: 0,
+        totalPrice: 60000,
+      });
+      jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue({ ...sampleRfq, quotes: [{ unitPrice: 15000 }] });
+      jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+      jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockResolvedValue({ sent: true });
+
+      const outcome = await emailGatewayService.processVendorQuoteMessage(
+        emailRecord,
+        sampleRfq,
+        sampleVendor
+      );
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
+      expect(outcome.quote.unitPrice).toBe(4286);
+    });
+
+    test('processVendorQuoteMessage derives unitPrice from lineItemQuotes when available', async () => {
+      const emailRecord = {
+        messageId: '<quote-line-only@apex.com>',
+        subject: 'Re: [RFQ-2026-00421] Bid',
+        fromAddress: VENDOR_EMAIL,
+        bodyText: 'Item price quotes',
+      };
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+        unitPrice: 0,
+        totalPrice: 0,
+        lineItemQuotes: [{ itemName: 'Item 1', unitPrice: 12500, quantity: 4 }],
+      });
+      jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue({ ...sampleRfq, quotes: [{ unitPrice: 12500 }] });
+      jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+      jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockResolvedValue({ sent: true });
+
+      const outcome = await emailGatewayService.processVendorQuoteMessage(
+        emailRecord,
+        sampleRfq,
+        sampleVendor
+      );
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
+      expect(outcome.quote.unitPrice).toBe(12500);
+    });
+
+    test('processVendorQuoteMessage uses second-chance fallback when initial extraction has 0 unitPrice', async () => {
+      const emailRecord = {
+        messageId: '<quote-fallback-pass@apex.com>',
+        subject: 'Re: [RFQ-2026-00421] Bid',
+        fromAddress: VENDOR_EMAIL,
+        bodyText: 'Unit Price: 18000',
+      };
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+        unitPrice: 0,
+        totalPrice: 0,
+      });
+      jest.spyOn(geminiService, 'extractQuotationFallback').mockReturnValue({
+        unitPrice: 18000,
+        totalPrice: 72000,
+        leadTimeDays: 5,
+        warrantyYears: 1,
+        paymentTerms: 'Net 30',
+        complianceStatus: 'Fully Compliant',
+        remarks: 'Fallback quote',
+      });
+      jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue({ ...sampleRfq, quotes: [{ unitPrice: 18000 }] });
+      jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+      jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockResolvedValue({ sent: true });
+
+      const outcome = await emailGatewayService.processVendorQuoteMessage(
+        emailRecord,
+        sampleRfq,
+        sampleVendor
+      );
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
+      expect(outcome.quote.unitPrice).toBe(18000);
+    });
+
+    test('processVendorQuoteMessage handles sendQuoteReceivedEmail errors gracefully', async () => {
+      const emailRecord = {
+        messageId: '<quote-buyer-mail-err@apex.com>',
+        subject: 'Re: [RFQ-2026-00421] Bid',
+        fromAddress: VENDOR_EMAIL,
+        bodyText: 'Unit Price: 10000',
+      };
+      jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
+        unitPrice: 10000,
+        totalPrice: 40000,
+      });
+      jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue('buyer@test.com');
+      jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue(sampleRfq);
+      jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+      jest.spyOn(mailerService, 'sendQuoteAcknowledgementEmail').mockResolvedValue({ sent: true });
+      jest.spyOn(mailerService, 'sendQuoteReceivedEmail').mockRejectedValue(new Error('SMTP down'));
+
+      const outcome = await emailGatewayService.processVendorQuoteMessage(
+        emailRecord,
+        sampleRfq,
+        sampleVendor
+      );
+      expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_INGESTED);
+    });
+
+    test('processMessage falls back to extractionInput.documentText when message.bodyText is missing', async () => {
+      const sampleBuffer = Buffer.from('From: intake@procucev.com\nSubject: Test\n\nBody content');
+      jest.spyOn(emailIngestionService, 'prepareEmailForExtraction').mockResolvedValue({
+        status: EMAIL_INGESTION_STATUS.READY,
+        message: { fromAddress: 'intake@procucev.com', subject: 'Requisition' },
+        extractionInput: { documentText: 'Line items text' },
+      });
+      const res = await emailGatewayService.processMessage(sampleBuffer, { user: 'intake@procucev.com' });
+      expect(res.status).toBe(INGESTION_OUTCOME.SKIPPED_OUTBOUND);
     });
 
     test('processMessage routes RFQ vendor reply directly to vendor quote ingestion', async () => {

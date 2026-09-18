@@ -1224,6 +1224,40 @@ describe('geminiService.generateJson', () => {
       expect(resWithDefaults.unitPrice).toBe(300);
       expect(resWithDefaults.totalPrice).toBe(300);
       expect(resWithDefaults.lineItemQuotes[0].itemName).toBe('Component Alpha');
+
+      // 4. extractQuotationFallback where unitPrice is initially 0 but line item has a price
+      const itemQuoteFallback = gemini.extractQuotationFallback(
+        'Turbo Pump: 5000 per unit',
+        { lineItems: [{ itemName: 'Turbo Pump', quantity: 3 }] }
+      );
+      expect(itemQuoteFallback.unitPrice).toBe(5000);
+      expect(itemQuoteFallback.totalPrice).toBe(15000);
+
+      // 5. extractQuotationFromEmail where AI response unitPrice is 0 and derived from lineItemQuotes
+      const aiResponseItemOnly = {
+        unitPrice: 0,
+        totalPrice: 0,
+        lineItemQuotes: [
+          { itemName: '', quantity: 2, unitPrice: 400, totalPrice: 0 }
+        ]
+      };
+      global.fetch = jest.fn(async () => geminiReply(JSON.stringify(aiResponseItemOnly)));
+      const resItemOnly = await gemini.extractQuotationFromEmail(
+        { bodyText: 'Quoting Item X' },
+        { lineItems: [{ description: 'Item X', quantity: 2 }] }
+      );
+      expect(resItemOnly.unitPrice).toBe(400);
+      expect(resItemOnly.totalPrice).toBe(800);
+
+      // 6. extractQuotationFromEmail with Minor Exception complianceStatus
+      const aiResponseMinor = {
+        unitPrice: 100,
+        totalPrice: 100,
+        complianceStatus: 'Minor Exception',
+      };
+      global.fetch = jest.fn(async () => geminiReply(JSON.stringify(aiResponseMinor)));
+      const resMinor = await gemini.extractQuotationFromEmail({ bodyText: 'Test' }, {});
+      expect(resMinor.complianceStatus).toBe('Minor Exception');
     });
   });
 });
