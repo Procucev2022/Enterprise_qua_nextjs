@@ -490,7 +490,7 @@ export default function InitialSetupModal() {
             };
           });
 
-          setStoredVendors(parsedVendors.slice(0, 100)); // preview sample
+          setStoredVendors(parsedVendors);
           setVendorMasterUploaded(true);
           setIsEditingVendorTable(false);
 
@@ -694,7 +694,7 @@ export default function InitialSetupModal() {
             };
           });
 
-          setPoLineItems(parsedPOs.slice(0, 100)); // preview sample
+          setPoLineItems(parsedPOs);
           setPoDataUploaded(true);
 
           if (sessionId) {
@@ -1288,7 +1288,7 @@ export default function InitialSetupModal() {
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] uppercase font-bold text-slate-400 block">
-                      {isEditingVendorTable ? 'Editing Vendor Master Records' : 'Stored Vendor Master Records'} ({storedVendors.length} Suppliers):
+                      {isEditingVendorTable ? 'Editing Vendor Master Records' : 'Stored Vendor Master Records'} ({storedVendors.length.toLocaleString('en-IN')} Suppliers):
                     </span>
                     {isEditingVendorTable && (
                       <span className="text-[10px] font-semibold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/70 border border-amber-200 dark:border-amber-800/50 px-2 py-0.5 rounded-full flex items-center gap-1">
@@ -1453,7 +1453,7 @@ export default function InitialSetupModal() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
-                        {storedVendors.map((v) => (
+                        {storedVendors.slice(0, 100).map((v) => (
                           <tr key={v.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/40">
                             <td className="p-2.5 font-mono text-[10px] text-slate-500">{v.vendorCode || 'VND-AUTO'}</td>
                             <td className="p-2.5 font-bold text-slate-800 dark:text-white">{v.companyName || '—'}</td>
@@ -1478,6 +1478,11 @@ export default function InitialSetupModal() {
                         ))}
                       </tbody>
                     </table>
+                    {storedVendors.length > 100 && (
+                      <div className="p-2 bg-slate-50 dark:bg-gray-800/60 border-t border-slate-200 dark:border-gray-800 text-[11px] text-center text-slate-500 dark:text-gray-400 font-medium">
+                        Showing preview of first 100 of {storedVendors.length.toLocaleString('en-IN')} suppliers. All {storedVendors.length.toLocaleString('en-IN')} suppliers are loaded and stored.
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1641,7 +1646,7 @@ export default function InitialSetupModal() {
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] uppercase font-bold text-slate-400 block">
-                  PO Line Items Preview ({poLineItems.length} Line Items):
+                  PO Line Items Preview ({poLineItems.length.toLocaleString('en-IN')} Line Items):
                 </span>
                 <span className="text-[10px] text-purple-600 dark:text-purple-400 font-bold">
                   Total Spend: {formatCurrency(poLineItems.reduce((acc, p) => acc + p.totalSpend, 0))}
@@ -1654,13 +1659,13 @@ export default function InitialSetupModal() {
                     <tr>
                       <th className="p-2.5">PO Number</th>
                       <th className="p-2.5">Vendor</th>
-                      <th className="p-2.5">Purchased Item & Specs</th>
+                      <th className="p-2.5">Purchased Item &amp; Specs</th>
                       <th className="p-2.5">Qty / Unit</th>
                       <th className="p-2.5">Total Spend</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-gray-800 bg-white dark:bg-gray-900/60">
-                    {poLineItems.map((p) => (
+                    {poLineItems.slice(0, 100).map((p) => (
                       <tr key={p.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/40">
                         <td className="p-2.5 font-mono text-[10px] text-slate-500">{p.poNumber}</td>
                         <td className="p-2.5 font-bold text-slate-800 dark:text-white">{p.vendorIdentifier}</td>
@@ -1676,6 +1681,11 @@ export default function InitialSetupModal() {
                     ))}
                   </tbody>
                 </table>
+                {poLineItems.length > 100 && (
+                  <div className="p-2 bg-slate-50 dark:bg-gray-800/60 border-t border-slate-200 dark:border-gray-800 text-[11px] text-center text-slate-500 dark:text-gray-400 font-medium">
+                    Showing preview of first 100 of {poLineItems.length.toLocaleString('en-IN')} PO records. All {poLineItems.length.toLocaleString('en-IN')} records are loaded.
+                  </div>
+                )}
               </div>
             </div>
 
