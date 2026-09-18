@@ -835,10 +835,6 @@ const EMAIL_GATEWAY_MESSAGES = {
   VENDOR_NOT_FOUND_FOR_QUOTE: 'No vendor profile found for sender {address}.',
 };
 
-/** Support email address included as CC on all vendor quotation acknowledgements. */
-const VENDOR_QUOTE_SUPPORT_CC = 'support@procucev.com';
-
-
 /** Notification email content for unauthorized email senders. */
 const UNAUTHORIZED_BUYER_NOTIFICATION = {
   SUBJECT: 'Enterprise QUA - Buyer Registration Required',
@@ -1389,7 +1385,6 @@ module.exports = {
   validatePayload,
   BUYER_SUBSCRIPTION_TO_SOURCING_MODE,
   resolveBuyerSourcingMode,
-  VENDOR_QUOTE_SUPPORT_CC,
 };
 
 

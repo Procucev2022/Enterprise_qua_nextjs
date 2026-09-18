@@ -42,7 +42,6 @@ const {
   EMAIL_INGESTION_STATUS,
   resolveBuyerSourcingMode,
   SYSTEM_ACTOR_EMAIL,
-  VENDOR_QUOTE_SUPPORT_CC,
 } = require('../config/constants');
 
 const { INGESTION_OUTCOME } = emailGatewayQueries;
@@ -459,7 +458,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     );
 
     const buyerEmail = storeService.resolveBuyerEmailForRFQ(targetRfq);
-    const ccList = [buyerEmail, VENDOR_QUOTE_SUPPORT_CC].filter(Boolean);
+    const ccList = [buyerEmail].filter(Boolean);
 
     try {
       await mailerService.sendQuoteFailureEmail(message.fromAddress, {
@@ -530,7 +529,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
   );
 
   const buyerEmail = storeService.resolveBuyerEmailForRFQ(targetRfq);
-  const ccList = [buyerEmail, VENDOR_QUOTE_SUPPORT_CC].filter(Boolean);
+  const ccList = [buyerEmail].filter(Boolean);
 
   try {
     await mailerService.sendQuoteAcknowledgementEmail(message.fromAddress, {
@@ -578,6 +577,34 @@ async function processMessage(rawSource, config = resolveConfig()) {
   }
 
   const { message } = prepared;
+
+  // 0. Never process mail the gateway itself sent. Every outbound notification
+  // (RFQ acknowledgement, quote acknowledgement/failure, unauthorized-sender
+  // notice) replies to whatever address triggered it — and if that address
+  // happens to equal the gateway's OWN watched mailbox (e.g. a test vendor
+  // reusing the intake address, or a buyer's RFQ-creation ack landing back in
+  // the same inbox it was sent from), the reply lands right back in the
+  // mailbox being watched. Without this guard the gateway then treats its own
+  // notification as a new inbound vendor quote, fails it again, sends another
+  // notification, and loops forever — confirmed live: one bad test message
+  // generated a new "Quotation Could Not Be Processed" every poll cycle
+  // indefinitely, CC'ing the buyer (and, before that CC was removed, a real
+  // support inbox) every time.
+  const gatewayOwnAddresses = new Set(
+    [config.address, config.user].filter(Boolean).map((a) => String(a).trim().toLowerCase())
+  );
+  if (message.fromAddress && gatewayOwnAddresses.has(String(message.fromAddress).trim().toLowerCase())) {
+    logger.warn(
+      `Ignoring inbound message from the gateway's own address (${message.fromAddress}) — processing it would risk an outbound-notification loop`,
+      { fromAddress: message.fromAddress, subject: message.subject },
+      'EMAIL_GATEWAY'
+    );
+    return {
+      status: INGESTION_OUTCOME.SELF_MAIL_IGNORED,
+      detail: 'Message originated from the gateway\'s own configured address; ignored to avoid a notification loop.',
+      message,
+    };
+  }
 
   // 1. Check if this message is a vendor quotation reply for an existing RFQ
   const { targetRfq, referencedNumber } = extractRfqReferenceFromEmail(message);
@@ -851,7 +878,14 @@ async function pollOnce(config = resolveConfig()) {
                 : null,
           });
 
-          if (result.status === INGESTION_OUTCOME.INGESTED || result.status === INGESTION_OUTCOME.QUOTE_INGESTED) {
+          if (result.status === INGESTION_OUTCOME.SELF_MAIL_IGNORED) {
+            // Also marked read, unlike other rejections below: left unread it
+            // would recount against maxPerPoll's fetch budget on every single
+            // poll forever (the ledger stops it being *reprocessed*, but not
+            // being *fetched*), which is exactly the resource-exhaustion tail
+            // of the same self-mail loop this outcome exists to break.
+            await client.messageFlagsAdd(String(uid), ['\\Seen']);
+          } else if (result.status === INGESTION_OUTCOME.INGESTED || result.status === INGESTION_OUTCOME.QUOTE_INGESTED) {
             runtime.ingestedThisRun += 1;
             // Marked read only for a message we actually acted on, and only after
             // the ledger write, so a failed write leaves it to be retried. Mail
