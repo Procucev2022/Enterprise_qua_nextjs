@@ -553,7 +553,7 @@ function extractQuotationFallback(text = '', rfqContext = {}) {
     let itemMatch = sanitized.match(itemRegex);
     if (!itemMatch) {
       const itemBlockRegex = new RegExp(
-        `(?:${escaped})[\\s\\S]{0,140}?(?:unit\\s*price|rate|price|quote)[\\s:=~–—\\-\\/₹RsINR\\.]*([\\d,]+(?:\\.\\d+)?)`,
+        `(?:${escaped})[\\s\\S]{0,140}?(?:unit\\s*price|rate|price|quote)(?:\\s*\\([^)]*\\)|\\[[^\\]]*\\])?[\\s:=~–—\\-\\/₹RsINR\\.]*([\\d,]+(?:\\.\\d+)?)`,
         'i'
       );
       itemMatch = sanitized.match(itemBlockRegex);

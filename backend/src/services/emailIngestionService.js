@@ -285,7 +285,10 @@ async function prepareEmailForExtraction({ fileName, content }) {
       fromAddress: message.fromAddress,
       fromName: message.fromName,
       toAddress: message.toAddress,
+      cc: message.cc || [],
       sentAt: message.sentAt,
+      bodyText: message.bodyText || '',
+      attachments: message.attachments || [],
       attachmentNames: message.attachments.map((attachment) => attachment.fileName),
     },
     extractionInput: {

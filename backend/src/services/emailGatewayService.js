@@ -734,6 +734,9 @@ async function processMessage(rawSource, config = resolveConfig()) {
   }
 
   const { message } = prepared;
+  if (message && !message.bodyText && prepared.extractionInput?.documentText) {
+    message.bodyText = prepared.extractionInput.documentText;
+  }
 
   // Guard: Never process outbound emails, self-sent copies, or system notifications as inbound requisitions/quotes
   if (isOutgoingSystemMessage(message, config)) {
