@@ -38,6 +38,7 @@ import {
   Database,
   Pencil,
   RefreshCw,
+  ChevronDown,
 } from 'lucide-react';
 
 export interface IngestionJobState {
@@ -228,6 +229,9 @@ export default function InitialSetupModal() {
   const [poFileName, setPoFileName] = useState<string>(`PO_Purchase_Dump_${selectedPeriod}.xlsx`);
   const [isDraggingPo, setIsDraggingPo] = useState<boolean>(false);
   const [isParsingPo, setIsParsingPo] = useState<boolean>(false);
+
+  const [vendorPreviewLimit, setVendorPreviewLimit] = useState<number>(50);
+  const [poPreviewLimit, setPoPreviewLimit] = useState<number>(50);
 
   const vendorFileInputRef = useRef<HTMLInputElement>(null);
   const poFileInputRef = useRef<HTMLInputElement>(null);
@@ -1330,20 +1334,23 @@ export default function InitialSetupModal() {
 
                 {isEditingVendorTable ? (
                   /* EDITABLE MODE TABLE */
-                  <div className="border border-indigo-200 dark:border-indigo-800 rounded-xl overflow-hidden max-h-96 overflow-y-auto text-xs bg-white dark:bg-gray-900 shadow-inner ring-1 ring-indigo-500/20">
-                    <table className="w-full text-left border-collapse">
+                  <div className="border border-indigo-200 dark:border-indigo-800 rounded-xl overflow-hidden max-h-96 overflow-y-auto overflow-x-auto text-xs bg-white dark:bg-gray-900 shadow-inner ring-1 ring-indigo-500/20">
+                    <table className="w-full text-left border-collapse min-w-[960px]">
                       <thead className="bg-indigo-50/70 dark:bg-gray-800 text-[10px] uppercase font-bold text-indigo-900 dark:text-gray-300 sticky top-0 z-10">
                         <tr>
-                          <th className="p-2 w-24">Code</th>
+                          <th className="p-2 w-28">Vendor Code</th>
                           <th className="p-2 min-w-[140px]">Company Name</th>
-                          <th className="p-2 min-w-[150px]">Email &amp; Contact</th>
-                          <th className="p-2 min-w-[150px]">GSTIN &amp; Location</th>
+                          <th className="p-2 min-w-[120px]">Contact Person</th>
+                          <th className="p-2 min-w-[140px]">Email Address</th>
+                          <th className="p-2 min-w-[110px]">Phone</th>
+                          <th className="p-2 min-w-[120px]">GSTIN</th>
+                          <th className="p-2 min-w-[140px]">Address / Location</th>
                           <th className="p-2 w-24">Rating</th>
                           <th className="p-2 w-10 text-center">Action</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
-                        {storedVendors.map((v) => (
+                        {storedVendors.slice(0, vendorPreviewLimit).map((v) => (
                           <tr key={v.id} className="hover:bg-indigo-50/30 dark:hover:bg-gray-800/50 group transition-colors">
                             <td className="p-1.5 align-top">
                               <input
@@ -1363,45 +1370,49 @@ export default function InitialSetupModal() {
                                 className="w-full font-bold text-xs px-1.5 py-1 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-900 dark:text-white focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
                               />
                             </td>
-                            <td className="p-1.5 align-top space-y-1">
+                            <td className="p-1.5 align-top">
+                              <input
+                                type="text"
+                                value={v.contactPerson || ''}
+                                onChange={(e) => handleUpdateVendorField(v.id, 'contactPerson', e.target.value)}
+                                placeholder="Contact Name"
+                                className="w-full text-[10px] px-1.5 py-1 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-700 dark:text-gray-300 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
+                              />
+                            </td>
+                            <td className="p-1.5 align-top">
                               <input
                                 type="email"
                                 value={v.email || ''}
                                 onChange={(e) => handleUpdateVendorField(v.id, 'email', e.target.value)}
                                 placeholder="email@domain.com"
-                                className="w-full font-mono text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-indigo-600 dark:text-indigo-400 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
+                                className="w-full font-mono text-[10px] font-semibold px-1.5 py-1 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-indigo-600 dark:text-indigo-400 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
                               />
-                              <div className="flex items-center gap-1">
-                                <input
-                                  type="text"
-                                  value={v.contactPerson || ''}
-                                  onChange={(e) => handleUpdateVendorField(v.id, 'contactPerson', e.target.value)}
-                                  placeholder="Contact Name"
-                                  className="w-1/2 text-[10px] px-1.5 py-0.5 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-600 dark:text-gray-300 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
-                                />
-                                <input
-                                  type="text"
-                                  value={v.phone || ''}
-                                  onChange={(e) => handleUpdateVendorField(v.id, 'phone', e.target.value)}
-                                  placeholder="+91 Phone"
-                                  className="w-1/2 text-[10px] px-1.5 py-0.5 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-500 dark:text-gray-400 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
-                                />
-                              </div>
                             </td>
-                            <td className="p-1.5 align-top space-y-1">
+                            <td className="p-1.5 align-top">
+                              <input
+                                type="text"
+                                value={v.phone || ''}
+                                onChange={(e) => handleUpdateVendorField(v.id, 'phone', e.target.value)}
+                                placeholder="+91 Phone"
+                                className="w-full text-[10px] px-1.5 py-1 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-500 dark:text-gray-400 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
+                              />
+                            </td>
+                            <td className="p-1.5 align-top">
                               <input
                                 type="text"
                                 value={v.gstNumber || ''}
                                 onChange={(e) => handleUpdateVendorField(v.id, 'gstNumber', e.target.value.toUpperCase())}
                                 placeholder="GSTIN"
-                                className="w-full font-mono text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-700 dark:text-gray-200 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
+                                className="w-full font-mono text-[10px] font-bold px-1.5 py-1 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-700 dark:text-gray-200 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
                               />
+                            </td>
+                            <td className="p-1.5 align-top">
                               <input
                                 type="text"
                                 value={v.address || ''}
                                 onChange={(e) => handleUpdateVendorField(v.id, 'address', e.target.value)}
                                 placeholder="City, State / Address"
-                                className="w-full text-[10px] px-1.5 py-0.5 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-500 dark:text-gray-400 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
+                                className="w-full text-[10px] px-1.5 py-1 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-500 dark:text-gray-400 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
                               />
                             </td>
                             <td className="p-1.5 align-top">
@@ -1440,31 +1451,31 @@ export default function InitialSetupModal() {
                     </table>
                   </div>
                 ) : (
-                  /* DEFAULT READ-ONLY TABLE */
-                  <div className="border border-slate-200 dark:border-gray-800 rounded-xl overflow-hidden max-h-96 overflow-y-auto text-xs bg-white dark:bg-gray-900/60 shadow-xs">
-                    <table className="w-full text-left">
+                  /* DEFAULT READ-ONLY TABLE WITH ALL DISTINCT COLUMNS */
+                  <div className="border border-slate-200 dark:border-gray-800 rounded-xl overflow-hidden max-h-96 overflow-y-auto overflow-x-auto text-xs bg-white dark:bg-gray-900/60 shadow-xs">
+                    <table className="w-full text-left border-collapse min-w-[960px]">
                       <thead className="bg-slate-100 dark:bg-gray-800 text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 sticky top-0 z-10">
                         <tr>
-                          <th className="p-2.5">Code</th>
+                          <th className="p-2.5">Vendor Code</th>
                           <th className="p-2.5">Company Name</th>
-                          <th className="p-2.5">Email &amp; Phone</th>
-                          <th className="p-2.5">GSTIN / Address</th>
+                          <th className="p-2.5">Contact Person</th>
+                          <th className="p-2.5">Email Address</th>
+                          <th className="p-2.5">Phone Number</th>
+                          <th className="p-2.5">GSTIN</th>
+                          <th className="p-2.5">Address / Location</th>
                           <th className="p-2.5">Rating (0-100)</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
-                        {storedVendors.slice(0, 100).map((v) => (
+                        {storedVendors.slice(0, vendorPreviewLimit).map((v) => (
                           <tr key={v.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/40">
                             <td className="p-2.5 font-mono text-[10px] text-slate-500">{v.vendorCode || 'VND-AUTO'}</td>
                             <td className="p-2.5 font-bold text-slate-800 dark:text-white">{v.companyName || '—'}</td>
-                            <td className="p-2.5">
-                              <span className="font-mono text-indigo-600 dark:text-indigo-400 font-semibold block">{v.email || '—'}</span>
-                              <span className="text-slate-400 text-[10px]">{v.phone || ''}</span>
-                            </td>
-                            <td className="p-2.5">
-                              <span className="mono text-[10px] text-slate-600 dark:text-gray-300 font-bold block">{v.gstNumber || '—'}</span>
-                              <span className="text-slate-400 text-[10px] truncate max-w-[140px] block">{v.address || ''}</span>
-                            </td>
+                            <td className="p-2.5 text-slate-700 dark:text-gray-300 font-medium">{v.contactPerson || '—'}</td>
+                            <td className="p-2.5 font-mono text-indigo-600 dark:text-indigo-400 font-semibold">{v.email || '—'}</td>
+                            <td className="p-2.5 text-slate-600 dark:text-gray-400 font-mono text-[11px]">{v.phone || '—'}</td>
+                            <td className="p-2.5 font-mono text-[10px] text-slate-700 dark:text-gray-200 font-bold">{v.gstNumber || '—'}</td>
+                            <td className="p-2.5 text-slate-600 dark:text-gray-400 text-[11px] truncate max-w-[200px]">{v.address || '—'}</td>
                             <td className="p-2.5 font-bold">
                               {v.vendorRatingScore !== undefined && v.vendorRatingScore !== null ? (
                                 <span className="text-amber-600 dark:text-amber-400 flex items-center gap-0.5">
@@ -1478,11 +1489,44 @@ export default function InitialSetupModal() {
                         ))}
                       </tbody>
                     </table>
-                    {storedVendors.length > 100 && (
-                      <div className="p-2 bg-slate-50 dark:bg-gray-800/60 border-t border-slate-200 dark:border-gray-800 text-[11px] text-center text-slate-500 dark:text-gray-400 font-medium">
-                        Showing preview of first 100 of {storedVendors.length.toLocaleString('en-IN')} suppliers. All {storedVendors.length.toLocaleString('en-IN')} suppliers are loaded and stored.
-                      </div>
-                    )}
+                  </div>
+                )}
+
+                {/* Vendor Master Pagination / Show More Bar */}
+                {storedVendors.length > 50 && (
+                  <div className="flex items-center justify-between p-2.5 bg-slate-50 dark:bg-gray-800/60 rounded-xl border border-slate-200 dark:border-gray-800 text-xs flex-wrap gap-2">
+                    <span className="text-[11px] text-slate-600 dark:text-gray-300 font-medium">
+                      Showing <strong>1 – {Math.min(vendorPreviewLimit, storedVendors.length).toLocaleString('en-IN')}</strong> of <strong>{storedVendors.length.toLocaleString('en-IN')}</strong> suppliers
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {vendorPreviewLimit < storedVendors.length && (
+                        <button
+                          type="button"
+                          onClick={() => setVendorPreviewLimit((prev) => Math.min(prev + 50, storedVendors.length))}
+                          className="btn btn-secondary btn-xs font-bold text-[11px] flex items-center gap-1 hover:border-indigo-400"
+                        >
+                          <ChevronDown size={12} /> Show More (+50)
+                        </button>
+                      )}
+                      {vendorPreviewLimit < Math.min(500, storedVendors.length) && (
+                        <button
+                          type="button"
+                          onClick={() => setVendorPreviewLimit(Math.min(500, storedVendors.length))}
+                          className="btn btn-secondary btn-xs font-bold text-[11px] text-indigo-600 dark:text-indigo-400 hover:border-indigo-400"
+                        >
+                          Show All (up to 500)
+                        </button>
+                      )}
+                      {vendorPreviewLimit > 50 && (
+                        <button
+                          type="button"
+                          onClick={() => setVendorPreviewLimit(50)}
+                          className="text-[11px] text-slate-400 hover:text-slate-600 underline font-medium px-1"
+                        >
+                          Collapse to 50
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -1653,40 +1697,80 @@ export default function InitialSetupModal() {
                 </span>
               </div>
 
-              <div className="border border-slate-200 dark:border-gray-800 rounded-xl overflow-hidden max-h-48 overflow-y-auto text-xs">
-                <table className="w-full text-left">
-                  <thead className="bg-slate-100 dark:bg-gray-800 text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 sticky top-0">
+              <div className="border border-slate-200 dark:border-gray-800 rounded-xl overflow-hidden max-h-56 overflow-y-auto overflow-x-auto text-xs bg-white dark:bg-gray-900/60 shadow-xs">
+                <table className="w-full text-left border-collapse min-w-[1000px]">
+                  <thead className="bg-slate-100 dark:bg-gray-800 text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 sticky top-0 z-10">
                     <tr>
                       <th className="p-2.5">PO Number</th>
-                      <th className="p-2.5">Vendor</th>
-                      <th className="p-2.5">Purchased Item &amp; Specs</th>
-                      <th className="p-2.5">Qty / Unit</th>
+                      <th className="p-2.5">PO Date</th>
+                      <th className="p-2.5">Vendor / Supplier</th>
+                      <th className="p-2.5">Line Item Description</th>
+                      <th className="p-2.5">Specifications</th>
+                      <th className="p-2.5">Quantity</th>
+                      <th className="p-2.5">Unit</th>
+                      <th className="p-2.5">Unit Price</th>
                       <th className="p-2.5">Total Spend</th>
+                      <th className="p-2.5">Department</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-gray-800 bg-white dark:bg-gray-900/60">
-                    {poLineItems.slice(0, 100).map((p) => (
+                    {poLineItems.slice(0, poPreviewLimit).map((p) => (
                       <tr key={p.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/40">
                         <td className="p-2.5 font-mono text-[10px] text-slate-500">{p.poNumber}</td>
+                        <td className="p-2.5 font-mono text-[10px] text-slate-600 dark:text-gray-300">{p.poDate || '—'}</td>
                         <td className="p-2.5 font-bold text-slate-800 dark:text-white">{p.vendorIdentifier}</td>
-                        <td className="p-2.5">
-                          <span className="font-semibold text-slate-800 dark:text-gray-200 block">{p.itemName}</span>
-                          <span className="text-slate-400 text-[10px]">{p.specs}</span>
-                        </td>
-                        <td className="p-2.5 text-slate-600 dark:text-gray-400">{p.quantity} {p.unit}</td>
+                        <td className="p-2.5 font-semibold text-slate-800 dark:text-gray-200">{p.itemName}</td>
+                        <td className="p-2.5 text-slate-400 text-[10px] max-w-[160px] truncate">{p.specs || '—'}</td>
+                        <td className="p-2.5 text-slate-600 dark:text-gray-300 font-bold">{p.quantity.toLocaleString('en-IN')}</td>
+                        <td className="p-2.5 text-slate-500 dark:text-gray-400 text-[10px]">{p.unit}</td>
+                        <td className="p-2.5 font-mono text-slate-600 dark:text-gray-300">{p.unitPrice ? formatCurrency(p.unitPrice) : '—'}</td>
                         <td className="p-2.5 font-mono font-bold text-indigo-700 dark:text-indigo-300">
                           {formatCurrency(p.totalSpend)}
                         </td>
+                        <td className="p-2.5 text-slate-500 dark:text-gray-400 text-[10px]">{p.department || 'General'}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                {poLineItems.length > 100 && (
-                  <div className="p-2 bg-slate-50 dark:bg-gray-800/60 border-t border-slate-200 dark:border-gray-800 text-[11px] text-center text-slate-500 dark:text-gray-400 font-medium">
-                    Showing preview of first 100 of {poLineItems.length.toLocaleString('en-IN')} PO records. All {poLineItems.length.toLocaleString('en-IN')} records are loaded.
-                  </div>
-                )}
               </div>
+
+              {/* PO Dump Pagination / Show More Bar */}
+              {poLineItems.length > 50 && (
+                <div className="flex items-center justify-between p-2.5 bg-slate-50 dark:bg-gray-800/60 rounded-xl border border-slate-200 dark:border-gray-800 text-xs flex-wrap gap-2">
+                  <span className="text-[11px] text-slate-600 dark:text-gray-300 font-medium">
+                    Showing <strong>1 – {Math.min(poPreviewLimit, poLineItems.length).toLocaleString('en-IN')}</strong> of <strong>{poLineItems.length.toLocaleString('en-IN')}</strong> PO line items
+                  </span>
+                  <div className="flex items-center gap-2">
+                    {poPreviewLimit < poLineItems.length && (
+                      <button
+                        type="button"
+                        onClick={() => setPoPreviewLimit((prev) => Math.min(prev + 50, poLineItems.length))}
+                        className="btn btn-secondary btn-xs font-bold text-[11px] flex items-center gap-1 hover:border-purple-400"
+                      >
+                        <ChevronDown size={12} /> Show More (+50)
+                      </button>
+                    )}
+                    {poPreviewLimit < Math.min(500, poLineItems.length) && (
+                      <button
+                        type="button"
+                        onClick={() => setPoPreviewLimit(Math.min(500, poLineItems.length))}
+                        className="btn btn-secondary btn-xs font-bold text-[11px] text-purple-600 dark:text-purple-400 hover:border-purple-400"
+                      >
+                        Show All (up to 500)
+                      </button>
+                    )}
+                    {poPreviewLimit > 50 && (
+                      <button
+                        type="button"
+                        onClick={() => setPoPreviewLimit(50)}
+                        className="text-[11px] text-slate-400 hover:text-slate-600 underline font-medium px-1"
+                      >
+                        Collapse to 50
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-gray-800">
