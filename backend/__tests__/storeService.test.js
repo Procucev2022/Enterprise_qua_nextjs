@@ -2,6 +2,7 @@ const storeService = require('../src/services/storeService');
 const domainPool = require('../src/db/pool');
 const domainQueries = require('../src/db/domainQueries');
 const mailerService = require('../src/services/mailerService');
+const identityQueries = require('../src/db/identityQueries');
 
 describe('Store Service & Business Operations', () => {
   test('initializes with no records at all', async () => {
@@ -101,6 +102,86 @@ describe('Store Service & Business Operations', () => {
 
       const nullRevise = storeService.reviseVendorRating('nonexistent', { qualityScore: 90, costScore: 90, deliveryScore: 90 });
       expect(nullRevise).toBeNull();
+    });
+
+    test('addVendor with an email sends a real onboarding invite (buyer manual "Add Vendor")', async () => {
+      const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({});
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
+
+      try {
+        const v = storeService.addVendor(
+          { name: 'Invited By Buyer Co', contactPerson: 'Priya', email: 'invited-by-buyer@example.com', majorCategory: 'Fasteners' },
+          'buyer@example.com'
+        );
+
+        // Starts pending, not a fabricated "sent" — the actual send hasn't
+        // resolved yet at this point (it's fire-and-forget).
+        expect(v.onboardingEmailStatus).toBe('pending');
+
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(identitySpy).toHaveBeenCalledWith(expect.objectContaining({
+          email: 'invited-by-buyer@example.com',
+          fullName: 'Priya',
+          organizationName: 'Invited By Buyer Co',
+          createdBy: 'buyer@example.com',
+        }));
+        expect(sendSpy).toHaveBeenCalled();
+        expect(storeService.getVendorById(v.id).onboardingEmailStatus).toBe('sent');
+      } finally {
+        identitySpy.mockRestore();
+        sendSpy.mockRestore();
+      }
+    });
+
+    test('addVendor marks the invite failed (not silently pending) when the onboarding email fails to send', async () => {
+      const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({});
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: false, reason: 'SMTP down' });
+
+      try {
+        const v = storeService.addVendor({ name: 'Failed Send Co', email: 'failed-send@example.com', majorCategory: 'Fasteners' });
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(storeService.getVendorById(v.id).onboardingEmailStatus).toBe('failed');
+      } finally {
+        identitySpy.mockRestore();
+        sendSpy.mockRestore();
+      }
+    });
+
+    test('addVendor never sends the onboarding email if the identity account could not be created after retrying (no broken credentials mailed out)', async () => {
+      const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockRejectedValue(new Error('ETIMEDOUT'));
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
+
+      try {
+        const v = storeService.addVendor({ name: 'Identity Down Co', email: 'identity-down@example.com', majorCategory: 'Fasteners' });
+        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(identitySpy).toHaveBeenCalledTimes(2); // one retry
+        expect(sendSpy).not.toHaveBeenCalled();
+        expect(storeService.getVendorById(v.id).onboardingEmailStatus).toBe('failed');
+      } finally {
+        identitySpy.mockRestore();
+        sendSpy.mockRestore();
+      }
+    });
+
+    test('addVendor with no email never attempts an onboarding invite', async () => {
+      const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({});
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
+
+      try {
+        const v = storeService.addVendor({ name: 'No Email Co', majorCategory: 'Fasteners' });
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(v.onboardingEmailStatus).toBe('sent');
+        expect(identitySpy).not.toHaveBeenCalled();
+        expect(sendSpy).not.toHaveBeenCalled();
+      } finally {
+        identitySpy.mockRestore();
+        sendSpy.mockRestore();
+      }
     });
 
     test('deleteVendor removes vendor', () => {
