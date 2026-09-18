@@ -612,14 +612,15 @@ async function getJobStatus(sessionUser, sessionId, jobId = null, jobType = null
     return queries.findIngestionJob(jobId, organizationId);
   }
 
+  const activeJobs = await queries.findActiveIngestionJobs(sessionId, organizationId);
   if (jobType) {
-    return queries.findLatestIngestionJob(sessionId, organizationId, jobType);
+    const matching = activeJobs.find((j) => j.jobType === jobType);
+    return matching || null;
   }
 
-  const activeJobs = await queries.findActiveIngestionJobs(sessionId, organizationId);
   if (activeJobs.length > 0) return activeJobs[0];
 
-  return queries.findLatestIngestionJob(sessionId, organizationId);
+  return null;
 }
 
 module.exports = {

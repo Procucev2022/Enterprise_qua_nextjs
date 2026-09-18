@@ -503,11 +503,12 @@ describe('largeFileIngestionService unit tests', () => {
       await new Promise((resolve) => setTimeout(resolve, 60));
     });
 
-    it('retrieves job status by jobId, jobType, active jobs, or fallback', async () => {
+    it('retrieves job status by jobId, jobType, active jobs, or returns null', async () => {
       const mockFindJob = jest.spyOn(queries, 'findIngestionJob').mockResolvedValue({ id: 'by-id' });
-      const mockFindLatest = jest.spyOn(queries, 'findLatestIngestionJob').mockResolvedValue({ id: 'by-type' });
-      const mockFindActive = jest.spyOn(queries, 'findActiveIngestionJobs').mockResolvedValueOnce([{ id: 'active-1' }])
-        .mockResolvedValueOnce([]); // Empty active jobs to trigger fallback
+      jest.spyOn(queries, 'findActiveIngestionJobs')
+        .mockResolvedValueOnce([{ id: 'active-vm', jobType: 'VENDOR_MASTER' }])
+        .mockResolvedValueOnce([{ id: 'active-1', jobType: 'PO_DUMP' }])
+        .mockResolvedValueOnce([]); // Empty active jobs
 
       // By jobId
       const job1 = await largeFileIngestionService.getJobStatus({ organizationId: 'org-1' }, 'sess-1', 'job-123');
@@ -515,15 +516,15 @@ describe('largeFileIngestionService unit tests', () => {
 
       // By jobType
       const job2 = await largeFileIngestionService.getJobStatus({ organizationId: 'org-1' }, 'sess-1', null, 'VENDOR_MASTER');
-      expect(job2.id).toBe('by-type');
+      expect(job2.id).toBe('active-vm');
 
       // Active jobs list
       const job3 = await largeFileIngestionService.getJobStatus({ organizationId: 'org-1' }, 'sess-1');
       expect(job3.id).toBe('active-1');
 
-      // Fallback when no active jobs
+      // Returns null when no active jobs
       const job4 = await largeFileIngestionService.getJobStatus({ organizationId: 'org-1' }, 'sess-1');
-      expect(job4.id).toBe('by-type');
+      expect(job4).toBeNull();
 
       // Unauthenticated / unresolvable returns null
       jest.spyOn(queries, 'findSessionById').mockResolvedValueOnce(null);
