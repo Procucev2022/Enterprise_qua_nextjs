@@ -410,6 +410,19 @@ async function getJobById(req, res, next) {
   }
 }
 
+async function cancelIngestionJob(req, res, next) {
+  try {
+    const success = await largeFileIngestionService.cancelJob(
+      req.user,
+      req.params.sessionId,
+      req.body?.jobId || null
+    );
+    return res.json({ success: true, data: { cancelled: success } });
+  } catch (err) {
+    return respondWithError(err, res, next, 'Failed to cancel ingestion job');
+  }
+}
+
 module.exports = {
   respondWithError,
   createSession,
@@ -434,6 +447,7 @@ module.exports = {
   getApprovedMappings,
   streamUploadFile,
   startIngestionJob,
+  cancelIngestionJob,
   getActiveJobStatus,
   getJobById,
 };

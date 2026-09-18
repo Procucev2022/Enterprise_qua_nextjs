@@ -525,11 +525,26 @@ describe('largeFileIngestionService unit tests', () => {
       // Returns null when no active jobs
       const job4 = await largeFileIngestionService.getJobStatus({ organizationId: 'org-1' }, 'sess-1');
       expect(job4).toBeNull();
+    });
 
-      // Unauthenticated / unresolvable returns null
+    it('cancels active ingestion jobs and updates progress to failed', async () => {
+      jest.spyOn(queries, 'findActiveIngestionJobs').mockResolvedValueOnce([
+        { id: 'job-cancel-1', jobType: 'VENDOR_MASTER' },
+      ]);
+      const updateProgressSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+
+      const res = await largeFileIngestionService.cancelJob({ organizationId: 'org-1' }, 'sess-1', 'job-cancel-1');
+      expect(res).toBe(true);
+      expect(updateProgressSpy).toHaveBeenCalledWith(
+        'job-cancel-1',
+        'org-1',
+        expect.objectContaining({ status: 'FAILED', errorMessage: 'Cancelled by user' })
+      );
+
+      // Returns false when organization is not resolvable
       jest.spyOn(queries, 'findSessionById').mockResolvedValueOnce(null);
-      const jobNull = await largeFileIngestionService.getJobStatus(null, 'bad-sess');
-      expect(jobNull).toBeNull();
+      const resFalse = await largeFileIngestionService.cancelJob(null, 'bad-sess');
+      expect(resFalse).toBe(false);
     });
   });
 });

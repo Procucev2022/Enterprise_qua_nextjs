@@ -252,9 +252,29 @@ export default function InitialSetupModal() {
     };
   };
 
-  // Re-establish session and resume any active background ingestion jobs on mount
+  const handleCloseModal = async () => {
+    if (sessionId && (vendorJob?.status === 'PROCESSING' || poJob?.status === 'PROCESSING')) {
+      try {
+        await fetch(`/api/vendor-ingestion/${sessionId}/jobs/cancel`, {
+          method: 'POST',
+          headers: authFetchHeaders(),
+        });
+      } catch (e) {
+        console.warn('Error cancelling job on close:', e);
+      }
+    }
+    setVendorJob(null);
+    setPoJob(null);
+    setInitialSetupModalOpen(false);
+  };
+
+  // Re-establish session on mount
   React.useEffect(() => {
-    if (!initialSetupModalOpen) return;
+    if (!initialSetupModalOpen) {
+      setVendorJob(null);
+      setPoJob(null);
+      return;
+    }
 
     const initSession = async () => {
       try {
@@ -271,22 +291,6 @@ export default function InitialSetupModal() {
             if (sess.poFileName && sess.poRowCount > 0) {
               setPoFileName(sess.poFileName);
               setPoDataUploaded(true);
-            }
-
-            // Check active jobs
-            const jobsRes = await fetch(`/api/vendor-ingestion/${sess.id}/jobs/active`, { headers: authFetchHeaders() });
-            if (jobsRes.ok) {
-              const jobsJson = await jobsRes.json();
-              if (jobsJson?.data?.job) {
-                const j = jobsJson.data.job;
-                if (j.jobType === 'VENDOR_MASTER') {
-                  setVendorJob(j);
-                  if (j.status === 'COMPLETED') setVendorMasterUploaded(true);
-                } else if (j.jobType === 'PO_DUMP') {
-                  setPoJob(j);
-                  if (j.status === 'COMPLETED') setPoDataUploaded(true);
-                }
-              }
             }
           }
         }
@@ -1026,7 +1030,7 @@ export default function InitialSetupModal() {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setInitialSetupModalOpen(false)}
+              onClick={handleCloseModal}
               className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-gray-800 transition-colors"
               title="Dismiss setup (you can resume from the blinking corner badge)"
             >

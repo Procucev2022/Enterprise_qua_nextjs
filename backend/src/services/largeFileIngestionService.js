@@ -19,6 +19,7 @@ const {
 
 const LOG_CATEGORY = 'LARGE_FILE_INGESTION';
 const DEFAULT_BATCH_SIZE = 500;
+const activeCancellations = new Set();
 
 /** Resolve organization ID from session user or session database record */
 async function resolveOrganizationId(sessionUser, sessionId = null) {
@@ -330,6 +331,16 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, filePath
           continue;
         }
 
+        if (activeCancellations.has(jobId) || activeCancellations.has(sessionId)) {
+          logger.info(`Ingestion job ${jobId} cancelled by user`, {}, LOG_CATEGORY);
+          await queries.updateIngestionJobProgress(jobId, organizationId, {
+            status: 'FAILED',
+            errorMessage: 'Cancelled by user',
+            completedAt: new Date().toISOString(),
+          });
+          return;
+        }
+
         const values = parseCsvLine(line, delimiter);
         const record = mapRowValues(values, headerMap, jobType, processedRecords);
         currentBatch.push(record);
@@ -365,6 +376,15 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, filePath
 
       // Process remainder batch
       if (currentBatch.length > 0) {
+        if (activeCancellations.has(jobId) || activeCancellations.has(sessionId)) {
+          await queries.updateIngestionJobProgress(jobId, organizationId, {
+            status: 'FAILED',
+            errorMessage: 'Cancelled by user',
+            completedAt: new Date().toISOString(),
+          });
+          return;
+        }
+
         let result;
         if (jobType === 'VENDOR_MASTER') {
           result = await processVendorMasterBatch(sessionId, organizationId, currentBatch);
@@ -459,6 +479,16 @@ async function processArrayJob({ jobId, sessionId, organizationId, rows, fileNam
     let failedRecords = 0;
     const recentErrors = [];
     for (let i = 0; i < rows.length; i += batchSize) {
+      if (activeCancellations.has(jobId) || activeCancellations.has(sessionId)) {
+        logger.info(`Array ingestion job ${jobId} cancelled by user`, {}, LOG_CATEGORY);
+        await queries.updateIngestionJobProgress(jobId, organizationId, {
+          status: 'FAILED',
+          errorMessage: 'Cancelled by user',
+          completedAt: new Date().toISOString(),
+        });
+        return;
+      }
+
       const chunk = rows.slice(i, i + batchSize);
       let result;
       if (jobType === 'VENDOR_MASTER') {
@@ -536,6 +566,9 @@ async function startIngestionJob({ sessionUser, sessionId, filePath, rows, fileN
     throw new Error('Organization not linked to user');
   }
 
+  // Clear any past cancellation markers for this session
+  activeCancellations.delete(sessionId);
+
   const total = rows ? rows.length : totalHint;
 
   // Create job in database
@@ -602,6 +635,30 @@ async function startIngestionJob({ sessionUser, sessionId, filePath, rows, fileN
 }
 
 /**
+ * Cancel an active background ingestion job
+ */
+async function cancelJob(sessionUser, sessionId, jobId = null) {
+  const organizationId = await resolveOrganizationId(sessionUser, sessionId);
+  if (!organizationId) return false;
+
+  activeCancellations.add(sessionId);
+  if (jobId) activeCancellations.add(jobId);
+
+  const activeJobs = await queries.findActiveIngestionJobs(sessionId, organizationId);
+  for (const j of activeJobs) {
+    if (!jobId || j.id === jobId) {
+      activeCancellations.add(j.id);
+      await queries.updateIngestionJobProgress(j.id, organizationId, {
+        status: 'FAILED',
+        errorMessage: 'Cancelled by user',
+        completedAt: new Date().toISOString(),
+      });
+    }
+  }
+  return true;
+}
+
+/**
  * Get the status of an ingestion job or active jobs for a session
  */
 async function getJobStatus(sessionUser, sessionId, jobId = null, jobType = null) {
@@ -626,6 +683,7 @@ async function getJobStatus(sessionUser, sessionId, jobId = null, jobType = null
 module.exports = {
   resolveOrganizationId,
   startIngestionJob,
+  cancelJob,
   getJobStatus,
   streamProcessCsvFile,
   processArrayJob,
@@ -634,4 +692,5 @@ module.exports = {
   parseCsvLine,
   extractHeaderIndices,
   mapRowValues,
+  activeCancellations,
 };
