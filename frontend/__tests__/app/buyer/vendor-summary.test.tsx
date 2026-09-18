@@ -565,6 +565,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/Company Name/i), { target: { value: '   ' } });
       fireEvent.change(screen.getByLabelText(/Contact Person/i), { target: { value: '   ' } });
       fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'a@b.com' } });
+      fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '   ' } });
       fireEvent.click(screen.getByTestId('submit-add-vendor'));
       expect(mockShowToast).toHaveBeenCalledWith('Validation Error', expect.any(String), 'warning');
       expect(mockAddBuyerVendor).not.toHaveBeenCalled();
@@ -625,6 +626,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/Company Name/i), { target: { value: 'Rejected Vendor Co' } });
       fireEvent.change(screen.getByLabelText(/Contact Person/i), { target: { value: 'Someone' } });
       fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'rejected@vendor.test' } });
+      fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '9876543210' } });
       fireEvent.click(screen.getByTestId('submit-add-vendor'));
 
       await waitFor(() => expect(mockAddBuyerVendor).toHaveBeenCalled());

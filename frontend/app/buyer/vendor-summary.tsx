@@ -232,7 +232,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   // clears the form once the backend actually confirms the write.
   const handleAddVendorSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formName.trim() || !formMajorCategory || !formEmail.trim() || !formContactPerson.trim()) {
+    if (!formName.trim() || !formMajorCategory || !formEmail.trim() || !formContactPerson.trim() || !formPhone.trim()) {
       showToast('Validation Error', 'Please complete all required fields.', 'warning');
       return;
     }
@@ -327,7 +327,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const handleEditVendorSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedVendorForCrud) return;
-    if (!formName.trim() || !formMajorCategory || !formEmail.trim() || !formContactPerson.trim()) {
+    if (!formName.trim() || !formMajorCategory || !formEmail.trim() || !formContactPerson.trim() || !formPhone.trim()) {
       showToast('Validation Error', 'Please complete all required fields.', 'warning');
       return;
     }
@@ -1366,12 +1366,16 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   />
                 </div>
                 <div>
-                  <label htmlFor="add-vendor-phone" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">Phone</label>
+                  <label htmlFor="add-vendor-phone" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    Phone <span className="text-rose-500">*</span>
+                  </label>
                   <input
                     id="add-vendor-phone"
                     type="tel"
+                    required
                     value={formPhone}
                     onChange={(e) => setFormPhone(e.target.value)}
+                    placeholder="e.g. +91 98765 43210"
                     className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
                   />
                 </div>
