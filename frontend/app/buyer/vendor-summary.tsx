@@ -1362,7 +1362,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     required
                     value={formContactPerson}
                     onChange={(e) => setFormContactPerson(e.target.value)}
-                    placeholder="Enter Your Name"
                     className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
                   />
                 </div>
@@ -1376,7 +1375,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     required
                     value={formPhone}
                     onChange={(e) => setFormPhone(e.target.value)}
-                    placeholder="Enter  Number"
                     className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
                   />
                 </div>
