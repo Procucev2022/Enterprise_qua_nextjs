@@ -1354,7 +1354,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label htmlFor="add-vendor-contact" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                    Contact Person <span className="text-rose-500">*</span>
+                    Contact Person Name <span className="text-rose-500">*</span>
                   </label>
                   <input
                     id="add-vendor-contact"
@@ -1362,6 +1362,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     required
                     value={formContactPerson}
                     onChange={(e) => setFormContactPerson(e.target.value)}
+                    placeholder="Enter Your Name"
                     className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
                   />
                 </div>
@@ -1375,7 +1376,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     required
                     value={formPhone}
                     onChange={(e) => setFormPhone(e.target.value)}
-                    placeholder="e.g. +91 98765 43210"
+                    placeholder="Enter  Number"
                     className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
                   />
                 </div>

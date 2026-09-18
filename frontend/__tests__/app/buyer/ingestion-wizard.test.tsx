@@ -995,7 +995,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
     // Debounced (350ms) — generous timeout so coverage instrumentation
     // overhead in a full suite run can't flake this on timing alone.
     await waitFor(() => expect(screen.queryByText('Apex Supplies Ltd.')).not.toBeInTheDocument(), { timeout: 3000 });
-    expect(screen.getByText('Kiran Valves & Actuators')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Kiran Valves & Actuators')).toBeInTheDocument(), { timeout: 3000 });
   });
 
   it('Mode 2: selecting "All Categories" browses the whole real vendor directory instead of category-matching', async () => {
