@@ -14,7 +14,10 @@ const { logger } = require('../services/loggerService');
 async function resolveRecipient(req) {
   if (!req.user) return null;
   if (req.user.role === 'vendor') {
-    const vendor = storeService.getVendorById(req.user.email);
+    // 'all': resolving the caller's own vendor identity by session email, not
+    // filtering a buyer-scoped list — omitting this silently returns nothing
+    // for any buyer-uploaded vendor (one with a buyerId set).
+    const vendor = storeService.getVendorById(req.user.email, 'all');
     return vendor ? { type: 'vendor', id: vendor.id } : null;
   }
   if (req.user.role === 'buyer') {

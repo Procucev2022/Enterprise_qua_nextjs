@@ -60,7 +60,12 @@ async function resolveRfqReadScope(req) {
     return { role, restricted: true, buyerAccountId: account ? account.id : null };
   }
   if (role === 'vendor') {
-    const vendor = storeService.getVendorById(req.user.email);
+    // 'all': resolving the caller's own vendor identity by session email, not
+    // filtering a buyer-scoped list — getVendorById otherwise refuses to
+    // resolve any vendor that has a buyerId set (i.e. every buyer-uploaded
+    // vendor), which silently made every RFQ invisible to them regardless of
+    // addedByBuyerCompany matching or being invited.
+    const vendor = storeService.getVendorById(req.user.email, 'all');
     return { role, restricted: true, vendor: vendor || null };
   }
   return { role, restricted: false };
@@ -716,7 +721,9 @@ async function addQuote(req, res, next) {
     if (req.user.role !== 'vendor') {
       return res.status(403).json({ success: false, error: 'Only a vendor can submit a quote.' });
     }
-    const vendorRecord = storeService.getVendorById(req.user.email);
+    // 'all': resolving the caller's own vendor identity, not a buyer-scoped
+    // list — see resolveRfqReadScope above for why the scope arg matters.
+    const vendorRecord = storeService.getVendorById(req.user.email, 'all');
     if (!vendorRecord) {
       return res.status(400).json({ success: false, error: 'Create your vendor profile before submitting a quote.' });
     }
@@ -781,7 +788,7 @@ async function generateEmailPreview(req, res, next) {
     // losing the counters. To restore enforcement, reintroduce the
     // quota/used check that used to 403 here (see git history on this file).
     if (req.user && req.user.role === 'vendor') {
-      const requestingVendor = storeService.getVendorById(req.user.email);
+      const requestingVendor = storeService.getVendorById(req.user.email, 'all');
       if (requestingVendor) {
         const isDirect =
           !!requestingVendor.addedByBuyerCompany && requestingVendor.addedByBuyerCompany === rfq.buyerAccountName;

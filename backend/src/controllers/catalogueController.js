@@ -5,7 +5,10 @@ const { logger } = require('../services/loggerService');
 // Returns null for a non-vendor role or a vendor with no profile record yet.
 function resolveOwnVendorId(req) {
   if (!req.user || req.user.role !== 'vendor') return null;
-  const vendor = storeService.getVendorById(req.user.email);
+  // 'all': resolving the caller's own vendor identity by session email, not
+  // filtering a buyer-scoped list — omitting this silently returns nothing
+  // for any buyer-uploaded vendor (one with a buyerId set).
+  const vendor = storeService.getVendorById(req.user.email, 'all');
   return vendor ? vendor.id : null;
 }
 

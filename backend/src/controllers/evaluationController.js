@@ -38,7 +38,10 @@ function createEvaluation(req, res, next) {
     // session, if they have no profile yet — mirrors the frontend's own
     // fallback chain) rather than trusted from the body, so a vendor can
     // never submit an evaluation attributed to a different vendor.
-    const vendorRecord = storeService.getVendorById(req.user.email);
+    // 'all': resolving the caller's own vendor identity by session email, not
+    // filtering a buyer-scoped list — omitting this silently returns nothing
+    // for any buyer-uploaded vendor (one with a buyerId set).
+    const vendorRecord = storeService.getVendorById(req.user.email, 'all');
     const identity = {
       vendorId: vendorRecord ? vendorRecord.id : undefined,
       vendorName: vendorRecord ? vendorRecord.name : (req.user.orgName || req.user.name || 'Vendor'),
