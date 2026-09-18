@@ -35,6 +35,7 @@ import type {
   RFQExtractionResult,
   RFQVendorCandidate,
   SourcingMode,
+  VendorEntry,
   VendorPageMeta,
 } from '@/lib/types';
 import {
@@ -422,25 +423,35 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
         attachments: [...form.attachments, ...storedAttachments],
       };
 
-      // In Mode 1 (Private Roster), assign strictly the vendors uploaded by this buyer
-      let mode1AssignedVendors: Array<{
+      type AssignedVendorEntry = {
         id?: string;
         name: string;
         email?: string | null;
         contactPerson?: string | null;
         phone?: string | null;
-      }> | undefined = undefined;
+      };
+      const toAssignedVendorEntry = (v: VendorEntry): AssignedVendorEntry => ({
+        id: v.id,
+        name: v.name || 'Enterprise Vendor',
+        email: v.email || null,
+        contactPerson: v.contactPerson || v.name || null,
+        phone: v.phone || null,
+      });
 
-      if (form.sourcingMode === 'mode_1' && Array.isArray(buyerVendors)) {
+      // A vendor only ever sees an RFQ if it's their own private-roster match
+      // (addedByBuyerCompany) or they're explicitly on assignedVendors —
+      // category match alone no longer grants visibility (CM invite-gating,
+      // see storeService.vendorCoversRFQ). Mode 2 previously left
+      // assignedVendors empty, so the buyer's private roster only got in via
+      // the addedByBuyerCompany fallback and nothing else was ever invited.
+      // Explicitly scoped to buyer-uploaded vendors only, same as Mode 1 —
+      // no marketplace/category-matched vendors here by design.
+      let mode1AssignedVendors: AssignedVendorEntry[] | undefined = undefined;
+
+      if ((form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2') && Array.isArray(buyerVendors)) {
         const myUploadedVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
         if (myUploadedVendors.length > 0) {
-          mode1AssignedVendors = myUploadedVendors.map((v) => ({
-            id: v.id,
-            name: v.name || 'Enterprise Vendor',
-            email: v.email || null,
-            contactPerson: v.contactPerson || v.name || null,
-            phone: v.phone || null,
-          }));
+          mode1AssignedVendors = myUploadedVendors.map(toAssignedVendorEntry);
         }
       }
 

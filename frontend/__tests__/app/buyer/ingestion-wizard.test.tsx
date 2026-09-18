@@ -860,11 +860,15 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
     ]);
   });
 
-  it('does not attach assignedVendors when the selected mode is not Mode 1', async () => {
+  it('Mode 2 (default) also assigns the buyer\'s private roster — a category match alone no longer grants vendor visibility, so it must actually be invited', async () => {
     serveBootstrap([
       { id: 'v-hist-1', name: 'Apex Industrial Dynamics', source: 'historical_purchase_dump' },
     ]);
     renderWizard();
+    // Wait for the bootstrap vendor to actually hydrate into buyerVendors
+    // before submitting — otherwise the form dispatches before context state
+    // catches up, and assignedVendors comes back empty regardless of the fix.
+    await waitFor(() => expect(screen.getByText('1 Suppliers Matched')).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
       target: { value: 'Navi Mumbai Plant' },
@@ -885,6 +889,15 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
     fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
 
     await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
-    expect(mockCreateRFQ.mock.calls[0][0].assignedVendors).toEqual([]);
+    expect(mockCreateRFQ.mock.calls[0][0].assignedVendors).toEqual([
+      {
+        id: 'v-hist-1',
+        name: 'Apex Industrial Dynamics',
+        email: null,
+        contactPerson: 'Apex Industrial Dynamics',
+        phone: null,
+      },
+    ]);
   });
+
 });
