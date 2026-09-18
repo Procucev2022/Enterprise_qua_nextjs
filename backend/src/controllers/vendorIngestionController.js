@@ -315,6 +315,101 @@ async function getApprovedMappings(req, res, next) {
   }
 }
 
+// ------------------------------------------------------------------------------
+// LARGE FILE STREAMING & INGESTION JOBS
+// ------------------------------------------------------------------------------
+
+const largeFileIngestionService = require('../services/largeFileIngestionService');
+const os = require('os');
+const path = require('path');
+const fs = require('fs');
+
+async function streamUploadFile(req, res, next) {
+  try {
+    const sessionId = req.params.sessionId;
+    const fileName = req.query.fileName || 'uploaded_data.csv';
+    const jobType = req.query.type === 'PO_DUMP' ? 'PO_DUMP' : 'VENDOR_MASTER';
+
+    const tempDir = path.join(os.tmpdir(), 'procucev-uploads');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+    const tempFilePath = path.join(tempDir, `ingest-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.csv`);
+    const writeStream = fs.createWriteStream(tempFilePath);
+
+    req.pipe(writeStream);
+
+    writeStream.on('finish', async () => {
+      try {
+        const job = await largeFileIngestionService.startIngestionJob({
+          sessionUser: req.user,
+          sessionId,
+          filePath: tempFilePath,
+          fileName,
+          jobType,
+        });
+        return res.status(202).json({ success: true, data: { job } });
+      } catch (startErr) {
+        return respondWithError(startErr, res, next, 'Failed to start ingestion job');
+      }
+    });
+
+    writeStream.on('error', (streamErr) => {
+      logger.error('Streaming file write error', streamErr, LOG_CATEGORY);
+      return respondWithError(streamErr, res, next, 'File upload write error');
+    });
+  } catch (err) {
+    return respondWithError(err, res, next, 'Unexpected error handling file upload stream');
+  }
+}
+
+async function startIngestionJob(req, res, next) {
+  try {
+    const sessionId = req.params.sessionId;
+    const { rows, fileName, jobType } = req.body;
+    const job = await largeFileIngestionService.startIngestionJob({
+      sessionUser: req.user,
+      sessionId,
+      rows,
+      fileName: fileName || (jobType === 'PO_DUMP' ? 'po_dump.xlsx' : 'vendor_master.xlsx'),
+      jobType: jobType === 'PO_DUMP' ? 'PO_DUMP' : 'VENDOR_MASTER',
+    });
+    return res.status(202).json({ success: true, data: { job } });
+  } catch (err) {
+    return respondWithError(err, res, next, 'Failed to start ingestion job');
+  }
+}
+
+async function getActiveJobStatus(req, res, next) {
+  try {
+    const job = await largeFileIngestionService.getJobStatus(
+      req.user,
+      req.params.sessionId,
+      null,
+      req.query.type || null
+    );
+    return res.json({ success: true, data: { job } });
+  } catch (err) {
+    return respondWithError(err, res, next, 'Failed to retrieve active job status');
+  }
+}
+
+async function getJobById(req, res, next) {
+  try {
+    const job = await largeFileIngestionService.getJobStatus(
+      req.user,
+      req.params.sessionId,
+      req.params.jobId
+    );
+    if (!job) {
+      return res.status(404).json({ success: false, error: 'Ingestion job not found' });
+    }
+    return res.json({ success: true, data: { job } });
+  } catch (err) {
+    return respondWithError(err, res, next, 'Failed to retrieve job status');
+  }
+}
+
 module.exports = {
   respondWithError,
   createSession,
@@ -337,4 +432,8 @@ module.exports = {
   getAudit,
   getAiLogs,
   getApprovedMappings,
+  streamUploadFile,
+  startIngestionJob,
+  getActiveJobStatus,
+  getJobById,
 };
