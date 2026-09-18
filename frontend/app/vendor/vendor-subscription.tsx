@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { SubscriptionPaymentModal } from '@/app/components/Modals';
+import { authClient } from '@/lib/authClient';
 import { Sparkles, ShieldCheck, Check, Zap, Layers, AlertCircle, RefreshCw, Download, Package, ArrowRight } from 'lucide-react';
 
 export default function VendorSubscriptionCenter() {
@@ -17,36 +18,57 @@ export default function VendorSubscriptionCenter() {
     currentUserSession,
     refreshFromDB,
     createVendorPaymentLink,
+    checkVendorPaymentLinkStatus,
+    buyerVendors,
   } = useApp();
 
-  // Zoho redirects the vendor back here with ?payment=success|cancelled after
-  // checkout. Activation itself already happened server-side (the webhook, or
-  // the reconciliation poller if that's delayed) — this just re-syncs the
-  // vendor's real subscriptionPlan and tells them what happened.
+  // Zoho redirects the vendor back here to the same URL whether they actually
+  // paid or cancelled on its hosted checkout page, so the outcome can't be
+  // read off the URL itself — instead it carries the app's own payment-link
+  // id (`linkId`), and the real outcome is looked up server-side via
+  // checkVendorPaymentLinkStatus. Activation itself already happened
+  // server-side (the webhook, or the reconciliation poller if that's
+  // delayed) — this just reflects that real state and re-syncs the vendor's
+  // subscriptionPlan. Mirrors subscription-center.tsx's identical handling.
+  const handledPaymentReturnRef = useRef(false);
   useEffect(() => {
+    if (handledPaymentReturnRef.current) return;
     const params = new URLSearchParams(window.location.search);
-    const outcome = params.get('payment');
-    if (!outcome) return;
+    const linkId = params.get('linkId');
+    if (!linkId) return;
+    // Reads the session directly off authClient (same as checkVendorPaymentLinkStatus
+    // itself) rather than the store's currentUserSession React state, which is only
+    // populated from a valid stored token — the two can otherwise disagree transiently.
+    const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
+    const myVendorReady = buyerVendors.some((v) => v.email?.toLowerCase() === sessionEmail);
+    if (!myVendorReady) return; // wait for the vendor directory to load, retry once it does
 
-    if (outcome === 'success') {
-      showToast(
-        'Payment Received',
-        'Your subscription is being activated — this can take a few moments to reflect here.',
-        'success'
-      );
-      void refreshFromDB();
-    } else if (outcome === 'cancelled') {
-      showToast('Payment Cancelled', 'No changes were made to your subscription.', 'info');
-    }
+    handledPaymentReturnRef.current = true;
 
-    // Drop the query param so a refresh doesn't re-show the toast.
-    params.delete('payment');
-    const next = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}`;
-    window.history.replaceState(null, '', next);
-    // Deliberately runs once on mount only — re-syncing on every render would
-    // re-trigger the toast/history rewrite in a loop.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    void (async () => {
+      const status = await checkVendorPaymentLinkStatus(linkId);
+      if (status === 'PAID') {
+        showToast('Payment Received', 'Your subscription has been activated.', 'success');
+        void refreshFromDB();
+      } else if (status === 'CANCELED') {
+        showToast('Payment Cancelled', 'No changes were made to your subscription.', 'info');
+      } else if (status === 'EXPIRED') {
+        showToast('Payment Link Expired', 'That payment link expired before it was completed. Please try again.', 'warning');
+      } else {
+        showToast(
+          'Payment Processing',
+          'We are still confirming your payment — this can take a few moments to reflect here.',
+          'info'
+        );
+        void refreshFromDB();
+      }
+
+      // Drop the query param so a refresh doesn't re-show the toast.
+      params.delete('linkId');
+      const next = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}`;
+      window.history.replaceState(null, '', next);
+    })();
+  }, [buyerVendors, currentUserSession?.email, checkVendorPaymentLinkStatus, refreshFromDB, showToast]);
 
   const [pendingPayment, setPendingPayment] = useState<{ planId: 'connect' | 'select'; planName: string; price: string } | null>(null);
   const [isUpdatingPlan, setIsUpdatingPlan] = useState(false);

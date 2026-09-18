@@ -1137,7 +1137,10 @@ async function empanelApprovedVendor(context, sessionId, mapping) {
   if (!mapping || !mapping.email) return null;
 
   const record = await queries.findVendorMasterRecord(mapping.vendorRecordId, context.organizationId);
-  const existing = storeService.getVendorById(mapping.email);
+  // 'all': checking for an existing vendor by email to decide create-vs-update
+  // — omitting this would miss any buyer-uploaded vendor (buyerId set) and
+  // create a duplicate record instead of updating theirs.
+  const existing = storeService.getVendorById(mapping.email, 'all');
 
   const categories = mapping.buyerMinorCategories.length > 0
     ? mapping.buyerMinorCategories

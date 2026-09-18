@@ -119,12 +119,12 @@ describe('zohoPaymentService', () => {
       expect(global.fetch).toHaveBeenCalledTimes(1);
     });
 
-    test('does not retry and rethrows a second consecutive "fetch failed" error', async () => {
+    test('gives up and rethrows after 3 consecutive "fetch failed" errors', async () => {
       domainQueries.getZohoOAuthTokenFromDB.mockResolvedValue(null);
       global.fetch = jest.fn().mockRejectedValue(new TypeError('fetch failed'));
 
       await expect(zohoPaymentService.getValidAccessToken()).rejects.toThrow('fetch failed');
-      expect(global.fetch).toHaveBeenCalledTimes(2);
+      expect(global.fetch).toHaveBeenCalledTimes(3);
     });
 
     test('throws a generic message when the failure body is unreadable', async () => {

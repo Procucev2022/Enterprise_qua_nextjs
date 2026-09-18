@@ -58,7 +58,10 @@ async function requireRfqReadScope(context) {
     return { user, role: user.role, restricted: true, buyerAccountId: account ? account.id : null };
   }
   if (user.role === 'vendor') {
-    const vendor = storeService.getVendorById(user.email);
+    // 'all': resolving the caller's own vendor identity by session email, not
+    // a buyer-scoped list — the same fix as rfqController.resolveRfqReadScope
+    // (REST); this GraphQL equivalent had the identical gap.
+    const vendor = storeService.getVendorById(user.email, 'all');
     return { user, role: user.role, restricted: true, vendor: vendor || null };
   }
   return { user, role: user.role, restricted: false, buyerAccountId: null };

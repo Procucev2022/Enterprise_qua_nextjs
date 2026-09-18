@@ -259,6 +259,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
     test('createSubscriptionPaymentLink validation and success flows', async () => {
       const res = mockRes();
       const next = jest.fn();
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue({ mobile: '9123456780' });
 
       // Account not found and user has no email
       await buyerAccountController.createSubscriptionPaymentLink(
@@ -288,6 +289,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
 
       // User without prior account record created on the fly with orgName
       jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValueOnce(null);
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValueOnce({ mobile: '9123456780' });
       jest.spyOn(zohoPaymentService, 'createPaymentLink').mockResolvedValueOnce({
         zohoPaymentLinkId: 'zpl-new',
         paymentUrl: 'https://payments.zoho.in/pay/new',
@@ -332,6 +334,16 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
         next
       );
       expect(res.status).toHaveBeenCalledWith(502);
+
+      // No mobileNumber on the domain record and no phone in the identity record either
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValueOnce({ id: 'ba-2', corporateEmail: 'nomobile@b.com' });
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValueOnce({ mobile: '' });
+      await buyerAccountController.createSubscriptionPaymentLink(
+        { user: { role: 'buyer', email: 'nomobile@b.com' }, params: { id: 'ba-2' }, body: { plan: 'version_1' } },
+        res,
+        next
+      );
+      expect(res.status).toHaveBeenCalledWith(400);
     });
 
     test('ingestHistoricalData validation, processing, and error', async () => {

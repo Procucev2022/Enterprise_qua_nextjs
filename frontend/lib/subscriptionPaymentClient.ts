@@ -55,6 +55,46 @@ export async function createPaymentLink(vendorId: string, plan: string): Promise
 }
 
 /**
+ * Look up the real, current status ('CREATED' | 'PAID' | 'CANCELED' | 'EXPIRED')
+ * of one of a vendor's own payment links by its id — used on return from
+ * Zoho's hosted checkout to show an accurate outcome instead of trusting a
+ * client-controlled query param (Zoho redirects to the same return_url on
+ * both a completed payment and a cancellation, so the URL alone can't tell
+ * them apart). Returns null on any failure — callers fall back to a neutral
+ * "still processing" message rather than guessing.
+ */
+export async function getVendorPaymentLinkStatus(vendorId: string, linkId: string): Promise<string | null> {
+  const token = authClient.getToken();
+  try {
+    const res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}/payment-links`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body?.success || !Array.isArray(body.data)) return null;
+    const match = body.data.find((l: { id?: string; status?: string }) => l.id === linkId);
+    return match?.status || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Buyer-account equivalent of getVendorPaymentLinkStatus — see its docstring. */
+export async function getBuyerPaymentLinkStatus(buyerAccountId: string, linkId: string): Promise<string | null> {
+  const token = authClient.getToken();
+  try {
+    const res = await fetch(`/api/buyer-accounts/${encodeURIComponent(buyerAccountId)}/payment-links`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body?.success || !Array.isArray(body.data)) return null;
+    const match = body.data.find((l: { id?: string; status?: string }) => l.id === linkId);
+    return match?.status || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Create a real Zoho payment link for a buyer's version_1/2/3 subscription
  * upgrade. Same shape/error-handling as `createPaymentLink` (vendor); a
  * separate function because it hits a different endpoint scoped to the

@@ -417,7 +417,10 @@ async function resolveVendorFromEmail(fromAddress) {
   if (!fromAddress) return null;
   const email = String(fromAddress).trim().toLowerCase();
 
-  const direct = storeService.getVendorById(email);
+  // 'all': resolving the sender's own vendor identity by email, not a
+  // buyer-scoped list — omitting this silently misses any buyer-uploaded
+  // vendor (one with a buyerId set) emailing in a quote reply.
+  const direct = storeService.getVendorById(email, 'all');
   if (direct) return direct;
 
   const allVendors = storeService.getVendors ? await storeService.getVendors() : [];
