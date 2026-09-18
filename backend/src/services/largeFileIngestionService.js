@@ -10,6 +10,7 @@
 const fs = require('fs');
 const readline = require('readline');
 const queries = require('../db/vendorIngestionQueries');
+const buyerProfileQueries = require('../db/buyerProfileQueries');
 const { logger } = require('./loggerService');
 const {
   VENDOR_INGESTION_SESSION_STATUS,
@@ -18,6 +19,48 @@ const {
 
 const LOG_CATEGORY = 'LARGE_FILE_INGESTION';
 const DEFAULT_BATCH_SIZE = 500;
+
+/** Resolve organization ID from session user or session database record */
+async function resolveOrganizationId(sessionUser, sessionId = null) {
+  if (sessionUser) {
+    if (sessionUser.organizationId) return sessionUser.organizationId;
+    if (sessionUser.organization_id) return sessionUser.organization_id;
+    if (sessionUser.orgId) return sessionUser.orgId;
+    if (sessionUser.sub) {
+      try {
+        const lookup = await buyerProfileQueries.findProfileByUserId(sessionUser.sub);
+        if (lookup && lookup.found && lookup.profile && lookup.profile.organizationId) {
+          return lookup.profile.organizationId;
+        }
+      } catch (e) {
+        // continue
+      }
+    }
+    if (sessionUser.userId || sessionUser.id) {
+      try {
+        const lookup = await buyerProfileQueries.findProfileByUserId(sessionUser.userId || sessionUser.id);
+        if (lookup && lookup.found && lookup.profile && lookup.profile.organizationId) {
+          return lookup.profile.organizationId;
+        }
+      } catch (e) {
+        // continue
+      }
+    }
+  }
+
+  if (sessionId) {
+    try {
+      const sess = await queries.findSessionById(sessionId);
+      if (sess && sess.organizationId) {
+        return sess.organizationId;
+      }
+    } catch (e) {
+      // continue
+    }
+  }
+
+  return null;
+}
 
 /** Split a CSV line respecting quotes */
 function parseCsvLine(line, delimiter = ',') {
@@ -489,7 +532,7 @@ async function processArrayJob({ jobId, sessionId, organizationId, rows, fileNam
  * Start a background ingestion job for an uploaded file or array
  */
 async function startIngestionJob({ sessionUser, sessionId, filePath, rows, fileName, jobType, totalHint = 0 }) {
-  const organizationId = sessionUser.organizationId || sessionUser.organization_id;
+  const organizationId = await resolveOrganizationId(sessionUser, sessionId);
   if (!organizationId) {
     throw new Error('Organization not linked to user');
   }
@@ -540,7 +583,7 @@ async function startIngestionJob({ sessionUser, sessionId, filePath, rows, fileN
  * Get the status of an ingestion job or active jobs for a session
  */
 async function getJobStatus(sessionUser, sessionId, jobId = null, jobType = null) {
-  const organizationId = sessionUser.organizationId || sessionUser.organization_id;
+  const organizationId = await resolveOrganizationId(sessionUser, sessionId);
   if (!organizationId) return null;
 
   if (jobId) {
@@ -558,9 +601,13 @@ async function getJobStatus(sessionUser, sessionId, jobId = null, jobType = null
 }
 
 module.exports = {
+  resolveOrganizationId,
   startIngestionJob,
   getJobStatus,
   streamProcessCsvFile,
+  processArrayJob,
+  processVendorMasterBatch,
+  processPoDumpBatch,
   parseCsvLine,
   extractHeaderIndices,
   mapRowValues,

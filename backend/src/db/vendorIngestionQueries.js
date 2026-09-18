@@ -197,6 +197,13 @@ async function findSession(sessionId, organizationId) {
   return rows.length > 0 ? mapRowToSession(rows[0]) : null;
 }
 
+/** Look up a session by its ID directly to resolve its organization */
+async function findSessionById(sessionId) {
+  if (!pool.pool || !sessionId) return null;
+  const rows = await pool.rows(`${SESSION_SELECT} where id = $1 limit 1`, [sessionId]);
+  return rows.length > 0 ? mapRowToSession(rows[0]) : null;
+}
+
 /**
  * The organisation's most recent session, so the buyer resumes rather than
  * restarting. Deliberately not filtered by status: a finished run is still the
@@ -1755,6 +1762,7 @@ module.exports = {
   // sessions
   insertSession,
   findSession,
+  findSessionById,
   findLatestSession,
   updateSession,
   // ingestion jobs
