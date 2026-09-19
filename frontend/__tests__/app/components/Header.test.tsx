@@ -64,7 +64,10 @@ describe('Header', () => {
       toggleTheme: mockToggleTheme,
       showToast: mockShowToast,
       addAuditLog: mockAddAuditLog,
-      activeBuyerAccount: { organizationName: 'Tata Motors' },
+      // version_3 here so the default fixture used by mode-switching-mechanics
+      // tests below isn't itself restricted by the entitlement gate — that
+      // gate has its own dedicated test with an explicit free_trial fixture.
+      activeBuyerAccount: { organizationName: 'Tata Motors', subscriptionPlan: 'version_3' },
       currentUserSession: {
         id: 'usr-1',
         email: 'navinchaudhary.dev@gmail.com',

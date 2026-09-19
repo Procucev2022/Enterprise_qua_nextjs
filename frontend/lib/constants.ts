@@ -101,22 +101,23 @@ export const SUBSCRIPTION_MODE_ENTITLEMENTS: Record<string, SourcingMode[]> = {
   version_3: ['mode_1', 'mode_2', 'mode_3'],
 };
 
-const ALL_SOURCING_MODES: SourcingMode[] = ['mode_1', 'mode_2', 'mode_3'];
-
 /**
  * Sourcing modes a buyer's subscription plan actually entitles them to use.
  *
- * A missing plan is treated as "unknown," not "free_trial": a real buyer
- * account always carries an explicit subscriptionPlan (see BuyerAccount in
- * types.ts), so a nullish value here means the caller couldn't resolve the
- * buyer's account at all (e.g. no store context yet) rather than that the
- * buyer is actually on the free tier. This is a UI convenience gate only —
- * POST /api/rfqs re-checks entitlement server-side regardless — so failing
- * open (show everything) is safer than wrongly locking a paying buyer out.
+ * A missing/unresolved plan (no activeBuyerAccount loaded yet, or a buyer
+ * with no domain buyer_accounts row at all — a real gap seen in practice)
+ * defaults to the most restrictive tier, not to "show everything." This used
+ * to fail open on the reasoning that "a real buyer account always carries an
+ * explicit subscriptionPlan" — but that assumption doesn't hold: an
+ * authenticated buyer session can genuinely have no resolvable plan (a
+ * missing/not-yet-created buyer_accounts record), and failing open there is
+ * exactly the free-upgrade bypass this gate exists to prevent. The backend
+ * still re-checks entitlement server-side regardless (POST /api/rfqs 403s
+ * for an un-entitled mode), so this stays a UI convenience layer either way —
+ * it just now fails closed instead of open.
  */
 export function entitledSourcingModes(subscriptionPlan?: string | null): SourcingMode[] {
-  if (!subscriptionPlan) return ALL_SOURCING_MODES;
-  const plan = subscriptionPlan.trim().toLowerCase();
+  const plan = (subscriptionPlan || 'free_trial').trim().toLowerCase();
   return SUBSCRIPTION_MODE_ENTITLEMENTS[plan] || SUBSCRIPTION_MODE_ENTITLEMENTS.free_trial;
 }
 
