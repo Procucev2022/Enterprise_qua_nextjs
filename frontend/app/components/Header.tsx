@@ -3,24 +3,20 @@
 import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { useRouter } from 'next/navigation';
-import { SOURCING_MODES, ROLE_SIDEBAR_NAV, LOGIN_ROUTE, entitledSourcingModes } from '@/lib/constants';
+import { ROLE_SIDEBAR_NAV, LOGIN_ROUTE } from '@/lib/constants';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import NotificationBell from '@/app/components/NotificationBell';
 import AccountSecurityPanel from '@/app/components/AccountSecurityPanel';
 import { deriveInitials, resolveSessionOrgName } from '@/lib/accountIdentity';
-import type { SourcingMode, UserRole } from '@/lib/types';
+import type { UserRole } from '@/lib/types';
 import {
   ShieldCheck,
   ChevronDown,
-  Layers,
-  Sparkles,
-  CheckCircle2,
   Sun,
   Moon,
   LogOut,
   Key,
-  Lock,
 } from 'lucide-react';
 
 /**
@@ -84,11 +80,6 @@ export default function Header() {
     setCurrentRole,
     isLoggedIn,
     setIsLoggedIn,
-    currentMode,
-    setCurrentMode,
-    vendorSubscription,
-    setVendorSubscription,
-    vendorRfqDownloadsUsed,
     theme,
     toggleTheme,
     showToast,
@@ -100,7 +91,6 @@ export default function Header() {
 
   const router = useRouter();
 
-  const [modeDropdownOpen, setModeDropdownOpen] = useState(false);
   const [userProfileDropdownOpen, setUserProfileDropdownOpen] = useState(false);
 
   // Visibility of the Account & Security overlay. The forms inside it live in
@@ -119,45 +109,6 @@ export default function Header() {
   // resolveSessionOrgName for why the active buyer account is only a conditional
   // fallback.
   const currentOrgName = resolveSessionOrgName(currentUserSession, activeBuyerAccount);
-
-  const activeModeObj = SOURCING_MODES.find((m) => m.id === currentMode) || SOURCING_MODES[1];
-
-  // A missing activeBuyerAccount (e.g. a category manager, who has no
-  // personal subscription) resolves to every mode via entitledSourcingModes'
-  // fail-open default — this only actually restricts a signed-in buyer.
-  const headerEntitledModes = entitledSourcingModes(activeBuyerAccount?.subscriptionPlan);
-
-  const handleModeSelect = (modeId: SourcingMode) => {
-    if (!headerEntitledModes.includes(modeId)) {
-      showToast(
-        'Upgrade Required',
-        'Your subscription does not include this sourcing mode. Upgrade to unlock it.',
-        'warning'
-      );
-      return;
-    }
-    setCurrentMode(modeId);
-    setModeDropdownOpen(false);
-    const selected = SOURCING_MODES.find((m) => m.id === modeId);
-    showToast('Sourcing Mode Updated', `Active platform mode switched to: ${selected?.name}`, 'info');
-  };
-
-  // 'premium' is free/auto-granted, so it can flip instantly here. connect/select
-  // are real, paid tiers — this used to call setVendorSubscription for all three,
-  // which set the local (and, via the effect that mirrors it into
-  // vendorRfqDownloadsUsed's gate, functionally real) subscription tier straight
-  // to a paid plan with no Zoho payment at all. Paid tiers now route to the
-  // real, payment-gated flow on vendor-subscription.tsx instead of being
-  // grantable from this quick-switcher.
-  const handleVendorSubscriptionSelect = (tier: 'premium' | 'connect' | 'select') => {
-    setModeDropdownOpen(false);
-    if (tier !== 'premium') {
-      router.push('/vendor/vendor-subscription');
-      return;
-    }
-    setVendorSubscription(tier);
-    showToast('Vendor Tier Switched', 'Active vendor access model set to: Premium (Client Uploaded)', 'success');
-  };
 
   const handleLogout = () => {
     setUserProfileDropdownOpen(false);
@@ -232,198 +183,15 @@ export default function Header() {
           </span>
         </div>
 
-        {/* Dynamic Mode Indicator */}
-        <div className="relative">
-          {currentRole === 'vendor' ? (
-            /* VENDOR ACCESS TIER PILL */
-            <button
-              onClick={() => {
-                setModeDropdownOpen(!modeDropdownOpen);
-                setUserProfileDropdownOpen(false);
-              }}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-700/60 hover:border-emerald-500 transition-all text-xs font-medium text-emerald-900 dark:text-emerald-200 shadow-sm"
-              title="Vendor Subscription Access Model"
-            >
-              <Sparkles size={14} className="text-emerald-600 dark:text-emerald-400" />
-              <span className="text-emerald-700 dark:text-emerald-400 font-bold hidden md:inline">Vendor Model:</span>
-              <span className="font-extrabold px-2 py-0.5 rounded bg-emerald-600 text-white shadow-xs">
-                {vendorSubscription === 'premium'
-                  ? 'Premium Model (Client Uploaded)'
-                  : vendorSubscription === 'connect'
-                  ? 'Connect Model (₹2 / 3mo)'
-                  : 'Select Model (₹5 / 3mo)'}
-              </span>
-              <ChevronDown
-                size={14}
-                className={`text-emerald-600 dark:text-emerald-400 transition-transform ${
-                  modeDropdownOpen ? 'rotate-180' : ''
-                }`}
-              />
-            </button>
-          ) : (
-            /* BUYER / CM SOURCING MODE PILL */
-            <button
-              onClick={() => {
-                setModeDropdownOpen(!modeDropdownOpen);
-                setUserProfileDropdownOpen(false);
-              }}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-gray-900/80 border border-slate-300 dark:border-gray-700/60 hover:border-indigo-500 transition-all text-xs font-medium text-slate-800 dark:text-gray-200 shadow-sm"
-              title="Switch Sourcing Mode"
-            >
-              <Layers size={14} className="text-indigo-600 dark:text-indigo-400" />
-              <span className="text-slate-500 dark:text-gray-400 hidden md:inline">Sourcing Mode:</span>
-              <span className="font-extrabold px-2 py-0.5 rounded bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60">
-                {activeModeObj.code}: {activeModeObj.shortLabel}
-              </span>
-              <ChevronDown
-                size={14}
-                className={`text-slate-400 dark:text-gray-400 transition-transform ${
-                  modeDropdownOpen ? 'rotate-180' : ''
-                }`}
-              />
-            </button>
-          )}
-
-          {/* Mode Dropdown Menu */}
-          {modeDropdownOpen && (
-            <div className="absolute top-full mt-2 w-80 sm:w-96 left-0 sm:left-auto sm:right-0 bg-white dark:bg-gray-900/95 border border-slate-200 dark:border-gray-700 rounded-2xl shadow-2xl p-2 z-50 backdrop-blur-xl animate-fade-in">
-              {currentRole === 'vendor' ? (
-                /* Vendor Subscription Tier Options */
-                <>
-                  <div className="px-3 py-2 border-b border-slate-100 dark:border-gray-800">
-                    <p className="text-xs font-bold text-slate-800 dark:text-gray-300 uppercase tracking-wider">
-                      Vendor Access Tiers &amp; Quotas
-                    </p>
-                    <p className="text-[11px] text-slate-500 dark:text-gray-400">
-                      Controls direct RFQ downloads and marketplace listing
-                    </p>
-                  </div>
-                  <div className="mt-1 space-y-1">
-                    <button
-                      onClick={() => handleVendorSubscriptionSelect('premium')}
-                      className={`w-full text-left p-2.5 rounded-xl transition-all flex items-start gap-2.5 ${
-                        vendorSubscription === 'premium'
-                          ? 'bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-600 text-emerald-900 dark:text-white'
-                          : 'hover:bg-slate-50 dark:hover:bg-gray-800/60 text-slate-700 dark:text-gray-300 border border-transparent'
-                      }`}
-                    >
-                      <CheckCircle2
-                        size={16}
-                        className={vendorSubscription === 'premium' ? 'text-emerald-600' : 'text-slate-300'}
-                      />
-                      <div>
-                        <div className="font-bold text-xs">Premium Model (Client Uploaded)</div>
-                        <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                          Free for uploaded vendors • Unlimited direct buyer RFQ access
-                        </div>
-                      </div>
-                    </button>
-
-                    <button
-                      onClick={() => handleVendorSubscriptionSelect('connect')}
-                      className={`w-full text-left p-2.5 rounded-xl transition-all flex items-start gap-2.5 ${
-                        vendorSubscription === 'connect'
-                          ? 'bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-600 text-emerald-900 dark:text-white'
-                          : 'hover:bg-slate-50 dark:hover:bg-gray-800/60 text-slate-700 dark:text-gray-300 border border-transparent'
-                      }`}
-                    >
-                      {vendorSubscription === 'connect' ? (
-                        <CheckCircle2 size={16} className="text-emerald-600" />
-                      ) : (
-                        <Lock size={14} className="text-slate-400 dark:text-gray-500 mt-0.5" />
-                      )}
-                      <div>
-                        <div className="font-bold text-xs">Connect Model (₹2 / 3 Months)</div>
-                        <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                          {vendorSubscription === 'connect'
-                            ? `50 RFQ downloads in 3 months (${vendorRfqDownloadsUsed}/50 used) • $0 Self-Evaluation Fee`
-                            : 'Requires payment — opens the Vendor Subscription checkout'}
-                        </div>
-                      </div>
-                    </button>
-
-                    <button
-                      onClick={() => handleVendorSubscriptionSelect('select')}
-                      className={`w-full text-left p-2.5 rounded-xl transition-all flex items-start gap-2.5 ${
-                        vendorSubscription === 'select'
-                          ? 'bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-600 text-emerald-900 dark:text-white'
-                          : 'hover:bg-slate-50 dark:hover:bg-gray-800/60 text-slate-700 dark:text-gray-300 border border-transparent'
-                      }`}
-                    >
-                      {vendorSubscription === 'select' ? (
-                        <CheckCircle2 size={16} className="text-emerald-600" />
-                      ) : (
-                        <Lock size={14} className="text-slate-400 dark:text-gray-500 mt-0.5" />
-                      )}
-                      <div>
-                        <div className="font-bold text-xs">Select Model (₹5 / 3 Months)</div>
-                        <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                          {vendorSubscription === 'select'
-                            ? 'Item Catalogue (Max 100 SKUs) + 100 RFQs • $0 Self-Evaluation Fee'
-                            : 'Requires payment — opens the Vendor Subscription checkout'}
-                        </div>
-                      </div>
-                    </button>
-                  </div>
-                </>
-              ) : (
-                /* Buyer / CM Sourcing Mode Options */
-                <>
-                  <div className="px-3 py-2 border-b border-slate-100 dark:border-gray-800">
-                    <p className="text-xs font-semibold text-slate-800 dark:text-gray-300 uppercase tracking-wider">
-                      Select Sourcing Mode
-                    </p>
-                    <p className="text-[11px] text-slate-500 dark:text-gray-400">
-                      Controls automated vendor pool dispatch logic
-                    </p>
-                  </div>
-                  <div className="mt-1 space-y-1">
-                    {SOURCING_MODES.map((mode) => {
-                      const isEntitled = headerEntitledModes.includes(mode.id);
-                      return (
-                        <button
-                          key={mode.id}
-                          onClick={() => handleModeSelect(mode.id)}
-                          aria-disabled={!isEntitled}
-                          className={`w-full text-left p-2.5 rounded-xl transition-all flex items-start gap-2.5 ${
-                            !isEntitled
-                              ? 'opacity-50 cursor-not-allowed hover:bg-transparent text-slate-500 dark:text-gray-500 border border-transparent'
-                              : currentMode === mode.id
-                              ? 'bg-indigo-50 dark:bg-indigo-600/20 border border-indigo-300 dark:border-indigo-500/40 text-indigo-900 dark:text-white'
-                              : 'hover:bg-slate-50 dark:hover:bg-gray-800/60 text-slate-700 dark:text-gray-300 border border-transparent'
-                          }`}
-                        >
-                          <div className="mt-0.5">
-                            {!isEntitled ? (
-                              <Lock size={14} className="text-slate-400 dark:text-gray-500" />
-                            ) : currentMode === mode.id ? (
-                              <CheckCircle2 size={16} className="text-indigo-600 dark:text-indigo-400" />
-                            ) : (
-                              <div className="w-4 h-4 rounded-full border border-slate-400 dark:border-gray-600" />
-                            )}
-                          </div>
-                          <div>
-                            <div className="font-semibold text-xs text-slate-900 dark:text-gray-100 flex items-center gap-1.5">
-                              {mode.name}
-                              {!isEntitled && (
-                                <span className="text-[9px] font-extrabold uppercase tracking-wider text-amber-600 dark:text-amber-400">
-                                  Locked
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5 leading-relaxed">
-                              {!isEntitled ? 'Upgrade your subscription to unlock this mode.' : mode.description}
-                            </div>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-        </div>
+        {/* The buyer/CM "Sourcing Mode" and vendor "Access Tier" quick-switchers
+            that used to render here have been removed entirely, not just
+            gated: sourcing mode is a per-RFQ decision made in the RFQ
+            creation modal, and vendor tier changes go through the real,
+            payment-gated vendor-subscription screen. A global, always-visible
+            header toggle that could flip either independent of any specific
+            RFQ or payment had no legitimate purpose once real per-mode
+            entitlement existed — it was pure surface area for confusion/
+            misuse, not a feature worth preserving. */}
 
         {/* Right Section: Theme Toggle, Notifications, and Sleek Corner User Profile Box */}
         <div className="flex items-center gap-2 sm:gap-3">
@@ -454,10 +222,7 @@ export default function Header() {
           {/* ═══════════════════════════════════════════════════════════════ */}
           <div className="relative pl-1 border-l border-slate-200 dark:border-gray-800">
             <button
-              onClick={() => {
-                setUserProfileDropdownOpen(!userProfileDropdownOpen);
-                setModeDropdownOpen(false);
-              }}
+              onClick={() => setUserProfileDropdownOpen(!userProfileDropdownOpen)}
               className="flex items-center gap-2.5 p-1.5 pr-2.5 rounded-2xl hover:bg-slate-100 dark:hover:bg-gray-800/80 transition-all border border-slate-200/80 dark:border-gray-700/60 bg-slate-50/50 dark:bg-gray-900/50 shadow-xs text-left group"
               title="Signed-in account details"
             >

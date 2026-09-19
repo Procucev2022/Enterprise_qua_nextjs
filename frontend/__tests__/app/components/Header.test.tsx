@@ -105,136 +105,32 @@ describe('Header', () => {
     expect(mockToggleTheme).toHaveBeenCalled();
   });
 
-  it('renders logged in header with buyer sourcing mode and handles mode switch to mode 1, 2, 3', () => {
-    render(<Header />);
-
-    const modeBtn = screen.getByTitle('Switch Sourcing Mode');
-    expect(modeBtn).toBeInTheDocument();
-    fireEvent.click(modeBtn);
-
-    const mode2Options = screen.getAllByText(/Version 2: Hybrid Sourcing Plan/);
-    fireEvent.click(mode2Options[mode2Options.length - 1]);
-    expect(mockSetCurrentMode).toHaveBeenCalledWith('mode_2');
-
-    // Switch to mode 3
-    fireEvent.click(modeBtn);
-    const mode3Options = screen.getAllByText(/Version 3: AI Autonomous Sourcing Plan/);
-    fireEvent.click(mode3Options[mode3Options.length - 1]);
-    expect(mockSetCurrentMode).toHaveBeenCalledWith('mode_3');
-
-    // Reopen dropdown and switch to mode 1
-    fireEvent.click(modeBtn);
-    const mode1Options = screen.getAllByText(/Version 1: Client Roster Sourcing Plan/);
-    fireEvent.click(mode1Options[mode1Options.length - 1]);
-    expect(mockSetCurrentMode).toHaveBeenCalledWith('mode_1');
-  });
-
-  it('locks Version 2 and Version 3 sourcing modes for a free_trial buyer and blocks selecting them', () => {
-    (storeModule.useApp as jest.Mock).mockReturnValue({
-      currentRole: 'buyer',
-      setCurrentRole: mockSetCurrentRole,
-      isLoggedIn: true,
-      setIsLoggedIn: mockSetIsLoggedIn,
-      currentMode: 'mode_1',
-      setCurrentMode: mockSetCurrentMode,
-      vendorSubscription: 'premium',
-      setVendorSubscription: mockSetVendorSubscription,
-      vendorRfqDownloadsUsed: 0,
-      aiFeed: [],
-      theme: 'dark',
-      toggleTheme: mockToggleTheme,
-      showToast: mockShowToast,
-      addAuditLog: mockAddAuditLog,
-      activeBuyerAccount: { organizationName: 'Tata Motors', subscriptionPlan: 'free_trial' },
-    });
-
-    render(<Header />);
-    fireEvent.click(screen.getByTitle('Switch Sourcing Mode'));
-
-    expect(screen.getAllByText('Locked').length).toBe(2);
-
-    const mode2Options = screen.getAllByText(/Version 2: Hybrid Sourcing Plan/);
-    fireEvent.click(mode2Options[mode2Options.length - 1]);
-    expect(mockSetCurrentMode).not.toHaveBeenCalled();
-    expect(mockShowToast).toHaveBeenCalledWith(
-      'Upgrade Required',
-      expect.stringContaining('does not include this sourcing mode'),
-      'warning'
-    );
-
-    // Version 1 remains selectable regardless of plan.
-    const mode1Options = screen.getAllByText(/Version 1: Client Roster Sourcing Plan/);
-    fireEvent.click(mode1Options[mode1Options.length - 1]);
-    expect(mockSetCurrentMode).toHaveBeenCalledWith('mode_1');
-  });
-
-  it('renders vendor model for vendor role with premium, connect, and select subscription states', () => {
-    (storeModule.useApp as jest.Mock).mockReturnValue({
-      currentRole: 'vendor',
-      setCurrentRole: mockSetCurrentRole,
-      isLoggedIn: true,
-      setIsLoggedIn: mockSetIsLoggedIn,
-      currentMode: 'mode_1',
-      setCurrentMode: mockSetCurrentMode,
-      vendorSubscription: 'premium',
-      setVendorSubscription: mockSetVendorSubscription,
-      vendorRfqDownloadsUsed: 2,
-      aiFeed: [],
-      theme: 'dark',
-      toggleTheme: mockToggleTheme,
-      showToast: mockShowToast,
-      addAuditLog: mockAddAuditLog,
-      activeBuyerAccount: null,
-    });
-
+  // The buyer/CM "Sourcing Mode" and vendor "Access Tier" header
+  // quick-switchers were removed entirely (not gated, removed) — sourcing
+  // mode is now only ever chosen per-RFQ in the creation modal, and vendor
+  // tier changes only ever happen through the real, payment-gated
+  // vendor-subscription screen. This test asserts the pill/dropdown is gone
+  // for both roles rather than testing switch behavior that no longer exists.
+  it('renders no sourcing-mode or vendor-tier quick-switcher for either role', () => {
     const { rerender } = render(<Header />);
+    expect(screen.queryByTitle('Switch Sourcing Mode')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Vendor Subscription Access Model')).not.toBeInTheDocument();
 
-    const vendorModelBtn = screen.getByTitle('Vendor Subscription Access Model');
-    expect(vendorModelBtn).toBeInTheDocument();
-    fireEvent.click(vendorModelBtn);
-
-    // Switch to premium
-    const premiumOptions = screen.getAllByText(/Premium Model \(Client Uploaded\)/);
-    fireEvent.click(premiumOptions[premiumOptions.length - 1]);
-    expect(mockSetVendorSubscription).toHaveBeenCalledWith('premium');
-
-    // Switch to select state
     (storeModule.useApp as jest.Mock).mockReturnValue({
       currentRole: 'vendor',
       setCurrentRole: mockSetCurrentRole,
       isLoggedIn: true,
       setIsLoggedIn: mockSetIsLoggedIn,
-      currentMode: 'mode_1',
-      setCurrentMode: mockSetCurrentMode,
-      vendorSubscription: 'select',
-      setVendorSubscription: mockSetVendorSubscription,
-      vendorRfqDownloadsUsed: 8,
       aiFeed: [],
-      theme: 'light',
+      theme: 'dark',
       toggleTheme: mockToggleTheme,
       showToast: mockShowToast,
       addAuditLog: mockAddAuditLog,
       activeBuyerAccount: null,
     });
     rerender(<Header />);
-
-    // Paid tiers (connect/select) are real, Zoho-gated plans — clicking them
-    // here must never grant the tier directly (that used to just call
-    // setVendorSubscription with no payment involved); it routes to the real
-    // subscription checkout instead.
-    fireEvent.click(vendorModelBtn);
-    const selectOptions = screen.getAllByText(/Select Model \(₹5 \/ 3 Months\)/);
-    fireEvent.click(selectOptions[selectOptions.length - 1]);
-    expect(mockSetVendorSubscription).not.toHaveBeenCalledWith('select');
-    expect(mockPush).toHaveBeenCalledWith('/vendor/vendor-subscription');
-
-    // Switch to connect
-    mockPush.mockClear();
-    fireEvent.click(vendorModelBtn);
-    const connectOptions = screen.getAllByText(/Connect Model \(₹2 \/ 3 Months\)/);
-    fireEvent.click(connectOptions[connectOptions.length - 1]);
-    expect(mockSetVendorSubscription).not.toHaveBeenCalledWith('connect');
-    expect(mockPush).toHaveBeenCalledWith('/vendor/vendor-subscription');
+    expect(screen.queryByTitle('Switch Sourcing Mode')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Vendor Subscription Access Model')).not.toBeInTheDocument();
   });
 
   it('renders the notification bell, opening the buyer notification inbox', async () => {
@@ -488,57 +384,6 @@ describe('Header session identity', () => {
 
     expect(setIsLoggedIn).toHaveBeenCalledWith(false);
     await Promise.resolve();
-  });
-});
-
-describe('Header vendor subscription pill', () => {
-  const vendorStore = (vendorSubscription: string) => ({
-    currentRole: 'vendor',
-    setCurrentRole: jest.fn(),
-    isLoggedIn: true,
-    setIsLoggedIn: jest.fn(),
-    currentMode: 'mode_1',
-    setCurrentMode: jest.fn(),
-    vendorSubscription,
-    setVendorSubscription: jest.fn(),
-    vendorRfqDownloadsUsed: 5,
-    aiFeed: [],
-    theme: 'dark',
-    toggleTheme: jest.fn(),
-    showToast: jest.fn(),
-    addAuditLog: jest.fn(),
-    activeBuyerAccount: null,
-    currentUserSession: {
-      id: 'v1',
-      email: 'vendor@apex.com',
-      name: 'Apex Supplies',
-      role: 'vendor',
-      orgId: 'o2',
-      orgName: 'Apex Supplies Ltd.',
-    },
-    setCurrentUserSession: jest.fn(),
-  });
-
-  afterEach(() => {
-    jest.clearAllMocks();
-  });
-
-  it('names the Connect tier on the pill and marks it active in the dropdown', () => {
-    (storeModule.useApp as jest.Mock).mockReturnValue(vendorStore('connect'));
-    render(<Header />);
-
-    expect(screen.getByText('Connect Model (₹2 / 3mo)')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByTitle('Vendor Subscription Access Model'));
-    expect(screen.getByText('Connect Model (₹2 / 3 Months)')).toBeInTheDocument();
-    expect(screen.getByText(/5\/50 used/)).toBeInTheDocument();
-  });
-
-  it('names the Select tier when that is the active plan', () => {
-    (storeModule.useApp as jest.Mock).mockReturnValue(vendorStore('select'));
-    render(<Header />);
-
-    expect(screen.getByText('Select Model (₹5 / 3mo)')).toBeInTheDocument();
   });
 });
 
