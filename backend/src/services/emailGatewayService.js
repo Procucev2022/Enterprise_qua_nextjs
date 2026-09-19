@@ -121,6 +121,12 @@ function resolveConfig(env = process.env) {
  * Resolve vendor gateway configuration from the environment (srinu20252026@gmail.com).
  */
 function resolveVendorConfig(env = process.env) {
+  const splitList = (value) =>
+    String(value || '')
+      .split(',')
+      .map((entry) => entry.trim().toLowerCase())
+      .filter(Boolean);
+
   return {
     enabled: String(
       env.VENDOR_EMAIL_GATEWAY_ENABLED !== undefined
@@ -158,6 +164,8 @@ function resolveVendorConfig(env = process.env) {
       ),
       1
     ),
+    allowedSenders: splitList(env.VENDOR_EMAIL_GATEWAY_ALLOWED_SENDERS || env.EMAIL_GATEWAY_ALLOWED_SENDERS),
+    allowedDomains: splitList(env.VENDOR_EMAIL_GATEWAY_ALLOWED_DOMAINS || env.EMAIL_GATEWAY_ALLOWED_DOMAINS),
     isVendorMailbox: true,
   };
 }
@@ -249,9 +257,11 @@ async function resolveSenderAuthorisation(fromAddress, config = resolveConfig())
   }
 
   const buyerAccount = (await storeService.getBuyerAccountByEmail(address)) || null;
+  const allowedSenders = Array.isArray(config && config.allowedSenders) ? config.allowedSenders : [];
+  const allowedDomains = Array.isArray(config && config.allowedDomains) ? config.allowedDomains : [];
 
-  if (config.allowedSenders.length > 0) {
-    if (!config.allowedSenders.includes(address)) {
+  if (allowedSenders.length > 0) {
+    if (!allowedSenders.includes(address)) {
       return {
         allowed: false,
         reason: EMAIL_GATEWAY_MESSAGES.SENDER_NOT_LISTED.replace('{address}', address),
@@ -269,9 +279,9 @@ async function resolveSenderAuthorisation(fromAddress, config = resolveConfig())
     return { allowed: true, reason: null, buyerAccount };
   }
 
-  if (config.allowedDomains.length > 0) {
+  if (allowedDomains.length > 0) {
     const domain = address.split('@')[1] || '';
-    if (!config.allowedDomains.includes(domain)) {
+    if (!allowedDomains.includes(domain)) {
       return {
         allowed: false,
         reason: EMAIL_GATEWAY_MESSAGES.DOMAIN_NOT_LISTED.replace('{domain}', domain || address),
@@ -801,14 +811,23 @@ async function processMessage(rawSource, config = resolveConfig()) {
     };
   }
 
-  // If message arrived on the vendor quotation mailbox, reject buyer RFQ creation:
-  // vendor mailbox only ingests quotations for existing RFQs.
+  // If message arrived on the vendor quotation mailbox, vendor submissions require an RFQ.
+  // When an email represents a new RFQ/request (from a registered buyer or an RFQ enquiry),
+  // it is processed through the RFQ creation pipeline as per dual-inbox requirements.
   if (config && config.isVendorMailbox) {
-    return {
-      status: INGESTION_OUTCOME.INVALID_RFQ,
-      detail: EMAIL_GATEWAY_MESSAGES.VENDOR_GATEWAY_REQUIRES_RFQ,
-      message,
-    };
+    const isRegisteredBuyer = Boolean(await storeService.getBuyerAccountByEmail(message.fromAddress));
+    const isRfqSubjectOrContent = /rfq|requisition|purchase|material|indent|tender|quot|boq|requirement/i.test(
+      `${message.subject || ''} ${message.bodyText || ''}`
+    );
+
+    // Non-RFQ vendor correspondence or general enquiries sent to vendor mailbox without an RFQ are rejected
+    if (!isRegisteredBuyer && !isRfqSubjectOrContent) {
+      return {
+        status: INGESTION_OUTCOME.INVALID_RFQ,
+        detail: EMAIL_GATEWAY_MESSAGES.VENDOR_GATEWAY_REQUIRES_RFQ,
+        message,
+      };
+    }
   }
 
   // 2. Otherwise process as Inbound Buyer RFQ Requisition
@@ -1341,6 +1360,57 @@ function startVendorPolling(config = resolveVendorConfig()) {
 }
 
 /**
+ * Run one polling pass across both monitored inboxes:
+ *   1. Buyer Requisitions Mailbox (e.g. rfq@procucev.com)
+ *   2. Vendor Quotations Mailbox (srinu20252026@gmail.com)
+ *
+ * Executes both in parallel using Promise.allSettled so an error in one inbox
+ * never blocks or disrupts the other.
+ */
+async function pollBothInboxesOnce(buyerConfig = resolveConfig(), vendorConfig = resolveVendorConfig()) {
+  logger.info('Executing scheduled dual-inbox email poll cycle', {}, 'EMAIL_GATEWAY');
+  const [buyerSettled, vendorSettled] = await Promise.allSettled([
+    emailGateway.pollOnce(buyerConfig),
+    emailGateway.pollVendorOnce(vendorConfig),
+  ]);
+
+  const buyer = buyerSettled.status === 'fulfilled'
+    ? buyerSettled.value
+    : { skipped: false, error: (buyerSettled.reason && buyerSettled.reason.message) || 'Buyer poll failed' };
+
+  const vendor = vendorSettled.status === 'fulfilled'
+    ? vendorSettled.value
+    : { skipped: false, error: (vendorSettled.reason && vendorSettled.reason.message) || 'Vendor poll failed' };
+
+  const result = {
+    executedAt: new Date().toISOString(),
+    buyerMailbox: {
+      address: buyerConfig.address || buyerConfig.user || EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+      ...buyer,
+    },
+    vendorMailbox: {
+      address: vendorConfig.address || vendorConfig.user || VENDOR_EMAIL_GATEWAY_CONFIG.DEFAULT_GATEWAY_ADDRESS,
+      ...vendor,
+    },
+    totalConsidered: (buyer.considered || 0) + (vendor.considered || 0),
+    totalIngested: (buyer.ingested || 0) + (vendor.ingested || 0),
+  };
+
+  logger.info(
+    `Dual-inbox poll completed: ${result.totalIngested} ingested of ${result.totalConsidered} considered across both inboxes`,
+    {
+      buyerIngested: buyer.ingested || 0,
+      vendorIngested: vendor.ingested || 0,
+      buyerConsidered: buyer.considered || 0,
+      vendorConsidered: vendor.considered || 0,
+    },
+    'EMAIL_GATEWAY'
+  );
+
+  return result;
+}
+
+/**
  * Begin polling on intervals for both buyer and vendor mailboxes.
  * When called without arguments (e.g. from server.js), launches both buyer and vendor watchers.
  * When called with an explicit config (e.g. unit tests or specific runner), controls that target.
@@ -1382,6 +1452,8 @@ function stopPolling() {
     clearInterval(vendorRuntime.pollTimer);
     vendorRuntime.pollTimer = null;
   }
+  runtime.isPolling = false;
+  vendorRuntime.isPolling = false;
   return buyerWasRunning;
 }
 
@@ -1461,6 +1533,7 @@ const emailGateway = {
   processMessage,
   pollOnce,
   pollVendorOnce,
+  pollBothInboxesOnce,
   startPolling,
   startBuyerPolling,
   startVendorPolling,
