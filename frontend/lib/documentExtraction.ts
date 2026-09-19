@@ -167,6 +167,88 @@ export function readAsArrayBuffer(file: File): Promise<ArrayBuffer> {
   });
 }
 
+/**
+ * Extract plain text from digital PDF ArrayBuffer by reading content streams.
+ */
+export async function extractPdfText(buffer: ArrayBuffer): Promise<string> {
+  try {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const chunk = 8192;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
+    }
+
+    const lines: string[] = [];
+
+    const parseStreamText = (streamText: string) => {
+      const tjRegex = /\(([^)\\]*(?:\\.[^)\\]*)*)\)\s*Tj/g;
+      let match: RegExpExecArray | null;
+      while ((match = tjRegex.exec(streamText)) !== null) {
+        const clean = match[1]
+          .replace(/\\([0-7]{3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8)))
+          .replace(/\\([()\\])/g, '$1')
+          .trim();
+        if (clean) lines.push(clean);
+      }
+
+      const tjArrRegex = /\[(.*?)\]\s*TJ/g;
+      while ((match = tjArrRegex.exec(streamText)) !== null) {
+        const inner = match[1];
+        const strMatches = inner.match(/\(([^)\\]*(?:\\.[^)\\]*)*)\)/g);
+        if (strMatches) {
+          const combined = strMatches
+            .map((s) =>
+              s
+                .slice(1, -1)
+                .replace(/\\([0-7]{3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8)))
+                .replace(/\\([()\\])/g, '$1')
+            )
+            .join(' ')
+            .trim();
+          if (combined) lines.push(combined);
+        }
+      }
+    };
+
+    const streamMarker = /stream[\r\n]+([\s\S]*?)[\r\n]+endstream/g;
+    let sm: RegExpExecArray | null;
+
+    while ((sm = streamMarker.exec(binary)) !== null) {
+      const rawStream = sm[1];
+      parseStreamText(rawStream);
+
+      if (typeof DecompressionStream !== 'undefined') {
+        const streamBytes = new Uint8Array(rawStream.length);
+        for (let j = 0; j < rawStream.length; j++) {
+          streamBytes[j] = rawStream.charCodeAt(j);
+        }
+        for (const format of ['deflate', 'deflate-raw'] as const) {
+          try {
+            const ds = new DecompressionStream(format);
+            const writer = ds.writable.getWriter();
+            writer.write(streamBytes);
+            writer.close();
+            const resp = new Response(ds.readable);
+            const decompressed = await resp.text();
+            if (decompressed) {
+              parseStreamText(decompressed);
+              break;
+            }
+          } catch {
+            // continue
+          }
+        }
+      }
+    }
+
+    const uniqueLines = lines.filter((l, idx) => l && lines.indexOf(l) === idx);
+    return uniqueLines.join('\n').trim();
+  } catch {
+    return '';
+  }
+}
+
 /** Build the extraction request for whichever document the buyer supplied. */
 export async function buildExtractionRequest(file: File): Promise<RFQExtractionRequest> {
   if (isSpreadsheet(file.name)) {
@@ -193,6 +275,16 @@ export async function buildExtractionRequest(file: File): Promise<RFQExtractionR
   if (isEmailFile(file.name)) {
     const mimeType = /\.msg$/i.test(file.name) ? 'application/vnd.ms-outlook' : 'message/rfc822';
     return { fileName: file.name, inlineData: await readAsBase64(file), mimeType };
+  }
+  if (/\.pdf$/i.test(file.name)) {
+    try {
+      const pdfText = await extractPdfText(await readAsArrayBuffer(file));
+      if (pdfText && pdfText.length >= 15) {
+        return { fileName: file.name, documentText: pdfText };
+      }
+    } catch {
+      // fallback to inline data below
+    }
   }
   return {
     fileName: file.name,
