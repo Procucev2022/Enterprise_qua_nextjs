@@ -504,11 +504,12 @@ describe('largeFileIngestionService unit tests', () => {
     });
 
     it('retrieves job status by jobId, jobType, active jobs, or returns null', async () => {
-      const mockFindJob = jest.spyOn(queries, 'findIngestionJob').mockResolvedValue({ id: 'by-id' });
+      jest.spyOn(queries, 'findIngestionJob').mockResolvedValue({ id: 'by-id' });
       jest.spyOn(queries, 'findActiveIngestionJobs')
-        .mockResolvedValueOnce([{ id: 'active-vm', jobType: 'VENDOR_MASTER' }])
-        .mockResolvedValueOnce([{ id: 'active-1', jobType: 'PO_DUMP' }])
-        .mockResolvedValueOnce([]); // Empty active jobs
+        .mockResolvedValueOnce([{ id: 'active-vm', jobType: 'VENDOR_MASTER' }]) // for job2
+        .mockResolvedValueOnce([{ id: 'active-1', jobType: 'PO_DUMP' }]) // for job3
+        .mockResolvedValueOnce([{ id: 'active-vm', jobType: 'VENDOR_MASTER' }]) // for noMatchJob
+        .mockResolvedValueOnce([]); // for job4
 
       // By jobId
       const job1 = await largeFileIngestionService.getJobStatus({ organizationId: 'org-1' }, 'sess-1', 'job-123');
@@ -522,6 +523,10 @@ describe('largeFileIngestionService unit tests', () => {
       const job3 = await largeFileIngestionService.getJobStatus({ organizationId: 'org-1' }, 'sess-1');
       expect(job3.id).toBe('active-1');
 
+      // By jobType with no match
+      const noMatchJob = await largeFileIngestionService.getJobStatus({ organizationId: 'org-1' }, 'sess-1', null, 'NON_EXISTENT');
+      expect(noMatchJob).toBeNull();
+
       // Returns null when no active jobs
       const job4 = await largeFileIngestionService.getJobStatus({ organizationId: 'org-1' }, 'sess-1');
       expect(job4).toBeNull();
@@ -530,6 +535,7 @@ describe('largeFileIngestionService unit tests', () => {
     it('cancels active ingestion jobs and updates progress to failed', async () => {
       jest.spyOn(queries, 'findActiveIngestionJobs').mockResolvedValueOnce([
         { id: 'job-cancel-1', jobType: 'VENDOR_MASTER' },
+        { id: 'job-cancel-2', jobType: 'PO_DUMP' },
       ]);
       const updateProgressSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
 
@@ -545,6 +551,280 @@ describe('largeFileIngestionService unit tests', () => {
       jest.spyOn(queries, 'findSessionById').mockResolvedValueOnce(null);
       const resFalse = await largeFileIngestionService.cancelJob(null, 'bad-sess');
       expect(resFalse).toBe(false);
+    });
+
+    it('covers lookup and batch count variant branches', async () => {
+      // 1. resolveOrganizationId with found=false and profile=null
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId')
+        .mockResolvedValueOnce({ found: false })
+        .mockResolvedValueOnce({ found: true, profile: null });
+
+      const org1 = await largeFileIngestionService.resolveOrganizationId({ sub: 'sub-not-found' });
+      expect(org1).toBeNull();
+
+      const org2 = await largeFileIngestionService.resolveOrganizationId({ userId: 'user-no-profile' });
+      expect(org2).toBeNull();
+
+      // 2. processVendorMasterBatch when bulkUpsert returns a number
+      jest.spyOn(queries, 'bulkUpsertVendorMasterRecords').mockResolvedValueOnce(5);
+      const resVm = await largeFileIngestionService.processVendorMasterBatch('s1', 'o1', [{ companyName: 'Corp A' }]);
+      expect(resVm.imported).toBe(5);
+
+      // 3. processPoDumpBatch when bulkInsert returns an array
+      jest.spyOn(queries, 'bulkInsertPoLineItems').mockResolvedValueOnce([{ id: 'po-1' }]);
+      const resPo = await largeFileIngestionService.processPoDumpBatch('s1', 'o1', [{ vendorName: 'Vendor A' }], {});
+      expect(resPo.imported).toBe(1);
+
+      // 4. streamProcessCsvFile with tab-separated file
+      const tabContent = 'vendor_name\tcontact_email\nVendor Tab\ttab@example.com\n';
+      const tmpTabFile = path.join(os.tmpdir(), `tab-${Date.now()}.tsv`);
+      fs.writeFileSync(tmpTabFile, tabContent, 'utf8');
+
+      jest.spyOn(queries, 'findSession').mockResolvedValue({ id: 'sess-tab' });
+      jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+      jest.spyOn(queries, 'updateSession').mockResolvedValue({});
+      jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(1);
+
+      await largeFileIngestionService.streamProcessCsvFile({
+        jobId: 'job-tab',
+        sessionId: 'sess-tab',
+        organizationId: 'org-1',
+        filePath: tmpTabFile,
+        fileName: 'tab.tsv',
+        jobType: 'VENDOR_MASTER',
+        batchSize: 10,
+      });
+
+      try {
+        fs.unlinkSync(tmpTabFile);
+      } catch {}
+    });
+
+    it('handles cancellation mid-stream during streamProcessCsvFile', async () => {
+      const csvContent = 'vendor_name,contact_email\nVendor 1,v1@example.com\nVendor 2,v2@example.com\n';
+      const tmpFile = path.join(os.tmpdir(), `cancel-stream-${Date.now()}.csv`);
+      fs.writeFileSync(tmpFile, csvContent, 'utf8');
+
+      const updateProgressSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+      jest.spyOn(queries, 'findSession').mockResolvedValue({ id: 'sess-cancel' });
+
+      // Add to active cancellations
+      largeFileIngestionService.activeCancellations.add('job-mid-cancel');
+
+      await largeFileIngestionService.streamProcessCsvFile({
+        jobId: 'job-mid-cancel',
+        sessionId: 'sess-cancel',
+        organizationId: 'org-1',
+        filePath: tmpFile,
+        fileName: 'cancel.csv',
+        jobType: 'VENDOR_MASTER',
+        batchSize: 1,
+      });
+
+      expect(updateProgressSpy).toHaveBeenCalledWith(
+        'job-mid-cancel',
+        'org-1',
+        expect.objectContaining({ status: 'FAILED', errorMessage: 'Cancelled by user' })
+      );
+
+      largeFileIngestionService.activeCancellations.delete('job-mid-cancel');
+    });
+
+    it('handles file cleanup error gracefully in streamProcessCsvFile', async () => {
+      const csvContent = 'vendor_name,contact_email\nVendor 1,v1@example.com\n';
+      const tmpFile = path.join(os.tmpdir(), `unlink-err-${Date.now()}.csv`);
+      fs.writeFileSync(tmpFile, csvContent, 'utf8');
+
+      jest.spyOn(queries, 'findSession').mockResolvedValue({ id: 'sess-1' });
+      jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+      jest.spyOn(queries, 'updateSession').mockResolvedValue({});
+      jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(1);
+
+      const unlinkSpy = jest.spyOn(fs, 'unlinkSync').mockImplementationOnce(() => {
+        throw new Error('EPERM lock');
+      });
+
+      await largeFileIngestionService.streamProcessCsvFile({
+        jobId: 'job-unlink',
+        sessionId: 'sess-1',
+        organizationId: 'org-1',
+        filePath: tmpFile,
+        fileName: 'unlink.csv',
+        jobType: 'VENDOR_MASTER',
+        batchSize: 10,
+      });
+
+      expect(unlinkSpy).toHaveBeenCalled();
+      try {
+        fs.unlinkSync(tmpFile);
+      } catch {}
+    });
+
+    it('handles cancellation inside processArrayJob', async () => {
+      const updateProgressSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+      jest.spyOn(queries, 'findSession').mockResolvedValue({ id: 'sess-arr-cancel' });
+
+      largeFileIngestionService.activeCancellations.add('job-arr-cancel');
+
+      await largeFileIngestionService.processArrayJob({
+        jobId: 'job-arr-cancel',
+        sessionId: 'sess-arr-cancel',
+        organizationId: 'org-1',
+        rows: [{ vendor_name: 'A' }, { vendor_name: 'B' }],
+        fileName: 'test.json',
+        jobType: 'VENDOR_MASTER',
+        batchSize: 1,
+      });
+
+      expect(updateProgressSpy).toHaveBeenCalledWith(
+        'job-arr-cancel',
+        'org-1',
+        expect.objectContaining({ status: 'FAILED', errorMessage: 'Cancelled by user' })
+      );
+
+      largeFileIngestionService.activeCancellations.delete('job-arr-cancel');
+    });
+
+    it('handles startIngestionJob with rows greater than 5000 in background mode', async () => {
+      jest.spyOn(queries, 'createIngestionJob').mockResolvedValueOnce({ id: 'job-large-rows' });
+      const bigRows = new Array(5002).fill({ vendor_name: 'Big Vendor' });
+
+      const job = await largeFileIngestionService.startIngestionJob({
+        sessionUser: { organizationId: 'org-1' },
+        sessionId: 'sess-big',
+        jobType: 'VENDOR_MASTER',
+        rows: bigRows,
+      });
+
+      expect(job.id).toBe('job-large-rows');
+    });
+
+    it('collects batch errors into recentErrors and handles remainder batch cancellation', async () => {
+      const csvContent = 'vendor_name,contact_email\nVendor 1,v1@example.com\n';
+      const tmpFile = path.join(os.tmpdir(), `remainder-cancel-${Date.now()}.csv`);
+      fs.writeFileSync(tmpFile, csvContent, 'utf8');
+
+      jest.spyOn(queries, 'findSession').mockResolvedValue({ id: 'sess-rem' });
+      const updateProgressSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+
+      const readline = require('readline');
+      const origCreateInterface = readline.createInterface;
+      let callCount = 0;
+      jest.spyOn(readline, 'createInterface').mockImplementation((opts) => {
+        callCount++;
+        const rl = origCreateInterface(opts);
+        if (callCount === 2) {
+          return {
+            async *[Symbol.asyncIterator]() {
+              for await (const line of rl) {
+                yield line;
+              }
+              largeFileIngestionService.activeCancellations.add('job-rem');
+            },
+            close() {
+              if (typeof rl.close === 'function') rl.close();
+            },
+          };
+        }
+        return rl;
+      });
+      await largeFileIngestionService.streamProcessCsvFile({
+        jobId: 'job-rem',
+        sessionId: 'sess-rem',
+        organizationId: 'org-1',
+        filePath: tmpFile,
+        fileName: 'rem.csv',
+        jobType: 'VENDOR_MASTER',
+        batchSize: 500, // file line remains in remainder batch
+      });
+
+      expect(updateProgressSpy).toHaveBeenCalledWith(
+        'job-rem',
+        'org-1',
+        expect.objectContaining({ status: 'FAILED', errorMessage: 'Cancelled by user' })
+      );
+
+      largeFileIngestionService.activeCancellations.delete('job-rem');
+      try {
+        fs.unlinkSync(tmpFile);
+      } catch {}
+    });
+
+    it('collects batch errors in remainder batch when bulk upsert fails', async () => {
+      const csvContent = 'vendor_name,contact_email\nVendor Remainder,rem@example.com\n';
+      const tmpFile = path.join(os.tmpdir(), `remainder-err-${Date.now()}.csv`);
+      fs.writeFileSync(tmpFile, csvContent, 'utf8');
+
+      jest.spyOn(queries, 'findSession').mockResolvedValue({ id: 'sess-rem-err' });
+      jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+      jest.spyOn(queries, 'updateSession').mockResolvedValue({});
+      jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(0);
+      jest.spyOn(queries, 'bulkUpsertVendorMasterRecords').mockRejectedValue(new Error('Remainder DB error'));
+
+      await largeFileIngestionService.streamProcessCsvFile({
+        jobId: 'job-rem-err',
+        sessionId: 'sess-rem-err',
+        organizationId: 'org-1',
+        filePath: tmpFile,
+        fileName: 'rem-err.csv',
+        jobType: 'VENDOR_MASTER',
+        batchSize: 500, // processed in remainder batch
+      });
+
+      try {
+        fs.unlinkSync(tmpFile);
+      } catch {}
+    });
+
+    it('logs error when background array ingestion rejects inside setImmediate and handles fallthrough startIngestionJob', async () => {
+      jest.spyOn(queries, 'createIngestionJob').mockResolvedValueOnce({ id: 'job-large-err' });
+      jest.spyOn(queries, 'findSession').mockRejectedValueOnce(new Error('Immediate array worker crash'));
+      jest.spyOn(queries, 'updateIngestionJobProgress').mockRejectedValueOnce(new Error('Progress update crash'));
+
+      await largeFileIngestionService.startIngestionJob({
+        sessionUser: { organizationId: 'org-1' },
+        sessionId: 'sess-large-err',
+        jobType: 'VENDOR_MASTER',
+        rows: new Array(5002).fill({ vendor_name: 'V' }),
+      });
+
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Test fallthrough startIngestionJob when neither filePath nor rows are provided
+      jest.spyOn(queries, 'createIngestionJob').mockResolvedValueOnce({ id: 'job-fallthrough' });
+      const jobFallthrough = await largeFileIngestionService.startIngestionJob({
+        sessionUser: { organizationId: 'org-1' },
+        sessionId: 'sess-fallthrough',
+        jobType: 'VENDOR_MASTER',
+      });
+      expect(jobFallthrough.id).toBe('job-fallthrough');
+    });
+
+    it('collects batch errors in full and remainder batches', async () => {
+      const csvContent = 'vendor_name,contact_email\nVendor 1,v1@example.com\nVendor 2,v2@example.com\n';
+      const tmpFile = path.join(os.tmpdir(), `batch-errors-${Date.now()}.csv`);
+      fs.writeFileSync(tmpFile, csvContent, 'utf8');
+
+      jest.spyOn(queries, 'findSession').mockResolvedValue({ id: 'sess-err' });
+      jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+      jest.spyOn(queries, 'updateSession').mockResolvedValue({});
+      jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(0);
+      jest.spyOn(queries, 'bulkUpsertVendorMasterRecords').mockRejectedValue(new Error('DB upsert error'));
+
+      await largeFileIngestionService.streamProcessCsvFile({
+        jobId: 'job-errors',
+        sessionId: 'sess-err',
+        organizationId: 'org-1',
+        filePath: tmpFile,
+        fileName: 'errs.csv',
+        jobType: 'VENDOR_MASTER',
+        batchSize: 1, // first line triggers main batch with error, second triggers remainder with error
+      });
+
+      try {
+        fs.unlinkSync(tmpFile);
+      } catch {}
     });
   });
 });

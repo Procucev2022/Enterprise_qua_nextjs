@@ -26,7 +26,10 @@ const DEFAULT_IDLE_TIMEOUT_MS = 10000;
  * it is no longer a signal to serve seed data from memory.
  */
 function resolveConfig(env = process.env) {
-  const connectionString = env.DATABASE_URL || '';
+  const connectionString = (env && env.HYPERDRIVE && env.HYPERDRIVE.connectionString)
+    || (env && env.HYPERDRIVE_URL)
+    || (env && env.DATABASE_URL)
+    || '';
   if (!connectionString) return null;
 
   const isLocal = connectionString.includes('localhost') || connectionString.includes('127.0.0.1');
@@ -80,6 +83,9 @@ function createPool(env = process.env) {
 
 function detectProvider(connectionString) {
   const lower = connectionString.toLowerCase();
+  if (lower.includes('hyperdrive')) {
+    return { provider: 'hyperdrive', providerLabel: 'Cloudflare Hyperdrive (Neon PostgreSQL)' };
+  }
   if (lower.includes('neon.tech')) {
     return { provider: 'neon', providerLabel: 'Neon PostgreSQL' };
   }
@@ -232,6 +238,20 @@ async function closePool() {
   poolModule.pool = null;
 }
 
+/**
+ * Initialize or swap connection pool using Cloudflare Worker environment bindings.
+ */
+function initFromEnv(workerEnv) {
+  if (workerEnv) {
+    const config = resolveConfig(workerEnv);
+    if (config) {
+      poolModule.pool = new Pool(config);
+      poolModule.isConfigured = true;
+    }
+  }
+  return poolModule.pool;
+}
+
 poolModule.NOT_CONFIGURED_MESSAGE = NOT_CONFIGURED_MESSAGE;
 poolModule.resolveConfig = resolveConfig;
 poolModule.createPool = createPool;
@@ -243,5 +263,6 @@ poolModule.withTransaction = withTransaction;
 poolModule.checkDatabaseHealth = checkDatabaseHealth;
 poolModule.checkDomainDBHealth = checkDatabaseHealth;
 poolModule.closePool = closePool;
+poolModule.initFromEnv = initFromEnv;
 
 module.exports = poolModule;

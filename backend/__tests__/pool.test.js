@@ -56,6 +56,19 @@ describe('Database pool (Neon PostgreSQL)', () => {
         expect(dbPool.resolveConfig({ DATABASE_URL: connectionString }).ssl).toBe(false);
       }
     );
+    test('resolves config from Cloudflare HYPERDRIVE binding', () => {
+      const config = dbPool.resolveConfig({
+        HYPERDRIVE: { connectionString: 'postgres://hyperdrive.local/db' },
+      });
+      expect(config.connectionString).toBe('postgres://hyperdrive.local/db');
+    });
+
+    test('resolves config from HYPERDRIVE_URL', () => {
+      const config = dbPool.resolveConfig({
+        HYPERDRIVE_URL: 'postgres://hyperdrive.internal/db',
+      });
+      expect(config.connectionString).toBe('postgres://hyperdrive.internal/db');
+    });
   });
 
   describe('createPool', () => {
@@ -82,6 +95,34 @@ describe('Database pool (Neon PostgreSQL)', () => {
       expect(dbPool.detectProvider('postgres://u:p@db.example.com/db')).toMatchObject({
         provider: 'postgres',
       });
+    });
+
+    test('labels a hyperdrive host as hyperdrive', () => {
+      expect(dbPool.detectProvider('postgres://u:p@hyperdrive.domain.internal/db')).toMatchObject({
+        provider: 'hyperdrive',
+        providerLabel: 'Cloudflare Hyperdrive (Neon PostgreSQL)',
+      });
+    });
+  });
+
+  describe('initFromEnv', () => {
+    test('initializes pool from workerEnv with Hyperdrive connection string', () => {
+      const originalPool = dbPool.pool;
+      const originalConfigured = dbPool.isConfigured;
+
+      dbPool.initFromEnv({ HYPERDRIVE_URL: 'postgres://user:pass@127.0.0.1:5432/testdb' });
+      expect(dbPool.isConfigured).toBe(true);
+      expect(dbPool.pool).toBeTruthy();
+
+      // Cleanup
+      dbPool.pool = originalPool;
+      dbPool.isConfigured = originalConfigured;
+    });
+
+    test('is a no-op when workerEnv is empty or absent', () => {
+      const originalPool = dbPool.pool;
+      expect(dbPool.initFromEnv(null)).toBe(originalPool);
+      expect(dbPool.initFromEnv({})).toBe(originalPool);
     });
   });
 
