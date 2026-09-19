@@ -3,6 +3,7 @@ const domainQueries = require('../db/domainQueries');
 const pool = require('../db/pool');
 const { generateVendorOnboardingEmail } = require('../services/emailService');
 const zohoPaymentService = require('../services/zohoPaymentService');
+const zohoReconciliationService = require('../services/zohoReconciliationService');
 const { generateReceiptPdf } = require('../services/invoiceService');
 const { normalizePhone } = require('../db/identityQueries');
 const { logger } = require('../services/loggerService');
@@ -206,6 +207,23 @@ async function getVendorById(req, res, next) {
     if (user && user.role === 'buyer') {
       const buyerAccount = await storeService.getBuyerAccountByEmail(user.email);
       buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
+    } else if (
+      user &&
+      user.role === 'vendor' &&
+      user.email &&
+      id &&
+      id.toLowerCase() === user.email.toLowerCase()
+    ) {
+      // A vendor looking up their own record by their own email. Without
+      // this, storeService.getVendorById's ownership scoping (only ever
+      // populated for the 'buyer' role above) requires a scope to return
+      // ANY vendor a buyer has uploaded — which every buyer-uploaded vendor
+      // is — so a buyer-uploaded vendor could never resolve their own record
+      // at all. That resolution is what quotation-form.tsx uses to find "my
+      // submitted quotes" (matched by vendorId), so it silently showed 0
+      // submitted quotes for every buyer-uploaded vendor regardless of how
+      // many they'd actually sent.
+      buyerId = 'all';
     } else if (req.query && req.query.buyerId) {
       buyerId = req.query.buyerId;
     }
@@ -260,11 +278,25 @@ async function createVendor(req, res, next) {
     if (addedByBuyerCompany) {
       body.addedByBuyerCompany = addedByBuyerCompany;
     }
+    // Checked before addVendor runs at all, not just before reporting success:
+    // addVendor kicks off real side effects (an identity-account write with a
+    // fresh temp password, a real onboarding email) as soon as it's called.
+    // Deferring the uniqueness check to confirmVendorPersisted (below) let a
+    // vendor-add for an email that already had its own identity account
+    // silently overwrite that account's real password/phone on every retried
+    // duplicate submission, even though the vendor record itself never
+    // persisted — a real account got its login clobbered this way.
+    if (body.email && storeService.getVendorById(body.email, 'all')) {
+      return res.status(409).json({ success: false, error: `A vendor with the email ${body.email} already exists.` });
+    }
     logger.info(`Creating new vendor: ${body.name}`, { name: body.name, majorCategory: body.majorCategory, buyerId }, 'VENDOR_CONTROLLER');
     const created = storeService.addVendor(body, req.user && req.user.email, buyerId);
     // Confirms the write actually landed in Postgres before reporting
     // success — a duplicate email (vendors.email is UNIQUE) used to fail
     // silently in the background while this endpoint still returned 201.
+    // Still the authoritative check for a genuine race (two concurrent
+    // requests for the same new email) that the in-memory check above can't
+    // catch — the pre-check above only stops the common, already-hydrated case.
     await storeService.confirmVendorPersisted(created);
     res.status(201).json({ success: true, data: created });
   } catch (err) {
@@ -383,7 +415,7 @@ function generateOnboardingEmailPreview(req, res, next) {
       return res.status(403).json({ success: false, error: 'You do not have permission to view vendor onboarding credentials.' });
     }
     logger.info(`Generating onboarding email preview for vendor ${id}`, { id }, 'VENDOR_CONTROLLER');
-    const vendor = storeService.getVendorById(id);
+    const vendor = storeService.getVendorById(id, 'all'); // resolving by route-param id for an action on this vendor, not a buyer-scoped list
     if (!vendor) {
       logger.warn(`Vendor not found for onboarding email: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
@@ -409,7 +441,7 @@ async function updateSubscription(req, res, next) {
   try {
     const { id } = req.params;
     const { plan } = req.body;
-    const existing = storeService.getVendorById(id);
+    const existing = storeService.getVendorById(id, 'all'); // resolving by route-param id for an action on this vendor, not a buyer-scoped list
     if (!existing) {
       logger.warn(`Vendor not found for subscription update: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
@@ -439,7 +471,7 @@ async function createSubscriptionPaymentLink(req, res, next) {
   try {
     const { id } = req.params;
     const { plan } = req.body;
-    const existing = storeService.getVendorById(id);
+    const existing = storeService.getVendorById(id, 'all'); // resolving by route-param id for an action on this vendor, not a buyer-scoped list
     if (!existing) {
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
@@ -456,7 +488,12 @@ async function createSubscriptionPaymentLink(req, res, next) {
     // so this can never actually be null for a plan that passed that gate.
     const amount = computeZohoPlanAmount(plan);
     const planLabel = (VENDOR_SUBSCRIPTION_PLANS.find((p) => p.id === plan) || {}).name || plan;
-    const returnUrl = `${ZOHO_CONFIG.RETURN_URL_BASE}/vendor/vendor-subscription?payment=success`;
+    // Generated before the Zoho call so it can be embedded in returnUrl — see
+    // the matching comment in buyerAccountController.createSubscriptionPaymentLink
+    // for why a hardcoded `?payment=success` here would misreport a real
+    // cancellation.
+    const linkId = `pl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const returnUrl = `${ZOHO_CONFIG.RETURN_URL_BASE}/vendor/vendor-subscription?linkId=${linkId}`;
 
     const result = await zohoPaymentService.createPaymentLink({
       planId: plan,
@@ -468,7 +505,7 @@ async function createSubscriptionPaymentLink(req, res, next) {
     });
 
     const link = storeService.createPaymentLinkRecord({
-      id: `pl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id: linkId,
       zohoPaymentLinkId: result.zohoPaymentLinkId,
       vendorId: existing.id,
       planId: plan,
@@ -490,12 +527,19 @@ async function createSubscriptionPaymentLink(req, res, next) {
 async function getPaymentLinks(req, res, next) {
   try {
     const { id } = req.params;
-    const existing = storeService.getVendorById(id);
+    const existing = storeService.getVendorById(id, 'all'); // resolving by route-param id for an action on this vendor, not a buyer-scoped list
     if (!existing) {
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
     if (!(await assertVendorOwnership(req, res, existing.email))) return;
-    const links = await storeService.getPaymentLinksForVendor(existing.id);
+    let links = await storeService.getPaymentLinksForVendor(existing.id);
+    // Live re-check any of this vendor's own still-pending links against Zoho
+    // before responding — see zohoReconciliationService.reconcilePendingLinks'
+    // docstring for why (the sandbox webhook has proven unreliable).
+    const reconciled = await zohoReconciliationService.reconcilePendingLinks(links);
+    if (reconciled > 0) {
+      links = await storeService.getPaymentLinksForVendor(existing.id);
+    }
     res.json({ success: true, data: links });
   } catch (err) {
     logger.error(`Error fetching payment links for vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
@@ -507,7 +551,7 @@ async function getPaymentLinks(req, res, next) {
 async function downloadInvoice(req, res, next) {
   try {
     const { id, linkId } = req.params;
-    const existing = storeService.getVendorById(id);
+    const existing = storeService.getVendorById(id, 'all'); // resolving by route-param id for an action on this vendor, not a buyer-scoped list
     if (!existing) {
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
     }
@@ -540,7 +584,7 @@ async function updateCategories(req, res, next) {
   try {
     const { id } = req.params;
     const { clientMappedCategories, vendorSelectedCategories } = req.body;
-    const existing = storeService.getVendorById(id);
+    const existing = storeService.getVendorById(id, 'all'); // resolving by route-param id for an action on this vendor, not a buyer-scoped list
     if (!existing) {
       logger.warn(`Vendor not found for taxonomy update: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });

@@ -53,6 +53,7 @@ const REPORTED_TABLES = [
   'audit_logs',
   'notifications',
   'vendor_ingestion_sessions',
+  'ingestion_jobs',
   'vendor_master_records',
   'po_line_items',
   'vendor_category_mappings',

@@ -241,6 +241,40 @@ describe('emailGatewayService.processMessage', () => {
     expect(result.rfq.rfqNumber).toBe('RFQ-2026-0001');
   });
 
+  // Confirmed live: an outbound notification (RFQ ack, quote ack/failure)
+  // replying to a sender who happens to equal the gateway's own watched
+  // address lands right back in that same mailbox — without this guard the
+  // gateway treats its own notification as a fresh inbound message, fails it,
+  // sends another notification, and loops forever (one real incident sent a
+  // new failure email every poll cycle indefinitely).
+  test('ignores a message from the gateway\'s own configured address, without replying — breaks the self-mail notification loop', async () => {
+    const selfMailEml = [
+      'Return-Path: <intake@procucev.com>',
+      'Message-ID: <loop-1@procucev.com>',
+      'Date: Mon, 07 Sep 2026 09:14:22 +0530',
+      'From: Procucev Intake <intake@procucev.com>',
+      'To: intake@procucev.com',
+      'Subject: Action Required – Quotation Could Not Be Processed for RFQ RFQ-2026-0001',
+      'MIME-Version: 1.0',
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      'Your quotation could not be processed.',
+      '',
+    ].join('\r\n');
+
+    const sendFailureSpy = jest.spyOn(mailerService, 'sendQuoteFailureEmail');
+    const sendAckSpy = jest.spyOn(mailerService, 'sendUnauthorizedBuyerNotificationEmail');
+    const createSpy = jest.spyOn(storeService, 'createRFQ');
+
+    const result = await emailGatewayService.processMessage(Buffer.from(selfMailEml, 'utf8'), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.SKIPPED_OUTBOUND);
+    // No reply of any kind — sending one is exactly what would re-arm the loop.
+    expect(sendFailureSpy).not.toHaveBeenCalled();
+    expect(sendAckSpy).not.toHaveBeenCalled();
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
   test('refuses a message the parser cannot read', async () => {
     const result = await emailGatewayService.processMessage(Buffer.from(''), config());
     expect(result.status).toBe(INGESTION_OUTCOME.UNREADABLE);
@@ -1728,7 +1762,7 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       const addQuoteSpy = jest.spyOn(storeService, 'addQuoteToRFQ').mockReturnValue({
         ...sampleRfq,
         quotesCount: 1,
-        status: 'Quotes Received',
+        status: 'In Evaluation',
       });
 
       const outcome = await emailGatewayService.processVendorQuoteMessage(

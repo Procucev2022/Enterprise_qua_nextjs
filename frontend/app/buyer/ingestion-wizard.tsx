@@ -27,7 +27,7 @@ import {
 } from '@/lib/manualRfqModel';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
-import { extractRfqCategorySignals, getCategoryMatchedProcucevVendors } from '@/lib/vendorMatching';
+import { extractRfqCategorySignals, matchVendorAgainstSignals } from '@/lib/vendorMatching';
 import type {
   ManualRFQForm,
   ManualRFQLineItem,
@@ -35,6 +35,7 @@ import type {
   RFQExtractionResult,
   RFQVendorCandidate,
   SourcingMode,
+  VendorEntry,
   VendorPageMeta,
 } from '@/lib/types';
 import {
@@ -72,7 +73,7 @@ const MODAL = UI_STRINGS.manualRfqModal;
 // value so the Minor Category select and validation still treat it as "a
 // category was chosen", not "nothing chosen yet".
 const ALL_CATEGORIES_OPTION = 'All Categories';
-const ALL_VENDORS_PAGE_SIZE = 30;
+const ALL_VENDORS_PAGE_SIZE = 100;
 const ALL_VENDORS_SEARCH_DEBOUNCE_MS = 350;
 
 function taxonomyMajors(): string[] {
@@ -120,6 +121,15 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
   // Vendors "All Vendors" tab), rather than the always-0-at-scale client match
   // that would otherwise run against the capped bootstrap vendor list.
   const isAllCategories = form.lineItems.some((item) => item.majorCategory === ALL_CATEGORIES_OPTION);
+  // The specific category to browse via the same real, paginated,
+  // server-backed search — not just the "All Categories" case. Client-side
+  // matching against the capped 500-vendor bootstrap snapshot silently
+  // undercounts (or misses entirely) at real scale: a bulk import alone put
+  // 4000+ vendors in a single category, none of which are guaranteed to be
+  // among the 500 vendors that happened to load into that snapshot.
+  const selectedMajorCategory = isAllCategories
+    ? ''
+    : form.lineItems.find((item) => item.majorCategory && item.majorCategory !== ALL_CATEGORIES_OPTION)?.majorCategory || '';
   const [allVendorsSearch, setAllVendorsSearch] = useState('');
   const [debouncedAllVendorsSearch, setDebouncedAllVendorsSearch] = useState('');
   const [allVendorsList, setAllVendorsList] = useState<RFQVendorCandidate[]>([]);
@@ -137,12 +147,18 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
   // re-searched one and overwriting it with stale results.
   const allVendorsFetchSeqRef = useRef(0);
   useEffect(() => {
-    if (!isAllCategories) return;
-    if (allVendorsList.length > 0 && lastAllVendorsKeyRef.current === debouncedAllVendorsSearch) return;
-    lastAllVendorsKeyRef.current = debouncedAllVendorsSearch;
+    if (!isAllCategories && !selectedMajorCategory) return;
+    const key = `${selectedMajorCategory}::${debouncedAllVendorsSearch}`;
+    if (allVendorsList.length > 0 && lastAllVendorsKeyRef.current === key) return;
+    lastAllVendorsKeyRef.current = key;
     const seq = ++allVendorsFetchSeqRef.current;
     setAllVendorsLoading(true);
-    void fetchAllVendors({ page: 1, pageSize: ALL_VENDORS_PAGE_SIZE, search: debouncedAllVendorsSearch }).then((result) => {
+    void fetchAllVendors({
+      page: 1,
+      pageSize: ALL_VENDORS_PAGE_SIZE,
+      search: debouncedAllVendorsSearch,
+      category: selectedMajorCategory,
+    }).then((result) => {
       if (seq !== allVendorsFetchSeqRef.current) return;
       if (result.success) {
         setAllVendorsList(result.candidates);
@@ -151,7 +167,7 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
       setAllVendorsLoading(false);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- allVendorsList is only read as a "has loaded yet" guard, not a re-fetch trigger
-  }, [isAllCategories, debouncedAllVendorsSearch]);
+  }, [isAllCategories, selectedMajorCategory, debouncedAllVendorsSearch]);
 
   const loadMoreAllVendors = () => {
     if (!allVendorsPagination || allVendorsLoadingMore) return;
@@ -159,7 +175,12 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
     if (nextPage > allVendorsPagination.totalPages) return;
     const seq = ++allVendorsFetchSeqRef.current;
     setAllVendorsLoadingMore(true);
-    void fetchAllVendors({ page: nextPage, pageSize: ALL_VENDORS_PAGE_SIZE, search: debouncedAllVendorsSearch }).then((result) => {
+    void fetchAllVendors({
+      page: nextPage,
+      pageSize: ALL_VENDORS_PAGE_SIZE,
+      search: debouncedAllVendorsSearch,
+      category: selectedMajorCategory,
+    }).then((result) => {
       if (seq !== allVendorsFetchSeqRef.current) return;
       if (result.success) {
         setAllVendorsList((prev) => [...prev, ...result.candidates]);
@@ -274,11 +295,6 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
 
   /** AI Extraction: processes uploaded document (.eml, .msg, .xlsx, .pdf, .docx, .csv) into form */
   const handleExtractFromFiles = async () => {
-    if (uploadedFiles.length === 0) {
-      showToast(EXTRACTION.noFileTitle, 'Please select or drop a BOQ document or requisition email first.', 'warning');
-      return;
-    }
-
     setIsExtracting(true);
     setExtractionError(null);
     setExtractionSummary(null);
@@ -422,25 +438,42 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
         attachments: [...form.attachments, ...storedAttachments],
       };
 
-      // In Mode 1 (Private Roster), assign strictly the vendors uploaded by this buyer
-      let mode1AssignedVendors: Array<{
+      type AssignedVendorEntry = {
         id?: string;
         name: string;
         email?: string | null;
         contactPerson?: string | null;
         phone?: string | null;
-      }> | undefined = undefined;
+      };
+      const toAssignedVendorEntry = (v: VendorEntry): AssignedVendorEntry => ({
+        id: v.id,
+        name: v.name || 'Enterprise Vendor',
+        email: v.email || null,
+        contactPerson: v.contactPerson || v.name || null,
+        phone: v.phone || null,
+      });
 
-      if (form.sourcingMode === 'mode_1' && Array.isArray(buyerVendors)) {
-        const myUploadedVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+      // A vendor only ever sees an RFQ if it's their own private-roster match
+      // (addedByBuyerCompany) or they're explicitly on assignedVendors —
+      // category match alone no longer grants visibility (CM invite-gating,
+      // see storeService.vendorCoversRFQ). Mode 2 previously left
+      // assignedVendors empty, so the buyer's private roster only got in via
+      // the addedByBuyerCompany fallback and nothing else was ever invited.
+      // Explicitly scoped to buyer-uploaded vendors only, same as Mode 1 —
+      // no marketplace/category-matched vendors here by design.
+      let mode1AssignedVendors: AssignedVendorEntry[] | undefined = undefined;
+
+      if ((form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2') && Array.isArray(buyerVendors)) {
+        const allMyUploadedVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+        // Category-filtered to match what the panel above actually displays
+        // (and what the buyer sees as "matched") — falls back to the full
+        // roster only when no category signal exists yet to filter by.
+        const { signals: dispatchSignals } = extractRfqCategorySignals(updatedForm);
+        const myUploadedVendors = dispatchSignals.length > 0
+          ? allMyUploadedVendors.filter((v) => matchVendorAgainstSignals(v, dispatchSignals).isMatch)
+          : allMyUploadedVendors;
         if (myUploadedVendors.length > 0) {
-          mode1AssignedVendors = myUploadedVendors.map((v) => ({
-            id: v.id,
-            name: v.name || 'Enterprise Vendor',
-            email: v.email || null,
-            contactPerson: v.contactPerson || v.name || null,
-            phone: v.phone || null,
-          }));
+          mode1AssignedVendors = myUploadedVendors.map(toAssignedVendorEntry);
         }
       }
 
@@ -824,11 +857,11 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                 <tr>
                   <th className="px-3 py-2.5 font-bold">{MODAL.colItem}</th>
                   <th className="px-3 py-2.5 font-bold">{MODAL.colSpecs}</th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colMajor}</th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colMinor}</th>
                   <th className="px-3 py-2.5 font-bold">{MODAL.colQty}</th>
                   <th className="px-3 py-2.5 font-bold">{MODAL.colUnit}</th>
                   <th className="px-3 py-2.5 font-bold">{MODAL.colTargetDate}</th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colMajor}</th>
+                  <th className="px-3 py-2.5 font-bold">{MODAL.colMinor}</th>
                   <th className="px-3 py-2.5 text-center font-bold">Action</th>
                 </tr>
               </thead>
@@ -860,46 +893,6 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                           placeholder={MODAL.specsPlaceholder}
                           className="w-48 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-indigo-500"
                         />
-                      </td>
-
-                      {/* Major Category */}
-                      <td className="px-3 py-2.5 align-top">
-                        <select
-                          aria-label={MODAL.colMajor}
-                          value={item.majorCategory}
-                          onChange={(e) => patchItem(item.id, { majorCategory: e.target.value })}
-                          className="w-44 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium focus:ring-2 focus:ring-indigo-500"
-                        >
-                          <option value="">{MODAL.selectPlaceholder}</option>
-                          <option value={ALL_CATEGORIES_OPTION}>All Categories</option>
-                          {taxonomyMajors().map((major) => (
-                            <option key={major} value={major}>
-                              {major}
-                            </option>
-                          ))}
-                        </select>
-                        <FieldError message={errors.majorCategory} />
-                      </td>
-
-                      {/* Minor Category */}
-                      <td className="px-3 py-2.5 align-top">
-                        <select
-                          aria-label={MODAL.colMinor}
-                          value={item.minorCategory}
-                          disabled={!item.majorCategory || item.majorCategory === ALL_CATEGORIES_OPTION}
-                          onChange={(e) => patchItem(item.id, { minorCategory: e.target.value })}
-                          className="w-44 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium disabled:opacity-40 focus:ring-2 focus:ring-indigo-500"
-                        >
-                          <option value="">
-                            {item.majorCategory === ALL_CATEGORIES_OPTION ? 'Not required' : MODAL.selectPlaceholder}
-                          </option>
-                          {minorsFor(item.majorCategory).map((minor) => (
-                            <option key={minor} value={minor}>
-                              {minor}
-                            </option>
-                          ))}
-                        </select>
-                        <FieldError message={errors.minorCategory} />
                       </td>
 
                       {/* Quantity */}
@@ -942,6 +935,46 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                           onChange={(e) => patchItem(item.id, { targetDate: e.target.value })}
                           className="w-36 px-2 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-indigo-500"
                         />
+                      </td>
+
+                      {/* Major Category */}
+                      <td className="px-3 py-2.5 align-top">
+                        <select
+                          aria-label={MODAL.colMajor}
+                          value={item.majorCategory}
+                          onChange={(e) => patchItem(item.id, { majorCategory: e.target.value })}
+                          className="w-44 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium focus:ring-2 focus:ring-indigo-500"
+                        >
+                          <option value="">{MODAL.selectPlaceholder}</option>
+                          <option value={ALL_CATEGORIES_OPTION}>All Categories</option>
+                          {taxonomyMajors().map((major) => (
+                            <option key={major} value={major}>
+                              {major}
+                            </option>
+                          ))}
+                        </select>
+                        <FieldError message={errors.majorCategory} />
+                      </td>
+
+                      {/* Minor Category */}
+                      <td className="px-3 py-2.5 align-top">
+                        <select
+                          aria-label={MODAL.colMinor}
+                          value={item.minorCategory}
+                          disabled={!item.majorCategory || item.majorCategory === ALL_CATEGORIES_OPTION}
+                          onChange={(e) => patchItem(item.id, { minorCategory: e.target.value })}
+                          className="w-44 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium disabled:opacity-40 focus:ring-2 focus:ring-indigo-500"
+                        >
+                          <option value="">
+                            {item.majorCategory === ALL_CATEGORIES_OPTION ? 'Not required' : MODAL.selectPlaceholder}
+                          </option>
+                          {minorsFor(item.majorCategory).map((minor) => (
+                            <option key={minor} value={minor}>
+                              {minor}
+                            </option>
+                          ))}
+                        </select>
+                        <FieldError message={errors.minorCategory} />
                       </td>
 
                       {/* Delete */}
@@ -1096,7 +1129,13 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                   <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                     <span>Mode 1: Buyer&apos;s Approved Vendor Roster</span>
                     <span className="badge badge-blue text-[10px] font-bold">
-                      {buyerVendors.filter((v) => isBuyerUploaded(v)).length} Suppliers Found
+                      {(() => {
+                        const uploaded = buyerVendors.filter((v) => isBuyerUploaded(v));
+                        const { signals } = extractRfqCategorySignals(form);
+                        return signals.length > 0
+                          ? uploaded.filter((v) => matchVendorAgainstSignals(v, signals).isMatch).length
+                          : uploaded.length;
+                      })()} Suppliers Found
                     </span>
                   </h3>
                   <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
@@ -1110,7 +1149,11 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
             </div>
 
             {(() => {
-              const myVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+              const allMyVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+              const { signals: mode1Signals } = extractRfqCategorySignals(form);
+              const myVendors = mode1Signals.length > 0
+                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, mode1Signals).isMatch)
+                : allMyVendors;
               if (myVendors.length === 0) {
                 return (
                   <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-2">
@@ -1218,9 +1261,25 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
         {form.sourcingMode === 'mode_2' && (
           <div className="mt-5 rounded-2xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
             {(() => {
-              const myVendors = buyerVendors.filter(isBuyerUploaded);
+              const allMyVendors = buyerVendors.filter(isBuyerUploaded);
               const { signals: rfqSignals } = extractRfqCategorySignals(form);
-              const matchedProcucev = getCategoryMatchedProcucevVendors(buyerVendors, rfqSignals, 80);
+              // Was showing the buyer's entire private roster unconditionally,
+              // never re-filtering when the line-item category changed — only
+              // the Procucev marketplace half below reacted. Now applies the
+              // same category-match rule to the private roster too, so both
+              // halves of "Hybrid" actually respond to the category dropdown.
+              const myVendors = rfqSignals.length > 0
+                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals).isMatch)
+                : allMyVendors;
+              // Real, server-paginated, indexed search (same backend query the
+              // CM's Invite Vendors picker uses) whenever any category — "All
+              // Categories" or one specific major category — is selected.
+              // Replaces client-side matching against the capped 500-vendor
+              // bootstrap snapshot, which silently undercounted or missed
+              // vendors entirely once a real category holds thousands of rows
+              // (a single bulk import alone put 4000+ vendors in one category).
+              const usesRealVendorSearch = isAllCategories || !!selectedMajorCategory;
+              const marketplaceCount = allVendorsPagination?.total ?? allVendorsList.length;
 
               return (
                 <>
@@ -1231,15 +1290,17 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                       </div>
                       <div>
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                          <span>Mode 2: Hybrid Sourcing Pool (Private Roster + Procucev Marketplace)</span>
+                          <span>Mode 2: Hybrid Sourcing Pool (Private Roster + Top 100 Procucev Marketplace)</span>
                           <span className="badge badge-emerald text-[10px] font-bold">
-                            {myVendors.length + (isAllCategories ? (allVendorsPagination?.total ?? allVendorsList.length) : matchedProcucev.length)} Suppliers Matched
+                            {myVendors.length + Math.min(100, marketplaceCount)} Suppliers Matched
                           </span>
                         </h3>
                         <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
                           {isAllCategories
-                            ? `Combines your approved roster (${myVendors.length}) with the whole Procucev marketplace directory (${(allVendorsPagination?.total ?? allVendorsList.length).toLocaleString()} suppliers, searchable) since "All Categories" was chosen.`
-                            : `Combines your approved roster (${myVendors.length}) with AI category-matched Procucev marketplace suppliers (${matchedProcucev.length}) for optimal price discovery.`}
+                            ? `Combines your approved roster (${myVendors.length}) with the top 100 Procucev marketplace suppliers (${Math.min(100, marketplaceCount)} shown of ${marketplaceCount.toLocaleString()}) across all categories.`
+                            : usesRealVendorSearch
+                            ? `Combines your approved roster (${myVendors.length}) with top 100 category-matched Procucev marketplace suppliers (${Math.min(100, marketplaceCount)} found).`
+                            : `Combines your approved roster (${myVendors.length}) with AI category-matched Procucev marketplace suppliers (0) — set a category on a line item to search the marketplace.`}
                         </p>
                       </div>
                     </div>
@@ -1328,83 +1389,24 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                     )}
                   </div>
 
-                  {/* Procucev AI-Matched Verified Vendors from Real Database */}
+                  {/* Procucev Verified Vendors from Real Database (top 100 server-paginated search) */}
                   <div className="space-y-2 pt-2 border-t border-emerald-100 dark:border-emerald-900/40">
                     <div className="flex items-center justify-between">
                       <h4 className="text-xs font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1.5">
                         <Sparkles size={13} className="text-emerald-600 dark:text-emerald-400" />
-                        <span>
-                          Procucev Verified Marketplace Suppliers (
-                          {isAllCategories ? (allVendorsPagination ? allVendorsPagination.total.toLocaleString() : allVendorsList.length) : matchedProcucev.length} Matched)
-                        </span>
+                        <span>Top 100 Procucev Verified Marketplace Suppliers ({Math.min(100, marketplaceCount)} Matched)</span>
                       </h4>
                       <span className="text-[10px] text-emerald-700 dark:text-emerald-300 font-semibold">
-                        {isAllCategories ? 'All Categories' : 'Category Matched'}
+                        {isAllCategories ? 'All Categories' : usesRealVendorSearch ? 'Category Matched' : 'No Category Selected'}
                       </span>
                     </div>
 
-                    {isAllCategories ? (
+                    {usesRealVendorSearch ? (
                       renderAllVendorsBrowsePanel('emerald')
-                    ) : matchedProcucev.length === 0 ? (
-                      <div className="p-3.5 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500 space-y-1">
-                        <p className="font-semibold text-slate-600 dark:text-gray-400">No marketplace suppliers directly matching this category yet.</p>
-                        <p className="text-[10px] text-slate-400">Your RFQ will dispatch to your private roster, and category managers will assist with extended sourcing.</p>
-                      </div>
                     ) : (
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-60 overflow-y-auto pr-1">
-                        {matchedProcucev.map(({ vendor: v, matchScore, matchedMajor, matchedCategories }) => {
-                          const rawMinor = v.minorCategories as string | string[] | undefined;
-                          const minorList = Array.isArray(matchedCategories) && matchedCategories.length > 0
-                            ? matchedCategories
-                            : Array.isArray(rawMinor)
-                            ? rawMinor
-                            : typeof rawMinor === 'string'
-                            ? (rawMinor as string).split(',').map((s: string) => s.trim()).filter(Boolean)
-                            : [];
-
-                          return (
-                            <div
-                              key={v.id}
-                              className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-emerald-200/70 dark:border-emerald-900/50 space-y-1.5 shadow-2xs hover:border-emerald-400 transition-colors"
-                            >
-                              <div className="flex items-start justify-between gap-1">
-                                <span className="text-xs font-bold text-slate-900 dark:text-white truncate" title={v.name}>{v.name}</span>
-                                <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-emerald-50 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-200/40 shrink-0">
-                                  {matchScore}% Match
-                                </span>
-                              </div>
-                              <div className="text-[10px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
-                                <span className="truncate font-semibold text-emerald-700 dark:text-emerald-300">{matchedMajor || v.majorCategory || 'General Industrial'}</span>
-                                <span className="truncate">{v.city || v.state || v.location || 'India'}</span>
-                              </div>
-                              {minorList.length > 0 && (
-                                <div className="flex flex-wrap gap-1 pt-1 border-t border-slate-100 dark:border-gray-800">
-                                  {minorList.slice(0, 2).map((cat: string, ci: number) => (
-                                    <span
-                                      key={ci}
-                                      className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-medium bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 border border-slate-200/60 dark:border-gray-700/60 truncate max-w-[120px]"
-                                      title={cat}
-                                    >
-                                      {cat}
-                                    </span>
-                                  ))}
-                                  {minorList.length > 2 && (
-                                    <span className="text-[8px] font-bold text-slate-400 dark:text-gray-500 self-center">
-                                      +{minorList.length - 2}
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-                              <div className="pt-1 border-t border-slate-100 dark:border-gray-800 flex items-center justify-between text-[9px]">
-                                <span className="text-slate-400 truncate">{v.contactPerson || 'Verified Supplier'}</span>
-                                <span className="text-amber-500 font-bold flex items-center gap-0.5 shrink-0">
-                                  <Star size={9} className="fill-amber-400 text-amber-400" />
-                                  <span>{v.rating || 4.5}</span>
-                                </span>
-                              </div>
-                            </div>
-                          );
-                        })}
+                      <div className="p-3.5 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500 space-y-1">
+                        <p className="font-semibold text-slate-600 dark:text-gray-400">Set a Major Category on a line item to search the marketplace.</p>
+                        <p className="text-[10px] text-slate-400">Your RFQ will still dispatch to your matched private roster in the meantime.</p>
                       </div>
                     )}
                   </div>
@@ -1418,8 +1420,11 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
         {form.sourcingMode === 'mode_3' && (
           <div className="mt-5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
             {(() => {
-              const { signals: rfqSignals } = extractRfqCategorySignals(form);
-              const matchedProcucev = getCategoryMatchedProcucevVendors(buyerVendors, rfqSignals, 80);
+              // Same real, server-paginated search as Mode 2 — see that block's
+              // comment for why the client-side capped-snapshot match was
+              // replaced.
+              const usesRealVendorSearch = isAllCategories || !!selectedMajorCategory;
+              const marketplaceCount = allVendorsPagination?.total ?? allVendorsList.length;
 
               return (
                 <>
@@ -1432,7 +1437,7 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                           <span>Mode 3: Autonomous Sourcing & Double-Blind Verification Protocol</span>
                           <span className="badge badge-indigo text-[10px] font-bold">
-                            {isAllCategories ? (allVendorsPagination?.total ?? allVendorsList.length) : matchedProcucev.length} Database Suppliers Queued
+                            {marketplaceCount.toLocaleString()} Database Suppliers Queued
                           </span>
                         </h3>
                         <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
@@ -1504,11 +1509,11 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                     <p>
                       {isAllCategories
                         ? `The RFQ will be sent immediately to your private roster. Simultaneously, suppliers you invite from the whole verified marketplace directory below will receive an anonymous RFQ evaluation invite with specifications, while your company identity stays 100% confidential.`
-                        : `The RFQ will be sent immediately to your private roster. Simultaneously, the ${matchedProcucev.length} category-matched Procucev database vendors below will receive an anonymous RFQ evaluation invite with specifications, while your company identity stays 100% confidential.`}
+                        : `The RFQ will be sent immediately to your private roster. Simultaneously, the ${marketplaceCount.toLocaleString()} category-matched Procucev database vendors below will receive an anonymous RFQ evaluation invite with specifications, while your company identity stays 100% confidential.`}
                     </p>
                   </div>
 
-                  {/* Procucev Database Vendors Grid from Real Database */}
+                  {/* Procucev Database Vendors Grid from Real Database (real, server-paginated search) */}
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <h4 className="text-xs font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1.5">
@@ -1516,74 +1521,16 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                         <span>Vetted Procucev Database Suppliers (Invited for Double-Blind Evaluation)</span>
                       </h4>
                       <span className="text-[10px] text-indigo-700 dark:text-indigo-300 font-semibold">
-                        {isAllCategories ? (allVendorsPagination?.total ?? allVendorsList.length) : matchedProcucev.length} {isAllCategories ? 'Suppliers' : 'Database Matches'}
+                        {marketplaceCount.toLocaleString()} {isAllCategories ? 'Suppliers' : 'Database Matches'}
                       </span>
                     </div>
 
-                    {isAllCategories ? (
+                    {usesRealVendorSearch ? (
                       renderAllVendorsBrowsePanel('indigo')
-                    ) : matchedProcucev.length === 0 ? (
-                      <div className="p-3.5 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500 space-y-1">
-                        <p className="font-semibold text-slate-600 dark:text-gray-400">No database vendors with &gt;80% match in this category.</p>
-                        <p className="text-[10px] text-slate-400">The RFQ will be routed to your private roster while our AI category desk identifies qualified suppliers.</p>
-                      </div>
                     ) : (
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-72 overflow-y-auto pr-1">
-                        {matchedProcucev.map(({ vendor: v, matchScore, matchedMajor, matchedCategories }) => {
-                          const rawMinor = v.minorCategories as string | string[] | undefined;
-                          const minorList = Array.isArray(matchedCategories) && matchedCategories.length > 0
-                            ? matchedCategories
-                            : Array.isArray(rawMinor)
-                            ? rawMinor
-                            : typeof rawMinor === 'string'
-                            ? (rawMinor as string).split(',').map((s: string) => s.trim()).filter(Boolean)
-                            : [];
-
-                          return (
-                            <div
-                              key={v.id}
-                              className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-indigo-200/70 dark:border-indigo-900/50 space-y-2 shadow-2xs hover:border-indigo-400 transition-colors"
-                            >
-                              <div className="flex items-start justify-between gap-1.5">
-                                <div>
-                                  <div className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                                    <span className="truncate" title={v.name}>{v.name}</span>
-                                    <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200/40 shrink-0">
-                                      {matchScore}% Match
-                                    </span>
-                                  </div>
-                                  <div className="text-[10px] text-slate-500 dark:text-gray-400 mt-0.5">{matchedMajor || v.majorCategory || 'General Industrial'} · {v.city || v.state || v.location || 'India'}</div>
-                                </div>
-                              </div>
-
-                              {minorList.length > 0 && (
-                                <div className="flex flex-wrap gap-1 pt-1 border-t border-slate-100 dark:border-gray-800">
-                                  {minorList.slice(0, 3).map((cat: string, ci: number) => (
-                                    <span
-                                      key={ci}
-                                      className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-medium bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 border border-slate-200/60 dark:border-gray-700/60 truncate max-w-[120px]"
-                                      title={cat}
-                                    >
-                                      {cat}
-                                    </span>
-                                  ))}
-                                  {minorList.length > 3 && (
-                                    <span className="text-[8px] font-bold text-slate-400 dark:text-gray-500 self-center">
-                                      +{minorList.length - 3}
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-
-                              <div className="pt-1.5 border-t border-slate-100 dark:border-gray-800 flex items-center justify-between text-[9px]">
-                                <span className="text-slate-500 font-medium">Rating: ⭐ <strong className="text-slate-700 dark:text-gray-300">{v.rating || 4.5}</strong></span>
-                                <span className="text-indigo-600 dark:text-indigo-400 font-bold flex items-center gap-0.5">
-                                  🔒 Double-Blind
-                                </span>
-                              </div>
-                            </div>
-                          );
-                        })}
+                      <div className="p-3.5 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500 space-y-1">
+                        <p className="font-semibold text-slate-600 dark:text-gray-400">Set a Major Category on a line item to search the marketplace.</p>
+                        <p className="text-[10px] text-slate-400">The RFQ will be routed to your private roster while our AI category desk identifies qualified suppliers.</p>
                       </div>
                     )}
                   </div>

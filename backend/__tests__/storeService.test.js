@@ -663,7 +663,7 @@ describe('Store Service & Business Operations', () => {
         minorCategories: ['pumps & accessories'], // casing deliberately different
       });
 
-      const rfq = storeService.createRFQ({ title: 'Centrifugal Pumps', category: 'Pumps & Accessories' });
+      const rfq = storeService.createRFQ({ title: 'Centrifugal Pumps', category: 'Pumps & Accessories', sourcingMode: 'mode_3' });
       expect(storeService.getNotificationsFor('vendor', covering.id)).toHaveLength(0);
       expect(storeService.getNotificationsFor('vendor', minorMatch.id)).toHaveLength(0);
 
@@ -808,7 +808,7 @@ describe('Store Service & Business Operations', () => {
     test('candidateVendorsForRFQ lists every category-matched vendor, flagging who is already invited', () => {
       const matched = storeService.addVendor({ name: 'Candidate Vendor', email: 'candidate@ex.com', majorCategory: 'Candidate-Cat' });
       storeService.addVendor({ name: 'Unmatched Vendor', email: 'unmatched@ex.com', majorCategory: 'Some-Other-Cat' });
-      const rfq = storeService.createRFQ({ title: 'Candidate pool RFQ', category: 'Candidate-Cat' });
+      const rfq = storeService.createRFQ({ title: 'Candidate pool RFQ', category: 'Candidate-Cat', sourcingMode: 'mode_3' });
 
       const candidates = storeService.candidateVendorsForRFQ(rfq);
       expect(candidates.map((c) => c.id)).toContain(matched.id);
@@ -850,8 +850,8 @@ describe('Store Service & Business Operations', () => {
       const v = storeService.addVendor({ name: 'Scope Vendor', email: 'scope@ex.com', majorCategory: 'Valves-Scope-Test' });
       // Explicit distinct ids: createRFQ's default id is `rfq-${Date.now()}`,
       // so two calls in the same millisecond can otherwise collide.
-      const notInvited = storeService.createRFQ({ id: 'rfq-scope-test-1', title: 'Valves enquiry, not invited', category: 'Valves-Scope-Test' });
-      storeService.createRFQ({ id: 'rfq-scope-test-2', title: 'Cables enquiry', category: 'Cables-Scope-Test' });
+      const notInvited = storeService.createRFQ({ id: 'rfq-scope-test-1', title: 'Valves enquiry, not invited', category: 'Valves-Scope-Test', sourcingMode: 'mode_3' });
+      storeService.createRFQ({ id: 'rfq-scope-test-2', title: 'Cables enquiry', category: 'Cables-Scope-Test', sourcingMode: 'mode_3' });
 
       let visible = storeService.getRFQsForVendor('scope@ex.com');
       expect(visible.map((r) => r.rfqNumber)).not.toContain(notInvited.rfqNumber);
@@ -906,14 +906,14 @@ describe('Store Service & Business Operations', () => {
     });
 
     test('skips unknown vendor ids and returns invitedCount 0 when nothing new was added', () => {
-      const rfq = storeService.createRFQ({ title: 'Invite Skip RFQ', category: 'Invite-Skip-Cat' });
+      const rfq = storeService.createRFQ({ title: 'Invite Skip RFQ', category: 'Invite-Skip-Cat' , sourcingMode: 'mode_3' });
       const result = storeService.inviteVendorsToRFQ(rfq.id, ['ghost-vendor-id'], 'cm@ex.com');
       expect(result).toEqual({ updatedRFQ: expect.objectContaining({ id: rfq.id }), invitedCount: 0 });
     });
 
     test('invites a vendor: grants access, fires the fake chaser feed, a real notification, a real email, and an audit entry', () => {
       const vendor = storeService.addVendor({ name: 'Invite Flow Vendor', email: 'inviteflow@ex.com', majorCategory: 'Invite-Flow-Cat' });
-      const rfq = storeService.createRFQ({ title: 'Invite Flow RFQ', category: 'Invite-Flow-Cat' });
+      const rfq = storeService.createRFQ({ title: 'Invite Flow RFQ', category: 'Invite-Flow-Cat' , sourcingMode: 'mode_3' });
       const feedBefore = storeService.getAIFeed().length;
       const auditBefore = storeService.getAuditLogs().length;
 
@@ -931,7 +931,7 @@ describe('Store Service & Business Operations', () => {
 
     test('re-inviting an already-invited vendor is a no-op (dedup, no duplicate side effects)', () => {
       const vendor = storeService.addVendor({ name: 'Dedup Vendor', email: 'dedup@ex.com', majorCategory: 'Dedup-Cat' });
-      const rfq = storeService.createRFQ({ title: 'Dedup RFQ', category: 'Dedup-Cat' });
+      const rfq = storeService.createRFQ({ title: 'Dedup RFQ', category: 'Dedup-Cat' , sourcingMode: 'mode_3' });
 
       storeService.inviteVendorsToRFQ(rfq.id, [vendor.id], 'cm@ex.com');
       const notifsAfterFirst = storeService.getNotificationsFor('vendor', vendor.id).length;
@@ -943,7 +943,7 @@ describe('Store Service & Business Operations', () => {
 
     test('skips the email step for an invited vendor with no email address', () => {
       const vendor = storeService.addVendor({ name: 'No Email Vendor', email: '', majorCategory: 'No-Email-Cat' });
-      const rfq = storeService.createRFQ({ title: 'No Email RFQ', category: 'No-Email-Cat' });
+      const rfq = storeService.createRFQ({ title: 'No Email RFQ', category: 'No-Email-Cat' , sourcingMode: 'mode_3' });
 
       const result = storeService.inviteVendorsToRFQ(rfq.id, [vendor.id], 'cm@ex.com');
 
@@ -952,14 +952,14 @@ describe('Store Service & Business Operations', () => {
     });
 
     test('vendorIds that is not an array is treated as empty — invitedCount 0', () => {
-      const rfq = storeService.createRFQ({ title: 'Non-Array Invite RFQ', category: 'Non-Array-Cat' });
+      const rfq = storeService.createRFQ({ title: 'Non-Array Invite RFQ', category: 'Non-Array-Cat' , sourcingMode: 'mode_3' });
       const result = storeService.inviteVendorsToRFQ(rfq.id, null, 'cm@ex.com');
       expect(result).toEqual({ updatedRFQ: rfq, invitedCount: 0 });
     });
 
     test('defaults the audit actor when no actorEmail is given', () => {
       const vendor = storeService.addVendor({ name: 'No Actor Vendor', email: 'noactor@ex.com', majorCategory: 'No-Actor-Cat' });
-      const rfq = storeService.createRFQ({ title: 'No Actor RFQ', category: 'No-Actor-Cat' });
+      const rfq = storeService.createRFQ({ title: 'No Actor RFQ', category: 'No-Actor-Cat' , sourcingMode: 'mode_3' });
 
       storeService.inviteVendorsToRFQ(rfq.id, [vendor.id]);
 
@@ -968,7 +968,7 @@ describe('Store Service & Business Operations', () => {
 
     test('tolerates an RFQ record with no assignedVendors array (legacy data predating the field)', () => {
       const vendor = storeService.addVendor({ name: 'Legacy Data Vendor', email: 'legacy@ex.com', majorCategory: 'Legacy-Cat' });
-      const rfq = storeService.createRFQ({ title: 'Legacy RFQ', category: 'Legacy-Cat' });
+      const rfq = storeService.createRFQ({ title: 'Legacy RFQ', category: 'Legacy-Cat' , sourcingMode: 'mode_3' });
       delete storeService.getRFQById(rfq.id).assignedVendors;
 
       const result = storeService.inviteVendorsToRFQ(rfq.id, [vendor.id], 'cm@ex.com');
@@ -981,13 +981,14 @@ describe('Store Service & Business Operations', () => {
       const rfqWithSignal = storeService.createRFQ({
         title: 'No Header RFQ',
         extractedEntities: [{ category: 'No-Header-Cat' }],
+        sourcingMode: 'mode_3',
       });
       storeService.inviteVendorsToRFQ(rfqWithSignal.id, [vendorA.id], 'cm@ex.com');
       const [notifA] = storeService.getNotificationsFor('vendor', vendorA.id);
       expect(notifA.title).toBe('New RFQ in No-Header-Cat');
 
       const vendorB = storeService.addVendor({ name: 'No Signal Vendor', email: 'nosignal@ex.com', majorCategory: 'Anything' });
-      const rfqNoSignal = storeService.createRFQ({ title: 'No Signal RFQ' });
+      const rfqNoSignal = storeService.createRFQ({ title: 'No Signal RFQ' , sourcingMode: 'mode_3' });
       storeService.inviteVendorsToRFQ(rfqNoSignal.id, [vendorB.id], 'cm@ex.com');
       const [notifB] = storeService.getNotificationsFor('vendor', vendorB.id);
       expect(notifB.title).toBe('New RFQ in your categories');
@@ -996,7 +997,7 @@ describe('Store Service & Business Operations', () => {
     test('logs (does not throw) when the invite email send rejects', async () => {
       inviteEmailSpy.mockRejectedValueOnce(new Error('smtp down'));
       const vendor = storeService.addVendor({ name: 'Invite Fail Vendor', email: 'invitefail@ex.com', majorCategory: 'Invite-Fail-Cat' });
-      const rfq = storeService.createRFQ({ title: 'Invite Fail RFQ', category: 'Invite-Fail-Cat' });
+      const rfq = storeService.createRFQ({ title: 'Invite Fail RFQ', category: 'Invite-Fail-Cat' , sourcingMode: 'mode_3' });
 
       const result = storeService.inviteVendorsToRFQ(rfq.id, [vendor.id], 'cm@ex.com');
 
@@ -1719,7 +1720,7 @@ describe('demo RFQ seeding', () => {
       expect(updatedRfq1).toBeDefined();
       expect(updatedRfq1.quotes.length).toBe(1);
       expect(updatedRfq1.quotesCount).toBe(1);
-      expect(updatedRfq1.status).toBe('Quotes Received');
+      expect(updatedRfq1.status).toBe('In Evaluation');
       expect(updatedRfq1.quotes[0].source).toBe('portal');
       expect(updatedRfq1.quotes[0].isBestPrice).toBe(true);
       expect(updatedRfq1.followUpData.respondedCount).toBe(1);

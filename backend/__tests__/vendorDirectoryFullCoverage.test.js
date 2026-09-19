@@ -259,6 +259,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
     test('createSubscriptionPaymentLink validation and success flows', async () => {
       const res = mockRes();
       const next = jest.fn();
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue({ mobile: '9123456780' });
 
       // Account not found and user has no email
       await buyerAccountController.createSubscriptionPaymentLink(
@@ -288,6 +289,7 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
 
       // User without prior account record created on the fly with orgName
       jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValueOnce(null);
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValueOnce({ mobile: '9123456780' });
       jest.spyOn(zohoPaymentService, 'createPaymentLink').mockResolvedValueOnce({
         zohoPaymentLinkId: 'zpl-new',
         paymentUrl: 'https://payments.zoho.in/pay/new',
@@ -332,6 +334,16 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
         next
       );
       expect(res.status).toHaveBeenCalledWith(502);
+
+      // No mobileNumber on the domain record and no phone in the identity record either
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValueOnce({ id: 'ba-2', corporateEmail: 'nomobile@b.com' });
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValueOnce({ mobile: '' });
+      await buyerAccountController.createSubscriptionPaymentLink(
+        { user: { role: 'buyer', email: 'nomobile@b.com' }, params: { id: 'ba-2' }, body: { plan: 'version_1' } },
+        res,
+        next
+      );
+      expect(res.status).toHaveBeenCalledWith(400);
     });
 
     test('ingestHistoricalData validation, processing, and error', async () => {
@@ -932,12 +944,32 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       );
       expect(res.status).toHaveBeenCalledWith(201);
 
-      // Exception handling
+      // A duplicate-email add is rejected before addVendor is ever called —
+      // not after. addVendor fires real side effects (an identity-account
+      // write with a fresh temp password, a real onboarding email); a
+      // duplicate that only got caught afterward, by confirmVendorPersisted's
+      // DB check, used to let that fire anyway and silently overwrite the
+      // existing account's real password/phone even though the vendor record
+      // itself was rejected.
+      const addVendorSpy = jest.spyOn(storeService, 'addVendor');
+      await vendorController.createVendor(
+        { user: { role: 'vendor', email: 'v@v.com' }, body: { name: 'Vendor 1 Again', majorCategory: 'Mechanical' } },
+        res,
+        next
+      );
+      expect(res.status).toHaveBeenCalledWith(409);
+      expect(addVendorSpy).not.toHaveBeenCalled();
+      addVendorSpy.mockRestore();
+
+      // Exception handling. A distinct email from the "Success" case above —
+      // createVendor now checks for an existing vendor email before addVendor
+      // is ever called, so reusing v@v.com here would short-circuit to a 409
+      // and never reach the mocked throw this test is exercising.
       jest.spyOn(storeService, 'addVendor').mockImplementation(() => {
         throw new Error('err');
       });
       await vendorController.createVendor(
-        { user: { role: 'vendor', email: 'v@v.com' }, body: { name: 'Vendor 1', majorCategory: 'Mechanical' } },
+        { user: { role: 'vendor', email: 'v2@v.com' }, body: { name: 'Vendor 2', majorCategory: 'Mechanical' } },
         res,
         next
       );

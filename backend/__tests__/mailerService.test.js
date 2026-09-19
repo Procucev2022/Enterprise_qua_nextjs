@@ -831,6 +831,70 @@ describe('mailerService', () => {
     });
   });
 
+  describe('Resend HTTPS-API delivery (used instead of SMTP whenever RESEND_API_KEY is set — SMTP is blocked outbound on Render)', () => {
+    afterEach(() => {
+      global.fetch.mockRestore?.();
+    });
+
+    test('sends via Resend instead of SMTP when RESEND_API_KEY is set, and never touches SMTP_USER/SMTP_PASSWORD', async () => {
+      let freshMailerService;
+      jest.isolateModules(() => {
+        process.env.NODE_ENV = 'development';
+        process.env.RESEND_API_KEY = 'resend-test-key';
+        process.env.RESEND_FROM_EMAIL = 'invites@procucev.com';
+        delete process.env.SMTP_USER;
+        delete process.env.SMTP_PASSWORD;
+        freshMailerService = require('../src/services/mailerService');
+      });
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ id: 'resend-msg-id' }),
+      });
+
+      const res = await freshMailerService.sendOtpEmail('vendor@example.com', '4321', 600);
+
+      expect(res.sent).toBe(true);
+      expect(res.messageId).toBe('resend-msg-id');
+      expect(global.fetch).toHaveBeenCalledWith(
+        'https://api.resend.com/emails',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({ Authorization: 'Bearer resend-test-key' }),
+        })
+      );
+      const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+      expect(body.from).toBe('invites@procucev.com');
+      expect(body.to).toBe('vendor@example.com');
+
+      delete process.env.RESEND_API_KEY;
+      delete process.env.RESEND_FROM_EMAIL;
+      process.env.NODE_ENV = 'test';
+    });
+
+    test('propagates a Resend API error to the caller instead of silently swallowing it', async () => {
+      let freshMailerService;
+      jest.isolateModules(() => {
+        process.env.NODE_ENV = 'development';
+        process.env.RESEND_API_KEY = 'resend-test-key';
+        freshMailerService = require('../src/services/mailerService');
+      });
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 422,
+        json: () => Promise.resolve({ message: 'Invalid from address' }),
+      });
+
+      await expect(freshMailerService.sendOtpEmail('vendor@example.com', '4321', 600)).rejects.toThrow(
+        'Invalid from address'
+      );
+
+      delete process.env.RESEND_API_KEY;
+      process.env.NODE_ENV = 'test';
+    });
+  });
+
   describe('Vendor Transporter & Gateway Address', () => {
     test('vendorFromAddress and vendorGatewayAddress support custom and fallback envs', () => {
       expect(mailerService.vendorFromAddress()).toContain('srinu20252026@gmail.com');

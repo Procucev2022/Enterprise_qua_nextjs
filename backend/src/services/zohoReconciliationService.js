@@ -30,28 +30,60 @@ const runtime = { timer: null };
 // re-checked a real payment link's status with Zoho.
 const RECONCILABLE_STATUSES = ['CREATED', 'pending', 'active'];
 
+/**
+ * Re-check a single payment link against Zoho's own status and activate the
+ * subscription if it's now paid. Shared by the bulk interval poll below and
+ * by an on-demand check (GET .../payment-links re-verifies any of the
+ * caller's own still-pending links this same way before responding) — the
+ * sandbox webhook subscription has proven unreliable in practice (delivery
+ * never observed even when the console reports it enabled and subscribed to
+ * every event), so a user actively checking their own payment status should
+ * never have to wait on it or the 10-minute interval.
+ */
+async function reconcileLink(link) {
+  const result = await zohoPaymentService.getPaymentLinkStatus(link.zohoPaymentLinkId);
+  storeService.updatePaymentLinkRecord(link.id, { status: result.status, rawResponse: result.rawResponse });
+  // Zoho's own status strings are lowercase ('active', 'paid', 'expired',
+  // 'cancelled') — compared case-insensitively since the webhook path
+  // separately writes its own app-invented 'PAID' (uppercase) for the
+  // same lifecycle point, and this check needs to recognize either.
+  if (String(result.status || '').toLowerCase() === 'paid') {
+    if (link.payerType === 'buyer') {
+      storeService.activateBuyerSubscriptionFromPayment(link.id);
+    } else {
+      storeService.activateVendorSubscriptionFromPayment(link.id);
+    }
+  }
+  return result;
+}
+
 async function reconcileOnce() {
   const pending = await storeService.getPaymentLinksByStatusIn(RECONCILABLE_STATUSES);
   for (const link of pending) {
     try {
-      const result = await zohoPaymentService.getPaymentLinkStatus(link.zohoPaymentLinkId);
-      storeService.updatePaymentLinkRecord(link.id, { status: result.status, rawResponse: result.rawResponse });
-      // Zoho's own status strings are lowercase ('active', 'paid', 'expired',
-      // 'cancelled') — compared case-insensitively since the webhook path
-      // separately writes its own app-invented 'PAID' (uppercase) for the
-      // same lifecycle point, and this check needs to recognize either.
-      if (String(result.status || '').toLowerCase() === 'paid') {
-        if (link.payerType === 'buyer') {
-          storeService.activateBuyerSubscriptionFromPayment(link.id);
-        } else {
-          storeService.activateVendorSubscriptionFromPayment(link.id);
-        }
-      }
+      await reconcileLink(link);
     } catch (err) {
       logger.error(`Zoho reconciliation failed for payment link ${link.id}`, err, 'ZOHO_RECONCILIATION');
     }
   }
   return { checked: pending.length };
+}
+
+/**
+ * Re-check every one of `links` that's still in a non-terminal status,
+ * in place, swallowing per-link failures (a Zoho blip re-checking one link
+ * shouldn't fail the whole list for the caller). Returns the same array
+ * reference with any reconciled links' entries already updated in
+ * `storeService`, so callers just re-read from storeService afterward.
+ */
+async function reconcilePendingLinks(links) {
+  const pending = links.filter((l) => RECONCILABLE_STATUSES.includes(l.status));
+  await Promise.all(
+    pending.map((link) =>
+      reconcileLink(link).catch((err) => logger.error(`On-demand Zoho reconciliation failed for payment link ${link.id}`, err, 'ZOHO_RECONCILIATION'))
+    )
+  );
+  return pending.length;
 }
 
 /** Begin polling on an interval. Refuses to start twice or when disabled/unconfigured. */
@@ -81,4 +113,4 @@ function stopPolling() {
   return true;
 }
 
-module.exports = { reconcileOnce, startPolling, stopPolling };
+module.exports = { reconcileOnce, reconcilePendingLinks, startPolling, stopPolling };

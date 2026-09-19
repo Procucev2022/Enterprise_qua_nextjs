@@ -80,6 +80,12 @@ function mockFetchImpl(url: string, options: any = {}) {
       }),
     });
   }
+  if (/\/api\/vendors\/v-mock-apex\/payment-links$/.test(url) && method === 'GET') {
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({ success: true, data: [{ id: 'pl-1', status: 'PAID' }] }),
+    });
+  }
   if (/\/api\/catalogue/.test(url) && method === 'GET') {
     return Promise.resolve({ ok: true, json: async () => ({ success: true, data: [] }) });
   }
@@ -532,41 +538,61 @@ describe('Vendor Screens Comprehensive Suite', () => {
       authClient.setSession(null);
     });
 
-    test('shows a toast and re-syncs on a successful Zoho redirect back, then strips the query param', async () => {
+    test('shows a toast and re-syncs when the real payment link status comes back PAID, then strips the query param', async () => {
+      authClient.setSession({
+        id: 'u-vendor-1',
+        email: 'sales@apexsupplies.com',
+        name: 'Test Vendor',
+        role: 'vendor',
+        orgId: 'org-vendor-1',
+        orgName: 'Apex Supplies Ltd.',
+      });
       const originalLocation = window.location.href;
-      window.history.pushState({}, '', '/vendor/vendor-subscription?payment=success');
+      window.history.pushState({}, '', '/vendor/vendor-subscription?linkId=pl-1');
 
       try {
         renderWithToast(<VendorSubscriptionCenter />);
-        await act(async () => {
-          await Promise.resolve();
-        });
 
-        expect(screen.getByText(/Payment Received/i)).toBeInTheDocument();
+        await waitFor(() => expect(screen.getByText(/Payment Received/i)).toBeInTheDocument());
         expect(window.location.search).toBe('');
       } finally {
+        authClient.setSession(null);
         window.history.pushState({}, '', originalLocation);
       }
     });
 
-    test('shows a toast on a cancelled Zoho redirect back, preserving any other query params', async () => {
+    test('shows a cancelled toast when the real payment link status comes back CANCELED, preserving any other query params', async () => {
+      authClient.setSession({
+        id: 'u-vendor-1',
+        email: 'sales@apexsupplies.com',
+        name: 'Test Vendor',
+        role: 'vendor',
+        orgId: 'org-vendor-1',
+        orgName: 'Apex Supplies Ltd.',
+      });
+      const cancelledImpl = (url: string, options: any = {}) => {
+        if (/\/api\/vendors\/v-mock-apex\/payment-links$/.test(url)) {
+          return Promise.resolve({ ok: true, json: async () => ({ success: true, data: [{ id: 'pl-1', status: 'CANCELED' }] }) });
+        }
+        return mockFetchImpl(url, options);
+      };
+      global.fetch = jest.fn(cancelledImpl) as any;
+
       const originalLocation = window.location.href;
-      window.history.pushState({}, '', '/vendor/vendor-subscription?ref=email&payment=cancelled');
+      window.history.pushState({}, '', '/vendor/vendor-subscription?ref=email&linkId=pl-1');
 
       try {
         renderWithToast(<VendorSubscriptionCenter />);
-        await act(async () => {
-          await Promise.resolve();
-        });
 
-        expect(screen.getByText(/Payment Cancelled/i)).toBeInTheDocument();
+        await waitFor(() => expect(screen.getByText(/Payment Cancelled/i)).toBeInTheDocument());
         expect(window.location.search).toBe('?ref=email');
       } finally {
+        authClient.setSession(null);
         window.history.pushState({}, '', originalLocation);
       }
     });
 
-    test('does nothing when there is no payment query param', async () => {
+    test('does nothing when there is no linkId query param', async () => {
       renderWithProvider(<VendorSubscriptionCenter />);
       await act(async () => {
         await Promise.resolve();

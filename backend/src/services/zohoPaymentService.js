@@ -15,7 +15,7 @@ const domainQueries = require('../db/domainQueries');
 const { logger } = require('./loggerService');
 
 /**
- * `fetch`, retried once on a raw network-level failure.
+ * `fetch`, retried on a raw network-level failure.
  *
  * Node's global fetch (undici) keeps a persistent keep-alive connection pool
  * per origin for the life of the process. Observed live against the real
@@ -24,19 +24,30 @@ const { logger } = require('./loggerService');
  * resets it, etc.), every subsequent call in this long-running server process
  * fails with an opaque `TypeError: fetch failed` — while a fresh, short-lived
  * process (its own clean connection pool) succeeds immediately against the
- * identical request. A one-shot retry recovers from this because undici
- * discards the dead connection and opens a new one on the next attempt,
- * without needing to reach into undici's connection-pool internals directly.
+ * identical request. A retry recovers from this because undici discards the
+ * dead connection and opens a new one on the next attempt, without needing to
+ * reach into undici's connection-pool internals directly.
+ *
+ * Up to 2 retries (3 attempts total), not 1: observed live that a single
+ * immediate retry can still land on the same degraded network state and fail
+ * too — a real buyer's payment-link request failed on both the first attempt
+ * and its one retry, each ~10-20s later, while a fresh short-lived process
+ * making the identical call succeeded immediately every time. A short delay
+ * before each retry gives a genuinely transient blip more room to clear,
+ * rather than firing both attempts back-to-back into the same bad state.
  */
-async function fetchWithRetry(url, init) {
+async function fetchWithRetry(url, init, attempt = 1) {
+  const MAX_ATTEMPTS = 3;
+  const RETRY_DELAY_MS = 400;
   try {
     return await fetch(url, init);
   } catch (err) {
-    if (!(err instanceof TypeError) || !/fetch failed/i.test(err.message || '')) {
+    if (!(err instanceof TypeError) || !/fetch failed/i.test(err.message || '') || attempt >= MAX_ATTEMPTS) {
       throw err;
     }
-    logger.warn('Zoho fetch failed once, retrying with a fresh connection', { url }, 'ZOHO_PAYMENT_SERVICE');
-    return fetch(url, init);
+    logger.warn(`Zoho fetch failed (attempt ${attempt}/${MAX_ATTEMPTS}), retrying with a fresh connection`, { url }, 'ZOHO_PAYMENT_SERVICE');
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+    return fetchWithRetry(url, init, attempt + 1);
   }
 }
 

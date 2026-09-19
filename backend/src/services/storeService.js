@@ -1209,6 +1209,66 @@ class StoreService {
       },
     };
 
+    // Category-based vendor invite for Version 1 (mode_1) and Version 2
+    // (mode_2): every vendor whose major/minor category matches this RFQ is
+    // merged into assignedVendors, in addition to whatever the client
+    // already supplied (e.g. the buyer's own private roster). Reuses
+    // candidateVendorsForRFQ (same category-match rule the CM's invite
+    // picker uses) — this bypasses the invite-only requirement deliberately
+    // for these two modes only.
+    if (newRFQ.sourcingMode === 'mode_1' || newRFQ.sourcingMode === 'mode_2') {
+      // Capped: a bulk-imported category can match thousands of vendors (seen
+      // live: 3000+ on a single RFQ, a 787KB payload) — embedding all of them
+      // in assignedVendors on every future read of this RFQ is exactly the
+      // "crashes the browser at scale" problem this codebase has already hit
+      // and capped elsewhere (MAX_VENDOR_PAGE_SIZE, MAX_BOOTSTRAP_VENDORS).
+      const MAX_CATEGORY_MATCHED_INVITES = 200;
+      // Relevance (category match) decides who qualifies at all; rating
+      // breaks ties within that pool. mode_2 additionally reorders the
+      // qualified pool by delivery-pincode proximity before trimming to its
+      // own smaller cap — pincode is a re-sort of who's already relevant,
+      // never a replacement for relevance itself.
+      let categoryMatches = this.candidateVendorsForRFQ(newRFQ).sort(
+        (a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0)
+      );
+
+      if (newRFQ.sourcingMode === 'mode_2' && newRFQ.deliveryPincode) {
+        const MAX_MODE2_PINCODE_INVITES = 100;
+        const targetPincode = String(newRFQ.deliveryPincode).trim();
+        const pincodeMatches = categoryMatches.filter(
+          (v) => v.pincode && String(v.pincode).trim() === targetPincode
+        );
+        const pincodeNonMatches = categoryMatches.filter(
+          (v) => !(v.pincode && String(v.pincode).trim() === targetPincode)
+        );
+        // Pincode match ranked first (rating already sorted within each
+        // group from the sort above); non-matches backfill any remaining
+        // slots up to the cap so mode_2 never returns an under-filled list
+        // when pincode coverage in that area is thin.
+        categoryMatches = [...pincodeMatches, ...pincodeNonMatches].slice(0, MAX_MODE2_PINCODE_INVITES);
+      } else {
+        categoryMatches = categoryMatches.slice(0, MAX_CATEGORY_MATCHED_INVITES);
+      }
+
+      const existingKeys = new Set(
+        (newRFQ.assignedVendors || []).map((v) => (v.id || v.email || v.name || '').toLowerCase())
+      );
+      const additions = categoryMatches
+        .filter((v) => !existingKeys.has((v.id || v.email || v.name || '').toLowerCase()))
+        .map((v) => ({
+          id: v.id,
+          name: v.name,
+          email: v.email || null,
+          contactPerson: v.contactPerson || null,
+          phone: v.phone || null,
+        }));
+      if (additions.length > 0) {
+        newRFQ.assignedVendors = [...newRFQ.assignedVendors, ...additions];
+        newRFQ.followUpData.totalInvited = newRFQ.assignedVendors.length;
+        newRFQ.followUpData.vendors = newRFQ.assignedVendors;
+      }
+    }
+
     this.rfqs.unshift(newRFQ);
     this._persistRFQ(newRFQ);
 
@@ -1286,10 +1346,16 @@ class StoreService {
       }
     }
 
+    // 'Quotes Received' isn't a real RFQItem status (the type only allows
+    // 'Parsing' | 'In Evaluation' | 'AI Recommended' | 'PO Generated' |
+    // 'Quotes Pending') — writing it here left every quoted RFQ in a status
+    // no screen recognises, so nothing ever showed the RFQ as under
+    // evaluation once a vendor bid. 'In Evaluation' is the real state a
+    // quote actually puts an RFQ into.
     const updated = this.updateRFQ(rfq.id, {
       quotes,
       quotesCount: quotes.length,
-      status: rfq.status === 'PO Generated' ? 'PO Generated' : 'Quotes Received',
+      status: rfq.status === 'PO Generated' ? 'PO Generated' : 'In Evaluation',
       followUpData,
     });
 

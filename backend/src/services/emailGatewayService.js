@@ -520,7 +520,10 @@ async function resolveVendorFromEmail(fromAddress, targetRfq = null) {
     return null;
   }
 
-  const direct = storeService.getVendorById(email);
+  // 'all': resolving the sender's own vendor identity by email, not a
+  // buyer-scoped list — omitting this silently misses any buyer-uploaded
+  // vendor (one with a buyerId set) emailing in a quote reply.
+  const direct = storeService.getVendorById(email, 'all');
   if (direct) return direct;
 
   const allVendors = storeService.getVendors ? await storeService.getVendors() : [];
@@ -738,12 +741,46 @@ async function processMessage(rawSource, config = resolveConfig()) {
     message.bodyText = prepared.extractionInput.documentText;
   }
 
-  // Guard: Never process outbound emails, self-sent copies, or system notifications as inbound requisitions/quotes
+  // 0. Never process mail the gateway itself sent. Every outbound notification
+  // (RFQ acknowledgement, quote acknowledgement/failure, unauthorized-sender
+  // notice) replies to whatever address triggered it — and if that address
+  // happens to equal the gateway's OWN watched mailbox (e.g. a test vendor
+  // reusing the intake address, or a buyer's RFQ-creation ack landing back in
+  // the same inbox it was sent from), the reply lands right back in the
+  // mailbox being watched. Without this guard the gateway then treats its own
+  // notification as a new inbound vendor quote, fails it again, sends another
+  // notification, and loops forever — confirmed live: one bad test message
+  // generated a new "Quotation Could Not Be Processed" every poll cycle
+  // indefinitely, CC'ing the buyer (and, before that CC was removed, a real
+  // support inbox) every time.
+  //
+  // isOutgoingSystemMessage (below) already covers the common case (sender
+  // matches config.user or a known vendor/buyer gateway address); this is a
+  // supplementary catch-all for config.address specifically, which that
+  // check doesn't look at. Both report the same outcome (SKIPPED_OUTBOUND) —
+  // there is nothing behaviourally different about "own address" vs "own
+  // system message" once either is true, both stop here with no reply sent.
   if (isOutgoingSystemMessage(message, config)) {
     logger.info(`Skipping outbound system message from ${message.fromAddress}`, { subject: message.subject }, 'EMAIL_GATEWAY');
     return {
       status: INGESTION_OUTCOME.SKIPPED_OUTBOUND,
       detail: 'Skipped self-sent or outbound system message',
+      message,
+    };
+  }
+
+  const gatewayOwnAddresses = new Set(
+    [config.address, config.user].filter(Boolean).map((a) => String(a).trim().toLowerCase())
+  );
+  if (message.fromAddress && gatewayOwnAddresses.has(String(message.fromAddress).trim().toLowerCase())) {
+    logger.warn(
+      `Ignoring inbound message from the gateway's own address (${message.fromAddress}) — processing it would risk an outbound-notification loop`,
+      { fromAddress: message.fromAddress, subject: message.subject },
+      'EMAIL_GATEWAY'
+    );
+    return {
+      status: INGESTION_OUTCOME.SKIPPED_OUTBOUND,
+      detail: 'Message originated from the gateway\'s own configured address; ignored to avoid a notification loop.',
       message,
     };
   }
@@ -1048,6 +1085,11 @@ async function pollOnce(config = resolveConfig()) {
             if (result.status !== INGESTION_OUTCOME.SKIPPED_OUTBOUND) {
               runtime.ingestedThisRun += 1;
             }
+            // Marked read only for a message we actually acted on, and only after
+            // the ledger write, so a failed write leaves it to be retried. Mail
+            // the gateway rejected is left untouched: it belongs to the mailbox
+            // owner, not to us, and the ledger already stops it being
+            // reconsidered on the next poll.
             await client.messageFlagsAdd(String(uid), ['\\Seen']);
           }
           outcomes.push({ uid, messageId: resolvedMessageId, status: result.status });

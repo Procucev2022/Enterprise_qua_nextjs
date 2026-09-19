@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import VendorSummary, { isBuyerUploaded, isProcucevVendor } from '@/app/buyer/vendor-summary';
 import { useApp } from '@/lib/store';
 import * as rfqClient from '@/lib/rfqClient';
+import * as buyerProfileClient from '@/lib/buyerProfileClient';
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
@@ -10,8 +11,12 @@ jest.mock('@/lib/store', () => ({
 jest.mock('@/lib/rfqClient', () => ({
   fetchAllVendors: jest.fn(),
 }));
+jest.mock('@/lib/buyerProfileClient', () => ({
+  fetchBuyerProfile: jest.fn(),
+}));
 
 const mockFetchAllVendors = rfqClient.fetchAllVendors as jest.Mock;
+const mockFetchBuyerProfile = buyerProfileClient.fetchBuyerProfile as jest.Mock;
 
 describe('app/buyer/vendor-summary.tsx', () => {
   const mockOnViewEvaluation = jest.fn();
@@ -188,6 +193,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         pagination: { page: 1, pageSize: 20, total: candidates.length, totalPages: 1 },
       };
     });
+    mockFetchBuyerProfile.mockResolvedValue({ success: false, error: 'unavailable' });
   });
 
   describe('helper classification functions', () => {
@@ -559,6 +565,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/Company Name/i), { target: { value: '   ' } });
       fireEvent.change(screen.getByLabelText(/Contact Person/i), { target: { value: '   ' } });
       fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'a@b.com' } });
+      fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '   ' } });
       fireEvent.click(screen.getByTestId('submit-add-vendor'));
       expect(mockShowToast).toHaveBeenCalledWith('Validation Error', expect.any(String), 'warning');
       expect(mockAddBuyerVendor).not.toHaveBeenCalled();
@@ -619,6 +626,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/Company Name/i), { target: { value: 'Rejected Vendor Co' } });
       fireEvent.change(screen.getByLabelText(/Contact Person/i), { target: { value: 'Someone' } });
       fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'rejected@vendor.test' } });
+      fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '9876543210' } });
       fireEvent.click(screen.getByTestId('submit-add-vendor'));
 
       await waitFor(() => expect(mockAddBuyerVendor).toHaveBeenCalled());
@@ -1178,6 +1186,74 @@ describe('app/buyer/vendor-summary.tsx', () => {
           country: 'India',
         })
       );
+    });
+  });
+
+  describe('Pincode-based vendor sorting', () => {
+    it('ranks the buyer-uploaded vendor whose pincode matches the buyer profile first', async () => {
+      mockFetchBuyerProfile.mockResolvedValue({ success: true, data: { pincode: '390001' } });
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: mockEvaluationRecords,
+        currentMode: 'mode_3',
+        rfqs: mockRFQs,
+        showToast: mockShowToast,
+        buyerVendors: [
+          { ...mockBuyerVendors[0], id: 'v-1', pincode: '411001' },
+          { ...mockBuyerVendors[1], id: 'v-2', pincode: '390001' },
+        ],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves', 'Pumps'] }],
+        reviseVendorRating: mockReviseVendorRating,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      await waitFor(() => expect(mockFetchBuyerProfile).toHaveBeenCalled());
+
+      const badges = await waitFor(() => {
+        const els = [screen.getByText('v-1'), screen.getByText('v-2')];
+        return els;
+      });
+      const position = badges[0].compareDocumentPosition(badges[1]);
+      // v-2 (the pincode match) must come before v-1 in document order.
+      expect(position & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+    });
+
+    it('leaves vendor order unchanged when the buyer profile has no pincode', async () => {
+      mockFetchBuyerProfile.mockResolvedValue({ success: true, data: {} });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      await waitFor(() => expect(mockFetchBuyerProfile).toHaveBeenCalled());
+      expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
+    });
+
+    it('does not crash when fetchBuyerProfile fails', async () => {
+      mockFetchBuyerProfile.mockResolvedValue({ success: false, error: 'unavailable' });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      await waitFor(() => expect(mockFetchBuyerProfile).toHaveBeenCalled());
+      expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
     });
   });
 

@@ -97,7 +97,15 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       // fires the deep-link effect once the real fetch below resolves.
       setMyVendorRecordLoaded(false);
       try {
-        const res = await fetch(`/api/vendors/${encodeURIComponent(email)}`);
+        // Unauthenticated (no Authorization header) requests to this endpoint
+        // only ever resolve vendors with no buyerId/buyerAccountId at all —
+        // any buyer-uploaded vendor (this.vendors entries with a buyerId set)
+        // requires a resolved scope to be returned. Omitting the token here
+        // meant myVendorId never resolved for a buyer-uploaded vendor, so
+        // "my submitted quotes" (filtered by q.vendorId === myVendorId)
+        // always came back empty for them — a real quote existed server-side
+        // under the real vendor id, but the dashboard showed "0 Sent".
+        const res = await fetch(`/api/vendors/${encodeURIComponent(email)}`, { headers: authHeaders() });
         if (!res.ok) return;
         const data = await res.json();
         if (!cancelled && data.success && data.data) {

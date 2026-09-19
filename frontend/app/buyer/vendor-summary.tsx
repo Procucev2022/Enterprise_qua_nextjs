@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { fetchAllVendors } from '@/lib/rfqClient';
+import { fetchBuyerProfile } from '@/lib/buyerProfileClient';
 import { VendorEvaluationRecord, VendorEntry, VendorPageMeta } from '@/lib/types';
 import {
   Search,
@@ -102,6 +103,43 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [procucevError, setProcucevError] = useState<string | null>(null);
   const [selectedStatus, setSelectedStatus] = useState('ALL');
 
+  // Buyer's own registered pincode, fetched once — used to rank vendors with
+  // a matching pincode first, same relevance-then-pincode rule the backend
+  // already applies to mode_2 RFQ dispatch (createRFQ) and RFQ invite emails
+  // (selectVendorsForRFQEmail): pincode re-sorts an already-relevant list, it
+  // never filters anyone out.
+  const [buyerPincode, setBuyerPincode] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchBuyerProfile().then((result) => {
+      if (cancelled) return;
+      if (result.success && result.data?.pincode) {
+        setBuyerPincode(String(result.data.pincode).trim() || null);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Pincode-first sort: vendors whose pincode matches the buyer's own are
+  // moved to the front, preserving whatever relative order (rating, etc.)
+  // each group already had — mirrors the backend's pincode-match-then-rating
+  // ranking rather than introducing a separate ordering rule client-side.
+  const sortByPincodeMatch = (list: any[]) => {
+    if (!buyerPincode) return list;
+    const matches: any[] = [];
+    const nonMatches: any[] = [];
+    for (const v of list) {
+      if (v.pincode && String(v.pincode).trim() === buyerPincode) {
+        matches.push(v);
+      } else {
+        nonMatches.push(v);
+      }
+    }
+    return [...matches, ...nonMatches];
+  };
+
   // CRUD Modals State
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [isSubmittingAdd, setIsSubmittingAdd] = useState(false);
@@ -194,7 +232,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   // clears the form once the backend actually confirms the write.
   const handleAddVendorSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formName.trim() || !formMajorCategory || !formEmail.trim() || !formContactPerson.trim()) {
+    if (!formName.trim() || !formMajorCategory || !formEmail.trim() || !formContactPerson.trim() || !formPhone.trim()) {
       showToast('Validation Error', 'Please complete all required fields.', 'warning');
       return;
     }
@@ -289,7 +327,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const handleEditVendorSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedVendorForCrud) return;
-    if (!formName.trim() || !formMajorCategory || !formEmail.trim() || !formContactPerson.trim()) {
+    if (!formName.trim() || !formMajorCategory || !formEmail.trim() || !formContactPerson.trim() || !formPhone.trim()) {
       showToast('Validation Error', 'Please complete all required fields.', 'warning');
       return;
     }
@@ -546,7 +584,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     return matchesSearch && matchesCategory && matchesStatus;
   };
 
-  const buyerFilteredVendors = buyerUploadedVendorsList.filter(filterVendorItem);
+  const buyerFilteredVendors = sortByPincodeMatch(buyerUploadedVendorsList.filter(filterVendorItem));
   // Search already happened server-side (see the fetch effect below) — only
   // category/status still filter client-side over the loaded pages.
   const matchesCategoryAndStatus = (v: any) => {
@@ -560,7 +598,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       (selectedStatus === 'CONDITIONAL' && v.status === 'CONDITIONAL / UNDER REVIEW');
     return matchesCategory && matchesStatus;
   };
-  const procucevFilteredVendors = procucevVendorsList.filter(matchesCategoryAndStatus);
+  const procucevFilteredVendors = sortByPincodeMatch(procucevVendorsList.filter(matchesCategoryAndStatus));
   const procucevPagedVendors = procucevFilteredVendors;
   const hasMoreProcucevVendors = !!procucevPagination && procucevPagination.page < procucevPagination.totalPages;
 
@@ -1316,7 +1354,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label htmlFor="add-vendor-contact" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                    Contact Person <span className="text-rose-500">*</span>
+                    Contact Person Name <span className="text-rose-500">*</span>
                   </label>
                   <input
                     id="add-vendor-contact"
@@ -1328,10 +1366,13 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   />
                 </div>
                 <div>
-                  <label htmlFor="add-vendor-phone" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">Phone</label>
+                  <label htmlFor="add-vendor-phone" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    Phone <span className="text-rose-500">*</span>
+                  </label>
                   <input
                     id="add-vendor-phone"
                     type="tel"
+                    required
                     value={formPhone}
                     onChange={(e) => setFormPhone(e.target.value)}
                     className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"

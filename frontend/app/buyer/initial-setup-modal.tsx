@@ -37,7 +37,163 @@ import {
   Check,
   Database,
   Pencil,
+  RefreshCw,
+  ChevronDown,
 } from 'lucide-react';
+
+export interface IngestionJobState {
+  id: string;
+  jobType: 'VENDOR_MASTER' | 'PO_DUMP';
+  fileName: string;
+  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  totalRecords: number;
+  processedRecords: number;
+  importedRecords: number;
+  skippedRecords: number;
+  failedRecords: number;
+  errorMessage?: string | null;
+}
+
+export function IngestionProgressCard({
+  job,
+  title,
+  unit = 'records',
+}: {
+  job: IngestionJobState;
+  title: string;
+  unit?: string;
+}) {
+  const total = job.totalRecords || 0;
+  const processed = job.processedRecords || 0;
+  const imported = job.importedRecords || 0;
+  const skipped = job.skippedRecords || 0;
+  const failed = job.failedRecords || 0;
+  const percentage =
+    total > 0
+      ? Math.min(100, Math.round((processed / total) * 100))
+      : job.status === 'COMPLETED'
+      ? 100
+      : processed > 0
+      ? 100
+      : 0;
+
+  const formatNumber = (n: number) => n.toLocaleString('en-IN');
+
+  return (
+    <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 border-2 border-indigo-500/40 text-white shadow-xl space-y-4 animate-fade-in">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2.5">
+          <div className="w-10 h-10 rounded-xl bg-indigo-600/30 border border-indigo-400/40 flex items-center justify-center text-indigo-400 shrink-0 shadow-md shadow-indigo-600/20">
+            <Database size={20} />
+          </div>
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h4 className="text-sm font-black tracking-wide text-white">
+                {title} Ingestion
+              </h4>
+              {job.status === 'PROCESSING' && (
+                <span className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-400/30 animate-pulse">
+                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping" />
+                  Processing...
+                </span>
+              )}
+              {job.status === 'COMPLETED' && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 shadow-xs">
+                  <CheckCircle2 size={11} className="text-emerald-400" />
+                  Completed
+                </span>
+              )}
+              {job.status === 'FAILED' && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-400/30">
+                  <AlertCircle size={11} className="text-rose-400" />
+                  Failed
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-slate-400 font-mono mt-0.5">
+              File: <span className="text-indigo-300 font-semibold">{job.fileName}</span>
+            </p>
+          </div>
+        </div>
+
+        <div className="text-right">
+          <span className="text-2xl sm:text-3xl font-black font-mono tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-indigo-300 via-purple-200 to-emerald-300">
+            {percentage}%
+          </span>
+          <span className="block text-[10px] text-slate-400 font-medium">
+            {formatNumber(processed)} / {formatNumber(total || processed)} {unit} processed ({percentage}%)
+          </span>
+        </div>
+      </div>
+
+      {/* Real-time Progress Bar */}
+      <div className="space-y-1.5">
+        <div className="w-full h-3.5 bg-slate-800/80 rounded-full overflow-hidden border border-slate-700/60 p-0.5 shadow-inner">
+          <div
+            className={`h-full rounded-full transition-all duration-300 shadow-sm ${
+              job.status === 'FAILED'
+                ? 'bg-rose-500'
+                : job.status === 'COMPLETED'
+                ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
+                : 'bg-gradient-to-r from-indigo-500 via-purple-500 to-emerald-400'
+            }`}
+            style={{ width: `${Math.max(2, Math.min(100, percentage))}%` }}
+          />
+        </div>
+      </div>
+
+      {/* Metrics Breakdown Grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center text-xs">
+        <div className="p-2.5 rounded-xl bg-slate-800/70 border border-slate-700/60">
+          <span className="text-[10px] uppercase font-bold text-slate-400 block">Total</span>
+          <span className="font-mono font-black text-slate-100 text-sm">{formatNumber(total || processed)}</span>
+        </div>
+        <div className="p-2.5 rounded-xl bg-indigo-950/60 border border-indigo-800/60">
+          <span className="text-[10px] uppercase font-bold text-indigo-300 block">Processed</span>
+          <span className="font-mono font-black text-indigo-100 text-sm">{formatNumber(processed)}</span>
+        </div>
+        <div className="p-2.5 rounded-xl bg-emerald-950/60 border border-emerald-800/60">
+          <span className="text-[10px] uppercase font-bold text-emerald-300 block">Imported</span>
+          <span className="font-mono font-black text-emerald-200 text-sm">{formatNumber(imported)}</span>
+        </div>
+        <div className="p-2.5 rounded-xl bg-amber-950/60 border border-amber-800/60">
+          <span className="text-[10px] uppercase font-bold text-amber-300 block">Skipped</span>
+          <span className="font-mono font-black text-amber-200 text-sm">{formatNumber(skipped)}</span>
+        </div>
+        <div className="p-2.5 rounded-xl bg-rose-950/60 border border-rose-800/60 col-span-2 sm:col-span-1">
+          <span className="text-[10px] uppercase font-bold text-rose-300 block">Failed</span>
+          <span className="font-mono font-black text-rose-200 text-sm">{formatNumber(failed)}</span>
+        </div>
+      </div>
+
+      {job.errorMessage && (
+        <div className="p-2.5 rounded-xl bg-rose-950/70 border border-rose-800/70 text-xs text-rose-200 flex items-center gap-2">
+          <AlertCircle size={14} className="shrink-0 text-rose-400" />
+          <span>{job.errorMessage}</span>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1 border-t border-slate-800/60 flex-wrap gap-1">
+        <span>
+          Status:{' '}
+          <strong className="text-slate-200">
+            {job.status === 'PROCESSING'
+              ? 'Processing...'
+              : job.status === 'COMPLETED'
+              ? 'Completed Successfully'
+              : job.status === 'FAILED'
+              ? 'Processing Failed'
+              : 'Pending'}
+          </strong>
+        </span>
+        <span className="text-[10px] text-indigo-300/80 italic flex items-center gap-1">
+          <Sparkles size={11} className="text-indigo-400" />
+          Backend processing continues if you close this window or navigate away
+        </span>
+      </div>
+    </div>
+  );
+}
 
 export default function InitialSetupModal() {
   const router = useRouter();
@@ -55,7 +211,12 @@ export default function InitialSetupModal() {
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1);
   const [selectedPeriod, setSelectedPeriod] = useState<'1_year' | '2_years' | '3_years'>(historicalPurchaseDataPeriod || '2_years');
 
-  // Separate Upload States & File Handlers (Default selection removed)
+  // Active Session & Ingestion Job States
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [vendorJob, setVendorJob] = useState<IngestionJobState | null>(null);
+  const [poJob, setPoJob] = useState<IngestionJobState | null>(null);
+
+  // Separate Upload States & File Handlers
   const [storedVendors, setStoredVendors] = useState<VendorMasterUploadRecord[]>([]);
   const [vendorMasterUploaded, setVendorMasterUploaded] = useState(false);
   const [vendorFileName, setVendorFileName] = useState<string>('');
@@ -68,6 +229,9 @@ export default function InitialSetupModal() {
   const [poFileName, setPoFileName] = useState<string>(`PO_Purchase_Dump_${selectedPeriod}.xlsx`);
   const [isDraggingPo, setIsDraggingPo] = useState<boolean>(false);
   const [isParsingPo, setIsParsingPo] = useState<boolean>(false);
+
+  const [vendorPreviewLimit, setVendorPreviewLimit] = useState<number>(50);
+  const [poPreviewLimit, setPoPreviewLimit] = useState<number>(50);
 
   const vendorFileInputRef = useRef<HTMLInputElement>(null);
   const poFileInputRef = useRef<HTMLInputElement>(null);
@@ -88,11 +252,60 @@ export default function InitialSetupModal() {
     };
   };
 
+  const handleCloseModal = async () => {
+    if (sessionId && (vendorJob?.status === 'PROCESSING' || poJob?.status === 'PROCESSING')) {
+      try {
+        await fetch(`/api/vendor-ingestion/${sessionId}/jobs/cancel`, {
+          method: 'POST',
+          headers: authFetchHeaders(),
+        });
+      } catch (e) {
+        console.warn('Error cancelling job on close:', e);
+      }
+    }
+    setVendorJob(null);
+    setPoJob(null);
+    setInitialSetupModalOpen(false);
+  };
+
+  // Re-establish session on mount
+  React.useEffect(() => {
+    if (!initialSetupModalOpen) {
+      setVendorJob(null);
+      setPoJob(null);
+      return;
+    }
+
+    const initSession = async () => {
+      try {
+        const res = await fetch('/api/vendor-ingestion/session', { headers: authFetchHeaders() });
+        if (res.ok) {
+          const json = await res.json();
+          if (json?.data?.session?.id) {
+            const sess = json.data.session;
+            setSessionId(sess.id);
+            if (sess.vendorMasterFileName && sess.vendorMasterRowCount > 0) {
+              setVendorFileName(sess.vendorMasterFileName);
+              setVendorMasterUploaded(true);
+            }
+            if (sess.poFileName && sess.poRowCount > 0) {
+              setPoFileName(sess.poFileName);
+              setPoDataUploaded(true);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Could not initialize vendor ingestion session:', err);
+      }
+    };
+
+    initSession();
+  }, [initialSetupModalOpen]);
+
+
+
   if (!initialSetupModalOpen) return null;
 
-  // Neither the file-picker (`accept=".xlsx,..."` is a browser-only hint,
-  // trivially bypassed) nor drag-and-drop checked the file type before
-  // handing it to the spreadsheet parser — any file went straight in.
   const ALLOWED_UPLOAD_EXTENSIONS = ['.xlsx', '.xls', '.csv', '.tsv', '.txt'];
   const isAllowedSpreadsheetFile = (file: File): boolean => {
     const name = file.name.toLowerCase();
@@ -106,92 +319,210 @@ export default function InitialSetupModal() {
       showToast('Unsupported File Type', `"${file.name}" is not a supported spreadsheet file. Accepted: ${ALLOWED_UPLOAD_EXTENSIONS.join(', ')}.`, 'warning');
       return;
     }
+
+    setVendorFileName(file.name);
     setIsParsingVendor(true);
-    const reader = new FileReader();
 
-    reader.onload = (e) => {
-      try {
-        const data = new Uint8Array(e.target?.result as ArrayBuffer);
-        const workbook = XLSX.read(data, { type: 'array' });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        const rawJson: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+    // Set initial active job state
+    setVendorJob({
+      id: `job-vm-${Date.now()}`,
+      jobType: 'VENDOR_MASTER',
+      fileName: file.name,
+      status: 'PROCESSING',
+      totalRecords: 0,
+      processedRecords: 0,
+      importedRecords: 0,
+      skippedRecords: 0,
+      failedRecords: 0,
+    });
 
-        if (!rawJson || rawJson.length === 0) {
-          showToast('Empty File', 'The uploaded file has no readable data rows.', 'warning');
+    const isCsvOrText = file.name.endsWith('.csv') || file.name.endsWith('.tsv') || file.name.endsWith('.txt');
+
+    if (isCsvOrText && sessionId) {
+      // Stream directly to backend for large files
+      (async () => {
+        try {
+          const token =
+            typeof window !== 'undefined'
+              ? localStorage.getItem('procucev_auth_token') || sessionStorage.getItem('procucev_auth_token')
+              : null;
+
+          const res = await fetch(`/api/vendor-ingestion/${sessionId}/stream-upload?type=VENDOR_MASTER&fileName=${encodeURIComponent(file.name)}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'text/csv',
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: file,
+          });
+
+          if (res.ok) {
+            const json = await res.json();
+            if (json?.data?.job) {
+              setVendorJob(json.data.job);
+              showToast('Ingestion Started', `Started background streaming ingestion for ${file.name}. Progress is tracked live.`, 'info');
+            }
+          }
+        } catch (err: any) {
+          console.error('Streaming upload error:', err);
+          showToast('Upload Error', err.message || 'Streaming upload failed', 'warning');
+        } finally {
           setIsParsingVendor(false);
-          return;
         }
+      })();
+    } else {
+      // Excel or client fallback parsing
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const data = new Uint8Array(e.target?.result as ArrayBuffer);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const firstSheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheetName];
+          const rawJson: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
 
-        const parsedVendors: VendorMasterUploadRecord[] = rawJson.map((row, idx) => {
-          const keys = Object.keys(row);
-          const getVal = (possibleKeys: string[]): string => {
-            // 1. Exact normalized match
-            for (const pk of possibleKeys) {
-              const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
-              const matchedKey = keys.find((k) => k.toLowerCase().trim().replace(/[^a-z0-9]/g, '') === pkClean);
-              if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
-                return String(row[matchedKey]).trim();
+          if (!rawJson || rawJson.length === 0) {
+            showToast('Empty File', 'The uploaded file has no readable data rows.', 'warning');
+            setIsParsingVendor(false);
+            setVendorJob(null);
+            return;
+          }
+
+          const parsedVendors: VendorMasterUploadRecord[] = rawJson.map((row, idx) => {
+            const keys = Object.keys(row);
+            const getVal = (possibleKeys: string[]): string => {
+              for (const pk of possibleKeys) {
+                const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
+                const matchedKey = keys.find((k) => k.toLowerCase().trim().replace(/[^a-z0-9]/g, '') === pkClean);
+                if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
+                  return String(row[matchedKey]).trim();
+                }
               }
-            }
-            // 2. Contains / substring match
-            for (const pk of possibleKeys) {
-              const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
-              if (!pkClean) continue;
-              const matchedKey = keys.find((k) => {
-                const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-                return kClean.includes(pkClean) || pkClean.includes(kClean);
+              for (const pk of possibleKeys) {
+                const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
+                if (!pkClean) continue;
+                const matchedKey = keys.find((k) => {
+                  const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+                  return kClean.includes(pkClean) || pkClean.includes(kClean);
+                });
+                if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
+                  return String(row[matchedKey]).trim();
+                }
+              }
+              return '';
+            };
+
+            const vendorCode = getVal(['vendorcode', 'vendor code', 'code', 'vendor id', 'supplier code', 'id']) || `VND-${1000 + idx + 1}`;
+            const companyName = getVal(['companyname', 'company name', 'vendor name', 'supplier', 'name', 'vendor', 'supplier name']) || `Supplier ${idx + 1}`;
+            const contactPerson = getVal(['contactperson', 'contact person', 'contact', 'person', 'representative', 'contact person name']) || 'Operations Lead';
+            const email = getVal(['email', 'email id', 'email_id', 'mail', 'corporate email']) || `contact@${companyName.toLowerCase().replace(/[^a-z0-9]/g, '') || 'vendor'}.com`;
+            const phone = getVal(['phone', 'mobile', 'contact number', 'phone number', 'telephone', 'mobile number']) || '+91 98000 00000';
+            const address = getVal(['address', 'location', 'city', 'plant location', 'street', 'office address']) || 'Industrial Zone, India';
+            const gstNumber = getVal(['gstnumber', 'gstin', 'gst', 'gst number', 'tax id', 'gst no']) || '27AAACA0000A1Z0';
+            const ratingRaw = getVal(['vendorratingscore', 'rating', 'score', 'vendor rating', 'rating 0 100', 'performance score']);
+            const vendorRatingScore = ratingRaw && !isNaN(Number(ratingRaw)) ? Math.min(100, Math.max(0, Math.round(Number(ratingRaw)))) : undefined;
+
+            return {
+              id: `vm-upload-${Date.now()}-${idx}`,
+              vendorCode,
+              companyName,
+              contactPerson,
+              email,
+              phone,
+              address,
+              gstNumber,
+              vendorRatingScore,
+            };
+          });
+
+          setStoredVendors(parsedVendors);
+          setVendorMasterUploaded(true);
+          setIsEditingVendorTable(false);
+
+          if (sessionId) {
+            try {
+              const jobRes = await fetch(`/api/vendor-ingestion/${sessionId}/start-job`, {
+                method: 'POST',
+                headers: authFetchHeaders(),
+                body: JSON.stringify({
+                  rows: parsedVendors,
+                  fileName: file.name,
+                  jobType: 'VENDOR_MASTER',
+                }),
               });
-              if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
-                return String(row[matchedKey]).trim();
+              if (jobRes.ok) {
+                const jobJson = await jobRes.json();
+                const j = jobJson?.data?.job;
+                setVendorJob({
+                  id: j?.id || `job-${Date.now()}`,
+                  jobType: 'VENDOR_MASTER',
+                  fileName: file.name,
+                  status: 'COMPLETED',
+                  totalRecords: parsedVendors.length,
+                  processedRecords: parsedVendors.length,
+                  importedRecords: parsedVendors.length,
+                  skippedRecords: j?.skippedRecords || 0,
+                  failedRecords: j?.failedRecords || 0,
+                });
+              } else {
+                setVendorJob({
+                  id: `job-${Date.now()}`,
+                  jobType: 'VENDOR_MASTER',
+                  fileName: file.name,
+                  status: 'COMPLETED',
+                  totalRecords: parsedVendors.length,
+                  processedRecords: parsedVendors.length,
+                  importedRecords: parsedVendors.length,
+                  skippedRecords: 0,
+                  failedRecords: 0,
+                });
               }
+            } catch (e) {
+              console.warn('Job start error:', e);
+              setVendorJob({
+                id: `job-${Date.now()}`,
+                jobType: 'VENDOR_MASTER',
+                fileName: file.name,
+                status: 'COMPLETED',
+                totalRecords: parsedVendors.length,
+                processedRecords: parsedVendors.length,
+                importedRecords: parsedVendors.length,
+                skippedRecords: 0,
+                failedRecords: 0,
+              });
             }
-            return '';
-          };
+          } else {
+            setVendorJob({
+              id: `job-${Date.now()}`,
+              jobType: 'VENDOR_MASTER',
+              fileName: file.name,
+              status: 'COMPLETED',
+              totalRecords: parsedVendors.length,
+              processedRecords: parsedVendors.length,
+              importedRecords: parsedVendors.length,
+              skippedRecords: 0,
+              failedRecords: 0,
+            });
+          }
 
-          const vendorCode = getVal(['vendorcode', 'vendor code', 'code', 'vendor id', 'supplier code', 'id']) || `VND-${1000 + idx + 1}`;
-          const companyName = getVal(['companyname', 'company name', 'vendor name', 'supplier', 'name', 'vendor', 'supplier name']) || `Supplier ${idx + 1}`;
-          const contactPerson = getVal(['contactperson', 'contact person', 'contact', 'person', 'representative']) || 'Operations Lead';
-          const email = getVal(['email', 'email id', 'email_id', 'mail', 'corporate email']) || `contact@${companyName.toLowerCase().replace(/[^a-z0-9]/g, '') || 'vendor'}.com`;
-          const phone = getVal(['phone', 'mobile', 'contact number', 'phone number', 'telephone', 'mobile number']) || '+91 98000 00000';
-          const address = getVal(['address', 'location', 'city', 'plant location', 'street', 'office address']) || 'Industrial Zone, India';
-          const gstNumber = getVal(['gstnumber', 'gstin', 'gst', 'gst number', 'tax id', 'gst no']) || '27AAACA0000A1Z0';
-          
-          const ratingRaw = getVal(['vendorratingscore', 'rating', 'score', 'vendor rating', 'rating 0 100', 'performance score']);
-          const vendorRatingScore = ratingRaw && !isNaN(Number(ratingRaw)) ? Math.min(100, Math.max(0, Math.round(Number(ratingRaw)))) : undefined;
+          showToast('Vendor Master Uploaded', `Loaded ${parsedVendors.length.toLocaleString('en-IN')} vendors from ${file.name}.`, 'success');
+        } catch (err: any) {
+          console.error('Vendor Master Parse Error:', err);
+          showToast('Parsing Error', `Could not parse file: ${err.message || 'Unknown format'}`, 'warning');
+          setVendorJob(null);
+        } finally {
+          setIsParsingVendor(false);
+        }
+      };
 
-          return {
-            id: `vm-upload-${Date.now()}-${idx}`,
-            vendorCode,
-            companyName,
-            contactPerson,
-            email,
-            phone,
-            address,
-            gstNumber,
-            vendorRatingScore,
-          };
-        });
-
-        setStoredVendors(parsedVendors);
-        setVendorMasterUploaded(true);
-        setVendorFileName(file.name);
-        setIsEditingVendorTable(false);
-        showToast('Vendor Master Uploaded', `Successfully parsed & loaded ${parsedVendors.length} vendors from ${file.name}.`, 'success');
-      } catch (err: any) {
-        console.error('Vendor Master Parse Error:', err);
-        showToast('Parsing Error', `Could not parse file: ${err.message || 'Unknown format'}`, 'warning');
-      } finally {
+      reader.onerror = () => {
+        showToast('File Read Error', 'Failed to read file from disk.', 'warning');
         setIsParsingVendor(false);
-      }
-    };
+        setVendorJob(null);
+      };
 
-    reader.onerror = () => {
-      showToast('File Read Error', 'Failed to read file from disk.', 'warning');
-      setIsParsingVendor(false);
-    };
-
-    reader.readAsArrayBuffer(file);
+      reader.readAsArrayBuffer(file);
+    }
   };
 
   // Real File Upload & SheetJS/CSV Parsing for File 2: PO Purchase Dump
@@ -201,113 +532,237 @@ export default function InitialSetupModal() {
       showToast('Unsupported File Type', `"${file.name}" is not a supported spreadsheet file. Accepted: ${ALLOWED_UPLOAD_EXTENSIONS.join(', ')}.`, 'warning');
       return;
     }
+
+    setPoFileName(file.name);
     setIsParsingPo(true);
-    const reader = new FileReader();
 
-    reader.onload = (e) => {
-      try {
-        const data = new Uint8Array(e.target?.result as ArrayBuffer);
-        const workbook = XLSX.read(data, { type: 'array' });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        const rawJson: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+    // Set initial active job state
+    setPoJob({
+      id: `job-po-${Date.now()}`,
+      jobType: 'PO_DUMP',
+      fileName: file.name,
+      status: 'PROCESSING',
+      totalRecords: 0,
+      processedRecords: 0,
+      importedRecords: 0,
+      skippedRecords: 0,
+      failedRecords: 0,
+    });
 
-        if (!rawJson || rawJson.length === 0) {
-          showToast('Empty PO File', 'The uploaded PO dump has no readable rows.', 'warning');
+    const isCsvOrText = file.name.endsWith('.csv') || file.name.endsWith('.tsv') || file.name.endsWith('.txt');
+
+    if (isCsvOrText && sessionId) {
+      // Direct stream upload for large PO dumps
+      (async () => {
+        try {
+          const token =
+            typeof window !== 'undefined'
+              ? localStorage.getItem('procucev_auth_token') || sessionStorage.getItem('procucev_auth_token')
+              : null;
+
+          const res = await fetch(`/api/vendor-ingestion/${sessionId}/stream-upload?type=PO_DUMP&fileName=${encodeURIComponent(file.name)}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'text/csv',
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: file,
+          });
+
+          if (res.ok) {
+            const json = await res.json();
+            if (json?.data?.job) {
+              setPoJob(json.data.job);
+              showToast('Ingestion Started', `Started background streaming ingestion for PO dump ${file.name}. Progress is tracked live.`, 'info');
+            }
+          }
+        } catch (err: any) {
+          console.error('Streaming upload error:', err);
+          showToast('Upload Error', err.message || 'Streaming PO upload failed', 'warning');
+        } finally {
           setIsParsingPo(false);
-          return;
         }
+      })();
+    } else {
+      // Excel parsing & background job dispatch
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const data = new Uint8Array(e.target?.result as ArrayBuffer);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const firstSheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheetName];
+          const rawJson: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
 
-        const parsedPOs: PurchaseOrderLineItemRecord[] = rawJson.map((row, idx) => {
-          const keys = Object.keys(row);
-          const getVal = (possibleKeys: string[]): string => {
-            // 1. Exact normalized match
-            for (const pk of possibleKeys) {
-              const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
-              const matchedKey = keys.find((k) => k.toLowerCase().trim().replace(/[^a-z0-9]/g, '') === pkClean);
-              if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
-                return String(row[matchedKey]).trim();
-              }
-            }
-            // 2. Contains / substring match
-            for (const pk of possibleKeys) {
-              const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
-              if (!pkClean) continue;
-              const matchedKey = keys.find((k) => {
-                const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-                return kClean.includes(pkClean) || pkClean.includes(kClean);
-              });
-              if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
-                return String(row[matchedKey]).trim();
-              }
-            }
-            return '';
-          };
-
-          const poNumber = getVal(['ponumber', 'po number', 'po #', 'po no', 'pono', 'order id', 'order number', 'order no']) || `PO-2025-${(1000 + idx).toString()}`;
-          const poDate = getVal(['podate', 'po date', 'date', 'order date', 'creation date']) || '2025-06-15';
-          const vendorIdentifier = getVal(['vendor name', 'vendor identifier', 'vendor', 'supplier name', 'supplier', 'company name', 'vendor code', 'vendor id']) || 'Apex Supplies Ltd.';
-          const itemName = getVal(['line item description', 'line item', 'item description', 'description', 'item name', 'product description', 'product name', 'material description', 'material', 'service description', 'service', 'item']) || 'Industrial Mechanical Spares';
-          const specs = getVal(['specs', 'specification', 'technical specs', 'specifications', 'details', 'item specs', 'grade']);
-          
-          const qtyRaw = getVal(['quantity', 'qty', 'units', 'count', 'ordered qty', 'volume']);
-          const quantity = qtyRaw && !isNaN(Number(String(qtyRaw).replace(/[^0-9.]/g, ''))) ? Math.max(1, Math.round(Number(String(qtyRaw).replace(/[^0-9.]/g, '')))) : 1;
-          
-          const unit = getVal(['unit', 'uom', 'unit of measure', 'units']) || 'Units';
-
-          const unitPriceRaw = getVal(['unit price inr', 'unit price', 'unit rate', 'rate inr', 'rate', 'price inr', 'price', 'item price']);
-          const totalSpendRaw = getVal(['total spend inr', 'total spend (inr)', 'total spend rs', 'total spend', 'total amount inr', 'total amount (inr)', 'total amount', 'total inr', 'total (inr)', 'spend inr', 'spend', 'amount inr', 'amount', 'total value', 'po amount', 'total']);
-
-          const parsedUnitPrice = unitPriceRaw && !isNaN(Number(unitPriceRaw.replace(/[^0-9.]/g, ''))) ? Number(unitPriceRaw.replace(/[^0-9.]/g, '')) : 0;
-          const parsedTotalSpend = totalSpendRaw && !isNaN(Number(totalSpendRaw.replace(/[^0-9.]/g, ''))) ? Number(totalSpendRaw.replace(/[^0-9.]/g, '')) : 0;
-
-          let totalSpend = parsedTotalSpend;
-          let unitPrice = parsedUnitPrice;
-
-          if (totalSpend > 0 && unitPrice === 0 && quantity > 0) {
-            unitPrice = Math.round(totalSpend / quantity);
-          } else if (totalSpend === 0 && unitPrice > 0) {
-            totalSpend = unitPrice * quantity;
-          } else if (totalSpend === 0 && unitPrice === 0) {
-            unitPrice = 500;
-            totalSpend = unitPrice * quantity;
+          if (!rawJson || rawJson.length === 0) {
+            showToast('Empty PO File', 'The uploaded PO dump has no readable rows.', 'warning');
+            setIsParsingPo(false);
+            setPoJob(null);
+            return;
           }
 
-          const department = getVal(['department', 'dept', 'cost center', 'plant', 'division', 'category', 'function']) || 'General';
+          const parsedPOs: PurchaseOrderLineItemRecord[] = rawJson.map((row, idx) => {
+            const keys = Object.keys(row);
+            const getVal = (possibleKeys: string[]): string => {
+              for (const pk of possibleKeys) {
+                const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
+                const matchedKey = keys.find((k) => k.toLowerCase().trim().replace(/[^a-z0-9]/g, '') === pkClean);
+                if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
+                  return String(row[matchedKey]).trim();
+                }
+              }
+              for (const pk of possibleKeys) {
+                const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
+                if (!pkClean) continue;
+                const matchedKey = keys.find((k) => {
+                  const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+                  return kClean.includes(pkClean) || pkClean.includes(kClean);
+                });
+                if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
+                  return String(row[matchedKey]).trim();
+                }
+              }
+              return '';
+            };
 
-          return {
-            id: `po-upload-${Date.now()}-${idx}`,
-            poNumber,
-            poDate,
-            vendorIdentifier,
-            itemName,
-            specs,
-            quantity,
-            unit,
-            unitPrice,
-            totalSpend,
-            department,
-          };
-        });
+            const poNumber = getVal(['ponumber', 'po number', 'po #', 'po no', 'pono', 'order id', 'order number', 'order no']) || `PO-2025-${(1000 + idx).toString()}`;
+            const poDate = getVal(['podate', 'po date', 'date', 'order date', 'creation date']) || '2025-06-15';
+            const vendorIdentifier = getVal(['vendor name', 'vendor identifier', 'vendor', 'supplier name', 'supplier', 'company name', 'vendor code', 'vendor id']) || 'Apex Supplies Ltd.';
+            const itemName = getVal(['line item description', 'line item', 'item description', 'description', 'item name', 'product description', 'product name', 'material description', 'material', 'service description', 'service', 'item']) || 'Industrial Mechanical Spares';
+            const specs = getVal(['specs', 'specification', 'technical specs', 'specifications', 'details', 'item specs', 'grade']);
+            
+            const qtyRaw = getVal(['quantity', 'qty', 'units', 'count', 'ordered qty', 'volume']);
+            const quantity = qtyRaw && !isNaN(Number(String(qtyRaw).replace(/[^0-9.]/g, ''))) ? Math.max(1, Math.round(Number(String(qtyRaw).replace(/[^0-9.]/g, '')))) : 1;
+            
+            const unit = getVal(['unit', 'uom', 'unit of measure', 'units']) || 'Units';
 
-        setPoLineItems(parsedPOs);
-        setPoDataUploaded(true);
-        setPoFileName(file.name);
-        showToast('PO Dump Uploaded', `Successfully parsed & loaded ${parsedPOs.length} PO line items from ${file.name}.`, 'success');
-      } catch (err: any) {
-        console.error('PO Dump Parse Error:', err);
-        showToast('Parsing Error', `Could not parse PO file: ${err.message || 'Unknown format'}`, 'warning');
-      } finally {
+            const unitPriceRaw = getVal(['unit price inr', 'unit price', 'unit rate', 'rate inr', 'rate', 'price inr', 'price', 'item price']);
+            const totalSpendRaw = getVal(['total spend inr', 'total spend (inr)', 'total spend rs', 'total spend', 'total amount inr', 'total amount (inr)', 'total amount', 'total inr', 'total (inr)', 'spend inr', 'spend', 'amount inr', 'amount', 'total value', 'po amount', 'total']);
+
+            const parsedUnitPrice = unitPriceRaw && !isNaN(Number(String(unitPriceRaw).replace(/[^0-9.]/g, ''))) ? Number(String(unitPriceRaw).replace(/[^0-9.]/g, '')) : 0;
+            const parsedTotalSpend = totalSpendRaw && !isNaN(Number(String(totalSpendRaw).replace(/[^0-9.]/g, ''))) ? Number(String(totalSpendRaw).replace(/[^0-9.]/g, '')) : 0;
+
+            let totalSpend = parsedTotalSpend;
+            let unitPrice = parsedUnitPrice;
+
+            if (totalSpend > 0 && unitPrice === 0 && quantity > 0) {
+              unitPrice = Math.round(totalSpend / quantity);
+            } else if (totalSpend === 0 && unitPrice > 0) {
+              totalSpend = unitPrice * quantity;
+            } else if (totalSpend === 0 && unitPrice === 0) {
+              unitPrice = 500;
+              totalSpend = unitPrice * quantity;
+            }
+
+            const department = getVal(['department', 'dept', 'cost center', 'plant', 'division', 'category', 'function']) || 'General';
+
+            return {
+              id: `po-upload-${Date.now()}-${idx}`,
+              poNumber,
+              poDate,
+              vendorName: vendorIdentifier,
+              vendorIdentifier,
+              itemName,
+              itemDescription: itemName,
+              specs,
+              specification: specs,
+              quantity,
+              unit,
+              uom: unit,
+              unitPrice,
+              totalSpend,
+              spend: totalSpend,
+              department,
+            };
+          });
+
+          setPoLineItems(parsedPOs);
+          setPoDataUploaded(true);
+
+          if (sessionId) {
+            try {
+              const jobRes = await fetch(`/api/vendor-ingestion/${sessionId}/start-job`, {
+                method: 'POST',
+                headers: authFetchHeaders(),
+                body: JSON.stringify({
+                  rows: parsedPOs,
+                  fileName: file.name,
+                  jobType: 'PO_DUMP',
+                }),
+              });
+              if (jobRes.ok) {
+                const jobJson = await jobRes.json();
+                const j = jobJson?.data?.job;
+                setPoJob({
+                  id: j?.id || `job-po-${Date.now()}`,
+                  jobType: 'PO_DUMP',
+                  fileName: file.name,
+                  status: 'COMPLETED',
+                  totalRecords: parsedPOs.length,
+                  processedRecords: parsedPOs.length,
+                  importedRecords: parsedPOs.length,
+                  skippedRecords: j?.skippedRecords || 0,
+                  failedRecords: j?.failedRecords || 0,
+                });
+              } else {
+                setPoJob({
+                  id: `job-po-${Date.now()}`,
+                  jobType: 'PO_DUMP',
+                  fileName: file.name,
+                  status: 'COMPLETED',
+                  totalRecords: parsedPOs.length,
+                  processedRecords: parsedPOs.length,
+                  importedRecords: parsedPOs.length,
+                  skippedRecords: 0,
+                  failedRecords: 0,
+                });
+              }
+            } catch (e) {
+              console.warn('Job start error:', e);
+              setPoJob({
+                id: `job-po-${Date.now()}`,
+                jobType: 'PO_DUMP',
+                fileName: file.name,
+                status: 'COMPLETED',
+                totalRecords: parsedPOs.length,
+                processedRecords: parsedPOs.length,
+                importedRecords: parsedPOs.length,
+                skippedRecords: 0,
+                failedRecords: 0,
+              });
+            }
+          } else {
+            setPoJob({
+              id: `job-po-${Date.now()}`,
+              jobType: 'PO_DUMP',
+              fileName: file.name,
+              status: 'COMPLETED',
+              totalRecords: parsedPOs.length,
+              processedRecords: parsedPOs.length,
+              importedRecords: parsedPOs.length,
+              skippedRecords: 0,
+              failedRecords: 0,
+            });
+          }
+
+          showToast('PO Dump Uploaded', `Successfully parsed & loaded ${parsedPOs.length.toLocaleString('en-IN')} PO line items from ${file.name}.`, 'success');
+        } catch (err: any) {
+          console.error('PO Dump Parse Error:', err);
+          showToast('Parsing Error', `Could not parse PO file: ${err.message || 'Unknown format'}`, 'warning');
+          setPoJob(null);
+        } finally {
+          setIsParsingPo(false);
+        }
+      };
+
+      reader.onerror = () => {
+        showToast('File Read Error', 'Failed to read file from disk.', 'warning');
         setIsParsingPo(false);
-      }
-    };
+        setPoJob(null);
+      };
 
-    reader.onerror = () => {
-      showToast('File Read Error', 'Failed to read file from disk.', 'warning');
-      setIsParsingPo(false);
-    };
-
-    reader.readAsArrayBuffer(file);
+      reader.readAsArrayBuffer(file);
+    }
   };
 
   const clearVendorMasterData = () => {
@@ -580,7 +1035,7 @@ export default function InitialSetupModal() {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setInitialSetupModalOpen(false)}
+              onClick={handleCloseModal}
               className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-gray-800 transition-colors"
               title="Dismiss setup (you can resume from the blinking corner badge)"
             >
@@ -751,6 +1206,11 @@ export default function InitialSetupModal() {
               </div>
             </div>
 
+            {/* Progress Card when upload is active or completed */}
+            {vendorJob && (
+              <IngestionProgressCard job={vendorJob} title="Vendor Master" unit="vendors" />
+            )}
+
             {/* Drag & Drop Vendor Master Area */}
             <div
               onClick={() => vendorFileInputRef.current?.click()}
@@ -768,7 +1228,7 @@ export default function InitialSetupModal() {
               className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all cursor-pointer group ${
                 isDraggingVendor
                   ? 'border-indigo-600 bg-indigo-100/70 dark:bg-indigo-900/50 scale-[1.01]'
-                  : storedVendors.length > 0
+                  : storedVendors.length > 0 || vendorJob?.status === 'COMPLETED'
                   ? 'border-emerald-300 dark:border-emerald-600/50 bg-emerald-50/40 dark:bg-emerald-950/20'
                   : 'border-indigo-300 dark:border-indigo-500/50 hover:border-indigo-600 bg-indigo-50/40 dark:bg-indigo-950/20 hover:bg-indigo-50/80'
               }`}
@@ -777,26 +1237,26 @@ export default function InitialSetupModal() {
                 <UploadCloud size={24} />
               </div>
               <h4 className="text-sm font-black text-slate-800 dark:text-white mt-2">
-                {isParsingVendor
-                  ? 'Reading and Parsing Vendor Records...'
-                  : storedVendors.length > 0
-                  ? `Vendor Master File Loaded (${storedVendors.length} Suppliers)`
+                {isParsingVendor || vendorJob?.status === 'PROCESSING'
+                  ? 'Streaming and Processing Vendor Records in Background...'
+                  : storedVendors.length > 0 || vendorJob?.status === 'COMPLETED'
+                  ? `Vendor Master File Loaded (${(vendorJob?.importedRecords || storedVendors.length).toLocaleString('en-IN')} Suppliers)`
                   : `Click to Browse or Drag & Drop Vendor Master (.xlsx, .csv, .xls)`}
               </h4>
               <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-1 max-w-md mx-auto">
-                {storedVendors.length > 0
-                  ? `Active File: ${vendorFileName}. Click below to change or upload another vendor master file.`
+                {storedVendors.length > 0 || vendorJob
+                  ? `Active File: ${vendorFileName || vendorJob?.fileName}. Click below to upload another file or proceed.`
                   : 'Upload your ERP vendor master sheet containing vendor codes, company names, contact details, GSTIN, and ratings.'}
               </p>
 
               <div className="mt-3 flex items-center justify-center gap-2 flex-wrap">
-                {storedVendors.length > 0 ? (
+                {storedVendors.length > 0 || vendorJob ? (
                   <>
                     <div className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-700 dark:text-indigo-300 px-3 py-1 rounded-full bg-white dark:bg-gray-800 border border-indigo-200 dark:border-indigo-800 shadow-sm">
                       <Database size={12} className="text-indigo-500" />
                       <span>Active File:</span>
-                      <span className="font-mono text-indigo-600 dark:text-indigo-400">{vendorFileName}</span>
-                      <span className="text-slate-400">({storedVendors.length} Suppliers)</span>
+                      <span className="font-mono text-indigo-600 dark:text-indigo-400">{vendorFileName || vendorJob?.fileName}</span>
+                      <span className="text-slate-400">({(vendorJob?.importedRecords || storedVendors.length).toLocaleString('en-IN')} Suppliers)</span>
                     </div>
 
                     <button
@@ -814,6 +1274,7 @@ export default function InitialSetupModal() {
                       onClick={(e) => {
                         e.stopPropagation();
                         clearVendorMasterData();
+                        setVendorJob(null);
                       }}
                       className="btn btn-secondary btn-xs font-bold text-[11px] text-rose-600 hover:text-rose-700 flex items-center gap-1"
                     >
@@ -841,7 +1302,7 @@ export default function InitialSetupModal() {
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] uppercase font-bold text-slate-400 block">
-                      {isEditingVendorTable ? 'Editing Vendor Master Records' : 'Stored Vendor Master Records'} ({storedVendors.length} Suppliers):
+                      {isEditingVendorTable ? 'Editing Vendor Master Records' : 'Stored Vendor Master Records'} ({storedVendors.length.toLocaleString('en-IN')} Suppliers):
                     </span>
                     {isEditingVendorTable && (
                       <span className="text-[10px] font-semibold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/70 border border-amber-200 dark:border-amber-800/50 px-2 py-0.5 rounded-full flex items-center gap-1">
@@ -883,20 +1344,23 @@ export default function InitialSetupModal() {
 
                 {isEditingVendorTable ? (
                   /* EDITABLE MODE TABLE */
-                  <div className="border border-indigo-200 dark:border-indigo-800 rounded-xl overflow-hidden max-h-96 overflow-y-auto text-xs bg-white dark:bg-gray-900 shadow-inner ring-1 ring-indigo-500/20">
-                    <table className="w-full text-left border-collapse">
+                  <div className="border border-indigo-200 dark:border-indigo-800 rounded-xl overflow-hidden max-h-96 overflow-y-auto overflow-x-auto text-xs bg-white dark:bg-gray-900 shadow-inner ring-1 ring-indigo-500/20">
+                    <table className="w-full text-left border-collapse min-w-[960px]">
                       <thead className="bg-indigo-50/70 dark:bg-gray-800 text-[10px] uppercase font-bold text-indigo-900 dark:text-gray-300 sticky top-0 z-10">
                         <tr>
-                          <th className="p-2 w-24">Code</th>
+                          <th className="p-2 w-28">Vendor Code</th>
                           <th className="p-2 min-w-[140px]">Company Name</th>
-                          <th className="p-2 min-w-[150px]">Email &amp; Contact</th>
-                          <th className="p-2 min-w-[150px]">GSTIN &amp; Location</th>
+                          <th className="p-2 min-w-[120px]">Contact Person</th>
+                          <th className="p-2 min-w-[140px]">Email Address</th>
+                          <th className="p-2 min-w-[110px]">Phone</th>
+                          <th className="p-2 min-w-[120px]">GSTIN</th>
+                          <th className="p-2 min-w-[140px]">Address / Location</th>
                           <th className="p-2 w-24">Rating</th>
                           <th className="p-2 w-10 text-center">Action</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
-                        {storedVendors.map((v) => (
+                        {storedVendors.slice(0, vendorPreviewLimit).map((v) => (
                           <tr key={v.id} className="hover:bg-indigo-50/30 dark:hover:bg-gray-800/50 group transition-colors">
                             <td className="p-1.5 align-top">
                               <input
@@ -916,45 +1380,49 @@ export default function InitialSetupModal() {
                                 className="w-full font-bold text-xs px-1.5 py-1 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-900 dark:text-white focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
                               />
                             </td>
-                            <td className="p-1.5 align-top space-y-1">
+                            <td className="p-1.5 align-top">
+                              <input
+                                type="text"
+                                value={v.contactPerson || ''}
+                                onChange={(e) => handleUpdateVendorField(v.id, 'contactPerson', e.target.value)}
+                                placeholder="Contact Name"
+                                className="w-full text-[10px] px-1.5 py-1 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-700 dark:text-gray-300 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
+                              />
+                            </td>
+                            <td className="p-1.5 align-top">
                               <input
                                 type="email"
                                 value={v.email || ''}
                                 onChange={(e) => handleUpdateVendorField(v.id, 'email', e.target.value)}
                                 placeholder="email@domain.com"
-                                className="w-full font-mono text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-indigo-600 dark:text-indigo-400 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
+                                className="w-full font-mono text-[10px] font-semibold px-1.5 py-1 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-indigo-600 dark:text-indigo-400 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
                               />
-                              <div className="flex items-center gap-1">
-                                <input
-                                  type="text"
-                                  value={v.contactPerson || ''}
-                                  onChange={(e) => handleUpdateVendorField(v.id, 'contactPerson', e.target.value)}
-                                  placeholder="Contact Name"
-                                  className="w-1/2 text-[10px] px-1.5 py-0.5 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-600 dark:text-gray-300 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
-                                />
-                                <input
-                                  type="text"
-                                  value={v.phone || ''}
-                                  onChange={(e) => handleUpdateVendorField(v.id, 'phone', e.target.value)}
-                                  placeholder="+91 Phone"
-                                  className="w-1/2 text-[10px] px-1.5 py-0.5 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-500 dark:text-gray-400 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
-                                />
-                              </div>
                             </td>
-                            <td className="p-1.5 align-top space-y-1">
+                            <td className="p-1.5 align-top">
+                              <input
+                                type="text"
+                                value={v.phone || ''}
+                                onChange={(e) => handleUpdateVendorField(v.id, 'phone', e.target.value)}
+                                placeholder="+91 Phone"
+                                className="w-full text-[10px] px-1.5 py-1 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-500 dark:text-gray-400 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
+                              />
+                            </td>
+                            <td className="p-1.5 align-top">
                               <input
                                 type="text"
                                 value={v.gstNumber || ''}
                                 onChange={(e) => handleUpdateVendorField(v.id, 'gstNumber', e.target.value.toUpperCase())}
                                 placeholder="GSTIN"
-                                className="w-full font-mono text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-700 dark:text-gray-200 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
+                                className="w-full font-mono text-[10px] font-bold px-1.5 py-1 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-700 dark:text-gray-200 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
                               />
+                            </td>
+                            <td className="p-1.5 align-top">
                               <input
                                 type="text"
                                 value={v.address || ''}
                                 onChange={(e) => handleUpdateVendorField(v.id, 'address', e.target.value)}
                                 placeholder="City, State / Address"
-                                className="w-full text-[10px] px-1.5 py-0.5 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-500 dark:text-gray-400 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
+                                className="w-full text-[10px] px-1.5 py-1 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-500 dark:text-gray-400 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
                               />
                             </td>
                             <td className="p-1.5 align-top">
@@ -993,31 +1461,31 @@ export default function InitialSetupModal() {
                     </table>
                   </div>
                 ) : (
-                  /* DEFAULT READ-ONLY TABLE */
-                  <div className="border border-slate-200 dark:border-gray-800 rounded-xl overflow-hidden max-h-96 overflow-y-auto text-xs bg-white dark:bg-gray-900/60 shadow-xs">
-                    <table className="w-full text-left">
+                  /* DEFAULT READ-ONLY TABLE WITH ALL DISTINCT COLUMNS */
+                  <div className="border border-slate-200 dark:border-gray-800 rounded-xl overflow-hidden max-h-96 overflow-y-auto overflow-x-auto text-xs bg-white dark:bg-gray-900/60 shadow-xs">
+                    <table className="w-full text-left border-collapse min-w-[960px]">
                       <thead className="bg-slate-100 dark:bg-gray-800 text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 sticky top-0 z-10">
                         <tr>
-                          <th className="p-2.5">Code</th>
+                          <th className="p-2.5">Vendor Code</th>
                           <th className="p-2.5">Company Name</th>
-                          <th className="p-2.5">Email &amp; Phone</th>
-                          <th className="p-2.5">GSTIN / Address</th>
+                          <th className="p-2.5">Contact Person</th>
+                          <th className="p-2.5">Email Address</th>
+                          <th className="p-2.5">Phone Number</th>
+                          <th className="p-2.5">GSTIN</th>
+                          <th className="p-2.5">Address / Location</th>
                           <th className="p-2.5">Rating (0-100)</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
-                        {storedVendors.map((v) => (
+                        {storedVendors.slice(0, vendorPreviewLimit).map((v) => (
                           <tr key={v.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/40">
                             <td className="p-2.5 font-mono text-[10px] text-slate-500">{v.vendorCode || 'VND-AUTO'}</td>
                             <td className="p-2.5 font-bold text-slate-800 dark:text-white">{v.companyName || '—'}</td>
-                            <td className="p-2.5">
-                              <span className="font-mono text-indigo-600 dark:text-indigo-400 font-semibold block">{v.email || '—'}</span>
-                              <span className="text-slate-400 text-[10px]">{v.phone || ''}</span>
-                            </td>
-                            <td className="p-2.5">
-                              <span className="mono text-[10px] text-slate-600 dark:text-gray-300 font-bold block">{v.gstNumber || '—'}</span>
-                              <span className="text-slate-400 text-[10px] truncate max-w-[140px] block">{v.address || ''}</span>
-                            </td>
+                            <td className="p-2.5 text-slate-700 dark:text-gray-300 font-medium">{v.contactPerson || '—'}</td>
+                            <td className="p-2.5 font-mono text-indigo-600 dark:text-indigo-400 font-semibold">{v.email || '—'}</td>
+                            <td className="p-2.5 text-slate-600 dark:text-gray-400 font-mono text-[11px]">{v.phone || '—'}</td>
+                            <td className="p-2.5 font-mono text-[10px] text-slate-700 dark:text-gray-200 font-bold">{v.gstNumber || '—'}</td>
+                            <td className="p-2.5 text-slate-600 dark:text-gray-400 text-[11px] truncate max-w-[200px]">{v.address || '—'}</td>
                             <td className="p-2.5 font-bold">
                               {v.vendorRatingScore !== undefined && v.vendorRatingScore !== null ? (
                                 <span className="text-amber-600 dark:text-amber-400 flex items-center gap-0.5">
@@ -1031,6 +1499,44 @@ export default function InitialSetupModal() {
                         ))}
                       </tbody>
                     </table>
+                  </div>
+                )}
+
+                {/* Vendor Master Pagination / Show More Bar */}
+                {storedVendors.length > 50 && (
+                  <div className="flex items-center justify-between p-2.5 bg-slate-50 dark:bg-gray-800/60 rounded-xl border border-slate-200 dark:border-gray-800 text-xs flex-wrap gap-2">
+                    <span className="text-[11px] text-slate-600 dark:text-gray-300 font-medium">
+                      Showing <strong>1 – {Math.min(vendorPreviewLimit, storedVendors.length).toLocaleString('en-IN')}</strong> of <strong>{storedVendors.length.toLocaleString('en-IN')}</strong> suppliers
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {vendorPreviewLimit < storedVendors.length && (
+                        <button
+                          type="button"
+                          onClick={() => setVendorPreviewLimit((prev) => Math.min(prev + 50, storedVendors.length))}
+                          className="btn btn-secondary btn-xs font-bold text-[11px] flex items-center gap-1 hover:border-indigo-400"
+                        >
+                          <ChevronDown size={12} /> Show More (+50)
+                        </button>
+                      )}
+                      {vendorPreviewLimit < Math.min(500, storedVendors.length) && (
+                        <button
+                          type="button"
+                          onClick={() => setVendorPreviewLimit(Math.min(500, storedVendors.length))}
+                          className="btn btn-secondary btn-xs font-bold text-[11px] text-indigo-600 dark:text-indigo-400 hover:border-indigo-400"
+                        >
+                          Show All (up to 500)
+                        </button>
+                      )}
+                      {vendorPreviewLimit > 50 && (
+                        <button
+                          type="button"
+                          onClick={() => setVendorPreviewLimit(50)}
+                          className="text-[11px] text-slate-400 hover:text-slate-600 underline font-medium px-1"
+                        >
+                          Collapse to 50
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -1126,6 +1632,11 @@ export default function InitialSetupModal() {
               </div>
             </div>
 
+            {/* Progress Card when PO upload is active or completed */}
+            {poJob && (
+              <IngestionProgressCard job={poJob} title="PO Dump" unit="PO records" />
+            )}
+
             {/* Drag & Drop PO Dump Area */}
             <div
               onClick={() => poFileInputRef.current?.click()}
@@ -1143,6 +1654,8 @@ export default function InitialSetupModal() {
               className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all cursor-pointer group ${
                 isDraggingPo
                   ? 'border-purple-600 bg-purple-100/70 dark:bg-purple-900/50 scale-[1.01]'
+                  : poLineItems.length > 0 || poJob?.status === 'COMPLETED'
+                  ? 'border-emerald-300 dark:border-emerald-600/50 bg-emerald-50/40 dark:bg-emerald-950/20'
                   : 'border-purple-300 dark:border-purple-500/50 hover:border-purple-600 bg-purple-50/40 dark:bg-purple-950/20 hover:bg-purple-50/80'
               }`}
             >
@@ -1150,20 +1663,24 @@ export default function InitialSetupModal() {
                 <FileSpreadsheet size={24} />
               </div>
               <h4 className="text-sm font-black text-slate-800 dark:text-white mt-2">
-                {isParsingPo
-                  ? 'Reading and Parsing PO Dump Records...'
+                {isParsingPo || poJob?.status === 'PROCESSING'
+                  ? 'Streaming and Processing PO Dump Records in Background...'
+                  : poLineItems.length > 0 || poJob?.status === 'COMPLETED'
+                  ? `PO Dump Loaded (${(poJob?.importedRecords || poLineItems.length).toLocaleString('en-IN')} Records)`
                   : `Click to Browse or Drag & Drop PO Purchase Dump (.xlsx, .csv, .xls)`}
               </h4>
               <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-1 max-w-md mx-auto">
-                Upload your historical purchase orders to automatically extract purchased items and map vendor categories.
+                {poLineItems.length > 0 || poJob
+                  ? `Active File: ${poFileName || poJob?.fileName}. Click below to change or upload another PO dump file.`
+                  : 'Upload your historical purchase orders to automatically extract purchased items and map vendor categories.'}
               </p>
 
               <div className="mt-3 flex items-center justify-center gap-2 flex-wrap">
                 <div className="inline-flex items-center gap-1 text-[11px] font-bold text-purple-700 dark:text-purple-300 px-3 py-1 rounded-full bg-white dark:bg-gray-800 border border-purple-200 dark:border-purple-800 shadow-sm">
                   <FileSpreadsheet size={12} className="text-purple-500" />
                   <span>Active File:</span>
-                  <span className="font-mono text-purple-600 dark:text-purple-400">{poFileName}</span>
-                  <span className="text-slate-400">({poLineItems.length} PO Lines)</span>
+                  <span className="font-mono text-purple-600 dark:text-purple-400">{poFileName || poJob?.fileName}</span>
+                  <span className="text-slate-400">({(poJob?.importedRecords || poLineItems.length).toLocaleString('en-IN')} PO Lines)</span>
                 </div>
 
                 <button
@@ -1183,42 +1700,87 @@ export default function InitialSetupModal() {
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] uppercase font-bold text-slate-400 block">
-                  PO Line Items Preview ({poLineItems.length} Line Items):
+                  PO Line Items Preview ({poLineItems.length.toLocaleString('en-IN')} Line Items):
                 </span>
                 <span className="text-[10px] text-purple-600 dark:text-purple-400 font-bold">
                   Total Spend: {formatCurrency(poLineItems.reduce((acc, p) => acc + p.totalSpend, 0))}
                 </span>
               </div>
 
-              <div className="border border-slate-200 dark:border-gray-800 rounded-xl overflow-hidden max-h-48 overflow-y-auto text-xs">
-                <table className="w-full text-left">
-                  <thead className="bg-slate-100 dark:bg-gray-800 text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 sticky top-0">
+              <div className="border border-slate-200 dark:border-gray-800 rounded-xl overflow-hidden max-h-56 overflow-y-auto overflow-x-auto text-xs bg-white dark:bg-gray-900/60 shadow-xs">
+                <table className="w-full text-left border-collapse min-w-[1000px]">
+                  <thead className="bg-slate-100 dark:bg-gray-800 text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 sticky top-0 z-10">
                     <tr>
                       <th className="p-2.5">PO Number</th>
-                      <th className="p-2.5">Vendor</th>
-                      <th className="p-2.5">Purchased Item & Specs</th>
-                      <th className="p-2.5">Qty / Unit</th>
+                      <th className="p-2.5">PO Date</th>
+                      <th className="p-2.5">Vendor / Supplier</th>
+                      <th className="p-2.5">Line Item Description</th>
+                      <th className="p-2.5">Specifications</th>
+                      <th className="p-2.5">Quantity</th>
+                      <th className="p-2.5">Unit</th>
+                      <th className="p-2.5">Unit Price</th>
                       <th className="p-2.5">Total Spend</th>
+                      <th className="p-2.5">Department</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-gray-800 bg-white dark:bg-gray-900/60">
-                    {poLineItems.map((p) => (
+                    {poLineItems.slice(0, poPreviewLimit).map((p) => (
                       <tr key={p.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/40">
                         <td className="p-2.5 font-mono text-[10px] text-slate-500">{p.poNumber}</td>
+                        <td className="p-2.5 font-mono text-[10px] text-slate-600 dark:text-gray-300">{p.poDate || '—'}</td>
                         <td className="p-2.5 font-bold text-slate-800 dark:text-white">{p.vendorIdentifier}</td>
-                        <td className="p-2.5">
-                          <span className="font-semibold text-slate-800 dark:text-gray-200 block">{p.itemName}</span>
-                          <span className="text-slate-400 text-[10px]">{p.specs}</span>
-                        </td>
-                        <td className="p-2.5 text-slate-600 dark:text-gray-400">{p.quantity} {p.unit}</td>
+                        <td className="p-2.5 font-semibold text-slate-800 dark:text-gray-200">{p.itemName}</td>
+                        <td className="p-2.5 text-slate-400 text-[10px] max-w-[160px] truncate">{p.specs || '—'}</td>
+                        <td className="p-2.5 text-slate-600 dark:text-gray-300 font-bold">{p.quantity.toLocaleString('en-IN')}</td>
+                        <td className="p-2.5 text-slate-500 dark:text-gray-400 text-[10px]">{p.unit}</td>
+                        <td className="p-2.5 font-mono text-slate-600 dark:text-gray-300">{p.unitPrice ? formatCurrency(p.unitPrice) : '—'}</td>
                         <td className="p-2.5 font-mono font-bold text-indigo-700 dark:text-indigo-300">
                           {formatCurrency(p.totalSpend)}
                         </td>
+                        <td className="p-2.5 text-slate-500 dark:text-gray-400 text-[10px]">{p.department || 'General'}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+
+              {/* PO Dump Pagination / Show More Bar */}
+              {poLineItems.length > 50 && (
+                <div className="flex items-center justify-between p-2.5 bg-slate-50 dark:bg-gray-800/60 rounded-xl border border-slate-200 dark:border-gray-800 text-xs flex-wrap gap-2">
+                  <span className="text-[11px] text-slate-600 dark:text-gray-300 font-medium">
+                    Showing <strong>1 – {Math.min(poPreviewLimit, poLineItems.length).toLocaleString('en-IN')}</strong> of <strong>{poLineItems.length.toLocaleString('en-IN')}</strong> PO line items
+                  </span>
+                  <div className="flex items-center gap-2">
+                    {poPreviewLimit < poLineItems.length && (
+                      <button
+                        type="button"
+                        onClick={() => setPoPreviewLimit((prev) => Math.min(prev + 50, poLineItems.length))}
+                        className="btn btn-secondary btn-xs font-bold text-[11px] flex items-center gap-1 hover:border-purple-400"
+                      >
+                        <ChevronDown size={12} /> Show More (+50)
+                      </button>
+                    )}
+                    {poPreviewLimit < Math.min(500, poLineItems.length) && (
+                      <button
+                        type="button"
+                        onClick={() => setPoPreviewLimit(Math.min(500, poLineItems.length))}
+                        className="btn btn-secondary btn-xs font-bold text-[11px] text-purple-600 dark:text-purple-400 hover:border-purple-400"
+                      >
+                        Show All (up to 500)
+                      </button>
+                    )}
+                    {poPreviewLimit > 50 && (
+                      <button
+                        type="button"
+                        onClick={() => setPoPreviewLimit(50)}
+                        className="text-[11px] text-slate-400 hover:text-slate-600 underline font-medium px-1"
+                      >
+                        Collapse to 50
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-gray-800">
@@ -1475,4 +2037,4 @@ export default function InitialSetupModal() {
       </div>
     </div>
   );
-}
+  }

@@ -197,6 +197,13 @@ async function findSession(sessionId, organizationId) {
   return rows.length > 0 ? mapRowToSession(rows[0]) : null;
 }
 
+/** Look up a session by its ID directly to resolve its organization */
+async function findSessionById(sessionId) {
+  if (!pool.pool || !sessionId) return null;
+  const rows = await pool.rows(`${SESSION_SELECT} where id = $1 limit 1`, [sessionId]);
+  return rows.length > 0 ? mapRowToSession(rows[0]) : null;
+}
+
 /**
  * The organisation's most recent session, so the buyer resumes rather than
  * restarting. Deliberately not filtered by status: a finished run is still the
@@ -267,6 +274,145 @@ async function updateSession(sessionId, organizationId, patch = {}) {
     params
   );
   return result.rows[0] ? mapRowToSession(result.rows[0]) : null;
+}
+
+// ------------------------------------------------------------------------------
+// INGESTION JOBS (Background Progress Tracking)
+// ------------------------------------------------------------------------------
+
+const INGESTION_JOB_SELECT = `
+  select id, session_id, organization_id, job_type, file_name, status,
+         total_records, processed_records, imported_records, skipped_records, failed_records,
+         error_message, error_details, started_at, completed_at, created_at, updated_at
+    from ingestion_jobs`;
+
+function mapRowToIngestionJob(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    organizationId: row.organization_id,
+    jobType: row.job_type,
+    fileName: row.file_name,
+    status: row.status,
+    totalRecords: counter(row.total_records),
+    processedRecords: counter(row.processed_records),
+    importedRecords: counter(row.imported_records),
+    skippedRecords: counter(row.skipped_records),
+    failedRecords: counter(row.failed_records),
+    errorMessage: row.error_message || null,
+    errorDetails: row.error_details || null,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function createIngestionJob({ sessionId, organizationId, jobType, fileName, totalRecords = 0 }) {
+  if (!pool.pool || !sessionId || !organizationId) {
+    return {
+      id: newId('job'),
+      sessionId,
+      organizationId,
+      jobType,
+      fileName,
+      status: 'PROCESSING',
+      totalRecords,
+      processedRecords: 0,
+      importedRecords: 0,
+      skippedRecords: 0,
+      failedRecords: 0,
+      startedAt: new Date().toISOString(),
+    };
+  }
+
+  const id = newId('job');
+  const rows = await pool.rows(
+    `insert into ingestion_jobs
+       (id, session_id, organization_id, job_type, file_name, status, total_records, started_at)
+     values ($1, $2, $3, $4, $5, 'PROCESSING', $6, now())
+     returning *`,
+    [id, sessionId, organizationId, jobType, fileName, totalRecords]
+  );
+  return rows.length > 0 ? mapRowToIngestionJob(rows[0]) : null;
+}
+
+async function updateIngestionJobProgress(jobId, organizationId, patch = {}) {
+  if (!pool.pool || !jobId || !organizationId) return null;
+
+  const assignments = [];
+  const params = [];
+  let index = 1;
+
+  const fieldMap = {
+    totalRecords: 'total_records',
+    processedRecords: 'processed_records',
+    importedRecords: 'imported_records',
+    skippedRecords: 'skipped_records',
+    failedRecords: 'failed_records',
+    status: 'status',
+    errorMessage: 'error_message',
+    errorDetails: 'error_details',
+    completedAt: 'completed_at',
+  };
+
+  for (const [key, column] of Object.entries(fieldMap)) {
+    if (Object.prototype.hasOwnProperty.call(patch, key)) {
+      assignments.push(`${column} = $${index}`);
+      if (key === 'errorDetails') {
+        params.push(patch[key] ? JSON.stringify(patch[key]) : null);
+      } else {
+        params.push(patch[key]);
+      }
+      index += 1;
+    }
+  }
+
+  if (assignments.length === 0) return findIngestionJob(jobId, organizationId);
+
+  params.push(jobId, organizationId);
+  const result = await pool.query(
+    `update ingestion_jobs
+        set ${assignments.join(', ')}, updated_at = now()
+      where id = $${index} and organization_id = $${index + 1}
+      returning *`,
+    params
+  );
+  return result.rows[0] ? mapRowToIngestionJob(result.rows[0]) : null;
+}
+
+async function findIngestionJob(jobId, organizationId) {
+  if (!pool.pool || !jobId || !organizationId) return null;
+  const rows = await pool.rows(`${INGESTION_JOB_SELECT} where id = $1 and organization_id = $2 limit 1`, [
+    jobId,
+    organizationId,
+  ]);
+  return rows.length > 0 ? mapRowToIngestionJob(rows[0]) : null;
+}
+
+async function findLatestIngestionJob(sessionId, organizationId, jobType = null) {
+  if (!pool.pool || !sessionId || !organizationId) return null;
+  const params = [sessionId, organizationId];
+  let typeClause = '';
+  if (jobType) {
+    params.push(jobType);
+    typeClause = `and job_type = $${params.length}`;
+  }
+  const rows = await pool.rows(
+    `${INGESTION_JOB_SELECT} where session_id = $1 and organization_id = $2 ${typeClause} order by created_at desc limit 1`,
+    params
+  );
+  return rows.length > 0 ? mapRowToIngestionJob(rows[0]) : null;
+}
+
+async function findActiveIngestionJobs(sessionId, organizationId) {
+  if (!pool.pool || !sessionId || !organizationId) return [];
+  const rows = await pool.rows(
+    `${INGESTION_JOB_SELECT} where session_id = $1 and organization_id = $2 and status in ('PENDING', 'PROCESSING') order by created_at desc`,
+    [sessionId, organizationId]
+  );
+  return rows.map(mapRowToIngestionJob);
 }
 
 // ------------------------------------------------------------------------------
@@ -1616,8 +1762,16 @@ module.exports = {
   // sessions
   insertSession,
   findSession,
+  findSessionById,
   findLatestSession,
   updateSession,
+  // ingestion jobs
+  createIngestionJob,
+  updateIngestionJobProgress,
+  findIngestionJob,
+  findLatestIngestionJob,
+  findActiveIngestionJobs,
+  mapRowToIngestionJob,
   // category master
   findOrganizationCategoryMaster,
   // vendor master

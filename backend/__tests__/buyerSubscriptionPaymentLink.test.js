@@ -4,6 +4,7 @@ const request = require('supertest');
 const app = require('../src/app');
 const storeService = require('../src/services/storeService');
 const zohoPaymentService = require('../src/services/zohoPaymentService');
+const identityQueries = require('../src/db/identityQueries');
 const { authHeader, TEST_USERS } = require('./testHelpers');
 
 describe('POST /api/buyer-accounts/:id/subscription-payment', () => {
@@ -16,6 +17,8 @@ describe('POST /api/buyer-accounts/:id/subscription-payment', () => {
       corporateEmail: TEST_USERS.buyer.email,
       mobileNumber: '9876543210',
     });
+    // Fallback used when a resolved/auto-created buyer account has no mobileNumber of its own.
+    jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue({ mobile: '9123456780' });
   });
 
   test('requires a session', async () => {
@@ -92,6 +95,15 @@ describe('POST /api/buyer-accounts/:id/subscription-payment', () => {
     const res = await request(app).post(`/api/buyer-accounts/${buyerAccount.id}/subscription-payment`).set(authHeader('buyer')).send({ plan: 'version_1' });
     expect(res.statusCode).toBe(400);
     expect(res.body.error).toMatch(/no email on file/i);
+    spy.mockRestore();
+  });
+
+  test('400s when neither the domain record nor the identity record has a mobile number', async () => {
+    const spy = jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue({ id: 'no-mobile-buyer', corporateEmail: TEST_USERS.buyer.email, mobileNumber: '' });
+    identityQueries.findUserByEmail.mockResolvedValueOnce({ mobile: '' });
+    const res = await request(app).post(`/api/buyer-accounts/${buyerAccount.id}/subscription-payment`).set(authHeader('buyer')).send({ plan: 'version_1' });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toMatch(/no mobile number on file/i);
     spy.mockRestore();
   });
 

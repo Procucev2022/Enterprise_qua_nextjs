@@ -308,14 +308,12 @@ describe('API Route Endpoints', () => {
     });
 
     test('PUT /api/vendors/:id updates the profile as the owning vendor, ignoring smuggled fields', async () => {
-      const created = await request(app).post('/api/vendors').set(authHeader('vendor')).send({
-        name: 'Whitelist Test Vendor',
-        majorCategory: 'Engineering Spares - Electrical',
-      });
-      const id = created.body.data.id;
-
+      // Reuses testVendorId (already created above, under this same vendor
+      // session's email) rather than creating a second one for the same
+      // vendor identity — createVendor now rejects a duplicate email before
+      // ever calling addVendor.
       const res = await request(app)
-        .put(`/api/vendors/${id}`)
+        .put(`/api/vendors/${testVendorId}`)
         .set(authHeader('vendor'))
         .send({ contactPerson: 'Updated Contact', rating: 999, status: 'HACKED' });
 
@@ -371,6 +369,54 @@ describe('API Route Endpoints', () => {
     test('GET /api/rfqs requires a session', async () => {
       const res = await request(app).get('/api/rfqs');
       expect(res.statusCode).toBe(401);
+    });
+
+    // Found live 2026-09-18: getVendorById(req.user.email) — with no scope
+    // arg — refuses to resolve any vendor that has a buyerId set (i.e. every
+    // buyer-uploaded vendor), so resolveRfqReadScope silently treated the
+    // vendor as unresolvable and every RFQ came back invisible to them, even
+    // one their own addedByBuyerCompany matched exactly.
+    test('a buyer-uploaded vendor (not self-registered) can see and quote the RFQ their addedByBuyerCompany matches', async () => {
+      const addedVendor = await request(app).post('/api/vendors').set(authHeader('buyer')).send({
+        name: 'Ankit Buyer-Uploaded Co',
+        email: 'ankit.buyer-uploaded@example.com',
+        contactPerson: 'Ankit',
+        majorCategory: 'Mechanical',
+      });
+      expect(addedVendor.statusCode).toBe(201);
+      expect(addedVendor.body.data.addedByBuyerCompany).toBe('Test Buyer Org');
+
+      const rfqRes = await request(app).post('/api/rfqs').set(authHeader('buyer')).send({
+        title: 'Buyer-uploaded vendor visibility RFQ',
+        category: 'Mechanical',
+        deliveryLocation: 'Pune',
+        deliveryPincode: '411001',
+        targetDeliveryDate: '2026-12-01',
+        sourcingMode: 'mode_1',
+      });
+      expect(rfqRes.statusCode).toBe(201);
+      expect(rfqRes.body.data.buyerAccountName).toBe('Test Buyer Org');
+
+      const customVendorHeader = {
+        Authorization: `Bearer ${authService.generateSessionToken({
+          id: 'usr-ankit-buyer-uploaded',
+          email: 'ankit.buyer-uploaded@example.com',
+          name: 'Ankit',
+          role: 'vendor',
+          orgId: 'org-ankit',
+          orgName: 'Ankit Buyer-Uploaded Co',
+        })}`,
+      };
+
+      const listRes = await request(app).get('/api/rfqs').set(customVendorHeader);
+      expect(listRes.statusCode).toBe(200);
+      expect(listRes.body.data.some((r) => r.id === rfqRes.body.data.id)).toBe(true);
+
+      const quoteRes = await request(app)
+        .post(`/api/rfqs/${rfqRes.body.data.id}/quotes`)
+        .set(customVendorHeader)
+        .send({ unitPrice: 500, totalPrice: 2500 });
+      expect(quoteRes.statusCode).toBe(200);
     });
 
     describe('buyer subscription entitlement (server-side re-validation)', () => {

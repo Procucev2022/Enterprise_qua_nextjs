@@ -995,16 +995,46 @@ describe('geminiService.generateJson', () => {
       expect(result.lineItemQuotes.length).toBe(1);
     });
 
-    test('extractQuotationFromEmail falls back to regex parser when Gemini fails or key is missing', async () => {
-      delete GEMINI_CONFIG.API_KEY;
-      const emailText = 'Unit price: INR 8500, Lead time: 7 days, Warranty: 2 years, Payment terms: Net 45';
-      const result = await gemini.extractQuotationFromEmail({ bodyText: emailText }, sampleRfq);
-
+    test('extractQuotationFallback computes unitPrice from totalPrice when unitPrice is missing', () => {
+      const emailText = 'Total Price: INR 140000, Delivery Period: 2 weeks, Warranty: 24 months';
+      const result = gemini.extractQuotationFallback(emailText, sampleRfq);
       expect(result).toBeDefined();
-      expect(result.extractionMethod).toBe('heuristic_fallback');
-      expect(result.unitPrice).toBe(8500);
-      expect(result.leadTimeDays).toBe(7);
+      expect(result.totalPrice).toBe(140000);
+      expect(result.unitPrice).toBe(10000);
+      expect(result.leadTimeDays).toBe(14);
       expect(result.warrantyYears).toBe(2);
+    });
+
+    test('extractQuotationFromEmail creates default lineItemQuotes from rfqItems when data.lineItemQuotes is empty', async () => {
+      GEMINI_CONFIG.API_KEY = 'test-key';
+      const aiResponseWithoutItems = {
+        unitPrice: 12000,
+        totalPrice: 48000,
+        leadTimeDays: 14,
+        warrantyYears: 2,
+        taxes: 1800,
+      };
+
+      global.fetch = jest.fn(async () => geminiReply(JSON.stringify(aiResponseWithoutItems)));
+
+      const result = await gemini.extractQuotationFromEmail({ bodyText: 'Quotation body' }, sampleRfq);
+      expect(result).toBeDefined();
+      expect(result.lineItemQuotes.length).toBe(sampleRfq.extractedEntities.length);
+      expect(result.lineItemQuotes[0].unitPrice).toBe(12000);
+    });
+
+    test('extractQuotationFromEmail logs warning and falls back to heuristic when generateJson returns error', async () => {
+      GEMINI_CONFIG.API_KEY = 'test-key';
+      global.fetch = jest.fn(async () => ({
+        ok: false,
+        status: 500,
+        text: async () => 'Internal Server Error',
+      }));
+
+      const emailText = 'Unit price: INR 9000, Lead time: 10 days';
+      const result = await gemini.extractQuotationFromEmail({ bodyText: emailText }, sampleRfq);
+      expect(result.extractionMethod).toBe('heuristic_fallback');
+      expect(result.unitPrice).toBe(9000);
     });
 
     test('extractQuotationFromEmail handles empty lineItemQuotes and calculates defaults from rfqItems', async () => {

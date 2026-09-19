@@ -507,6 +507,29 @@ CREATE TABLE IF NOT EXISTS vendor_ingestion_sessions (
 CREATE INDEX IF NOT EXISTS idx_vendor_ingestion_sessions_org ON vendor_ingestion_sessions (organization_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_vendor_ingestion_sessions_status ON vendor_ingestion_sessions (status);
 
+-- Persistent background ingestion jobs for Vendor Master and PO Dump
+CREATE TABLE IF NOT EXISTS ingestion_jobs (
+  id VARCHAR(64) PRIMARY KEY,
+  session_id VARCHAR(64) NOT NULL,
+  organization_id VARCHAR(64) NOT NULL,
+  job_type VARCHAR(32) NOT NULL, -- 'VENDOR_MASTER' | 'PO_DUMP'
+  file_name VARCHAR(512),
+  status VARCHAR(32) NOT NULL DEFAULT 'PENDING', -- 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED'
+  total_records INTEGER NOT NULL DEFAULT 0,
+  processed_records INTEGER NOT NULL DEFAULT 0,
+  imported_records INTEGER NOT NULL DEFAULT 0,
+  skipped_records INTEGER NOT NULL DEFAULT 0,
+  failed_records INTEGER NOT NULL DEFAULT 0,
+  error_message TEXT,
+  error_details JSONB,
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_session ON ingestion_jobs (session_id, job_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_org ON ingestion_jobs (organization_id, status);
+
 -- File 1: the buyer's vendor master. normalized_name is the pre-computed
 -- fallback match key (lowercased, legal suffixes and punctuation stripped) so
 -- the name-based join is an indexed equality test rather than a per-row scan.

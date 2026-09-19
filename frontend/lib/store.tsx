@@ -28,7 +28,12 @@ import {
   MajorMinorCategory,
 } from './types';
 import { authClient } from './authClient';
-import { createPaymentLink, createBuyerPaymentLink as createBuyerPaymentLinkRequest } from './subscriptionPaymentClient';
+import {
+  createPaymentLink,
+  createBuyerPaymentLink as createBuyerPaymentLinkRequest,
+  getVendorPaymentLinkStatus,
+  getBuyerPaymentLinkStatus,
+} from './subscriptionPaymentClient';
 import { fetchCategoryTaxonomy } from './buyerProfileClient';
 import { setCategoryTaxonomy, clearCategoryTaxonomy } from './categoryTaxonomy';
 import { UI_STRINGS, formatString } from './uiStrings';
@@ -85,6 +90,8 @@ function buildOpportunityFromRFQ(rfq: RFQItem): VendorOpportunity {
     estimatedValue: rfq.budget > 0 ? formatCurrency(rfq.budget) : undefined,
     deliveryLocation: rfq.deliveryLocation || '',
     status: rfq.quotes && rfq.quotes.length > 0 ? 'under_review' : 'pending_bid',
+    majorCategory: rfq.category || '',
+    minorCategory: rfq.extractedEntities?.[0]?.minorCategory || '',
     lineItems: (rfq.extractedEntities || []).map((ent: ExtractedEntity, idx: number) => ({
       id: ent.id || `item-${idx}`,
       description: ent.itemName,
@@ -137,6 +144,8 @@ interface AppContextType {
   activeBuyerAccount: BuyerAccount | null;
   /** Real Zoho payment-link creation for the caller's own buyer account. Returns the URL to redirect to, or null on failure (a toast is already shown). */
   createBuyerPaymentLink: (plan: string) => Promise<string | null>;
+  /** Real status ('CREATED'|'PAID'|'CANCELED'|'EXPIRED') of one of the caller's own buyer payment links, or null if it can't be resolved. */
+  checkBuyerPaymentLinkStatus: (linkId: string) => Promise<string | null>;
   addBuyerAccount: (account: Omit<BuyerAccount, 'id' | 'syncTimestamp' | 'createdDate'>) => BuyerAccount;
   updateBuyerAccount: (id: string, updates: Partial<BuyerAccount>) => void;
   deleteBuyerAccount: (id: string) => void;
@@ -279,6 +288,8 @@ interface AppContextType {
   updateVendorSubscription: (plan: 'premium' | 'connect' | 'select') => Promise<boolean>;
   /** Real Zoho payment-link creation for the caller's own vendor profile. Returns the URL to redirect to, or null on failure (a toast is already shown). */
   createVendorPaymentLink: (plan: string) => Promise<string | null>;
+  /** Real status ('CREATED'|'PAID'|'CANCELED'|'EXPIRED') of one of the caller's own vendor payment links, or null if it can't be resolved. */
+  checkVendorPaymentLinkStatus: (linkId: string) => Promise<string | null>;
   vendorRfqDownloadsUsed: number;
   setVendorRfqDownloadsUsed: React.Dispatch<React.SetStateAction<number>>;
   vendorCatalogue: any[];
@@ -410,6 +421,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return null;
     }
     return result.paymentUrl;
+  };
+
+  const checkVendorPaymentLinkStatus = async (linkId: string): Promise<string | null> => {
+    const sessionEmail = authClient.getSessionUser()?.email?.toLowerCase();
+    const myVendor = buyerVendors.find((v) => v.email?.toLowerCase() === sessionEmail);
+    if (!myVendor) return null;
+    return getVendorPaymentLinkStatus(myVendor.id, linkId);
+  };
+
+  const checkBuyerPaymentLinkStatus = async (linkId: string): Promise<string | null> => {
+    if (!activeBuyerAccount?.id) return null;
+    return getBuyerPaymentLinkStatus(activeBuyerAccount.id, linkId);
   };
 
   const toggleTheme = () => {
@@ -2320,6 +2343,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setVendorSubscription,
         updateVendorSubscription,
         createVendorPaymentLink,
+        checkVendorPaymentLinkStatus,
         vendorRfqDownloadsUsed,
         setVendorRfqDownloadsUsed,
         vendorCatalogue,
@@ -2328,6 +2352,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         activeBuyerAccount,
         refreshActiveBuyerAccount,
         createBuyerPaymentLink,
+        checkBuyerPaymentLinkStatus,
         addBuyerAccount,
         updateBuyerAccount,
         deleteBuyerAccount,
