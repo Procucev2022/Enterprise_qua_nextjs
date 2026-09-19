@@ -30,9 +30,21 @@ function resolveConfig(env = process.env) {
   if (!connectionString) return null;
 
   const isLocal = connectionString.includes('localhost') || connectionString.includes('127.0.0.1');
+  const isAiven = connectionString.includes('aivencloud.com');
+
+  // When connecting to Aiven, strip the sslmode query parameter from the URL so
+  // that our explicit ssl object takes full control. Leaving sslmode=require in
+  // the URL causes pg-connection-string to enforce certificate verification even
+  // when rejectUnauthorized is false in the ssl option, because the URL-level
+  // sslmode is parsed and applied after our ssl config.
+  const resolvedConnectionString = isAiven
+    ? connectionString.replace(/[?&]sslmode=[^&]*/g, (match) =>
+        match.startsWith('?') ? '?' : ''
+      ).replace(/\?$/, '')
+    : connectionString;
 
   return {
-    connectionString,
+    connectionString: resolvedConnectionString,
     max: env.DATABASE_POOL_MAX ? parseInt(env.DATABASE_POOL_MAX, 10) : DEFAULT_POOL_MAX,
     connectionTimeoutMillis: env.DATABASE_CONNECT_TIMEOUT_MS
       ? parseInt(env.DATABASE_CONNECT_TIMEOUT_MS, 10)
@@ -40,9 +52,11 @@ function resolveConfig(env = process.env) {
     idleTimeoutMillis: env.DATABASE_IDLE_TIMEOUT_MS
       ? parseInt(env.DATABASE_IDLE_TIMEOUT_MS, 10)
       : DEFAULT_IDLE_TIMEOUT_MS,
-    // Neon's certificate chain is publicly trusted, so this verifies for real.
+    // Aiven uses a self-signed CA chain that Node's default trust store does not
+    // include, so rejectUnauthorized must be false for Aiven connections.
+    // Neon and other public-CA providers verify normally.
     // A local Postgres is assumed to be plaintext on the loopback interface.
-    ssl: isLocal ? false : { rejectUnauthorized: true },
+    ssl: isLocal ? false : isAiven ? { rejectUnauthorized: false } : { rejectUnauthorized: true },
   };
 }
 
@@ -59,6 +73,9 @@ function detectProvider(connectionString) {
   const lower = connectionString.toLowerCase();
   if (lower.includes('neon.tech')) {
     return { provider: 'neon', providerLabel: 'Neon PostgreSQL' };
+  }
+  if (lower.includes('aivencloud.com')) {
+    return { provider: 'aiven', providerLabel: 'Aiven PostgreSQL' };
   }
   return { provider: 'postgres', providerLabel: 'PostgreSQL' };
 }
