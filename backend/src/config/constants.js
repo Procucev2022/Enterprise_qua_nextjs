@@ -499,7 +499,7 @@ const GEMINI_CONFIG = {
   API_KEY: process.env.GEMINI_API_KEY || '',
   BASE_URL: process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/models',
   // Pinned to a specific GA model so extraction quality is reproducible.
-  PRIMARY_MODEL: process.env.GEMINI_PRIMARY_MODEL || 'gemini-3.6-flash',
+  PRIMARY_MODEL: process.env.GEMINI_PRIMARY_MODEL || 'gemini-3-flash-preview',
   // Tried in order when the primary model errors or is unavailable.
   //
   // Ordered fastest-first, which is a deliberate departure from
@@ -518,7 +518,7 @@ const GEMINI_CONFIG = {
   // extraction failed outright instead of degrading.
   FALLBACK_MODELS: (
     process.env.GEMINI_FALLBACK_MODELS ||
-    'gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-flash-lite-latest,gemini-3.7-flash,gemini-3.5-flash'
+    'gemini-3.1-flash-lite,gemini-flash-latest,gemini-flash-lite-latest,gemini-3.6-flash,gemini-3.7-flash'
   )
     .split(',')
     .map((m) => m.trim())
@@ -715,7 +715,7 @@ function computeZohoBuyerPlanAmount(planId) {
 // The mailbox poller. See services/emailGatewayService.js for why an ingested RFQ
 // is held for review rather than circulated.
 const EMAIL_GATEWAY_CONFIG = {
-  DEFAULT_POLL_MS: 120000,
+  DEFAULT_POLL_MS: 60000,
   // Floor on the interval regardless of configuration. Each poll opens an IMAP
   // connection and may call Gemini per message, so a misconfigured 1s interval
   // would burn provider quota and risk the mail host throttling the account.
@@ -729,12 +729,12 @@ const EMAIL_GATEWAY_CONFIG = {
   INGESTED_SOURCING_MODE: 'mode_2',
   // Emails have no file name; this stands in wherever one is recorded.
   SYNTHETIC_FILE_NAME: 'inbound-email.eml',
-  DEFAULT_GATEWAY_ADDRESS: 'RFQ@procucev.com',
+  DEFAULT_GATEWAY_ADDRESS: 'rfq@procucev.com',
   MAX_LINE_ITEMS_PER_RFQ: 49,
 };
 
 const VENDOR_EMAIL_GATEWAY_CONFIG = {
-  DEFAULT_POLL_MS: 120000,
+  DEFAULT_POLL_MS: 60000,
   MIN_POLL_MS: 30000,
   DEFAULT_MAX_PER_POLL: 10,
   DEFAULT_GATEWAY_ADDRESS: 'srinu20252026@gmail.com',
