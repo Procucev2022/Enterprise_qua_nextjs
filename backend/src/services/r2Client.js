@@ -2,6 +2,7 @@ const { S3Client } = require('@aws-sdk/client-s3');
 
 let client;
 let clientInitialized = false;
+let nativeBucket = null;
 
 /**
  * Lazily builds an S3 client pointed at Cloudflare R2's S3-compatible endpoint.
@@ -25,11 +26,25 @@ function getClient() {
   return client;
 }
 
-function isConfigured() {
-  return Boolean(process.env.R2_ACCOUNT_ID && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY);
+function setNativeBucket(binding) {
+  nativeBucket = binding;
+}
+
+function getNativeBucket() {
+  return nativeBucket;
+}
+
+function isConfigured(env = process.env) {
+  if (nativeBucket || (env && env.R2_BUCKET && typeof env.R2_BUCKET.put === 'function')) {
+    return true;
+  }
+  return Boolean(env && env.R2_ACCOUNT_ID && env.R2_ACCESS_KEY_ID && env.R2_SECRET_ACCESS_KEY);
 }
 
 function bucket() {
+  if (nativeBucket && nativeBucket.name) {
+    return nativeBucket.name;
+  }
   return process.env.R2_BUCKET;
 }
 
@@ -37,4 +52,6 @@ module.exports = {
   getClient,
   isConfigured,
   bucket,
+  setNativeBucket,
+  getNativeBucket,
 };

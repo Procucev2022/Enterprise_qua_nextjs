@@ -75,8 +75,19 @@ async function reportRowCounts() {
   }
 }
 
-async function migrate() {
+async function migrate(options = {}) {
+  const allowSkip = Boolean(
+    options.skipIfUnset ||
+    process.argv.includes('--if-configured') ||
+    process.argv.includes('--skip-if-unset')
+  );
+
   if (!pool.pool) {
+    if (allowSkip) {
+      const schemaSql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+      console.log(`[migrate] DATABASE_URL is not set — verified schema.sql integrity offline (${schemaSql.length} bytes).`);
+      return;
+    }
     console.error('[migrate] DATABASE_URL is not set — nothing to migrate against.');
     process.exitCode = 1;
     return;

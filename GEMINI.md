@@ -73,6 +73,7 @@
 ## 11. CI/CD Quality Gate & Pull Request Reporting Protocol
 - CI/CD workflow (`.github/workflows/ci.yml`) runs on PRs and pushes to enforce linting, build, typecheck, migrations, and strict per-file 90% unit test coverage.
 - Automatically generates and posts detailed PR summary comments with test failure/success stats, suite metrics, and per-file coverage tables.
+- **Mandatory Pipeline & Job Timeouts**: Enforce explicit `timeout-minutes` on all GitHub Actions workflows, jobs, and steps to prevent hanging processes and unbounded runner usage.
 
 ---
 
