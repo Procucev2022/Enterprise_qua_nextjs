@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { useRouter } from 'next/navigation';
-import { SOURCING_MODES, ROLE_SIDEBAR_NAV, LOGIN_ROUTE } from '@/lib/constants';
+import { SOURCING_MODES, ROLE_SIDEBAR_NAV, LOGIN_ROUTE, entitledSourcingModes } from '@/lib/constants';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import NotificationBell from '@/app/components/NotificationBell';
@@ -20,6 +20,7 @@ import {
   Moon,
   LogOut,
   Key,
+  Lock,
 } from 'lucide-react';
 
 /**
@@ -121,23 +122,41 @@ export default function Header() {
 
   const activeModeObj = SOURCING_MODES.find((m) => m.id === currentMode) || SOURCING_MODES[1];
 
+  // A missing activeBuyerAccount (e.g. a category manager, who has no
+  // personal subscription) resolves to every mode via entitledSourcingModes'
+  // fail-open default — this only actually restricts a signed-in buyer.
+  const headerEntitledModes = entitledSourcingModes(activeBuyerAccount?.subscriptionPlan);
+
   const handleModeSelect = (modeId: SourcingMode) => {
+    if (!headerEntitledModes.includes(modeId)) {
+      showToast(
+        'Upgrade Required',
+        'Your subscription does not include this sourcing mode. Upgrade to unlock it.',
+        'warning'
+      );
+      return;
+    }
     setCurrentMode(modeId);
     setModeDropdownOpen(false);
     const selected = SOURCING_MODES.find((m) => m.id === modeId);
     showToast('Sourcing Mode Updated', `Active platform mode switched to: ${selected?.name}`, 'info');
   };
 
+  // 'premium' is free/auto-granted, so it can flip instantly here. connect/select
+  // are real, paid tiers — this used to call setVendorSubscription for all three,
+  // which set the local (and, via the effect that mirrors it into
+  // vendorRfqDownloadsUsed's gate, functionally real) subscription tier straight
+  // to a paid plan with no Zoho payment at all. Paid tiers now route to the
+  // real, payment-gated flow on vendor-subscription.tsx instead of being
+  // grantable from this quick-switcher.
   const handleVendorSubscriptionSelect = (tier: 'premium' | 'connect' | 'select') => {
-    setVendorSubscription(tier);
     setModeDropdownOpen(false);
-    const tierName =
-      tier === 'premium'
-        ? 'Premium (Client Uploaded)'
-        : tier === 'connect'
-        ? 'Connect Model (₹2)'
-        : 'Select Model (₹5)';
-    showToast('Vendor Tier Switched', `Active vendor access model set to: ${tierName}`, 'success');
+    if (tier !== 'premium') {
+      router.push('/vendor/vendor-subscription');
+      return;
+    }
+    setVendorSubscription(tier);
+    showToast('Vendor Tier Switched', 'Active vendor access model set to: Premium (Client Uploaded)', 'success');
   };
 
   const handleLogout = () => {
@@ -308,14 +327,17 @@ export default function Header() {
                           : 'hover:bg-slate-50 dark:hover:bg-gray-800/60 text-slate-700 dark:text-gray-300 border border-transparent'
                       }`}
                     >
-                      <CheckCircle2
-                        size={16}
-                        className={vendorSubscription === 'connect' ? 'text-emerald-600' : 'text-slate-300'}
-                      />
+                      {vendorSubscription === 'connect' ? (
+                        <CheckCircle2 size={16} className="text-emerald-600" />
+                      ) : (
+                        <Lock size={14} className="text-slate-400 dark:text-gray-500 mt-0.5" />
+                      )}
                       <div>
                         <div className="font-bold text-xs">Connect Model (₹2 / 3 Months)</div>
                         <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                          50 RFQ downloads in 3 months ({vendorRfqDownloadsUsed}/50 used) • $0 Self-Evaluation Fee
+                          {vendorSubscription === 'connect'
+                            ? `50 RFQ downloads in 3 months (${vendorRfqDownloadsUsed}/50 used) • $0 Self-Evaluation Fee`
+                            : 'Requires payment — opens the Vendor Subscription checkout'}
                         </div>
                       </div>
                     </button>
@@ -328,14 +350,17 @@ export default function Header() {
                           : 'hover:bg-slate-50 dark:hover:bg-gray-800/60 text-slate-700 dark:text-gray-300 border border-transparent'
                       }`}
                     >
-                      <CheckCircle2
-                        size={16}
-                        className={vendorSubscription === 'select' ? 'text-emerald-600' : 'text-slate-300'}
-                      />
+                      {vendorSubscription === 'select' ? (
+                        <CheckCircle2 size={16} className="text-emerald-600" />
+                      ) : (
+                        <Lock size={14} className="text-slate-400 dark:text-gray-500 mt-0.5" />
+                      )}
                       <div>
                         <div className="font-bold text-xs">Select Model (₹5 / 3 Months)</div>
                         <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                          Item Catalogue (Max 100 SKUs) + 100 RFQs • $0 Self-Evaluation Fee
+                          {vendorSubscription === 'select'
+                            ? 'Item Catalogue (Max 100 SKUs) + 100 RFQs • $0 Self-Evaluation Fee'
+                            : 'Requires payment — opens the Vendor Subscription checkout'}
                         </div>
                       </div>
                     </button>
@@ -353,31 +378,46 @@ export default function Header() {
                     </p>
                   </div>
                   <div className="mt-1 space-y-1">
-                    {SOURCING_MODES.map((mode) => (
-                      <button
-                        key={mode.id}
-                        onClick={() => handleModeSelect(mode.id)}
-                        className={`w-full text-left p-2.5 rounded-xl transition-all flex items-start gap-2.5 ${
-                          currentMode === mode.id
-                            ? 'bg-indigo-50 dark:bg-indigo-600/20 border border-indigo-300 dark:border-indigo-500/40 text-indigo-900 dark:text-white'
-                            : 'hover:bg-slate-50 dark:hover:bg-gray-800/60 text-slate-700 dark:text-gray-300 border border-transparent'
-                        }`}
-                      >
-                        <div className="mt-0.5">
-                          {currentMode === mode.id ? (
-                            <CheckCircle2 size={16} className="text-indigo-600 dark:text-indigo-400" />
-                          ) : (
-                            <div className="w-4 h-4 rounded-full border border-slate-400 dark:border-gray-600" />
-                          )}
-                        </div>
-                        <div>
-                          <div className="font-semibold text-xs text-slate-900 dark:text-gray-100">{mode.name}</div>
-                          <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5 leading-relaxed">
-                            {mode.description}
+                    {SOURCING_MODES.map((mode) => {
+                      const isEntitled = headerEntitledModes.includes(mode.id);
+                      return (
+                        <button
+                          key={mode.id}
+                          onClick={() => handleModeSelect(mode.id)}
+                          aria-disabled={!isEntitled}
+                          className={`w-full text-left p-2.5 rounded-xl transition-all flex items-start gap-2.5 ${
+                            !isEntitled
+                              ? 'opacity-50 cursor-not-allowed hover:bg-transparent text-slate-500 dark:text-gray-500 border border-transparent'
+                              : currentMode === mode.id
+                              ? 'bg-indigo-50 dark:bg-indigo-600/20 border border-indigo-300 dark:border-indigo-500/40 text-indigo-900 dark:text-white'
+                              : 'hover:bg-slate-50 dark:hover:bg-gray-800/60 text-slate-700 dark:text-gray-300 border border-transparent'
+                          }`}
+                        >
+                          <div className="mt-0.5">
+                            {!isEntitled ? (
+                              <Lock size={14} className="text-slate-400 dark:text-gray-500" />
+                            ) : currentMode === mode.id ? (
+                              <CheckCircle2 size={16} className="text-indigo-600 dark:text-indigo-400" />
+                            ) : (
+                              <div className="w-4 h-4 rounded-full border border-slate-400 dark:border-gray-600" />
+                            )}
                           </div>
-                        </div>
-                      </button>
-                    ))}
+                          <div>
+                            <div className="font-semibold text-xs text-slate-900 dark:text-gray-100 flex items-center gap-1.5">
+                              {mode.name}
+                              {!isEntitled && (
+                                <span className="text-[9px] font-extrabold uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                                  Locked
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5 leading-relaxed">
+                              {!isEntitled ? 'Upgrade your subscription to unlock this mode.' : mode.description}
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 </>
               )}

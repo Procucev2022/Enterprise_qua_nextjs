@@ -7,8 +7,9 @@ import { UI_STRINGS } from '@/lib/uiStrings';
 jest.mock('@/lib/store');
 
 const mockReplace = jest.fn();
+const mockPush = jest.fn();
 jest.mock('next/navigation', () => ({
-  useRouter: () => ({ replace: mockReplace, push: jest.fn() }),
+  useRouter: () => ({ replace: mockReplace, push: mockPush }),
 }));
 
 jest.mock('@/lib/authClient', () => ({
@@ -125,6 +126,45 @@ describe('Header', () => {
     expect(mockSetCurrentMode).toHaveBeenCalledWith('mode_1');
   });
 
+  it('locks Version 2 and Version 3 sourcing modes for a free_trial buyer and blocks selecting them', () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      currentRole: 'buyer',
+      setCurrentRole: mockSetCurrentRole,
+      isLoggedIn: true,
+      setIsLoggedIn: mockSetIsLoggedIn,
+      currentMode: 'mode_1',
+      setCurrentMode: mockSetCurrentMode,
+      vendorSubscription: 'premium',
+      setVendorSubscription: mockSetVendorSubscription,
+      vendorRfqDownloadsUsed: 0,
+      aiFeed: [],
+      theme: 'dark',
+      toggleTheme: mockToggleTheme,
+      showToast: mockShowToast,
+      addAuditLog: mockAddAuditLog,
+      activeBuyerAccount: { organizationName: 'Tata Motors', subscriptionPlan: 'free_trial' },
+    });
+
+    render(<Header />);
+    fireEvent.click(screen.getByTitle('Switch Sourcing Mode'));
+
+    expect(screen.getAllByText('Locked').length).toBe(2);
+
+    const mode2Options = screen.getAllByText(/Version 2: Hybrid Sourcing Plan/);
+    fireEvent.click(mode2Options[mode2Options.length - 1]);
+    expect(mockSetCurrentMode).not.toHaveBeenCalled();
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Upgrade Required',
+      expect.stringContaining('does not include this sourcing mode'),
+      'warning'
+    );
+
+    // Version 1 remains selectable regardless of plan.
+    const mode1Options = screen.getAllByText(/Version 1: Client Roster Sourcing Plan/);
+    fireEvent.click(mode1Options[mode1Options.length - 1]);
+    expect(mockSetCurrentMode).toHaveBeenCalledWith('mode_1');
+  });
+
   it('renders vendor model for vendor role with premium, connect, and select subscription states', () => {
     (storeModule.useApp as jest.Mock).mockReturnValue({
       currentRole: 'vendor',
@@ -175,16 +215,23 @@ describe('Header', () => {
     });
     rerender(<Header />);
 
+    // Paid tiers (connect/select) are real, Zoho-gated plans — clicking them
+    // here must never grant the tier directly (that used to just call
+    // setVendorSubscription with no payment involved); it routes to the real
+    // subscription checkout instead.
     fireEvent.click(vendorModelBtn);
     const selectOptions = screen.getAllByText(/Select Model \(₹5 \/ 3 Months\)/);
     fireEvent.click(selectOptions[selectOptions.length - 1]);
-    expect(mockSetVendorSubscription).toHaveBeenCalledWith('select');
+    expect(mockSetVendorSubscription).not.toHaveBeenCalledWith('select');
+    expect(mockPush).toHaveBeenCalledWith('/vendor/vendor-subscription');
 
     // Switch to connect
+    mockPush.mockClear();
     fireEvent.click(vendorModelBtn);
     const connectOptions = screen.getAllByText(/Connect Model \(₹2 \/ 3 Months\)/);
     fireEvent.click(connectOptions[connectOptions.length - 1]);
-    expect(mockSetVendorSubscription).toHaveBeenCalledWith('connect');
+    expect(mockSetVendorSubscription).not.toHaveBeenCalledWith('connect');
+    expect(mockPush).toHaveBeenCalledWith('/vendor/vendor-subscription');
   });
 
   it('renders the notification bell, opening the buyer notification inbox', async () => {
