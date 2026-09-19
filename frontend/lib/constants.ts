@@ -86,6 +86,40 @@ export function resolveBuyerSourcingMode(
   return 'mode_2';
 }
 
+/**
+ * Mirrors backend/src/controllers/rfqController.js's SUBSCRIPTION_MODE_ENTITLEMENTS
+ * exactly: each paid tier adds one mode on top of the last. The backend already
+ * enforces this on POST /api/rfqs (a request for an un-entitled mode 403s), so
+ * this is UI-side only — it stops a buyer from picking a mode they cannot use
+ * and then hitting a rejection after filling out the whole form, rather than
+ * being the source of truth for access control.
+ */
+export const SUBSCRIPTION_MODE_ENTITLEMENTS: Record<string, SourcingMode[]> = {
+  free_trial: ['mode_1'],
+  version_1: ['mode_1'],
+  version_2: ['mode_1', 'mode_2'],
+  version_3: ['mode_1', 'mode_2', 'mode_3'],
+};
+
+const ALL_SOURCING_MODES: SourcingMode[] = ['mode_1', 'mode_2', 'mode_3'];
+
+/**
+ * Sourcing modes a buyer's subscription plan actually entitles them to use.
+ *
+ * A missing plan is treated as "unknown," not "free_trial": a real buyer
+ * account always carries an explicit subscriptionPlan (see BuyerAccount in
+ * types.ts), so a nullish value here means the caller couldn't resolve the
+ * buyer's account at all (e.g. no store context yet) rather than that the
+ * buyer is actually on the free tier. This is a UI convenience gate only —
+ * POST /api/rfqs re-checks entitlement server-side regardless — so failing
+ * open (show everything) is safer than wrongly locking a paying buyer out.
+ */
+export function entitledSourcingModes(subscriptionPlan?: string | null): SourcingMode[] {
+  if (!subscriptionPlan) return ALL_SOURCING_MODES;
+  const plan = subscriptionPlan.trim().toLowerCase();
+  return SUBSCRIPTION_MODE_ENTITLEMENTS[plan] || SUBSCRIPTION_MODE_ENTITLEMENTS.free_trial;
+}
+
 export const BUYER_SUBSCRIPTION_PLANS = [
   {
     id: 'buyer_starter',
