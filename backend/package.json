@@ -15,7 +15,8 @@
     "create-buyer": "node scripts/create-buyer.js",
     "email:check": "node scripts/check-email.js",
     "worker:dev": "wrangler dev src/worker.js",
-    "worker:deploy": "wrangler deploy"
+    "worker:deploy": "wrangler deploy",
+    "email:scheduler": "node scripts/email-scheduler.js"
   },
   "keywords": [
     "procurement",

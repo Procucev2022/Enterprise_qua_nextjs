@@ -12,6 +12,7 @@ const buyerProfileQueries = require('../src/db/buyerProfileQueries');
 const { logger } = require('../src/services/loggerService');
 const {
   EMAIL_GATEWAY_CONFIG,
+  VENDOR_EMAIL_GATEWAY_CONFIG,
   EMAIL_GATEWAY_MESSAGES,
   EMAIL_INGESTION_STATUS,
   resolveBuyerSourcingMode,
@@ -2581,6 +2582,189 @@ Hello team, sending catalog.
       expect(pollSpy).toHaveBeenCalled();
       emailGatewayService.stopPolling();
       jest.useRealTimers();
+    });
+
+    test('1-minute default poll interval is configured for both gateways', () => {
+      expect(EMAIL_GATEWAY_CONFIG.DEFAULT_POLL_MS).toBe(60000);
+      expect(VENDOR_EMAIL_GATEWAY_CONFIG.DEFAULT_POLL_MS).toBe(60000);
+
+      const buyerConf = emailGatewayService.resolveConfig({});
+      expect(buyerConf.pollIntervalMs).toBe(60000);
+
+      const vendorConf = emailGatewayService.resolveVendorConfig({});
+      expect(vendorConf.pollIntervalMs).toBe(60000);
+    });
+
+    test('pollBothInboxesOnce runs dual-inbox poll concurrently and returns aggregated metrics', async () => {
+      jest.spyOn(emailGatewayService, 'pollOnce').mockResolvedValueOnce({
+        skipped: false,
+        considered: 2,
+        ingested: 2,
+        pending: 0,
+        outcomes: [{ uid: 1, status: INGESTION_OUTCOME.INGESTED }],
+      });
+
+      jest.spyOn(emailGatewayService, 'pollVendorOnce').mockResolvedValueOnce({
+        skipped: false,
+        considered: 3,
+        ingested: 1,
+        pending: 0,
+        outcomes: [{ uid: 10, status: INGESTION_OUTCOME.QUOTE_INGESTED }],
+      });
+
+      const result = await emailGatewayService.pollBothInboxesOnce();
+      expect(result.totalConsidered).toBe(5);
+      expect(result.totalIngested).toBe(3);
+      expect(result.buyerMailbox.ingested).toBe(2);
+      expect(result.vendorMailbox.ingested).toBe(1);
+      expect(result).toHaveProperty('executedAt');
+    });
+
+    test('pollBothInboxesOnce handles partial failure gracefully without aborting the other inbox', async () => {
+      jest.spyOn(emailGatewayService, 'pollOnce').mockRejectedValueOnce(new Error('IMAP connection reset'));
+      jest.spyOn(emailGatewayService, 'pollVendorOnce').mockResolvedValueOnce({
+        skipped: false,
+        considered: 1,
+        ingested: 1,
+        pending: 0,
+        outcomes: [{ uid: 20, status: INGESTION_OUTCOME.QUOTE_INGESTED }],
+      });
+
+      const result = await emailGatewayService.pollBothInboxesOnce();
+      expect(result.buyerMailbox.error).toBe('IMAP connection reset');
+      expect(result.vendorMailbox.ingested).toBe(1);
+      expect(result.totalIngested).toBe(1);
+
+      // Now test the inverse: vendor rejects, buyer succeeds
+      jest.spyOn(emailGatewayService, 'pollOnce').mockResolvedValueOnce({
+        skipped: false,
+        considered: 1,
+        ingested: 1,
+        pending: 0,
+        outcomes: [{ uid: 30, status: INGESTION_OUTCOME.INGESTED }],
+      });
+      jest.spyOn(emailGatewayService, 'pollVendorOnce').mockRejectedValueOnce(new Error('Vendor socket timeout'));
+
+      const result2 = await emailGatewayService.pollBothInboxesOnce();
+      expect(result2.vendorMailbox.error).toBe('Vendor socket timeout');
+      expect(result2.buyerMailbox.ingested).toBe(1);
+      expect(result2.totalIngested).toBe(1);
+    });
+
+    test('inbound multi-item RFQ sent to vendor inbox (srinu20252026@gmail.com) by registered buyer creates RFQ and preserves all line items', async () => {
+      const registeredBuyer = {
+        id: 'buyer-dual-1',
+        corporateEmail: 'buyer.procure@enterprise.com',
+        organizationName: 'Enterprise Logistics Ltd',
+        city: 'Hyderabad',
+        state: 'Telangana',
+        pincode: '500081',
+      };
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(registeredBuyer);
+      const ackSpy = jest.spyOn(mailerService, 'sendRfqAcknowledgementEmail').mockResolvedValue(true);
+
+      const multiItemEml = `From: buyer.procure@enterprise.com
+To: srinu20252026@gmail.com
+Subject: Urgent RFQ - Electrical & Mechanical Consumables
+Message-ID: <rfq-multi-item-vendor-inbox@enterprise.com>
+Date: Fri, 18 Sep 2026 14:00:00 +0530
+Content-Type: text/plain
+
+Please quote for the following items urgently:
+1. Industrial Motor 15HP - 5 Nos - High torque specs
+2. Ball Bearings 6205 - 100 Nos - SKF grade
+3. V-Belts B-52 - 20 Nos - Heavy duty
+Delivery needed in Hyderabad.
+`;
+
+      const vendorConfig = emailGatewayService.resolveVendorConfig(VENDOR_ENV);
+
+      // Mock gemini extraction returning 3 distinct line items
+      jest.spyOn(geminiService, 'extractLineItems').mockResolvedValueOnce({
+        status: geminiService.EXTRACTION_STATUS.SUCCESS,
+        documentTitle: 'Electrical & Mechanical Consumables',
+        category: 'Electrical & Electronics',
+        lineItems: [
+          { itemDescription: 'Industrial Motor 15HP', quantity: 5, uom: 'Nos', specifications: 'High torque specs', targetDate: '2026-10-01' },
+          { itemDescription: 'Ball Bearings 6205', quantity: 100, uom: 'Nos', specifications: 'SKF grade', targetDate: '2026-10-01' },
+          { itemDescription: 'V-Belts B-52', quantity: 20, uom: 'Nos', specifications: 'Heavy duty', targetDate: '2026-10-01' },
+        ],
+      });
+
+      const result = await emailGatewayService.processMessage(Buffer.from(multiItemEml, 'utf8'), vendorConfig);
+
+      expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
+      expect(result.rfq).toBeDefined();
+      expect(result.rfq.status).toBe('Parsing');
+      expect(result.rfq.extractedEntities).toHaveLength(3);
+      expect(result.rfq.extractedEntities[0].itemName).toBe('Industrial Motor 15HP');
+      expect(result.rfq.extractedEntities[0].quantity).toBe(5);
+      expect(result.rfq.extractedEntities[1].itemName).toBe('Ball Bearings 6205');
+      expect(result.rfq.extractedEntities[1].quantity).toBe(100);
+      expect(result.rfq.extractedEntities[2].itemName).toBe('V-Belts B-52');
+      expect(result.rfq.extractedEntities[2].quantity).toBe(20);
+      expect(ackSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: 'buyer.procure@enterprise.com',
+          rfqNumber: result.rfq.rfqNumber,
+        })
+      );
+    });
+
+    test('unregistered buyer sending RFQ to vendor inbox (srinu20252026@gmail.com) is blocked, sends notification, and creates no RFQ or buyer', async () => {
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(null);
+      const unauthSpy = jest.spyOn(mailerService, 'sendUnauthorizedBuyerNotificationEmail').mockResolvedValue(true);
+      const rfqCreateSpy = jest.spyOn(storeService, 'createRFQ');
+
+      const unauthEml = `From: unknown.sender@stranger.org
+To: srinu20252026@gmail.com
+Subject: Request for Quotation: Heavy Machinery Parts
+Message-ID: <rfq-unauth-vendor-inbox@stranger.org>
+Date: Fri, 18 Sep 2026 15:00:00 +0530
+Content-Type: text/plain
+
+Need quotation for 2 units Hydraulic Pump.
+`;
+
+      const vendorConfig = emailGatewayService.resolveVendorConfig(VENDOR_ENV);
+      const result = await emailGatewayService.processMessage(Buffer.from(unauthEml, 'utf8'), vendorConfig);
+
+      expect(result.status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
+      expect(unauthSpy).toHaveBeenCalledWith(
+        'unknown.sender@stranger.org',
+        expect.objectContaining({
+          subject: expect.stringContaining('Heavy Machinery Parts'),
+        })
+      );
+      expect(rfqCreateSpy).not.toHaveBeenCalled();
+    });
+
+    test('insufficient extraction or zero line items logs failure and does not create RFQ', async () => {
+      const registeredBuyer = {
+        id: 'buyer-insufficient',
+        corporateEmail: 'buyer.test@corp.com',
+      };
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(registeredBuyer);
+      const rfqCreateSpy = jest.spyOn(storeService, 'createRFQ');
+
+      jest.spyOn(geminiService, 'extractLineItems').mockResolvedValueOnce({
+        status: 'EXTRACTION_FAILED',
+        lineItems: [],
+      });
+
+      const badExtractionEml = `From: buyer.test@corp.com
+To: rfq@procucev.com
+Subject: Corrupted Requisition
+Message-ID: <bad-extract-1@corp.com>
+Date: Fri, 18 Sep 2026 16:00:00 +0530
+Content-Type: text/plain
+
+Can you quote something?
+`;
+
+      const result = await emailGatewayService.processMessage(Buffer.from(badExtractionEml, 'utf8'));
+      expect(result.status).toBe(INGESTION_OUTCOME.NO_LINE_ITEMS);
+      expect(rfqCreateSpy).not.toHaveBeenCalled();
     });
   });
 
