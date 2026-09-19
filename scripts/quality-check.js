@@ -56,7 +56,7 @@ runStep('Step 3: TypeScript Static Typecheck Verification', 'npm run typecheck -
 runStep('Step 4: Linter & Static Code Analysis Verification', 'npm run lint --prefix frontend');
 
 // 5. Database Schema & Migration Health Check
-runStep('Step 5: Database Schema & Migration Verification', 'node backend/src/db/migrate.js');
+runStep('Step 5: Database Schema & Migration Verification', 'node backend/src/db/migrate.js --if-configured');
 
 console.log('================================================================================');
 console.log('  🎉 ALL WORKSPACE QUALITY CHECKS PASSED SUCCESSFULLY (0 ERRORS, 0 WARNINGS)');

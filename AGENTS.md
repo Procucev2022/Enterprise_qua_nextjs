@@ -138,6 +138,7 @@ Whenever making any code changes or adding new features:
   - Overall coverage breakdown (Statements, Branches, Functions, Lines).
   - Per-file coverage status confirming 100% compliance across all workspace projects.
   - Status of build, lint, typecheck, and database schema migrations.
+- **Mandatory Pipeline & Job Timeouts**: Every GitHub Actions CI/CD workflow, job, and step MUST have explicit timeout constraints configured (`timeout-minutes`) to eliminate zombie runners, prevent unbounded execution, and protect compute resources against hangs or deadlocks.
 
 ---
 
