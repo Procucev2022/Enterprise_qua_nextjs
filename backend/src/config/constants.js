@@ -709,7 +709,7 @@ function computeZohoBuyerPlanAmount(planId) {
 // The mailbox poller. See services/emailGatewayService.js for why an ingested RFQ
 // is held for review rather than circulated.
 const EMAIL_GATEWAY_CONFIG = {
-  DEFAULT_POLL_MS: 120000,
+  DEFAULT_POLL_MS: 60000,
   // Floor on the interval regardless of configuration. Each poll opens an IMAP
   // connection and may call Gemini per message, so a misconfigured 1s interval
   // would burn provider quota and risk the mail host throttling the account.
@@ -723,12 +723,12 @@ const EMAIL_GATEWAY_CONFIG = {
   INGESTED_SOURCING_MODE: 'mode_2',
   // Emails have no file name; this stands in wherever one is recorded.
   SYNTHETIC_FILE_NAME: 'inbound-email.eml',
-  DEFAULT_GATEWAY_ADDRESS: 'RFQ@procucev.com',
+  DEFAULT_GATEWAY_ADDRESS: 'rfq@procucev.com',
   MAX_LINE_ITEMS_PER_RFQ: 49,
 };
 
 const VENDOR_EMAIL_GATEWAY_CONFIG = {
-  DEFAULT_POLL_MS: 120000,
+  DEFAULT_POLL_MS: 60000,
   MIN_POLL_MS: 30000,
   DEFAULT_MAX_PER_POLL: 10,
   DEFAULT_GATEWAY_ADDRESS: 'srinu20252026@gmail.com',

@@ -13,7 +13,8 @@
     "db:migrate": "node src/db/migrate.js",
     "db:view": "node src/db/view.js",
     "create-buyer": "node scripts/create-buyer.js",
-    "email:check": "node scripts/check-email.js"
+    "email:check": "node scripts/check-email.js",
+    "email:scheduler": "node scripts/email-scheduler.js"
   },
   "keywords": [
     "procurement",
