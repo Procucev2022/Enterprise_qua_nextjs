@@ -222,9 +222,19 @@ function buildRequestBody({ documentText, inlineData, mimeType, fileName }) {
   };
 }
 
+let activeKeyIndex = 0;
+
+function getActiveKeyIndex() {
+  return activeKeyIndex;
+}
+
+function setActiveKeyIndex(idx) {
+  activeKeyIndex = Number(idx) || 0;
+}
+
 /**
  * Call one model, returning its parsed JSON or throwing so the caller can try
- * the next model in the chain. Supports multiple API keys with failover.
+ * the next model in the chain. Supports multiple API keys with recursive loop failover.
  */
 async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_TIMEOUT_MS) {
   const url = `${GEMINI_CONFIG.BASE_URL}/${model}:generateContent`;
@@ -233,8 +243,9 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
     throw new Error('No Gemini API key available');
   }
 
-  for (let i = 0; i < keys.length; i++) {
-    const apiKey = keys[i];
+  for (let attempt = 0; attempt < keys.length; attempt++) {
+    const keyIdx = (activeKeyIndex + attempt) % keys.length;
+    const apiKey = keys[keyIdx];
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -260,12 +271,18 @@ async function callModel(model, requestBody, timeoutMs = GEMINI_CONFIG.REQUEST_T
       if (!parsed) {
         throw new Error(`Gemini ${model} returned no parseable JSON`);
       }
+      activeKeyIndex = keyIdx;
       return parsed;
     } catch (err) {
       if (err.name === 'AbortError') {
         throw err;
       }
-      if (i < keys.length - 1) {
+      logger.warn(
+        `Gemini API key ${keyIdx + 1}/${keys.length} failed for ${model}: ${err.message}. Rotating to next key...`,
+        { keyIndex: keyIdx + 1, totalKeys: keys.length, model, error: err.message },
+        'GEMINI'
+      );
+      if (attempt < keys.length - 1) {
         continue;
       }
       throw err;
@@ -749,6 +766,8 @@ module.exports = {
   isConfigured,
   resolveModelChain,
   resolveApiKeys,
+  getActiveKeyIndex,
+  setActiveKeyIndex,
   callModel,
   generateJson,
   extractResponseText,

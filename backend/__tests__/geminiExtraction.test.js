@@ -422,6 +422,49 @@ describe('Gemini document extraction service', () => {
         await expect(gemini.callModel('gemini-1.5-flash', {})).rejects.toThrow('The operation was aborted');
         expect(global.fetch).toHaveBeenCalledTimes(1);
       });
+
+      test('rotates cyclically through multiple keys and retains working key', async () => {
+        GEMINI_CONFIG.API_KEY = 'key-1, key-2, key-3';
+        gemini.setActiveKeyIndex(0);
+        expect(gemini.getActiveKeyIndex()).toBe(0);
+
+        // First call: key-1 fails (401), key-2 succeeds
+        global.fetch = jest
+          .fn()
+          .mockResolvedValueOnce({ ok: false, status: 401, text: async () => 'Unauthorized' })
+          .mockResolvedValueOnce(geminiReply('{"items":[{"itemDescription":"Gasket"}]}'));
+
+        const parsed1 = await gemini.callModel('gemini-1.5-flash', {});
+        expect(parsed1).toEqual({ items: [{ itemDescription: 'Gasket' }] });
+        expect(global.fetch).toHaveBeenCalledTimes(2);
+        expect(global.fetch.mock.calls[0][1].headers['x-goog-api-key']).toBe('key-1');
+        expect(global.fetch.mock.calls[1][1].headers['x-goog-api-key']).toBe('key-2');
+        expect(gemini.getActiveKeyIndex()).toBe(1);
+
+        // Next call starts directly with the retained working key (key-2)
+        global.fetch = jest
+          .fn()
+          .mockResolvedValueOnce(geminiReply('{"items":[{"itemDescription":"Bolt"}]}'));
+
+        const parsed2 = await gemini.callModel('gemini-1.5-flash', {});
+        expect(parsed2).toEqual({ items: [{ itemDescription: 'Bolt' }] });
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+        expect(global.fetch.mock.calls[0][1].headers['x-goog-api-key']).toBe('key-2');
+
+        // When starting from key-3 (index 2), if key-3 fails, it cyclically loops back to key-1 (index 0)
+        gemini.setActiveKeyIndex(2);
+        global.fetch = jest
+          .fn()
+          .mockResolvedValueOnce({ ok: false, status: 429, text: async () => 'Rate limit' })
+          .mockResolvedValueOnce(geminiReply('{"items":[{"itemDescription":"Nut"}]}'));
+
+        const parsed3 = await gemini.callModel('gemini-1.5-flash', {});
+        expect(parsed3).toEqual({ items: [{ itemDescription: 'Nut' }] });
+        expect(global.fetch).toHaveBeenCalledTimes(2);
+        expect(global.fetch.mock.calls[0][1].headers['x-goog-api-key']).toBe('key-3');
+        expect(global.fetch.mock.calls[1][1].headers['x-goog-api-key']).toBe('key-1');
+        expect(gemini.getActiveKeyIndex()).toBe(0);
+      });
     });
 
     describe('resolveApiKeys and isConfigured', () => {
