@@ -292,8 +292,8 @@ describe('entitledSourcingModes', () => {
     expect(entitledSourcingModes(' Version_2 ')).toEqual(['mode_1', 'mode_2']);
   });
 
-  it('defaults to the free_trial tier when the plan is unresolved (null/undefined)', () => {
-    expect(entitledSourcingModes(null)).toEqual(['mode_1', 'mode_2', 'mode_3']);
-    expect(entitledSourcingModes(undefined)).toEqual(['mode_1', 'mode_2', 'mode_3']);
+  it('defaults to the most restrictive tier when the plan is unresolved (null/undefined), not to allowing everything', () => {
+    expect(entitledSourcingModes(null)).toEqual(['mode_1']);
+    expect(entitledSourcingModes(undefined)).toEqual(['mode_1']);
   });
 });
