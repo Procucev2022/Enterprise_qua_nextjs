@@ -354,6 +354,137 @@ async function insertBuyerAccount({
 }
 
 /**
+ * Create an internal staff account (category_manager or admin) in the identity
+ * database. Same organization-reuse + transaction pattern as insertBuyerAccount,
+ * but the role/org-type/status names are passed in rather than hardcoded, since
+ * this covers two different app roles that share no other master-data name.
+ */
+async function insertStaffAccount({
+  email,
+  password,
+  phone,
+  fullName,
+  organizationName,
+  roleName,
+  orgTypeName,
+  statusName,
+  createdBy = 'enterprise-workspace',
+}) {
+  if (!pool.pool) {
+    throw new Error(pool.NOT_CONFIGURED_MESSAGE);
+  }
+  if (!email || !password || !phone) {
+    throw new Error('email, password and phone are required to create a staff account.');
+  }
+  if (!roleName || !orgTypeName || !statusName) {
+    throw new Error('roleName, orgTypeName and statusName are required to create a staff account.');
+  }
+
+  const normalizedEmail = String(email).trim().toLowerCase();
+  const normalizedPhone = normalizePhone(phone);
+  const orgName = organizationName || `${normalizedEmail.split('@')[0]} Internal`;
+  const displayName = fullName || normalizedEmail.split('@')[0];
+
+  const existing = await findUserByEmail(normalizedEmail);
+  if (existing) {
+    return { created: false, reason: 'ALREADY_EXISTS', user: existing };
+  }
+
+  const [roleUuid, orgTypeUuid, statusUuid] = await Promise.all([
+    resolveMasterUuid('role', 'role_name', roleName, true),
+    resolveMasterUuid('org_types', 'type_name', orgTypeName),
+    resolveMasterUuid('master_status', 'status', statusName),
+  ]);
+
+  if (!roleUuid) throw new Error(`Role "${roleName}" not found.`);
+  if (!orgTypeUuid) throw new Error(`Org type "${orgTypeName}" not found.`);
+  if (!statusUuid) throw new Error(`Status "${statusName}" not found.`);
+
+  return pool.withTransaction(async (client) => {
+    const orgLookup = await client.query(
+      'select uuid from organization where organization_name = $1 and org_type_uuid = $2 limit 1',
+      [orgName, orgTypeUuid]
+    );
+
+    const organizationReused = orgLookup.rows.length > 0;
+    let orgUuid = organizationReused ? orgLookup.rows[0].uuid : null;
+
+    if (!orgUuid) {
+      orgUuid = crypto.randomUUID();
+      await client.query(
+        `insert into organization
+           (uuid, organization_name, email, organization_phonenumber, contact_person,
+            org_type_uuid, client_status_uuid, self_client, source_type, company_id,
+            gmt_name, bfs_name, is_india, upgrade_days, rfq_credits, rfq_used_count,
+            quote_submitted, created_by, created_ts, last_modified_by, last_modified_ts)
+         values ($1, $2, $3, $4, $5, $6, $7, true, $8, $9, $10, $11, true, 0, 0, 0, 0, $12, now(), $13, now())`,
+        [
+          orgUuid,
+          orgName,
+          normalizedEmail,
+          normalizedPhone,
+          displayName,
+          orgTypeUuid,
+          statusUuid,
+          IDENTITY_MASTER_DATA.SOURCE_TYPE_WEB,
+          buildCompanyId(orgName),
+          IDENTITY_MASTER_DATA.DEFAULT_GMT_PLAN,
+          IDENTITY_MASTER_DATA.DEFAULT_BFS_PLAN,
+          createdBy,
+          createdBy,
+        ]
+      );
+    }
+
+    const userUuid = crypto.randomUUID();
+    await client.query(
+      `insert into "user"
+         (uuid, username, email, password, full_name, first_name, phone,
+          org_uuid, role_uuid, client_status_uuid, unique_id,
+          is_active, self_client, is_approved, reset_password,
+          is_web_app, is_whats_app, is_bot,
+          source_type, verification_status, created_by, created_ts,
+          last_modified_by, last_modified_ts)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+               true, false, true, false, true, false, false,
+               $12, $13, $14, now(), $15, now())`,
+      [
+        userUuid,
+        normalizedEmail,
+        normalizedEmail,
+        password,
+        displayName,
+        displayName,
+        normalizedPhone,
+        orgUuid,
+        roleUuid,
+        statusUuid,
+        buildUniqueId(),
+        IDENTITY_MASTER_DATA.SOURCE_TYPE_WEB,
+        IDENTITY_MASTER_DATA.VERIFICATION_VERIFIED,
+        createdBy,
+        createdBy,
+      ]
+    );
+
+    return {
+      created: true,
+      user: {
+        id: userUuid,
+        email: normalizedEmail,
+        name: displayName,
+        role: mapRoleName(roleName),
+        orgId: orgUuid,
+        orgName,
+        mobile: normalizedPhone,
+        status: 'ACTIVE',
+      },
+      organizationReused,
+    };
+  });
+}
+
+/**
  * Create a vendor user account in the identity database.
  * Similar to insertBuyerAccount but for vendor role and org type.
  */
@@ -531,6 +662,7 @@ module.exports = {
   buildCompanyId,
   insertBuyerAccount,
   insertVendorAccount,
+  insertStaffAccount,
   updateUserPassword,
   updateUserPasswordByUuid,
   MASTER_TABLES,
