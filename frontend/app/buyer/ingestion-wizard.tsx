@@ -6,6 +6,7 @@ import {
   SOURCING_MODES,
   CURRENCY,
   formatFileSize,
+  RFQ_DOCUMENT_LIMITS,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
@@ -285,8 +286,23 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
     const fileList = Array.from(files);
     if (fileList.length === 0) return;
 
-    setUploadedFiles((prev) => [...prev, ...fileList]);
-    setExtractionError(null);
+    const validFiles: File[] = [];
+    for (const file of fileList) {
+      if (file.size > RFQ_DOCUMENT_LIMITS.MAX_FILE_SIZE_BYTES) {
+        showToast(
+          'File Too Large',
+          `"${file.name}" exceeds the 10 MB file size limit (${formatFileSize(file.size)}).`,
+          'warning'
+        );
+      } else {
+        validFiles.push(file);
+      }
+    }
+
+    if (validFiles.length > 0) {
+      setUploadedFiles((prev) => [...prev, ...validFiles]);
+      setExtractionError(null);
+    }
   };
 
   const handleRemoveFile = (index: number) => {
@@ -565,7 +581,7 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
               Upload Source Documents & Forwarded Emails
             </h2>
             <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-              Upload BOQ files (<span className="font-semibold text-slate-700 dark:text-slate-300">.xlsx, .xls, .csv, .pdf, .docx, .txt</span>) or Forwarded Requisition Emails (<span className="font-semibold text-indigo-600 dark:text-indigo-400">.eml, .msg</span>).
+              Upload BOQ files (<span className="font-semibold text-slate-700 dark:text-slate-300">.xlsx, .xls, .csv, .pdf, .docx, .txt</span>) or Forwarded Requisition Emails (<span className="font-semibold text-indigo-600 dark:text-indigo-400">.eml, .msg</span>) — <span className="inline-flex items-center font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-1.5 py-0.5 rounded text-[11px]">Max 10 MB per file</span>
             </p>
           </div>
 
@@ -632,7 +648,7 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
             {isExtracting ? 'Gemini AI is parsing document contents...' : 'Drag and drop BOQ spreadsheets or .eml / .msg emails here'}
           </h3>
           <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-            Supports Excel (.xlsx, .xls), CSV, PDF specs, Word (.docx), and Outlook/MIME Email (.eml, .msg).
+            Supports Excel (.xlsx, .xls), CSV, PDF specs, Word (.docx), Plain Text (.txt), and Outlook/MIME Email (.eml, .msg) — <span className="font-semibold text-slate-700 dark:text-slate-300">Max 10 MB</span>.
           </p>
         </div>
 
