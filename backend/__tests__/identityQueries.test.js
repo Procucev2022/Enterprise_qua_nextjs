@@ -445,6 +445,148 @@ describe('Identity queries (Neon PostgreSQL)', () => {
     });
   });
 
+  // ── Staff creation (category_manager / admin) ─────────────────────────────
+  describe('insertStaffAccount', () => {
+    let client;
+    let originalPool;
+    let existingUserRows;
+    let masterRows;
+    let withTransactionSpy;
+
+    const payload = {
+      email: 'New.Staff@Example.com',
+      password: 'Pass@123',
+      phone: '9157154504',
+      fullName: 'New Staff',
+      organizationName: 'New Staff Org',
+      roleName: IDENTITY_MASTER_DATA.CATEGORY_MANAGER_ROLE_NAME,
+      orgTypeName: IDENTITY_MASTER_DATA.CATEGORY_MANAGER_ORG_TYPE,
+      statusName: IDENTITY_MASTER_DATA.CATEGORY_MANAGER_STATUS,
+    };
+
+    beforeEach(() => {
+      existingUserRows = [];
+      masterRows = { role: [{ uuid: '5005' }], org_types: [{ uuid: '3001' }], master_status: [{ uuid: '104' }] };
+
+      client = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      originalPool = dbPool.pool;
+      dbPool.pool = { connect: jest.fn() };
+      withTransactionSpy = jest
+        .spyOn(dbPool, 'withTransaction')
+        .mockImplementation(async (fn) => fn(client));
+
+      jest.spyOn(dbPool, 'rows').mockImplementation(async (sql) => {
+        if (sql.includes('from "user"')) return existingUserRows;
+        if (sql.includes('from "role"')) return masterRows.role;
+        if (sql.includes('from "org_types"')) return masterRows.org_types;
+        if (sql.includes('from "master_status"')) return masterRows.master_status;
+        return [];
+      });
+    });
+
+    afterEach(() => {
+      dbPool.pool = originalPool;
+    });
+
+    test('creates the organisation and the user in one transaction', async () => {
+      const result = await identityQueries.insertStaffAccount(payload);
+
+      expect(withTransactionSpy).toHaveBeenCalledTimes(1);
+      expect(result.created).toBe(true);
+      expect(result.organizationReused).toBe(false);
+      expect(result.user).toMatchObject({
+        email: 'new.staff@example.com',
+        role: 'category_manager',
+        orgName: 'New Staff Org',
+        mobile: '+919157154504',
+        status: 'ACTIVE',
+      });
+      const statements = client.query.mock.calls.map(([sql]) => sql);
+      expect(statements.some((sql) => sql.includes('insert into organization'))).toBe(true);
+      expect(statements.some((sql) => sql.includes('insert into "user"'))).toBe(true);
+    });
+
+    test('maps the SuperUser role name onto the admin app role', async () => {
+      const result = await identityQueries.insertStaffAccount({
+        ...payload,
+        roleName: IDENTITY_MASTER_DATA.ADMIN_ROLE_NAME,
+        orgTypeName: IDENTITY_MASTER_DATA.ADMIN_ORG_TYPE,
+        statusName: IDENTITY_MASTER_DATA.ADMIN_STATUS,
+      });
+
+      expect(result.user.role).toBe('admin');
+    });
+
+    test('reuses an existing organisation with the same name', async () => {
+      client.query.mockResolvedValueOnce({ rows: [{ uuid: 'existing-org' }] }).mockResolvedValue({ rows: [] });
+
+      const result = await identityQueries.insertStaffAccount(payload);
+
+      expect(result.organizationReused).toBe(true);
+      expect(result.user.orgId).toBe('existing-org');
+      expect(client.query.mock.calls.some(([sql]) => sql.includes('insert into organization'))).toBe(false);
+    });
+
+    test('derives the organisation name and display name from the email when omitted', async () => {
+      const result = await identityQueries.insertStaffAccount({
+        email: 'solo-staff@example.com',
+        password: 'Pass@123',
+        phone: '9157154504',
+        roleName: payload.roleName,
+        orgTypeName: payload.orgTypeName,
+        statusName: payload.statusName,
+      });
+
+      expect(result.user.orgName).toBe('solo-staff Internal');
+      expect(result.user.name).toBe('solo-staff');
+    });
+
+    test('reports an existing account without opening a transaction', async () => {
+      existingUserRows = [{ uuid: 'u-1', username: 'new.staff@example.com', role_name: 'CategoryManager' }];
+
+      const result = await identityQueries.insertStaffAccount(payload);
+
+      expect(result).toMatchObject({ created: false, reason: 'ALREADY_EXISTS' });
+      expect(withTransactionSpy).not.toHaveBeenCalled();
+    });
+
+    test.each([
+      ['email', { ...payload, email: '' }],
+      ['password', { ...payload, password: '' }],
+      ['phone', { ...payload, phone: '' }],
+    ])('requires %s', async (_field, badPayload) => {
+      await expect(identityQueries.insertStaffAccount(badPayload)).rejects.toThrow(
+        /email, password and phone are required/
+      );
+    });
+
+    test.each([
+      ['roleName', { ...payload, roleName: '' }],
+      ['orgTypeName', { ...payload, orgTypeName: '' }],
+      ['statusName', { ...payload, statusName: '' }],
+    ])('requires %s', async (_field, badPayload) => {
+      await expect(identityQueries.insertStaffAccount(badPayload)).rejects.toThrow(
+        /roleName, orgTypeName and statusName are required/
+      );
+    });
+
+    test('refuses to run when the database is not configured', async () => {
+      dbPool.pool = null;
+      await expect(identityQueries.insertStaffAccount(payload)).rejects.toThrow(
+        dbPool.NOT_CONFIGURED_MESSAGE
+      );
+    });
+
+    test.each([
+      ['role', 'role', (p) => `Role "${p.roleName}" not found.`],
+      ['org type', 'org_types', (p) => `Org type "${p.orgTypeName}" not found.`],
+      ['status', 'master_status', (p) => `Status "${p.statusName}" not found.`],
+    ])('fails clearly when the %s master row is missing', async (_label, table, expectedErrorFn) => {
+      masterRows[table] = [];
+      await expect(identityQueries.insertStaffAccount(payload)).rejects.toThrow(expectedErrorFn(payload));
+    });
+  });
+
   // ── Password updates ──────────────────────────────────────────────────────
   describe('updateUserPassword', () => {
     test('reports success when a row was updated', async () => {

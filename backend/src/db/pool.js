@@ -30,9 +30,33 @@ function resolveConfig(env = process.env) {
   if (!connectionString) return null;
 
   const isLocal = connectionString.includes('localhost') || connectionString.includes('127.0.0.1');
+  // Neon's certificate chain is publicly trusted, so full verification is used
+  // there. Other managed providers (e.g. Aiven) issue from their own CA by
+  // default, which Node has no trust anchor for — verification would fail
+  // even though the connection is genuinely encrypted, so it's relaxed to
+  // encrypt-without-verify for anything not on a known-public-CA host.
+  const hasPublicCA = connectionString.includes('neon.tech');
+
+  // pg-connection-string parses a `sslmode` query param out of the URL into
+  // its own ssl object and that takes precedence over the `ssl` field passed
+  // alongside `connectionString` below — so a URL carrying `sslmode=require`
+  // (Aiven's default) silently re-enables full verification regardless of
+  // hasPublicCA. Stripped here so this file's ssl setting is the only one in
+  // effect; the encryption itself is unaffected, only which layer configures it.
+  let sanitizedConnectionString = connectionString;
+  if (!isLocal) {
+    try {
+      const url = new URL(connectionString);
+      url.searchParams.delete('sslmode');
+      url.searchParams.delete('channel_binding');
+      sanitizedConnectionString = url.toString();
+    } catch {
+      // Malformed URL: fall through unmodified and let `pg` surface its own error.
+    }
+  }
 
   return {
-    connectionString,
+    connectionString: sanitizedConnectionString,
     max: env.DATABASE_POOL_MAX ? parseInt(env.DATABASE_POOL_MAX, 10) : DEFAULT_POOL_MAX,
     connectionTimeoutMillis: env.DATABASE_CONNECT_TIMEOUT_MS
       ? parseInt(env.DATABASE_CONNECT_TIMEOUT_MS, 10)
@@ -40,9 +64,8 @@ function resolveConfig(env = process.env) {
     idleTimeoutMillis: env.DATABASE_IDLE_TIMEOUT_MS
       ? parseInt(env.DATABASE_IDLE_TIMEOUT_MS, 10)
       : DEFAULT_IDLE_TIMEOUT_MS,
-    // Neon's certificate chain is publicly trusted, so this verifies for real.
     // A local Postgres is assumed to be plaintext on the loopback interface.
-    ssl: isLocal ? false : { rejectUnauthorized: true },
+    ssl: isLocal ? false : { rejectUnauthorized: hasPublicCA },
   };
 }
 

@@ -86,6 +86,41 @@ export function resolveBuyerSourcingMode(
   return 'mode_2';
 }
 
+/**
+ * Mirrors backend/src/controllers/rfqController.js's SUBSCRIPTION_MODE_ENTITLEMENTS
+ * exactly: each paid tier adds one mode on top of the last. The backend already
+ * enforces this on POST /api/rfqs (a request for an un-entitled mode 403s), so
+ * this is UI-side only — it stops a buyer from picking a mode they cannot use
+ * and then hitting a rejection after filling out the whole form, rather than
+ * being the source of truth for access control.
+ */
+export const SUBSCRIPTION_MODE_ENTITLEMENTS: Record<string, SourcingMode[]> = {
+  free_trial: ['mode_1'],
+  version_1: ['mode_1'],
+  version_2: ['mode_1', 'mode_2'],
+  version_3: ['mode_1', 'mode_2', 'mode_3'],
+};
+
+/**
+ * Sourcing modes a buyer's subscription plan actually entitles them to use.
+ *
+ * A missing/unresolved plan (no activeBuyerAccount loaded yet, or a buyer
+ * with no domain buyer_accounts row at all — a real gap seen in practice)
+ * defaults to the most restrictive tier, not to "show everything." This used
+ * to fail open on the reasoning that "a real buyer account always carries an
+ * explicit subscriptionPlan" — but that assumption doesn't hold: an
+ * authenticated buyer session can genuinely have no resolvable plan (a
+ * missing/not-yet-created buyer_accounts record), and failing open there is
+ * exactly the free-upgrade bypass this gate exists to prevent. The backend
+ * still re-checks entitlement server-side regardless (POST /api/rfqs 403s
+ * for an un-entitled mode), so this stays a UI convenience layer either way —
+ * it just now fails closed instead of open.
+ */
+export function entitledSourcingModes(subscriptionPlan?: string | null): SourcingMode[] {
+  const plan = (subscriptionPlan || 'free_trial').trim().toLowerCase();
+  return SUBSCRIPTION_MODE_ENTITLEMENTS[plan] || SUBSCRIPTION_MODE_ENTITLEMENTS.free_trial;
+}
+
 export const BUYER_SUBSCRIPTION_PLANS = [
   {
     id: 'buyer_starter',

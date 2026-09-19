@@ -16,13 +16,25 @@ describe('Database pool (Neon PostgreSQL)', () => {
         DATABASE_URL: 'postgres://user:pass@ep.neon.tech/db?sslmode=require',
       });
 
+      // sslmode/channel_binding are stripped from the outgoing connection string:
+      // pg-connection-string would otherwise parse them into its own ssl config
+      // and silently override the ssl object built below.
       expect(config).toMatchObject({
-        connectionString: 'postgres://user:pass@ep.neon.tech/db?sslmode=require',
+        connectionString: 'postgres://user:pass@ep.neon.tech/db',
         max: 10,
         connectionTimeoutMillis: 5000,
         idleTimeoutMillis: 10000,
       });
       expect(config.ssl).toEqual({ rejectUnauthorized: true });
+    });
+
+    test('relaxes certificate verification for a non-Neon host (e.g. Aiven, self-signed CA)', () => {
+      const config = dbPool.resolveConfig({
+        DATABASE_URL: 'postgres://user:pass@some-service.aivencloud.com:5432/db?sslmode=require',
+      });
+
+      expect(config.connectionString).toBe('postgres://user:pass@some-service.aivencloud.com:5432/db');
+      expect(config.ssl).toEqual({ rejectUnauthorized: false });
     });
 
     test('honours explicit pool size and timeout overrides', () => {

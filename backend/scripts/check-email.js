@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 // ==============================================================================
-// CHECK INBOUND REQUISITION EMAILS & CREATE RFQ
+// CHECK INBOUND REQUISITION & QUOTATION EMAILS (DUAL INBOX)
 // ==============================================================================
-// Connects to the configured mailbox (rfqprocucev@gmail.com) via IMAP, fetches
-// unread requisition emails, evaluates buyer authorization, and processes each:
+// Connects to both configured mailboxes:
+//   1. Buyer Requisitions Mailbox: rfq@procucev.com (rfqprocucev@gmail.com)
+//   2. Vendor Quotations Mailbox: srinu20252026@gmail.com
+//
+// Fetches unread emails, evaluates buyer authorization or vendor quotation validity:
 //   - Authorized buyer -> extracts line items with Gemini AI & creates RFQ in 'Parsing'
 //   - Unauthorized buyer -> blocks RFQ & dispatches registration notification email
+//   - Vendor quote reply -> parses quotation, updates RFQ, dispatches acknowledgements
 //
 // Usage:
 //   node scripts/check-email.js
@@ -21,74 +25,100 @@ const emailGatewayQueries = require('../src/db/emailGatewayQueries');
 
 async function main() {
   console.log('================================================================');
-  console.log('       ENTERPRISE QUA - CHECK EMAIL & CREATE RFQ (LOCAL)        ');
+  console.log('     ENTERPRISE QUA - DUAL-INBOX EMAIL POLLING & CHECK (LOCAL)  ');
   console.log('================================================================\n');
 
   // Check DB health
   const health = await pool.checkDatabaseHealth();
   if (!health.isConnected) {
     console.error(`[ERROR] Database unavailable: ${health.errorMessage}`);
-    process.exitCode = 1;
-    return;
+    return health;
   }
   console.log(`✔ Database connected: ${health.providerLabel} (${health.database})`);
 
-  // Hydrate store so buyer accounts are loaded
+  // Hydrate store so buyer accounts and vendors are loaded
   console.log('✔ Hydrating buyer accounts and domain data...');
   await storeService.hydrateFromDB();
-  console.log(`✔ Loaded ${storeService.buyerAccounts.length} buyer accounts from database.`);
+  console.log(`✔ Loaded ${(storeService.buyerAccounts || []).length} buyer accounts from database.`);
 
-  // Check gateway configuration
+  // Check gateway status for both mailboxes
   const status = await emailGatewayService.getStatus();
-  if (!status.configured) {
-    console.error('[ERROR] Email gateway is not configured in .env.');
-    process.exitCode = 1;
-    return;
-  }
-  console.log(`✔ Mailbox: ${status.mailboxUser} (${status.host})`);
-  console.log(`✔ Intake address: ${status.gatewayAddress}`);
+  console.log(`✔ Inbox 1 (Requisitions): ${status.mailboxUser || 'Not configured'} (${status.host || 'N/A'}) - Address: ${status.gatewayAddress || 'N/A'}`);
+  console.log(`✔ Inbox 2 (Quotations):   ${status.vendorGateway?.mailboxUser || 'Not configured'} (${status.vendorGateway?.host || 'N/A'}) - Address: ${status.vendorGateway?.gatewayAddress || 'N/A'}`);
 
-  console.log('\nScanning mailbox for unread requisition emails...\n');
-  const result = await emailGatewayService.pollOnce();
+  console.log('\nExecuting dual-inbox scan for unread emails...\n');
+  const result = await emailGatewayService.pollBothInboxesOnce();
 
-  if (result.skipped) {
-    console.log(`[INFO] Mailbox scan skipped: ${result.reason}`);
-    return;
-  }
-
-  console.log('Scan completed:');
-  console.log(`  - Considered: ${result.considered}`);
-  console.log(`  - Ingested as RFQ: ${result.ingested}`);
-  console.log(`  - Pending in mailbox: ${result.pending}`);
-
-  if (result.outcomes && result.outcomes.length > 0) {
-    console.log('\nMessage Outcomes:');
-    result.outcomes.forEach((o, i) => {
-      console.log(`  ${i + 1}. UID: ${o.uid} | Message-ID: ${o.messageId || 'N/A'} | Status: ${o.status}`);
-    });
+  // 1. Report Inbox 1 Results (Requisitions)
+  console.log('----------------------------------------------------------------');
+  console.log(`[INBOX 1: ${result.buyerMailbox.address || 'Requisitions'}]`);
+  if (result.buyerMailbox.skipped) {
+    console.log(`  Status: Skipped (${result.buyerMailbox.reason})`);
+  } else if (result.buyerMailbox.error) {
+    console.log(`  Status: Error (${result.buyerMailbox.error})`);
   } else {
-    console.log('\nNo new unseen requisition emails in mailbox.');
+    console.log(`  Considered: ${result.buyerMailbox.considered || 0}`);
+    console.log(`  Ingested:   ${result.buyerMailbox.ingested || 0}`);
+    console.log(`  Pending:    ${result.buyerMailbox.pending || 0}`);
+    if (result.buyerMailbox.outcomes && result.buyerMailbox.outcomes.length > 0) {
+      result.buyerMailbox.outcomes.forEach((o, i) => {
+        console.log(`    ${i + 1}. UID: ${o.uid} | Message-ID: ${o.messageId || 'N/A'} | Status: ${o.status}`);
+      });
+    } else {
+      console.log('  No new unseen messages.');
+    }
+  }
+
+  // 2. Report Inbox 2 Results (Vendor Quotations)
+  console.log('\n----------------------------------------------------------------');
+  console.log(`[INBOX 2: ${result.vendorMailbox.address || 'Vendor Quotations'}]`);
+  if (result.vendorMailbox.skipped) {
+    console.log(`  Status: Skipped (${result.vendorMailbox.reason})`);
+  } else if (result.vendorMailbox.error) {
+    console.log(`  Status: Error (${result.vendorMailbox.error})`);
+  } else {
+    console.log(`  Considered: ${result.vendorMailbox.considered || 0}`);
+    console.log(`  Ingested:   ${result.vendorMailbox.ingested || 0}`);
+    console.log(`  Pending:    ${result.vendorMailbox.pending || 0}`);
+    if (result.vendorMailbox.outcomes && result.vendorMailbox.outcomes.length > 0) {
+      result.vendorMailbox.outcomes.forEach((o, i) => {
+        console.log(`    ${i + 1}. UID: ${o.uid} | Message-ID: ${o.messageId || 'N/A'} | Status: ${o.status}`);
+      });
+    } else {
+      console.log('  No new unseen messages.');
+    }
   }
 
   // Show recent ledger entries
   const recent = await emailGatewayQueries.listRecent(5);
   if (recent.length > 0) {
-    console.log('\nRecent Email Gateway Ingestion Ledger:');
+    console.log('\n================================================================');
+    console.log('Recent Ingestion Ledger:');
     recent.forEach((r, i) => {
       console.log(`  ${i + 1}. [${r.status}] From: ${r.fromAddress || 'N/A'} | Subject: "${r.subject || 'N/A'}" | ${r.detail || ''}`);
     });
   }
 
   console.log('\n================================================================');
-  console.log('✔ Email check completed successfully.');
+  console.log(`✔ Scan complete: ${result.totalIngested} ingested of ${result.totalConsidered} considered.`);
   console.log('================================================================\n');
 
   try {
-    await pool.end();
+    await pool.closePool();
   } catch (_) {}
+
+  return result;
 }
 
-main().catch((err) => {
-  console.error('Fatal error during email check:', err);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().then((res) => {
+    if (res && res.isConnected === false) {
+      process.exitCode = 1;
+    }
+  }).catch((err) => {
+    console.error('Fatal error during email check:', err);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { main };

@@ -734,32 +734,42 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const updateBuyerAccount = (id: string, updates: Partial<BuyerAccount>) => {
-    const target = buyerAccounts.find((a) => a.id === id);
-    const updatedAcc = target
-      ? { ...target, ...updates, syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC' }
-      : null;
-
-    setBuyerAccounts((prev) =>
-      prev.map((acc) => {
-        if (acc.id !== id) return acc;
-        return updatedAcc || { ...acc, ...updates };
+    // Was POSTing the merged record to /api/buyer-accounts — the CREATE
+    // endpoint, not an update route — and applying the local state change
+    // unconditionally regardless of what (if anything) the server did with
+    // it. createBuyerAccount has no subscriptionPlan restriction at all
+    // (that gate only exists on PUT /api/buyer-accounts/:id's
+    // sanitizeBuyerAccountUpdates), so any edit through this path — e.g. the
+    // Buyer Directory's edit form — could set subscriptionPlan to a paid
+    // tier directly, no Zoho payment involved, and it would actually
+    // persist. Fixed to call the real, gated update route, and to only
+    // reflect the change locally once the server has actually accepted it.
+    fetch(`/api/buyer-accounts/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: authFetchHeaders(),
+      body: JSON.stringify(updates),
+    })
+      .then(async (res) => {
+        const json = await res.json().catch(() => null);
+        if (!res.ok || !json?.success) {
+          showToast(
+            'Update Failed',
+            json?.error || 'Could not save buyer account changes. Please try again.',
+            'warning'
+          );
+          return;
+        }
+        const updatedAcc: BuyerAccount = json.data;
+        setBuyerAccounts((prev) => prev.map((acc) => (acc.id === id ? updatedAcc : acc)));
+        if (activeBuyerAccount?.id === id) {
+          setActiveBuyerAccount(updatedAcc);
+        }
+        addAuditLog(`Updated account specifications for buyer ID ${id}`);
+        showToast('Account Updated', 'Buyer account details successfully saved.', 'info');
       })
-    );
-
-    if (activeBuyerAccount?.id === id && updatedAcc) {
-      setActiveBuyerAccount(updatedAcc);
-    }
-
-    if (updatedAcc) {
-      fetch('/api/buyer-accounts', {
-        method: 'POST',
-        headers: authFetchHeaders(),
-        body: JSON.stringify(updatedAcc),
-      }).catch((e) => console.error('Failed to update buyer account in DB:', e));
-    }
-
-    addAuditLog(`Updated account specifications for buyer ID ${id}`);
-    showToast('Account Updated', 'Buyer account details successfully saved.', 'info');
+      .catch(() => {
+        showToast('Update Failed', 'Could not reach the server. Please try again.', 'warning');
+      });
   };
 
   const deleteBuyerAccount = (id: string) => {

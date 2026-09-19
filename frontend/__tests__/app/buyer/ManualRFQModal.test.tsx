@@ -518,6 +518,10 @@ describe('ManualRFQModal: header and item fields', () => {
 
 describe('ManualRFQModal: sourcing mode', () => {
   it('starts on the first mode and switches on selection', async () => {
+    (useApp as jest.Mock).mockReturnValue({
+      buyerVendors: [],
+      activeBuyerAccount: { subscriptionPlan: 'version_3' },
+    });
     renderModal();
     const modes = screen.getAllByRole('radio');
     expect(modes[0]).toHaveAttribute('aria-checked', 'true');
@@ -531,6 +535,44 @@ describe('ManualRFQModal: sourcing mode', () => {
     clickSave();
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
     expect(rfqClient.createRFQ.mock.calls[0][0].sourcingMode).toBe(SOURCING_MODES[2].id);
+  });
+
+  it('locks Mode 2 and Mode 3 for a free_trial buyer and blocks selecting them', async () => {
+    (useApp as jest.Mock).mockReturnValue({
+      buyerVendors: [],
+      activeBuyerAccount: { subscriptionPlan: 'free_trial' },
+    });
+    renderModal();
+    const modes = screen.getAllByRole('radio');
+
+    expect(modes[0]).not.toBeDisabled();
+    expect(modes[1]).toBeDisabled();
+    expect(modes[2]).toBeDisabled();
+    expect(screen.getAllByText('LOCKED')).toHaveLength(2);
+
+    fireEvent.click(modes[1]);
+    expect(modes[0]).toHaveAttribute('aria-checked', 'true');
+    expect(modes[1]).toHaveAttribute('aria-checked', 'false');
+
+    fillRow();
+    fillDelivery();
+    clickSave();
+    await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
+    expect(rfqClient.createRFQ.mock.calls[0][0].sourcingMode).toBe(SOURCING_MODES[0].id);
+  });
+
+  it('unlocks every mode for a version_3 buyer', () => {
+    (useApp as jest.Mock).mockReturnValue({
+      buyerVendors: [],
+      activeBuyerAccount: { subscriptionPlan: 'version_3' },
+    });
+    renderModal();
+    const modes = screen.getAllByRole('radio');
+
+    expect(modes[0]).not.toBeDisabled();
+    expect(modes[1]).not.toBeDisabled();
+    expect(modes[2]).not.toBeDisabled();
+    expect(screen.queryByText('LOCKED')).not.toBeInTheDocument();
   });
 
   // Each card states the reach that tier buys as well as how it routes, so the
@@ -818,6 +860,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
   it('does not attach assignedVendors when the selected mode is not Mode 1', async () => {
     (useApp as jest.Mock).mockReturnValue({
       buyerVendors: [{ id: 'v-hist-1', name: 'Apex Industrial Dynamics', source: 'historical_purchase_dump' }],
+      activeBuyerAccount: { subscriptionPlan: 'version_3' },
     });
     renderModal();
 
@@ -853,6 +896,7 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
         buyerVendors: [
           { id: 'v-hist-1', name: 'Private Vendor', source: 'buyer_uploaded' },
         ],
+        activeBuyerAccount: { subscriptionPlan: 'version_3' },
       });
       renderModal();
 
