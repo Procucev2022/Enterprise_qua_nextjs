@@ -748,6 +748,7 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                 ref={attachInputRef}
                 type="file"
                 multiple
+                accept=".xlsx,.xls,.csv,.pdf,.docx,.doc,.txt,.eml,.msg"
                 data-testid="rfq-edit-attachment-input"
                 className="hidden"
                 onChange={(e) => handleAttach(e.target.files)}

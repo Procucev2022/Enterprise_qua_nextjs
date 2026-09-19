@@ -384,6 +384,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                 ref={attachInputRef}
                 type="file"
                 multiple
+                accept=".xlsx,.xls,.csv,.pdf,.docx,.doc,.txt,.eml,.msg"
                 data-testid="manual-modal-attachment-input"
                 className="hidden"
                 onChange={(e) => handleAttach(e.target.files)}

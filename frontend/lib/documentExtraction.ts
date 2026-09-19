@@ -3,11 +3,12 @@
 // ==============================================================================
 // Turns a browser File into the request shape POST /api/rfqs/extract accepts.
 //
-// Shared by the ingestion wizard's upload path and the manual RFQ dialog, which
-// both offer extraction from an attached document. It lived inside the wizard
-// component until the dialog needed it too; duplicating it would have let the two
-// drift, and the spreadsheet flattening in particular has to match what the
-// extraction prompt describes or quantities stop lining up with their items.
+// Supports:
+// - Spreadsheets (.xlsx, .xls, .csv, .tsv) -> flattened into table rows with pipe delimiters
+// - Text documents (.txt, .text, .log, .md) -> read as text
+// - Word documents (.docx, .doc) -> extracted text/tables or inline data
+// - PDF documents & images (.pdf, .png, .jpg, .webp) -> inline base64
+// - Email messages (.eml, .msg) -> inline base64 routed to emailIngestionService
 // ==============================================================================
 
 import * as XLSX from 'xlsx';
@@ -21,9 +22,19 @@ export function isSpreadsheet(name: string): boolean {
   return /\.(xlsx|xls|csv|tsv)$/i.test(name);
 }
 
-/** A raw forwarded email — parsed server-side by emailIngestionService, not Gemini directly. */
+/** A raw forwarded email (.eml or Outlook .msg) — parsed server-side by emailIngestionService. */
 export function isEmailFile(name: string): boolean {
-  return /\.eml$/i.test(name);
+  return /\.(eml|msg)$/i.test(name);
+}
+
+/** Plain text or markdown document containing procurement lists or specs. */
+export function isTextFile(name: string): boolean {
+  return /\.(txt|text|log|md)$/i.test(name);
+}
+
+/** Word document (.docx or .doc). */
+export function isWordDocument(name: string): boolean {
+  return /\.(docx|doc)$/i.test(name);
 }
 
 /**
@@ -47,6 +58,82 @@ export function flattenWorkbook(data: ArrayBuffer): string {
   }).join('\n\n');
 }
 
+/** Parse XML extracted from word/document.xml into structured text with line items and table rows. */
+export function parseDocxXml(xml: string): string {
+  return xml
+    .replace(/<w:p[^>]*>/gi, '\n')
+    .replace(/<w:tr[^>]*>/gi, '\n')
+    .replace(/<w:tc[^>]*>/gi, ' | ')
+    .replace(/<w:tab[^>]*\/>/gi, '\t')
+    .replace(/<w:t[^>]*>([\s\S]*?)<\/w:t>/gi, '$1')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\|\s*/g, '\n')
+    .replace(/\s*\|\s*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
+ * Extract text from a docx ArrayBuffer by reading the word/document.xml entry in the zip archive.
+ */
+export async function extractDocxText(buffer: ArrayBuffer): Promise<string> {
+  const bytes = new Uint8Array(buffer);
+  for (let i = 0; i < bytes.length - 30; i++) {
+    if (bytes[i] === 0x50 && bytes[i + 1] === 0x4b && bytes[i + 2] === 0x03 && bytes[i + 3] === 0x04) {
+      const compMethod = bytes[i + 8] | (bytes[i + 9] << 8);
+      const compSize = bytes[i + 18] | (bytes[i + 19] << 8) | (bytes[i + 20] << 16) | (bytes[i + 21] << 24);
+      const fnLen = bytes[i + 26] | (bytes[i + 27] << 8);
+      const extraLen = bytes[i + 28] | (bytes[i + 29] << 8);
+      const fnOffset = i + 30;
+      if (fnOffset + fnLen <= bytes.length) {
+        let fn = '';
+        try {
+          fn = new TextDecoder('utf-8').decode(bytes.subarray(fnOffset, fnOffset + fnLen));
+        } catch {
+          fn = Array.from(bytes.subarray(fnOffset, fnOffset + fnLen))
+            .map((b) => String.fromCharCode(b))
+            .join('');
+        }
+        if (fn === 'word/document.xml') {
+          const dataOffset = fnOffset + fnLen + extraLen;
+          const compressedData = bytes.subarray(dataOffset, dataOffset + compSize);
+          if (compMethod === 0) {
+            let xml = '';
+            try {
+              xml = new TextDecoder('utf-8').decode(compressedData);
+            } catch {
+              xml = Array.from(compressedData)
+                .map((b) => String.fromCharCode(b))
+                .join('');
+            }
+            return parseDocxXml(xml);
+          }
+          if (typeof DecompressionStream !== 'undefined') {
+            try {
+              const ds = new DecompressionStream('deflate-raw');
+              const writer = ds.writable.getWriter();
+              writer.write(compressedData);
+              writer.close();
+              const response = new Response(ds.readable);
+              const xml = await response.text();
+              if (xml) return parseDocxXml(xml);
+            } catch {
+              // fallback
+            }
+          }
+        }
+      }
+    }
+  }
+  return '';
+}
+
 /** Read a file as the base64 body Gemini accepts for PDFs and images. */
 export function readAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -58,6 +145,16 @@ export function readAsBase64(file: File): Promise<string> {
       resolve(result.slice(result.indexOf(',') + 1));
     };
     reader.readAsDataURL(file);
+  });
+}
+
+/** Read a file as plain text string. */
+export function readAsText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('read failed'));
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.readAsText(file);
   });
 }
 
@@ -75,11 +172,27 @@ export async function buildExtractionRequest(file: File): Promise<RFQExtractionR
   if (isSpreadsheet(file.name)) {
     return { fileName: file.name, documentText: flattenWorkbook(await readAsArrayBuffer(file)) };
   }
+  if (isTextFile(file.name)) {
+    return { fileName: file.name, documentText: await readAsText(file) };
+  }
+  if (isWordDocument(file.name)) {
+    try {
+      const docxText = await extractDocxText(await readAsArrayBuffer(file));
+      if (docxText && docxText.length > 0) {
+        return { fileName: file.name, documentText: docxText };
+      }
+    } catch {
+      // fallback to inline data below
+    }
+    return {
+      fileName: file.name,
+      inlineData: await readAsBase64(file),
+      mimeType: file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    };
+  }
   if (isEmailFile(file.name)) {
-    // Raw RFC822 bytes, base64 — the backend detects the .eml extension and
-    // routes this through emailIngestionService instead of Gemini's inline
-    // MIME allow-list (which doesn't include message/rfc822).
-    return { fileName: file.name, inlineData: await readAsBase64(file), mimeType: 'message/rfc822' };
+    const mimeType = /\.msg$/i.test(file.name) ? 'application/vnd.ms-outlook' : 'message/rfc822';
+    return { fileName: file.name, inlineData: await readAsBase64(file), mimeType };
   }
   return {
     fileName: file.name,
