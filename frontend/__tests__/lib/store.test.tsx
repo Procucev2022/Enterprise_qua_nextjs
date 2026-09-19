@@ -530,6 +530,33 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     act(() => {
       contextValue.alignActiveBuyerAccount(newAcc.id);
     });
+
+    // updateBuyerAccount now PUTs to the real, gated /api/buyer-accounts/:id
+    // route and only applies the change locally once the server confirms it
+    // (see the fix in lib/store.tsx) — so the mock has to actually answer
+    // that route for these assertions to resolve.
+    mockFetch.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
+      const match = typeof url === 'string' && url.match(/\/api\/buyer-accounts\/([^/]+)$/);
+      if (match && init?.method === 'PUT') {
+        const id = match[1];
+        const sent = JSON.parse(init.body || '{}');
+        const known = [...contextValue.buyerAccounts, newAcc].find((a: BuyerAccount) => a.id === id);
+        if (!known) {
+          return Promise.resolve({
+            ok: false,
+            status: 404,
+            json: async () => ({ success: false, error: `Buyer account ${id} not found.` }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true, data: { ...known, ...sent } }),
+        });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, data: {} }) });
+    });
+
     act(() => {
       contextValue.updateBuyerAccount(newAcc.id, {
         industry: 'Heavy Infrastructure & Power',
@@ -538,12 +565,14 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       contextValue.updateBuyerAccount('buyer-acc-2', {
         industry: 'Renewable Power',
       });
-      // update non-existent account (noop)
+      // update non-existent account (server 404s; handled without throwing)
       contextValue.updateBuyerAccount('non-existent-id', {
         industry: 'Noop',
       });
     });
-    expect(contextValue.activeBuyerAccount?.industry).toBe('Heavy Infrastructure & Power');
+    await waitFor(() =>
+      expect(contextValue.activeBuyerAccount?.industry).toBe('Heavy Infrastructure & Power')
+    );
 
     // 3. Align non-existent account does not throw
     act(() => {
