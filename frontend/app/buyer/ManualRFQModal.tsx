@@ -36,7 +36,7 @@ import {
   Info,
 } from 'lucide-react';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
-import { CURRENCY, SOURCING_MODES } from '@/lib/constants';
+import { CURRENCY, SOURCING_MODES, entitledSourcingModes } from '@/lib/constants';
 import { createRFQ, extractLineItemsFromDocument, fetchAllVendors, uploadRFQAttachment } from '@/lib/rfqClient';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
 import {
@@ -88,10 +88,12 @@ function FieldError({ message }: { message?: string }) {
 
 export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQModalProps) {
   let buyerVendors: any[] = [];
+  let entitledModes: ReturnType<typeof entitledSourcingModes> = entitledSourcingModes(null);
   try {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     const store = useApp();
     buyerVendors = store?.buyerVendors || [];
+    entitledModes = entitledSourcingModes(store?.activeBuyerAccount?.subscriptionPlan);
   } catch {
     buyerVendors = [];
   }
@@ -720,6 +722,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
             >
               {SOURCING_MODES.map((mode, index) => {
                 const isSelected = form.sourcingMode === mode.id;
+                const isEntitled = entitledModes.includes(mode.id as SourcingMode);
 
                 const modeConfig = [
                   {
@@ -745,14 +748,19 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                     type="button"
                     role="radio"
                     aria-checked={isSelected}
+                    aria-disabled={!isEntitled}
+                    disabled={!isEntitled}
                     data-testid={`manual-mode-${mode.id}`}
-                    onClick={() =>
-                      patchForm("sourcingMode", mode.id as SourcingMode)
-                    }
+                    onClick={() => {
+                      if (!isEntitled) return;
+                      patchForm("sourcingMode", mode.id as SourcingMode);
+                    }}
                     className={`
             group relative text-left rounded-2xl border p-4
             transition-all duration-200
-            ${isSelected
+            ${!isEntitled
+                        ? "border-slate-200 bg-slate-50/70 opacity-60 cursor-not-allowed dark:border-gray-800 dark:bg-gray-900/40"
+                        : isSelected
                         ? "border-indigo-500 bg-indigo-50/80 dark:bg-indigo-950/30 shadow-sm ring-2 ring-indigo-500/15"
                         : "border-slate-200 bg-white hover:border-indigo-300 hover:bg-slate-50/70 dark:border-gray-800 dark:bg-gray-900 dark:hover:border-gray-700"
                       }
@@ -775,7 +783,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                       </div>
 
                       <div className="flex items-center gap-2">
-                        {modeConfig.badge && (
+                        {!isEntitled && (
+                          <span className="rounded-full px-2 py-0.5 text-[8px] font-extrabold tracking-wider bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400">
+                            LOCKED
+                          </span>
+                        )}
+                        {isEntitled && modeConfig.badge && (
                           <span
                             className={`
                     rounded-full px-2 py-0.5 text-[8px]
@@ -855,11 +868,17 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                       </div>
                     </div>
 
-                    {/* Selected footer */}
-                    {isSelected && (
+                    {/* Selected / locked footer */}
+                    {isEntitled && isSelected && (
                       <div className="mt-3 flex items-center gap-1.5 text-[10px] font-bold text-indigo-600 dark:text-indigo-400">
                         <CheckCircle2 size={12} />
                         Selected sourcing mode
+                      </div>
+                    )}
+                    {!isEntitled && (
+                      <div className="mt-3 flex items-center gap-1.5 text-[10px] font-bold text-amber-600 dark:text-amber-400">
+                        <AlertCircle size={12} />
+                        Upgrade your subscription to unlock
                       </div>
                     )}
                   </button>

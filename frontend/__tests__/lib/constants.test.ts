@@ -20,6 +20,7 @@ import {
   formatIndianDateTime,
   BUYER_SUBSCRIPTION_TO_SOURCING_MODE,
   resolveBuyerSourcingMode,
+  entitledSourcingModes,
 } from '@/lib/constants';
 
 
@@ -272,5 +273,27 @@ describe('resolveBuyerSourcingMode & BUYER_SUBSCRIPTION_TO_SOURCING_MODE', () =>
     expect(resolveBuyerSourcingMode({})).toBe('mode_2');
     expect(resolveBuyerSourcingMode(null)).toBe('mode_2');
     expect(resolveBuyerSourcingMode(undefined)).toBe('mode_2');
+  });
+});
+
+describe('entitledSourcingModes', () => {
+  it('mirrors the backend SUBSCRIPTION_MODE_ENTITLEMENTS tiers exactly', () => {
+    expect(entitledSourcingModes('free_trial')).toEqual(['mode_1']);
+    expect(entitledSourcingModes('version_1')).toEqual(['mode_1']);
+    expect(entitledSourcingModes('version_2')).toEqual(['mode_1', 'mode_2']);
+    expect(entitledSourcingModes('version_3')).toEqual(['mode_1', 'mode_2', 'mode_3']);
+  });
+
+  it('falls back to the free_trial tier for an unrecognised plan string', () => {
+    expect(entitledSourcingModes('some_unknown_plan')).toEqual(['mode_1']);
+  });
+
+  it('is case-insensitive and trims whitespace', () => {
+    expect(entitledSourcingModes(' Version_2 ')).toEqual(['mode_1', 'mode_2']);
+  });
+
+  it('allows every mode when the plan is unresolved (null/undefined), since that means "unknown," not "free_trial"', () => {
+    expect(entitledSourcingModes(null)).toEqual(['mode_1', 'mode_2', 'mode_3']);
+    expect(entitledSourcingModes(undefined)).toEqual(['mode_1', 'mode_2', 'mode_3']);
   });
 });
