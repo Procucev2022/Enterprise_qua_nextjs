@@ -1,0 +1,38 @@
+# ==============================================================================
+# PROCUCEV ENTERPRISE BACKEND - CLOUDFLARE WORKERS CONFIGURATION
+# ==============================================================================
+# Native Edge Runtime configuration for Cloudflare Workers Platform
+# Compatible with V8 isolates (workerd) and Node.js standard modules
+# ==============================================================================
+
+name = "procucev-enterprise-backend"
+main = "src/worker.js"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Hyperdrive connection pooling for Neon PostgreSQL
+# Creates ultra-low-latency edge-to-database connection pools
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "procucev-pg-hyperdrive"
+
+# Cloudflare R2 Object Storage Bucket Binding
+# Direct zero-latency object storage for RFQ documents and attachments
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "procucev-enterprise-assets"
+preview_bucket_name = "procucev-enterprise-assets-preview"
+
+# Scheduled Cron Triggers for autonomous background jobs
+# Triggers scheduledWorker.js for Zoho payment reconciliation and chaser outreach
+[triggers]
+crons = ["*/5 * * * *"]
+
+# Worker runtime environment variables
+[vars]
+NODE_ENV = "production"
+PORT = "4000"
+LOG_LEVEL = "INFO"
+AES_CIPHER_ALGORITHM = "aes-256-gcm"
+EMAIL_GATEWAY_ENABLED = "true"
+VENDOR_EMAIL_GATEWAY_ENABLED = "true"

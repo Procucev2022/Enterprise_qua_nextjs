@@ -79,6 +79,19 @@ describe('r2Client', () => {
 
       process.env.R2_SECRET_ACCESS_KEY = 'c';
       expect(r2Client.isConfigured()).toBe(true);
+
+      expect(r2Client.isConfigured({ R2_BUCKET: { put: jest.fn() } })).toBe(true);
+    });
+
+    test('isConfigured returns true when nativeBucket is set', () => {
+      r2Client.setNativeBucket({ name: 'native-test-bucket', put: jest.fn() });
+      expect(r2Client.getNativeBucket()).toBeTruthy();
+      expect(r2Client.isConfigured()).toBe(true);
+      expect(r2Client.bucket()).toBe('native-test-bucket');
+
+      // Cleanup
+      r2Client.setNativeBucket(null);
+      expect(r2Client.getNativeBucket()).toBeNull();
     });
   });
 

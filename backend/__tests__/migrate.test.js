@@ -20,6 +20,21 @@ describe('Database migration (Neon PostgreSQL)', () => {
     process.exitCode = originalExitCode;
   });
 
+  test('skips loudly and preserves exit code when DATABASE_URL is unset and skipIfUnset is true', async () => {
+    let freshMigrate;
+    jest.isolateModules(() => {
+      jest.doMock('../src/db/pool', () => ({ pool: null, query: jest.fn() }));
+      freshMigrate = require('../src/db/migrate');
+    });
+    const originalExitCode = process.exitCode;
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    await freshMigrate.migrate({ skipIfUnset: true });
+
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('verified schema.sql integrity offline'));
+    expect(process.exitCode).toBe(originalExitCode);
+  });
+
   test('applies the schema and writes no seed data', async () => {
     // The whole point of this migration is that it creates structure and nothing
     // else. It used to seed six collections from SEED_* constants and was broken
