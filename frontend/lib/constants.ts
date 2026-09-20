@@ -574,6 +574,18 @@ export const BUYER_PROFILE_LIMITS = {
   MAX_MINOR_CATEGORIES: 10,
 };
 
+/**
+ * Global constraints for RFQ supporting document attachments and AI extraction.
+ */
+export const RFQ_DOCUMENT_LIMITS = {
+  MAX_FILE_SIZE_BYTES: 10 * 1024 * 1024,
+  MAX_FILE_SIZE_MB: 10,
+  MAX_DOCUMENTS_PER_RFQ: 10,
+  SUPPORTED_EXTENSIONS: '.xlsx,.xls,.csv,.pdf,.docx,.doc,.txt,.eml,.msg',
+  SUPPORTED_FORMATS_LABEL:
+    'Upload BOQ files (.xlsx, .xls, .csv, .pdf, .docx, .txt) or Forwarded Requisition Emails (.eml, .msg)',
+} as const;
+
 /** Legal constitutions offered by the buyer profile form. */
 export const ORGANIZATION_TYPE_OPTIONS: OrganizationType[] = [
   'Public Limited',
