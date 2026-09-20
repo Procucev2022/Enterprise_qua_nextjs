@@ -44,11 +44,11 @@ describe('isSpreadsheet', () => {
 });
 
 describe('isEmailFile', () => {
-  test.each(['original_msg.eml', 'Requisition.EML'])('treats %s as an email', (name) => {
+  test.each(['original_msg.eml', 'Requisition.EML', 'requisition.msg', 'MAIL.MSG'])('treats %s as an email', (name) => {
     expect(isEmailFile(name)).toBe(true);
   });
 
-  test.each(['boq.xlsx', 'spec.pdf', 'requisition.msg', 'noextension'])(
+  test.each(['boq.xlsx', 'spec.pdf', 'notes.txt', 'noextension'])(
     'does not treat %s as an email',
     (name) => {
       expect(isEmailFile(name)).toBe(false);
@@ -262,5 +262,34 @@ describe('buildExtractionRequest', () => {
       inlineData: expect.any(String),
       mimeType: 'message/rfc822',
     });
+  });
+
+  test('sends a .msg file inline as application/vnd.ms-outlook', async () => {
+    const file = new File(['From: a@b.com\r\nSubject: RFQ\r\n\r\nBody'], 'requisition.msg', { type: '' });
+
+    await expect(buildExtractionRequest(file)).resolves.toEqual({
+      fileName: 'requisition.msg',
+      inlineData: expect.any(String),
+      mimeType: 'application/vnd.ms-outlook',
+    });
+  });
+
+  test('sends a .txt file as documentText', async () => {
+    const file = new File(['1000m Power Cable 4-core'], 'indent.txt', { type: 'text/plain' });
+
+    await expect(buildExtractionRequest(file)).resolves.toEqual({
+      fileName: 'indent.txt',
+      documentText: '1000m Power Cable 4-core',
+    });
+  });
+
+  test('sends a .docx file as documentText or inlineData', async () => {
+    const file = new File(['mock docx binary content'], 'specification.docx', {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    });
+
+    const res = await buildExtractionRequest(file);
+    expect(res.fileName).toBe('specification.docx');
+    expect(res.documentText !== undefined || res.inlineData !== undefined).toBe(true);
   });
 });

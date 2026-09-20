@@ -38,7 +38,7 @@ export function isAllowedVendorUploadFile(file: File): boolean {
 // A vendor master file this large risks freezing the tab while XLSX parses
 // it in the main thread — reject it client-side with a clear reason rather
 // than letting the browser hang with no explanation.
-export const MAX_VENDOR_UPLOAD_FILE_BYTES = 15 * 1024 * 1024; // 15MB
+export const MAX_VENDOR_UPLOAD_FILE_BYTES = 10 * 1024 * 1024; // 10MB
 
 /** Matches a header cell against any of several acceptable spellings, tolerant of case/spacing/punctuation. */
 function findColumn(headerKeys: string[], candidates: string[]): string | undefined {

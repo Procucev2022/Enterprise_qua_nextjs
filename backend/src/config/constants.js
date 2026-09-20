@@ -526,7 +526,7 @@ const GEMINI_CONFIG = {
   // The primary model measured 12.5s on a small PDF and timed out at 15s on a
   // real one, so it needs more than the Java service's 15s read timeout to have a
   // fair chance before the chain moves on.
-  REQUEST_TIMEOUT_MS: Number(process.env.GEMINI_REQUEST_TIMEOUT_MS || 20000),
+  REQUEST_TIMEOUT_MS: Number(process.env.GEMINI_REQUEST_TIMEOUT_MS || 24000),
   // Ceiling for the whole model chain, not one attempt.
   //
   // Extraction is answered inside a browser request, so the walk has to finish
@@ -536,10 +536,10 @@ const GEMINI_CONFIG = {
   // the buyer as a bare 500 instead of the manual-entry fallback this endpoint
   // exists to return.
   //
-  // 24s leaves 6s of headroom under that ceiling and still funds a fast fallback:
-  // if the 20s primary times out, the remaining 4s comfortably covers a lite
+  // 28s leaves 2s of headroom under that ceiling and still funds a fast fallback:
+  // if the 24s primary times out, the remaining 4s comfortably covers a lite
   // model measured at 1.8s.
-  TOTAL_BUDGET_MS: Number(process.env.GEMINI_TOTAL_BUDGET_MS || 24000),
+  TOTAL_BUDGET_MS: Number(process.env.GEMINI_TOTAL_BUDGET_MS || 28000),
   // Below this much remaining budget a further attempt cannot finish, so the
   // chain stops rather than starting a request it will have to abandon.
   MIN_ATTEMPT_MS: Number(process.env.GEMINI_MIN_ATTEMPT_MS || 3000),
@@ -558,7 +558,7 @@ const GEMINI_CONFIG = {
 // because the buyer is keying the line items themselves.
 //
 // Content lives in Cloudflare R2 rather than on the RFQ record. A 10MB PDF is
-// ~13MB of base64, and the bootstrap payload returns every RFQ, so inlining
+// ~13.3MB of base64, and the bootstrap payload returns every RFQ, so inlining
 // attachments would make that response grow without bound.
 const RFQ_ATTACHMENT_CONFIG = {
   // Object key prefix within the R2 bucket (was the local disk directory
@@ -604,7 +604,7 @@ const EMAIL_INGESTION_CONFIG = {
   // Outlook's Compound File Binary format, which is not RFC822 and is refused
   // with an instruction to re-export rather than failing silently.
   MSG_PATTERN: /\.msg$/i,
-  MAX_BYTES: Number(process.env.EMAIL_INGESTION_MAX_BYTES || 15 * 1024 * 1024),
+  MAX_BYTES: Number(process.env.EMAIL_INGESTION_MAX_BYTES || 10 * 1024 * 1024),
   MAX_ATTACHMENTS: Number(process.env.EMAIL_INGESTION_MAX_ATTACHMENTS || 10),
   // Cap on how much of a decoded text attachment is appended, so one oversized
   // CSV cannot crowd the body out of the extractor's context window.
@@ -896,7 +896,7 @@ const EMAIL_INGESTION_MESSAGES = {
   NO_CONTENT:
     'This email has no readable body and no PDF, image or CSV attachment to extract from. If the requisition is in a spreadsheet, upload it through the BOQ Spreadsheet / Drawing tab.',
   TOO_LARGE: `That email is larger than the ${Math.floor(
-    Number(process.env.EMAIL_INGESTION_MAX_BYTES || 15 * 1024 * 1024) / (1024 * 1024)
+    Number(process.env.EMAIL_INGESTION_MAX_BYTES || 10 * 1024 * 1024) / (1024 * 1024)
   )}MB limit. Forward just the requisition without the earlier thread, or upload the attachment on its own.`,
   UNREADABLE:
     'This email could not be parsed. Re-export it from your mail client as a .eml file, or add the line items manually.',
