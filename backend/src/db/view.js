@@ -1658,10 +1658,10 @@ async function view() {
   console.log(`[db:view] Connected to ${health.providerLabel || 'Database'} (${health.poolStatus || 'ACTIVE'})`);
 
   const vendors = await pool.query(
-    'SELECT id, email, major_category, status, source, created_at, raw FROM vendors ORDER BY created_at DESC'
+    'SELECT id, email, major_category, status, source, created_at, raw FROM vendors ORDER BY created_at DESC LIMIT 500'
   );
   const rfqs = await pool.query(
-    'SELECT id, rfq_number, category, status, sourcing_mode, budget, created_at, raw FROM rfqs ORDER BY created_at DESC'
+    'SELECT id, rfq_number, category, status, sourcing_mode, budget, created_at, raw FROM rfqs ORDER BY created_at DESC LIMIT 500'
   );
 
   viewModule.printSummaryTable('Vendors', vendors.rows, ['id', 'email', 'major_category', 'status', 'source', 'created_at']);
