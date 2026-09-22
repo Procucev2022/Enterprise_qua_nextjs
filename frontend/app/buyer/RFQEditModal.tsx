@@ -24,6 +24,7 @@ import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { CURRENCY, RFQ_STATUSES, formatFileSize, formatIndianDateTime } from '@/lib/constants';
 import { PINCODE_PATTERN } from '@/lib/validationSchemas';
 import { uploadRFQAttachment } from '@/lib/rfqClient';
+import { isPastDateString } from '@/lib/manualRfqModel';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type {
   ExtractedEntity,
@@ -175,6 +176,9 @@ export function validateRFQEdit(form: RFQEditFormState): RFQEditFormErrors {
   if (form.title.trim().length < 3) errors.title = EDIT.titleRequired;
   if (form.category.trim() === '') errors.category = EDIT.categoryRequired;
   if (form.budget !== null && form.budget < 0) errors.budget = EDIT.budgetNegative;
+  if (form.targetDeliveryDate && isPastDateString(form.targetDeliveryDate)) {
+    errors.targetDeliveryDate = EDIT.targetDateCannotBePast || 'Target date cannot be earlier than today.';
+  }
   if (form.deliveryLocation.trim().length < 3) errors.deliveryLocation = EDIT.deliveryLocationRequired;
 
   const pincode = form.deliveryPincode.trim();
@@ -201,6 +205,8 @@ export function validateRFQEdit(form: RFQEditFormState): RFQEditFormErrors {
           ? EDIT.unitRequired
           : row.majorCategory.trim() === ''
           ? EDIT.majorCategoryRequired
+          : row.targetDate && isPastDateString(row.targetDate)
+          ? (EDIT.targetDateCannotBePast || 'Target date cannot be earlier than today.')
           : null;
       return message ? formatString(EDIT.lineItemErrorSummary, { row: index + 1, message }) : null;
     }, null);
@@ -533,10 +539,12 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                 <input
                   id="rfq-edit-date"
                   type="date"
+                  min={new Date().toISOString().slice(0, 10)}
                   value={form.targetDeliveryDate}
                   onChange={(e) => patch('targetDeliveryDate', e.target.value)}
                   className="font-medium"
                 />
+                <FieldError message={errors.targetDeliveryDate} />
               </div>
 
               <div>
@@ -705,6 +713,7 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                           <input
                             type="date"
                             aria-label={EDIT.colTargetDate}
+                            min={new Date().toISOString().slice(0, 10)}
                             value={row.targetDate}
                             onChange={(e) => patchRow(row.id, { targetDate: e.target.value })}
                             className="w-36"

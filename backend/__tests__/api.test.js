@@ -471,17 +471,65 @@ describe('API Route Endpoints', () => {
         expect(res.body.error).toMatch(/free trial/i);
       });
 
-      test('a free_trial (and version_1) buyer is rejected with 403 for mode_2/mode_3', async () => {
-        const email = 'entitlement-mode-gate@ex.com';
+      test('a free_trial buyer can raise mode_1, mode_2, or mode_3 RFQs sharing the 5 free RFQs', async () => {
+        const email = 'entitlement-multi-version@ex.com';
         await request(app).post('/api/buyer-accounts').set(customAuthHeaderFor(email)).send({
+          organizationName: 'Entitlement Multi Mode Buyer',
+          corporateEmail: email,
+        });
+
+        const rfq1 = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({ sourcingMode: 'mode_1' }));
+        expect(rfq1.statusCode).toBe(201);
+        expect((await storeService.getBuyerAccountByEmail(email)).remainingFreeRFQs).toBe(4);
+
+        const rfq2 = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({ sourcingMode: 'mode_2' }));
+        expect(rfq2.statusCode).toBe(201);
+        expect((await storeService.getBuyerAccountByEmail(email)).remainingFreeRFQs).toBe(3);
+
+        const rfq3 = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({ sourcingMode: 'mode_3' }));
+        expect(rfq3.statusCode).toBe(201);
+        expect((await storeService.getBuyerAccountByEmail(email)).remainingFreeRFQs).toBe(2);
+      });
+
+      test('a version_1 buyer is rejected with 403 for mode_2/mode_3', async () => {
+        const email = 'entitlement-mode-gate@ex.com';
+        const acc = await request(app).post('/api/buyer-accounts').set(customAuthHeaderFor(email)).send({
           organizationName: 'Entitlement Mode Gate Buyer',
           corporateEmail: email,
         });
+        storeService.updateBuyerAccount(acc.body.data.id, { subscriptionPlan: 'version_1' });
 
         const res = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({ sourcingMode: 'mode_2' }));
 
         expect(res.statusCode).toBe(403);
         expect(res.body.error).toMatch(/does not include mode_2/i);
+      });
+
+      test('rejects RFQ creation if targetDeliveryDate is in the past', async () => {
+        const email = 'past-date-buyer@ex.com';
+        await request(app).post('/api/buyer-accounts').set(customAuthHeaderFor(email)).send({
+          organizationName: 'Past Date Buyer',
+          corporateEmail: email,
+        });
+
+        const res = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({ targetDeliveryDate: '2020-01-01' }));
+        expect(res.statusCode).toBe(400);
+        expect(res.body.error).toBe('Target date cannot be earlier than today.');
+      });
+
+      test('rejects RFQ creation if line item targetDate is in the past', async () => {
+        const email = 'past-item-buyer@ex.com';
+        await request(app).post('/api/buyer-accounts').set(customAuthHeaderFor(email)).send({
+          organizationName: 'Past Item Buyer',
+          corporateEmail: email,
+        });
+
+        const res = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({
+          targetDeliveryDate: new Date().toISOString().slice(0, 10),
+          extractedEntities: [{ itemName: 'Item 1', quantity: 1, unit: 'Nos', targetDate: '2020-01-01' }],
+        }));
+        expect(res.statusCode).toBe(400);
+        expect(res.body.error).toBe('Target date cannot be earlier than today.');
       });
 
       test('a version_2 buyer may raise mode_1/mode_2 but not mode_3', async () => {

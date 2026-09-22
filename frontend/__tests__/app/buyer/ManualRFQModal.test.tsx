@@ -120,7 +120,7 @@ function extractedEntity(overrides: Partial<ExtractedEntity> = {}): ExtractedEnt
     itemName: 'Centrifugal Water Pump 500 GPM',
     quantity: 12,
     unit: 'Units',
-    targetDate: '2026-09-15',
+    targetDate: '2026-10-15',
     technicalSpecs: 'SS316 impeller',
     confidence: 90,
     category: categoriesData[0].minorCategories[0],
@@ -144,7 +144,7 @@ function extractionResult({
     data: {
       title,
       category: categoriesData[0].majorCategory,
-      targetDeliveryDate: '2026-09-15',
+      targetDeliveryDate: '2026-10-15',
       estimatedBudget,
       extractedEntities: entities,
       source: 'web_portal',
@@ -537,10 +537,24 @@ describe('ManualRFQModal: sourcing mode', () => {
     expect(rfqClient.createRFQ.mock.calls[0][0].sourcingMode).toBe(SOURCING_MODES[2].id);
   });
 
-  it('locks Mode 2 and Mode 3 for a free_trial buyer and blocks selecting them', async () => {
+  it('unlocks all 3 modes for a free_trial buyer', async () => {
     (useApp as jest.Mock).mockReturnValue({
       buyerVendors: [],
       activeBuyerAccount: { subscriptionPlan: 'free_trial' },
+    });
+    renderModal();
+    const modes = screen.getAllByRole('radio');
+
+    expect(modes[0]).not.toBeDisabled();
+    expect(modes[1]).not.toBeDisabled();
+    expect(modes[2]).not.toBeDisabled();
+    expect(screen.queryByText('LOCKED')).not.toBeInTheDocument();
+  });
+
+  it('locks Mode 2 and Mode 3 for a version_1 buyer and blocks selecting them', async () => {
+    (useApp as jest.Mock).mockReturnValue({
+      buyerVendors: [],
+      activeBuyerAccount: { subscriptionPlan: 'version_1' },
     });
     renderModal();
     const modes = screen.getAllByRole('radio');
@@ -941,6 +955,46 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       const mode3Container = screen.getByText(/Mode 3: Double-Blind Anonymous Verification/i).closest('.border-indigo-200');
       expect(mode3Container).not.toBeNull();
       expect(screen.getByText(/Database Suppliers Queued/i)).toHaveClass('badge-indigo');
+    });
+  });
+
+  describe('ManualRFQModal: Quota exhaustion and upgrade plan', () => {
+    it('shows quota exhausted warning banner and upgrade plan CTA when remaining free RFQs are 0 on free_trial', () => {
+      useApp.mockReturnValue({
+        activeSubscription: 'free_trial',
+        remainingFreeRFQs: 0,
+        activeBuyerAccount: { subscriptionPlan: 'free_trial', remainingFreeRFQs: 0 },
+      });
+      renderModal();
+
+      expect(screen.getByTestId('manual-rfq-quota-exhausted-banner')).toBeInTheDocument();
+      expect(screen.getByText(MODAL.quotaExhaustedTitle)).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Please Upgrade Your Plan/i })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: MODAL.saveAction })).not.toBeInTheDocument();
+    });
+
+    it('does not show quota exhausted banner when user has remaining free RFQs', () => {
+      useApp.mockReturnValue({
+        activeSubscription: 'free_trial',
+        remainingFreeRFQs: 3,
+        activeBuyerAccount: { subscriptionPlan: 'free_trial', remainingFreeRFQs: 3 },
+      });
+      renderModal();
+
+      expect(screen.queryByTestId('manual-rfq-quota-exhausted-banner')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: MODAL.saveAction })).toBeInTheDocument();
+    });
+
+    it('does not show quota exhausted banner for paid subscription users even if remainingFreeRFQs is 0', () => {
+      useApp.mockReturnValue({
+        activeSubscription: 'version_1',
+        remainingFreeRFQs: 0,
+        activeBuyerAccount: { subscriptionPlan: 'version_1', remainingFreeRFQs: 0 },
+      });
+      renderModal();
+
+      expect(screen.queryByTestId('manual-rfq-quota-exhausted-banner')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: MODAL.saveAction })).toBeInTheDocument();
     });
   });
 });

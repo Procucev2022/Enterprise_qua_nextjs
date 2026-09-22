@@ -25,11 +25,24 @@ const RFQ_DEFAULT_STATUS = 'Quotes Pending';
 // each paid tier adds one mode on top of the last, matching store.tsx's
 // existing client-side gate (addNewRFQ) that this mirrors server-side.
 const SUBSCRIPTION_MODE_ENTITLEMENTS = {
-  free_trial: ['mode_1'],
+  free_trial: ['mode_1', 'mode_2', 'mode_3'],
   version_1: ['mode_1'],
   version_2: ['mode_1', 'mode_2'],
   version_3: ['mode_1', 'mode_2', 'mode_3'],
 };
+
+/**
+ * Checks whether an ISO date string (YYYY-MM-DD...) represents a calendar date in the past.
+ */
+function isPastDate(dateStr) {
+  if (!dateStr || typeof dateStr !== 'string') return false;
+  const trimmed = dateStr.trim();
+  if (!trimmed) return false;
+  const dateOnly = trimmed.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateOnly)) return false;
+  const today = new Date().toISOString().slice(0, 10);
+  return dateOnly < today;
+}
 
 /** Buyer-facing reason for each attachment rejection. */
 const ATTACHMENT_ERRORS = {
@@ -247,6 +260,8 @@ async function getRFQById(req, res, next) {
  * Create an RFQ owned by the signed-in buyer's account.
  */
 async function createRFQ(req, res, next) {
+  let consumedFreeTrial = false;
+  let requestingBuyerAccount = null;
   try {
     const body = req.body || {};
 
@@ -260,22 +275,31 @@ async function createRFQ(req, res, next) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
     }
 
+    if (isPastDate(body.targetDeliveryDate)) {
+      logger.warn('Failed to create RFQ: targetDeliveryDate is in the past', { targetDeliveryDate: body.targetDeliveryDate }, 'RFQ_CONTROLLER');
+      return res.status(400).json({
+        success: false,
+        error: 'Target date cannot be earlier than today.',
+        fieldErrors: { targetDeliveryDate: 'Target date cannot be earlier than today.' },
+      });
+    }
+
     const lineItems = Array.isArray(body.extractedEntities) ? body.extractedEntities : body.lineItems || [];
+    for (const item of lineItems) {
+      if (item && isPastDate(item.targetDate)) {
+        logger.warn('Failed to create RFQ: line item targetDate is in the past', { targetDate: item.targetDate }, 'RFQ_CONTROLLER');
+        return res.status(400).json({
+          success: false,
+          error: 'Target date cannot be earlier than today.',
+          fieldErrors: { targetDate: 'Target date cannot be earlier than today.' },
+        });
+      }
+    }
 
-    // Generated from the line items the buyer confirmed, so the summary
-    // always describes what was actually dispatched. A model or network
-    // failure here must not block RFQ creation — buildRFQSummary already
-    // falls back to a deterministic summary rather than throwing.
-    const aiSummary = await rfqSummaryService.buildRFQSummary(
-      { ...body, extractedEntities: lineItems },
-      { orgName: (req.user && req.user.orgName) || '' }
-    );
-
-    logger.info(`Creating new RFQ: ${body.title}`, { title: body.title, category: body.category, budget: body.budget }, 'RFQ_CONTROLLER');
     // Resolved server-side from the authenticated session, never trusted from
     // the request body, so the RFQ is attributed to whoever is actually
     // logged in rather than a client-supplied or globally-shared value.
-    const requestingBuyerAccount = req.user ? await storeService.getBuyerAccountByEmail(req.user.email) : null;
+    requestingBuyerAccount = req.user ? await storeService.getBuyerAccountByEmail(req.user.email) : null;
 
     // Server-side re-validation of the buyer's subscription entitlement —
     // mirrors the vendor download-quota check below (generateEmailPreview).
@@ -302,22 +326,31 @@ async function createRFQ(req, res, next) {
         });
       }
 
-      if (plan === 'free_trial' && (requestingBuyerAccount.remainingFreeRFQs || 0) <= 0) {
-        logger.warn('Rejected RFQ creation: free trial exhausted', { buyerAccountId: requestingBuyerAccount.id }, 'RFQ_CONTROLLER');
-        return res.status(403).json({
-          success: false,
-          error: 'Your free trial RFQs are used up. Upgrade to a paid plan to raise more.',
-        });
+      if (plan === 'free_trial') {
+        const consumeResult = storeService.tryConsumeFreeRFQ(requestingBuyerAccount.id);
+        if (!consumeResult.ok) {
+          logger.warn('Rejected RFQ creation: free trial exhausted', { buyerAccountId: requestingBuyerAccount.id }, 'RFQ_CONTROLLER');
+          return res.status(403).json({
+            success: false,
+            error: 'Your free trial RFQs are used up. Upgrade to a paid plan to raise more.',
+          });
+        }
+        consumedFreeTrial = true;
       }
     }
 
-    const created = storeService.createRFQ({ ...body, extractedEntities: lineItems, aiSummary }, requestingBuyerAccount);
+    // Generated from the line items the buyer confirmed, so the summary
+    // always describes what was actually dispatched. A model or network
+    // failure here must not block RFQ creation — buildRFQSummary already
+    // falls back to a deterministic summary rather than throwing.
+    const aiSummary = await rfqSummaryService.buildRFQSummary(
+      { ...body, extractedEntities: lineItems },
+      { orgName: (req.user && req.user.orgName) || '' }
+    );
 
-    if (requestingBuyerAccount && (requestingBuyerAccount.subscriptionPlan || 'free_trial') === 'free_trial') {
-      storeService.updateBuyerAccount(requestingBuyerAccount.id, {
-        remainingFreeRFQs: Math.max(0, (requestingBuyerAccount.remainingFreeRFQs || 0) - 1),
-      });
-    }
+    logger.info(`Creating new RFQ: ${body.title}`, { title: body.title, category: body.category, budget: body.budget }, 'RFQ_CONTROLLER');
+
+    const created = storeService.createRFQ({ ...body, extractedEntities: lineItems, aiSummary }, requestingBuyerAccount);
 
     // Dispatch real email notification to target gateway address (e.g. RFQ@procucev.com)
     if (body.source === 'email_gateway' || body.targetGatewayEmail) {
@@ -331,6 +364,9 @@ async function createRFQ(req, res, next) {
 
     res.status(201).json({ success: true, data: created });
   } catch (err) {
+    if (consumedFreeTrial && requestingBuyerAccount) {
+      storeService.refundFreeRFQ(requestingBuyerAccount.id);
+    }
     logger.error('Error creating RFQ', err, 'RFQ_CONTROLLER');
     next(err);
   }
@@ -649,6 +685,28 @@ async function updateRFQ(req, res, next) {
     if (!isValid) {
       logger.warn('RFQ edit rejected: payload validation failed', { id, errors }, 'RFQ_CONTROLLER');
       return res.status(400).json({ success: false, error: Object.values(errors)[0], fieldErrors: errors });
+    }
+
+    if (body.targetDeliveryDate && isPastDate(body.targetDeliveryDate)) {
+      logger.warn('RFQ edit rejected: targetDeliveryDate is in the past', { id, targetDeliveryDate: body.targetDeliveryDate }, 'RFQ_CONTROLLER');
+      return res.status(400).json({
+        success: false,
+        error: 'Target date cannot be earlier than today.',
+        fieldErrors: { targetDeliveryDate: 'Target date cannot be earlier than today.' },
+      });
+    }
+
+    if (Array.isArray(body.extractedEntities)) {
+      for (const item of body.extractedEntities) {
+        if (item && isPastDate(item.targetDate)) {
+          logger.warn('RFQ edit rejected: line item targetDate is in the past', { id, targetDate: item.targetDate }, 'RFQ_CONTROLLER');
+          return res.status(400).json({
+            success: false,
+            error: 'Target date cannot be earlier than today.',
+            fieldErrors: { targetDate: 'Target date cannot be earlier than today.' },
+          });
+        }
+      }
     }
 
     const updates = pickUpdatableRfqFields(body);

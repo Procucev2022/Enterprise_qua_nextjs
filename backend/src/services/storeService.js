@@ -375,6 +375,51 @@ class StoreService {
     return target;
   }
 
+  /**
+   * Atomically check and consume one free trial RFQ slot for a buyer account.
+   * Eliminates race conditions from concurrent RFQ creation requests.
+   */
+  tryConsumeFreeRFQ(id) {
+    const idx = this.buyerAccounts.findIndex((a) => a.id === id);
+    if (idx === -1) return { ok: false, remaining: 0 };
+    const buyer = this.buyerAccounts[idx];
+    const remaining = buyer.remainingFreeRFQs !== undefined ? buyer.remainingFreeRFQs : 5;
+    if (remaining <= 0) {
+      return { ok: false, remaining: 0 };
+    }
+    const updated = {
+      ...buyer,
+      remainingFreeRFQs: remaining - 1,
+      syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
+    };
+    this.buyerAccounts[idx] = updated;
+    this._persistBuyerAccount(updated);
+    if (this.activeBuyerAccount && this.activeBuyerAccount.id === id) {
+      this.activeBuyerAccount = updated;
+    }
+    return { ok: true, remaining: updated.remainingFreeRFQs };
+  }
+
+  /**
+   * Refund a reserved free trial RFQ slot if RFQ creation fails downstream.
+   */
+  refundFreeRFQ(id) {
+    const idx = this.buyerAccounts.findIndex((a) => a.id === id);
+    if (idx === -1) return;
+    const buyer = this.buyerAccounts[idx];
+    const current = buyer.remainingFreeRFQs !== undefined ? buyer.remainingFreeRFQs : 0;
+    const updated = {
+      ...buyer,
+      remainingFreeRFQs: Math.min(5, current + 1),
+      syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
+    };
+    this.buyerAccounts[idx] = updated;
+    this._persistBuyerAccount(updated);
+    if (this.activeBuyerAccount && this.activeBuyerAccount.id === id) {
+      this.activeBuyerAccount = updated;
+    }
+  }
+
   // ==========================================
   // 2. VENDORS
   // ==========================================

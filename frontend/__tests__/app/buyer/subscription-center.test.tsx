@@ -42,8 +42,9 @@ describe('app/buyer/subscription-center.tsx', () => {
     render(<SubscriptionCenter />);
 
     expect(screen.getByText('Procurement Sourcing Mode Subscriptions')).toBeInTheDocument();
-    expect(screen.getByText(/Free Starter Account Active — 5 Free RFQs Included/i)).toBeInTheDocument();
-    expect(screen.getByText(/4 of 5 Free RFQs Left/i)).toBeInTheDocument();
+    expect(screen.getByText(/Free Starter Account — 5 Free RFQs Included/i)).toBeInTheDocument();
+    expect(screen.getByText(/Remaining: 4 \/ 5/i)).toBeInTheDocument();
+    expect(screen.getByText(/Used: 1 \/ 5/i)).toBeInTheDocument();
     expect(screen.getByText('Version 1 Plan')).toBeInTheDocument();
     expect(screen.getByText('Version 2 Plan')).toBeInTheDocument();
     expect(screen.getByText('Version 3 Plan')).toBeInTheDocument();

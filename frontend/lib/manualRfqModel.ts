@@ -106,6 +106,19 @@ function clean(value: unknown): string {
 }
 
 /**
+ * Checks whether an ISO date string (YYYY-MM-DD...) represents a calendar date in the past.
+ */
+export function isPastDateString(dateStr?: string | null): boolean {
+  if (!dateStr || typeof dateStr !== 'string') return false;
+  const trimmed = dateStr.trim();
+  if (!trimmed) return false;
+  const dateOnly = trimmed.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateOnly)) return false;
+  const today = new Date().toISOString().slice(0, 10);
+  return dateOnly < today;
+}
+
+/**
  * Validate one line item.
  *
  * Every field checked here is something a vendor quotes against, which is why a
@@ -123,6 +136,9 @@ export function validateManualRFQLineItem(item: ManualRFQLineItem): ManualRFQLin
   }
   if (clean(item.unit) === '') {
     errors.unit = MANUAL.unitRequired;
+  }
+  if (item.targetDate && isPastDateString(item.targetDate)) {
+    errors.targetDate = MANUAL.targetDateCannotBePast || 'Target date cannot be earlier than today.';
   }
   // Major/minor category are no longer mandatory to dispatch a manual RFQ —
   // a buyer may not know the exact taxonomy slot for an item up front, and
@@ -179,6 +195,10 @@ export function validateManualRFQForm(form: ManualRFQForm): ManualRFQValidation 
   // Optional, but a negative ceiling is meaningless rather than merely absent.
   if (form.estimatedBudget !== null && Number(form.estimatedBudget) < 0) {
     formErrors.estimatedBudget = MANUAL.budgetNegative;
+  }
+
+  if (form.targetDeliveryDate && isPastDateString(form.targetDeliveryDate)) {
+    formErrors.targetDeliveryDate = MANUAL.targetDateCannotBePast || 'Target date cannot be earlier than today.';
   }
 
   if (items.length === 0) {

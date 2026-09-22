@@ -95,7 +95,7 @@ export function resolveBuyerSourcingMode(
  * being the source of truth for access control.
  */
 export const SUBSCRIPTION_MODE_ENTITLEMENTS: Record<string, SourcingMode[]> = {
-  free_trial: ['mode_1'],
+  free_trial: ['mode_1', 'mode_2', 'mode_3'],
   version_1: ['mode_1'],
   version_2: ['mode_1', 'mode_2'],
   version_3: ['mode_1', 'mode_2', 'mode_3'],

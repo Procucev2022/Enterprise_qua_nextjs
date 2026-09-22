@@ -194,20 +194,25 @@ export default function SubscriptionCenter() {
 
       {/* Trial Quota Info Alert */}
       {activeSubscription === 'free_trial' ? (
-        <div className="p-5 rounded-2xl bg-gradient-to-r from-amber-50/80 via-orange-50/60 to-indigo-50/80 dark:from-amber-950/30 dark:via-orange-950/20 dark:to-indigo-950/30 border border-amber-300 dark:border-amber-700/60 text-xs text-amber-900 dark:text-amber-200 space-y-2 shadow-sm">
+        <div className="p-5 rounded-2xl bg-gradient-to-r from-amber-50/80 via-orange-50/60 to-indigo-50/80 dark:from-amber-950/30 dark:via-orange-950/20 dark:to-indigo-950/30 border border-amber-300 dark:border-amber-700/60 text-xs text-amber-900 dark:text-amber-200 space-y-3 shadow-sm">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-2 font-black text-sm">
               <Sparkles className="text-amber-600 dark:text-amber-400 shrink-0" size={18} />
-              <span>🎁 Free Starter Account Active — 5 Free RFQs Included</span>
+              <span>🎁 Free Starter Account — 5 Free RFQs Included</span>
             </div>
-            <span className="px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-amber-200/60 dark:bg-amber-900/60 text-amber-900 dark:text-amber-100 border border-amber-300">
-              {remainingFreeRFQs} of 5 Free RFQs Left
-            </span>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-amber-200/60 dark:bg-amber-900/60 text-amber-900 dark:text-amber-100 border border-amber-300">
+                Used: {Math.max(0, 5 - remainingFreeRFQs)} / 5
+              </span>
+              <span className="px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-emerald-200/60 dark:bg-emerald-900/60 text-emerald-900 dark:text-emerald-100 border border-emerald-300">
+                Remaining: {remainingFreeRFQs} / 5
+              </span>
+            </div>
           </div>
           <p className="text-xs leading-relaxed text-slate-700 dark:text-gray-300">
-            Every new buyer starts with a <strong>Free Account</strong> with <strong>5 Free RFQs</strong>. You can use <strong>ANY version (Version 1: Client Roster, Version 2: Hybrid Sourcing, or Version 3: Autonomous AI)</strong> for each of your 5 free RFQs without restrictions.
+            Every new buyer receives <strong>5 Free RFQs in total</strong>. You can create your free RFQs using <strong>any version (Version 1: Client Roster, Version 2: Hybrid Sourcing, or Version 3: Autonomous AI)</strong>. The 5-RFQ allowance is shared across all versions. After the 5 free RFQs are used, please subscribe to continue creating and dispatching RFQs.
           </p>
-          <div className="w-full bg-amber-200/50 dark:bg-gray-800 rounded-full h-2 overflow-hidden mt-1">
+          <div className="w-full bg-amber-200/50 dark:bg-gray-800 rounded-full h-2.5 overflow-hidden mt-1">
             <div
               className="bg-gradient-to-r from-amber-500 to-emerald-500 h-full transition-all duration-300"
               style={{ width: `${(remainingFreeRFQs / 5) * 100}%` }}
@@ -230,24 +235,21 @@ export default function SubscriptionCenter() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         {plans.map((p) => {
           const isActive = activeSubscription === p.id;
-          const isTrialActive = activeSubscription === 'free_trial' && p.id === 'version_1';
           const buttonLabel = isActive
             ? 'Active Subscription'
-            : isTrialActive
-            ? 'Active Free Trial'
             : `Subscribe to ${p.name.split(' ')[0]} ${p.name.split(' ')[1]}`;
 
           return (
             <div
               key={p.id}
               className={`rounded-3xl border bg-white dark:bg-gray-900 flex flex-col justify-between overflow-hidden transition-all shadow-md relative ${
-                isActive || isTrialActive
+                isActive
                   ? 'border-brand-500 ring-2 ring-brand-500/20 scale-[1.01]'
                   : 'border-slate-200 dark:border-gray-800 hover:border-slate-400 dark:hover:border-gray-700'
               }`}
             >
               {/* Highlight Ribbon */}
-              {(isActive || isTrialActive) && (
+              {isActive && (
                 <div className="absolute top-0 right-0 bg-brand-500 text-white font-mono text-[9px] font-bold px-3 py-1 rounded-bl-xl uppercase tracking-widest">
                   Active
                 </div>
@@ -293,14 +295,14 @@ export default function SubscriptionCenter() {
               <div className="p-6 bg-slate-50 dark:bg-gray-950/40 border-t border-slate-150 dark:border-gray-800/60">
                 <button
                   onClick={() => handleSubscribe(p.id)}
-                  disabled={isActive || isTrialActive}
+                  disabled={isActive}
                   className={`btn w-full text-xs font-bold py-2 flex items-center justify-center gap-1.5 ${
-                    isActive || isTrialActive
+                    isActive
                       ? 'btn-secondary border-emerald-300 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300 cursor-default opacity-85'
                       : 'btn-primary'
                   }`}
                 >
-                  {(isActive || isTrialActive) ? <ShieldCheck size={13} /> : <Zap size={13} />}
+                  {isActive ? <ShieldCheck size={13} /> : <Zap size={13} />}
                   {buttonLabel}
                 </button>
               </div>

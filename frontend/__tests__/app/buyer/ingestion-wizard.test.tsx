@@ -1045,4 +1045,56 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
     expect(screen.getByRole('button', { name: /Extract Line Items with AI/i })).toBeDisabled();
   });
 
+  describe('IngestionWizard: Quota exhaustion and upgrade plan', () => {
+    it('shows quota exhausted warning banner and upgrade plan button when remaining free RFQs are 0 on free_trial', () => {
+      render(
+        <AppProvider>
+          <IngestionWizard
+            forceSubscription="free_trial"
+            forceRemainingFreeRFQs={0}
+            onComplete={jest.fn()}
+            onCancel={jest.fn()}
+          />
+        </AppProvider>
+      );
+
+      expect(screen.getByTestId('ingestion-wizard-quota-exhausted-banner')).toBeInTheDocument();
+      expect(screen.getByText(EXTRACTION.quotaExhaustedTitle)).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Please Upgrade Your Plan/i })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Create & Dispatch RFQ/i })).not.toBeInTheDocument();
+    });
+
+    it('does not show quota exhausted banner when buyer has remaining free RFQs', () => {
+      render(
+        <AppProvider>
+          <IngestionWizard
+            forceSubscription="free_trial"
+            forceRemainingFreeRFQs={3}
+            onComplete={jest.fn()}
+            onCancel={jest.fn()}
+          />
+        </AppProvider>
+      );
+
+      expect(screen.queryByTestId('ingestion-wizard-quota-exhausted-banner')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Create & Dispatch RFQ/i })).toBeInTheDocument();
+    });
+
+    it('does not show quota exhausted banner for paid subscription plans', () => {
+      render(
+        <AppProvider>
+          <IngestionWizard
+            forceSubscription="version_2"
+            forceRemainingFreeRFQs={0}
+            onComplete={jest.fn()}
+            onCancel={jest.fn()}
+          />
+        </AppProvider>
+      );
+
+      expect(screen.queryByTestId('ingestion-wizard-quota-exhausted-banner')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Create & Dispatch RFQ/i })).toBeInTheDocument();
+    });
+  });
+
 });
