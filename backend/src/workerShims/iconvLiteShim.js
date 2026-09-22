@@ -16,4 +16,21 @@ function getDecoder(encoding) {
   return new StringDecoder(encoding || 'utf8');
 }
 
-module.exports = { getDecoder };
+// body-parser's `read()` (via raw-body/content-type charset handling) checks
+// `iconv.encodingExists(charset)` before ever calling getDecoder, to decide
+// whether it can even attempt the request — a missing export here throws
+// "iconv.encodingExists is not a function" on every POST/PUT with a body,
+// not just non-utf-8 ones. Buffer.isEncoding() is the right proxy: it's the
+// exact same encoding set string_decoder (used above) actually supports.
+function encodingExists(encoding) {
+  return Buffer.isEncoding(String(encoding || '').toLowerCase());
+}
+
+// body-parser's read() falls back to iconv.decode(body, encoding) once a
+// whole buffer has already been read (the non-streaming path) — same
+// encoding set as encodingExists/getDecoder above, via Buffer's own decoder.
+function decode(buffer, encoding) {
+  return buffer.toString(String(encoding || 'utf8').toLowerCase());
+}
+
+module.exports = { getDecoder, encodingExists, decode };
