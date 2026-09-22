@@ -573,6 +573,22 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       pool.pool = { query: jest.fn().mockResolvedValue({ rowCount: 0 }) };
       await expect(domainQueries.deleteCatalogueProductInDB('prod-x')).resolves.toBe(false);
     });
+
+    // vendor_catalogue has been ported to D1 (see d1Bridge.js), which has no
+    // JSON column type — raw comes back as a TEXT string there.
+    test('getVendorCatalogueFromDB parses a string raw column (D1)', async () => {
+      const product = { id: 'prod-1', sku: 'SKU-1' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(product) }] }) };
+
+      await expect(domainQueries.getVendorCatalogueFromDB()).resolves.toEqual([product]);
+    });
+
+    test('upsertCatalogueProductInDB parses a string raw column (D1)', async () => {
+      const product = { id: 'prod-1', sku: 'SKU-1' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(product) }] }) };
+
+      await expect(domainQueries.upsertCatalogueProductInDB(product)).resolves.toEqual(product);
+    });
   });
 
   describe('buyer accounts', () => {

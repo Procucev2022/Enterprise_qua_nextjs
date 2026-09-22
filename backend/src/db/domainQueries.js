@@ -299,31 +299,55 @@ async function upsertEvaluationInDB(evaluation) {
 
 async function getVendorCatalogueFromDB() {
   if (!pool.pool) return [];
-  const result = await pool.query('SELECT raw FROM vendor_catalogue ORDER BY created_at DESC');
-  return result.rows.map((row) => row.raw);
+  const result = await pool.query(
+    'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC',
+    [],
+    { d1: true }
+  );
+  return result.rows.map((row) => parseRaw(row.raw));
 }
 
 async function upsertCatalogueProductInDB(product) {
   if (!pool.pool) return null;
   const { id, vendorId, sku, category } = product;
+  // See upsertEvaluationInDB's comment: CURRENT_TIMESTAMP on D1 renders in a
+  // format that doesn't sort correctly against the ISO created_at/updated_at
+  // already in the column from migrated data, since this table's D1 default
+  // needs the same ISO form.
   const result = await pool.query(
     `INSERT INTO vendor_catalogue (id, vendor_id, sku, category, raw, updated_at)
-     VALUES ($1, $2, $3, $4, $5, now())
+     VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
      ON CONFLICT (id) DO UPDATE SET
        vendor_id = EXCLUDED.vendor_id,
        sku = EXCLUDED.sku,
        category = EXCLUDED.category,
        raw = EXCLUDED.raw,
-       updated_at = now()
+       updated_at = CURRENT_TIMESTAMP
      RETURNING raw`,
-    [id, vendorId || null, sku || null, category || null, JSON.stringify(product)]
+    [id, vendorId || null, sku || null, category || null, JSON.stringify(product)],
+    {
+      d1: true,
+      d1Text: `INSERT INTO vendor_catalogue (id, vendor_id, sku, category, raw, updated_at)
+     VALUES ($1, $2, $3, $4, $5, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT (id) DO UPDATE SET
+       vendor_id = EXCLUDED.vendor_id,
+       sku = EXCLUDED.sku,
+       category = EXCLUDED.category,
+       raw = EXCLUDED.raw,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     RETURNING raw`,
+    }
   );
-  return result.rows[0]?.raw || null;
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 async function deleteCatalogueProductInDB(id) {
   if (!pool.pool) return false;
-  const result = await pool.query('DELETE FROM vendor_catalogue WHERE id = $1', [id]);
+  const result = await pool.query(
+    'DELETE FROM vendor_catalogue WHERE id = $1',
+    [id],
+    { d1: true }
+  );
   return result.rowCount > 0;
 }
 
