@@ -407,8 +407,18 @@ async function upsertAIFeedItemInDB(item) {
 
 async function getAuditLogsFromDB() {
   if (!pool.pool) return [];
-  const result = await pool.query('SELECT raw FROM audit_logs ORDER BY sequence DESC');
-  return result.rows.map((row) => row.raw);
+  // Reconstructing exact insertion order is load-bearing here — auditService
+  // walks this newest-first list checking each entry's previousHash against
+  // the next (older) one's own hash, so a wrong order looks like a broken
+  // tamper chain. Same sequence -> rowid substitution as ai_feed/
+  // notifications; SQLite's rowid gives the identical "strictly increases in
+  // insertion order" guarantee Postgres's BIGSERIAL sequence does.
+  const result = await pool.query(
+    'SELECT raw FROM audit_logs ORDER BY sequence DESC',
+    [],
+    { d1: true, d1Text: 'SELECT raw FROM audit_logs ORDER BY rowid DESC' }
+  );
+  return result.rows.map((row) => parseRaw(row.raw));
 }
 
 async function upsertAuditLogInDB(entry) {
@@ -418,9 +428,10 @@ async function upsertAuditLogInDB(entry) {
     `INSERT INTO audit_logs (id, raw) VALUES ($1, $2)
      ON CONFLICT (id) DO UPDATE SET raw = EXCLUDED.raw
      RETURNING raw`,
-    [id, JSON.stringify(entry)]
+    [id, JSON.stringify(entry)],
+    { d1: true }
   );
-  return result.rows[0]?.raw || null;
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 // ── Notifications ────────────────────────────────────────────────────────────

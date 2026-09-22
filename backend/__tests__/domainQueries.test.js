@@ -689,6 +689,22 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
       await expect(domainQueries.upsertAuditLogInDB({ id: 'log-2' })).resolves.toBeNull();
     });
+
+    // audit_logs has been ported to D1 (see d1Bridge.js), which has no JSON
+    // column type — raw comes back as a TEXT string there.
+    test('getAuditLogsFromDB parses a string raw column (D1)', async () => {
+      const entry = { id: 'log-1', action: 'LOGIN' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(entry) }] }) };
+
+      await expect(domainQueries.getAuditLogsFromDB()).resolves.toEqual([entry]);
+    });
+
+    test('upsertAuditLogInDB parses a string raw column (D1)', async () => {
+      const entry = { id: 'log-1', action: 'LOGIN' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(entry) }] }) };
+
+      await expect(domainQueries.upsertAuditLogInDB(entry)).resolves.toEqual(entry);
+    });
   });
 
   describe('notifications', () => {
