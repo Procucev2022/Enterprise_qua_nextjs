@@ -66,7 +66,7 @@ describe('d1Bridge', () => {
       expect(result).toEqual({ rows: [] });
     });
 
-    it('falls back to an empty rows array when D1 returns no results field', async () => {
+    it('falls back to an empty rows array and undefined rowCount when D1 returns no meta/results', async () => {
       const all = jest.fn().mockResolvedValue({});
       const prepare = jest.fn().mockReturnValue({ all });
       const db = { prepare };
@@ -74,7 +74,19 @@ describe('d1Bridge', () => {
       const { queryD1 } = require('../src/db/d1Bridge');
       const result = await queryD1(db, 'select * from t');
 
-      expect(result).toEqual({ rows: [] });
+      expect(result).toEqual({ rows: [], rowCount: undefined });
+    });
+
+    it('reports rowCount from D1 meta.changes for an INSERT/UPDATE/DELETE', async () => {
+      const all = jest.fn().mockResolvedValue({ results: [], meta: { changes: 1 } });
+      const bind = jest.fn().mockReturnValue({ all });
+      const prepare = jest.fn().mockReturnValue({ bind });
+      const db = { prepare };
+
+      const { queryD1 } = require('../src/db/d1Bridge');
+      const result = await queryD1(db, 'delete from t where id = $1', ['x']);
+
+      expect(result).toEqual({ rows: [], rowCount: 1 });
     });
   });
 });

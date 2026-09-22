@@ -34,15 +34,17 @@ function toD1Sql(text) {
 }
 
 /**
- * Run a query against D1, returning the same `{ rows }` shape pool.query()'s
- * pg path returns, so callers reading `.rows` don't need to know which
- * database actually served the request.
+ * Run a query against D1, returning a result shaped like pg's: `{ rows,
+ * rowCount }`. `rowCount` comes from D1's `meta.changes` — pg's `pg` driver
+ * exposes it under that name for INSERT/UPDATE/DELETE, and a few call sites
+ * (authSessionQueries.deleteOtp/purgeExpiredAuthState) read it directly to
+ * know whether a delete actually removed a row, not just that the query ran.
  */
 async function queryD1(db, text, params = []) {
   const stmt = db.prepare(toD1Sql(text));
   const bound = params.length > 0 ? stmt.bind(...params) : stmt;
   const result = await bound.all();
-  return { rows: result.results || [] };
+  return { rows: result.results || [], rowCount: result.meta ? result.meta.changes : undefined };
 }
 
 module.exports = { getD1Binding, toD1Sql, queryD1 };
