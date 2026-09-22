@@ -26,6 +26,7 @@
 
 const crypto = require('crypto');
 const pool = require('./pool');
+const { getD1Binding } = require('./d1Bridge');
 const {
   IDENTITY_ROLE_MAP,
   IDENTITY_MASTER_DATA,
@@ -138,7 +139,8 @@ async function findUserByEmail(email) {
   if (!email) return null;
   const result = await pool.rows(
     `${USER_SELECT} where lower(u.username) = $1 order by u.is_active desc, u.created_ts desc limit 1`,
-    [String(email).trim().toLowerCase()]
+    [String(email).trim().toLowerCase()],
+    { d1: true }
   );
   return mapRowToUser(result[0]);
 }
@@ -154,7 +156,8 @@ async function findUserByEmailAndPhone(email, phone) {
   if (!email || !phone) return null;
   const result = await pool.rows(
     `${USER_SELECT} where lower(u.username) = $1 and u.phone = $2 order by u.is_active desc, u.created_ts desc limit 1`,
-    [String(email).trim().toLowerCase(), normalizePhone(phone)]
+    [String(email).trim().toLowerCase(), normalizePhone(phone)],
+    { d1: true }
   );
   return mapRowToUser(result[0]);
 }
@@ -165,7 +168,8 @@ async function findUserByEmailAndPhone(email, phone) {
 async function listUsers(limit = 200) {
   const result = await pool.rows(
     `${USER_SELECT} where u.is_active = true order by u.created_ts desc limit $1`,
-    [Number(limit)]
+    [Number(limit)],
+    { d1: true }
   );
   return result.map(mapRowToUser).filter((u) => !!u.email);
 }
@@ -272,6 +276,102 @@ async function insertBuyerAccount({
   if (!roleUuid) throw new Error(`Role "${IDENTITY_MASTER_DATA.BUYER_ROLE_NAME}" not found.`);
   if (!orgTypeUuid) throw new Error(`Org type "${IDENTITY_MASTER_DATA.BUYER_ORG_TYPE}" not found.`);
   if (!statusUuid) throw new Error(`Status "${IDENTITY_MASTER_DATA.BUYER_STATUS}" not found.`);
+
+  // D1 has no equivalent of withTransaction: its batch() API only runs a
+  // fixed list of statements decided up front, and this logic has to read
+  // (does an org with this name/type already exist?) before deciding what to
+  // write — genuinely interactive, not expressible as one atomic D1 batch.
+  // The D1 path below runs the same steps as plain sequential queries
+  // instead. That is a real, accepted gap versus the pg path's atomicity: two
+  // concurrent registrations under the same new organisation name on D1
+  // could each decide no org exists yet and both insert one, leaving two
+  // organisation rows for the same name rather than one being an inconsistent
+  // half-write — not data corruption, just a duplicate-org race window that
+  // pg's transaction closes and D1's doesn't.
+  if (getD1Binding()) {
+    const orgLookup = await pool.query(
+      'select uuid from organization where organization_name = $1 and org_type_uuid = $2 limit 1',
+      [orgName, orgTypeUuid],
+      { d1: true }
+    );
+    const organizationReused = orgLookup.rows.length > 0;
+    let orgUuid = organizationReused ? orgLookup.rows[0].uuid : null;
+
+    if (!orgUuid) {
+      orgUuid = crypto.randomUUID();
+      await pool.query(
+        `insert into organization
+           (uuid, organization_name, email, organization_phonenumber, contact_person,
+            org_type_uuid, client_status_uuid, self_client, source_type, company_id,
+            gmt_name, bfs_name, is_india, upgrade_days, rfq_credits, rfq_used_count,
+            quote_submitted, created_by, created_ts, last_modified_by, last_modified_ts)
+         values ($1, $2, $3, $4, $5, $6, $7, true, $8, $9, $10, $11, true, 0, 0, 0, 0, $12, strftime('%Y-%m-%dT%H:%M:%fZ','now'), $13, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
+        [
+          orgUuid,
+          orgName,
+          normalizedEmail,
+          normalizedPhone,
+          displayName,
+          orgTypeUuid,
+          statusUuid,
+          IDENTITY_MASTER_DATA.SOURCE_TYPE_WEB,
+          buildCompanyId(orgName),
+          IDENTITY_MASTER_DATA.DEFAULT_GMT_PLAN,
+          IDENTITY_MASTER_DATA.DEFAULT_BFS_PLAN,
+          createdBy,
+          createdBy,
+        ],
+        { d1: true }
+      );
+    }
+
+    const userUuid = crypto.randomUUID();
+    await pool.query(
+      `insert into "user"
+         (uuid, username, email, password, full_name, first_name, phone,
+          org_uuid, role_uuid, client_status_uuid, unique_id,
+          is_active, self_client, is_approved, reset_password,
+          is_web_app, is_whats_app, is_bot,
+          source_type, verification_status, created_by, created_ts,
+          last_modified_by, last_modified_ts)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+               true, false, true, false, true, false, false,
+               $12, $13, $14, strftime('%Y-%m-%dT%H:%M:%fZ','now'), $15, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
+      [
+        userUuid,
+        normalizedEmail,
+        normalizedEmail,
+        password,
+        displayName,
+        displayName,
+        normalizedPhone,
+        orgUuid,
+        roleUuid,
+        statusUuid,
+        buildUniqueId(),
+        IDENTITY_MASTER_DATA.SOURCE_TYPE_WEB,
+        IDENTITY_MASTER_DATA.VERIFICATION_VERIFIED,
+        createdBy,
+        createdBy,
+      ],
+      { d1: true }
+    );
+
+    return {
+      created: true,
+      user: {
+        id: userUuid,
+        email: normalizedEmail,
+        name: displayName,
+        role: 'buyer',
+        orgId: orgUuid,
+        orgName,
+        mobile: normalizedPhone,
+        status: 'ACTIVE',
+      },
+      organizationReused,
+    };
+  }
 
   return pool.withTransaction(async (client) => {
     const orgLookup = await client.query(
@@ -404,6 +504,93 @@ async function insertStaffAccount({
   if (!orgTypeUuid) throw new Error(`Org type "${orgTypeName}" not found.`);
   if (!statusUuid) throw new Error(`Status "${statusName}" not found.`);
 
+  // See insertBuyerAccount's comment on the D1/pg split — same reasoning,
+  // same shape, applies identically here.
+  if (getD1Binding()) {
+    const orgLookup = await pool.query(
+      'select uuid from organization where organization_name = $1 and org_type_uuid = $2 limit 1',
+      [orgName, orgTypeUuid],
+      { d1: true }
+    );
+    const organizationReused = orgLookup.rows.length > 0;
+    let orgUuid = organizationReused ? orgLookup.rows[0].uuid : null;
+
+    if (!orgUuid) {
+      orgUuid = crypto.randomUUID();
+      await pool.query(
+        `insert into organization
+           (uuid, organization_name, email, organization_phonenumber, contact_person,
+            org_type_uuid, client_status_uuid, self_client, source_type, company_id,
+            gmt_name, bfs_name, is_india, upgrade_days, rfq_credits, rfq_used_count,
+            quote_submitted, created_by, created_ts, last_modified_by, last_modified_ts)
+         values ($1, $2, $3, $4, $5, $6, $7, true, $8, $9, $10, $11, true, 0, 0, 0, 0, $12, strftime('%Y-%m-%dT%H:%M:%fZ','now'), $13, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
+        [
+          orgUuid,
+          orgName,
+          normalizedEmail,
+          normalizedPhone,
+          displayName,
+          orgTypeUuid,
+          statusUuid,
+          IDENTITY_MASTER_DATA.SOURCE_TYPE_WEB,
+          buildCompanyId(orgName),
+          IDENTITY_MASTER_DATA.DEFAULT_GMT_PLAN,
+          IDENTITY_MASTER_DATA.DEFAULT_BFS_PLAN,
+          createdBy,
+          createdBy,
+        ],
+        { d1: true }
+      );
+    }
+
+    const userUuid = crypto.randomUUID();
+    await pool.query(
+      `insert into "user"
+         (uuid, username, email, password, full_name, first_name, phone,
+          org_uuid, role_uuid, client_status_uuid, unique_id,
+          is_active, self_client, is_approved, reset_password,
+          is_web_app, is_whats_app, is_bot,
+          source_type, verification_status, created_by, created_ts,
+          last_modified_by, last_modified_ts)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+               true, false, true, false, true, false, false,
+               $12, $13, $14, strftime('%Y-%m-%dT%H:%M:%fZ','now'), $15, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
+      [
+        userUuid,
+        normalizedEmail,
+        normalizedEmail,
+        password,
+        displayName,
+        displayName,
+        normalizedPhone,
+        orgUuid,
+        roleUuid,
+        statusUuid,
+        buildUniqueId(),
+        IDENTITY_MASTER_DATA.SOURCE_TYPE_WEB,
+        IDENTITY_MASTER_DATA.VERIFICATION_VERIFIED,
+        createdBy,
+        createdBy,
+      ],
+      { d1: true }
+    );
+
+    return {
+      created: true,
+      user: {
+        id: userUuid,
+        email: normalizedEmail,
+        name: displayName,
+        role: mapRoleName(roleName),
+        orgId: orgUuid,
+        orgName,
+        mobile: normalizedPhone,
+        status: 'ACTIVE',
+      },
+      organizationReused,
+    };
+  }
+
   return pool.withTransaction(async (client) => {
     const orgLookup = await client.query(
       'select uuid from organization where organization_name = $1 and org_type_uuid = $2 limit 1',
@@ -519,7 +706,12 @@ async function insertVendorAccount({
       if (phone) {
         await pool.query(
           'update "user" set phone = $1, last_modified_by = $2, last_modified_ts = now() where uuid = $3',
-          [normalizedPhone, createdBy, existing.id]
+          [normalizedPhone, createdBy, existing.id],
+          {
+            d1: true,
+            d1Text:
+              'update "user" set phone = $1, last_modified_by = $2, last_modified_ts = strftime(\'%Y-%m-%dT%H:%M:%fZ\',\'now\') where uuid = $3',
+          }
         );
       }
     }
@@ -535,6 +727,92 @@ async function insertVendorAccount({
   if (!roleUuid) throw new Error(`Role "${IDENTITY_MASTER_DATA.VENDOR_ROLE_NAME}" not found.`);
   if (!orgTypeUuid) throw new Error(`Org type "${IDENTITY_MASTER_DATA.VENDOR_ORG_TYPE}" not found.`);
   if (!statusUuid) throw new Error(`Status "${IDENTITY_MASTER_DATA.VENDOR_STATUS}" not found.`);
+
+  // See insertBuyerAccount's comment on the D1/pg split — same reasoning here.
+  if (getD1Binding()) {
+    const orgLookup = await pool.query(
+      'select uuid from organization where organization_name = $1 and org_type_uuid = $2 limit 1',
+      [orgName, orgTypeUuid],
+      { d1: true }
+    );
+    const organizationReused = orgLookup.rows.length > 0;
+    let orgUuid = organizationReused ? orgLookup.rows[0].uuid : null;
+
+    if (!orgUuid) {
+      orgUuid = crypto.randomUUID();
+      await pool.query(
+        `insert into organization
+           (uuid, organization_name, email, organization_phonenumber, contact_person,
+            org_type_uuid, client_status_uuid, self_client, source_type, company_id,
+            gmt_name, bfs_name, is_india, upgrade_days, rfq_credits, rfq_used_count,
+            quote_submitted, created_by, created_ts, last_modified_by, last_modified_ts)
+         values ($1, $2, $3, $4, $5, $6, $7, true, $8, $9, $10, $11, true, 0, 0, 0, 0, $12, strftime('%Y-%m-%dT%H:%M:%fZ','now'), $13, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
+        [
+          orgUuid,
+          orgName,
+          normalizedEmail,
+          normalizedPhone,
+          displayName,
+          orgTypeUuid,
+          statusUuid,
+          IDENTITY_MASTER_DATA.SOURCE_TYPE_WEB,
+          buildCompanyId(orgName),
+          IDENTITY_MASTER_DATA.DEFAULT_GMT_PLAN,
+          IDENTITY_MASTER_DATA.DEFAULT_BFS_PLAN,
+          createdBy,
+          createdBy,
+        ],
+        { d1: true }
+      );
+    }
+
+    const userUuid = crypto.randomUUID();
+    await pool.query(
+      `insert into "user"
+         (uuid, username, email, password, full_name, first_name, phone,
+          org_uuid, role_uuid, client_status_uuid, unique_id,
+          is_active, self_client, is_approved, reset_password,
+          is_web_app, is_whats_app, is_bot,
+          source_type, verification_status, created_by, created_ts,
+          last_modified_by, last_modified_ts)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+               true, false, true, false, true, false, false,
+               $12, $13, $14, strftime('%Y-%m-%dT%H:%M:%fZ','now'), $15, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
+      [
+        userUuid,
+        normalizedEmail,
+        normalizedEmail,
+        password,
+        displayName,
+        displayName,
+        normalizedPhone,
+        orgUuid,
+        roleUuid,
+        statusUuid,
+        buildUniqueId(),
+        IDENTITY_MASTER_DATA.SOURCE_TYPE_WEB,
+        IDENTITY_MASTER_DATA.VERIFICATION_VERIFIED,
+        createdBy,
+        createdBy,
+      ],
+      { d1: true }
+    );
+
+    return {
+      created: true,
+      user: {
+        id: userUuid,
+        email: normalizedEmail,
+        name: displayName,
+        role: 'vendor',
+        orgId: orgUuid,
+        orgName,
+        mobile: normalizedPhone,
+        status: 'ACTIVE',
+      },
+      organizationReused,
+    };
+  }
 
   return pool.withTransaction(async (client) => {
     const orgLookup = await client.query(
@@ -631,7 +909,12 @@ async function insertVendorAccount({
 async function updateUserPassword(email, newPassword) {
   const result = await pool.query(
     'update "user" set password = $1, last_modified_ts = now() where lower(username) = $2',
-    [newPassword, String(email).trim().toLowerCase()]
+    [newPassword, String(email).trim().toLowerCase()],
+    {
+      d1: true,
+      d1Text:
+        'update "user" set password = $1, last_modified_ts = strftime(\'%Y-%m-%dT%H:%M:%fZ\',\'now\') where lower(username) = $2',
+    }
   );
   return (result.rowCount || 0) > 0;
 }
@@ -647,7 +930,12 @@ async function updateUserPassword(email, newPassword) {
 async function updateUserPasswordByUuid(userUuid, newPassword, actorEmail) {
   const result = await pool.query(
     'update "user" set password = $1, last_modified_by = $2, last_modified_ts = now() where uuid = $3',
-    [newPassword, actorEmail || 'enterprise-workspace', String(userUuid)]
+    [newPassword, actorEmail || 'enterprise-workspace', String(userUuid)],
+    {
+      d1: true,
+      d1Text:
+        'update "user" set password = $1, last_modified_by = $2, last_modified_ts = strftime(\'%Y-%m-%dT%H:%M:%fZ\',\'now\') where uuid = $3',
+    }
   );
   return (result.rowCount || 0) > 0;
 }

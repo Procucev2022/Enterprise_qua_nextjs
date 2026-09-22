@@ -118,11 +118,17 @@ const NOT_CONFIGURED_MESSAGE = 'The database is not configured. Set DATABASE_URL
  * spelling, SQLite's equivalent is json_set(). For those, pass `d1Text` with
  * the SQLite version; it's used only on the D1 path, `text` is untouched for
  * pg.
+ *
+ * Pass `d1Params` too when the two versions don't just differ in SQL text but
+ * need a different-shaped params array — e.g. Postgres's `= any($n)` binds
+ * one array parameter, but SQLite has no array parameter type at all, so the
+ * D1 side expands to `in (?, ?, ...)` and needs each value as its own bound
+ * param instead of one array.
  */
 async function query(text, params = [], options = {}) {
   if (options.d1) {
     const db = getD1Binding();
-    if (db) return queryD1(db, options.d1Text || text, params);
+    if (db) return queryD1(db, options.d1Text || text, options.d1Params || params);
   }
   if (!poolModule.pool) {
     throw new Error(NOT_CONFIGURED_MESSAGE);

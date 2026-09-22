@@ -175,7 +175,11 @@ describe('Identity queries (Neon PostgreSQL)', () => {
 
       const user = await identityQueries.findUserByEmail('  A@B.COM ');
 
-      expect(spy).toHaveBeenCalledWith(expect.stringContaining('lower(u.username) = $1'), ['a@b.com']);
+      expect(spy).toHaveBeenCalledWith(
+        expect.stringContaining('lower(u.username) = $1'),
+        ['a@b.com'],
+        expect.objectContaining({ d1: true })
+      );
       expect(user.role).toBe('vendor');
     });
 
@@ -199,7 +203,11 @@ describe('Identity queries (Neon PostgreSQL)', () => {
 
       const user = await identityQueries.findUserByEmailAndPhone('A@B.com', '9157154504');
 
-      expect(spy).toHaveBeenCalledWith(expect.any(String), ['a@b.com', '+919157154504']);
+      expect(spy).toHaveBeenCalledWith(
+        expect.any(String),
+        ['a@b.com', '+919157154504'],
+        expect.objectContaining({ d1: true })
+      );
       expect(user.role).toBe('buyer');
     });
 
@@ -234,7 +242,7 @@ describe('Identity queries (Neon PostgreSQL)', () => {
     test('honours an explicit limit', async () => {
       const spy = jest.spyOn(dbPool, 'rows').mockResolvedValue([]);
       await identityQueries.listUsers(25);
-      expect(spy).toHaveBeenCalledWith(expect.any(String), [25]);
+      expect(spy).toHaveBeenCalledWith(expect.any(String), [25], expect.objectContaining({ d1: true }));
     });
   });
 
@@ -615,7 +623,11 @@ describe('Identity queries (Neon PostgreSQL)', () => {
     test('normalises the email before updating', async () => {
       const spy = jest.spyOn(dbPool, 'query').mockResolvedValue({ rowCount: 1 });
       await identityQueries.updateUserPassword('  A@B.COM ', 'New@1234');
-      expect(spy).toHaveBeenCalledWith(expect.any(String), ['New@1234', 'a@b.com']);
+      expect(spy).toHaveBeenCalledWith(
+        expect.any(String),
+        ['New@1234', 'a@b.com'],
+        expect.objectContaining({ d1: true })
+      );
     });
   });
 
@@ -659,11 +671,11 @@ describe('Identity queries (Neon PostgreSQL)', () => {
     test('falls back to a system actor when no email is supplied', async () => {
       const spy = jest.spyOn(dbPool, 'query').mockResolvedValue({ rowCount: 1 });
       await identityQueries.updateUserPasswordByUuid(UUID, 'New@1234');
-      expect(spy).toHaveBeenCalledWith(expect.any(String), [
-        'New@1234',
-        'enterprise-workspace',
-        UUID,
-      ]);
+      expect(spy).toHaveBeenCalledWith(
+        expect.any(String),
+        ['New@1234', 'enterprise-workspace', UUID],
+        expect.objectContaining({ d1: true })
+      );
     });
   });
 });

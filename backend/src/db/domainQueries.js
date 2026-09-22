@@ -17,8 +17,12 @@ const pool = require('./pool');
 
 async function getVendorsFromDB() {
   if (!pool.pool) return [];
-  const result = await pool.query('SELECT raw FROM vendors ORDER BY created_at DESC');
-  return (result && result.rows) ? result.rows.map((row) => row.raw) : [];
+  const result = await pool.query(
+    'SELECT raw FROM vendors ORDER BY created_at DESC',
+    [],
+    { d1: true }
+  );
+  return (result && result.rows) ? result.rows.map((row) => parseRaw(row.raw)) : [];
 }
 
 /**
@@ -35,7 +39,14 @@ async function getVendorsFromDB() {
 async function getVendorsPageFromDB({ limit, offset, search = '', category = '', publicOnly = false, scopedBuyerId = '' } = {}) {
   if (!pool.pool) return { rows: [], total: 0 };
   const params = [];
+  // Two parallel condition lists, not one translated after the fact: ILIKE
+  // has no SQLite equivalent (LIKE + lower() instead), raw->>'x' is Postgres
+  // JSONB syntax (SQLite's is json_extract(raw,'$.x'), which already returns
+  // text for a scalar — no separate ::text cast needed), and (raw->'x')::text
+  // likewise becomes json_extract. Both lists push the exact same params in
+  // the exact same order, so one params array serves either query text.
   const conditions = [];
+  const d1Conditions = [];
   if (search) {
     params.push(`%${search}%`);
     // major_category/email/name/minorCategories are all backed by a trigram
@@ -45,6 +56,10 @@ async function getVendorsPageFromDB({ limit, offset, search = '', category = '',
       OR email ILIKE $${params.length}
       OR raw->>'name' ILIKE $${params.length}
       OR (raw->'minorCategories')::text ILIKE $${params.length})`);
+    d1Conditions.push(`(lower(major_category) LIKE lower($${params.length})
+      OR lower(email) LIKE lower($${params.length})
+      OR lower(json_extract(raw,'$.name')) LIKE lower($${params.length})
+      OR lower(json_extract(raw,'$.minorCategories')) LIKE lower($${params.length}))`);
   }
   if (category) {
     // An exact-match category filter (the CM's category dropdown), separate
@@ -53,12 +68,14 @@ async function getVendorsPageFromDB({ limit, offset, search = '', category = '',
     // match, unlike search's leading-wildcard ILIKE, so no trigram needed).
     params.push(category);
     conditions.push(`major_category = $${params.length}`);
+    d1Conditions.push(`major_category = $${params.length}`);
   }
   if (publicOnly) {
     // Mirrors storeService.getVendors' unscoped filter: a vendor tagged to a
     // specific buyer (buyerId/buyerAccountId set inside `raw`) is only meant
     // to be visible to that buyer, never in an anonymous/public listing.
     conditions.push(`(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`);
+    d1Conditions.push(`json_extract(raw,'$.buyerId') IS NULL AND json_extract(raw,'$.buyerAccountId') IS NULL`);
   }
   if (scopedBuyerId) {
     // A buyer's paginated listing must include every public vendor (no
@@ -79,35 +96,57 @@ async function getVendorsPageFromDB({ limit, offset, search = '', category = '',
       OR lower(raw->>'buyerAccountId') = lower($${p})
       OR lower(raw->>'buyerEmail') = lower($${p})
     )`);
+    d1Conditions.push(`(
+      (json_extract(raw,'$.buyerId') IS NULL AND json_extract(raw,'$.buyerAccountId') IS NULL)
+      OR lower(json_extract(raw,'$.buyerId')) = lower($${p})
+      OR lower(json_extract(raw,'$.buyerAccountId')) = lower($${p})
+      OR lower(json_extract(raw,'$.buyerEmail')) = lower($${p})
+    )`);
   }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const d1Where = d1Conditions.length ? `WHERE ${d1Conditions.join(' AND ')}` : '';
 
   // Separate param arrays for the count vs. data query — sharing and
   // mutating one array across both calls works with a driver that sends the
   // query immediately, but is a needless footgun (and confusing to inspect
   // in tests) for no benefit.
-  const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM vendors ${where}`, [...params]);
+  const countResult = await pool.query(
+    `SELECT COUNT(*)::int AS total FROM vendors ${where}`,
+    [...params],
+    { d1: true, d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}` }
+  );
   const total = countResult.rows[0]?.total || 0;
 
   const dataParams = [...params, limit, offset];
   const dataResult = await pool.query(
     `SELECT raw FROM vendors ${where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
-    dataParams
+    dataParams,
+    {
+      d1: true,
+      d1Text: `SELECT raw FROM vendors ${d1Where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+    }
   );
-  return { rows: dataResult.rows.map((row) => row.raw), total };
+  return { rows: dataResult.rows.map((row) => parseRaw(row.raw)), total };
 }
 
 /** Single-row lookup by email — used to guarantee a specific vendor is
  * present in a capped/paginated listing without fetching the whole table. */
 async function getVendorByEmailFromDB(email) {
   if (!pool.pool || !email) return null;
-  const result = await pool.query('SELECT raw FROM vendors WHERE email = $1 LIMIT 1', [email]);
-  return result.rows[0]?.raw || null;
+  const result = await pool.query(
+    'SELECT raw FROM vendors WHERE email = $1 LIMIT 1',
+    [email],
+    { d1: true }
+  );
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 async function upsertVendorInDB(vendor) {
   if (!pool.pool) return null;
   const { id, email, majorCategory, status, source } = vendor;
+  // See upsertEvaluationInDB's comment for why the D1 path needs its own
+  // ISO-formatted timestamp rather than plain CURRENT_TIMESTAMP/now() —
+  // created_at is sorted on directly by getVendorsFromDB/getVendorsPageFromDB.
   const result = await pool.query(
     `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
      VALUES ($1, $2, $3, $4, $5, $6, now())
@@ -119,14 +158,31 @@ async function upsertVendorInDB(vendor) {
        raw = EXCLUDED.raw,
        updated_at = now()
      RETURNING raw`,
-    [id, email || null, majorCategory || null, status || null, source || null, JSON.stringify(vendor)]
+    [id, email || null, majorCategory || null, status || null, source || null, JSON.stringify(vendor)],
+    {
+      d1: true,
+      d1Text: `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT (id) DO UPDATE SET
+       email = EXCLUDED.email,
+       major_category = EXCLUDED.major_category,
+       status = EXCLUDED.status,
+       source = EXCLUDED.source,
+       raw = EXCLUDED.raw,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     RETURNING raw`,
+    }
   );
-  return result.rows[0]?.raw || null;
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 async function deleteVendorInDB(id) {
   if (!pool.pool) return false;
-  const result = await pool.query('DELETE FROM vendors WHERE id = $1', [id]);
+  const result = await pool.query(
+    'DELETE FROM vendors WHERE id = $1',
+    [id],
+    { d1: true }
+  );
   return result.rowCount > 0;
 }
 
@@ -141,7 +197,9 @@ async function deleteVendorInDB(id) {
 async function bulkInsertVendorsInDB(vendors) {
   if (!pool.pool || vendors.length === 0) return [];
   const values = [];
-  const placeholders = vendors.map((vendor, i) => {
+  const placeholders = [];
+  const d1Placeholders = [];
+  vendors.forEach((vendor, i) => {
     const base = i * 6;
     values.push(
       vendor.id,
@@ -151,14 +209,26 @@ async function bulkInsertVendorsInDB(vendors) {
       vendor.source || null,
       JSON.stringify(vendor)
     );
-    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, now())`;
+    const cols = `$${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}`;
+    placeholders.push(`(${cols}, now())`);
+    // See upsertEvaluationInDB's comment: the D1 timestamp needs to match
+    // the ISO format migrated/D1-written rows already use for created_at to
+    // sort correctly, not plain CURRENT_TIMESTAMP/now().
+    d1Placeholders.push(`(${cols}, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`);
   });
   const result = await pool.query(
     `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
      VALUES ${placeholders.join(', ')}
      ON CONFLICT (email) DO NOTHING
      RETURNING email`,
-    values
+    values,
+    {
+      d1: true,
+      d1Text: `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
+     VALUES ${d1Placeholders.join(', ')}
+     ON CONFLICT (email) DO NOTHING
+     RETURNING email`,
+    }
   );
   return result.rows.map((row) => row.email);
 }
@@ -172,7 +242,8 @@ async function createBulkImportSessionInDB(id, createdByEmail, totalRowsDeclared
      VALUES ($1, $2, $3)
      RETURNING id, status, total_rows_declared, processed_count, imported_count,
                missing_email_count, duplicate_count, invalid_count`,
-    [id, createdByEmail, totalRowsDeclared || 0]
+    [id, createdByEmail, totalRowsDeclared || 0],
+    { d1: true }
   );
   return result.rows[0] || null;
 }
@@ -183,7 +254,8 @@ async function getBulkImportSessionFromDB(id) {
     `SELECT id, status, total_rows_declared, processed_count, imported_count,
             missing_email_count, duplicate_count, invalid_count
      FROM bulk_vendor_import_sessions WHERE id = $1`,
-    [id]
+    [id],
+    { d1: true }
   );
   return result.rows[0] || null;
 }
@@ -202,7 +274,21 @@ async function incrementBulkImportSessionInDB(id, delta) {
      WHERE id = $1
      RETURNING id, status, total_rows_declared, processed_count, imported_count,
                missing_email_count, duplicate_count, invalid_count`,
-    [id, delta.processed || 0, delta.imported || 0, delta.missingEmail || 0, delta.duplicate || 0, delta.invalid || 0]
+    [id, delta.processed || 0, delta.imported || 0, delta.missingEmail || 0, delta.duplicate || 0, delta.invalid || 0],
+    {
+      d1: true,
+      d1Text: `UPDATE bulk_vendor_import_sessions SET
+       processed_count = processed_count + $2,
+       imported_count = imported_count + $3,
+       missing_email_count = missing_email_count + $4,
+       duplicate_count = duplicate_count + $5,
+       invalid_count = invalid_count + $6,
+       status = CASE WHEN processed_count + $2 >= total_rows_declared THEN 'COMPLETED' ELSE status END,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     WHERE id = $1
+     RETURNING id, status, total_rows_declared, processed_count, imported_count,
+               missing_email_count, duplicate_count, invalid_count`,
+    }
   );
   return result.rows[0] || null;
 }
