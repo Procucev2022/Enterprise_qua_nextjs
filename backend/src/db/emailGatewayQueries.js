@@ -43,7 +43,8 @@ async function hasProcessed(messageId) {
   try {
     const rows = await pool.rows(
       'select 1 from email_ingestion_log where message_id = $1 limit 1',
-      [String(messageId)]
+      [String(messageId)],
+      { d1: true }
     );
     return rows.length > 0;
   } catch (err) {
@@ -70,10 +71,14 @@ async function recordProcessed({
 }) {
   if (!messageId) return false;
   try {
+    // email_ingestion_log has already been ported to D1 (see d1Bridge.js).
+    // CURRENT_TIMESTAMP (not now()) and CAST(... AS INTEGER) (not ::int, below
+    // in countsByStatus) are used throughout this file because both are
+    // understood by Postgres and SQLite/D1 alike — one query, either backend.
     await pool.query(
       `insert into email_ingestion_log
          (message_id, rfq_id, rfq_number, from_address, subject, status, detail, processed_at)
-       values ($1, $2, $3, $4, $5, $6, $7, now())
+       values ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
        on conflict (message_id) do update set
          rfq_id = excluded.rfq_id,
          rfq_number = excluded.rfq_number,
@@ -81,7 +86,7 @@ async function recordProcessed({
          subject = excluded.subject,
          status = excluded.status,
          detail = excluded.detail,
-         processed_at = now()`,
+         processed_at = CURRENT_TIMESTAMP`,
       [
         String(messageId),
         rfqId,
@@ -90,7 +95,8 @@ async function recordProcessed({
         subject ? String(subject).slice(0, 2000) : null,
         status,
         detail ? String(detail).slice(0, 2000) : null,
-      ]
+      ],
+      { d1: true }
     );
     return true;
   } catch (err) {
@@ -113,7 +119,8 @@ async function listRecent(limit = 15) {
          from email_ingestion_log
         order by processed_at desc
         limit $1`,
-      [capped]
+      [capped],
+      { d1: true }
     );
   } catch (err) {
     logger.error('Email ingestion ledger could not be listed', err, 'EMAIL_GATEWAY');
@@ -125,7 +132,9 @@ async function listRecent(limit = 15) {
 async function countsByStatus() {
   try {
     const rows = await pool.rows(
-      'select status, count(*)::int as total from email_ingestion_log group by status'
+      'select status, CAST(count(*) AS INTEGER) as total from email_ingestion_log group by status',
+      [],
+      { d1: true }
     );
     return rows.reduce((acc, row) => ({ ...acc, [row.status]: row.total }), {});
   } catch (err) {
