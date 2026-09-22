@@ -5,6 +5,7 @@ const {
   SYSTEM_ACTOR_EMAIL,
   RFQ_DEFAULTS,
   resolveBuyerSourcingMode,
+  VENDOR_FREE_CREDITS_LIMIT,
 } = require('../config/constants');
 const pool = require('../db/pool');
 const domainQueries = require('../db/domainQueries');
@@ -506,10 +507,13 @@ class StoreService {
       onboardingEmailStatus: vendorData.email ? 'pending' : (vendorData.onboardingEmailStatus || 'sent'),
       isCategoryAligned: vendorData.isCategoryAligned !== undefined ? vendorData.isCategoryAligned : true,
       // Every vendor starts on the free client-uploaded tier with a clean
-      // download counter — these used to exist only as frontend useState
-      // (reset on every page refresh, never actually persisted or enforced).
+      // download counter and initial free quotation credits.
       subscriptionPlan: vendorData.subscriptionPlan || 'premium',
       rfqDownloadsUsed: vendorData.rfqDownloadsUsed || 0,
+      freeQuotationCredits: vendorData.freeQuotationCredits !== undefined
+        ? Number(vendorData.freeQuotationCredits)
+        : VENDOR_FREE_CREDITS_LIMIT,
+      quotedRfqIds: Array.isArray(vendorData.quotedRfqIds) ? vendorData.quotedRfqIds : [],
     };
 
     this.vendors.unshift(newVendor);
@@ -677,6 +681,8 @@ class StoreService {
         isCategoryAligned: true,
         subscriptionPlan: 'premium',
         rfqDownloadsUsed: 0,
+        freeQuotationCredits: VENDOR_FREE_CREDITS_LIMIT,
+        quotedRfqIds: [],
         // Carried through from the request's server-side re-validation
         // (see vendorController.bulkImportVendors) so a row that failed a
         // format check (bad email/phone/GSTIN/pincode, or a normally-
@@ -796,6 +802,85 @@ class StoreService {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Check whether a vendor is eligible to submit a quotation for an RFQ.
+   *
+   * Initial allowance: Each vendor starts with 5 free quotation credits.
+   * Once free credits are exhausted, an active paid subscription ('connect' or 'select')
+   * is strictly required.
+   */
+  checkVendorQuotationEligibility(vendor) {
+    if (!vendor) {
+      return {
+        eligible: false,
+        reason: 'Vendor record not found',
+        freeCreditsRemaining: 0,
+        isSubscribed: false,
+        subscriptionPlan: 'none',
+      };
+    }
+
+    const freeCredits = vendor.freeQuotationCredits !== undefined
+      ? Number(vendor.freeQuotationCredits)
+      : VENDOR_FREE_CREDITS_LIMIT;
+
+    const isSubscribed = Boolean(
+      vendor.subscriptionPlan === 'connect' ||
+      vendor.subscriptionPlan === 'select' ||
+      vendor.isSubscribed === true ||
+      vendor.subscriptionStatus === 'active'
+    );
+
+    const eligible = freeCredits > 0 || isSubscribed;
+
+    return {
+      eligible,
+      freeCreditsRemaining: Math.max(0, freeCredits),
+      isSubscribed,
+      subscriptionPlan: vendor.subscriptionPlan || 'premium',
+    };
+  }
+
+  /**
+   * Deduct 1 quotation credit from a vendor after quotation submission on a new RFQ.
+   * Resubmitting/updating a quote for the same RFQ does not consume an extra credit.
+   * Subscribed vendors do not consume free credits below 0.
+   */
+  consumeVendorQuotationCredit(vendorId, rfqId) {
+    const vendor = this.getVendorById(vendorId, 'all');
+    if (!vendor) return null;
+
+    const eligibility = this.checkVendorQuotationEligibility(vendor);
+    const quotedRfqIds = Array.isArray(vendor.quotedRfqIds) ? [...vendor.quotedRfqIds] : [];
+    const normalizedRfqId = rfqId ? String(rfqId).trim() : null;
+    const alreadyQuoted = normalizedRfqId && quotedRfqIds.includes(normalizedRfqId);
+
+    if (!alreadyQuoted && normalizedRfqId) {
+      quotedRfqIds.push(normalizedRfqId);
+    }
+
+    let newCredits = eligibility.freeCreditsRemaining;
+    if (!alreadyQuoted && !eligibility.isSubscribed) {
+      newCredits = Math.max(0, eligibility.freeCreditsRemaining - 1);
+    }
+
+    vendor.freeQuotationCredits = newCredits;
+    vendor.quotedRfqIds = quotedRfqIds;
+
+    const updated = this.updateVendor(vendor.id, {
+      freeQuotationCredits: newCredits,
+      quotedRfqIds,
+    });
+
+    logger.info(
+      `Quotation credit updated for vendor ${vendor.name || vendor.id}: remaining ${newCredits} (RFQ ${rfqId || 'N/A'}, subscribed: ${eligibility.isSubscribed})`,
+      { vendorId: vendor.id, freeQuotationCredits: newCredits, isSubscribed: eligibility.isSubscribed },
+      'STORE_SERVICE'
+    );
+
+    return updated;
   }
 
   // ==========================================
@@ -1397,6 +1482,9 @@ class StoreService {
     // no screen recognises, so nothing ever showed the RFQ as under
     // evaluation once a vendor bid. 'In Evaluation' is the real state a
     // quote actually puts an RFQ into.
+    rfq.quotes = quotes;
+    rfq.quotesCount = quotes.length;
+
     const updated = this.updateRFQ(rfq.id, {
       quotes,
       quotesCount: quotes.length,
@@ -1651,12 +1739,20 @@ class StoreService {
       // Real invite email, if the vendor has an address.
       if (vendor.email) {
         const buyerEmail = this.resolveBuyerEmailForRFQ(updatedRFQ);
+        const creditInfo = this.checkVendorQuotationEligibility(vendor);
+        logger.info(
+          `Checking quotation credits for invited vendor ${vendor.name || vendor.email}: ${creditInfo.freeCreditsRemaining} free credits, subscribed: ${creditInfo.isSubscribed}`,
+          { vendorId: vendor.id, freeCreditsRemaining: creditInfo.freeCreditsRemaining, isSubscribed: creditInfo.isSubscribed },
+          'STORE_SERVICE'
+        );
         mailerService
           .sendRfqInviteEmail(vendor.email, {
             rfq: updatedRFQ,
             recipientName: vendor.contactPerson || vendor.name,
             buyerEmail,
             cc: buyerEmail || undefined,
+            freeCreditsRemaining: creditInfo.freeCreditsRemaining,
+            isSubscribed: creditInfo.isSubscribed,
           })
           .catch((err) => logger.error('Failed to email RFQ invite to vendor', err, 'STORE_SERVICE'));
       }
@@ -1829,8 +1925,14 @@ class StoreService {
     for (const vendor of recipients) {
       if (vendor.email && !allEmails.has(vendor.email.toLowerCase())) {
         allEmails.add(vendor.email.toLowerCase());
+        const creditInfo = this.checkVendorQuotationEligibility(vendor);
         mailerService
-          .sendRfqInviteEmail(vendor.email, { rfq, recipientName: vendor.contactPerson || vendor.name })
+          .sendRfqInviteEmail(vendor.email, {
+            rfq,
+            recipientName: vendor.contactPerson || vendor.name,
+            freeCreditsRemaining: creditInfo.freeCreditsRemaining,
+            isSubscribed: creditInfo.isSubscribed,
+          })
           .catch((err) => logger.error('Failed to email RFQ invite to matched vendor', err, 'STORE_SERVICE'));
       }
     }
@@ -1838,8 +1940,15 @@ class StoreService {
     for (const vendor of assigned) {
       if (vendor.email && !allEmails.has(vendor.email.toLowerCase())) {
         allEmails.add(vendor.email.toLowerCase());
+        const resolvedVendor = this.getVendorById(vendor.id || vendor.email, 'all');
+        const creditInfo = this.checkVendorQuotationEligibility(resolvedVendor || vendor);
         mailerService
-          .sendRfqInviteEmail(vendor.email, { rfq, recipientName: vendor.contactPerson || vendor.name })
+          .sendRfqInviteEmail(vendor.email, {
+            rfq,
+            recipientName: vendor.contactPerson || vendor.name,
+            freeCreditsRemaining: creditInfo.freeCreditsRemaining,
+            isSubscribed: creditInfo.isSubscribed,
+          })
           .catch((err) => logger.error('Failed to email RFQ invite to assigned vendor', err, 'STORE_SERVICE'));
       }
     }

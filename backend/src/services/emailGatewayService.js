@@ -574,6 +574,48 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     'EMAIL_GATEWAY'
   );
 
+  const buyerEmail = storeService.resolveBuyerEmailForRFQ(targetRfq);
+  const incomingCc = Array.isArray(message.cc) ? message.cc : (message.cc ? [message.cc] : []);
+  const ccList = Array.from(new Set([buyerEmail, ...incomingCc, VENDOR_QUOTE_SUPPORT_CC].filter(Boolean)));
+
+  // Validate vendor quotation eligibility: 5 free quotation credits, then active subscription required
+  const eligibility = storeService.checkVendorQuotationEligibility(vendorRecord);
+  if (!eligibility.eligible) {
+    logger.warn(
+      `Vendor quote reply from ${vendorRecord.name} for RFQ ${targetRfq.rfqNumber} rejected: 5 free quotation credits exhausted (subscriptionPlan: ${eligibility.subscriptionPlan})`,
+      { rfqNumber: targetRfq.rfqNumber, vendorId: vendorRecord.id, fromAddress: message.fromAddress },
+      'EMAIL_GATEWAY'
+    );
+
+    storeService.addAuditLog({
+      userEmail: message.fromAddress || SYSTEM_ACTOR_EMAIL,
+      action: `Quotation email from ${vendorRecord.name} for ${targetRfq.rfqNumber} rejected: 5 free quotation credits exhausted (subscription required)`,
+      rfqNumber: targetRfq.rfqNumber,
+    });
+
+    try {
+      await mailerService.sendVendorCreditsExhaustedEmail(message.fromAddress, {
+        rfq: targetRfq,
+        rfqNumber: targetRfq.rfqNumber,
+        rfqTitle: targetRfq.title,
+        vendorName: vendorRecord.name,
+        upgradeUrl: typeof mailerService.vendorUpgradeUrl === 'function' ? mailerService.vendorUpgradeUrl() : undefined,
+        cc: ccList.length > 0 ? ccList.join(', ') : undefined,
+      });
+    } catch (mailErr) {
+      logger.error('Failed to send vendor credits exhausted email', mailErr, 'EMAIL_GATEWAY');
+    }
+
+    return {
+      status: INGESTION_OUTCOME.CREDITS_EXHAUSTED,
+      detail: (EMAIL_GATEWAY_MESSAGES.CREDITS_EXHAUSTED_DETAIL || 'Vendor quotation credits exhausted')
+        .replace('{rfqNumber}', targetRfq.rfqNumber)
+        .replace('{vendorName}', vendorRecord.name),
+      message,
+      rfq: targetRfq,
+    };
+  }
+
   const extraction = await geminiService.extractQuotationFromEmail(
     {
       bodyText: message.bodyText || message.textBody || message.text,
@@ -609,10 +651,6 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
       unitPriceNum = Number(extraction.unitPrice);
     }
   }
-
-  const buyerEmail = storeService.resolveBuyerEmailForRFQ(targetRfq);
-  const incomingCc = Array.isArray(message.cc) ? message.cc : (message.cc ? [message.cc] : []);
-  const ccList = Array.from(new Set([buyerEmail, ...incomingCc, VENDOR_QUOTE_SUPPORT_CC].filter(Boolean)));
 
   if (!extraction.unitPrice || isNaN(unitPriceNum) || unitPriceNum <= 0) {
     logger.warn(
@@ -669,6 +707,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
   };
 
   const updatedRFQ = storeService.addQuoteToRFQ(targetRfq.id, quote);
+  storeService.consumeVendorQuotationCredit(vendorRecord.id, targetRfq.id);
 
   storeService.addAuditLog({
     userEmail: message.fromAddress || SYSTEM_ACTOR_EMAIL,
@@ -1099,9 +1138,10 @@ async function pollOnce(config = resolveConfig()) {
           if (
             result.status === INGESTION_OUTCOME.INGESTED ||
             result.status === INGESTION_OUTCOME.QUOTE_INGESTED ||
+            result.status === INGESTION_OUTCOME.CREDITS_EXHAUSTED ||
             result.status === INGESTION_OUTCOME.SKIPPED_OUTBOUND
           ) {
-            if (result.status !== INGESTION_OUTCOME.SKIPPED_OUTBOUND) {
+            if (result.status !== INGESTION_OUTCOME.SKIPPED_OUTBOUND && result.status !== INGESTION_OUTCOME.CREDITS_EXHAUSTED) {
               runtime.ingestedThisRun += 1;
             }
             // Marked read only for a message we actually acted on, and only after
@@ -1251,9 +1291,10 @@ async function pollVendorOnce(config = resolveVendorConfig()) {
           if (
             result.status === INGESTION_OUTCOME.INGESTED ||
             result.status === INGESTION_OUTCOME.QUOTE_INGESTED ||
+            result.status === INGESTION_OUTCOME.CREDITS_EXHAUSTED ||
             result.status === INGESTION_OUTCOME.SKIPPED_OUTBOUND
           ) {
-            if (result.status !== INGESTION_OUTCOME.SKIPPED_OUTBOUND) {
+            if (result.status !== INGESTION_OUTCOME.SKIPPED_OUTBOUND && result.status !== INGESTION_OUTCOME.CREDITS_EXHAUSTED) {
               vendorRuntime.ingestedThisRun += 1;
             }
             await client.messageFlagsAdd(String(uid), ['\\Seen']);
