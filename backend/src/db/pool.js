@@ -103,6 +103,21 @@ const poolModule = {
 const NOT_CONFIGURED_MESSAGE = 'The database is not configured. Set DATABASE_URL so records can be read and written.';
 
 /**
+ * Whether *some* backing store is reachable — pg pool or D1 binding.
+ *
+ * domainQueries.js/vendorIngestionQueries.js/identityQueries.js guard every
+ * ported function with `if (!pool.hasStorage()) return <empty>;` before
+ * calling query()/rows(). On Cloudflare there is no DATABASE_URL and
+ * `poolModule.pool` is always null, so a guard that only checked `pool.pool`
+ * would short-circuit every D1-ported call before it ever reached the D1
+ * branch inside query(). This checks both so the guard only fires when
+ * neither store is configured.
+ */
+function hasStorage() {
+  return !!poolModule.pool || !!getD1Binding();
+}
+
+/**
  * Run a parameterised query and return the full pg result.
  *
  * Pass `{ d1: true }` for a query against a table that has already been
@@ -258,6 +273,7 @@ async function closePool() {
 }
 
 poolModule.NOT_CONFIGURED_MESSAGE = NOT_CONFIGURED_MESSAGE;
+poolModule.hasStorage = hasStorage;
 poolModule.resolveConfig = resolveConfig;
 poolModule.createPool = createPool;
 poolModule.detectProvider = detectProvider;

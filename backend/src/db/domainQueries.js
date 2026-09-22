@@ -16,7 +16,7 @@ const pool = require('./pool');
 // ── Vendors ──────────────────────────────────────────────────────────────────
 
 async function getVendorsFromDB() {
-  if (!pool.pool) return [];
+  if (!pool.hasStorage()) return [];
   const result = await pool.query(
     'SELECT raw FROM vendors ORDER BY created_at DESC',
     [],
@@ -37,7 +37,7 @@ async function getVendorsFromDB() {
  * a page request only ever touches the rows it actually returns.
  */
 async function getVendorsPageFromDB({ limit, offset, search = '', category = '', publicOnly = false, scopedBuyerId = '' } = {}) {
-  if (!pool.pool) return { rows: [], total: 0 };
+  if (!pool.hasStorage()) return { rows: [], total: 0 };
   const params = [];
   // Two parallel condition lists, not one translated after the fact: ILIKE
   // has no SQLite equivalent (LIKE + lower() instead), raw->>'x' is Postgres
@@ -132,7 +132,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', category = '',
 /** Single-row lookup by email — used to guarantee a specific vendor is
  * present in a capped/paginated listing without fetching the whole table. */
 async function getVendorByEmailFromDB(email) {
-  if (!pool.pool || !email) return null;
+  if (!pool.hasStorage() || !email) return null;
   const result = await pool.query(
     'SELECT raw FROM vendors WHERE email = $1 LIMIT 1',
     [email],
@@ -142,7 +142,7 @@ async function getVendorByEmailFromDB(email) {
 }
 
 async function upsertVendorInDB(vendor) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const { id, email, majorCategory, status, source } = vendor;
   // See upsertEvaluationInDB's comment for why the D1 path needs its own
   // ISO-formatted timestamp rather than plain CURRENT_TIMESTAMP/now() —
@@ -177,7 +177,7 @@ async function upsertVendorInDB(vendor) {
 }
 
 async function deleteVendorInDB(id) {
-  if (!pool.pool) return false;
+  if (!pool.hasStorage()) return false;
   const result = await pool.query(
     'DELETE FROM vendors WHERE id = $1',
     [id],
@@ -195,7 +195,7 @@ async function deleteVendorInDB(id) {
 // landed versus were silently skipped as a race-condition duplicate, so it
 // never has to guess or trust a fire-and-forget write.
 async function bulkInsertVendorsInDB(vendors) {
-  if (!pool.pool || vendors.length === 0) return [];
+  if (!pool.hasStorage() || vendors.length === 0) return [];
   const values = [];
   const placeholders = [];
   const d1Placeholders = [];
@@ -236,7 +236,7 @@ async function bulkInsertVendorsInDB(vendors) {
 // ── Bulk vendor import sessions ─────────────────────────────────────────────
 
 async function createBulkImportSessionInDB(id, createdByEmail, totalRowsDeclared) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const result = await pool.query(
     `INSERT INTO bulk_vendor_import_sessions (id, created_by_email, total_rows_declared)
      VALUES ($1, $2, $3)
@@ -249,7 +249,7 @@ async function createBulkImportSessionInDB(id, createdByEmail, totalRowsDeclared
 }
 
 async function getBulkImportSessionFromDB(id) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const result = await pool.query(
     `SELECT id, status, total_rows_declared, processed_count, imported_count,
             missing_email_count, duplicate_count, invalid_count
@@ -261,7 +261,7 @@ async function getBulkImportSessionFromDB(id) {
 }
 
 async function incrementBulkImportSessionInDB(id, delta) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const result = await pool.query(
     `UPDATE bulk_vendor_import_sessions SET
        processed_count = processed_count + $2,
@@ -296,7 +296,7 @@ async function incrementBulkImportSessionInDB(id, delta) {
 // ── RFQs ─────────────────────────────────────────────────────────────────────
 
 async function getRFQsFromDB() {
-  if (!pool.pool) return [];
+  if (!pool.hasStorage()) return [];
   const result = await pool.query(
     'SELECT raw FROM rfqs ORDER BY created_at DESC',
     [],
@@ -306,7 +306,7 @@ async function getRFQsFromDB() {
 }
 
 async function upsertRFQInDB(rfq) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const { id, rfqNumber, category, status, sourcingMode, budget } = rfq;
   // See upsertEvaluationInDB's comment for why the D1 path needs its own
   // ISO-formatted timestamp rather than plain CURRENT_TIMESTAMP.
@@ -350,7 +350,7 @@ async function upsertRFQInDB(rfq) {
 }
 
 async function deleteRFQInDB(id) {
-  if (!pool.pool) return false;
+  if (!pool.hasStorage()) return false;
   const result = await pool.query(
     'DELETE FROM rfqs WHERE id = $1',
     [id],
@@ -362,7 +362,7 @@ async function deleteRFQInDB(id) {
 // ── Evaluations (append-only — no update/delete method exists) ────────────────
 
 async function getEvaluationsFromDB() {
-  if (!pool.pool) return [];
+  if (!pool.hasStorage()) return [];
   const result = await pool.query(
     'SELECT raw FROM evaluations ORDER BY created_at DESC',
     [],
@@ -372,7 +372,7 @@ async function getEvaluationsFromDB() {
 }
 
 async function upsertEvaluationInDB(evaluation) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const { id, vendorId, status } = evaluation;
   // updated_at doesn't drive getEvaluationsFromDB's sort — created_at does,
   // separately defaulted at the schema level — but CURRENT_TIMESTAMP still
@@ -408,7 +408,7 @@ async function upsertEvaluationInDB(evaluation) {
 // ── Vendor catalogue ────────────────────────────────────────────────────────
 
 async function getVendorCatalogueFromDB() {
-  if (!pool.pool) return [];
+  if (!pool.hasStorage()) return [];
   const result = await pool.query(
     'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC',
     [],
@@ -418,7 +418,7 @@ async function getVendorCatalogueFromDB() {
 }
 
 async function upsertCatalogueProductInDB(product) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const { id, vendorId, sku, category } = product;
   // See upsertEvaluationInDB's comment: CURRENT_TIMESTAMP on D1 renders in a
   // format that doesn't sort correctly against the ISO created_at/updated_at
@@ -452,7 +452,7 @@ async function upsertCatalogueProductInDB(product) {
 }
 
 async function deleteCatalogueProductInDB(id) {
-  if (!pool.pool) return false;
+  if (!pool.hasStorage()) return false;
   const result = await pool.query(
     'DELETE FROM vendor_catalogue WHERE id = $1',
     [id],
@@ -469,7 +469,7 @@ async function deleteCatalogueProductInDB(id) {
 // invariant it already has in memory.
 
 async function getBuyerAccountsFromDB() {
-  if (!pool.pool) return { accounts: [], activeId: null };
+  if (!pool.hasStorage()) return { accounts: [], activeId: null };
   const result = await pool.query(
     'SELECT id, is_active, raw FROM buyer_accounts ORDER BY created_at DESC',
     [],
@@ -484,7 +484,7 @@ async function getBuyerAccountsFromDB() {
 // change made by any other process (a script, another instance) is visible on
 // the very next request instead of requiring this process to restart.
 async function getBuyerAccountByEmailFromDB(email) {
-  if (!pool.pool || !email) return null;
+  if (!pool.hasStorage() || !email) return null;
   const result = await pool.query(
     'SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1',
     [email],
@@ -494,7 +494,7 @@ async function getBuyerAccountByEmailFromDB(email) {
 }
 
 async function upsertBuyerAccountInDB(account) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const { id, corporateEmail, status } = account;
   // is_active is deliberately not touched here — this saves the account's own
   // data, not which account is active. setActiveBuyerAccountInDB owns that flag.
@@ -526,7 +526,7 @@ async function upsertBuyerAccountInDB(account) {
 }
 
 async function deleteBuyerAccountInDB(id) {
-  if (!pool.pool) return false;
+  if (!pool.hasStorage()) return false;
   const result = await pool.query(
     'DELETE FROM buyer_accounts WHERE id = $1',
     [id],
@@ -540,7 +540,7 @@ async function deleteBuyerAccountInDB(id) {
 // alignActiveBuyerAccount's in-memory "not found" behaviour of leaving the
 // pointer unchanged from the caller's perspective (no row matches either way).
 async function setActiveBuyerAccountInDB(id) {
-  if (!pool.pool) return;
+  if (!pool.hasStorage()) return;
   // (id = $1) evaluates to a boolean in Postgres and to 0/1 in SQLite —
   // both assignable straight into is_active, no divergence needed here.
   await pool.query(
@@ -555,7 +555,7 @@ async function setActiveBuyerAccountInDB(id) {
 // trim without needing its own bookkeeping of which item to evict) ──────────
 
 async function getAIFeedFromDB() {
-  if (!pool.pool) return [];
+  if (!pool.hasStorage()) return [];
   // sequence is a Postgres-side auto-generated identity column, same as
   // notifications.sequence — see getNotificationsFromDB's comment. The D1
   // path orders by SQLite's own implicit rowid instead.
@@ -568,7 +568,7 @@ async function getAIFeedFromDB() {
 }
 
 async function upsertAIFeedItemInDB(item) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const { id } = item;
   const result = await pool.query(
     `INSERT INTO ai_feed (id, raw) VALUES ($1, $2)
@@ -592,7 +592,7 @@ async function upsertAIFeedItemInDB(item) {
 // order, see schema.sql's comment on audit_logs.sequence) ───────────────────
 
 async function getAuditLogsFromDB() {
-  if (!pool.pool) return [];
+  if (!pool.hasStorage()) return [];
   // Reconstructing exact insertion order is load-bearing here — auditService
   // walks this newest-first list checking each entry's previousHash against
   // the next (older) one's own hash, so a wrong order looks like a broken
@@ -608,7 +608,7 @@ async function getAuditLogsFromDB() {
 }
 
 async function upsertAuditLogInDB(entry) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const { id } = entry;
   const result = await pool.query(
     `INSERT INTO audit_logs (id, raw) VALUES ($1, $2)
@@ -623,7 +623,7 @@ async function upsertAuditLogInDB(entry) {
 // ── Notifications ────────────────────────────────────────────────────────────
 
 async function getNotificationsFromDB() {
-  if (!pool.pool) return [];
+  if (!pool.hasStorage()) return [];
   // `sequence` is a Postgres-side auto-generated identity column — it's
   // never in any INSERT's column list, so a D1 row would have it NULL. D1
   // has no auto-increment-on-conflict-free-PK equivalent here (id is TEXT,
@@ -639,7 +639,7 @@ async function getNotificationsFromDB() {
 }
 
 async function insertNotificationInDB(notification) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const { id, recipientType, recipientId, kind, rfqId, read } = notification;
   const result = await pool.query(
     `INSERT INTO notifications (id, recipient_type, recipient_id, kind, rfq_id, is_read, raw)
@@ -657,7 +657,7 @@ async function insertNotificationInDB(notification) {
 // One multi-row INSERT for the whole fan-out of a single RFQ to every matched
 // vendor, rather than a write per vendor.
 async function bulkInsertNotificationsInDB(notifications) {
-  if (!pool.pool || notifications.length === 0) return [];
+  if (!pool.hasStorage() || notifications.length === 0) return [];
   const values = [];
   const placeholders = notifications.map((n, i) => {
     const base = i * 7;
@@ -684,7 +684,7 @@ async function bulkInsertNotificationsInDB(notifications) {
 }
 
 async function markNotificationReadInDB(id) {
-  if (!pool.pool) return false;
+  if (!pool.hasStorage()) return false;
   // jsonb_set has no shared Postgres/SQLite spelling (SQLite's equivalent is
   // json_set, and 'true'::jsonb is Postgres-only cast syntax), so this needs
   // a real second SQL string for the D1 path rather than a placeholder swap.
@@ -704,7 +704,7 @@ async function markNotificationReadInDB(id) {
 }
 
 async function markAllNotificationsReadInDB(recipientType, recipientId) {
-  if (!pool.pool) return 0;
+  if (!pool.hasStorage()) return 0;
   const result = await pool.query(
     `UPDATE notifications
        SET is_read = true, raw = jsonb_set(raw, '{read}', 'true'::jsonb)
@@ -723,7 +723,7 @@ async function markAllNotificationsReadInDB(recipientType, recipientId) {
 // ── Zoho OAuth token (single-row cache) ────────────────────────────────────────
 
 async function getZohoOAuthTokenFromDB() {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const result = await pool.query(
     "SELECT access_token, expiry_time FROM zoho_oauth_token WHERE id = 'default'",
     [],
@@ -733,7 +733,7 @@ async function getZohoOAuthTokenFromDB() {
 }
 
 async function upsertZohoOAuthTokenInDB({ accessToken, expiryTime }) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const result = await pool.query(
     `INSERT INTO zoho_oauth_token (id, access_token, expiry_time, last_updated)
      VALUES ('default', $1, $2, CURRENT_TIMESTAMP)
@@ -762,7 +762,7 @@ function parseRaw(value) {
 }
 
 async function getPaymentLinksFromDB() {
-  if (!pool.pool) return [];
+  if (!pool.hasStorage()) return [];
   const result = await pool.query(
     'SELECT raw FROM payment_links ORDER BY created_at DESC',
     [],
@@ -772,7 +772,7 @@ async function getPaymentLinksFromDB() {
 }
 
 async function getPaymentLinkByZohoIdFromDB(zohoPaymentLinkId) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const result = await pool.query(
     'SELECT raw FROM payment_links WHERE zoho_payment_link_id = $1',
     [zohoPaymentLinkId],
@@ -782,7 +782,7 @@ async function getPaymentLinkByZohoIdFromDB(zohoPaymentLinkId) {
 }
 
 async function upsertPaymentLinkInDB(link) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const { id, zohoPaymentLinkId, vendorId, buyerAccountId, payerType, status } = link;
   const result = await pool.query(
     `INSERT INTO payment_links (id, zoho_payment_link_id, vendor_id, buyer_account_id, payer_type, status, raw, updated_at)

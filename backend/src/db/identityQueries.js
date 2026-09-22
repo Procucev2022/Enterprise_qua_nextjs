@@ -250,7 +250,7 @@ async function insertBuyerAccount({
   organizationName,
   createdBy = 'enterprise-workspace',
 }) {
-  if (!pool.pool) {
+  if (!pool.hasStorage()) {
     throw new Error(pool.NOT_CONFIGURED_MESSAGE);
   }
   if (!email || !password || !phone) {
@@ -474,7 +474,7 @@ async function insertStaffAccount({
   statusName,
   createdBy = 'enterprise-workspace',
 }) {
-  if (!pool.pool) {
+  if (!pool.hasStorage()) {
     throw new Error(pool.NOT_CONFIGURED_MESSAGE);
   }
   if (!email || !password || !phone) {
@@ -687,7 +687,7 @@ async function insertVendorAccount({
   organizationName,
   createdBy = 'vendor-ingestion',
 }) {
-  if (!pool.pool) {
+  if (!pool.hasStorage()) {
     throw new Error(pool.NOT_CONFIGURED_MESSAGE);
   }
   if (!email || !password) {

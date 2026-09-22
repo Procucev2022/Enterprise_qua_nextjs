@@ -157,7 +157,7 @@ function mapRowToSession(row) {
 
 /** Create a session. The caller has already resolved and validated the horizon. */
 async function insertSession({ organizationId, userId, userEmail, horizon }) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const id = newId('vis');
   const result = await pool.query(
     `insert into vendor_ingestion_sessions
@@ -190,7 +190,7 @@ async function insertSession({ organizationId, userId, userEmail, horizon }) {
  * and cannot be probed.
  */
 async function findSession(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return null;
+  if (!pool.hasStorage() || !sessionId || !organizationId) return null;
   const rows = await pool.rows(
     `${SESSION_SELECT} where id = $1 and organization_id = $2 limit 1`,
     [sessionId, organizationId],
@@ -201,7 +201,7 @@ async function findSession(sessionId, organizationId) {
 
 /** Look up a session by its ID directly to resolve its organization */
 async function findSessionById(sessionId) {
-  if (!pool.pool || !sessionId) return null;
+  if (!pool.hasStorage() || !sessionId) return null;
   const rows = await pool.rows(`${SESSION_SELECT} where id = $1 limit 1`, [sessionId], { d1: true });
   return rows.length > 0 ? mapRowToSession(rows[0]) : null;
 }
@@ -212,7 +212,7 @@ async function findSessionById(sessionId) {
  * right thing to reopen, showing its results.
  */
 async function findLatestSession(organizationId) {
-  if (!pool.pool || !organizationId) return null;
+  if (!pool.hasStorage() || !organizationId) return null;
   const rows = await pool.rows(
     `${SESSION_SELECT} where organization_id = $1 order by created_at desc limit 1`,
     [organizationId],
@@ -253,7 +253,7 @@ const SESSION_COLUMN_MAP = [
  * request body can never reach a column it has no business writing.
  */
 async function updateSession(sessionId, organizationId, patch = {}) {
-  if (!pool.pool || !sessionId || !organizationId) return null;
+  if (!pool.hasStorage() || !sessionId || !organizationId) return null;
 
   const assignments = [];
   const params = [];
@@ -320,7 +320,7 @@ function mapRowToIngestionJob(row) {
 }
 
 async function createIngestionJob({ sessionId, organizationId, jobType, fileName, totalRecords = 0 }) {
-  if (!pool.pool || !sessionId || !organizationId) {
+  if (!pool.hasStorage() || !sessionId || !organizationId) {
     return {
       id: newId('job'),
       sessionId,
@@ -356,7 +356,7 @@ async function createIngestionJob({ sessionId, organizationId, jobType, fileName
 }
 
 async function updateIngestionJobProgress(jobId, organizationId, patch = {}) {
-  if (!pool.pool || !jobId || !organizationId) return null;
+  if (!pool.hasStorage() || !jobId || !organizationId) return null;
 
   const assignments = [];
   const params = [];
@@ -407,7 +407,7 @@ async function updateIngestionJobProgress(jobId, organizationId, patch = {}) {
 }
 
 async function findIngestionJob(jobId, organizationId) {
-  if (!pool.pool || !jobId || !organizationId) return null;
+  if (!pool.hasStorage() || !jobId || !organizationId) return null;
   const rows = await pool.rows(
     `${INGESTION_JOB_SELECT} where id = $1 and organization_id = $2 limit 1`,
     [jobId, organizationId],
@@ -417,7 +417,7 @@ async function findIngestionJob(jobId, organizationId) {
 }
 
 async function findLatestIngestionJob(sessionId, organizationId, jobType = null) {
-  if (!pool.pool || !sessionId || !organizationId) return null;
+  if (!pool.hasStorage() || !sessionId || !organizationId) return null;
   const params = [sessionId, organizationId];
   let typeClause = '';
   if (jobType) {
@@ -433,7 +433,7 @@ async function findLatestIngestionJob(sessionId, organizationId, jobType = null)
 }
 
 async function findActiveIngestionJobs(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId) return [];
   const rows = await pool.rows(
     `${INGESTION_JOB_SELECT} where session_id = $1 and organization_id = $2 and status in ('PENDING', 'PROCESSING') order by created_at desc`,
     [sessionId, organizationId],
@@ -457,7 +457,7 @@ async function findActiveIngestionJobs(sessionId, organizationId) {
  * classification rather than letting the model invent a taxonomy.
  */
 async function findOrganizationCategoryMaster(organizationId) {
-  if (!pool.pool || !organizationId) return [];
+  if (!pool.hasStorage() || !organizationId) return [];
   const rows = await pool.rows(
     `select division, category from org_division_category
       where organization_id = $1 and is_active is not false
@@ -529,7 +529,7 @@ const VENDOR_MASTER_STRIDE = 14;
  * Returns the stored rows so the caller can report exactly what landed.
  */
 async function bulkUpsertVendorMasterRecords(sessionId, organizationId, rows = []) {
-  if (!pool.pool || !sessionId || !organizationId || rows.length === 0) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId || rows.length === 0) return [];
 
   const values = [];
   const placeholders = rows.map((row, i) => {
@@ -600,7 +600,7 @@ async function bulkUpsertVendorMasterRecords(sessionId, organizationId, rows = [
 
 /** Every vendor-master row in a session, ordered as the sheet supplied them. */
 async function findVendorMasterRecords(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId) return [];
   const rows = await pool.rows(
     `${VENDOR_MASTER_SELECT} where session_id = $1 and organization_id = $2
       order by source_row_number nulls last, company_name`,
@@ -612,7 +612,7 @@ async function findVendorMasterRecords(sessionId, organizationId) {
 
 /** One vendor-master row, org-scoped. */
 async function findVendorMasterRecord(recordId, organizationId) {
-  if (!pool.pool || !recordId || !organizationId) return null;
+  if (!pool.hasStorage() || !recordId || !organizationId) return null;
   const rows = await pool.rows(
     `${VENDOR_MASTER_SELECT} where id = $1 and organization_id = $2 limit 1`,
     [recordId, organizationId],
@@ -622,7 +622,7 @@ async function findVendorMasterRecord(recordId, organizationId) {
 }
 
 async function countVendorMasterRecords(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return 0;
+  if (!pool.hasStorage() || !sessionId || !organizationId) return 0;
   const rows = await pool.rows(
     'select count(*)::int as total from vendor_master_records where session_id = $1 and organization_id = $2',
     [sessionId, organizationId],
@@ -637,7 +637,7 @@ async function countVendorMasterRecords(sessionId, organizationId) {
 
 /** Clear a session's vendor master so a corrected file replaces it wholesale. */
 async function deleteVendorMasterRecords(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return 0;
+  if (!pool.hasStorage() || !sessionId || !organizationId) return 0;
   const result = await pool.query(
     'delete from vendor_master_records where session_id = $1 and organization_id = $2',
     [sessionId, organizationId],
@@ -662,7 +662,7 @@ const PO_STRIDE = 21;
  * catches a mis-selected horizon.
  */
 async function bulkInsertPoLineItems(sessionId, organizationId, rows = []) {
-  if (!pool.pool || !sessionId || !organizationId || rows.length === 0) return 0;
+  if (!pool.hasStorage() || !sessionId || !organizationId || rows.length === 0) return 0;
 
   const values = [];
   const placeholders = rows.map((row, i) => {
@@ -710,7 +710,7 @@ async function bulkInsertPoLineItems(sessionId, organizationId, rows = []) {
 
 /** Counts for the "inside / outside the selected period" summary. */
 async function countPoLineItems(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return { total: 0, inHorizon: 0, outsideHorizon: 0 };
+  if (!pool.hasStorage() || !sessionId || !organizationId) return { total: 0, inHorizon: 0, outsideHorizon: 0 };
   const rows = await pool.rows(
     `select count(*)::int as total,
             count(*) filter (where in_horizon)::int as in_horizon,
@@ -734,7 +734,7 @@ async function countPoLineItems(sessionId, organizationId) {
 }
 
 async function deletePoLineItems(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return 0;
+  if (!pool.hasStorage() || !sessionId || !organizationId) return 0;
   const result = await pool.query(
     'delete from po_line_items where session_id = $1 and organization_id = $2',
     [sessionId, organizationId],
@@ -760,7 +760,7 @@ async function deletePoLineItems(sessionId, organizationId) {
  * fact rather than the absence of one.
  */
 async function matchPoLineItemsToVendors(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) {
+  if (!pool.hasStorage() || !sessionId || !organizationId) {
     return { byVendorCode: 0, byGstin: 0, byName: 0, unmatched: 0 };
   }
 
@@ -864,7 +864,7 @@ function buildLineSummary(part) {
 }
 
 async function findVendorPurchasingProfiles(sessionId, organizationId, { descriptionLimit } = {}) {
-  if (!pool.pool || !sessionId || !organizationId) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId) return [];
   const limit = counter(descriptionLimit) || VENDOR_INGESTION_CONFIG.AI_MAX_PO_LINES_PER_VENDOR;
 
   // The D1 variant aggregates the raw line parts (json_group_array of
@@ -1011,7 +1011,7 @@ async function findVendorPurchasingProfiles(sessionId, organizationId, { descrip
  * would hide that.
  */
 async function findUnmatchedPoVendors(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId) return [];
   const rows = await pool.rows(
     `select coalesce(nullif(vendor_name, ''), nullif(vendor_code, ''), 'Unidentified vendor') as vendor_label,
             vendor_code,
@@ -1119,7 +1119,7 @@ const MAPPING_SEED_STRIDE = 13;
  * the match must not discard a decision the buyer already made.
  */
 async function seedCategoryMappings(sessionId, organizationId, profiles = []) {
-  if (!pool.pool || !sessionId || !organizationId || profiles.length === 0) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId || profiles.length === 0) return [];
 
   const values = [];
   const placeholders = profiles.map((profile, i) => {
@@ -1183,7 +1183,7 @@ async function seedCategoryMappings(sessionId, organizationId, profiles = []) {
 
 /** Every mapping in a session, richest-spend first. */
 async function findCategoryMappings(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId) return [];
   const rows = await pool.rows(
     `${MAPPING_SELECT} where session_id = $1 and organization_id = $2
       order by total_spend desc, company_name`,
@@ -1195,7 +1195,7 @@ async function findCategoryMappings(sessionId, organizationId) {
 
 /** One mapping by its vendor-master record id, org-scoped. */
 async function findCategoryMappingByVendorRecord(sessionId, organizationId, vendorRecordId) {
-  if (!pool.pool || !sessionId || !organizationId || !vendorRecordId) return null;
+  if (!pool.hasStorage() || !sessionId || !organizationId || !vendorRecordId) return null;
   const rows = await pool.rows(
     `${MAPPING_SELECT} where session_id = $1 and organization_id = $2 and vendor_record_id = $3 limit 1`,
     [sessionId, organizationId, vendorRecordId],
@@ -1213,7 +1213,7 @@ async function findCategoryMappingByVendorRecord(sessionId, organizationId, vend
  * holding row locks across a network call to the model.
  */
 async function findQueuedCategoryMappings(sessionId, organizationId, limit) {
-  if (!pool.pool || !sessionId || !organizationId) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId) return [];
   const rows = await pool.rows(
     `${MAPPING_SELECT}
       where session_id = $1 and organization_id = $2
@@ -1235,7 +1235,7 @@ async function findQueuedCategoryMappings(sessionId, organizationId, limit) {
 
 /** Flip one mapping to PROCESSING and count the attempt. */
 async function markMappingProcessing(mappingId, organizationId) {
-  if (!pool.pool || !mappingId || !organizationId) return null;
+  if (!pool.hasStorage() || !mappingId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_mappings
         set processing_status = $3, attempt_count = attempt_count + 1, updated_at = now()
@@ -1255,7 +1255,7 @@ async function markMappingProcessing(mappingId, organizationId) {
  * approved" independently readable for the audit trail (RULE 8).
  */
 async function saveAiSuggestion(mappingId, organizationId, suggestion) {
-  if (!pool.pool || !mappingId || !organizationId) return null;
+  if (!pool.hasStorage() || !mappingId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_mappings
         set ai_major_category = $3,
@@ -1322,7 +1322,7 @@ async function saveAiSuggestion(mappingId, organizationId, suggestion) {
  * had and carries a readable reason plus a retryable FAILED state.
  */
 async function markMappingFailed(mappingId, organizationId, errorMessage) {
-  if (!pool.pool || !mappingId || !organizationId) return null;
+  if (!pool.hasStorage() || !mappingId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_mappings
         set processing_status = $3, status = $4, processing_error = $5, updated_at = now()
@@ -1342,7 +1342,7 @@ async function markMappingFailed(mappingId, organizationId, errorMessage) {
 
 /** Re-queue one mapping for another classification pass. */
 async function requeueMapping(mappingId, organizationId) {
-  if (!pool.pool || !mappingId || !organizationId) return null;
+  if (!pool.hasStorage() || !mappingId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_mappings
         set processing_status = $3, processing_error = null, updated_at = now()
@@ -1361,7 +1361,7 @@ async function requeueMapping(mappingId, organizationId) {
  * overwrite the original recommendation.
  */
 async function saveBuyerReview(mappingId, organizationId, review) {
-  if (!pool.pool || !mappingId || !organizationId) return null;
+  if (!pool.hasStorage() || !mappingId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_mappings
         set buyer_major_category = $3,
@@ -1404,7 +1404,7 @@ async function saveBuyerReview(mappingId, organizationId, review) {
 
 /** Link a mapping to the live `vendors` row it produced. */
 async function attachVendorId(mappingId, organizationId, vendorId) {
-  if (!pool.pool || !mappingId || !organizationId) return null;
+  if (!pool.hasStorage() || !mappingId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_mappings set vendor_id = $3, updated_at = now()
       where id = $1 and organization_id = $2 returning *`,
@@ -1433,7 +1433,7 @@ async function summarizeCategoryMappings(sessionId, organizationId) {
     mediumConfidence: 0,
     lowConfidence: 0,
   };
-  if (!pool.pool || !sessionId || !organizationId) return empty;
+  if (!pool.hasStorage() || !sessionId || !organizationId) return empty;
 
   const rows = await pool.rows(
     `select count(*)::int as total,
@@ -1521,7 +1521,7 @@ async function summarizeCategoryMappings(sessionId, organizationId) {
  * service renders as its own "Self Mapping Required" bucket.
  */
 async function findCategorySegmentation(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId) return [];
   const rows = await pool.rows(
     `select coalesce(nullif(buyer_major_category, ''), nullif(ai_major_category, '')) as major_category,
             status,
@@ -1567,7 +1567,7 @@ async function findCategorySegmentation(sessionId, organizationId) {
  * about a vendor yet.
  */
 async function findApprovedMappingsForOrganization(organizationId) {
-  if (!pool.pool || !organizationId) return [];
+  if (!pool.hasStorage() || !organizationId) return [];
   const rows = await pool.rows(
     `${MAPPING_SELECT}
       where organization_id = $1
@@ -1607,7 +1607,7 @@ function mapRowToDispatch(row) {
 }
 
 async function insertDispatch({ sessionId, organizationId, template, majorCategory, recipientCount, dispatchedBy }) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const result = await pool.query(
     `insert into vendor_category_dispatches
        (id, session_id, organization_id, template, major_category, recipient_count, status, dispatched_by, raw)
@@ -1630,7 +1630,7 @@ async function insertDispatch({ sessionId, organizationId, template, majorCatego
 }
 
 async function finalizeDispatch(dispatchId, organizationId, { sentCount, failedCount, skippedCount, status }) {
-  if (!pool.pool || !dispatchId || !organizationId) return null;
+  if (!pool.hasStorage() || !dispatchId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_dispatches
         set sent_count = $3, failed_count = $4, skipped_count = $5, status = $6, updated_at = now()
@@ -1643,7 +1643,7 @@ async function finalizeDispatch(dispatchId, organizationId, { sentCount, failedC
 }
 
 async function findDispatches(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId) return [];
   const rows = await pool.rows(
     `select * from vendor_category_dispatches
       where session_id = $1 and organization_id = $2 order by created_at desc limit 100`,
@@ -1701,7 +1701,7 @@ function mapRowToEmailLog(row) {
  * recipient list.
  */
 async function findEmailLogsByIdempotencyKeys(organizationId, keys = []) {
-  if (!pool.pool || !organizationId || keys.length === 0) return [];
+  if (!pool.hasStorage() || !organizationId || keys.length === 0) return [];
   // = any($2) binds a single array parameter — a Postgres-only construct.
   // SQLite has no array parameter type at all, so the D1 path expands to a
   // dynamic IN (...) with one placeholder per key, each bound individually
@@ -1738,7 +1738,7 @@ async function claimEmailSlot({
   template,
   majorCategory,
 }) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const idempotencyKey = buildIdempotencyKey({ organizationId, template, recipientEmail, majorCategory });
   const result = await pool.query(
     `insert into vendor_email_dispatch_log
@@ -1774,7 +1774,7 @@ async function claimEmailSlot({
 }
 
 async function markEmailSent(logId, organizationId, messageId) {
-  if (!pool.pool || !logId || !organizationId) return null;
+  if (!pool.hasStorage() || !logId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_email_dispatch_log
         set status = $3, message_id = $4, detail = null, sent_at = now(), updated_at = now()
@@ -1787,7 +1787,7 @@ async function markEmailSent(logId, organizationId, messageId) {
 }
 
 async function markEmailFailed(logId, organizationId, detail) {
-  if (!pool.pool || !logId || !organizationId) return null;
+  if (!pool.hasStorage() || !logId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_email_dispatch_log
         set status = $3, detail = $4, updated_at = now()
@@ -1800,7 +1800,7 @@ async function markEmailFailed(logId, organizationId, detail) {
 }
 
 async function findEmailLogs(sessionId, organizationId, { status, limit } = {}) {
-  if (!pool.pool || !sessionId || !organizationId) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId) return [];
   const params = [sessionId, organizationId];
   let where = 'where session_id = $1 and organization_id = $2';
   if (status) {
@@ -1819,7 +1819,7 @@ async function findEmailLogs(sessionId, organizationId, { status, limit } = {}) 
 /** Totals for the email status panel. */
 async function summarizeEmailLogs(sessionId, organizationId) {
   const empty = { total: 0, pending: 0, queued: 0, sent: 0, failed: 0, delivered: 0, bounced: 0 };
-  if (!pool.pool || !sessionId || !organizationId) return empty;
+  if (!pool.hasStorage() || !sessionId || !organizationId) return empty;
   const rows = await pool.rows(
     `select count(*)::int as total,
             count(*) filter (where status = $3)::int as pending,
@@ -1889,7 +1889,7 @@ async function insertAuditEntry({
   oldValue,
   newValue,
 }) {
-  if (!pool.pool || !organizationId || !action) return null;
+  if (!pool.hasStorage() || !organizationId || !action) return null;
   const result = await pool.query(
     `insert into vendor_ingestion_audit
        (id, session_id, organization_id, user_id, user_email, action, entity_type, entity_id,
@@ -1921,7 +1921,7 @@ async function insertAuditEntry({
 }
 
 async function findAuditEntries(organizationId, { sessionId, limit, offset } = {}) {
-  if (!pool.pool || !organizationId) return [];
+  if (!pool.hasStorage() || !organizationId) return [];
   const params = [organizationId];
   let where = 'where organization_id = $1';
   if (sessionId) {
@@ -1987,7 +1987,7 @@ async function insertAiClassificationLog({
   error,
   response,
 }) {
-  if (!pool.pool || !sessionId || !organizationId) return null;
+  if (!pool.hasStorage() || !sessionId || !organizationId) return null;
   const result = await pool.query(
     `insert into ai_classification_logs
        (id, session_id, organization_id, vendor_record_id, vendor_code, model, status,
@@ -2022,7 +2022,7 @@ async function insertAiClassificationLog({
 }
 
 async function findAiClassificationLogs(sessionId, organizationId, { limit } = {}) {
-  if (!pool.pool || !sessionId || !organizationId) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId) return [];
   const rows = await pool.rows(
     `select id, vendor_record_id, vendor_code, model, status, attempt, prompt_chars,
             po_count, duration_ms, error, created_at
