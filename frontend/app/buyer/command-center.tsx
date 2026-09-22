@@ -221,14 +221,22 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
             <div className="text-xs font-bold text-slate-800 dark:text-gray-200 flex items-center gap-2 flex-wrap">
               <span>Sourcing Plan: {activeSubscription === 'free_trial' ? 'Free Starter Account (All Versions Unlocked)' : activeSubscription === 'version_1' ? 'Version 1 (Client Roster Plan)' : activeSubscription === 'version_2' ? 'Version 2 (Hybrid Sourcing Plan)' : 'Version 3 (AI Autonomous Sourcing Plan)'}</span>
               {activeSubscription === 'free_trial' && (
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300">
-                  {remainingFreeRFQs} of 5 Free RFQs Left (Usable on V1, V2, V3)
-                </span>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300 border border-indigo-300">
+                    Total: 5
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300">
+                    Used: {Math.max(0, 5 - remainingFreeRFQs)}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300">
+                    Remaining: {remainingFreeRFQs}
+                  </span>
+                </div>
               )}
             </div>
             <p className="text-[10px] text-slate-500 dark:text-gray-400 mt-0.5">
               {activeSubscription === 'free_trial' 
-                ? 'Your Free Account includes 5 free RFQs to use with full flexibility across Version 1 (Client Roster), Version 2 (Hybrid), and Version 3 (AI Autonomous).' 
+                ? 'Your Free Account includes 5 Free RFQs in total, shared across Version 1 (Client Roster), Version 2 (Hybrid), and Version 3 (Autonomous AI).' 
                 : 'Your premium sourcing plan is active. All dispatch features for this mode are fully unlocked.'}
             </p>
           </div>

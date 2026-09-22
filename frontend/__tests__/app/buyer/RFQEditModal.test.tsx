@@ -27,7 +27,7 @@ function entity(overrides: Partial<ExtractedEntity> = {}): ExtractedEntity {
     itemName: 'Centrifugal Water Pump 500 GPM',
     quantity: 12,
     unit: 'Nos',
-    targetDate: '2026-09-15',
+    targetDate: '2026-10-15',
     technicalSpecs: 'SS316 impeller',
     confidence: 95,
     category: MINOR,
@@ -587,7 +587,7 @@ describe('RFQEditModal: line items', () => {
     expect(within(firstRow()).getByLabelText(EDIT.colQty)).toHaveValue(12);
     expect(within(firstRow()).getByLabelText(EDIT.colUnit)).toHaveValue('Nos');
     expect(within(firstRow()).getByLabelText(EDIT.colSpecs)).toHaveValue('SS316 impeller');
-    expect(within(firstRow()).getByLabelText(EDIT.colTargetDate)).toHaveValue('2026-09-15');
+    expect(within(firstRow()).getByLabelText(EDIT.colTargetDate)).toHaveValue('2026-10-15');
   });
 
   it('counts the rows in the section heading', () => {
@@ -725,7 +725,7 @@ describe('RFQEditModal: line items', () => {
       expect(within(firstRow()).getByLabelText(EDIT.colUnit)).toHaveValue('Nos');
       expect(within(firstRow()).getByLabelText(EDIT.colItem)).toHaveValue('Centrifugal Water Pump 500 GPM');
       expect(within(firstRow()).getByLabelText(EDIT.colSpecs)).toHaveValue('SS316 impeller');
-      expect(within(firstRow()).getByLabelText(EDIT.colTargetDate)).toHaveValue('2026-09-15');
+      expect(within(firstRow()).getByLabelText(EDIT.colTargetDate)).toHaveValue('2026-10-15');
     });
 
     // A six-figure BOQ quantity was being clipped by a 112px input, which read as

@@ -144,6 +144,12 @@ describe('validateManualRFQLineItem', () => {
   it('does not require a per-row target date', () => {
     expect(validateManualRFQLineItem(completeItem({ targetDate: '' }))).toEqual({});
   });
+
+  it('rejects a line item with a target date in the past', () => {
+    expect(validateManualRFQLineItem(completeItem({ targetDate: '2020-01-01' }))).toEqual({
+      targetDate: 'Target date cannot be earlier than today.',
+    });
+  });
 });
 
 describe('validateManualRFQForm', () => {
@@ -153,6 +159,12 @@ describe('validateManualRFQForm', () => {
       formErrors: {},
       lineItemErrors: {},
     });
+  });
+
+  it('rejects a form with a target delivery date in the past', () => {
+    const { isValid, formErrors } = validateManualRFQForm(completeForm({ targetDeliveryDate: '2020-01-01' }));
+    expect(isValid).toBe(false);
+    expect(formErrors.targetDeliveryDate).toBe('Target date cannot be earlier than today.');
   });
 
   // The title falls back to the leading line item, matching how the server
