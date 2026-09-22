@@ -253,25 +253,46 @@ async function deleteRFQInDB(id) {
 
 async function getEvaluationsFromDB() {
   if (!pool.pool) return [];
-  const result = await pool.query('SELECT raw FROM evaluations ORDER BY created_at DESC');
-  return result.rows.map((row) => row.raw);
+  const result = await pool.query(
+    'SELECT raw FROM evaluations ORDER BY created_at DESC',
+    [],
+    { d1: true }
+  );
+  return result.rows.map((row) => parseRaw(row.raw));
 }
 
 async function upsertEvaluationInDB(evaluation) {
   if (!pool.pool) return null;
   const { id, vendorId, status } = evaluation;
+  // updated_at doesn't drive getEvaluationsFromDB's sort — created_at does,
+  // separately defaulted at the schema level — but CURRENT_TIMESTAMP still
+  // needs a D1-specific ISO form here: plain CURRENT_TIMESTAMP renders as
+  // "YYYY-MM-DD HH:MM:SS" on SQLite, which would sort inconsistently against
+  // any ISO-formatted ("...T...Z") timestamp already in the column from
+  // migrated data — same trap as authSessionQueries' purge comparison.
   const result = await pool.query(
     `INSERT INTO evaluations (id, vendor_id, status, raw, updated_at)
-     VALUES ($1, $2, $3, $4, now())
+     VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
      ON CONFLICT (id) DO UPDATE SET
        vendor_id = EXCLUDED.vendor_id,
        status = EXCLUDED.status,
        raw = EXCLUDED.raw,
-       updated_at = now()
+       updated_at = CURRENT_TIMESTAMP
      RETURNING raw`,
-    [id, vendorId || null, status || null, JSON.stringify(evaluation)]
+    [id, vendorId || null, status || null, JSON.stringify(evaluation)],
+    {
+      d1: true,
+      d1Text: `INSERT INTO evaluations (id, vendor_id, status, raw, updated_at)
+     VALUES ($1, $2, $3, $4, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT (id) DO UPDATE SET
+       vendor_id = EXCLUDED.vendor_id,
+       status = EXCLUDED.status,
+       raw = EXCLUDED.raw,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     RETURNING raw`,
+    }
   );
-  return result.rows[0]?.raw || null;
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 // ── Vendor catalogue ────────────────────────────────────────────────────────
