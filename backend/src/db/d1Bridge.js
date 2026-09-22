@@ -11,13 +11,21 @@
 // `cloudflare:workers` only resolves inside the Workers runtime, never under
 // Node/Render, so getD1Binding() below is a plain, cheap no-op there — this file
 // changes nothing about the existing Node/pg path.
+//
+// This file is CommonJS (required deep under app.js), and the bundler only
+// resolves `cloudflare:*` specifiers through a static ESM import — calling
+// `require('cloudflare:workers')` here throws "Dynamic require ... is not
+// supported" every time, which a bare try/catch swallowed silently, so every
+// D1-ported query fell back to the pg pool without ever reaching D1. Real
+// ESM `import { env } from 'cloudflare:workers'` only exists in worker.mjs
+// (the actual Workers entry point), which stashes it on `globalThis.__CF_ENV__`
+// once at module load, for this file to read back synchronously instead.
 // ==============================================================================
 
 /** Returns the D1 binding (env.DB) when running on Workers with it configured, else null. */
 function getD1Binding() {
   try {
-    // eslint-disable-next-line global-require
-    const { env } = require('cloudflare:workers');
+    const env = globalThis.__CF_ENV__;
     return (env && env.DB) || null;
   } catch {
     return null;

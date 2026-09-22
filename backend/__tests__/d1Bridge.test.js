@@ -1,25 +1,34 @@
 describe('d1Bridge', () => {
+  const originalCfEnv = globalThis.__CF_ENV__;
+
   afterEach(() => {
     jest.resetModules();
+    globalThis.__CF_ENV__ = originalCfEnv;
   });
 
   describe('getD1Binding', () => {
-    it('returns null when cloudflare:workers is not resolvable (Node/Render)', () => {
+    it('returns null when globalThis.__CF_ENV__ was never set (Node/Render)', () => {
+      delete globalThis.__CF_ENV__;
       const { getD1Binding } = require('../src/db/d1Bridge');
       expect(getD1Binding()).toBeNull();
     });
 
-    it('returns env.DB when running under Workers with the binding configured', () => {
+    // worker.mjs is the only real ESM file in the backend, and it's the only
+    // place that can do `import { env } from 'cloudflare:workers'` — a
+    // require() of that specifier anywhere else throws "Dynamic require of
+    // 'cloudflare:workers' is not supported" under the Workers bundler. So
+    // worker.mjs stashes it on globalThis.__CF_ENV__ once at module load, and
+    // this file reads that back instead of importing/requiring the
+    // cloudflare: specifier itself.
+    it('returns env.DB when worker.mjs has stashed the binding on globalThis', () => {
       const fakeDb = { prepare: jest.fn() };
-      jest.doMock('cloudflare:workers', () => ({ env: { DB: fakeDb } }), { virtual: true });
-      jest.resetModules();
+      globalThis.__CF_ENV__ = { DB: fakeDb };
       const { getD1Binding } = require('../src/db/d1Bridge');
       expect(getD1Binding()).toBe(fakeDb);
     });
 
-    it('returns null when running under Workers without the DB binding', () => {
-      jest.doMock('cloudflare:workers', () => ({ env: {} }), { virtual: true });
-      jest.resetModules();
+    it('returns null when globalThis.__CF_ENV__ is set but has no DB binding', () => {
+      globalThis.__CF_ENV__ = {};
       const { getD1Binding } = require('../src/db/d1Bridge');
       expect(getD1Binding()).toBeNull();
     });
