@@ -246,6 +246,7 @@ export const UI_STRINGS = {
       'Enter a pincode or zipcode of 3 to 10 letters, digits, spaces or hyphens, for example 400701.',
     budgetNegative: 'An estimated budget cannot be negative. Leave it blank to publish no ceiling.',
     lineItemsRequired: 'Add at least one line item so vendors have something to quote against.',
+    targetDateCannotBePast: 'Target date cannot be earlier than today.',
   },
 
   /** The Manual RFQ Entry dialog opened from the wizard's Manual tab. */
@@ -294,6 +295,11 @@ export const UI_STRINGS = {
     extractingAction: 'Reading…',
     removeAttachmentAria: 'Remove {fileName}',
 
+    quotaExhaustedTitle: 'Free RFQ Limit Reached (0 of 5 Remaining)',
+    quotaExhaustedMessage:
+      'You have consumed all 5 free RFQs. Please upgrade your plan to continue creating and dispatching RFQs across Version 1, Version 2, or Version 3.',
+    upgradePlanAction: 'Upgrade Plan',
+
     serverAllocatesNumber: 'The RFQ number is allocated when you save.',
     cancelAction: 'Cancel',
     saveAction: 'Create RFQ',
@@ -301,6 +307,11 @@ export const UI_STRINGS = {
   },
 
   rfqExtraction: {
+    quotaExhaustedTitle: 'Free RFQ Quota Exhausted (0 of 5 Remaining)',
+    quotaExhaustedMessage:
+      'You have used all 5 free RFQs shared across V1, V2, and V3. Please upgrade your plan to continue creating and dispatching new RFQs.',
+    upgradePlanAction: 'Upgrade Plan',
+
     // Step 1
     noFileTitle: 'No Document Selected',
     noFileMessage: 'Upload a BOQ spreadsheet, PDF or scanned requirement before continuing.',
@@ -847,6 +858,7 @@ export const UI_STRINGS = {
     deliveryPincodeRequired: 'PIN / ZIP Code is required so vendors can price freight.',
     deliveryPincodeInvalid:
       'PIN / ZIP Code must be 3 to 10 letters, digits, spaces or hyphens, for example 400701 or SW1A 1AA.',
+    targetDateCannotBePast: 'Target date cannot be earlier than today.',
 
     // Outcomes
     savedTitle: 'RFQ Updated',

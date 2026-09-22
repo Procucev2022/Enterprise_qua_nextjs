@@ -89,6 +89,7 @@ interface IngestionWizardProps {
   onComplete: () => void;
   onCancel: () => void;
   forceSubscription?: 'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none';
+  forceRemainingFreeRFQs?: number;
 }
 
 function FieldError({ message }: { message?: string }) {
@@ -96,7 +97,12 @@ function FieldError({ message }: { message?: string }) {
   return <p className="text-[10px] text-rose-600 dark:text-rose-400 mt-1 font-medium">{message}</p>;
 }
 
-export default function IngestionWizard({ onComplete, onCancel, forceSubscription }: IngestionWizardProps) {
+export default function IngestionWizard({
+  onComplete,
+  onCancel,
+  forceSubscription,
+  forceRemainingFreeRFQs,
+}: IngestionWizardProps) {
   const {
     addNewRFQ,
     adoptCreatedRFQ,
@@ -105,7 +111,17 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
     showToast,
     activeSubscription: storeSubscription,
     buyerVendors,
+    remainingFreeRFQs: storeRemaining,
+    activeBuyerAccount,
   } = useApp();
+
+  const effectivePlan = forceSubscription ?? activeBuyerAccount?.subscriptionPlan ?? storeSubscription ?? 'free_trial';
+  const effectiveRemaining =
+    forceRemainingFreeRFQs !== undefined
+      ? forceRemainingFreeRFQs
+      : (activeBuyerAccount?.remainingFreeRFQs ?? storeRemaining ?? 5);
+  const isPaidPlan = ['version_1', 'version_2', 'version_3'].includes(effectivePlan);
+  const isQuotaExhausted = !isPaidPlan && effectiveRemaining <= 0;
 
   const [form, setForm] = useState<ManualRFQForm>(() => ({
     ...createEmptyManualRFQForm(),
@@ -436,6 +452,12 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
     setSubmitAttempted(true);
     setSubmitError(null);
 
+    if (isQuotaExhausted) {
+      setSubmitError(EXTRACTION.quotaExhaustedMessage);
+      showToast('Quota Exhausted', 'Please upgrade your plan to continue creating RFQs.', 'warning');
+      return;
+    }
+
     if (!validateManualRFQForm(form).isValid) {
       showToast('Validation Error', 'Please complete all required fields and line items before dispatching.', 'warning');
       return;
@@ -569,6 +591,35 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
           </button>
         </div>
       </div>
+
+      {/* Quota Exhausted Banner */}
+      {isQuotaExhausted && (
+        <div
+          data-testid="ingestion-wizard-quota-exhausted-banner"
+          className="p-5 rounded-2xl bg-amber-500/10 border border-amber-500/30 dark:bg-amber-950/40 dark:border-amber-700/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm"
+        >
+          <div className="flex items-start gap-3">
+            <div className="p-2 rounded-xl bg-amber-500/20 text-amber-600 dark:text-amber-400 shrink-0">
+              <AlertCircle size={22} />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-amber-950 dark:text-amber-200">
+                {EXTRACTION.quotaExhaustedTitle}
+              </h3>
+              <p className="text-xs text-amber-800 dark:text-amber-300 mt-1">
+                {EXTRACTION.quotaExhaustedMessage}
+              </p>
+            </div>
+          </div>
+          <a
+            href="/buyer/subscription-center"
+            className="btn btn-primary font-bold shrink-0 inline-flex items-center gap-2 px-4 py-2 text-xs shadow-md hover:shadow-lg"
+          >
+            <Sparkles size={14} />
+            <span>{EXTRACTION.upgradePlanAction}</span>
+          </a>
+        </div>
+      )}
 
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* TOP: DOCUMENT & REQUISITION EMAIL UPLOAD & AI EXTRACTION      */}
@@ -813,10 +864,12 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
             <input
               id="rfq-date"
               type="date"
+              min={new Date().toISOString().slice(0, 10)}
               value={form.targetDeliveryDate}
               onChange={(e) => patchForm('targetDeliveryDate', e.target.value)}
               className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-indigo-500"
             />
+            <FieldError message={formErrors.targetDeliveryDate} />
           </div>
         </div>
       </section>
@@ -947,10 +1000,12 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
                         <input
                           type="date"
                           aria-label={MODAL.colTargetDate}
+                          min={new Date().toISOString().slice(0, 10)}
                           value={item.targetDate}
                           onChange={(e) => patchItem(item.id, { targetDate: e.target.value })}
                           className="w-36 px-2 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-indigo-500"
                         />
+                        <FieldError message={errors.targetDate} />
                       </td>
 
                       {/* Major Category */}
@@ -1560,6 +1615,19 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* FOOTER ACTIONS & SUBMISSION                                   */}
       {/* ═══════════════════════════════════════════════════════════════ */}
+      {isQuotaExhausted && (
+        <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex items-center gap-2 font-medium">
+            <AlertCircle size={16} className="text-amber-600 shrink-0" />
+            <span>{EXTRACTION.quotaExhaustedMessage}</span>
+          </div>
+          <a href="/buyer/subscription-center" className="font-bold underline hover:text-amber-700 text-xs shrink-0 inline-flex items-center gap-1">
+            <span>{EXTRACTION.upgradePlanAction}</span>
+            <ArrowRight size={13} />
+          </a>
+        </div>
+      )}
+
       {submitError && (
         <p role="alert" className="flex items-start gap-2 p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 text-rose-800 dark:text-rose-300 text-xs">
           <AlertCircle size={15} className="mt-0.5 shrink-0" />
@@ -1583,24 +1651,35 @@ export default function IngestionWizard({ onComplete, onCancel, forceSubscriptio
           </button>
         </div>
 
-        <button
-          onClick={handleSubmit}
-          disabled={isDispatching}
-          className="btn btn-primary font-black flex items-center gap-2 px-6 py-2.5 shadow-md hover:shadow-lg disabled:opacity-50 cursor-pointer"
-        >
-          {isDispatching ? (
-            <>
-              <Loader2 size={16} className="animate-spin" />
-              <span>Creating & Dispatching RFQ...</span>
-            </>
-          ) : (
-            <>
-              <Send size={16} />
-              <span>Create & Dispatch RFQ</span>
-              <ArrowRight size={16} />
-            </>
-          )}
-        </button>
+        {isQuotaExhausted ? (
+          <a
+            href="/buyer/subscription-center"
+            className="btn btn-primary font-black flex items-center gap-2 px-6 py-2.5 shadow-md hover:shadow-lg cursor-pointer"
+          >
+            <Sparkles size={16} />
+            <span>Please Upgrade Your Plan</span>
+            <ArrowRight size={16} />
+          </a>
+        ) : (
+          <button
+            onClick={handleSubmit}
+            disabled={isDispatching}
+            className="btn btn-primary font-black flex items-center gap-2 px-6 py-2.5 shadow-md hover:shadow-lg disabled:opacity-50 cursor-pointer"
+          >
+            {isDispatching ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                <span>Creating & Dispatching RFQ...</span>
+              </>
+            ) : (
+              <>
+                <Send size={16} />
+                <span>Create & Dispatch RFQ</span>
+                <ArrowRight size={16} />
+              </>
+            )}
+          </button>
+        )}
       </div>
     </div>
   );

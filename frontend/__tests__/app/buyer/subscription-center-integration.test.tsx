@@ -62,7 +62,8 @@ describe('SubscriptionCenter (real AppProvider integration)', () => {
       await Promise.resolve();
     });
 
-    expect(await screen.findByText(/3 of 5 Free RFQs Left/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Remaining: 3 \/ 5/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Used: 2 \/ 5/i)).toBeInTheDocument();
   });
 
   it('createBuyerPaymentLink calls the real endpoint and redirects on success', async () => {

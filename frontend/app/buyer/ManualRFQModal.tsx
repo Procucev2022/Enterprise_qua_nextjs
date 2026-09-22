@@ -89,14 +89,20 @@ function FieldError({ message }: { message?: string }) {
 export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQModalProps) {
   let buyerVendors: any[] = [];
   let entitledModes: ReturnType<typeof entitledSourcingModes> = entitledSourcingModes(null);
+  let remainingFreeRFQs = 5;
+  let activeSubscription = 'free_trial';
   try {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     const store = useApp();
     buyerVendors = store?.buyerVendors || [];
-    entitledModes = entitledSourcingModes(store?.activeBuyerAccount?.subscriptionPlan);
+    entitledModes = entitledSourcingModes(store?.activeBuyerAccount?.subscriptionPlan ?? store?.activeSubscription);
+    remainingFreeRFQs = store?.activeBuyerAccount?.remainingFreeRFQs ?? store?.remainingFreeRFQs ?? 5;
+    activeSubscription = store?.activeBuyerAccount?.subscriptionPlan ?? store?.activeSubscription ?? 'free_trial';
   } catch {
     buyerVendors = [];
   }
+  const isPaidPlan = ['version_1', 'version_2', 'version_3'].includes(activeSubscription);
+  const isQuotaExhausted = !isPaidPlan && remainingFreeRFQs <= 0;
   const [form, setForm] = useState<ManualRFQForm>(createEmptyManualRFQForm);
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -265,6 +271,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     setSubmitAttempted(true);
     setSubmitError(null);
 
+    if (isQuotaExhausted) {
+      setSubmitError(MODAL.quotaExhaustedMessage);
+      return;
+    }
+
     if (!validateManualRFQForm(form).isValid) return;
 
     setIsSaving(true);
@@ -346,6 +357,32 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
         </header>
 
         <div className="px-5 py-4 space-y-5 text-xs">
+          {isQuotaExhausted && (
+            <div
+              data-testid="manual-rfq-quota-exhausted-banner"
+              className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 dark:bg-amber-950/40 dark:border-amber-700/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs"
+            >
+              <div className="flex items-start gap-2.5">
+                <AlertCircle className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" size={18} />
+                <div>
+                  <h4 className="text-xs font-bold text-amber-900 dark:text-amber-200">
+                    {MODAL.quotaExhaustedTitle}
+                  </h4>
+                  <p className="text-[11px] text-amber-700 dark:text-amber-300 mt-0.5">
+                    {MODAL.quotaExhaustedMessage}
+                  </p>
+                </div>
+              </div>
+              <a
+                href="/buyer/subscription-center"
+                className="btn btn-primary btn-sm font-bold shrink-0 inline-flex items-center gap-1.5 shadow-xs"
+              >
+                <Sparkles size={13} />
+                <span>{MODAL.upgradePlanAction}</span>
+              </a>
+            </div>
+          )}
+
           {/* ── Supporting documents ──────────────────────────────────────── */}
           {/* Stored server-side and downloadable from the RFQ. Never sent for AI
               extraction: this is the manual path, so the document is evidence to
@@ -533,10 +570,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
               <input
                 id="manual-rfq-date"
                 type="date"
+                min={new Date().toISOString().slice(0, 10)}
                 value={form.targetDeliveryDate}
                 onChange={(e) => patchForm('targetDeliveryDate', e.target.value)}
                 className="font-medium"
               />
+              <FieldError message={formErrors.targetDeliveryDate} />
             </div>
 
           </section>
@@ -673,10 +712,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                             <input
                               type="date"
                               aria-label={MODAL.colTargetDate}
+                              min={new Date().toISOString().slice(0, 10)}
                               value={item.targetDate}
                               onChange={(e) => patchItem(item.id, { targetDate: e.target.value })}
                               className="w-36"
                             />
+                            <FieldError message={errors.targetDate} />
                           </td>
                           <td className="px-2 py-2 align-top">
                             <button
@@ -1305,19 +1346,31 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
 
         {/* Footer */}
         <footer className="flex items-center justify-between gap-3 px-5 py-4 border-t border-slate-200 dark:border-gray-800">
-          <p className="text-[11px] text-slate-400 dark:text-gray-500">{MODAL.serverAllocatesNumber}</p>
+          <p className="text-[11px] text-slate-400 dark:text-gray-500">
+            {isQuotaExhausted ? MODAL.quotaExhaustedMessage : MODAL.serverAllocatesNumber}
+          </p>
           <div className="flex items-center gap-2">
             <button onClick={handleClose} disabled={isSaving} className="btn btn-secondary btn-sm font-bold">
               {MODAL.cancelAction}
             </button>
-            <button
-              onClick={handleSubmit}
-              disabled={isSaving}
-              className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-60"
-            >
-              {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-              {isSaving ? MODAL.savingAction : MODAL.saveAction}
-            </button>
+            {isQuotaExhausted ? (
+              <a
+                href="/buyer/subscription-center"
+                className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5"
+              >
+                <Sparkles size={14} />
+                <span>Please Upgrade Your Plan</span>
+              </a>
+            ) : (
+              <button
+                onClick={handleSubmit}
+                disabled={isSaving}
+                className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-60"
+              >
+                {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                {isSaving ? MODAL.savingAction : MODAL.saveAction}
+              </button>
+            )}
           </div>
         </footer>
       </div>
