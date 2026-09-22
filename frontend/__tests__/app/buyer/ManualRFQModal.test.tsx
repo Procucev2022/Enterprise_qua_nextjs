@@ -616,6 +616,10 @@ describe('ManualRFQModal: extraction from an attached document', () => {
   const attachOne = async (name = 'boq.pdf') => {
     chooseFiles([new File(['x'], name, { type: 'application/pdf' })]);
     await waitFor(() => expect(rfqClient.uploadRFQAttachment).toHaveBeenCalled());
+    // The extract button stays disabled while the upload is in flight
+    // (isAttaching), so wait for it to actually be clickable rather than
+    // just for the upload call to have started.
+    await waitFor(() => expect(extractBtn()).toBeEnabled());
   };
 
   const extractBtn = () => screen.getByTestId('manual-extract');
@@ -751,6 +755,7 @@ describe('ManualRFQModal: extraction from an attached document', () => {
       new File(['y'], 'bad.pdf', { type: 'application/pdf' }),
     ]);
     await waitFor(() => expect(rfqClient.uploadRFQAttachment).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(extractBtn()).toBeEnabled());
 
     fireEvent.click(extractBtn());
 
