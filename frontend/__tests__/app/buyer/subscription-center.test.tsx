@@ -13,6 +13,7 @@ describe('app/buyer/subscription-center.tsx', () => {
   const mockRefreshActiveBuyerAccount = jest.fn();
   const mockCreateBuyerPaymentLink = jest.fn();
   const mockCheckBuyerPaymentLinkStatus = jest.fn();
+  const mockUpdateBuyerSubscriptionPlan = jest.fn().mockResolvedValue({ success: true });
   const originalFetch = global.fetch;
 
   function mockStore(overrides: Record<string, unknown> = {}) {
@@ -24,6 +25,7 @@ describe('app/buyer/subscription-center.tsx', () => {
       refreshActiveBuyerAccount: mockRefreshActiveBuyerAccount,
       createBuyerPaymentLink: mockCreateBuyerPaymentLink,
       checkBuyerPaymentLinkStatus: mockCheckBuyerPaymentLinkStatus,
+      updateBuyerSubscriptionPlan: mockUpdateBuyerSubscriptionPlan,
       ...overrides,
     });
   }
@@ -136,31 +138,14 @@ describe('app/buyer/subscription-center.tsx', () => {
     expect(mockShowToast).toHaveBeenCalledWith('Reset Failed', expect.any(String), 'warning');
   });
 
-  it('clicking a paid plan opens the real Zoho checkout modal, not an instant local flip', async () => {
+  it('clicking a paid plan upgrades the active subscription immediately', async () => {
     render(<SubscriptionCenter />);
 
     fireEvent.click(screen.getByText('Subscribe to Version 2'));
-    expect(screen.getByText(/Secure Payment/i)).toBeInTheDocument();
-    expect(screen.getByText('Version 2: Hybrid Sourcing Plan')).toBeInTheDocument();
-
-    const payBtn = screen.getByRole('button', { name: /Pay ₹5/i });
-    mockCreateBuyerPaymentLink.mockResolvedValue('https://payments.zoho.in/buyer-mock');
-    await act(async () => {
-      fireEvent.click(payBtn);
-      await Promise.resolve();
-    });
-    expect(mockCreateBuyerPaymentLink).toHaveBeenCalledWith('version_2');
-  });
-
-  it('closes the checkout modal via Cancel without paying', () => {
-    render(<SubscriptionCenter />);
-
-    fireEvent.click(screen.getByText('Subscribe to Version 3'));
-    expect(screen.getByText(/Secure Payment/i)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
-    expect(screen.queryByText(/Secure Payment/i)).not.toBeInTheDocument();
-    expect(mockCreateBuyerPaymentLink).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(mockUpdateBuyerSubscriptionPlan).toHaveBeenCalledWith('version_2')
+    );
+    expect(mockShowToast).toHaveBeenCalledWith('Subscription Upgraded!', expect.any(String), 'success');
   });
 
   it('renders the active-plan banner and disables the button for the currently active paid plan', () => {

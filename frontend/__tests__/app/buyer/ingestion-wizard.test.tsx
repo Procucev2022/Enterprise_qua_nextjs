@@ -218,13 +218,13 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
   it('switches sourcing mode when clicking sourcing cards', () => {
     renderWizard();
 
-    const version1Mode = screen.getByTestId('mode-mode_1');
-    fireEvent.click(version1Mode);
-    expect(version1Mode.getAttribute('aria-checked')).toBe('true');
+    const mode2 = screen.getByLabelText('Version 2');
+    const mode3 = screen.getByLabelText('Version 3');
+    expect(mode2).toBeChecked();
 
-    const version3Mode = screen.getByTestId('mode-mode_3');
-    fireEvent.click(version3Mode);
-    expect(version3Mode.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(mode3);
+    expect(mode3).toBeChecked();
+    expect(mode2).not.toBeChecked();
   });
 
   it('validates required fields on submission and dispatches RFQ on valid input', async () => {
@@ -873,7 +873,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
     // Wait for the bootstrap vendor to actually hydrate into buyerVendors
     // before submitting — otherwise the form dispatches before context state
     // catches up, and assignedVendors comes back empty regardless of the fix.
-    await waitFor(() => expect(screen.getByText('1 Suppliers Matched')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/1 Private Suppliers Matched/i)).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
       target: { value: 'Navi Mumbai Plant' },
@@ -905,128 +905,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
     ]);
   });
 
-  it('Mode 2: selecting a specific category searches the real paginated vendor directory, not the capped local snapshot', async () => {
-    renderWizard();
 
-    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
-    const [majorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
-    fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
-
-    // Real, server-fetched marketplace vendors (jest.setup's /api/vendors
-    // fixture), not the client-side category-match card renderer this
-    // replaced.
-    await waitFor(() => expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument());
-    expect(screen.getByText('Kiran Valves & Actuators')).toBeInTheDocument();
-    expect(screen.getByText('Category Matched')).toBeInTheDocument();
-  });
-
-  it('Mode 2: with no category selected on any line item, the marketplace panel prompts to set one instead of searching', () => {
-    renderWizard();
-    expect(screen.getByText('Set a Major Category on a line item to search the marketplace.')).toBeInTheDocument();
-    expect(screen.getByText('No Category Selected')).toBeInTheDocument();
-  });
-
-  it('Mode 3: selecting a specific category searches the real paginated vendor directory', async () => {
-    renderWizard();
-    fireEvent.click(screen.getByTestId('mode-mode_3'));
-
-    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
-    const [majorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
-    fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
-
-    await waitFor(() => expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument());
-    expect(screen.getByText('Kiran Valves & Actuators')).toBeInTheDocument();
-  });
-
-  it('Mode 2: "Load more suppliers" fetches and appends the next page of the real vendor search', async () => {
-    const realFetch = global.fetch;
-    global.fetch = jest.fn((url: RequestInfo | URL, init?: any) => {
-      if (typeof url === 'string' && /\/api\/vendors(\?|$)/.test(url)) {
-        const page = new URL(url, 'http://localhost').searchParams.get('page');
-        const body =
-          page === '2'
-            ? { success: true, data: [{ id: 'v-page2', name: 'Second Page Supplier', majorCategory: 'X' }], pagination: { page: 2, pageSize: 1, total: 2, totalPages: 2 } }
-            : { success: true, data: [{ id: 'v-page1', name: 'First Page Supplier', majorCategory: 'X' }], pagination: { page: 1, pageSize: 1, total: 2, totalPages: 2 } };
-        return Promise.resolve({ ok: true, status: 200, json: async () => body }) as any;
-      }
-      return (realFetch as any)(url, init);
-    });
-
-    try {
-      renderWizard();
-      const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
-      const [majorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
-      fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
-
-      await waitFor(() => expect(screen.getByText('First Page Supplier')).toBeInTheDocument());
-      fireEvent.click(screen.getByRole('button', { name: /Load more suppliers/i }));
-
-      await waitFor(() => expect(screen.getByText('Second Page Supplier')).toBeInTheDocument());
-      expect(screen.getByText('First Page Supplier')).toBeInTheDocument();
-    } finally {
-      global.fetch = realFetch;
-    }
-  });
-
-  it('Mode 2 and Mode 3: the "AI Matching Criteria" info panel toggles open and closed', async () => {
-    renderWizard();
-    fireEvent.click(screen.getByRole('button', { name: /AI Matching Criteria/i }));
-    await waitFor(() => expect(screen.getByText(/How QUA AI Categorizes Line Items/i)).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /✕ Close/i }));
-    expect(screen.queryByText(/How QUA AI Categorizes Line Items/i)).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByTestId('mode-mode_3'));
-    fireEvent.click(screen.getByRole('button', { name: /AI Matching Criteria/i }));
-    await waitFor(() => expect(screen.getByText(/How QUA AI Categorizes Line Items/i)).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /✕ Close/i }));
-    expect(screen.queryByText(/How QUA AI Categorizes Line Items/i)).not.toBeInTheDocument();
-  });
-
-  it('Mode 2: typing in the marketplace search box re-searches the real vendor directory', async () => {
-    renderWizard();
-    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
-    const [majorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
-    fireEvent.change(majorSelect, { target: { value: categoriesData[0].majorCategory } });
-    await waitFor(() => expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument());
-
-    fireEvent.change(screen.getByPlaceholderText('Search suppliers by name, email or category...'), {
-      target: { value: 'Kiran' },
-    });
-    // Debounced (350ms) — generous timeout so coverage instrumentation
-    // overhead in a full suite run can't flake this on timing alone.
-    await waitFor(() => expect(screen.queryByText('Apex Supplies Ltd.')).not.toBeInTheDocument(), { timeout: 3000 });
-    await waitFor(() => expect(screen.getByText('Kiran Valves & Actuators')).toBeInTheDocument(), { timeout: 3000 });
-  });
-
-  it('Mode 2: selecting "All Categories" browses the whole real vendor directory instead of category-matching', async () => {
-    renderWizard();
-    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
-    const [majorSelect, minorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
-    fireEvent.change(majorSelect, { target: { value: 'All Categories' } });
-    expect(minorSelect).toBeDisabled();
-
-    await waitFor(() => expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument());
-    expect(screen.getByText('Kiran Valves & Actuators')).toBeInTheDocument();
-    expect(screen.getAllByText('All Categories').length).toBeGreaterThan(0);
-
-    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
-      target: { value: 'Navi Mumbai Plant' },
-    });
-    fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder), {
-      target: { value: '400701' },
-    });
-    fireEvent.change(within(row).getByPlaceholderText(MODAL.itemPlaceholder), {
-      target: { value: 'Centrifugal Water Pump' },
-    });
-    fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '10' } });
-    fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Units' } });
-
-    fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
-    // "All Categories" is a UI sentinel, sanitized to '' before it ever
-    // reaches the server as this line item's majorCategory.
-    await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
-    expect(mockCreateRFQ.mock.calls[0][0].extractedEntities[0].majorCategory).toBe('');
-  });
 
   it('the upload drop zone highlights on drag-over and unhighlights on drag-leave', () => {
     renderWizard();

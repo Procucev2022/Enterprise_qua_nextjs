@@ -86,21 +86,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     activeBuyerAccount,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'BUYER_UPLOADED' | 'PROCUCEV_VENDORS'>('BUYER_UPLOADED');
+  const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('ALL');
-  // The Procucev network list is the real, 80k+-row marketplace directory —
-  // the old `buyerVendors` context list was capped at 500 by the bootstrap
-  // payload (see the "no in-memory-only vendor storage" fix), which silently
-  // hid the vast majority of it. Fetched a page at a time straight from the
-  // real endpoint instead, same pattern as the CM's vendor-console.tsx.
-  const PROCUCEV_VENDORS_PAGE_SIZE = 20;
-  const [fetchedProcucevVendors, setFetchedProcucevVendors] = useState<VendorEntry[]>([]);
-  const [procucevPagination, setProcucevPagination] = useState<VendorPageMeta | null>(null);
-  const [procucevLoading, setProcucevLoading] = useState(true);
-  const [procucevLoadingMore, setProcucevLoadingMore] = useState(false);
-  const [procucevError, setProcucevError] = useState<string | null>(null);
   const [selectedStatus, setSelectedStatus] = useState('ALL');
 
   // Buyer's own registered pincode, fetched once — used to rank vendors with
@@ -534,19 +522,13 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       return { ...bv };
     });
 
-  // "Uploaded by Buyer" is the buyer's own (small) set from context.
-  // "Procucev Vendors" is the real marketplace directory (80k+ rows) —
-  // fetched separately below, never from the capped bootstrap list.
   const mergedVendors = mergeWithEvaluations(buyerVendors);
-  const mergedProcucevVendors = mergeWithEvaluations(fetchedProcucevVendors).filter(isProcucevVendor);
-
   const buyerUploadedVendorsList = mergedVendors.filter(isBuyerUploaded);
-  const procucevVendorsList = mergedProcucevVendors;
 
   // Filter categories dynamically
   const categories = [
     'ALL',
-    ...Array.from(new Set([...mergedVendors, ...mergedProcucevVendors].map((v) => v.majorCategory || 'General Industrial'))),
+    ...Array.from(new Set(buyerUploadedVendorsList.map((v) => v.majorCategory || 'General Industrial'))),
   ];
 
   // Helper filter function
@@ -585,71 +567,25 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   };
 
   const buyerFilteredVendors = sortByPincodeMatch(buyerUploadedVendorsList.filter(filterVendorItem));
-  // Search already happened server-side (see the fetch effect below) — only
-  // category/status still filter client-side over the loaded pages.
-  const matchesCategoryAndStatus = (v: any) => {
-    const rawCategory = v.majorCategory || '';
-    const matchesCategory = selectedCategory === 'ALL' || rawCategory.toLowerCase() === selectedCategory.toLowerCase();
-    const matchesStatus =
-      selectedStatus === 'ALL' ||
-      (selectedStatus === 'EVALUATED' && v.evaluated) ||
-      (selectedStatus === 'NOT_EVALUATED' && !v.evaluated) ||
-      (selectedStatus === 'PREFERRED' && v.status === 'PREFERRED ENTERPRISE SUPPLIER') ||
-      (selectedStatus === 'CONDITIONAL' && v.status === 'CONDITIONAL / UNDER REVIEW');
-    return matchesCategory && matchesStatus;
-  };
-  const procucevFilteredVendors = sortByPincodeMatch(procucevVendorsList.filter(matchesCategoryAndStatus));
-  const procucevPagedVendors = procucevFilteredVendors;
-  const hasMoreProcucevVendors = !!procucevPagination && procucevPagination.page < procucevPagination.totalPages;
 
-  // Debounce free-text search before it re-triggers a server-side page fetch.
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedSearchQuery(searchQuery), 350);
-    return () => clearTimeout(t);
-  }, [searchQuery]);
-
-  const lastFetchedProcucevSearchRef = useRef<string | null>(null);
-  // Guards against a slower, earlier request resolving after a newer one
-  // and overwriting it with stale data.
-  const procucevFetchSeqRef = useRef(0);
-  useEffect(() => {
-    if (activeTab !== 'PROCUCEV_VENDORS') return;
-    if (fetchedProcucevVendors.length > 0 && lastFetchedProcucevSearchRef.current === debouncedSearchQuery) return;
-    lastFetchedProcucevSearchRef.current = debouncedSearchQuery;
-    const seq = ++procucevFetchSeqRef.current;
-    setProcucevLoading(true);
-    setProcucevError(null);
-    void fetchAllVendors({ page: 1, pageSize: PROCUCEV_VENDORS_PAGE_SIZE, search: debouncedSearchQuery }).then((result) => {
-      if (seq !== procucevFetchSeqRef.current) return;
-      if (result.success) {
-        setFetchedProcucevVendors(result.candidates);
-        setProcucevPagination(result.pagination);
-      } else {
-        setProcucevError(result.error);
-      }
-      setProcucevLoading(false);
-    });
-  }, [activeTab, debouncedSearchQuery, fetchedProcucevVendors.length]);
-
-  const loadMoreProcucevVendors = () => {
-    if (!procucevPagination || procucevLoadingMore) return;
-    const nextPage = procucevPagination.page + 1;
-    if (nextPage > procucevPagination.totalPages) return;
-    const seq = ++procucevFetchSeqRef.current;
-    setProcucevLoadingMore(true);
-    void fetchAllVendors({ page: nextPage, pageSize: PROCUCEV_VENDORS_PAGE_SIZE, search: debouncedSearchQuery }).then((result) => {
-      if (seq !== procucevFetchSeqRef.current) return;
-      if (result.success) {
-        setFetchedProcucevVendors((prev) => [...prev, ...result.candidates]);
-        setProcucevPagination(result.pagination);
-      } else {
-        setProcucevError(result.error);
-      }
-      setProcucevLoadingMore(false);
-    });
+  // Multi-Selection Controls
+  const handleToggleSelectVendor = (id: string) => {
+    setSelectedVendorIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
   };
 
-  const allFilteredVendors = mergedVendors.filter(filterVendorItem);
+  const handleToggleSelectAll = () => {
+    if (selectedVendorIds.length === buyerFilteredVendors.length && buyerFilteredVendors.length > 0) {
+      setSelectedVendorIds([]);
+    } else {
+      setSelectedVendorIds(buyerFilteredVendors.map((v) => v.id).filter(Boolean));
+    }
+  };
+
+  const handleClearSelection = () => {
+    setSelectedVendorIds([]);
+  };
 
   const getStatusStyle = (status: string) => {
     if (status === 'PREFERRED ENTERPRISE SUPPLIER') {
@@ -708,14 +644,30 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     }
 
     const engagement = getVendorRfqEngagement(vendor);
+    const isSelected = selectedVendorIds.includes(vendor.id);
 
     return (
       <div
         key={vendor.id}
-        className="glass-panel p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm hover:border-indigo-500/40 dark:hover:border-indigo-400/40 transition-all flex flex-col md:flex-row md:items-center justify-between gap-4"
+        className={
+          'glass-panel p-5 rounded-2xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 ' +
+          (isSelected
+            ? 'border-indigo-500 bg-indigo-50/20 dark:bg-indigo-950/20 ring-1 ring-indigo-500/30'
+            : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm hover:border-indigo-500/40 dark:hover:border-indigo-400/40')
+        }
       >
-        {/* Left: Vendor Brand & Info */}
-        <div className="space-y-2 flex-1">
+        <div className="flex items-start md:items-center gap-3.5 flex-1">
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={() => handleToggleSelectVendor(vendor.id)}
+            data-testid={`select-vendor-${vendor.id}`}
+            aria-label={`Select ${vendor.name}`}
+            className="h-4 w-4 rounded border-slate-300 dark:border-gray-700 text-indigo-600 focus:ring-indigo-500 cursor-pointer mt-1 md:mt-0 shrink-0"
+          />
+
+          {/* Left: Vendor Brand & Info */}
+          <div className="space-y-2 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-300 border border-indigo-200/40">
               {vendor.id}
@@ -823,6 +775,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               </button>
             </div>
           )}
+          </div>
         </div>
 
         {/* Right: Score Gauge & View Actions */}
@@ -1045,11 +998,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         <div>
           <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white flex items-center gap-2">
             <Building2 className="text-indigo-600 dark:text-indigo-400" size={24} />
-            Vendor Directory &amp; Summary
+            Vendor Directory &amp; Management
           </h1>
           <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-            Organized into <strong>Uploaded by Buyer</strong> (Vendor Master &amp; PO Ingestion) and{' '}
-            <strong>Procucev Vendors</strong> (Category Manager Catalog &amp; Direct Self-Registration).
+            Manage your organization&apos;s empanelled suppliers, select vendors, add new suppliers, and edit company profiles.
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -1074,81 +1026,32 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </div>
       </div>
 
-      {/* Vendor Source Segment Tabs */}
-      <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-2 overflow-x-auto">
-        <button
-          type="button"
-          onClick={() => setActiveTab('BUYER_UPLOADED')}
-          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 shrink-0 ${
-            activeTab === 'BUYER_UPLOADED'
-              ? 'bg-indigo-600 text-white shadow-sm'
-              : 'text-slate-600 dark:text-gray-400 hover:bg-slate-100 dark:hover:bg-gray-800'
-          }`}
-        >
-          <UploadCloud size={14} />
-          <span>Uploaded by Buyer</span>
-          <span
-            className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${
-              activeTab === 'BUYER_UPLOADED'
-                ? 'bg-indigo-500 text-white'
-                : 'bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-gray-300'
-            }`}
-          >
-            {buyerUploadedVendorsList.length}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('PROCUCEV_VENDORS')}
-          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 shrink-0 ${
-            activeTab === 'PROCUCEV_VENDORS'
-              ? 'bg-indigo-600 text-white shadow-sm'
-              : 'text-slate-600 dark:text-gray-400 hover:bg-slate-100 dark:hover:bg-gray-800'
-          }`}
-        >
-          <ShieldCheck size={14} />
-          <span>Procucev Vendors</span>
-          <span
-            className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${
-              activeTab === 'PROCUCEV_VENDORS'
-                ? 'bg-indigo-500 text-white'
-                : 'bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-gray-300'
-            }`}
-          >
-            {procucevPagination ? procucevPagination.total.toLocaleString() : procucevVendorsList.length}
-          </span>
-        </button>
-      </div>
-
       {/* Stats Counter Bar */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
-          <div className="text-[10px] uppercase font-bold text-slate-400">Total Registered</div>
+          <div className="text-[10px] uppercase font-bold text-slate-400">Total Empanelled</div>
           <div className="text-2xl font-black text-indigo-600 dark:text-indigo-400 mt-1">
-            {activeTab === 'BUYER_UPLOADED' ? buyerFilteredVendors.length : procucevFilteredVendors.length}
+            {buyerFilteredVendors.length}
           </div>
         </div>
         <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
           <div className="text-[10px] uppercase font-bold text-slate-400">OCR &amp; 360° Evaluated</div>
           <div className="text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-1">
-            {(activeTab === 'BUYER_UPLOADED' ? buyerFilteredVendors : procucevFilteredVendors).filter((v) => v.evaluated).length}
+            {buyerFilteredVendors.filter((v) => v.evaluated).length}
           </div>
         </div>
         <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
           <div className="text-[10px] uppercase font-bold text-slate-400">Preferred Status</div>
           <div className="text-2xl font-black text-indigo-700 dark:text-indigo-300 mt-1">
-            {(activeTab === 'BUYER_UPLOADED' ? buyerFilteredVendors : procucevFilteredVendors).filter(
+            {buyerFilteredVendors.filter(
               (v) => v.status === 'PREFERRED ENTERPRISE SUPPLIER'
             ).length}
           </div>
         </div>
         <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
-          <div className="text-[10px] uppercase font-bold text-slate-400">Pending Evaluation</div>
-          <div className="text-2xl font-black text-amber-600 dark:text-amber-400 mt-1">
-            {(activeTab === 'BUYER_UPLOADED' ? buyerFilteredVendors : procucevFilteredVendors).filter(
-              (v) => !v.evaluated
-            ).length}
+          <div className="text-[10px] uppercase font-bold text-slate-400">Selected Suppliers</div>
+          <div className="text-2xl font-black text-purple-600 dark:text-purple-400 mt-1">
+            {selectedVendorIds.length}
           </div>
         </div>
       </div>
@@ -1197,107 +1100,76 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </div>
       </div>
 
-      {/* Vendors Display List */}
-      <div className="space-y-4">
-        {/* SECTION 1: UPLOADED BY BUYER */}
-        {activeTab === 'BUYER_UPLOADED' && (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between pb-2 border-b border-indigo-100 dark:border-indigo-950">
-              <div className="flex items-center gap-2">
-                <div className="p-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border border-indigo-200/50">
-                  <UploadCloud size={16} />
-                </div>
-                <div>
-                  <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                    Uploaded by Buyer
-                    <span className="text-[11px] font-normal px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200/50 font-mono">
-                      {buyerFilteredVendors.length} Suppliers
-                    </span>
-                  </h2>
-                  <p className="text-[11px] text-slate-500 dark:text-gray-400">
-                    Vendors added through Buyer Initial Setup → Vendor Master &amp; PO Data Ingestion
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              {buyerFilteredVendors.map(renderVendorCard)}
-              {buyerFilteredVendors.length === 0 && (
-                <div className="p-8 text-center text-slate-500 border border-dashed border-slate-200 dark:border-gray-800 rounded-2xl bg-slate-50/50 dark:bg-gray-950/40 space-y-3">
-                  <div className="p-3 bg-indigo-50 dark:bg-indigo-950/60 rounded-full w-fit mx-auto text-indigo-600 dark:text-indigo-400">
-                    <Building2 size={24} />
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                      No buyer-uploaded vendors match the selected filters.
-                    </p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">
-                      Empanel suppliers manually or batch ingest your vendor master catalog.
-                    </p>
-                  </div>
-                  <div className="flex items-center justify-center gap-2 pt-1">
-                    {onNavigateToWizard && (
-                      <button
-                        type="button"
-                        onClick={onNavigateToWizard}
-                        className="btn btn-secondary btn-xs font-semibold flex items-center gap-1"
-                      >
-                        <UploadCloud size={12} /> Ingest Master / POs
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
+      {/* Multi-Selection Controls Bar */}
+      <div className="flex items-center justify-between gap-3 flex-wrap bg-slate-50 dark:bg-gray-900/60 p-3 rounded-xl border border-slate-200 dark:border-gray-800">
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-gray-300 cursor-pointer">
+            <input
+              type="checkbox"
+              data-testid="select-all-vendors-checkbox"
+              checked={buyerFilteredVendors.length > 0 && selectedVendorIds.length === buyerFilteredVendors.length}
+              onChange={handleToggleSelectAll}
+              className="h-4 w-4 rounded border-slate-300 dark:border-gray-700 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+            />
+            <span>Select All ({buyerFilteredVendors.length} suppliers)</span>
+          </label>
+          {selectedVendorIds.length > 0 && (
+            <span className="badge badge-purple text-[10px] font-bold">
+              {selectedVendorIds.length} Selected
+            </span>
+          )}
+        </div>
+        {selectedVendorIds.length > 0 && (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleClearSelection}
+              className="btn btn-ghost btn-xs text-slate-500 hover:text-slate-700 dark:text-gray-400 dark:hover:text-gray-200"
+            >
+              Clear Selection
+            </button>
+            <button
+              type="button"
+              onClick={() => showToast('Export Complete', `Exported ${selectedVendorIds.length} selected supplier records.`, 'success')}
+              className="btn btn-secondary btn-xs font-semibold"
+            >
+              Export Selected ({selectedVendorIds.length})
+            </button>
           </div>
         )}
+      </div>
 
-        {/* SECTION 2: PROCUCEV VENDORS */}
-        {activeTab === 'PROCUCEV_VENDORS' && (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between pb-2 border-b border-emerald-100 dark:border-emerald-950">
-              <div className="flex items-center gap-2">
-                <div className="p-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 border border-emerald-200/50">
-                  <ShieldCheck size={16} />
-                </div>
-                <div>
-                  <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                    Procucev Vendors
-                    <span className="text-[11px] font-normal px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200/50 font-mono">
-                      {procucevPagedVendors.length}
-                      {procucevPagination ? ` of ${procucevPagination.total.toLocaleString()}` : ''} Suppliers
-                    </span>
-                  </h2>
-                  <p className="text-[11px] text-slate-500 dark:text-gray-400">
-                    Vendors added by Category Manager &amp; Direct Self-Registration on Procucev
-                  </p>
-                </div>
-              </div>
+      {/* Vendors Display List */}
+      <div className="space-y-3">
+        {buyerFilteredVendors.map(renderVendorCard)}
+        {buyerFilteredVendors.length === 0 && (
+          <div className="p-8 text-center text-slate-500 border border-dashed border-slate-200 dark:border-gray-800 rounded-2xl bg-slate-50/50 dark:bg-gray-950/40 space-y-3">
+            <div className="p-3 bg-indigo-50 dark:bg-indigo-950/60 rounded-full w-fit mx-auto text-indigo-600 dark:text-indigo-400">
+              <Building2 size={24} />
             </div>
-
-            <div className="space-y-3">
-              {procucevLoading && (
-                <p className="text-xs text-slate-400 dark:text-gray-500 py-8 text-center">Loading vendors…</p>
-              )}
-              {!procucevLoading && procucevError && (
-                <p className="text-xs text-rose-500 py-8 text-center">{procucevError}</p>
-              )}
-              {!procucevLoading && !procucevError && procucevPagedVendors.map(renderVendorCard)}
-              {!procucevLoading && !procucevError && procucevFilteredVendors.length === 0 && (
-                <div className="p-6 text-center text-slate-500 border border-dashed border-slate-200 dark:border-gray-800 rounded-2xl bg-slate-50/50 dark:bg-gray-950/40">
-                  <p className="text-xs">No Procucev vendors match the selected filters.</p>
-                </div>
-              )}
-              {hasMoreProcucevVendors && (
+            <div>
+              <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                No vendors match the selected filters.
+              </p>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Empanel suppliers manually or batch ingest your vendor master catalog.
+              </p>
+            </div>
+            <div className="flex items-center justify-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={handleOpenAddModal}
+                className="btn btn-primary btn-xs font-semibold flex items-center gap-1"
+              >
+                <Plus size={12} /> Add Vendor
+              </button>
+              {onNavigateToWizard && (
                 <button
                   type="button"
-                  data-testid="load-more-procucev-vendors"
-                  onClick={loadMoreProcucevVendors}
-                  disabled={procucevLoadingMore}
-                  className="w-full py-2 rounded-lg border border-dashed border-slate-300 dark:border-gray-700 text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 disabled:opacity-50"
+                  onClick={onNavigateToWizard}
+                  className="btn btn-secondary btn-xs font-semibold flex items-center gap-1"
                 >
-                  {procucevLoadingMore ? 'Loading…' : `Load ${PROCUCEV_VENDORS_PAGE_SIZE} more vendors`}
+                  <UploadCloud size={12} /> Ingest Master / POs
                 </button>
               )}
             </div>
