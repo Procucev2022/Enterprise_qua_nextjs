@@ -547,7 +547,6 @@ describe('ManualRFQModal: sourcing mode', () => {
     const mode1 = screen.getByLabelText('Version 1');
     const mode2 = screen.getByLabelText('Version 2');
     const mode3 = screen.getByLabelText('Version 3');
-
     expect(mode1).not.toBeDisabled();
     expect(mode2).not.toBeDisabled();
     expect(mode3).not.toBeDisabled();
@@ -940,6 +939,46 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       // Verify Mode 3 container styling
       const mode3Container = screen.getByText(/Mode 3: Double-Blind Autonomous Sourcing/i).closest('.border-indigo-200');
       expect(mode3Container).not.toBeNull();
+    });
+  });
+
+  describe('ManualRFQModal: Quota exhaustion and upgrade plan', () => {
+    it('shows quota exhausted warning banner and upgrade plan CTA when remaining free RFQs are 0 on free_trial', () => {
+      useApp.mockReturnValue({
+        activeSubscription: 'free_trial',
+        remainingFreeRFQs: 0,
+        activeBuyerAccount: { subscriptionPlan: 'free_trial', remainingFreeRFQs: 0 },
+      });
+      renderModal();
+
+      expect(screen.getByTestId('manual-rfq-quota-exhausted-banner')).toBeInTheDocument();
+      expect(screen.getByText(MODAL.quotaExhaustedTitle)).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Please Upgrade Your Plan/i })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: MODAL.saveAction })).not.toBeInTheDocument();
+    });
+
+    it('does not show quota exhausted banner when user has remaining free RFQs', () => {
+      useApp.mockReturnValue({
+        activeSubscription: 'free_trial',
+        remainingFreeRFQs: 3,
+        activeBuyerAccount: { subscriptionPlan: 'free_trial', remainingFreeRFQs: 3 },
+      });
+      renderModal();
+
+      expect(screen.queryByTestId('manual-rfq-quota-exhausted-banner')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: MODAL.saveAction })).toBeInTheDocument();
+    });
+
+    it('does not show quota exhausted banner for paid subscription users even if remainingFreeRFQs is 0', () => {
+      useApp.mockReturnValue({
+        activeSubscription: 'version_1',
+        remainingFreeRFQs: 0,
+        activeBuyerAccount: { subscriptionPlan: 'version_1', remainingFreeRFQs: 0 },
+      });
+      renderModal();
+
+      expect(screen.queryByTestId('manual-rfq-quota-exhausted-banner')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: MODAL.saveAction })).toBeInTheDocument();
     });
   });
 
