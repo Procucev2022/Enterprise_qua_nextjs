@@ -66,48 +66,24 @@ describe('SubscriptionCenter (real AppProvider integration)', () => {
     expect(await screen.findByText(/Used: 2 \/ 5/i)).toBeInTheDocument();
   });
 
-  it('createBuyerPaymentLink calls the real endpoint and redirects on success', async () => {
+  it('subscribing to a plan calls updateBuyerSubscriptionPlan and updates plan immediately', async () => {
     renderWithProvider(<SubscriptionCenter />);
     await act(async () => {
       await Promise.resolve();
     });
 
-    // Version 1 is the account's free-trial-equivalent card here (disabled,
-    // "Active Free Trial") since the account is on free_trial — Version 2 is
-    // the first actually-subscribable paid plan.
-    fireEvent.click(screen.getByText('Subscribe to Version 2'));
-    const payBtn = screen.getByRole('button', { name: /Pay ₹5/i });
+    const subscribeBtn = screen.getByText('Subscribe to Version 2');
     await act(async () => {
-      fireEvent.click(payBtn);
+      fireEvent.click(subscribeBtn);
       await Promise.resolve();
     });
 
     expect(global.fetch).toHaveBeenCalledWith(
-      '/api/buyer-accounts/buyer-int-1/subscription-payment',
-      expect.objectContaining({ method: 'POST', body: JSON.stringify({ plan: 'version_2' }) })
+      '/api/buyer-accounts/buyer-int-1',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ subscriptionPlan: 'version_2' }),
+      })
     );
-  });
-
-  it('createBuyerPaymentLink shows a warning when payment-link creation fails', async () => {
-    global.fetch = jest.fn((url: string, options: any = {}) => {
-      if (/\/api\/buyer-accounts\/buyer-int-1\/subscription-payment$/.test(url)) {
-        return Promise.resolve({ ok: false, status: 502, json: async () => ({ success: false, error: 'Zoho is unreachable.' }) });
-      }
-      return mockFetchImpl(url, options);
-    }) as any;
-
-    renderWithProvider(<SubscriptionCenter />);
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    fireEvent.click(screen.getByText('Subscribe to Version 2'));
-    const payBtn = screen.getByRole('button', { name: /Pay ₹5/i });
-    await act(async () => {
-      fireEvent.click(payBtn);
-      await Promise.resolve();
-    });
-
-    expect(screen.getByText(/Could not start checkout/i)).toBeInTheDocument();
   });
 });

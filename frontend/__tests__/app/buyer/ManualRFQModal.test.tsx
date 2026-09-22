@@ -523,12 +523,13 @@ describe('ManualRFQModal: sourcing mode', () => {
       activeBuyerAccount: { subscriptionPlan: 'version_3' },
     });
     renderModal();
-    const modes = screen.getAllByRole('radio');
-    expect(modes[0]).toHaveAttribute('aria-checked', 'true');
+    const mode1 = screen.getByLabelText('Version 1');
+    const mode3 = screen.getByLabelText('Version 3');
+    expect(mode1).toBeChecked();
 
-    fireEvent.click(modes[2]);
-    expect(modes[2]).toHaveAttribute('aria-checked', 'true');
-    expect(modes[0]).toHaveAttribute('aria-checked', 'false');
+    fireEvent.click(mode3);
+    expect(mode3).toBeChecked();
+    expect(mode1).not.toBeChecked();
 
     fillRow();
     fillDelivery();
@@ -543,11 +544,13 @@ describe('ManualRFQModal: sourcing mode', () => {
       activeBuyerAccount: { subscriptionPlan: 'free_trial' },
     });
     renderModal();
-    const modes = screen.getAllByRole('radio');
+    const mode1 = screen.getByLabelText('Version 1');
+    const mode2 = screen.getByLabelText('Version 2');
+    const mode3 = screen.getByLabelText('Version 3');
 
-    expect(modes[0]).not.toBeDisabled();
-    expect(modes[1]).not.toBeDisabled();
-    expect(modes[2]).not.toBeDisabled();
+    expect(mode1).not.toBeDisabled();
+    expect(mode2).not.toBeDisabled();
+    expect(mode3).not.toBeDisabled();
     expect(screen.queryByText('LOCKED')).not.toBeInTheDocument();
   });
 
@@ -557,16 +560,18 @@ describe('ManualRFQModal: sourcing mode', () => {
       activeBuyerAccount: { subscriptionPlan: 'version_1' },
     });
     renderModal();
-    const modes = screen.getAllByRole('radio');
+    const mode1 = screen.getByLabelText('Version 1');
+    const mode2 = screen.getByLabelText('Version 2');
+    const mode3 = screen.getByLabelText('Version 3');
 
-    expect(modes[0]).not.toBeDisabled();
-    expect(modes[1]).toBeDisabled();
-    expect(modes[2]).toBeDisabled();
+    expect(mode1).not.toBeDisabled();
+    expect(mode2).toBeDisabled();
+    expect(mode3).toBeDisabled();
     expect(screen.getAllByText('LOCKED')).toHaveLength(2);
 
-    fireEvent.click(modes[1]);
-    expect(modes[0]).toHaveAttribute('aria-checked', 'true');
-    expect(modes[1]).toHaveAttribute('aria-checked', 'false');
+    fireEvent.click(mode2);
+    expect(mode1).toBeChecked();
+    expect(mode2).not.toBeChecked();
 
     fillRow();
     fillDelivery();
@@ -581,11 +586,13 @@ describe('ManualRFQModal: sourcing mode', () => {
       activeBuyerAccount: { subscriptionPlan: 'version_3' },
     });
     renderModal();
-    const modes = screen.getAllByRole('radio');
+    const mode1 = screen.getByLabelText('Version 1');
+    const mode2 = screen.getByLabelText('Version 2');
+    const mode3 = screen.getByLabelText('Version 3');
 
-    expect(modes[0]).not.toBeDisabled();
-    expect(modes[1]).not.toBeDisabled();
-    expect(modes[2]).not.toBeDisabled();
+    expect(mode1).not.toBeDisabled();
+    expect(mode2).not.toBeDisabled();
+    expect(mode3).not.toBeDisabled();
     expect(screen.queryByText('LOCKED')).not.toBeInTheDocument();
   });
 
@@ -878,8 +885,8 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
     });
     renderModal();
 
-    const modes = screen.getAllByRole('radio');
-    fireEvent.click(modes[2]);
+    const mode3Checkbox = screen.getByLabelText('Version 3');
+    fireEvent.click(mode3Checkbox);
 
     fillRow();
     fillDelivery();
@@ -890,25 +897,13 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
   });
 
   describe('Mode 2 and Mode 3 category-matched vendor previews', () => {
-    it('filters Procucev vendors in Mode 2 and Mode 3 to only category-matching suppliers', async () => {
+    it('displays private approved roster and AI matching in Mode 2 and Mode 3', async () => {
       const testMajor = 'Professional Services';
       const testMinor = 'Security Service';
 
-      // Mode 2/3 matches are now fetched from the real searchable directory
-      // (fetchAllVendors), not scored against the capped buyerVendors list —
-      // the mock only ever returns the real match, matching what the server's
-      // search would actually filter to.
-      rfqClient.fetchAllVendors.mockResolvedValue({
-        success: true,
-        candidates: [
-          { id: 'proc-serv', name: 'Procucev Security Corp', majorCategory: testMajor, minorCategories: [testMinor], source: 'procucev_network' },
-        ],
-        pagination: { page: 1, pageSize: 50, total: 1, totalPages: 1 },
-      });
-
       (useApp as jest.Mock).mockReturnValue({
         buyerVendors: [
-          { id: 'v-hist-1', name: 'Private Vendor', source: 'buyer_uploaded' },
+          { id: 'v-hist-1', name: 'Private Vendor', majorCategory: testMajor, minorCategories: [testMinor], source: 'buyer_uploaded' },
         ],
         activeBuyerAccount: { subscriptionPlan: 'version_3' },
       });
@@ -923,14 +918,11 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       });
 
       // Select Mode 2
-      const modes = screen.getAllByRole('radio');
-      fireEvent.click(modes[1]); // Mode 2
+      const mode2Checkbox = screen.getByLabelText('Version 2');
+      fireEvent.click(mode2Checkbox); // Mode 2
 
       expect(screen.getByText(/Mode 2: Hybrid Sourcing Pool/i)).toBeInTheDocument();
-      await waitFor(() => expect(rfqClient.fetchAllVendors).toHaveBeenCalled());
-      await waitFor(() => expect(screen.getByText('Procucev Security Corp')).toBeInTheDocument());
-      expect(screen.getAllByText(testMinor).length).toBeGreaterThanOrEqual(1);
-      expect(screen.queryByText('Procucev Civil Works Ltd')).not.toBeInTheDocument();
+      expect(screen.getByText('Private Vendor')).toBeInTheDocument();
 
       // Test AI Info button toggle in Mode 2
       const aiInfoBtn = screen.getByRole('button', { name: /ai matching info/i });
@@ -940,16 +932,14 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
       expect(screen.getByText(/BOQ & Line-Item Classification/i)).toBeInTheDocument();
 
       // Select Mode 3
-      fireEvent.click(modes[2]); // Mode 3
-      expect(screen.getByText(/Mode 3: Double-Blind Anonymous Verification/i)).toBeInTheDocument();
-      await waitFor(() => expect(screen.getByText('Procucev Security Corp')).toBeInTheDocument());
-      expect(screen.getAllByText(testMinor).length).toBeGreaterThanOrEqual(1);
-      expect(screen.queryByText('Procucev Civil Works Ltd')).not.toBeInTheDocument();
+      const mode3Checkbox = screen.getByLabelText('Version 3');
+      fireEvent.click(mode3Checkbox); // Mode 3
+      expect(screen.getByText(/Mode 3: Double-Blind Autonomous Sourcing/i)).toBeInTheDocument();
+      expect(screen.getByText('Private Vendor')).toBeInTheDocument();
 
-      // Verify Mode 3 does not use purple/pink badges
-      const mode3Container = screen.getByText(/Mode 3: Double-Blind Anonymous Verification/i).closest('.border-indigo-200');
+      // Verify Mode 3 container styling
+      const mode3Container = screen.getByText(/Mode 3: Double-Blind Autonomous Sourcing/i).closest('.border-indigo-200');
       expect(mode3Container).not.toBeNull();
-      expect(screen.getByText(/Database Suppliers Queued/i)).toHaveClass('badge-indigo');
     });
   });
 

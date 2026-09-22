@@ -238,13 +238,6 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
       fireEvent.change(statusSelect, { target: { value: 'ALL' } });
     }
 
-    // Switch to PROCUCEV_VENDORS
-    const procucevTab = screen.getByRole('button', { name: /Procucev Vendors/i });
-    fireEvent.click(procucevTab);
-
-    // Switch back to BUYER_UPLOADED
-    const buyerTab = screen.getByRole('button', { name: /Uploaded by Buyer/i });
-    fireEvent.click(buyerTab);
 
     // Click Edit button on a vendor
     const editBtns = screen.getAllByRole('button', { name: /Edit/i });

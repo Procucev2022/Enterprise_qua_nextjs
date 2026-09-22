@@ -294,41 +294,20 @@ export default function VendorEvaluationSummary({
       });
     }
 
-    return Array.from(map.values());
+    const all = Array.from(map.values());
+    return all.filter((c) => isBuyerUploaded(c));
   }, [buyerVendors, vendorEvaluations, evaluationRecord]);
 
-  const buyerCompanyOptions = useMemo(() => {
-    return companyOptions.filter((c) => isBuyerUploaded(c));
-  }, [companyOptions]);
-
-  const procucevCompanyOptions = useMemo(() => {
-    return companyOptions.filter((c) => isProcucevVendor(c));
-  }, [companyOptions]);
-
-  const currentTabOptions = dropdownTab === 'buyer' ? buyerCompanyOptions : procucevCompanyOptions;
-
   const filteredCompanyOptions = useMemo(() => {
-    if (!searchQuery.trim()) return currentTabOptions;
+    if (!searchQuery.trim()) return companyOptions;
     const q = searchQuery.toLowerCase();
-    return currentTabOptions.filter(
+    return companyOptions.filter(
       (c) =>
         c.name.toLowerCase().includes(q) ||
         c.category.toLowerCase().includes(q) ||
         c.id.toLowerCase().includes(q)
     );
-  }, [currentTabOptions, searchQuery]);
-
-  const otherTabMatchesCount = useMemo(() => {
-    if (!searchQuery.trim()) return 0;
-    const q = searchQuery.toLowerCase();
-    const otherOptions = dropdownTab === 'buyer' ? procucevCompanyOptions : buyerCompanyOptions;
-    return otherOptions.filter(
-      (c) =>
-        c.name.toLowerCase().includes(q) ||
-        c.category.toLowerCase().includes(q) ||
-        c.id.toLowerCase().includes(q)
-    ).length;
-  }, [searchQuery, dropdownTab, buyerCompanyOptions, procucevCompanyOptions]);
+  }, [companyOptions, searchQuery]);
 
   const handleSelectCompany = (vendorId: string) => {
     setSelectedVendorId(vendorId);
@@ -534,51 +513,15 @@ export default function VendorEvaluationSummary({
           {/* Dropdown Menu Popover */}
           {dropdownOpen && (
             <div className="absolute right-0 top-full mt-1.5 w-84 sm:w-96 bg-white dark:bg-gray-900 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-700 z-50 overflow-hidden animate-fade-in">
-              {/* Tab Switcher: Uploaded by Buyer vs Procucev Vendors */}
-              <div className="p-2 border-b border-slate-200 dark:border-slate-800 bg-slate-100/70 dark:bg-gray-950 flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setDropdownTab('buyer')}
-                  className={`flex-1 py-1.5 px-2 rounded-lg text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${
-                    dropdownTab === 'buyer'
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'text-slate-600 dark:text-gray-400 hover:bg-slate-200/80 dark:hover:bg-gray-800'
-                  }`}
-                >
-                  <UploadCloud size={13} />
-                  <span>Uploaded by Buyer</span>
-                  <span
-                    className={`px-1.5 py-0.2 rounded-full text-[9px] font-mono ${
-                      dropdownTab === 'buyer'
-                        ? 'bg-indigo-500 text-white'
-                        : 'bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-gray-300'
-                    }`}
-                  >
-                    {buyerCompanyOptions.length}
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setDropdownTab('procucev')}
-                  className={`flex-1 py-1.5 px-2 rounded-lg text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${
-                    dropdownTab === 'procucev'
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'text-slate-600 dark:text-gray-400 hover:bg-slate-200/80 dark:hover:bg-gray-800'
-                  }`}
-                >
-                  <ShieldCheck size={13} />
-                  <span>Procucev Vendors</span>
-                  <span
-                    className={`px-1.5 py-0.2 rounded-full text-[9px] font-mono ${
-                      dropdownTab === 'procucev'
-                        ? 'bg-indigo-500 text-white'
-                        : 'bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-gray-300'
-                    }`}
-                  >
-                    {procucevCompanyOptions.length}
-                  </span>
-                </button>
+              {/* Header */}
+              <div className="p-2.5 border-b border-slate-200 dark:border-slate-800 bg-slate-100/70 dark:bg-gray-950 flex items-center justify-between">
+                <span className="text-[11px] font-bold text-slate-700 dark:text-gray-300 flex items-center gap-1.5">
+                  <UploadCloud size={13} className="text-indigo-600" />
+                  <span>Buyer Approved Suppliers</span>
+                </span>
+                <span className="px-1.5 py-0.5 rounded-full text-[9px] font-mono bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200/50">
+                  {companyOptions.length}
+                </span>
               </div>
 
               {/* Search Bar */}
@@ -587,7 +530,7 @@ export default function VendorEvaluationSummary({
                   <Search size={14} className="absolute left-2.5 top-2.5 text-slate-400" />
                   <input
                     type="text"
-                    placeholder={`Search ${dropdownTab === 'buyer' ? 'buyer-uploaded' : 'Procucev'} suppliers...`}
+                    placeholder="Search approved suppliers by name, category..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="w-full pl-8 pr-3 py-1.5 text-xs rounded-md bg-white dark:bg-gray-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:border-indigo-500"
@@ -596,7 +539,7 @@ export default function VendorEvaluationSummary({
                 </div>
                 <div className="flex items-center justify-between text-[10px] text-slate-400 mt-1 px-1">
                   <span>
-                    {filteredCompanyOptions.length} {dropdownTab === 'buyer' ? 'buyer-uploaded' : 'Procucev'} supplier{filteredCompanyOptions.length === 1 ? '' : 's'}
+                    {filteredCompanyOptions.length} supplier{filteredCompanyOptions.length === 1 ? '' : 's'} found
                   </span>
                   <span>Click to inspect evaluation</span>
                 </div>
@@ -605,24 +548,11 @@ export default function VendorEvaluationSummary({
               {/* Options List */}
               <div className="max-h-64 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
                 {filteredCompanyOptions.length === 0 ? (
-                  otherTabMatchesCount > 0 ? (
-                    <div className="p-4 text-center text-xs text-slate-500 dark:text-slate-400 space-y-2">
-                      <p>No {dropdownTab === 'buyer' ? 'buyer-uploaded' : 'Procucev'} suppliers match &quot;{searchQuery}&quot;</p>
-                      <button
-                        type="button"
-                        onClick={() => setDropdownTab(dropdownTab === 'buyer' ? 'procucev' : 'buyer')}
-                        className="btn btn-secondary btn-xs inline-flex items-center gap-1 font-semibold text-indigo-600 dark:text-indigo-400"
-                      >
-                        Switch to {dropdownTab === 'buyer' ? 'Procucev Vendors' : 'Uploaded by Buyer'} ({otherTabMatchesCount} found)
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="p-4 text-center text-xs text-slate-400">
-                      {searchQuery.trim()
-                        ? `No suppliers match "${searchQuery}" in this tab`
-                        : `No ${dropdownTab === 'buyer' ? 'buyer-uploaded' : 'Procucev'} suppliers available`}
-                    </div>
-                  )
+                  <div className="p-4 text-center text-xs text-slate-400">
+                    {searchQuery.trim()
+                      ? `No suppliers match "${searchQuery}"`
+                      : 'No buyer suppliers available'}
+                  </div>
                 ) : (
                   filteredCompanyOptions.map((c) => {
                     const isSelected = c.id === record.vendorId || c.name === record.vendorName;

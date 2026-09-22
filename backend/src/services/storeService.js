@@ -1777,15 +1777,41 @@ class StoreService {
    */
   selectVendorsForRFQEmail(rfq, limit = 10) {
     const pincode = rfq.deliveryPincode ? String(rfq.deliveryPincode).trim() : null;
-    return this.vendors
-      .filter((v) => v.email && this.vendorCoversRFQ(v, rfq))
-      .map((v) => ({
-        vendor: v,
-        score:
-          this._vendorTierRank(v.subscriptionPlan) * 1000 +
-          (pincode && v.pincode && String(v.pincode).trim() === pincode ? 100 : 0) +
-          (Number(v.rating) || 0),
-      }))
+    const rawSignals = this._rfqCategorySignals(rfq);
+    const distinctSignals = Array.from(new Set(rawSignals.map((s) => String(s || '').trim().toLowerCase()).filter(Boolean)));
+
+    const rankVendor = (v) => ({
+      vendor: v,
+      score:
+        this._vendorTierRank(v.subscriptionPlan) * 1000 +
+        (pincode && v.pincode && String(v.pincode).trim() === pincode ? 100 : 0) +
+        (Number(v.rating) || 0),
+    });
+
+    const eligible = this.vendors.filter((v) => v.email && this.vendorCoversRFQ(v, rfq));
+
+    if (distinctSignals.length > 3) {
+      const selected = new Map();
+      for (const sig of distinctSignals) {
+        const catMatched = eligible
+          .filter((v) => this.vendorCoversCategory(v, sig))
+          .map(rankVendor)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 5)
+          .map((x) => x.vendor);
+
+        for (const v of catMatched) {
+          const key = v.id || v.email;
+          if (key && !selected.has(key)) {
+            selected.set(key, v);
+          }
+        }
+      }
+      return Array.from(selected.values());
+    }
+
+    return eligible
+      .map(rankVendor)
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
       .map((x) => x.vendor);

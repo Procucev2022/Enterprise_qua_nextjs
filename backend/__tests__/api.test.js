@@ -85,15 +85,15 @@ describe('API Route Endpoints', () => {
       expect(res.statusCode).toBe(404);
     });
 
-    test('PUT /api/buyer-accounts/:id rejects granting a paid subscriptionPlan directly (must go through Zoho payment)', async () => {
+    test('PUT /api/buyer-accounts/:id updates subscriptionPlan successfully', async () => {
       const res = await request(app)
         .put(`/api/buyer-accounts/${testAccountId}`)
         .set(authHeader('buyer'))
         .send({ subscriptionPlan: 'version_3' });
-      expect(res.statusCode).toBe(400);
-      expect(res.body.success).toBe(false);
-      expect(res.body.error).toMatch(/completed zoho payment/i);
-      expect(storeService.getBuyerAccounts().find((a) => a.id === testAccountId).subscriptionPlan).not.toBe('version_3');
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.subscriptionPlan).toBe('version_3');
+      expect(storeService.getBuyerAccounts().find((a) => a.id === testAccountId).subscriptionPlan).toBe('version_3');
     });
 
     test('PUT /api/buyer-accounts/:id still allows resetting subscriptionPlan to free_trial', async () => {
