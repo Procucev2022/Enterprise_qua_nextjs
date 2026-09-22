@@ -758,7 +758,6 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
             </div>
 
             <div
-              role="radiogroup"
               aria-label={MODAL.sourcingModeLabel}
               className="grid grid-cols-1 md:grid-cols-3 gap-3"
             >
@@ -785,20 +784,15 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                 ][index];
 
                 return (
-                  <button
+                  <div
                     key={mode.id}
-                    type="button"
-                    role="radio"
-                    aria-checked={isSelected}
-                    aria-disabled={!isEntitled}
-                    disabled={!isEntitled}
                     data-testid={`manual-mode-${mode.id}`}
                     onClick={() => {
                       if (!isEntitled) return;
                       patchForm("sourcingMode", mode.id as SourcingMode);
                     }}
                     className={`
-            group relative text-left rounded-2xl border p-4
+            group relative text-left rounded-2xl border p-4 cursor-pointer
             transition-all duration-200
             ${!isEntitled
                         ? "border-slate-200 bg-slate-50/70 opacity-60 cursor-not-allowed dark:border-gray-800 dark:bg-gray-900/40"
@@ -845,20 +839,17 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                           </span>
                         )}
 
-                        <span
-                          aria-hidden="true"
-                          className={`
-                  flex h-4 w-4 items-center justify-center rounded-full border
-                  ${isSelected
-                              ? "border-indigo-600 bg-indigo-600"
-                              : "border-slate-300 dark:border-gray-600"
-                            }
-                `}
-                        >
-                          {isSelected && (
-                            <span className="h-1.5 w-1.5 rounded-full bg-white" />
-                          )}
-                        </span>
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          disabled={!isEntitled}
+                          aria-label={mode.shortLabel}
+                          onChange={() => {
+                            if (!isEntitled) return;
+                            patchForm("sourcingMode", mode.id as SourcingMode);
+                          }}
+                          className="h-4 w-4 rounded text-indigo-600 border-slate-300 dark:border-gray-600 focus:ring-indigo-500 cursor-pointer"
+                        />
                       </div>
                     </div>
 
@@ -923,7 +914,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                         Upgrade your subscription to unlock
                       </div>
                     )}
-                  </button>
+                  </div>
                 );
               })}
             </div>
@@ -1050,13 +1041,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
               </div>
             )}
 
-            {/* ── Mode 2: Hybrid Sourcing Pool (Private Roster + Procucev Marketplace) ── */}
+            {/* ── Mode 2: Hybrid Sourcing Pool (Private Roster + AI Routing) ── */}
             {form.sourcingMode === 'mode_2' && (
               <div className="mt-4 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-4 space-y-3 animate-fade-in shadow-2xs">
                 {(() => {
                   const myVendors = buyerVendors.filter(isBuyerUploaded);
-                  const { signals: rfqSignals } = extractRfqCategorySignals(form);
-                  const matchedProcucev = getCategoryMatchedProcucevVendors(fetchedCategoryVendors, rfqSignals, 80);
 
                   return (
                     <>
@@ -1069,11 +1058,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                             <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
                               <span>Mode 2: Hybrid Sourcing Pool</span>
                               <span className="badge badge-emerald text-[9px] font-bold">
-                                {myVendors.length + matchedProcucev.length} Suppliers Matched
+                                {myVendors.length} Private Suppliers Matched
                               </span>
                             </h4>
                             <p className="text-[10px] text-slate-500 dark:text-gray-400">
-                              Dispatches to your approved roster ({myVendors.length}) + AI category-matched Procucev suppliers ({matchedProcucev.length}).
+                              Dispatches to your approved roster ({myVendors.length}) with automated AI qualification and follow-ups.
                             </p>
                           </div>
                         </div>
@@ -1130,60 +1119,30 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                         </div>
                       )}
 
-                      {/* Procucev AI-Matched Verified Vendors Preview */}
-                      {matchedProcucev.length === 0 ? (
+                      {myVendors.length === 0 ? (
                         <div className="p-3 text-center rounded-lg bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[10px] text-slate-500 space-y-1">
-                          <p className="font-semibold text-slate-600 dark:text-gray-400">No marketplace suppliers directly matching this category yet.</p>
-                          <p className="text-[9px] text-slate-400">The RFQ will be dispatched to your private roster, and category managers will assist with extended supplier sourcing.</p>
+                          <p className="font-semibold text-slate-600 dark:text-gray-400">No private vendors uploaded yet.</p>
+                          <p className="text-[9px] text-slate-400">Please ingest your approved vendor directory or PO history to dispatch in Mode 2.</p>
                         </div>
                       ) : (
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-56 overflow-y-auto pr-1">
-                          {matchedProcucev.slice(0, 6).map(({ vendor: v, matchScore, matchedMajor, matchedCategories }) => {
-                            const rawMinor = v.minorCategories as string | string[] | undefined;
-                            const minorList = Array.isArray(matchedCategories) && matchedCategories.length > 0
-                              ? matchedCategories
-                              : Array.isArray(rawMinor)
-                              ? rawMinor
-                              : typeof rawMinor === 'string'
-                              ? (rawMinor as string).split(',').map((s: string) => s.trim()).filter(Boolean)
-                              : [];
-
-                            return (
-                              <div
-                                key={v.id}
-                                className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-emerald-200/70 dark:border-emerald-900/50 space-y-1.5 shadow-2xs"
-                              >
-                                <div className="flex items-center justify-between gap-1">
-                                  <span className="text-[11px] font-bold text-slate-900 dark:text-white truncate" title={v.name}>{v.name}</span>
-                                  <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200/40 shrink-0">
-                                    {matchScore}% Match
-                                  </span>
-                                </div>
-                                <div className="text-[9px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
-                                  <span className="truncate font-semibold text-emerald-700 dark:text-emerald-300">{matchedMajor || v.majorCategory || 'General Industrial'}</span>
-                                  <span className="truncate">{v.city || v.state || v.location || 'India'}</span>
-                                </div>
-                                {minorList.length > 0 && (
-                                  <div className="flex flex-wrap gap-1 pt-1 border-t border-slate-100 dark:border-gray-800">
-                                    {minorList.slice(0, 2).map((cat: string, ci: number) => (
-                                      <span
-                                        key={ci}
-                                        className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-medium bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 border border-slate-200/60 dark:border-gray-700/60 truncate max-w-[120px]"
-                                        title={cat}
-                                      >
-                                        {cat}
-                                      </span>
-                                    ))}
-                                    {minorList.length > 2 && (
-                                      <span className="text-[8px] font-bold text-slate-400 dark:text-gray-500 self-center">
-                                        +{minorList.length - 2}
-                                      </span>
-                                    )}
-                                  </div>
-                                )}
+                          {myVendors.map((vendor, idx) => (
+                            <div
+                              key={vendor.id || idx}
+                              className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-emerald-200/70 dark:border-emerald-900/50 space-y-1.5 shadow-2xs"
+                            >
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="text-[11px] font-bold text-slate-900 dark:text-white truncate" title={vendor.name}>{vendor.name}</span>
+                                <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200/40 shrink-0">
+                                  Approved
+                                </span>
                               </div>
-                            );
-                          })}
+                              <div className="text-[9px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
+                                <span className="truncate font-semibold text-emerald-700 dark:text-emerald-300">{vendor.majorCategory || 'General Industrial'}</span>
+                                <span className="truncate">{vendor.city || vendor.state || vendor.location || 'India'}</span>
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       )}
                     </>
@@ -1196,8 +1155,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
             {form.sourcingMode === 'mode_3' && (
               <div className="mt-4 rounded-xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 p-4 space-y-3 animate-fade-in shadow-2xs">
                 {(() => {
-                  const { signals: rfqSignals } = extractRfqCategorySignals(form);
-                  const matchedProcucev = getCategoryMatchedProcucevVendors(fetchedCategoryVendors, rfqSignals, 80);
+                  const myVendors = buyerVendors.filter(isBuyerUploaded);
 
                   return (
                     <>
@@ -1208,13 +1166,13 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                           </div>
                           <div>
                             <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                              <span>Mode 3: Double-Blind Anonymous Verification</span>
+                              <span>Mode 3: Double-Blind Autonomous Sourcing</span>
                               <span className="badge badge-indigo text-[9px] font-bold">
-                                {matchedProcucev.length} Database Suppliers Queued
+                                {myVendors.length} Verified Suppliers
                               </span>
                             </h4>
                             <p className="text-[10px] text-slate-500 dark:text-gray-400">
-                              Suppliers with &gt;80% category match receive anonymous evaluation invites. Your identity is withheld until qualification.
+                              Double-blind anonymous evaluation protocol. Buyer identity is shielded until final quote evaluation.
                             </p>
                           </div>
                         </div>
@@ -1271,59 +1229,30 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                         </div>
                       )}
 
-                      {matchedProcucev.length === 0 ? (
+                      {myVendors.length === 0 ? (
                         <div className="p-3 text-center rounded-lg bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[10px] text-slate-500 space-y-1">
-                          <p className="font-semibold text-slate-600 dark:text-gray-400">No database vendors with &gt;80% match in this category.</p>
-                          <p className="text-[9px] text-slate-400">The RFQ will be routed to your private roster while our AI category desk identifies qualified suppliers.</p>
+                          <p className="font-semibold text-slate-600 dark:text-gray-400">No private vendors uploaded yet.</p>
+                          <p className="text-[9px] text-slate-400">The RFQ will be routed through autonomous AI category matching once vendors are added.</p>
                         </div>
                       ) : (
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-56 overflow-y-auto pr-1">
-                          {matchedProcucev.slice(0, 6).map(({ vendor: v, matchScore, matchedMajor, matchedCategories }) => {
-                            const rawMinor = v.minorCategories as string | string[] | undefined;
-                            const minorList = Array.isArray(matchedCategories) && matchedCategories.length > 0
-                              ? matchedCategories
-                              : Array.isArray(rawMinor)
-                              ? rawMinor
-                              : typeof rawMinor === 'string'
-                              ? (rawMinor as string).split(',').map((s: string) => s.trim()).filter(Boolean)
-                              : [];
-
-                            return (
-                              <div
-                                key={v.id}
-                                className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-indigo-200/70 dark:border-indigo-900/50 space-y-1.5 shadow-2xs"
-                              >
-                                <div className="flex items-center justify-between gap-1">
-                                  <span className="text-[11px] font-bold text-slate-900 dark:text-white truncate" title={v.name}>{v.name}</span>
-                                  <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200/40 shrink-0">
-                                    {matchScore}% Match
-                                  </span>
-                                </div>
-                                <div className="text-[9px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
-                                  <span className="truncate font-semibold text-indigo-700 dark:text-indigo-300">{matchedMajor || v.majorCategory || 'General Industrial'}</span>
-                                  <span className="text-indigo-600 dark:text-indigo-400 font-semibold">🔒 Double-Blind</span>
-                                </div>
-                                {minorList.length > 0 && (
-                                  <div className="flex flex-wrap gap-1 pt-1 border-t border-slate-100 dark:border-gray-800">
-                                    {minorList.slice(0, 2).map((cat: string, ci: number) => (
-                                      <span
-                                        key={ci}
-                                        className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-medium bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 border border-slate-200/60 dark:border-gray-700/60 truncate max-w-[120px]"
-                                        title={cat}
-                                      >
-                                        {cat}
-                                      </span>
-                                    ))}
-                                    {minorList.length > 2 && (
-                                      <span className="text-[8px] font-bold text-slate-400 dark:text-gray-500 self-center">
-                                        +{minorList.length - 2}
-                                      </span>
-                                    )}
-                                  </div>
-                                )}
+                          {myVendors.map((vendor, idx) => (
+                            <div
+                              key={vendor.id || idx}
+                              className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-indigo-200/70 dark:border-indigo-900/50 space-y-1.5 shadow-2xs"
+                            >
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="text-[11px] font-bold text-slate-900 dark:text-white truncate" title={vendor.name}>{vendor.name}</span>
+                                <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200/40 shrink-0">
+                                  Approved
+                                </span>
                               </div>
-                            );
-                          })}
+                              <div className="text-[9px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
+                                <span className="truncate font-semibold text-indigo-700 dark:text-indigo-300">{vendor.majorCategory || 'General Industrial'}</span>
+                                <span className="text-indigo-600 dark:text-indigo-400 font-semibold">🔒 Double-Blind</span>
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       )}
                     </>

@@ -1083,7 +1083,7 @@ export default function IngestionWizard({
           </div>
         </div>
 
-        <div role="radiogroup" aria-label="Sourcing Mode" className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div aria-label="Sourcing Mode" className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {SOURCING_MODES.map((mode, index) => {
             const isSelected = form.sourcingMode === mode.id;
             const modeConfig = [
@@ -1108,11 +1108,8 @@ export default function IngestionWizard({
             ][index];
 
             return (
-              <button
+              <div
                 key={mode.id}
-                type="button"
-                role="radio"
-                aria-checked={isSelected}
                 data-testid={`mode-${mode.id}`}
                 onClick={() => patchForm('sourcingMode', mode.id as SourcingMode)}
                 className={`group relative text-left rounded-2xl border p-5 transition-all duration-200 cursor-pointer flex flex-col justify-between ${
@@ -1122,7 +1119,7 @@ export default function IngestionWizard({
                 }`}
               >
                 <div>
-                  {/* Top Header: Icon + Badges + Radio */}
+                  {/* Top Header: Icon + Badges + Checkbox */}
                   <div className="flex items-center justify-between gap-2 mb-3">
                     <div
                       className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-lg shadow-2xs ${
@@ -1138,15 +1135,13 @@ export default function IngestionWizard({
                       >
                         {modeConfig.badge}
                       </span>
-                      <span
-                        className={`flex h-4.5 w-4.5 items-center justify-center rounded-full border-2 transition-all ${
-                          isSelected
-                            ? 'border-indigo-600 bg-indigo-600 text-white'
-                            : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-900'
-                        }`}
-                      >
-                        {isSelected && <span className="h-1.5 w-1.5 rounded-full bg-white" />}
-                      </span>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        aria-label={mode.shortLabel}
+                        onChange={() => patchForm('sourcingMode', mode.id as SourcingMode)}
+                        className="h-4.5 w-4.5 rounded text-indigo-600 border-slate-300 dark:border-gray-600 focus:ring-indigo-500 cursor-pointer"
+                      />
                     </div>
                   </div>
 
@@ -1183,7 +1178,7 @@ export default function IngestionWizard({
                     </span>
                   </div>
                 </div>
-              </button>
+              </div>
             );
           })}
         </div>
@@ -1328,29 +1323,15 @@ export default function IngestionWizard({
           </div>
         )}
 
-        {/* ── Mode 2: Hybrid Sourcing Pool (Private Roster + Procucev Marketplace) ── */}
+        {/* ── Mode 2: Hybrid Sourcing Pool (Private Roster + AI Routing) ── */}
         {form.sourcingMode === 'mode_2' && (
           <div className="mt-5 rounded-2xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
             {(() => {
               const allMyVendors = buyerVendors.filter(isBuyerUploaded);
               const { signals: rfqSignals } = extractRfqCategorySignals(form);
-              // Was showing the buyer's entire private roster unconditionally,
-              // never re-filtering when the line-item category changed — only
-              // the Procucev marketplace half below reacted. Now applies the
-              // same category-match rule to the private roster too, so both
-              // halves of "Hybrid" actually respond to the category dropdown.
               const myVendors = rfqSignals.length > 0
                 ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals).isMatch)
                 : allMyVendors;
-              // Real, server-paginated, indexed search (same backend query the
-              // CM's Invite Vendors picker uses) whenever any category — "All
-              // Categories" or one specific major category — is selected.
-              // Replaces client-side matching against the capped 500-vendor
-              // bootstrap snapshot, which silently undercounted or missed
-              // vendors entirely once a real category holds thousands of rows
-              // (a single bulk import alone put 4000+ vendors in one category).
-              const usesRealVendorSearch = isAllCategories || !!selectedMajorCategory;
-              const marketplaceCount = allVendorsPagination?.total ?? allVendorsList.length;
 
               return (
                 <>
@@ -1361,17 +1342,13 @@ export default function IngestionWizard({
                       </div>
                       <div>
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                          <span>Mode 2: Hybrid Sourcing Pool (Private Roster + Top 100 Procucev Marketplace)</span>
+                          <span>Mode 2: Hybrid Sourcing Pool</span>
                           <span className="badge badge-emerald text-[10px] font-bold">
-                            {myVendors.length + Math.min(100, marketplaceCount)} Suppliers Matched
+                            {myVendors.length} Private Suppliers Matched
                           </span>
                         </h3>
                         <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                          {isAllCategories
-                            ? `Combines your approved roster (${myVendors.length}) with the top 100 Procucev marketplace suppliers (${Math.min(100, marketplaceCount)} shown of ${marketplaceCount.toLocaleString()}) across all categories.`
-                            : usesRealVendorSearch
-                            ? `Combines your approved roster (${myVendors.length}) with top 100 category-matched Procucev marketplace suppliers (${Math.min(100, marketplaceCount)} found).`
-                            : `Combines your approved roster (${myVendors.length}) with AI category-matched Procucev marketplace suppliers (0) — set a category on a line item to search the marketplace.`}
+                          Dispatches to your approved roster ({myVendors.length}) with automated AI qualification and follow-ups.
                         </p>
                       </div>
                     </div>
@@ -1386,7 +1363,7 @@ export default function IngestionWizard({
                         <span>AI Matching Criteria</span>
                       </button>
                       <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-100/70 dark:bg-emerald-900/50 px-2.5 py-1 rounded-full border border-emerald-200 dark:border-emerald-800 shrink-0">
-                        ⚡ Hybrid Multi-Channel
+                        ⚡ Hybrid Active
                       </span>
                     </div>
                   </div>
@@ -1397,7 +1374,7 @@ export default function IngestionWizard({
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2 font-bold text-xs text-emerald-800 dark:text-emerald-200">
                           <Sparkles size={15} className="text-emerald-600 dark:text-emerald-400" />
-                          <span>How QUA AI Categorizes Line Items & Matches Marketplace Suppliers</span>
+                          <span>How QUA AI Categorizes Line Items & Matches Suppliers</span>
                         </div>
                         <button
                           type="button"
@@ -1440,7 +1417,7 @@ export default function IngestionWizard({
 
                     {myVendors.length === 0 ? (
                       <div className="p-3.5 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500">
-                        No private vendors found — Procucev verified vendors will serve this RFQ.
+                        No private vendors found — please add vendors in your directory.
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-48 overflow-y-auto pr-1">
@@ -1459,28 +1436,6 @@ export default function IngestionWizard({
                       </div>
                     )}
                   </div>
-
-                  {/* Procucev Verified Vendors from Real Database (top 100 server-paginated search) */}
-                  <div className="space-y-2 pt-2 border-t border-emerald-100 dark:border-emerald-900/40">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-xs font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1.5">
-                        <Sparkles size={13} className="text-emerald-600 dark:text-emerald-400" />
-                        <span>Top 100 Procucev Verified Marketplace Suppliers ({Math.min(100, marketplaceCount)} Matched)</span>
-                      </h4>
-                      <span className="text-[10px] text-emerald-700 dark:text-emerald-300 font-semibold">
-                        {isAllCategories ? 'All Categories' : usesRealVendorSearch ? 'Category Matched' : 'No Category Selected'}
-                      </span>
-                    </div>
-
-                    {usesRealVendorSearch ? (
-                      renderAllVendorsBrowsePanel('emerald')
-                    ) : (
-                      <div className="p-3.5 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500 space-y-1">
-                        <p className="font-semibold text-slate-600 dark:text-gray-400">Set a Major Category on a line item to search the marketplace.</p>
-                        <p className="text-[10px] text-slate-400">Your RFQ will still dispatch to your matched private roster in the meantime.</p>
-                      </div>
-                    )}
-                  </div>
                 </>
               );
             })()}
@@ -1491,11 +1446,11 @@ export default function IngestionWizard({
         {form.sourcingMode === 'mode_3' && (
           <div className="mt-5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
             {(() => {
-              // Same real, server-paginated search as Mode 2 — see that block's
-              // comment for why the client-side capped-snapshot match was
-              // replaced.
-              const usesRealVendorSearch = isAllCategories || !!selectedMajorCategory;
-              const marketplaceCount = allVendorsPagination?.total ?? allVendorsList.length;
+              const allMyVendors = buyerVendors.filter(isBuyerUploaded);
+              const { signals: rfqSignals } = extractRfqCategorySignals(form);
+              const myVendors = rfqSignals.length > 0
+                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals).isMatch)
+                : allMyVendors;
 
               return (
                 <>
@@ -1508,13 +1463,11 @@ export default function IngestionWizard({
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                           <span>Mode 3: Autonomous Sourcing & Double-Blind Verification Protocol</span>
                           <span className="badge badge-indigo text-[10px] font-bold">
-                            {marketplaceCount.toLocaleString()} Database Suppliers Queued
+                            {myVendors.length} Private Suppliers
                           </span>
                         </h3>
                         <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                          {isAllCategories
-                            ? 'Browsing the whole verified marketplace directory since "All Categories" was chosen — search below to narrow it. Your corporate identity remains confidential.'
-                            : 'Suppliers with >80% category match receive an anonymous capability questionnaire. Your corporate identity remains confidential.'}
+                          Autonomous AI sourcing and evaluation protocol. Your corporate identity remains 100% confidential.
                         </p>
                       </div>
                     </div>
@@ -1578,30 +1531,40 @@ export default function IngestionWizard({
                       <span>Evaluation-First Protocol Active</span>
                     </div>
                     <p>
-                      {isAllCategories
-                        ? `The RFQ will be sent immediately to your private roster. Simultaneously, suppliers you invite from the whole verified marketplace directory below will receive an anonymous RFQ evaluation invite with specifications, while your company identity stays 100% confidential.`
-                        : `The RFQ will be sent immediately to your private roster. Simultaneously, the ${marketplaceCount.toLocaleString()} category-matched Procucev database vendors below will receive an anonymous RFQ evaluation invite with specifications, while your company identity stays 100% confidential.`}
+                      The RFQ will be routed to your private approved roster. Suppliers will undergo double-blind qualification evaluation while your corporate identity remains 100% confidential.
                     </p>
                   </div>
 
-                  {/* Procucev Database Vendors Grid from Real Database (real, server-paginated search) */}
+                  {/* Buyer Approved Roster */}
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <h4 className="text-xs font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1.5">
                         <Users size={13} className="text-indigo-600 dark:text-indigo-400" />
-                        <span>Vetted Procucev Database Suppliers (Invited for Double-Blind Evaluation)</span>
+                        <span>Buyer Approved Suppliers (Double-Blind Protocol)</span>
                       </h4>
                       <span className="text-[10px] text-indigo-700 dark:text-indigo-300 font-semibold">
-                        {marketplaceCount.toLocaleString()} {isAllCategories ? 'Suppliers' : 'Database Matches'}
+                        {myVendors.length} Suppliers
                       </span>
                     </div>
 
-                    {usesRealVendorSearch ? (
-                      renderAllVendorsBrowsePanel('indigo')
+                    {myVendors.length === 0 ? (
+                      <div className="p-3.5 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500">
+                        No private vendors found — please add vendors in your directory.
+                      </div>
                     ) : (
-                      <div className="p-3.5 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500 space-y-1">
-                        <p className="font-semibold text-slate-600 dark:text-gray-400">Set a Major Category on a line item to search the marketplace.</p>
-                        <p className="text-[10px] text-slate-400">The RFQ will be routed to your private roster while our AI category desk identifies qualified suppliers.</p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-48 overflow-y-auto pr-1">
+                        {myVendors.map((v, i) => (
+                          <div key={v.id || i} className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-indigo-200/70 dark:border-indigo-900/50 space-y-1 shadow-2xs">
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{v.name}</span>
+                              <span className="badge badge-indigo text-[8px] font-bold shrink-0">Private</span>
+                            </div>
+                            <div className="text-[10px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
+                              <span className="font-semibold text-slate-700 dark:text-gray-300">{v.majorCategory || 'General Industrial'}</span>
+                              <span className="text-indigo-600 dark:text-indigo-400 font-semibold">🔒 Double-Blind</span>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>

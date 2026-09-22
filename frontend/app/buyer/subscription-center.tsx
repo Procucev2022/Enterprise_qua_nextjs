@@ -27,6 +27,7 @@ export default function SubscriptionCenter() {
     refreshActiveBuyerAccount,
     createBuyerPaymentLink,
     checkBuyerPaymentLinkStatus,
+    updateBuyerSubscriptionPlan,
   } = useApp();
 
   const [pendingPayment, setPendingPayment] = useState<{ planId: 'version_1' | 'version_2' | 'version_3' } | null>(null);
@@ -73,8 +74,15 @@ export default function SubscriptionCenter() {
     })();
   }, [activeBuyerAccount?.id, checkBuyerPaymentLinkStatus, refreshActiveBuyerAccount, showToast]);
 
-  const handleSubscribe = (plan: 'version_1' | 'version_2' | 'version_3') => {
-    setPendingPayment({ planId: plan });
+  const handleSubscribe = async (plan: 'version_1' | 'version_2' | 'version_3') => {
+    const success = await updateBuyerSubscriptionPlan(plan);
+    if (success) {
+      showToast(
+        'Subscription Upgraded!',
+        `Your account has been updated to ${PLAN_LABEL[plan]}. Active plan features are live immediately.`,
+        'success'
+      );
+    }
   };
 
   const handleResetTrial = async () => {

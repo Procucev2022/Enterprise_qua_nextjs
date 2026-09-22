@@ -321,10 +321,10 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
     expect(screen.getByText(/Dedicated manufacturing lines & quality inspection facility verified/i)).toBeInTheDocument();
   });
 
-  it('allows switching companies and tabs (Uploaded by Buyer & Procucev Vendors) in Company Select Dropdown', () => {
+  it('allows switching companies in Company Select Dropdown', () => {
     const mockVendors = [
       { id: 'v-101', name: 'Alpha Machining Works', majorCategory: 'Mechanical', score: 94, source: 'buyer_uploaded' },
-      { id: 'v-102', name: 'Beta Polymer Systems', majorCategory: 'Polymers', score: 76, source: 'procucev_network' },
+      { id: 'v-102', name: 'Beta Polymer Systems', majorCategory: 'Polymers', score: 76, source: 'buyer_manual' },
     ];
 
     (useApp as jest.Mock).mockReturnValue({
@@ -345,15 +345,8 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
     const dropdownBtn = screen.getByLabelText('Select Company / Vendor');
     fireEvent.click(dropdownBtn);
 
-    // Verify tabs are present in dropdown popover
-    expect(screen.getByRole('button', { name: /Uploaded by Buyer/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Procucev Vendors/i })).toBeInTheDocument();
-
-    // Switch to Procucev Vendors tab
-    fireEvent.click(screen.getByRole('button', { name: /Procucev Vendors/i }));
-
-    // Search input in active tab
-    const searchInput = screen.getByPlaceholderText(/Search.*suppliers/i);
+    // Search input
+    const searchInput = screen.getByPlaceholderText(/Search approved suppliers by name/i);
     fireEvent.change(searchInput, { target: { value: 'Beta' } });
 
     const betaOption = screen.getByRole('button', { name: /Beta Polymer Systems/i });
@@ -368,13 +361,8 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
 
   it('builds a default-fallback evaluation record for a vendor missing name/category/dates', () => {
     const mockVendors = [
-      // No name/vendorName, no majorCategory/category, no contactPerson, no
-      // email/phone, but a real createdAt — exercises every default branch
-      // in buildEvaluationRecordForVendor at once, including the non-fallback
-      // createdAt path.
       { id: 'v-201', score: 91, source: 'buyer_manual', createdAt: '2026-01-15T10:00:00Z' },
       { id: 'v-202', name: 'Gamma Fabrication', majorCategory: 'Fabrication', score: 60, source: 'buyer_manual' },
-      { id: 'v-203', name: 'Delta Analytics', category: 'Software', score: 88, source: 'procucev_network' },
     ];
 
     (useApp as jest.Mock).mockReturnValue({
@@ -392,28 +380,15 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
     expect(screen.getAllByText('Enterprise Supplier').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/General Industrial/i).length).toBeGreaterThanOrEqual(1);
 
-    // Open the dropdown and select each other vendor to exercise more of the
-    // list (multiple options in the same tab => isSelected true/false both
-    // occur), plus a second call into buildEvaluationRecordForVendor via
-    // handleSelectCompany (which uses the mapped companyOptions object).
-    // Which tab starts active isn't asserted here, so switch explicitly.
     fireEvent.click(screen.getByLabelText('Select Company / Vendor'));
-    fireEvent.click(screen.getByRole('button', { name: /Uploaded by Buyer/i }));
     fireEvent.click(screen.getByRole('button', { name: /Gamma Fabrication/i }));
     expect(screen.getAllByText('Gamma Fabrication').length).toBeGreaterThanOrEqual(1);
-    // score 60 => DISQUALIFIED SUPPLIER, amber score styling branch.
     expect(screen.getByText('DISQUALIFIED SUPPLIER')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByLabelText('Select Company / Vendor'));
-    fireEvent.click(screen.getByRole('button', { name: /Procucev Vendors/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Delta Analytics/i }));
-    expect(screen.getAllByText('Delta Analytics').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('searches the dropdown, finds a match only in the other tab, then finds no match in either', () => {
+  it('searches the dropdown and handles no match', () => {
     const mockVendors = [
       { id: 'v-301', name: 'Buyer Uploaded Metals', majorCategory: 'Metals', score: 90, source: 'buyer_manual' },
-      { id: 'v-302', name: 'Procucev Textiles', majorCategory: 'Textiles', score: 85, source: 'procucev_network' },
     ];
 
     (useApp as jest.Mock).mockReturnValue({
@@ -427,21 +402,10 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
 
     render(<VendorEvaluationSummary evaluationRecord={null} />);
     fireEvent.click(screen.getByLabelText('Select Company / Vendor'));
-    // Ensure we're on the "Uploaded by Buyer" tab regardless of which one
-    // started active, then search for a term that only exists in the
-    // Procucev tab — hits the "switch to other tab" suggestion branch.
-    fireEvent.click(screen.getByRole('button', { name: /Uploaded by Buyer/i }));
 
-    const searchInput = screen.getByPlaceholderText(/Search.*suppliers/i);
-    fireEvent.change(searchInput, { target: { value: 'Textiles' } });
-    const switchBtn = screen.getByRole('button', { name: /Switch to Procucev Vendors/i });
-    expect(switchBtn).toBeInTheDocument();
-    fireEvent.click(switchBtn);
-    expect(screen.getByRole('button', { name: /Procucev Textiles/i })).toBeInTheDocument();
-
-    // Now search for something that matches nothing in either tab.
+    const searchInput = screen.getByPlaceholderText(/Search approved suppliers by name/i);
     fireEvent.change(searchInput, { target: { value: 'Nonexistent Corp' } });
-    expect(screen.getByText(/No suppliers match "Nonexistent Corp" in this tab/i)).toBeInTheDocument();
+    expect(screen.getByText(/No suppliers match "Nonexistent Corp"/i)).toBeInTheDocument();
   });
 
   it('renders "SUPPLIER" fallback and un-mapped question fallbacks when the record omits ids/scores', () => {
@@ -485,10 +449,10 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
     render(<VendorEvaluationSummary evaluationRecord={mockEvaluationRecord} />);
 
     fireEvent.click(screen.getByLabelText('Select Company / Vendor'));
-    expect(screen.getByRole('button', { name: /Uploaded by Buyer/i })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Search approved suppliers by name/i)).toBeInTheDocument();
 
     fireEvent.mouseDown(document.body);
-    expect(screen.queryByRole('button', { name: /Uploaded by Buyer/i })).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/Search approved suppliers by name/i)).not.toBeInTheDocument();
   });
 
   it('resolves the active record from the vendorEvaluations store list by id when no prop is passed', () => {

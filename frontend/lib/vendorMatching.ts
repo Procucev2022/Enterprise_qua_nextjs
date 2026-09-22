@@ -31,7 +31,7 @@ export function normalizeCategory(cat?: string | null): string {
   return String(cat)
     .toLowerCase()
     .replace(/&/g, 'and')
-    .replace(/[\/\-_,.]/g, ' ')
+    .replace(/[/_.,-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -178,6 +178,66 @@ export function getCategoryMatchedProcucevVendors(
   }
 
   // Sort by match score descending, then rating descending
+  return results.sort((a, b) => {
+    if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
+    return (b.vendor.rating || 0) - (a.vendor.rating || 0);
+  });
+}
+
+/**
+ * Selects candidate vendors considering the rule:
+ * If there are more than 3 categories, up to 5 vendors per category should be selected.
+ */
+export function selectVendorsForCategories(
+  vendors: VendorEntry[],
+  signals: string[],
+  maxPerCategory = 5
+): MatchedVendorResult[] {
+  if (!Array.isArray(vendors) || !signals || signals.length === 0) return [];
+
+  const rawSignals = Array.from(new Set(signals.map(normalizeCategory).filter(Boolean)));
+
+  if (rawSignals.length > 3) {
+    const selectedMap = new Map<string, MatchedVendorResult>();
+    for (const signal of rawSignals) {
+      const catMatches: MatchedVendorResult[] = [];
+      for (const vendor of vendors) {
+        const match = matchVendorAgainstSignals(vendor, [signal]);
+        if (match.isMatch) {
+          catMatches.push({
+            vendor,
+            matchScore: match.matchScore,
+            matchedCategories: match.matchedCategories,
+            matchedMajor: match.matchedMajor,
+          });
+        }
+      }
+      catMatches.sort((a, b) => {
+        if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
+        return (b.vendor.rating || 0) - (a.vendor.rating || 0);
+      });
+      for (const item of catMatches.slice(0, maxPerCategory)) {
+        const key = item.vendor.id || item.vendor.email;
+        if (key && !selectedMap.has(key)) {
+          selectedMap.set(key, item);
+        }
+      }
+    }
+    return Array.from(selectedMap.values());
+  }
+
+  const results: MatchedVendorResult[] = [];
+  for (const vendor of vendors) {
+    const match = matchVendorAgainstSignals(vendor, rawSignals);
+    if (match.isMatch) {
+      results.push({
+        vendor,
+        matchScore: match.matchScore,
+        matchedCategories: match.matchedCategories,
+        matchedMajor: match.matchedMajor,
+      });
+    }
+  }
   return results.sort((a, b) => {
     if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
     return (b.vendor.rating || 0) - (a.vendor.rating || 0);
