@@ -111,11 +111,18 @@ const NOT_CONFIGURED_MESSAGE = 'The database is not configured. Set DATABASE_URL
  * been verified against the migrated D1 schema take that path. On Node/Render
  * (no Workers runtime, no D1 binding) this option is a no-op and the call
  * falls straight through to the normal pg pool, unchanged.
+ *
+ * Most ported queries share one SQL string across both backends (placeholder
+ * syntax is the only difference, and d1Bridge.toD1Sql handles that). A few
+ * genuinely can't — e.g. Postgres's jsonb_set() has no Postgres/SQLite-shared
+ * spelling, SQLite's equivalent is json_set(). For those, pass `d1Text` with
+ * the SQLite version; it's used only on the D1 path, `text` is untouched for
+ * pg.
  */
 async function query(text, params = [], options = {}) {
   if (options.d1) {
     const db = getD1Binding();
-    if (db) return queryD1(db, text, params);
+    if (db) return queryD1(db, options.d1Text || text, params);
   }
   if (!poolModule.pool) {
     throw new Error(NOT_CONFIGURED_MESSAGE);

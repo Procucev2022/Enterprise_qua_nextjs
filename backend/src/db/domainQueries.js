@@ -414,8 +414,18 @@ async function upsertAuditLogInDB(entry) {
 
 async function getNotificationsFromDB() {
   if (!pool.pool) return [];
-  const result = await pool.query('SELECT raw FROM notifications ORDER BY sequence DESC', []);
-  return result.rows.map((row) => row.raw);
+  // `sequence` is a Postgres-side auto-generated identity column — it's
+  // never in any INSERT's column list, so a D1 row would have it NULL. D1
+  // has no auto-increment-on-conflict-free-PK equivalent here (id is TEXT,
+  // and SQLite's autoincrement rowid needs an INTEGER PRIMARY KEY), so the
+  // D1 path orders by SQLite's own implicit rowid instead, which already
+  // increases in insertion order and serves the same "newest first" need.
+  const result = await pool.query(
+    'SELECT raw FROM notifications ORDER BY sequence DESC',
+    [],
+    { d1: true, d1Text: 'SELECT raw FROM notifications ORDER BY rowid DESC' }
+  );
+  return result.rows.map((row) => parseRaw(row.raw));
 }
 
 async function insertNotificationInDB(notification) {
@@ -428,9 +438,10 @@ async function insertNotificationInDB(notification) {
        is_read = EXCLUDED.is_read,
        raw = EXCLUDED.raw
      RETURNING raw`,
-    [id, recipientType, recipientId, kind, rfqId || null, !!read, JSON.stringify(notification)]
+    [id, recipientType, recipientId, kind, rfqId || null, !!read, JSON.stringify(notification)],
+    { d1: true }
   );
-  return result.rows[0]?.raw || null;
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 // One multi-row INSERT for the whole fan-out of a single RFQ to every matched
@@ -456,18 +467,28 @@ async function bulkInsertNotificationsInDB(notifications) {
      VALUES ${placeholders.join(', ')}
      ON CONFLICT (id) DO NOTHING
      RETURNING id`,
-    values
+    values,
+    { d1: true }
   );
   return result.rows.map((row) => row.id);
 }
 
 async function markNotificationReadInDB(id) {
   if (!pool.pool) return false;
+  // jsonb_set has no shared Postgres/SQLite spelling (SQLite's equivalent is
+  // json_set, and 'true'::jsonb is Postgres-only cast syntax), so this needs
+  // a real second SQL string for the D1 path rather than a placeholder swap.
   const result = await pool.query(
     `UPDATE notifications
        SET is_read = true, raw = jsonb_set(raw, '{read}', 'true'::jsonb)
      WHERE id = $1`,
-    [id]
+    [id],
+    {
+      d1: true,
+      d1Text: `UPDATE notifications
+       SET is_read = 1, raw = json_set(raw, '$.read', json('true'))
+     WHERE id = $1`,
+    }
   );
   return result.rowCount > 0;
 }
@@ -478,7 +499,13 @@ async function markAllNotificationsReadInDB(recipientType, recipientId) {
     `UPDATE notifications
        SET is_read = true, raw = jsonb_set(raw, '{read}', 'true'::jsonb)
      WHERE recipient_type = $1 AND recipient_id = $2 AND is_read = false`,
-    [recipientType, recipientId]
+    [recipientType, recipientId],
+    {
+      d1: true,
+      d1Text: `UPDATE notifications
+       SET is_read = 1, raw = json_set(raw, '$.read', json('true'))
+     WHERE recipient_type = $1 AND recipient_id = $2 AND is_read = false`,
+    }
   );
   return result.rowCount;
 }
