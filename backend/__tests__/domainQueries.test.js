@@ -612,6 +612,44 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       await expect(domainQueries.getBuyerAccountsFromDB()).resolves.toEqual({ accounts: [{ id: 'buyer-1' }], activeId: null });
     });
 
+    // buyer_accounts has been ported to D1 (see d1Bridge.js), which has no
+    // JSON column type — raw comes back as a TEXT string there.
+    test('getBuyerAccountsFromDB parses a string raw column (D1)', async () => {
+      const acc = { id: 'buyer-1' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ id: 'buyer-1', is_active: true, raw: JSON.stringify(acc) }] }) };
+      await expect(domainQueries.getBuyerAccountsFromDB()).resolves.toEqual({ accounts: [acc], activeId: 'buyer-1' });
+    });
+
+    test('getBuyerAccountByEmailFromDB returns the matching account', async () => {
+      const account = { id: 'buyer-1', corporateEmail: 'buyer@lt.com' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: account }] }) };
+
+      await expect(domainQueries.getBuyerAccountByEmailFromDB('buyer@lt.com')).resolves.toEqual(account);
+      expect(pool.pool.query).toHaveBeenCalledWith(
+        expect.stringContaining('WHERE lower(corporate_email) = lower($1)'),
+        ['buyer@lt.com']
+      );
+    });
+
+    test('getBuyerAccountByEmailFromDB parses a string raw column (D1)', async () => {
+      const account = { id: 'buyer-1', corporateEmail: 'buyer@lt.com' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(account) }] }) };
+
+      await expect(domainQueries.getBuyerAccountByEmailFromDB('buyer@lt.com')).resolves.toEqual(account);
+    });
+
+    test('getBuyerAccountByEmailFromDB returns null when nothing matched', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      await expect(domainQueries.getBuyerAccountByEmailFromDB('nobody@x.com')).resolves.toBeNull();
+    });
+
+    test('getBuyerAccountByEmailFromDB returns null when not configured or no email given', async () => {
+      pool.pool = { query: jest.fn() };
+      await expect(domainQueries.getBuyerAccountByEmailFromDB('')).resolves.toBeNull();
+      pool.pool = null;
+      await expect(domainQueries.getBuyerAccountByEmailFromDB('x@y.com')).resolves.toBeNull();
+    });
+
     test('upsertBuyerAccountInDB serializes the account and returns the stored raw row', async () => {
       const account = { id: 'buyer-1', corporateEmail: 'buyer@lt.com', status: 'ACTIVE_VERIFIED' };
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: account }] }) };
@@ -647,6 +685,13 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       pool.pool = { query: jest.fn().mockResolvedValue({}) };
       await domainQueries.setActiveBuyerAccountInDB('buyer-2');
       expect(pool.pool.query).toHaveBeenCalledWith('UPDATE buyer_accounts SET is_active = (id = $1)', ['buyer-2']);
+    });
+
+    test('upsertBuyerAccountInDB parses a string raw column (D1)', async () => {
+      const account = { id: 'buyer-1', corporateEmail: 'buyer@lt.com' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(account) }] }) };
+
+      await expect(domainQueries.upsertBuyerAccountInDB(account)).resolves.toEqual(account);
     });
   });
 

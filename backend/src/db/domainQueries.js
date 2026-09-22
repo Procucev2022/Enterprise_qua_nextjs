@@ -360,8 +360,12 @@ async function deleteCatalogueProductInDB(id) {
 
 async function getBuyerAccountsFromDB() {
   if (!pool.pool) return { accounts: [], activeId: null };
-  const result = await pool.query('SELECT id, is_active, raw FROM buyer_accounts ORDER BY created_at DESC');
-  const accounts = result.rows.map((row) => row.raw);
+  const result = await pool.query(
+    'SELECT id, is_active, raw FROM buyer_accounts ORDER BY created_at DESC',
+    [],
+    { d1: true }
+  );
+  const accounts = result.rows.map((row) => parseRaw(row.raw));
   const activeRow = result.rows.find((row) => row.is_active);
   return { accounts, activeId: activeRow ? activeRow.id : null };
 }
@@ -371,8 +375,12 @@ async function getBuyerAccountsFromDB() {
 // the very next request instead of requiring this process to restart.
 async function getBuyerAccountByEmailFromDB(email) {
   if (!pool.pool || !email) return null;
-  const result = await pool.query('SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1', [email]);
-  return result.rows[0]?.raw || null;
+  const result = await pool.query(
+    'SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1',
+    [email],
+    { d1: true }
+  );
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 async function upsertBuyerAccountInDB(account) {
@@ -380,6 +388,8 @@ async function upsertBuyerAccountInDB(account) {
   const { id, corporateEmail, status } = account;
   // is_active is deliberately not touched here — this saves the account's own
   // data, not which account is active. setActiveBuyerAccountInDB owns that flag.
+  // See upsertEvaluationInDB's comment for why the D1 path needs its own
+  // ISO-formatted timestamp rather than plain CURRENT_TIMESTAMP.
   const result = await pool.query(
     `INSERT INTO buyer_accounts (id, corporate_email, status, raw, updated_at)
      VALUES ($1, $2, $3, $4, now())
@@ -389,14 +399,29 @@ async function upsertBuyerAccountInDB(account) {
        raw = EXCLUDED.raw,
        updated_at = now()
      RETURNING raw`,
-    [id, corporateEmail || null, status || null, JSON.stringify(account)]
+    [id, corporateEmail || null, status || null, JSON.stringify(account)],
+    {
+      d1: true,
+      d1Text: `INSERT INTO buyer_accounts (id, corporate_email, status, raw, updated_at)
+     VALUES ($1, $2, $3, $4, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT (id) DO UPDATE SET
+       corporate_email = EXCLUDED.corporate_email,
+       status = EXCLUDED.status,
+       raw = EXCLUDED.raw,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     RETURNING raw`,
+    }
   );
-  return result.rows[0]?.raw || null;
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 async function deleteBuyerAccountInDB(id) {
   if (!pool.pool) return false;
-  const result = await pool.query('DELETE FROM buyer_accounts WHERE id = $1', [id]);
+  const result = await pool.query(
+    'DELETE FROM buyer_accounts WHERE id = $1',
+    [id],
+    { d1: true }
+  );
   return result.rowCount > 0;
 }
 
@@ -406,7 +431,13 @@ async function deleteBuyerAccountInDB(id) {
 // pointer unchanged from the caller's perspective (no row matches either way).
 async function setActiveBuyerAccountInDB(id) {
   if (!pool.pool) return;
-  await pool.query('UPDATE buyer_accounts SET is_active = (id = $1)', [id]);
+  // (id = $1) evaluates to a boolean in Postgres and to 0/1 in SQLite —
+  // both assignable straight into is_active, no divergence needed here.
+  await pool.query(
+    'UPDATE buyer_accounts SET is_active = (id = $1)',
+    [id],
+    { d1: true }
+  );
 }
 
 // ── AI feed (100-item cap, trimmed here so triggerBatchChaser's bulk-insert
