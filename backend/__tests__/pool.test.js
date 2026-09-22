@@ -130,6 +130,32 @@ describe('Database pool (Neon PostgreSQL)', () => {
       // reporting that something is missing.
       expect(dbPool.NOT_CONFIGURED_MESSAGE).toContain('DATABASE_URL');
     });
+
+    test('ignores the d1 option when no D1 binding is available (Node/Render)', async () => {
+      const result = { rows: [{ id: 1 }] };
+      dbPool.pool = { query: jest.fn().mockResolvedValue(result) };
+
+      await expect(dbPool.query('select 1', [], { d1: true })).resolves.toBe(result);
+      expect(dbPool.pool.query).toHaveBeenCalledWith('select 1', []);
+    });
+
+    test('routes to D1 when a binding is available and { d1: true } is passed', async () => {
+      jest.resetModules();
+      jest.doMock('../src/db/d1Bridge', () => ({
+        getD1Binding: jest.fn().mockReturnValue({ id: 'fake-d1' }),
+        queryD1: jest.fn().mockResolvedValue({ rows: [{ id: 'from-d1' }] }),
+      }));
+      const freshPool = require('../src/db/pool');
+      const d1Bridge = require('../src/db/d1Bridge');
+
+      const result = await freshPool.query('select 1', ['a'], { d1: true });
+
+      expect(d1Bridge.queryD1).toHaveBeenCalledWith({ id: 'fake-d1' }, 'select 1', ['a']);
+      expect(result).toEqual({ rows: [{ id: 'from-d1' }] });
+
+      jest.dontMock('../src/db/d1Bridge');
+      jest.resetModules();
+    });
   });
 
   describe('rows', () => {

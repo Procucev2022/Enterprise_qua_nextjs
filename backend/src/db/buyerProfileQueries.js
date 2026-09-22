@@ -366,6 +366,9 @@ async function updateProfile({ organizationId, userId, patch, categories, actor 
  * major category to group under, so they cannot be displayed or selected.
  */
 async function findCategoryTaxonomy() {
+  // category_division has already been ported to D1 (see d1Bridge.js) — this
+  // opts into it explicitly. On Node/Render, { d1: true } is a no-op and this
+  // still runs the same query against Postgres as before.
   const rows = await pool.rows(
     `select cd.division, cd.category
        from category_division cd
@@ -377,7 +380,9 @@ async function findCategoryTaxonomy() {
        ) ord on ord.division = cd.division
       where cd.division is not null and cd.division <> ''
         and cd.category is not null and cd.category <> ''
-      order by ord.first_seen, cd.division, cd.category`
+      order by ord.first_seen, cd.division, cd.category`,
+    [],
+    { d1: true }
   );
 
   const byDivision = new Map();
