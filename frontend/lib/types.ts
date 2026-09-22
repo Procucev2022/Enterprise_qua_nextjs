@@ -879,6 +879,8 @@ export interface VendorEntry {
   // and GET /api/rfqs/:id/email-preview's quota check), not just local state.
   subscriptionPlan?: VendorSubscriptionPlan;
   rfqDownloadsUsed?: number;
+  freeQuotationCredits?: number;
+  quotedRfqIds?: string[];
 
   // Statutory/location fields a category manager's bulk vendor upload
   // collects (mirrors the real p2pservices Vendor Master sheet — see
