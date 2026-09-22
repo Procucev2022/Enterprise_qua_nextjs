@@ -191,9 +191,13 @@ async function resolveMasterUuid(table, column, value, extraActiveFilter = false
     throw new Error(`Column "${column}" is not a lookup key for master-data table "${table}".`);
   }
   const activeClause = extraActiveFilter ? ' and is_active = true' : '';
+  // role/org_types/master_status have already been ported to D1 (see
+  // d1Bridge.js) — this opts in explicitly. { d1: true } is a no-op on
+  // Node/Render, so this still runs the same query against Postgres there.
   const result = await pool.rows(
     `select uuid from "${table}" where lower(${column}) = lower($1)${activeClause} limit 1`,
-    [value]
+    [value],
+    { d1: true }
   );
   return result[0] ? result[0].uuid : null;
 }

@@ -252,6 +252,14 @@ describe('Identity queries (Neon PostgreSQL)', () => {
       expect(spy.mock.calls[0][0]).toContain('is_active = true');
     });
 
+    // role/org_types/master_status are already ported to D1 (see d1Bridge.js);
+    // this call site opts in explicitly.
+    test('opts into the D1 read path', async () => {
+      const spy = jest.spyOn(dbPool, 'rows').mockResolvedValue([{ uuid: '5005' }]);
+      await identityQueries.resolveMasterUuid('role', 'role_name', 'ClientInitiator');
+      expect(spy.mock.calls[0][2]).toEqual({ d1: true });
+    });
+
     test('returns null when the master row is absent', async () => {
       jest.spyOn(dbPool, 'rows').mockResolvedValue([]);
       await expect(identityQueries.resolveMasterUuid('role', 'role_name', 'Nope')).resolves.toBeNull();
