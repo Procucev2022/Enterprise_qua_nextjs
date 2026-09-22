@@ -370,8 +370,15 @@ async function setActiveBuyerAccountInDB(id) {
 
 async function getAIFeedFromDB() {
   if (!pool.pool) return [];
-  const result = await pool.query('SELECT raw FROM ai_feed ORDER BY sequence DESC');
-  return result.rows.map((row) => row.raw);
+  // sequence is a Postgres-side auto-generated identity column, same as
+  // notifications.sequence — see getNotificationsFromDB's comment. The D1
+  // path orders by SQLite's own implicit rowid instead.
+  const result = await pool.query(
+    'SELECT raw FROM ai_feed ORDER BY sequence DESC',
+    [],
+    { d1: true, d1Text: 'SELECT raw FROM ai_feed ORDER BY rowid DESC' }
+  );
+  return result.rows.map((row) => parseRaw(row.raw));
 }
 
 async function upsertAIFeedItemInDB(item) {
@@ -381,12 +388,18 @@ async function upsertAIFeedItemInDB(item) {
     `INSERT INTO ai_feed (id, raw) VALUES ($1, $2)
      ON CONFLICT (id) DO UPDATE SET raw = EXCLUDED.raw
      RETURNING raw`,
-    [id, JSON.stringify(item)]
+    [id, JSON.stringify(item)],
+    { d1: true }
   );
   await pool.query(
-    `DELETE FROM ai_feed WHERE id NOT IN (SELECT id FROM ai_feed ORDER BY sequence DESC LIMIT 100)`
+    `DELETE FROM ai_feed WHERE id NOT IN (SELECT id FROM ai_feed ORDER BY sequence DESC LIMIT 100)`,
+    [],
+    {
+      d1: true,
+      d1Text: `DELETE FROM ai_feed WHERE id NOT IN (SELECT id FROM ai_feed ORDER BY rowid DESC LIMIT 100)`,
+    }
   );
-  return result.rows[0]?.raw || null;
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 // ── Audit logs (SHA-256 hash chain — sequence must reflect exact insertion
