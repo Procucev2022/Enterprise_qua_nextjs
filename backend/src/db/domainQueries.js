@@ -211,13 +211,19 @@ async function incrementBulkImportSessionInDB(id, delta) {
 
 async function getRFQsFromDB() {
   if (!pool.pool) return [];
-  const result = await pool.query('SELECT raw FROM rfqs ORDER BY created_at DESC');
-  return result.rows.map((row) => row.raw);
+  const result = await pool.query(
+    'SELECT raw FROM rfqs ORDER BY created_at DESC',
+    [],
+    { d1: true }
+  );
+  return result.rows.map((row) => parseRaw(row.raw));
 }
 
 async function upsertRFQInDB(rfq) {
   if (!pool.pool) return null;
   const { id, rfqNumber, category, status, sourcingMode, budget } = rfq;
+  // See upsertEvaluationInDB's comment for why the D1 path needs its own
+  // ISO-formatted timestamp rather than plain CURRENT_TIMESTAMP.
   const result = await pool.query(
     `INSERT INTO rfqs (id, rfq_number, category, status, sourcing_mode, budget, raw, updated_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, now())
@@ -238,14 +244,32 @@ async function upsertRFQInDB(rfq) {
       sourcingMode || null,
       Number.isFinite(Number(budget)) ? Number(budget) : null,
       JSON.stringify(rfq),
-    ]
+    ],
+    {
+      d1: true,
+      d1Text: `INSERT INTO rfqs (id, rfq_number, category, status, sourcing_mode, budget, raw, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT (id) DO UPDATE SET
+       rfq_number = EXCLUDED.rfq_number,
+       category = EXCLUDED.category,
+       status = EXCLUDED.status,
+       sourcing_mode = EXCLUDED.sourcing_mode,
+       budget = EXCLUDED.budget,
+       raw = EXCLUDED.raw,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     RETURNING raw`,
+    }
   );
-  return result.rows[0]?.raw || null;
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 async function deleteRFQInDB(id) {
   if (!pool.pool) return false;
-  const result = await pool.query('DELETE FROM rfqs WHERE id = $1', [id]);
+  const result = await pool.query(
+    'DELETE FROM rfqs WHERE id = $1',
+    [id],
+    { d1: true }
+  );
   return result.rowCount > 0;
 }
 
