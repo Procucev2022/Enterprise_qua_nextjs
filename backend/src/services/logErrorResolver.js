@@ -12,8 +12,19 @@ const pool = require('../db/pool');
 
 class LogErrorResolver {
   constructor(options = {}) {
-    this.logsDir = options.logsDir || path.join(__dirname, '../../logs');
+    this.logsDir = options.logsDir || LogErrorResolver.resolveDefaultLogsDir();
     this.remediationHistory = [];
+  }
+
+  // See LoggerService.resolveDefaultLogsDir — __dirname doesn't exist on
+  // Cloudflare Workers and would otherwise throw at construction time.
+  static resolveDefaultLogsDir() {
+    try {
+      // eslint-disable-next-line no-undef
+      return path.join(__dirname, '../../logs');
+    } catch {
+      return './logs';
+    }
   }
 
   getLogFilePath(logType = 'error') {

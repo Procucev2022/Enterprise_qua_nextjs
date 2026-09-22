@@ -13,7 +13,7 @@ const LOG_LEVELS = {
 
 class LoggerService {
   constructor(options = {}) {
-    this.logsDir = options.logsDir || path.resolve(__dirname, '../../logs');
+    this.logsDir = options.logsDir || LoggerService.resolveDefaultLogsDir();
     this.maxBufferSize = options.maxBufferSize || 1000;
     this.retentionDays = options.retentionDays || 30;
     this.maxFileSizeBytes = options.maxFileSizeBytes || 10 * 1024 * 1024; // 10MB default
@@ -21,6 +21,22 @@ class LoggerService {
     this.inMemoryLogs = [];
 
     this.ensureLogsDirectory();
+  }
+
+  /**
+   * `__dirname` doesn't exist on Cloudflare Workers (no real filesystem, and
+   * the bundle isn't loaded from disk), which throws a ReferenceError at
+   * import time before ensureLogsDirectory()'s own try/catch ever runs. Log
+   * files themselves are best-effort everywhere (see ensureLogsDirectory) —
+   * this just keeps constructing the service from throwing on Workers.
+   */
+  static resolveDefaultLogsDir() {
+    try {
+      // eslint-disable-next-line no-undef
+      return path.resolve(__dirname, '../../logs');
+    } catch {
+      return './logs';
+    }
   }
 
   ensureLogsDirectory() {
