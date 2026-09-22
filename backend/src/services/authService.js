@@ -107,7 +107,7 @@ function verifyPassword(plainPassword, storedHash, storedSalt) {
  * more than one row.
  */
 async function loadIdentityUser(normalizedEmail, mobile) {
-  if (!pool.pool) {
+  if (!pool.hasStorage()) {
     throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
   }
   try {
@@ -584,7 +584,7 @@ async function registerUser(payload, ipAddress) {
   if (!password) throw new Error(AUTH_MESSAGES.EMAIL_PASSWORD_REQUIRED);
   if (!mobile) throw new Error(AUTH_MESSAGES.MOBILE_REQUIRED);
 
-  if (!pool.pool) {
+  if (!pool.hasStorage()) {
     throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
   }
 
@@ -623,7 +623,7 @@ async function registerUser(payload, ipAddress) {
  * Get all registered users (for admin inspection).
  */
 async function getAllUsers() {
-  if (!pool.pool) {
+  if (!pool.hasStorage()) {
     throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
   }
   const users = await identityQueries.listUsers();

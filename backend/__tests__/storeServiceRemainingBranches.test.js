@@ -196,7 +196,7 @@ describe('Store Service — remaining branch coverage', () => {
       const dbRfqs = [{ id: 'rfq-db-1', title: 'DB RFQ' }];
       let freshStore;
       jest.isolateModules(() => {
-        jest.doMock('../src/db/pool', () => ({ pool: {} }));
+        jest.doMock('../src/db/pool', () => ({ pool: {}, hasStorage: () => true }));
         jest.doMock('../src/db/domainQueries', () =>
           emptyDomainQueriesMock({
             getVendorsFromDB: jest.fn().mockResolvedValue(dbVendors),
@@ -221,7 +221,7 @@ describe('Store Service — remaining branch coverage', () => {
       const dbAuditLogs = [{ id: 'log-db-1', action: 'DB Audit Entry' }];
       let freshStore;
       jest.isolateModules(() => {
-        jest.doMock('../src/db/pool', () => ({ pool: {} }));
+        jest.doMock('../src/db/pool', () => ({ pool: {}, hasStorage: () => true }));
         jest.doMock('../src/db/domainQueries', () =>
           emptyDomainQueriesMock({
             getEvaluationsFromDB: jest.fn().mockResolvedValue(dbEvaluations),
@@ -247,7 +247,7 @@ describe('Store Service — remaining branch coverage', () => {
       const acc2 = { id: 'buyer-db-2', organizationName: 'DB Buyer Two' };
       let freshStore;
       jest.isolateModules(() => {
-        jest.doMock('../src/db/pool', () => ({ pool: {} }));
+        jest.doMock('../src/db/pool', () => ({ pool: {}, hasStorage: () => true }));
         jest.doMock('../src/db/domainQueries', () =>
           emptyDomainQueriesMock({
             getBuyerAccountsFromDB: jest.fn().mockResolvedValue({ accounts: [acc1, acc2], activeId: 'buyer-db-2' }),
@@ -266,7 +266,7 @@ describe('Store Service — remaining branch coverage', () => {
       const acc1 = { id: 'buyer-db-1', organizationName: 'DB Buyer One' };
       let freshStore;
       jest.isolateModules(() => {
-        jest.doMock('../src/db/pool', () => ({ pool: {} }));
+        jest.doMock('../src/db/pool', () => ({ pool: {}, hasStorage: () => true }));
         jest.doMock('../src/db/domainQueries', () =>
           emptyDomainQueriesMock({
             getBuyerAccountsFromDB: jest.fn().mockResolvedValue({ accounts: [acc1], activeId: 'no-such-id' }),
@@ -287,7 +287,7 @@ describe('Store Service — remaining branch coverage', () => {
     test('treats empty tables as an empty store, still reporting a successful load', async () => {
       let freshStore;
       jest.isolateModules(() => {
-        jest.doMock('../src/db/pool', () => ({ pool: {} }));
+        jest.doMock('../src/db/pool', () => ({ pool: {}, hasStorage: () => true }));
         jest.doMock('../src/db/domainQueries', () => emptyDomainQueriesMock());
         freshStore = require('../src/services/storeService');
       });
@@ -304,7 +304,7 @@ describe('Store Service — remaining branch coverage', () => {
     test('reports the read as unavailable when a query throws, without inventing records', async () => {
       let freshStore;
       jest.isolateModules(() => {
-        jest.doMock('../src/db/pool', () => ({ pool: {} }));
+        jest.doMock('../src/db/pool', () => ({ pool: {}, hasStorage: () => true }));
         jest.doMock('../src/db/domainQueries', () =>
           emptyDomainQueriesMock({
             getVendorsFromDB: jest.fn().mockRejectedValue(new Error('ECONNREFUSED')),

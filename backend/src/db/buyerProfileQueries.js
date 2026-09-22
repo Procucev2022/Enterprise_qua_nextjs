@@ -299,7 +299,7 @@ async function replaceCategories(client, organizationId, userId, categories) {
  * would make the profile disagree with the name shown in the header.
  */
 async function updateProfile({ organizationId, userId, patch, categories, actor }) {
-  if (!pool.pool) {
+  if (!pool.hasStorage()) {
     throw new Error(pool.NOT_CONFIGURED_MESSAGE);
   }
   if (!organizationId) {

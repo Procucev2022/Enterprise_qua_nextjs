@@ -67,7 +67,7 @@ class StoreService {
    * being swallowed: there is no second datastore to fall back to.
    */
   async hydrateFromDB() {
-    if (!pool.pool) {
+    if (!pool.hasStorage()) {
       this.isHydratedFromDB = false;
       logger.error(
         'DATABASE_URL is not set — no records can be loaded and every data-backed request will fail.',
@@ -163,7 +163,7 @@ class StoreService {
    * domainQueries.js — nothing to confirm against.
    */
   async confirmVendorPersisted(vendor) {
-    if (!pool.pool) return { persisted: null };
+    if (!pool.hasStorage()) return { persisted: null };
     try {
       await domainQueries.upsertVendorInDB(vendor);
       return { persisted: true };
@@ -293,7 +293,7 @@ class StoreService {
     if (!email) return null;
     const target = email.toLowerCase();
 
-    if (!pool.pool) {
+    if (!pool.hasStorage()) {
       return this.buyerAccounts.find((a) => (a.corporateEmail || '').toLowerCase() === target) || null;
     }
 
@@ -389,7 +389,7 @@ class StoreService {
    * Same pattern as getPaymentLinksForVendor/getPaymentLinksForBuyer.
    */
   async getVendors(scopedBuyerId = null) {
-    if (pool.pool) {
+    if (pool.hasStorage()) {
       const allFromDB = await domainQueries.getVendorsFromDB();
       const byId = new Map(this.vendors.map((v) => [v.id, v]));
       for (const vendor of allFromDB) byId.set(vendor.id, vendor);
@@ -568,7 +568,7 @@ class StoreService {
     // "no in-memory-only data path" principle). A bulk import with no database
     // configured must fail loudly, not silently accept rows into `this.vendors`
     // that vanish on the next restart and were never really "imported".
-    if (!pool.pool) {
+    if (!pool.hasStorage()) {
       const err = new Error('Database is not configured — vendors cannot be bulk-imported right now.');
       err.statusCode = 500;
       throw err;
@@ -777,7 +777,7 @@ class StoreService {
   async getPaymentLinkByZohoId(zohoPaymentLinkId) {
     const cached = this.paymentLinks.find((l) => l.zohoPaymentLinkId === zohoPaymentLinkId);
     if (cached) return cached;
-    if (!pool.pool) return null;
+    if (!pool.hasStorage()) return null;
     const fromDB = await domainQueries.getPaymentLinkByZohoIdFromDB(zohoPaymentLinkId);
     if (!fromDB) return null;
     if (!this.paymentLinks.some((l) => l.id === fromDB.id)) {
@@ -793,7 +793,7 @@ class StoreService {
    * mark, which is not guaranteed to be the process that created the link.
    */
   async getPaymentLinksByStatusIn(statuses) {
-    if (pool.pool) {
+    if (pool.hasStorage()) {
       const allFromDB = await domainQueries.getPaymentLinksFromDB();
       const byId = new Map(this.paymentLinks.map((l) => [l.id, l]));
       for (const link of allFromDB) {
@@ -811,7 +811,7 @@ class StoreService {
    * otherwise be invisible.
    */
   async getPaymentLinksForVendor(vendorId) {
-    if (pool.pool) {
+    if (pool.hasStorage()) {
       const allFromDB = await domainQueries.getPaymentLinksFromDB();
       const byId = new Map(this.paymentLinks.map((l) => [l.id, l]));
       for (const link of allFromDB) byId.set(link.id, link);
@@ -824,7 +824,7 @@ class StoreService {
 
   /** Same as getPaymentLinksForVendor, scoped to a buyer account instead. */
   async getPaymentLinksForBuyer(buyerAccountId) {
-    if (pool.pool) {
+    if (pool.hasStorage()) {
       const allFromDB = await domainQueries.getPaymentLinksFromDB();
       const byId = new Map(this.paymentLinks.map((l) => [l.id, l]));
       for (const link of allFromDB) byId.set(link.id, link);
@@ -843,7 +843,7 @@ class StoreService {
   async getPaymentLinkById(id) {
     const cached = this.paymentLinks.find((l) => l.id === id);
     if (cached) return cached;
-    if (!pool.pool) return null;
+    if (!pool.hasStorage()) return null;
     const allFromDB = await domainQueries.getPaymentLinksFromDB();
     const fromDB = allFromDB.find((l) => l.id === id);
     if (!fromDB) return null;
@@ -1047,7 +1047,7 @@ class StoreService {
    * (e.g. check-email CLI, background workers) are merged into memory.
    */
   async syncRFQsFromDB() {
-    if (!pool.pool) return this.getRFQs();
+    if (!pool.hasStorage()) return this.getRFQs();
     try {
       const allFromDB = await domainQueries.getRFQsFromDB();
       if (Array.isArray(allFromDB)) {
@@ -1067,7 +1067,7 @@ class StoreService {
 
   async getRFQByIdAsync(id) {
     let rfq = this.getRFQById(id);
-    if (!rfq && pool.pool) {
+    if (!rfq && pool.hasStorage()) {
       await this.syncRFQsFromDB();
       rfq = this.getRFQById(id);
     }
@@ -2484,7 +2484,7 @@ class StoreService {
     // the entire vendor table just to keep the first 500 — the same
     // performance disaster the CM's "Load more" pagination hit, just
     // triggered by something as ordinary as loading the app.
-    if (!scopedBuyerId && pool.pool) {
+    if (!scopedBuyerId && pool.hasStorage()) {
       const page = await domainQueries.getVendorsPageFromDB({ limit: MAX_BOOTSTRAP_VENDORS, offset: 0, publicOnly: true });
       vendors = page.rows;
       vendorsTotal = page.total;

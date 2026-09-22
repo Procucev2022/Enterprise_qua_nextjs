@@ -1082,6 +1082,16 @@ describe('API Route Endpoints', () => {
     });
 
     test('POST /api/rfqs/:id/quotes error handling for missing fields and invalid id', async () => {
+      // The 'vendor' session's own profile was deleted by the earlier
+      // "DELETE /api/vendors/:id removes vendor" test in this file, and
+      // addQuote 400s before ever checking the RFQ id if the caller has no
+      // vendor profile at all — so this recreates one to exercise the actual
+      // missing-field/invalid-id branches being tested here.
+      await request(app).post('/api/vendors').set(authHeader('vendor')).send({
+        name: 'Apex Supplies Ltd',
+        majorCategory: 'Engineering Spares - Mechanical',
+      });
+
       const failRes = await request(app).post('/api/rfqs/rfq-001/quotes').set(authHeader('vendor')).send({});
       expect(failRes.statusCode).toBe(400);
 

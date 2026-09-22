@@ -142,7 +142,7 @@ async function getVendors(req, res, next) {
     // re-parsed the entire directory on every click — the actual scale risk.
     // getVendorsPageFromDB applies the same public-or-mine scoping in SQL
     // when scopedBuyerId is set (skipped entirely for 'all').
-    if (page !== undefined && pool.pool) {
+    if (page !== undefined && pool.hasStorage()) {
       const pageNumber = Math.max(1, parseInt(page, 10) || 1);
       const pageSize = Math.min(
         MAX_VENDOR_PAGE_SIZE,
