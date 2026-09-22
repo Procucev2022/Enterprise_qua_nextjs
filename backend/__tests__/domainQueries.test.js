@@ -841,6 +841,30 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       await expect(domainQueries.getPaymentLinkByZohoIdFromDB('zoho-x')).resolves.toBeNull();
     });
 
+    // payment_links has been ported to D1 (see d1Bridge.js), which has no
+    // JSON column type — `raw` comes back as a TEXT string there, not an
+    // already-parsed object the way pg's jsonb driver returns it.
+    test('getPaymentLinksFromDB parses a string raw column (D1)', async () => {
+      const link = { id: 'pl-1', status: 'CREATED' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(link) }] }) };
+
+      await expect(domainQueries.getPaymentLinksFromDB()).resolves.toEqual([link]);
+    });
+
+    test('getPaymentLinkByZohoIdFromDB parses a string raw column (D1)', async () => {
+      const link = { id: 'pl-1', zohoPaymentLinkId: 'zoho-1' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(link) }] }) };
+
+      await expect(domainQueries.getPaymentLinkByZohoIdFromDB('zoho-1')).resolves.toEqual(link);
+    });
+
+    test('upsertPaymentLinkInDB parses a string raw column (D1)', async () => {
+      const link = { id: 'pl-1', status: 'CREATED' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(link) }] }) };
+
+      await expect(domainQueries.upsertPaymentLinkInDB(link)).resolves.toEqual(link);
+    });
+
     test('upsertPaymentLinkInDB serializes the link and returns the stored raw row', async () => {
       const link = { id: 'pl-1', zohoPaymentLinkId: 'zoho-1', vendorId: 'v-1', status: 'CREATED' };
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: link }] }) };

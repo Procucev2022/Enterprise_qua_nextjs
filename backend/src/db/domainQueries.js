@@ -488,7 +488,9 @@ async function markAllNotificationsReadInDB(recipientType, recipientId) {
 async function getZohoOAuthTokenFromDB() {
   if (!pool.pool) return null;
   const result = await pool.query(
-    "SELECT access_token, expiry_time FROM zoho_oauth_token WHERE id = 'default'"
+    "SELECT access_token, expiry_time FROM zoho_oauth_token WHERE id = 'default'",
+    [],
+    { d1: true }
   );
   return result.rows[0] || null;
 }
@@ -497,29 +499,49 @@ async function upsertZohoOAuthTokenInDB({ accessToken, expiryTime }) {
   if (!pool.pool) return null;
   const result = await pool.query(
     `INSERT INTO zoho_oauth_token (id, access_token, expiry_time, last_updated)
-     VALUES ('default', $1, $2, now())
+     VALUES ('default', $1, $2, CURRENT_TIMESTAMP)
      ON CONFLICT (id) DO UPDATE SET
        access_token = EXCLUDED.access_token,
        expiry_time = EXCLUDED.expiry_time,
-       last_updated = now()
+       last_updated = CURRENT_TIMESTAMP
      RETURNING access_token, expiry_time`,
-    [accessToken || null, expiryTime || null]
+    [accessToken || null, expiryTime || null],
+    { d1: true }
   );
   return result.rows[0] || null;
 }
 
 // ── Zoho payment links ──────────────────────────────────────────────────────────
 
+/**
+ * Postgres's jsonb columns are parsed into objects by the pg driver already;
+ * D1 has no JSON column type, so `raw` is stored/read there as plain TEXT and
+ * comes back as a string. Parsing only when it's a string keeps this one
+ * function correct against either backend without the callers needing to
+ * know which one actually served the row.
+ */
+function parseRaw(value) {
+  return typeof value === 'string' ? JSON.parse(value) : value;
+}
+
 async function getPaymentLinksFromDB() {
   if (!pool.pool) return [];
-  const result = await pool.query('SELECT raw FROM payment_links ORDER BY created_at DESC');
-  return result.rows.map((row) => row.raw);
+  const result = await pool.query(
+    'SELECT raw FROM payment_links ORDER BY created_at DESC',
+    [],
+    { d1: true }
+  );
+  return result.rows.map((row) => parseRaw(row.raw));
 }
 
 async function getPaymentLinkByZohoIdFromDB(zohoPaymentLinkId) {
   if (!pool.pool) return null;
-  const result = await pool.query('SELECT raw FROM payment_links WHERE zoho_payment_link_id = $1', [zohoPaymentLinkId]);
-  return result.rows[0]?.raw || null;
+  const result = await pool.query(
+    'SELECT raw FROM payment_links WHERE zoho_payment_link_id = $1',
+    [zohoPaymentLinkId],
+    { d1: true }
+  );
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 async function upsertPaymentLinkInDB(link) {
@@ -527,7 +549,7 @@ async function upsertPaymentLinkInDB(link) {
   const { id, zohoPaymentLinkId, vendorId, buyerAccountId, payerType, status } = link;
   const result = await pool.query(
     `INSERT INTO payment_links (id, zoho_payment_link_id, vendor_id, buyer_account_id, payer_type, status, raw, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+     VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
      ON CONFLICT (id) DO UPDATE SET
        zoho_payment_link_id = EXCLUDED.zoho_payment_link_id,
        vendor_id = EXCLUDED.vendor_id,
@@ -535,11 +557,12 @@ async function upsertPaymentLinkInDB(link) {
        payer_type = EXCLUDED.payer_type,
        status = EXCLUDED.status,
        raw = EXCLUDED.raw,
-       updated_at = now()
+       updated_at = CURRENT_TIMESTAMP
      RETURNING raw`,
-    [id, zohoPaymentLinkId || null, vendorId || null, buyerAccountId || null, payerType || 'vendor', status || null, JSON.stringify(link)]
+    [id, zohoPaymentLinkId || null, vendorId || null, buyerAccountId || null, payerType || 'vendor', status || null, JSON.stringify(link)],
+    { d1: true }
   );
-  return result.rows[0]?.raw || null;
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 module.exports = {
