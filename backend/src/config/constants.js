@@ -848,6 +848,21 @@ const EMAIL_GATEWAY_MESSAGES = {
   INVALID_RFQ_REFERENCED: 'The referenced RFQ {rfqNumber} was not found in the system.',
   VENDOR_NOT_FOUND_FOR_QUOTE: 'No vendor profile found for sender {address}.',
   VENDOR_GATEWAY_REQUIRES_RFQ: 'Vendor email gateway only processes quotation replies for existing RFQs.',
+  CREDITS_EXHAUSTED_DETAIL: 'Quotation email from {vendorName} for RFQ {rfqNumber} acknowledged: 5 free quotation credits exhausted. Subscription upgrade email sent.',
+  CREDITS_EXHAUSTED_SUBJECT: 'Action Required – Upgrade Plan to Submit Quotation for RFQ {rfqNumber}',
+};
+
+/** Default free RFQ quotation credits granted to each vendor */
+const VENDOR_FREE_CREDITS_LIMIT = 5;
+
+/** Notification email content for vendor credit exhaustion */
+const VENDOR_CREDITS_EXHAUSTED_NOTIFICATION = {
+  SUBJECT: 'Action Required – 5 Free Quotation Credits Exhausted for RFQ #{rfqNumber}',
+  HEADLINE: 'PROCUCEV ENTERPRISE',
+  SUBLINE: 'Free Quotation Credits Exhausted',
+  EXHAUSTION_MESSAGE: 'Your 5 free RFQ quotation credits have been fully utilized.',
+  UPGRADE_BUTTON_LABEL: 'Click Here to Go to Portal and Upgrade Plan',
+  REASSURANCE: 'Your quotation has not been submitted yet. To continue submitting quotations and have your bids evaluated by buyers, please upgrade your subscription plan on the vendor portal.',
 };
 
 /** Notification email content for unauthorized email senders. */
@@ -1382,6 +1397,8 @@ module.exports = {
   EMAIL_GATEWAY_SMTP_PORTS,
   UNAUTHORIZED_BUYER_NOTIFICATION,
   RFQ_ACKNOWLEDGEMENT_NOTIFICATION,
+  VENDOR_FREE_CREDITS_LIMIT,
+  VENDOR_CREDITS_EXHAUSTED_NOTIFICATION,
   ZOHO_CONFIG,
   ZOHO_SUBSCRIPTION_PRICING,
   computeZohoPlanAmount,

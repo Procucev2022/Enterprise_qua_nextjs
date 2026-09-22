@@ -1,7 +1,11 @@
 const nodemailer = require('nodemailer');
 const dns = require('dns');
 const { logger } = require('./loggerService');
-const { UNAUTHORIZED_BUYER_NOTIFICATION, RFQ_ACKNOWLEDGEMENT_NOTIFICATION } = require('../config/constants');
+const {
+  UNAUTHORIZED_BUYER_NOTIFICATION,
+  RFQ_ACKNOWLEDGEMENT_NOTIFICATION,
+  VENDOR_CREDITS_EXHAUSTED_NOTIFICATION,
+} = require('../config/constants');
 
 // Force Node.js DNS resolver to prefer IPv4 over IPv6.
 // Cloud environments like Render lack IPv6 egress routing; without this,
@@ -366,7 +370,7 @@ function emailGatewayAddress() {
 }
 
 function buildRfqInviteEmail(to, context = {}) {
-  const { rfq = {}, recipientName, buyerEmail, cc } = context;
+  const { rfq = {}, recipientName, buyerEmail, cc, freeCreditsRemaining, isSubscribed } = context;
   const items = Array.isArray(rfq.extractedEntities) && rfq.extractedEntities.length > 0
     ? rfq.extractedEntities
     : Array.isArray(rfq.items) && rfq.items.length > 0
@@ -427,6 +431,13 @@ function buildRfqInviteEmail(to, context = {}) {
         : ''
     }
     <div style="margin: 20px 0; padding: 18px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px;">
+      ${
+        isSubscribed
+          ? '<div style="background: #f0fdf4; border: 1px solid #86efac; color: #166534; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px;">✨ <strong>Subscribed Supplier:</strong> You have active subscription access with unlimited quotation submissions.</div>'
+          : freeCreditsRemaining !== undefined
+          ? `<div style="background: #f8fafc; border: 1px solid #cbd5e1; color: #334155; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px;">📊 <strong>Available Free Quotation Credits:</strong> ${freeCreditsRemaining} / 5 remaining.${freeCreditsRemaining === 0 ? ' <span style="color: #b91c1c; font-weight: bold;">(Plan upgrade required to submit quote)</span>' : ''}</div>`
+          : ''
+      }
       <h4 style="margin: 0 0 10px 0; color: #1e40af; font-size: 15px; font-weight: 700;">How to Submit Your Quotation</h4>
       <p style="margin: 0 0 10px 0; font-size: 13px; color: #1e293b; line-height: 1.5;">
         You can submit your bid either by <strong>replying directly to this email at <a href="mailto:${gatewayEmail}" style="color: #0284c7; font-weight: bold;">${gatewayEmail}</a></strong> (keep the subject line intact with RFQ number <strong>#${rfq.rfqNumber}</strong>${buyerCc ? ` and keep buyer CC'd: <strong>${buyerCc}</strong>` : ''}), or online via the Procucev Vendor Portal.
@@ -537,6 +548,109 @@ async function sendQuoteFailureEmail(toOrParams, maybeContext) {
   return deliverVendor(buildQuoteFailureEmail(toOrParams, maybeContext), 'quote failure notification email');
 }
 
+// ── Vendor credits exhausted notification → vendor ───────────────────────────
+
+function buildVendorCreditsExhaustedEmail(toOrParams, maybeContext) {
+  const { to, context } = normalizeToAndContext(toOrParams, maybeContext);
+  const { rfq = {}, rfqNumber, rfqTitle, vendorName, cc, upgradeUrl } = context;
+  const targetRfqNumber = rfqNumber || rfq.rfqNumber || 'RFQ';
+  const targetTitle = rfqTitle || rfq.title || 'Procurement Requisition';
+  const portalUpgradeLink = upgradeUrl || vendorUpgradeUrl();
+
+  const items = Array.isArray(rfq.extractedEntities) && rfq.extractedEntities.length > 0
+    ? rfq.extractedEntities
+    : Array.isArray(rfq.items) && rfq.items.length > 0
+      ? rfq.items
+      : Array.isArray(rfq.lineItems)
+        ? rfq.lineItems
+        : [];
+
+  const itemRows = items
+    .slice(0, 15)
+    .map(
+      (it, idx) =>
+        `<tr>
+          <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-weight: 600; color: #0f172a;">${idx + 1}. ${it.itemName || it.name || 'Line Item'}${it.technicalSpecs || it.specifications || it.specs || it.description ? `<br/><span style="font-weight: normal; font-size: 11px; color: #64748b;">Specs: ${it.technicalSpecs || it.specifications || it.specs || it.description}</span>` : ''}</td>
+          <td style="padding: 8px 10px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #1e293b;">${it.quantity != null ? it.quantity : 1} ${it.unit || it.uom || 'Units'}</td>
+          <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-size: 12px; color: #475569;">${it.deliveryLocation || it.location || rfq.deliveryLocation || '-'}</td>
+        </tr>`
+    )
+    .join('');
+
+  const budgetFormatted = rfq.budget != null && rfq.budget !== '' ? `₹${Number(rfq.budget).toLocaleString('en-IN')}` : null;
+  const subject = `Action Required – 5 Free Quotation Credits Exhausted for RFQ #${targetRfqNumber}`;
+
+  const inner = `
+    <p>${vendorName ? `Dear <strong>${vendorName}</strong>,` : 'Hello,'}</p>
+    <p>We received your email quotation response regarding RFQ <strong>#${targetRfqNumber}</strong> (${targetTitle}).</p>
+    
+    <div style="background: #fffbeb; border: 1px solid #f59e0b; color: #92400e; padding: 14px; border-radius: 6px; margin: 16px 0;">
+      <strong>Notice: Free Quotation Credits Exhausted</strong><br/>
+      Your <strong>5 free RFQ quotation credits</strong> have been fully used. In accordance with Enterprise QUA procurement policies, an active subscription plan is required to continue submitting quotations and creating bids.
+    </div>
+
+    <h3 style="font-size: 14px; margin: 16px 0 8px 0; color: #0f172a; text-transform: uppercase;">Relevant Current RFQ Details</h3>
+    <table style="width: 100%; border-collapse: collapse; margin-bottom: 16px; background: #f8fafc;">
+      ${row('RFQ Number', targetRfqNumber)}
+      ${row('Requirement', targetTitle)}
+      ${row('Category', rfq.category)}
+      ${row('Target Delivery Date', rfq.targetDeliveryDate || rfq.deadline)}
+      ${row('Delivery Location', rfq.deliveryLocation)}
+      ${budgetFormatted ? row('Estimated Budget', budgetFormatted) : ''}
+    </table>
+
+    ${
+      itemRows
+        ? `<h4 style="font-size: 12px; margin: 0 0 6px 0; color: #475569; text-transform: uppercase;">Requested Line Items</h4>
+           <table style="width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 12px;">
+             <thead><tr style="background: #f1f5f9; text-align: left;">
+               <th style="padding: 8px 10px; border: 1px solid #cbd5e1;">Item Description</th>
+               <th style="padding: 8px 10px; border: 1px solid #cbd5e1; text-align: center;">Quantity</th>
+               <th style="padding: 8px 10px; border: 1px solid #cbd5e1;">Location</th>
+             </tr></thead>
+             <tbody>${itemRows}</tbody>
+           </table>`
+        : ''
+    }
+
+    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 14px; margin: 16px 0;">
+      <h4 style="margin: 0 0 8px 0; color: #0f172a; font-size: 13px;">Mandatory Information Required for Quotation</h4>
+      <p style="margin: 0 0 8px 0; font-size: 12px; color: #475569;">When you upgrade and submit your quotation, please ensure the following mandatory details are provided:</p>
+      <ul style="margin: 0; padding-left: 20px; font-size: 12px; color: #334155; line-height: 1.6;">
+        <li><strong>Unit Price (₹)*</strong> — <span style="color: #b91c1c; font-weight: bold;">Mandatory</span>: Quoted unit rate (must be greater than ₹0) for each line item.</li>
+        <li><strong>Lead Time (Days)</strong> — Expected delivery timeline from PO issuance.</li>
+        <li><strong>Warranty (Years)</strong> — Product/service warranty coverage.</li>
+        <li><strong>Payment Terms</strong> — Commercial terms (e.g., Net 30, Advance).</li>
+        <li><strong>Remarks</strong> — Technical compliance, delivery terms, or scope notes.</li>
+      </ul>
+    </div>
+
+    <div style="text-align: center; margin: 24px 0;">
+      <a href="${portalUpgradeLink}" style="background: #0284c7; color: #ffffff; padding: 14px 28px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 14px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+        Click Here to Go to Portal and Upgrade Plan
+      </a>
+      <p style="margin: 8px 0 0 0; font-size: 12px; color: #64748b;">Or visit: <a href="${portalUpgradeLink}" style="color: #0284c7;">${portalUpgradeLink}</a></p>
+    </div>
+
+    <p style="font-size: 12px; color: #64748b;">
+      <em>Please note: No bid has been created from your reply. Once your subscription plan is active on the vendor portal, your quotation can be processed and forwarded to the buyer.</em>
+    </p>
+  `;
+
+  return {
+    from: vendorFromAddress(),
+    to,
+    replyTo: vendorGatewayAddress(),
+    cc: cc || undefined,
+    subject,
+    html: wrapEmail('PROCUCEV ENTERPRISE', 'Free Quotation Credits Exhausted', inner),
+  };
+}
+
+async function sendVendorCreditsExhaustedEmail(toOrParams, maybeContext) {
+  return deliverVendor(buildVendorCreditsExhaustedEmail(toOrParams, maybeContext), 'vendor credits exhausted email');
+}
+
 // ── Vendor quote → owning buyer ─────────────────────────────────────────────
 
 function buildQuoteReceivedEmail(to, { rfq, quote, recipientName }) {
@@ -592,6 +706,12 @@ async function sendRequisitionNotificationEmail(to, rfq, fromEmail) {
 function vendorSignInUrl() {
   const base = process.env.APP_PUBLIC_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
   return `${String(base).replace(/\/+$/, '')}/login`;
+}
+
+/** Where a supplier upgrades their subscription plan. */
+function vendorUpgradeUrl() {
+  const base = process.env.APP_PUBLIC_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
+  return `${String(base).replace(/\/+$/, '')}/vendor/vendor-subscription`;
 }
 
 /** Where a buyer registers or signs in. Configurable because it differs per deployment. */
@@ -1016,6 +1136,9 @@ module.exports = {
   sendQuoteAcknowledgementEmail,
   buildQuoteFailureEmail,
   sendQuoteFailureEmail,
+  vendorUpgradeUrl,
+  buildVendorCreditsExhaustedEmail,
+  sendVendorCreditsExhaustedEmail,
   isConfigured,
   isVendorConfigured,
 };

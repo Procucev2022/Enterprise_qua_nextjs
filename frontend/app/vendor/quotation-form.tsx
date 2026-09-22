@@ -78,6 +78,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const [myVendorId, setMyVendorId] = useState<string | null>(null);
   const [myVendorName, setMyVendorName] = useState<string>('');
   const [myAddedByBuyerCompany, setMyAddedByBuyerCompany] = useState<string | null>(null);
+  const [freeCreditsRemaining, setFreeCreditsRemaining] = useState<number | null>(null);
   // isOwnBuyerRfq depends on myAddedByBuyerCompany, which only exists once
   // this fetch resolves — the deep-link auto-open effect below waits on this
   // flag so it doesn't judge a real direct-buyer RFQ as locked just because
@@ -112,6 +113,9 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
           setMyVendorId(data.data.id);
           setMyVendorName(data.data.name);
           setMyAddedByBuyerCompany(data.data.addedByBuyerCompany || null);
+          if (data.data.freeQuotationCredits !== undefined) {
+            setFreeCreditsRemaining(Number(data.data.freeQuotationCredits));
+          }
         }
       } catch {
         // Leave myVendorId null — bidding/download actions will surface a
@@ -250,6 +254,11 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
+        if (data.upgradeRequired || res.status === 403) {
+          showToast('Quotation Credits Exhausted', data.error || 'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.', 'warning');
+          router.push('/vendor/vendor-subscription');
+          return;
+        }
         throw new Error(data.error || 'Failed to submit quote.');
       }
       addAuditLog(
@@ -356,7 +365,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* VENDOR SOURCING SUMMARY CARDS */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs font-medium">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs font-medium">
         <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900/80 shadow-sm flex items-center justify-between">
           <div>
             <div className="text-[10px] text-slate-500 dark:text-gray-400 uppercase tracking-wider">RFQs Received (Active Enquiries)</div>
@@ -374,6 +383,20 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
           </div>
           <div className="p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400">
             <Mail size={16} />
+          </div>
+        </div>
+
+        <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900/80 shadow-sm flex items-center justify-between">
+          <div>
+            <div className="text-[10px] text-slate-500 dark:text-gray-400 uppercase tracking-wider">Quotation Credits</div>
+            <span className="text-2xl font-black text-amber-600 dark:text-amber-400 mt-1 mono">
+              {vendorSubscription === 'connect' || vendorSubscription === 'select'
+                ? 'Active Plan'
+                : `${freeCreditsRemaining ?? 5} Free Left`}
+            </span>
+          </div>
+          <div className="p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400">
+            <ShieldCheck size={16} />
           </div>
         </div>
       </div>
