@@ -91,9 +91,17 @@ function verifyStoredPassword(submitted, stored) {
   return crypto.timingSafeEqual(a, b);
 }
 
-/** Coerce a Postgres boolean to a plain boolean, tolerating null. */
+/**
+ * Coerce a stored boolean to a plain JS boolean, tolerating null.
+ *
+ * pg's driver returns a real boolean for a Postgres BOOLEAN column. SQLite
+ * has no boolean type at all — D1 stores/returns `true`/`false` literals as
+ * the integers 1/0, so `1 === true` is false and every flag (isActive,
+ * isApproved, isSelfClient) silently read as "off" for every D1-backed
+ * account until this handled both.
+ */
 function flag(value) {
-  return value === true;
+  return value === true || value === 1 || value === '1';
 }
 
 /**

@@ -66,6 +66,18 @@ function counter(value) {
 }
 
 /**
+ * Coerce a stored boolean column to a plain JS boolean.
+ *
+ * pg returns a real boolean for BOOLEAN columns. SQLite has no boolean type
+ * — D1 stores/returns true/false literals as the integers 1/0, so a bare
+ * `=== true` reads every D1-backed row's flag as false. See identityQueries.js's
+ * flag() for the same fix applied to the identity tables.
+ */
+function flag(value) {
+  return value === true || value === 1 || value === '1';
+}
+
+/**
  * Fallback match key for a vendor name.
  *
  * Lowercases, strips punctuation, collapses whitespace and removes trailing
@@ -1092,8 +1104,8 @@ function mapRowToMapping(row) {
     attemptCount: counter(row.attempt_count),
     poCount: counter(row.po_count),
     totalSpend: counter(row.total_spend),
-    hasPoHistory: row.has_po_history === true,
-    isNewCategorySuggestion: row.is_new_category_suggestion === true,
+    hasPoHistory: flag(row.has_po_history),
+    isNewCategorySuggestion: flag(row.is_new_category_suggestion),
     suggestedNewCategory: text(row.suggested_new_category),
     reviewedBy: text(row.reviewed_by),
     reviewedAt: row.reviewed_at,
