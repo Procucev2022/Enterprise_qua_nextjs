@@ -8,6 +8,8 @@
 import { httpServerHandler } from 'cloudflare:node';
 import { env, waitUntil } from 'cloudflare:workers';
 import app from './app.js';
+import emailGatewayService from './services/emailGatewayService.js';
+import zohoReconciliationService from './services/zohoReconciliationService.js';
 
 // d1Bridge.js (required by the CommonJS backend, deep under app.js) cannot
 // reach `env` itself: `require('cloudflare:workers')` at call time throws
@@ -35,4 +37,45 @@ globalThis.__CF_WAIT_UNTIL__ = waitUntil;
 const PORT = 4000;
 app.listen(PORT);
 
-export default httpServerHandler({ port: PORT });
+const httpHandler = httpServerHandler({ port: PORT });
+
+// server.js's bootstrapServer() (Node/Render only) starts both of these via
+// setInterval — emailGatewayService.startPolling() (IMAP -> auto-RFQ
+// ingestion) and zohoReconciliationService.startPolling() (payment-link
+// reconciliation). worker.mjs never calls bootstrapServer(), and a
+// setInterval wouldn't survive a Worker's request-scoped lifetime even if it
+// did — Workers has no persistent background process to hold it. Cloudflare
+// Cron Triggers (the `crons` array in wrangler.jsonc, wired to this
+// `scheduled` export) are the platform's actual mechanism for periodic
+// background work: each trigger fire is its own short-lived invocation that
+// calls the same single-shot functions these services already exposed for
+// on-demand use (pollBothInboxesOnce / reconcileOnce) rather than reaching
+// for the interval-based startPolling machinery, which has nothing to run
+// inside here.
+async function scheduled(controller, workerEnv, ctx) {
+  const cron = controller.cron;
+  if (cron === EMAIL_GATEWAY_CRON) {
+    await emailGatewayService.pollBothInboxesOnce();
+    return;
+  }
+  if (cron === ZOHO_RECONCILIATION_CRON) {
+    await zohoReconciliationService.reconcileOnce();
+    return;
+  }
+  // Unrecognised cron pattern: run both rather than silently doing nothing,
+  // so a wrangler.jsonc edit that adds/renames a trigger doesn't go quiet.
+  await Promise.allSettled([emailGatewayService.pollBothInboxesOnce(), zohoReconciliationService.reconcileOnce()]);
+}
+
+// Must match the `crons` entries in wrangler.jsonc exactly — Cloudflare
+// passes the matched cron expression string back on `controller.cron`.
+const EMAIL_GATEWAY_CRON = '*/5 * * * *';
+const ZOHO_RECONCILIATION_CRON = '*/10 * * * *';
+
+// Attaching directly rather than spreading httpHandler into a new object:
+// spreading only copies own enumerable properties, and there's no guarantee
+// httpServerHandler()'s fetch isn't defined on a prototype instead — this
+// can't silently drop it.
+httpHandler.scheduled = scheduled;
+
+export default httpHandler;

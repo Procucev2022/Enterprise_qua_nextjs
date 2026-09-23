@@ -100,8 +100,9 @@ async function saveAttachment({ fileName, mimeType, content } = {}) {
   if (size === 0) return failure(ATTACHMENT_STATUS.NO_CONTENT);
   if (size > RFQ_ATTACHMENT_CONFIG.MAX_BYTES) return failure(ATTACHMENT_STATUS.TOO_LARGE);
 
-  const client = r2Client.getClient();
-  if (!client) {
+  const binding = r2Client.getBinding();
+  const client = binding ? null : r2Client.getClient();
+  if (!binding && !client) {
     logger.error('Failed to store RFQ attachment: R2 is not configured', null, 'RFQ_ATTACHMENT');
     return failure(ATTACHMENT_STATUS.WRITE_FAILED, 'Object storage is not configured.');
   }
@@ -115,24 +116,35 @@ async function saveAttachment({ fileName, mimeType, content } = {}) {
     uploadedAt: new Date().toISOString(),
   };
 
+  // S3/R2 metadata values travel as HTTP headers, so a non-ASCII original
+  // filename (realistic here) is encoded going in and decoded on read. Keys
+  // are written lowercase because S3/R2 normalises header names to lowercase
+  // on the way back (loadAttachment reads them lowercase too).
+  const customMetadata = {
+    filename: encodeURIComponent(meta.fileName),
+    size: String(size),
+    uploadedat: meta.uploadedAt,
+  };
+
   try {
-    await client.send(
-      new PutObjectCommand({
-        Bucket: r2Client.bucket(),
-        Key: resolveObjectKey(id),
-        Body: Buffer.from(content, 'base64'),
-        ContentType: mimeType,
-        // S3/R2 metadata values travel as HTTP headers, so a non-ASCII original
-        // filename (realistic here) is encoded going in and decoded on read.
-        // Keys are written lowercase because S3/R2 normalises header names to
-        // lowercase on the way back (loadAttachment reads them lowercase too).
-        Metadata: {
-          filename: encodeURIComponent(meta.fileName),
-          size: String(size),
-          uploadedat: meta.uploadedAt,
-        },
-      })
-    );
+    if (binding) {
+      // Native R2 binding — see r2Client.js's getBinding() for why this is
+      // preferred over the S3Client path below on Workers.
+      await binding.put(resolveObjectKey(id), Buffer.from(content, 'base64'), {
+        httpMetadata: { contentType: mimeType },
+        customMetadata,
+      });
+    } else {
+      await client.send(
+        new PutObjectCommand({
+          Bucket: r2Client.bucket(),
+          Key: resolveObjectKey(id),
+          Body: Buffer.from(content, 'base64'),
+          ContentType: mimeType,
+          Metadata: customMetadata,
+        })
+      );
+    }
   } catch (err) {
     logger.error('Failed to store RFQ attachment', err, 'RFQ_ATTACHMENT');
     return failure(ATTACHMENT_STATUS.WRITE_FAILED, err.message);
@@ -165,10 +177,31 @@ async function loadAttachment(id) {
   const key = resolveObjectKey(id);
   if (!key) return null;
 
-  const client = r2Client.getClient();
-  if (!client) return null;
+  const binding = r2Client.getBinding();
+  const client = binding ? null : r2Client.getClient();
+  if (!binding && !client) return null;
 
   try {
+    if (binding) {
+      const object = await binding.get(key);
+      if (!object) return null;
+      const content = Buffer.from(await object.arrayBuffer());
+      // R2's own customMetadata is already a plain lowercase-keyed object —
+      // no case-normalisation dance needed the way S3's header-based
+      // metadata requires below.
+      const metadata = object.customMetadata || {};
+      return {
+        meta: {
+          id,
+          fileName: metadata.filename ? decodeURIComponent(metadata.filename) : 'attachment',
+          mimeType: object.httpMetadata && object.httpMetadata.contentType,
+          size: Number(metadata.size) || content.length,
+          uploadedAt: metadata.uploadedat || null,
+        },
+        content,
+      };
+    }
+
     const response = await client.send(new GetObjectCommand({ Bucket: r2Client.bucket(), Key: key }));
     const content = await bufferBody(response.Body);
     // S3/R2 returns custom metadata keys lowercased regardless of how they

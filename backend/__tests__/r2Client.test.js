@@ -1,12 +1,36 @@
 const r2Client = require('../src/services/r2Client');
 
 describe('r2Client', () => {
+  const originalCfEnv = globalThis.__CF_ENV__;
+
   afterEach(() => {
     delete process.env.R2_ACCOUNT_ID;
     delete process.env.R2_ACCESS_KEY_ID;
     delete process.env.R2_SECRET_ACCESS_KEY;
     delete process.env.R2_ENDPOINT;
     delete process.env.R2_BUCKET;
+    globalThis.__CF_ENV__ = originalCfEnv;
+  });
+
+  // Same globalThis.__CF_ENV__ pattern as d1Bridge.js's getD1Binding() —
+  // worker.mjs is the only file that can `import { env } from
+  // 'cloudflare:workers'`, so it stashes the whole env object there.
+  describe('getBinding', () => {
+    it('returns null when globalThis.__CF_ENV__ was never set (Node/Render)', () => {
+      delete globalThis.__CF_ENV__;
+      expect(r2Client.getBinding()).toBeNull();
+    });
+
+    it('returns env.R2_BUCKET when worker.mjs has stashed the binding on globalThis', () => {
+      const fakeBucket = { put: jest.fn(), get: jest.fn(), delete: jest.fn() };
+      globalThis.__CF_ENV__ = { R2_BUCKET: fakeBucket };
+      expect(r2Client.getBinding()).toBe(fakeBucket);
+    });
+
+    it('returns null when globalThis.__CF_ENV__ is set but has no R2_BUCKET binding', () => {
+      globalThis.__CF_ENV__ = {};
+      expect(r2Client.getBinding()).toBeNull();
+    });
   });
 
   describe('getClient', () => {
@@ -67,6 +91,32 @@ describe('r2Client', () => {
       freshR2Client.getClient();
       expect(capturedConfig.endpoint).toBe('https://custom.endpoint.example.com');
     });
+
+    test('does not permanently cache a failed construction attempt', () => {
+      // A construction that throws (as the real S3Client does under Workers —
+      // see getBinding()'s comment) must not mark clientInitialized true,
+      // otherwise every later call in the same isolate would silently return
+      // undefined ("R2 isn't configured") instead of surfacing the error again.
+      let freshR2Client;
+      let callCount = 0;
+      jest.isolateModules(() => {
+        process.env.R2_ACCOUNT_ID = 'acct-123';
+        process.env.R2_ACCESS_KEY_ID = 'key-id';
+        process.env.R2_SECRET_ACCESS_KEY = 'secret';
+        jest.doMock('@aws-sdk/client-s3', () => ({
+          S3Client: jest.fn().mockImplementation(() => {
+            callCount += 1;
+            if (callCount === 1) throw new Error('emitWarningIfUnsupportedVersion$1 is not a function');
+            return { __mockS3Client: true };
+          }),
+        }));
+        freshR2Client = require('../src/services/r2Client');
+      });
+
+      expect(() => freshR2Client.getClient()).toThrow('emitWarningIfUnsupportedVersion$1');
+      expect(freshR2Client.getClient()).toEqual({ __mockS3Client: true });
+      expect(callCount).toBe(2);
+    });
   });
 
   describe('isConfigured', () => {
@@ -78,6 +128,11 @@ describe('r2Client', () => {
       expect(r2Client.isConfigured()).toBe(false);
 
       process.env.R2_SECRET_ACCESS_KEY = 'c';
+      expect(r2Client.isConfigured()).toBe(true);
+    });
+
+    test('is also true when a Workers R2 binding is present, regardless of env vars', () => {
+      globalThis.__CF_ENV__ = { R2_BUCKET: { put: jest.fn() } };
       expect(r2Client.isConfigured()).toBe(true);
     });
   });

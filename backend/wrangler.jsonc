@@ -19,5 +19,31 @@
       "database_name": "enterprise-qua-d1",
       "database_id": "63af6c6f-3606-4afa-b0c7-9f9db6296d61"
     }
-  ]
+  ],
+  // Native R2 binding — used in place of the @aws-sdk/client-s3 path (see
+  // r2Client.js's getBinding()) when running on Workers. The S3Client
+  // constructor throws `emitWarningIfUnsupportedVersion$1 is not a function`
+  // there: esbuild resolves @aws-sdk/core/client's "browser" package.json
+  // export condition instead of "node" even with nodejs_compat enabled, and
+  // that browser build's no-op stub for this function doesn't survive the
+  // bundle intact. Rather than fighting the SDK's export resolution, this
+  // uses Cloudflare's own recommended approach (see the Workers best-
+  // practices doc: "Use bindings for Cloudflare services, not REST APIs").
+  "r2_buckets": [
+    {
+      "binding": "R2_BUCKET",
+      "bucket_name": "procucec-dev"
+    }
+  ],
+  // Drives the scheduled() export in worker.mjs — Cloudflare's replacement
+  // for server.js's setInterval-based startPolling() (Node/Render only,
+  // never called here). Each entry's string must match EMAIL_GATEWAY_CRON /
+  // ZOHO_RECONCILIATION_CRON in worker.mjs exactly, since that's how
+  // scheduled() tells the two triggers apart on controller.cron.
+  "triggers": {
+    "crons": [
+      "*/5 * * * *",
+      "*/10 * * * *"
+    ]
+  }
 }
