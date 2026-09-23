@@ -141,6 +141,23 @@ async function getVendorByEmailFromDB(email) {
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
+/** Single-row lookup by id — same reasoning as getVendorByEmailFromDB, keyed
+ * on the primary key instead. storeService.getVendorById only searches the
+ * in-memory this.vendors cache, which at 600k+ real vendors is a capped
+ * subset (see getVendorsPageFromDB's own comment) — a vendor surfaced by a
+ * live, D1-backed paginated search (e.g. the CM's "All Vendors" invite
+ * picker) can be entirely absent from that cache, making an id it just
+ * returned fail to resolve moments later. This is the D1 fallback for that. */
+async function getVendorByIdFromDB(id) {
+  if (!pool.hasStorage() || !id) return null;
+  const result = await pool.query(
+    'SELECT raw FROM vendors WHERE id = $1 LIMIT 1',
+    [id],
+    { d1: true }
+  );
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+}
+
 async function upsertVendorInDB(vendor) {
   if (!pool.hasStorage()) return null;
   const { id, email, majorCategory, status, source } = vendor;
@@ -806,6 +823,7 @@ module.exports = {
   getVendorsFromDB,
   getVendorsPageFromDB,
   getVendorByEmailFromDB,
+  getVendorByIdFromDB,
   createBulkImportSessionInDB,
   getBulkImportSessionFromDB,
   incrementBulkImportSessionInDB,

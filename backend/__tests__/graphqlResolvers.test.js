@@ -112,7 +112,7 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
     );
     expect(await rootResolvers.rfq({ rfqNumber: seededRfq.rfqNumber }, coveringCtx)).toBeNull();
 
-    storeService.inviteVendorsToRFQ(seededRfq.id, [coveringVendor.id], TEST_USERS.category_manager.email);
+    await storeService.inviteVendorsToRFQ(seededRfq.id, [coveringVendor.id], TEST_USERS.category_manager.email);
     expect(await rootResolvers.rfqs({}, coveringCtx)).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: seededRfq.id })])
     );

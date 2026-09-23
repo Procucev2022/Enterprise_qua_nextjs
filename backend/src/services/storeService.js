@@ -1551,14 +1551,26 @@ class StoreService {
    * RFQ-invite email. Unknown vendor ids are silently skipped rather than
    * failing the whole batch.
    */
-  inviteVendorsToRFQ(rfqId, vendorIds, actorEmail) {
+  async inviteVendorsToRFQ(rfqId, vendorIds, actorEmail) {
     const rfq = this.getRFQById(rfqId);
     if (!rfq) return null;
 
     const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
     const newlyInvited = [];
     for (const id of Array.isArray(vendorIds) ? vendorIds : []) {
-      const vendor = this.getVendorById(id);
+      let vendor = this.getVendorById(id);
+      if (!vendor) {
+        // this.vendors is a capped in-memory subset (see getVendorsPageFromDB's
+        // own comment on why — 600k+ real vendors can't all live in memory),
+        // but the CM's "All Vendors" picker searches D1 directly and can
+        // surface an id that was never in that subset. Falls back to D1
+        // before giving up, and caches the result so a repeat invite (or any
+        // other in-memory lookup) finds it without another round trip.
+        vendor = await domainQueries.getVendorByIdFromDB(id);
+        if (vendor && !this.vendors.some((v) => v.id === vendor.id)) {
+          this.vendors.push(vendor);
+        }
+      }
       if (!vendor) continue;
       if (this._isInvitedVendor(vendor, rfq)) continue;
       newlyInvited.push(vendor);

@@ -200,7 +200,7 @@ function getVendorCandidates(req, res, next) {
  * notified about, be emailed about, or quote this RFQ afterward — see
  * storeService.vendorCoversRFQ. Route is gated to category_manager/admin.
  */
-function inviteVendors(req, res, next) {
+async function inviteVendors(req, res, next) {
   try {
     const { id } = req.params;
     const { vendorIds } = req.body || {};
@@ -211,7 +211,7 @@ function inviteVendors(req, res, next) {
     if (!rfq) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
-    const result = storeService.inviteVendorsToRFQ(id, vendorIds, req.user && req.user.email);
+    const result = await storeService.inviteVendorsToRFQ(id, vendorIds, req.user && req.user.email);
     logger.info(`Invited vendors to RFQ ${id}`, { id, invitedCount: result.invitedCount }, 'RFQ_CONTROLLER');
     res.json({ success: true, data: result.updatedRFQ, invitedCount: result.invitedCount });
   } catch (err) {

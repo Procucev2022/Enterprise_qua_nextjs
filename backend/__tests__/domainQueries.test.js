@@ -304,6 +304,37 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       });
     });
 
+    describe('getVendorByIdFromDB', () => {
+      test('no-ops when no pool is configured', async () => {
+        pool.pool = null;
+        await expect(domainQueries.getVendorByIdFromDB('v-1')).resolves.toBeNull();
+      });
+
+      test('no-ops when no id is given', async () => {
+        pool.pool = { query: jest.fn() };
+        await expect(domainQueries.getVendorByIdFromDB('')).resolves.toBeNull();
+        expect(pool.pool.query).not.toHaveBeenCalled();
+      });
+
+      test('returns the matching row', async () => {
+        const vendor = { id: 'v-1', email: 'a@b.com' };
+        const spy = jest.fn().mockResolvedValue({ rows: [{ raw: vendor }] });
+        pool.pool = { query: spy };
+        await expect(domainQueries.getVendorByIdFromDB('v-1')).resolves.toEqual(vendor);
+        expect(spy).toHaveBeenCalledWith('SELECT raw FROM vendors WHERE id = $1 LIMIT 1', ['v-1']);
+        // pool.query's 3rd arg ({d1:true}) is consumed by pool.js's own
+        // wrapper, not forwarded to the underlying pg driver mock — matches
+        // the existing assertion convention for every other test in this
+        // file (see deleteCatalogueProductInDB's test / this session's fix
+        // for that exact 2-vs-3-arg mismatch).
+      });
+
+      test('returns null when nothing matches', async () => {
+        pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+        await expect(domainQueries.getVendorByIdFromDB('missing')).resolves.toBeNull();
+      });
+    });
+
     test('upsertVendorInDB serializes the vendor and returns the stored raw row', async () => {
       const vendor = {
         id: 'v-1',

@@ -151,7 +151,7 @@ describe('Store Service — remaining branch coverage', () => {
       expect(prod.unitPrice).toBe(0);
     });
 
-    test('approvePurchaseOrder returns null when the RFQ cannot be found', () => {
+    test('approvePurchaseOrder returns null when the RFQ cannot be found', async () => {
       const po = storeService.approvePurchaseOrder(undefined, 'v-001', 'Vendor X', 500, 'notes');
       expect(po).toBeNull();
     });
@@ -588,7 +588,7 @@ describe('Store Service — remaining branch coverage', () => {
 
       const vendor = freshStore.addVendor({ name: 'Read Co', email: 'read@x.com', majorCategory: 'Read-Cat' });
       const rfq = freshStore.createRFQ({ rfqNumber: 'RFQ-NTF-3', category: 'Read-Cat' });
-      freshStore.inviteVendorsToRFQ(rfq.id, [vendor.id], 'cm@x.com');
+      await freshStore.inviteVendorsToRFQ(rfq.id, [vendor.id], 'cm@x.com');
       const [n] = freshStore.getNotificationsFor('vendor', vendor.id);
       freshStore.markNotificationRead(n.id, 'vendor', vendor.id);
       await flush();
@@ -603,7 +603,7 @@ describe('Store Service — remaining branch coverage', () => {
 
       const vendor = freshStore.addVendor({ name: 'BulkRead Co', email: 'bulkread@x.com', majorCategory: 'Bulk-Cat' });
       const rfq = freshStore.createRFQ({ rfqNumber: 'RFQ-NTF-4', category: 'Bulk-Cat' });
-      freshStore.inviteVendorsToRFQ(rfq.id, [vendor.id], 'cm@x.com');
+      await freshStore.inviteVendorsToRFQ(rfq.id, [vendor.id], 'cm@x.com');
       freshStore.markAllNotificationsRead('vendor', vendor.id);
       await flush();
 
