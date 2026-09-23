@@ -9,6 +9,7 @@ const {
 const pool = require('../db/pool');
 const domainQueries = require('../db/domainQueries');
 const identityQueries = require('../db/identityQueries');
+const { getWaitUntil } = require('../db/d1Bridge');
 const { createAuditEntry, verifyAuditTrail } = require('./auditService');
 const { evaluateQuotes, calculate360Evaluation, calculateRevisedRating } = require('./evaluationService');
 const { simulateChaserOutreach } = require('./aiChaserService');
@@ -145,8 +146,27 @@ class StoreService {
     return password;
   }
 
+  /**
+   * Runs a fire-and-forget persistence write, logging on failure instead of
+   * propagating it to the (already-responded) caller.
+   *
+   * On Workers, an async call that's neither awaited nor passed to
+   * ctx.waitUntil() can be cancelled the moment the HTTP response is sent —
+   * confirmed live: a created RFQ's write never reached D1 at all. This
+   * hands the same promise to Workers' waitUntil (imported once in
+   * worker.mjs, read back via getWaitUntil()) so the write actually
+   * completes after the response goes out; a plain no-op wrapper on
+   * Node/Render, where the process just keeps running regardless.
+   */
+  _background(promise, errorMessage) {
+    const tracked = promise.catch((err) => logger.error(errorMessage, err, 'STORE_SERVICE'));
+    const waitUntil = getWaitUntil();
+    if (waitUntil) waitUntil(tracked);
+    return tracked;
+  }
+
   _persistVendor(vendor) {
-    domainQueries.upsertVendorInDB(vendor).catch((err) => logger.error('Failed to persist vendor', err, 'STORE_SERVICE'));
+    this._background(domainQueries.upsertVendorInDB(vendor), 'Failed to persist vendor');
   }
 
   /**
@@ -185,81 +205,59 @@ class StoreService {
   }
 
   _removeVendor(id) {
-    domainQueries.deleteVendorInDB(id).catch((err) => logger.error('Failed to delete persisted vendor', err, 'STORE_SERVICE'));
+    this._background(domainQueries.deleteVendorInDB(id), 'Failed to delete persisted vendor');
   }
 
   _persistPaymentLink(link) {
-    domainQueries
-      .upsertPaymentLinkInDB(link)
-      .catch((err) => logger.error('Failed to persist payment link', err, 'STORE_SERVICE'));
+    this._background(domainQueries.upsertPaymentLinkInDB(link), 'Failed to persist payment link');
   }
 
   _persistRFQ(rfq) {
-    domainQueries.upsertRFQInDB(rfq).catch((err) => logger.error('Failed to persist RFQ', err, 'STORE_SERVICE'));
+    this._background(domainQueries.upsertRFQInDB(rfq), 'Failed to persist RFQ');
   }
 
   _removeRFQ(id) {
-    domainQueries.deleteRFQInDB(id).catch((err) => logger.error('Failed to delete persisted RFQ', err, 'STORE_SERVICE'));
+    this._background(domainQueries.deleteRFQInDB(id), 'Failed to delete persisted RFQ');
   }
 
   _persistEvaluation(evaluation) {
-    domainQueries
-      .upsertEvaluationInDB(evaluation)
-      .catch((err) => logger.error('Failed to persist evaluation', err, 'STORE_SERVICE'));
+    this._background(domainQueries.upsertEvaluationInDB(evaluation), 'Failed to persist evaluation');
   }
 
   _persistCatalogueProduct(product) {
-    domainQueries
-      .upsertCatalogueProductInDB(product)
-      .catch((err) => logger.error('Failed to persist catalogue product', err, 'STORE_SERVICE'));
+    this._background(domainQueries.upsertCatalogueProductInDB(product), 'Failed to persist catalogue product');
   }
 
   _removeCatalogueProduct(id) {
-    domainQueries
-      .deleteCatalogueProductInDB(id)
-      .catch((err) => logger.error('Failed to delete persisted catalogue product', err, 'STORE_SERVICE'));
+    this._background(domainQueries.deleteCatalogueProductInDB(id), 'Failed to delete persisted catalogue product');
   }
 
   _persistBuyerAccount(account) {
-    domainQueries
-      .upsertBuyerAccountInDB(account)
-      .catch((err) => logger.error('Failed to persist buyer account', err, 'STORE_SERVICE'));
+    this._background(domainQueries.upsertBuyerAccountInDB(account), 'Failed to persist buyer account');
   }
 
   _removeBuyerAccount(id) {
-    domainQueries
-      .deleteBuyerAccountInDB(id)
-      .catch((err) => logger.error('Failed to delete persisted buyer account', err, 'STORE_SERVICE'));
+    this._background(domainQueries.deleteBuyerAccountInDB(id), 'Failed to delete persisted buyer account');
   }
 
   _setActiveBuyerAccount(id) {
-    domainQueries
-      .setActiveBuyerAccountInDB(id)
-      .catch((err) => logger.error('Failed to persist active buyer account', err, 'STORE_SERVICE'));
+    this._background(domainQueries.setActiveBuyerAccountInDB(id), 'Failed to persist active buyer account');
   }
 
   _persistAIFeedItem(item) {
-    domainQueries
-      .upsertAIFeedItemInDB(item)
-      .catch((err) => logger.error('Failed to persist AI feed item', err, 'STORE_SERVICE'));
+    this._background(domainQueries.upsertAIFeedItemInDB(item), 'Failed to persist AI feed item');
   }
 
   _persistAuditLog(entry) {
-    domainQueries
-      .upsertAuditLogInDB(entry)
-      .catch((err) => logger.error('Failed to persist audit log entry', err, 'STORE_SERVICE'));
+    this._background(domainQueries.upsertAuditLogInDB(entry), 'Failed to persist audit log entry');
   }
 
   _persistNotification(notification) {
-    domainQueries
-      .insertNotificationInDB(notification)
-      .catch((err) => logger.error('Failed to persist notification', err, 'STORE_SERVICE'));
+    this._background(domainQueries.insertNotificationInDB(notification), 'Failed to persist notification');
   }
 
   _persistNotificationBatch(notifications) {
-    domainQueries
-      .bulkInsertNotificationsInDB(notifications)
-      .catch((err) => logger.error('Failed to persist notification batch', err, 'STORE_SERVICE'));
+    this._background(domainQueries.bulkInsertNotificationsInDB(notifications), 'Failed to persist notification batch');
   }
 
   // ==========================================
@@ -1431,9 +1429,7 @@ class StoreService {
     if (!notification) return null;
     if (!notification.read) {
       notification.read = true;
-      domainQueries
-        .markNotificationReadInDB(id)
-        .catch((err) => logger.error('Failed to persist notification read', err, 'STORE_SERVICE'));
+      this._background(domainQueries.markNotificationReadInDB(id), 'Failed to persist notification read');
     }
     return notification;
   }
@@ -1448,9 +1444,10 @@ class StoreService {
       }
     }
     if (changed > 0) {
-      domainQueries
-        .markAllNotificationsReadInDB(recipientType, recipientId)
-        .catch((err) => logger.error('Failed to persist bulk notification read', err, 'STORE_SERVICE'));
+      this._background(
+        domainQueries.markAllNotificationsReadInDB(recipientType, recipientId),
+        'Failed to persist bulk notification read'
+      );
     }
     return changed;
   }
@@ -1606,14 +1603,15 @@ class StoreService {
       // Real invite email, if the vendor has an address.
       if (vendor.email) {
         const buyerEmail = this.resolveBuyerEmailForRFQ(updatedRFQ);
-        mailerService
-          .sendRfqInviteEmail(vendor.email, {
+        this._background(
+          mailerService.sendRfqInviteEmail(vendor.email, {
             rfq: updatedRFQ,
             recipientName: vendor.contactPerson || vendor.name,
             buyerEmail,
             cc: buyerEmail || undefined,
-          })
-          .catch((err) => logger.error('Failed to email RFQ invite to vendor', err, 'STORE_SERVICE'));
+          }),
+          'Failed to email RFQ invite to vendor'
+        );
       }
     }
 
@@ -1758,18 +1756,20 @@ class StoreService {
     for (const vendor of recipients) {
       if (vendor.email && !allEmails.has(vendor.email.toLowerCase())) {
         allEmails.add(vendor.email.toLowerCase());
-        mailerService
-          .sendRfqInviteEmail(vendor.email, { rfq, recipientName: vendor.contactPerson || vendor.name })
-          .catch((err) => logger.error('Failed to email RFQ invite to matched vendor', err, 'STORE_SERVICE'));
+        this._background(
+          mailerService.sendRfqInviteEmail(vendor.email, { rfq, recipientName: vendor.contactPerson || vendor.name }),
+          'Failed to email RFQ invite to matched vendor'
+        );
       }
     }
 
     for (const vendor of assigned) {
       if (vendor.email && !allEmails.has(vendor.email.toLowerCase())) {
         allEmails.add(vendor.email.toLowerCase());
-        mailerService
-          .sendRfqInviteEmail(vendor.email, { rfq, recipientName: vendor.contactPerson || vendor.name })
-          .catch((err) => logger.error('Failed to email RFQ invite to assigned vendor', err, 'STORE_SERVICE'));
+        this._background(
+          mailerService.sendRfqInviteEmail(vendor.email, { rfq, recipientName: vendor.contactPerson || vendor.name }),
+          'Failed to email RFQ invite to assigned vendor'
+        );
       }
     }
 
@@ -1781,9 +1781,10 @@ class StoreService {
     if (!rfq.buyerAccountId) return false;
     const buyer = this.buyerAccounts.find((a) => a.id === rfq.buyerAccountId);
     if (!buyer || !buyer.corporateEmail) return false;
-    mailerService
-      .sendQuoteReceivedEmail(buyer.corporateEmail, { rfq, quote, recipientName: buyer.organizationName })
-      .catch((err) => logger.error('Failed to email quote to buyer', err, 'STORE_SERVICE'));
+    this._background(
+      mailerService.sendQuoteReceivedEmail(buyer.corporateEmail, { rfq, quote, recipientName: buyer.organizationName }),
+      'Failed to email quote to buyer'
+    );
     return true;
   }
 

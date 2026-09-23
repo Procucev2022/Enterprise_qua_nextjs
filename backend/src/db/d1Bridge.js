@@ -55,4 +55,19 @@ async function queryD1(db, text, params = []) {
   return { rows: result.results || [], rowCount: result.meta ? result.meta.changes : undefined };
 }
 
-module.exports = { getD1Binding, toD1Sql, queryD1 };
+/**
+ * Returns Workers' `waitUntil` (imported from `cloudflare:workers` in
+ * worker.mjs, the only real ESM file in this backend — see its comment)
+ * when running on Workers, else null. Used to extend a fire-and-forget
+ * persistence write past the point the HTTP response is sent, which Workers
+ * would otherwise cancel outright; a plain no-op on Node/Render.
+ */
+function getWaitUntil() {
+  try {
+    return globalThis.__CF_WAIT_UNTIL__ || null;
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { getD1Binding, toD1Sql, queryD1, getWaitUntil };

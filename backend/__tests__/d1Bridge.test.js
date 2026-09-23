@@ -1,9 +1,11 @@
 describe('d1Bridge', () => {
   const originalCfEnv = globalThis.__CF_ENV__;
+  const originalWaitUntil = globalThis.__CF_WAIT_UNTIL__;
 
   afterEach(() => {
     jest.resetModules();
     globalThis.__CF_ENV__ = originalCfEnv;
+    globalThis.__CF_WAIT_UNTIL__ = originalWaitUntil;
   });
 
   describe('getD1Binding', () => {
@@ -31,6 +33,24 @@ describe('d1Bridge', () => {
       globalThis.__CF_ENV__ = {};
       const { getD1Binding } = require('../src/db/d1Bridge');
       expect(getD1Binding()).toBeNull();
+    });
+  });
+
+  describe('getWaitUntil', () => {
+    it('returns null when globalThis.__CF_WAIT_UNTIL__ was never set (Node/Render)', () => {
+      delete globalThis.__CF_WAIT_UNTIL__;
+      const { getWaitUntil } = require('../src/db/d1Bridge');
+      expect(getWaitUntil()).toBeNull();
+    });
+
+    // Same reasoning as getD1Binding: worker.mjs is the only file that can
+    // `import { waitUntil } from 'cloudflare:workers'`, so it stashes the
+    // function on globalThis for this file to read back.
+    it('returns the stashed waitUntil function when worker.mjs has set it', () => {
+      const fakeWaitUntil = jest.fn();
+      globalThis.__CF_WAIT_UNTIL__ = fakeWaitUntil;
+      const { getWaitUntil } = require('../src/db/d1Bridge');
+      expect(getWaitUntil()).toBe(fakeWaitUntil);
     });
   });
 

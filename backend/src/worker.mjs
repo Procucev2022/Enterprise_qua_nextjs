@@ -6,7 +6,7 @@
 // Node/Render entry point this parallels — that one stays the source of
 // truth for local dev and the current Render deploy; this file is additive.
 import { httpServerHandler } from 'cloudflare:node';
-import { env } from 'cloudflare:workers';
+import { env, waitUntil } from 'cloudflare:workers';
 import app from './app.js';
 
 // d1Bridge.js (required by the CommonJS backend, deep under app.js) cannot
@@ -19,6 +19,18 @@ import app from './app.js';
 // on globalThis here, once, lets d1Bridge.js read it synchronously without
 // its own require/import of the virtual module.
 globalThis.__CF_ENV__ = env;
+
+// storeService.js's persistence writes are all fire-and-forget: `promise
+// .catch(err => logger.error(...))`, never awaited by the caller, so the
+// HTTP response doesn't wait on the DB write. That is fine on Node/Render,
+// where the process just keeps running — but on Workers, once the response
+// has been sent, an unawaited promise not passed to ctx.waitUntil() can be
+// cancelled before it finishes, dropping the write entirely (confirmed live:
+// a created RFQ never made it into D1). `waitUntil` imported here from
+// cloudflare:workers works the same as ctx.waitUntil() but from anywhere,
+// without threading `ctx` through Express — stashed on globalThis for the
+// same require/import reason __CF_ENV__ is.
+globalThis.__CF_WAIT_UNTIL__ = waitUntil;
 
 const PORT = 4000;
 app.listen(PORT);
