@@ -539,6 +539,120 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
     });
   });
 
+  // D1 has no withTransaction/client — updateProfile branches on getD1Binding()
+  // (read via globalThis.__CF_ENV__, same as every other D1 branch this session)
+  // and runs the same steps as plain pool.query(..., { d1: true }) calls instead.
+  describe('updateProfile (D1 path)', () => {
+    const originalCfEnv = globalThis.__CF_ENV__;
+    const originalPool = dbPool.pool;
+
+    beforeEach(() => {
+      globalThis.__CF_ENV__ = { DB: { prepare: jest.fn() } };
+      dbPool.pool = null; // no pg pool at all on Workers — D1 alone must satisfy hasStorage()
+    });
+
+    afterEach(() => {
+      globalThis.__CF_ENV__ = originalCfEnv;
+      dbPool.pool = originalPool;
+    });
+
+    test('updates the organisation, the user display name and the categories via sequential D1 queries', async () => {
+      const spy = jest
+        .spyOn(dbPool, 'query')
+        .mockResolvedValueOnce({ rows: [{ uuid: 'org-1' }] }) // existence check
+        .mockResolvedValueOnce({ rows: [] }) // update organization
+        .mockResolvedValueOnce({ rows: [] }) // update "user"
+        .mockResolvedValueOnce({ rows: [] }) // delete org_division_category by org
+        .mockResolvedValueOnce({ rows: [] }) // delete org_division_category by user
+        .mockResolvedValueOnce({ rows: [] }); // insert org_division_category
+
+      const result = await buyerProfileQueries.updateProfile({
+        organizationId: 'org-1',
+        userId: 'user-1',
+        patch: { companyName: 'ACME Ltd', contactName: 'Rajesh Sharma' },
+        categories: [{ major: 'IT', minor: 'Laptop' }],
+        actor: 'buyer@procucev.com',
+      });
+
+      expect(result).toEqual({ updated: true, fieldsUpdated: 4, categoryCount: 1 });
+      const calls = spy.mock.calls.map((c) => ({ sql: c[0], options: c[2] }));
+      expect(calls.every((c) => c.options && c.options.d1 === true)).toBe(true);
+      const allSql = calls.map((c) => c.sql).join('\n');
+      expect(allSql).toContain('update organization set');
+      expect(allSql).toContain('update "user" set full_name = $1');
+      expect(allSql).toContain('delete from org_division_category where organization_id');
+      expect(allSql).toContain('delete from org_division_category where user_id');
+      expect(allSql).toContain('insert into org_division_category');
+    });
+
+    test('reports ORG_NOT_FOUND rather than throwing when the organisation is gone', async () => {
+      const spy = jest.spyOn(dbPool, 'query').mockResolvedValueOnce({ rows: [] });
+      const result = await buyerProfileQueries.updateProfile({
+        organizationId: 'missing',
+        userId: 'user-1',
+        patch: { companyName: 'ACME' },
+      });
+      expect(result).toEqual({ updated: false, reason: 'ORG_NOT_FOUND' });
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
+
+    test('leaves categories untouched when the caller did not supply them', async () => {
+      const spy = jest
+        .spyOn(dbPool, 'query')
+        .mockResolvedValueOnce({ rows: [{ uuid: 'org-1' }] })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const result = await buyerProfileQueries.updateProfile({
+        organizationId: 'org-1',
+        userId: 'user-1',
+        patch: { city: 'Pune' },
+      });
+      expect(result.categoryCount).toBeNull();
+      expect(spy.mock.calls.map((c) => c[0]).join('\n')).not.toContain('org_division_category');
+    });
+
+    test('skips the organisation update when the patch is empty', async () => {
+      const spy = jest.spyOn(dbPool, 'query').mockResolvedValueOnce({ rows: [{ uuid: 'org-1' }] });
+      const result = await buyerProfileQueries.updateProfile({
+        organizationId: 'org-1',
+        userId: 'user-1',
+        patch: {},
+      });
+      expect(result.fieldsUpdated).toBe(0);
+      expect(spy.mock.calls.map((c) => c[0]).join('\n')).not.toContain('update organization set');
+    });
+
+    test('skips the user update when there is no user id', async () => {
+      const spy = jest
+        .spyOn(dbPool, 'query')
+        .mockResolvedValueOnce({ rows: [{ uuid: 'org-1' }] })
+        .mockResolvedValueOnce({ rows: [] });
+      await buyerProfileQueries.updateProfile({
+        organizationId: 'org-1',
+        userId: null,
+        patch: { contactName: 'Someone' },
+      });
+      expect(spy.mock.calls.map((c) => c[0]).join('\n')).not.toContain('update "user"');
+    });
+
+    test('clears the category selection when an empty array is supplied', async () => {
+      jest
+        .spyOn(dbPool, 'query')
+        .mockResolvedValueOnce({ rows: [{ uuid: 'org-1' }] })
+        .mockResolvedValueOnce({ rows: [] }) // delete by org
+        .mockResolvedValueOnce({ rows: [] }); // delete by user
+
+      const result = await buyerProfileQueries.updateProfile({
+        organizationId: 'org-1',
+        userId: 'user-1',
+        patch: {},
+        categories: [],
+      });
+      expect(result.categoryCount).toBe(0);
+    });
+  });
+
   // ── Taxonomy ──────────────────────────────────────────────────────────────
   describe('findCategoryTaxonomy', () => {
     test('groups minors under their major, preserving the row order', async () => {
