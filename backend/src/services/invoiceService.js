@@ -8,8 +8,6 @@
 // compliance document.
 // ==============================================================================
 
-const PDFDocument = require('pdfkit');
-
 /**
  * Render a payment-link record as a receipt PDF, returned as a Buffer.
  *
@@ -17,8 +15,18 @@ const PDFDocument = require('pdfkit');
  * planId, amount, status, createdAt, updatedAt). `payer` carries whatever
  * display name/email the caller already resolved (vendor or buyer account) —
  * this module has no opinion on which.
+ *
+ * pdfkit is required lazily, inside this function, rather than at module
+ * load: it reads its bundled AFM font-metrics files off a real filesystem
+ * via __filename, which doesn't exist on Cloudflare Workers. A top-level
+ * require would crash the whole Worker at boot — every route, not just this
+ * one — since Node/CJS module graphs are resolved eagerly. Deferring it
+ * confines the failure to an actual receipt-download request on Workers,
+ * where this feature remains unsupported until pdfkit is replaced with a
+ * Workers-compatible PDF library. Node/Render is unaffected either way.
  */
 function generateReceiptPdf({ link, payerName, payerEmail, planLabel }) {
+  const PDFDocument = require('pdfkit');
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', margin: 50 });
     const chunks = [];

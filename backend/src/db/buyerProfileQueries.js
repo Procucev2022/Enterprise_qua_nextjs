@@ -22,6 +22,7 @@
 
 const crypto = require('crypto');
 const pool = require('./pool');
+const { getD1Binding } = require('./d1Bridge');
 const { BUYER_PROFILE_CONFIG } = require('../config/constants');
 
 /**
@@ -144,7 +145,8 @@ async function loadCategories(organizationId, userId) {
       `select division, category from org_division_category
         where user_id = $1 and category is not null and category <> ''
         order by division, category`,
-      [userId]
+      [userId],
+      { d1: true }
     );
   }
 
@@ -153,7 +155,8 @@ async function loadCategories(organizationId, userId) {
       `select division, category from org_division_category
         where organization_id = $1 and category is not null and category <> ''
         order by division, category`,
-      [organizationId]
+      [organizationId],
+      { d1: true }
     );
   }
 
@@ -170,7 +173,7 @@ async function loadCategories(organizationId, userId) {
 async function findProfileByUserId(userId) {
   if (!userId) return { found: false, reason: 'NO_USER_ID' };
 
-  const rows = await pool.rows(`${PROFILE_SELECT} where u.uuid = $1 limit 1`, [userId]);
+  const rows = await pool.rows(`${PROFILE_SELECT} where u.uuid = $1 limit 1`, [userId], { d1: true });
 
   if (rows.length === 0) return { found: false, reason: 'USER_NOT_FOUND' };
   if (!rows[0].org_uuid) return { found: false, reason: 'ORG_NOT_LINKED' };
@@ -289,6 +292,44 @@ async function replaceCategories(client, organizationId, userId, categories) {
 }
 
 /**
+ * D1 equivalent of replaceCategories — D1 has no `client`/transaction object
+ * to run these through (see updateProfile's D1 branch), so this runs the same
+ * delete-then-insert sequence as plain `pool.query(..., { d1: true })` calls,
+ * with `strftime` in place of Postgres's `now()`.
+ */
+async function replaceCategoriesD1(organizationId, userId, categories) {
+  await pool.query('delete from org_division_category where organization_id = $1', [organizationId], { d1: true });
+  if (userId) {
+    await pool.query('delete from org_division_category where user_id = $1', [userId], { d1: true });
+  }
+
+  if (!Array.isArray(categories) || categories.length === 0) return 0;
+
+  const params = [];
+  const tuples = categories.map((entry) => {
+    const base = params.length;
+    params.push(
+      crypto.randomUUID(),
+      text(entry.major),
+      text(entry.minor),
+      organizationId,
+      userId || null
+    );
+    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, true, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
+  });
+
+  await pool.query(
+    `insert into org_division_category
+       (uuid, division, category, organization_id, user_id, is_active, created_ts)
+     values ${tuples.join(', ')}`,
+    params,
+    { d1: true }
+  );
+
+  return categories.length;
+}
+
+/**
  * Persist a buyer organisation profile and its category selection.
  *
  * Runs as one transaction so a failure part-way cannot leave the organisation
@@ -299,11 +340,54 @@ async function replaceCategories(client, organizationId, userId, categories) {
  * would make the profile disagree with the name shown in the header.
  */
 async function updateProfile({ organizationId, userId, patch, categories, actor }) {
-  if (!pool.pool) {
+  if (!pool.hasStorage()) {
     throw new Error(pool.NOT_CONFIGURED_MESSAGE);
   }
   if (!organizationId) {
     throw new Error('organizationId is required to update a buyer profile.');
+  }
+
+  // D1 has no equivalent of pool.withTransaction — its batch() API only runs a
+  // pre-decided fixed list of statements, not "read, then conditionally decide
+  // what to write" (see insertBuyerAccount's identical comment in
+  // identityQueries.js for the fuller rationale). This runs the same steps
+  // sequentially instead, via plain pool.query(..., { d1: true }) calls.
+  if (getD1Binding()) {
+    const existing = await pool.query('select uuid from organization where uuid = $1 limit 1', [organizationId], {
+      d1: true,
+    });
+    if (existing.rows.length === 0) {
+      return { updated: false, reason: 'ORG_NOT_FOUND' };
+    }
+
+    const { assignments, params, nextIndex } = buildProfileUpdate(patch);
+    if (assignments.length > 0) {
+      const actorIndex = nextIndex;
+      const uuidIndex = nextIndex + 1;
+      assignments.push(`last_modified_by = $${actorIndex}`, `last_modified_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')`);
+      params.push(actor || 'enterprise-workspace', organizationId);
+      await pool.query(`update organization set ${assignments.join(', ')} where uuid = $${uuidIndex}`, params, {
+        d1: true,
+      });
+    }
+
+    if (userId && patch.contactName !== undefined && patch.contactName !== null) {
+      const contactName = text(patch.contactName);
+      if (contactName !== '') {
+        await pool.query(
+          `update "user" set full_name = $1, last_modified_by = $2, last_modified_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now') where uuid = $3`,
+          [contactName, actor || 'enterprise-workspace', userId],
+          { d1: true }
+        );
+      }
+    }
+
+    let categoryCount = null;
+    if (categories !== undefined) {
+      categoryCount = await replaceCategoriesD1(organizationId, userId, categories);
+    }
+
+    return { updated: true, fieldsUpdated: assignments.length, categoryCount };
   }
 
   return pool.withTransaction(async (client) => {
@@ -366,6 +450,9 @@ async function updateProfile({ organizationId, userId, patch, categories, actor 
  * major category to group under, so they cannot be displayed or selected.
  */
 async function findCategoryTaxonomy() {
+  // category_division has already been ported to D1 (see d1Bridge.js) — this
+  // opts into it explicitly. On Node/Render, { d1: true } is a no-op and this
+  // still runs the same query against Postgres as before.
   const rows = await pool.rows(
     `select cd.division, cd.category
        from category_division cd
@@ -377,7 +464,9 @@ async function findCategoryTaxonomy() {
        ) ord on ord.division = cd.division
       where cd.division is not null and cd.division <> ''
         and cd.category is not null and cd.category <> ''
-      order by ord.first_seen, cd.division, cd.category`
+      order by ord.first_seen, cd.division, cd.category`,
+    [],
+    { d1: true }
   );
 
   const byDivision = new Map();

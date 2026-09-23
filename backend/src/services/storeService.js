@@ -10,6 +10,7 @@ const {
 const pool = require('../db/pool');
 const domainQueries = require('../db/domainQueries');
 const identityQueries = require('../db/identityQueries');
+const { getWaitUntil } = require('../db/d1Bridge');
 const { createAuditEntry, verifyAuditTrail } = require('./auditService');
 const { evaluateQuotes, calculate360Evaluation, calculateRevisedRating } = require('./evaluationService');
 const { simulateChaserOutreach } = require('./aiChaserService');
@@ -68,7 +69,7 @@ class StoreService {
    * being swallowed: there is no second datastore to fall back to.
    */
   async hydrateFromDB() {
-    if (!pool.pool) {
+    if (!pool.hasStorage()) {
       this.isHydratedFromDB = false;
       logger.error(
         'DATABASE_URL is not set — no records can be loaded and every data-backed request will fail.',
@@ -146,8 +147,27 @@ class StoreService {
     return password;
   }
 
+  /**
+   * Runs a fire-and-forget persistence write, logging on failure instead of
+   * propagating it to the (already-responded) caller.
+   *
+   * On Workers, an async call that's neither awaited nor passed to
+   * ctx.waitUntil() can be cancelled the moment the HTTP response is sent —
+   * confirmed live: a created RFQ's write never reached D1 at all. This
+   * hands the same promise to Workers' waitUntil (imported once in
+   * worker.mjs, read back via getWaitUntil()) so the write actually
+   * completes after the response goes out; a plain no-op wrapper on
+   * Node/Render, where the process just keeps running regardless.
+   */
+  _background(promise, errorMessage) {
+    const tracked = promise.catch((err) => logger.error(errorMessage, err, 'STORE_SERVICE'));
+    const waitUntil = getWaitUntil();
+    if (waitUntil) waitUntil(tracked);
+    return tracked;
+  }
+
   _persistVendor(vendor) {
-    domainQueries.upsertVendorInDB(vendor).catch((err) => logger.error('Failed to persist vendor', err, 'STORE_SERVICE'));
+    this._background(domainQueries.upsertVendorInDB(vendor), 'Failed to persist vendor');
   }
 
   /**
@@ -164,7 +184,7 @@ class StoreService {
    * domainQueries.js — nothing to confirm against.
    */
   async confirmVendorPersisted(vendor) {
-    if (!pool.pool) return { persisted: null };
+    if (!pool.hasStorage()) return { persisted: null };
     try {
       await domainQueries.upsertVendorInDB(vendor);
       return { persisted: true };
@@ -186,81 +206,59 @@ class StoreService {
   }
 
   _removeVendor(id) {
-    domainQueries.deleteVendorInDB(id).catch((err) => logger.error('Failed to delete persisted vendor', err, 'STORE_SERVICE'));
+    this._background(domainQueries.deleteVendorInDB(id), 'Failed to delete persisted vendor');
   }
 
   _persistPaymentLink(link) {
-    domainQueries
-      .upsertPaymentLinkInDB(link)
-      .catch((err) => logger.error('Failed to persist payment link', err, 'STORE_SERVICE'));
+    this._background(domainQueries.upsertPaymentLinkInDB(link), 'Failed to persist payment link');
   }
 
   _persistRFQ(rfq) {
-    domainQueries.upsertRFQInDB(rfq).catch((err) => logger.error('Failed to persist RFQ', err, 'STORE_SERVICE'));
+    this._background(domainQueries.upsertRFQInDB(rfq), 'Failed to persist RFQ');
   }
 
   _removeRFQ(id) {
-    domainQueries.deleteRFQInDB(id).catch((err) => logger.error('Failed to delete persisted RFQ', err, 'STORE_SERVICE'));
+    this._background(domainQueries.deleteRFQInDB(id), 'Failed to delete persisted RFQ');
   }
 
   _persistEvaluation(evaluation) {
-    domainQueries
-      .upsertEvaluationInDB(evaluation)
-      .catch((err) => logger.error('Failed to persist evaluation', err, 'STORE_SERVICE'));
+    this._background(domainQueries.upsertEvaluationInDB(evaluation), 'Failed to persist evaluation');
   }
 
   _persistCatalogueProduct(product) {
-    domainQueries
-      .upsertCatalogueProductInDB(product)
-      .catch((err) => logger.error('Failed to persist catalogue product', err, 'STORE_SERVICE'));
+    this._background(domainQueries.upsertCatalogueProductInDB(product), 'Failed to persist catalogue product');
   }
 
   _removeCatalogueProduct(id) {
-    domainQueries
-      .deleteCatalogueProductInDB(id)
-      .catch((err) => logger.error('Failed to delete persisted catalogue product', err, 'STORE_SERVICE'));
+    this._background(domainQueries.deleteCatalogueProductInDB(id), 'Failed to delete persisted catalogue product');
   }
 
   _persistBuyerAccount(account) {
-    domainQueries
-      .upsertBuyerAccountInDB(account)
-      .catch((err) => logger.error('Failed to persist buyer account', err, 'STORE_SERVICE'));
+    this._background(domainQueries.upsertBuyerAccountInDB(account), 'Failed to persist buyer account');
   }
 
   _removeBuyerAccount(id) {
-    domainQueries
-      .deleteBuyerAccountInDB(id)
-      .catch((err) => logger.error('Failed to delete persisted buyer account', err, 'STORE_SERVICE'));
+    this._background(domainQueries.deleteBuyerAccountInDB(id), 'Failed to delete persisted buyer account');
   }
 
   _setActiveBuyerAccount(id) {
-    domainQueries
-      .setActiveBuyerAccountInDB(id)
-      .catch((err) => logger.error('Failed to persist active buyer account', err, 'STORE_SERVICE'));
+    this._background(domainQueries.setActiveBuyerAccountInDB(id), 'Failed to persist active buyer account');
   }
 
   _persistAIFeedItem(item) {
-    domainQueries
-      .upsertAIFeedItemInDB(item)
-      .catch((err) => logger.error('Failed to persist AI feed item', err, 'STORE_SERVICE'));
+    this._background(domainQueries.upsertAIFeedItemInDB(item), 'Failed to persist AI feed item');
   }
 
   _persistAuditLog(entry) {
-    domainQueries
-      .upsertAuditLogInDB(entry)
-      .catch((err) => logger.error('Failed to persist audit log entry', err, 'STORE_SERVICE'));
+    this._background(domainQueries.upsertAuditLogInDB(entry), 'Failed to persist audit log entry');
   }
 
   _persistNotification(notification) {
-    domainQueries
-      .insertNotificationInDB(notification)
-      .catch((err) => logger.error('Failed to persist notification', err, 'STORE_SERVICE'));
+    this._background(domainQueries.insertNotificationInDB(notification), 'Failed to persist notification');
   }
 
   _persistNotificationBatch(notifications) {
-    domainQueries
-      .bulkInsertNotificationsInDB(notifications)
-      .catch((err) => logger.error('Failed to persist notification batch', err, 'STORE_SERVICE'));
+    this._background(domainQueries.bulkInsertNotificationsInDB(notifications), 'Failed to persist notification batch');
   }
 
   // ==========================================
@@ -294,7 +292,7 @@ class StoreService {
     if (!email) return null;
     const target = email.toLowerCase();
 
-    if (!pool.pool) {
+    if (!pool.hasStorage()) {
       return this.buyerAccounts.find((a) => (a.corporateEmail || '').toLowerCase() === target) || null;
     }
 
@@ -435,7 +433,7 @@ class StoreService {
    * Same pattern as getPaymentLinksForVendor/getPaymentLinksForBuyer.
    */
   async getVendors(scopedBuyerId = null) {
-    if (pool.pool) {
+    if (pool.hasStorage()) {
       const allFromDB = await domainQueries.getVendorsFromDB();
       const byId = new Map(this.vendors.map((v) => [v.id, v]));
       for (const vendor of allFromDB) byId.set(vendor.id, vendor);
@@ -534,15 +532,46 @@ class StoreService {
       // no account at all. One retry absorbs a transient blip; a real
       // failure marks the status 'failed' (visible to the buyer/CM) instead
       // of silently mailing broken credentials.
-      this._provisionVendorOnboarding(newVendor, actorEmail).catch((err) => {
-        logger.error(`Onboarding provisioning failed for ${newVendor.email}`, err, 'STORE_SERVICE');
-      });
+      // Was a bare .catch(), never handed to waitUntil — on Workers an
+      // unawaited promise like that can be cancelled the instant the
+      // response is sent (same class of bug as every other _background()
+      // call in this file), so this vendor's identity account and
+      // onboarding email silently never happened. Confirmed live: a buyer
+      // added a vendor, got a normal 201, and the vendor had no login at
+      // all afterward — no error surfaced anywhere.
+      this._background(
+        this._provisionVendorOnboarding(newVendor, actorEmail),
+        `Onboarding provisioning failed for ${newVendor.email}`
+      );
     }
 
     return newVendor;
   }
 
   async _provisionVendorOnboarding(vendor, actorEmail = null) {
+    // Real, previously-shipped bug found live: identityQueries.insertVendorAccount
+    // unconditionally resets password + phone on an *existing* identity
+    // account when one is found for the email — correct for the CLI
+    // provisioning script this function shares that code with (an explicit
+    // admin action recreating known credentials), but this function runs
+    // automatically on every ordinary vendor-profile creation, including for
+    // an email that already has a real login the vendor actually knows and
+    // uses. That combination silently clobbered a real account's password
+    // with a random temp one the vendor was never told, breaking their login
+    // with no warning (confirmed live: yagnik.c@ahduni.edu.in). A vendor
+    // *profile* being created is not the same event as a vendor *identity*
+    // being created — this only provisions identity/sends onboarding
+    // credentials when there is genuinely no identity account yet.
+    const existingIdentity = await identityQueries.findUserByEmail(vendor.email).catch(() => null);
+    if (existingIdentity) {
+      logger.info(
+        `Skipped onboarding identity provisioning for ${vendor.email}: an identity account already exists`,
+        { vendorId: vendor.id },
+        'STORE_SERVICE'
+      );
+      return;
+    }
+
     const tempPassword = this._generateTempPassword();
 
     let identityCreated = false;
@@ -617,7 +646,7 @@ class StoreService {
     // "no in-memory-only data path" principle). A bulk import with no database
     // configured must fail loudly, not silently accept rows into `this.vendors`
     // that vanish on the next restart and were never really "imported".
-    if (!pool.pool) {
+    if (!pool.hasStorage()) {
       const err = new Error('Database is not configured — vendors cannot be bulk-imported right now.');
       err.statusCode = 500;
       throw err;
@@ -717,18 +746,36 @@ class StoreService {
           vendor,
         });
 
-        if (vendor.email) {
+        // eslint-disable-next-line no-await-in-loop
+        if (vendor.email && (await identityQueries.findUserByEmail(vendor.email).catch(() => null))) {
+          // Same real bug as _provisionVendorOnboarding's comment describes:
+          // insertVendorAccount resets password+phone on an existing
+          // identity account. A bulk import row for an email that already
+          // has a real login must never touch it or mail out fake "new"
+          // credentials for an account the buyer/vendor already uses.
+          logger.info(
+            `Skipped onboarding identity provisioning for ${vendor.email}: an identity account already exists`,
+            { vendorId: vendor.id },
+            'STORE_SERVICE'
+          );
+        } else if (vendor.email) {
           const tempPassword = this._generateTempPassword();
-          identityQueries.insertVendorAccount({
-            email: vendor.email,
-            password: tempPassword,
-            phone: vendor.phone || null,
-            fullName: vendor.contactPerson || vendor.name,
-            organizationName: vendor.name,
-            createdBy: 'vendor-bulk-import',
-          }).catch((err) => {
-            logger.error(`Failed to create vendor identity account for ${vendor.email}`, err, 'STORE_SERVICE');
-          });
+          // Both handed to waitUntil (via _background) — bare fire-and-forget
+          // here meant Workers could cancel either before it actually ran,
+          // same bug confirmed live in addVendor's own onboarding call (see
+          // that comment). A bulk-imported vendor with no identity account
+          // and no onboarding email is a vendor with no way to ever log in.
+          this._background(
+            identityQueries.insertVendorAccount({
+              email: vendor.email,
+              password: tempPassword,
+              phone: vendor.phone || null,
+              fullName: vendor.contactPerson || vendor.name,
+              organizationName: vendor.name,
+              createdBy: 'vendor-bulk-import',
+            }),
+            `Failed to create vendor identity account for ${vendor.email}`
+          );
 
           const emailPayload = mailerService.buildVendorOnboardingEmail({
             to: vendor.email,
@@ -739,18 +786,17 @@ class StoreService {
             contactPhone: vendor.phone,
           });
 
-          mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding')
-            .then((delivery) => {
+          this._background(
+            mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding').then((delivery) => {
               if (delivery.sent) {
                 this.updateVendor(vendor.id, { onboardingEmailStatus: 'sent', tempPassword });
                 logger.info(`Onboarding email sent to ${vendor.email}`, { vendorId: vendor.id }, 'STORE_SERVICE');
               } else {
                 logger.warn(`Failed to send onboarding email to ${vendor.email}`, { reason: delivery.reason }, 'STORE_SERVICE');
               }
-            })
-            .catch((err) => {
-              logger.error(`Error sending onboarding email to ${vendor.email}`, err, 'STORE_SERVICE');
-            });
+            }),
+            `Error sending onboarding email to ${vendor.email}`
+          );
         }
       } else {
         results.push({ rowNumber, status: 'duplicate', email: vendor.email, reason: 'A vendor with this email already exists.' });
@@ -907,7 +953,7 @@ class StoreService {
   async getPaymentLinkByZohoId(zohoPaymentLinkId) {
     const cached = this.paymentLinks.find((l) => l.zohoPaymentLinkId === zohoPaymentLinkId);
     if (cached) return cached;
-    if (!pool.pool) return null;
+    if (!pool.hasStorage()) return null;
     const fromDB = await domainQueries.getPaymentLinkByZohoIdFromDB(zohoPaymentLinkId);
     if (!fromDB) return null;
     if (!this.paymentLinks.some((l) => l.id === fromDB.id)) {
@@ -923,7 +969,7 @@ class StoreService {
    * mark, which is not guaranteed to be the process that created the link.
    */
   async getPaymentLinksByStatusIn(statuses) {
-    if (pool.pool) {
+    if (pool.hasStorage()) {
       const allFromDB = await domainQueries.getPaymentLinksFromDB();
       const byId = new Map(this.paymentLinks.map((l) => [l.id, l]));
       for (const link of allFromDB) {
@@ -941,7 +987,7 @@ class StoreService {
    * otherwise be invisible.
    */
   async getPaymentLinksForVendor(vendorId) {
-    if (pool.pool) {
+    if (pool.hasStorage()) {
       const allFromDB = await domainQueries.getPaymentLinksFromDB();
       const byId = new Map(this.paymentLinks.map((l) => [l.id, l]));
       for (const link of allFromDB) byId.set(link.id, link);
@@ -954,7 +1000,7 @@ class StoreService {
 
   /** Same as getPaymentLinksForVendor, scoped to a buyer account instead. */
   async getPaymentLinksForBuyer(buyerAccountId) {
-    if (pool.pool) {
+    if (pool.hasStorage()) {
       const allFromDB = await domainQueries.getPaymentLinksFromDB();
       const byId = new Map(this.paymentLinks.map((l) => [l.id, l]));
       for (const link of allFromDB) byId.set(link.id, link);
@@ -973,7 +1019,7 @@ class StoreService {
   async getPaymentLinkById(id) {
     const cached = this.paymentLinks.find((l) => l.id === id);
     if (cached) return cached;
-    if (!pool.pool) return null;
+    if (!pool.hasStorage()) return null;
     const allFromDB = await domainQueries.getPaymentLinksFromDB();
     const fromDB = allFromDB.find((l) => l.id === id);
     if (!fromDB) return null;
@@ -1177,7 +1223,7 @@ class StoreService {
    * (e.g. check-email CLI, background workers) are merged into memory.
    */
   async syncRFQsFromDB() {
-    if (!pool.pool) return this.getRFQs();
+    if (!pool.hasStorage()) return this.getRFQs();
     try {
       const allFromDB = await domainQueries.getRFQsFromDB();
       if (Array.isArray(allFromDB)) {
@@ -1197,7 +1243,7 @@ class StoreService {
 
   async getRFQByIdAsync(id) {
     let rfq = this.getRFQById(id);
-    if (!rfq && pool.pool) {
+    if (!rfq && pool.hasStorage()) {
       await this.syncRFQsFromDB();
       rfq = this.getRFQById(id);
     }
@@ -1564,9 +1610,7 @@ class StoreService {
     if (!notification) return null;
     if (!notification.read) {
       notification.read = true;
-      domainQueries
-        .markNotificationReadInDB(id)
-        .catch((err) => logger.error('Failed to persist notification read', err, 'STORE_SERVICE'));
+      this._background(domainQueries.markNotificationReadInDB(id), 'Failed to persist notification read');
     }
     return notification;
   }
@@ -1581,9 +1625,10 @@ class StoreService {
       }
     }
     if (changed > 0) {
-      domainQueries
-        .markAllNotificationsReadInDB(recipientType, recipientId)
-        .catch((err) => logger.error('Failed to persist bulk notification read', err, 'STORE_SERVICE'));
+      this._background(
+        domainQueries.markAllNotificationsReadInDB(recipientType, recipientId),
+        'Failed to persist bulk notification read'
+      );
     }
     return changed;
   }
@@ -1687,14 +1732,26 @@ class StoreService {
    * RFQ-invite email. Unknown vendor ids are silently skipped rather than
    * failing the whole batch.
    */
-  inviteVendorsToRFQ(rfqId, vendorIds, actorEmail) {
+  async inviteVendorsToRFQ(rfqId, vendorIds, actorEmail) {
     const rfq = this.getRFQById(rfqId);
     if (!rfq) return null;
 
     const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
     const newlyInvited = [];
     for (const id of Array.isArray(vendorIds) ? vendorIds : []) {
-      const vendor = this.getVendorById(id);
+      let vendor = this.getVendorById(id);
+      if (!vendor) {
+        // this.vendors is a capped in-memory subset (see getVendorsPageFromDB's
+        // own comment on why — 600k+ real vendors can't all live in memory),
+        // but the CM's "All Vendors" picker searches D1 directly and can
+        // surface an id that was never in that subset. Falls back to D1
+        // before giving up, and caches the result so a repeat invite (or any
+        // other in-memory lookup) finds it without another round trip.
+        vendor = await domainQueries.getVendorByIdFromDB(id);
+        if (vendor && !this.vendors.some((v) => v.id === vendor.id)) {
+          this.vendors.push(vendor);
+        }
+      }
       if (!vendor) continue;
       if (this._isInvitedVendor(vendor, rfq)) continue;
       newlyInvited.push(vendor);
@@ -1745,16 +1802,17 @@ class StoreService {
           { vendorId: vendor.id, freeCreditsRemaining: creditInfo.freeCreditsRemaining, isSubscribed: creditInfo.isSubscribed },
           'STORE_SERVICE'
         );
-        mailerService
-          .sendRfqInviteEmail(vendor.email, {
+        this._background(
+          mailerService.sendRfqInviteEmail(vendor.email, {
             rfq: updatedRFQ,
             recipientName: vendor.contactPerson || vendor.name,
             buyerEmail,
             cc: buyerEmail || undefined,
             freeCreditsRemaining: creditInfo.freeCreditsRemaining,
             isSubscribed: creditInfo.isSubscribed,
-          })
-          .catch((err) => logger.error('Failed to email RFQ invite to vendor', err, 'STORE_SERVICE'));
+          }),
+          'Failed to email RFQ invite to vendor'
+        );
       }
     }
 
@@ -1926,14 +1984,15 @@ class StoreService {
       if (vendor.email && !allEmails.has(vendor.email.toLowerCase())) {
         allEmails.add(vendor.email.toLowerCase());
         const creditInfo = this.checkVendorQuotationEligibility(vendor);
-        mailerService
-          .sendRfqInviteEmail(vendor.email, {
+        this._background(
+          mailerService.sendRfqInviteEmail(vendor.email, {
             rfq,
             recipientName: vendor.contactPerson || vendor.name,
             freeCreditsRemaining: creditInfo.freeCreditsRemaining,
             isSubscribed: creditInfo.isSubscribed,
-          })
-          .catch((err) => logger.error('Failed to email RFQ invite to matched vendor', err, 'STORE_SERVICE'));
+          }),
+          'Failed to email RFQ invite to matched vendor'
+        );
       }
     }
 
@@ -1942,14 +2001,15 @@ class StoreService {
         allEmails.add(vendor.email.toLowerCase());
         const resolvedVendor = this.getVendorById(vendor.id || vendor.email, 'all');
         const creditInfo = this.checkVendorQuotationEligibility(resolvedVendor || vendor);
-        mailerService
-          .sendRfqInviteEmail(vendor.email, {
+        this._background(
+          mailerService.sendRfqInviteEmail(vendor.email, {
             rfq,
             recipientName: vendor.contactPerson || vendor.name,
             freeCreditsRemaining: creditInfo.freeCreditsRemaining,
             isSubscribed: creditInfo.isSubscribed,
-          })
-          .catch((err) => logger.error('Failed to email RFQ invite to assigned vendor', err, 'STORE_SERVICE'));
+          }),
+          'Failed to email RFQ invite to assigned vendor'
+        );
       }
     }
 
@@ -1961,9 +2021,10 @@ class StoreService {
     if (!rfq.buyerAccountId) return false;
     const buyer = this.buyerAccounts.find((a) => a.id === rfq.buyerAccountId);
     if (!buyer || !buyer.corporateEmail) return false;
-    mailerService
-      .sendQuoteReceivedEmail(buyer.corporateEmail, { rfq, quote, recipientName: buyer.organizationName })
-      .catch((err) => logger.error('Failed to email quote to buyer', err, 'STORE_SERVICE'));
+    this._background(
+      mailerService.sendQuoteReceivedEmail(buyer.corporateEmail, { rfq, quote, recipientName: buyer.organizationName }),
+      'Failed to email quote to buyer'
+    );
     return true;
   }
 
@@ -2266,50 +2327,86 @@ class StoreService {
       createdThisRun.push({ row: idx + 1, vendor: newVendor });
       importedCount++;
 
-      // Create identity database account for the vendor so they can log in
+      // Create identity database account for the vendor so they can log in —
+      // but only if one doesn't already exist. insertVendorAccount resets
+      // password+phone on an *existing* identity account (correct for the
+      // CLI provisioning script it also serves; wrong here, where the row is
+      // just a historical-purchase-dump entry that may well already have a
+      // real login). Confirmed live: this exact class of call silently
+      // clobbered a real vendor's password with a random one they were never
+      // told, via bulkAddVendors' sibling path — see that fix's comment.
+      // Checked up front (not just logged after the fact once
+      // insertVendorAccount's own `result.created === false` came back,
+      // which is what this used to do) so the reset never happens at all.
       if (newVendor.email) {
-        const tempPassword = this._generateTempPassword();
-
-        // Create vendor account in identity database
-        identityQueries.insertVendorAccount({
-          email: newVendor.email,
-          password: tempPassword,
-          phone: newVendor.phone || null,
-          fullName: newVendor.contactPerson || newVendor.name,
-          organizationName: newVendor.name,
-          createdBy: 'vendor-ingestion',
-        }).then((result) => {
-          if (result.created) {
-            logger.info(`Vendor identity account created for ${newVendor.email}`, { vendorId: newVendor.id }, 'STORE_SERVICE');
-          } else {
-            logger.warn(`Vendor identity account already exists for ${newVendor.email}`, { vendorId: newVendor.id, reason: result.reason }, 'STORE_SERVICE');
-          }
-        }).catch((err) => {
-          logger.error(`Failed to create vendor identity account for ${newVendor.email}`, err, 'STORE_SERVICE');
-        });
-
-        // Send onboarding email to the vendor
-        const emailPayload = mailerService.buildVendorOnboardingEmail({
-          to: newVendor.email,
-          recipientName: newVendor.contactPerson || newVendor.name,
-          buyerOrganizationName: attributedAccount ? attributedAccount.organizationName : 'Procucev Enterprise',
-          vendorCode: newVendor.id,
-          tempPassword: tempPassword,
-          contactPhone: newVendor.phone,
-        });
-
-        mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding')
-          .then((delivery) => {
-            if (delivery.sent) {
-              this.updateVendor(newVendor.id, { onboardingEmailStatus: 'sent', tempPassword });
-              logger.info(`Onboarding email sent to ${newVendor.email}`, { vendorId: newVendor.id }, 'STORE_SERVICE');
-            } else {
-              logger.warn(`Failed to send onboarding email to ${newVendor.email}`, { reason: delivery.reason }, 'STORE_SERVICE');
+        // The whole sequence below is handed to waitUntil (via _background),
+        // via a real async IIFE with genuine awaits — the previous version
+        // used nested .then()/.catch() chains where the inner
+        // insertVendorAccount/sendVendorIngestionEmail calls were never
+        // returned from their enclosing .then() callback, so even wrapping
+        // the outer promise wouldn't have covered them: the outer chain
+        // resolved as soon as its synchronous body finished, not once the
+        // inner unawaited calls actually completed. Confirmed live (same
+        // root cause as addVendor's own onboarding call, see that comment):
+        // a buyer-added vendor's identity account and onboarding email
+        // silently never happened.
+        this._background(
+          (async () => {
+            const existingIdentity = await identityQueries.findUserByEmail(newVendor.email).catch((err) => {
+              logger.error(`Failed to check existing identity for ${newVendor.email}`, err, 'STORE_SERVICE');
+              return null;
+            });
+            if (existingIdentity) {
+              logger.info(
+                `Skipped onboarding identity provisioning for ${newVendor.email}: an identity account already exists`,
+                { vendorId: newVendor.id },
+                'STORE_SERVICE'
+              );
+              return;
             }
-          })
-          .catch((err) => {
-            logger.error(`Error sending onboarding email to ${newVendor.email}`, err, 'STORE_SERVICE');
-          });
+
+            const tempPassword = this._generateTempPassword();
+
+            try {
+              const result = await identityQueries.insertVendorAccount({
+                email: newVendor.email,
+                password: tempPassword,
+                phone: newVendor.phone || null,
+                fullName: newVendor.contactPerson || newVendor.name,
+                organizationName: newVendor.name,
+                createdBy: 'vendor-ingestion',
+              });
+              if (result.created) {
+                logger.info(`Vendor identity account created for ${newVendor.email}`, { vendorId: newVendor.id }, 'STORE_SERVICE');
+              }
+            } catch (err) {
+              logger.error(`Failed to create vendor identity account for ${newVendor.email}`, err, 'STORE_SERVICE');
+              return;
+            }
+
+            const emailPayload = mailerService.buildVendorOnboardingEmail({
+              to: newVendor.email,
+              recipientName: newVendor.contactPerson || newVendor.name,
+              buyerOrganizationName: attributedAccount ? attributedAccount.organizationName : 'Procucev Enterprise',
+              vendorCode: newVendor.id,
+              tempPassword: tempPassword,
+              contactPhone: newVendor.phone,
+            });
+
+            try {
+              const delivery = await mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding');
+              if (delivery.sent) {
+                this.updateVendor(newVendor.id, { onboardingEmailStatus: 'sent', tempPassword });
+                logger.info(`Onboarding email sent to ${newVendor.email}`, { vendorId: newVendor.id }, 'STORE_SERVICE');
+              } else {
+                logger.warn(`Failed to send onboarding email to ${newVendor.email}`, { reason: delivery.reason }, 'STORE_SERVICE');
+              }
+            } catch (err) {
+              logger.error(`Error sending onboarding email to ${newVendor.email}`, err, 'STORE_SERVICE');
+            }
+          })(),
+          `Onboarding provisioning failed for ${newVendor.email}`
+        );
       }
     });
 
@@ -2664,7 +2761,7 @@ class StoreService {
     // the entire vendor table just to keep the first 500 — the same
     // performance disaster the CM's "Load more" pagination hit, just
     // triggered by something as ordinary as loading the app.
-    if (!scopedBuyerId && pool.pool) {
+    if (!scopedBuyerId && pool.hasStorage()) {
       const page = await domainQueries.getVendorsPageFromDB({ limit: MAX_BOOTSTRAP_VENDORS, offset: 0, publicOnly: true });
       vendors = page.rows;
       vendorsTotal = page.total;

@@ -320,9 +320,36 @@ async function getApprovedMappings(req, res, next) {
 // ------------------------------------------------------------------------------
 
 const largeFileIngestionService = require('../services/largeFileIngestionService');
-const os = require('os');
-const path = require('path');
-const fs = require('fs');
+const { VENDOR_INGESTION_CONFIG } = require('../config/constants');
+
+/**
+ * Buffer the incoming request body, capped at MAX_UPLOAD_BYTES.
+ *
+ * Cloudflare Workers has no persistent local disk (the previous
+ * fs.createWriteStream-to-a-temp-file approach silently produced a file the
+ * background job could never actually read back there), so the raw upload is
+ * buffered here and handed to largeFileIngestionService to store in R2 —
+ * same store RFQ attachments already use successfully on this deployment.
+ * The cap keeps a single request from holding an unbounded buffer in memory;
+ * see VENDOR_INGESTION_CONFIG.MAX_UPLOAD_BYTES for the sizing rationale.
+ */
+function bufferRequestBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on('data', (chunk) => {
+      total += chunk.length;
+      if (total > maxBytes) {
+        req.destroy();
+        reject(Object.assign(new Error(`Upload exceeds the ${maxBytes}-byte limit.`), { statusCode: 413 }));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
 
 async function streamUploadFile(req, res, next) {
   try {
@@ -330,34 +357,16 @@ async function streamUploadFile(req, res, next) {
     const fileName = req.query.fileName || 'uploaded_data.csv';
     const jobType = req.query.type === 'PO_DUMP' ? 'PO_DUMP' : 'VENDOR_MASTER';
 
-    const tempDir = path.join(os.tmpdir(), 'procucev-uploads');
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
-    }
-    const tempFilePath = path.join(tempDir, `ingest-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.csv`);
-    const writeStream = fs.createWriteStream(tempFilePath);
+    const buffer = await bufferRequestBody(req, VENDOR_INGESTION_CONFIG.MAX_UPLOAD_BYTES);
 
-    req.pipe(writeStream);
-
-    writeStream.on('finish', async () => {
-      try {
-        const job = await largeFileIngestionService.startIngestionJob({
-          sessionUser: req.user,
-          sessionId,
-          filePath: tempFilePath,
-          fileName,
-          jobType,
-        });
-        return res.status(202).json({ success: true, data: { job } });
-      } catch (startErr) {
-        return respondWithError(startErr, res, next, 'Failed to start ingestion job');
-      }
+    const job = await largeFileIngestionService.startIngestionJob({
+      sessionUser: req.user,
+      sessionId,
+      fileBuffer: buffer,
+      fileName,
+      jobType,
     });
-
-    writeStream.on('error', (streamErr) => {
-      logger.error('Streaming file write error', streamErr, LOG_CATEGORY);
-      return respondWithError(streamErr, res, next, 'File upload write error');
-    });
+    return res.status(202).json({ success: true, data: { job } });
   } catch (err) {
     return respondWithError(err, res, next, 'Unexpected error handling file upload stream');
   }

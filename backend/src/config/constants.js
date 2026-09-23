@@ -1247,6 +1247,16 @@ const VENDOR_INGESTION_CONFIG = {
   MAX_ROWS_PER_REQUEST: 1000,
   MAX_VENDOR_MASTER_ROWS: 20000,
   MAX_PO_ROWS: 200000,
+  // R2 object key prefix for a large CSV upload awaiting background
+  // processing (see largeFileIngestionService.js). Was a local temp-file
+  // directory before the Cloudflare Workers migration — Workers has no
+  // persistent local disk, so the raw upload now lives in R2 (the same
+  // store RFQ attachments already use) between the streaming upload request
+  // and the background ingestion job reading it back.
+  UPLOAD_STORAGE_DIR: process.env.VENDOR_INGESTION_UPLOAD_DIR || 'uploads/vendor-ingestion',
+  // 200,000 PO rows at a generous ~250 bytes/row is ~50MB; this leaves
+  // headroom above that without risking an unbounded buffer.
+  MAX_UPLOAD_BYTES: Number(process.env.VENDOR_INGESTION_MAX_UPLOAD_BYTES || 75 * 1024 * 1024),
   // Vendors classified per AI batch. The job is chunked so a large run reports
   // progress and can be resumed, rather than holding one long request open.
   AI_BATCH_SIZE: 8,

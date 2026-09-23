@@ -76,7 +76,7 @@ describe('NotificationBell — recipient inbox', () => {
     render(<NotificationBell />);
     await waitFor(() => expect(mockFetch).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByRole('button', { name: /unread notification/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /unread notification/i }));
 
     expect(await screen.findByText('Pump RFQ')).toBeInTheDocument();
     // Opening re-fetches.
@@ -94,7 +94,7 @@ describe('NotificationBell — recipient inbox', () => {
     render(<NotificationBell />);
     await waitFor(() => expect(mockFetch).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByRole('button', { name: /unread notification/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /unread notification/i }));
     fireEvent.click(await screen.findByText('New RFQ in Cables'));
 
     await waitFor(() => expect(mockMarkRead).toHaveBeenCalledWith('n1'));
@@ -130,7 +130,7 @@ describe('NotificationBell — recipient inbox', () => {
     render(<NotificationBell />);
     await waitFor(() => expect(mockFetch).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByRole('button', { name: /unread notification/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /unread notification/i }));
     fireEvent.click(await screen.findByText('Mark all read'));
 
     await waitFor(() => expect(mockMarkAll).toHaveBeenCalled());
@@ -202,7 +202,7 @@ describe('NotificationBell — recipient inbox', () => {
     render(<NotificationBell />);
     await waitFor(() => expect(screen.getByText('1')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /unread notification/i })); // triggers a 2nd fetch that fails
+    fireEvent.click(await screen.findByRole('button', { name: /unread notification/i })); // triggers a 2nd fetch that fails
     await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
     // Badge still shows the last good value.
     expect(screen.getByText('1')).toBeInTheDocument();
@@ -233,7 +233,7 @@ describe('NotificationBell — routing edge cases', () => {
     render(<NotificationBell />);
     await waitFor(() => expect(mockFetch).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByRole('button', { name: /unread notification/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /unread notification/i }));
     fireEvent.click(await screen.findByText('Orphan quote'));
 
     await waitFor(() => expect(mockMarkRead).toHaveBeenCalledWith('n1'));

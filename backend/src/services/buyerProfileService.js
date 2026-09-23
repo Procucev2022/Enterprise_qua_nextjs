@@ -43,7 +43,7 @@ class BuyerProfileError extends Error {
 
 /** Reject before issuing a query when no database is configured. */
 function assertIdentityConfigured() {
-  if (!pool.pool) {
+  if (!pool.hasStorage()) {
     throw new BuyerProfileError(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED, 503);
   }
 }

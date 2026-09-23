@@ -97,11 +97,10 @@ function createBuyerAccount(req, res, next) {
 // for free.
 function sanitizeBuyerAccountUpdates(updates, res) {
   if (!Object.prototype.hasOwnProperty.call(updates, 'subscriptionPlan')) return updates;
-  const validPlans = ['free_trial', 'version_1', 'version_2', 'version_3'];
-  if (validPlans.includes(updates.subscriptionPlan)) return updates;
+  if (updates.subscriptionPlan === 'free_trial') return updates;
   res.status(400).json({
     success: false,
-    error: `Invalid subscriptionPlan. Must be one of: ${validPlans.join(', ')}`,
+    error: 'subscriptionPlan can only be reset to free_trial here — paid plans can only be granted via a completed Zoho payment.',
   });
   return null;
 }

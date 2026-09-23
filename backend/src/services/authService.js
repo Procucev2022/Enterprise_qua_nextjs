@@ -6,6 +6,7 @@ const { AUTH_MESSAGES, IDENTITY_OTP_CONFIG, PASSWORD_MIN_LENGTH } = require('../
 const pool = require('../db/pool');
 const identityQueries = require('../db/identityQueries');
 const authSessionQueries = require('../db/authSessionQueries');
+const { getWaitUntil } = require('../db/d1Bridge');
 
 const CONFIGURED_AUTH_SECRET = process.env.AUTH_SECRET || process.env.JWT_SECRET || '';
 
@@ -107,7 +108,7 @@ function verifyPassword(plainPassword, storedHash, storedSalt) {
  * more than one row.
  */
 async function loadIdentityUser(normalizedEmail, mobile) {
-  if (!pool.pool) {
+  if (!pool.hasStorage()) {
     throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
   }
   try {
@@ -492,9 +493,17 @@ async function requestOtp(email, mobile, roleHint, ipAddress) {
     throw new Error(AUTH_MESSAGES.OTP_STORAGE_FAILED);
   }
 
-  mailerService.sendOtpEmail(normalizedEmail, code, OTP_EXPIRY_MS / 1000).catch((e) =>
-    logger.error('OTP email dispatch error', e, 'AUTH_SERVICE')
-  );
+  // Fire-and-forget, but on Workers an unawaited promise can be cancelled the
+  // instant the response is sent — same fix as storeService.js's _background
+  // helper (see that file's comment for the full rationale). A no-op on
+  // Node/Render, where the process just keeps running regardless.
+  {
+    const otpEmailSend = mailerService
+      .sendOtpEmail(normalizedEmail, code, OTP_EXPIRY_MS / 1000)
+      .catch((e) => logger.error('OTP email dispatch error', e, 'AUTH_SERVICE'));
+    const waitUntil = getWaitUntil();
+    if (waitUntil) waitUntil(otpEmailSend);
+  }
 
   logger.info(`OTP generated for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
   storeService.addAuditLog({
@@ -584,7 +593,7 @@ async function registerUser(payload, ipAddress) {
   if (!password) throw new Error(AUTH_MESSAGES.EMAIL_PASSWORD_REQUIRED);
   if (!mobile) throw new Error(AUTH_MESSAGES.MOBILE_REQUIRED);
 
-  if (!pool.pool) {
+  if (!pool.hasStorage()) {
     throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
   }
 
@@ -623,7 +632,7 @@ async function registerUser(payload, ipAddress) {
  * Get all registered users (for admin inspection).
  */
 async function getAllUsers() {
-  if (!pool.pool) {
+  if (!pool.hasStorage()) {
     throw new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
   }
   const users = await identityQueries.listUsers();

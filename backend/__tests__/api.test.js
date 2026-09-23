@@ -85,15 +85,15 @@ describe('API Route Endpoints', () => {
       expect(res.statusCode).toBe(404);
     });
 
-    test('PUT /api/buyer-accounts/:id updates subscriptionPlan successfully', async () => {
+    test('PUT /api/buyer-accounts/:id rejects granting a paid subscriptionPlan directly (must go through Zoho payment)', async () => {
       const res = await request(app)
         .put(`/api/buyer-accounts/${testAccountId}`)
         .set(authHeader('buyer'))
         .send({ subscriptionPlan: 'version_3' });
-      expect(res.statusCode).toBe(200);
-      expect(res.body.success).toBe(true);
-      expect(res.body.data.subscriptionPlan).toBe('version_3');
-      expect(storeService.getBuyerAccounts().find((a) => a.id === testAccountId).subscriptionPlan).toBe('version_3');
+      expect(res.statusCode).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toMatch(/completed zoho payment/i);
+      expect(storeService.getBuyerAccounts().find((a) => a.id === testAccountId).subscriptionPlan).not.toBe('version_3');
     });
 
     test('PUT /api/buyer-accounts/:id still allows resetting subscriptionPlan to free_trial', async () => {
@@ -203,6 +203,12 @@ describe('API Route Endpoints', () => {
       expect(res.statusCode).toBe(201);
       expect(res.body.success).toBe(true);
       expect(res.body.data.name).toBe(newVendor.name);
+      // Found live: falling back to storeService's default ('buyer_manual')
+      // here made the frontend's isBuyerUploaded() classifier sort a real
+      // vendor self-registration into the "Uploaded by Buyer" tab instead of
+      // "Procucev Vendors", where it's documented to live and where a buyer
+      // would actually search for it.
+      expect(res.body.data.source).toBe('self_registration');
       testVendorId = res.body.data.id;
     });
 
@@ -1130,6 +1136,16 @@ describe('API Route Endpoints', () => {
     });
 
     test('POST /api/rfqs/:id/quotes error handling for missing fields and invalid id', async () => {
+      // The 'vendor' session's own profile was deleted by the earlier
+      // "DELETE /api/vendors/:id removes vendor" test in this file, and
+      // addQuote 400s before ever checking the RFQ id if the caller has no
+      // vendor profile at all — so this recreates one to exercise the actual
+      // missing-field/invalid-id branches being tested here.
+      await request(app).post('/api/vendors').set(authHeader('vendor')).send({
+        name: 'Apex Supplies Ltd',
+        majorCategory: 'Engineering Spares - Mechanical',
+      });
+
       const failRes = await request(app).post('/api/rfqs/rfq-001/quotes').set(authHeader('vendor')).send({});
       expect(failRes.statusCode).toBe(400);
 

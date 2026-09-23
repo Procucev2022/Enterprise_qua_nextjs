@@ -11,6 +11,7 @@
 // ==============================================================================
 
 const { Pool } = require('pg');
+const { getD1Binding, queryD1 } = require('./d1Bridge');
 
 const DEFAULT_POOL_MAX = 10;
 const DEFAULT_CONNECT_TIMEOUT_MS = 5000;
@@ -102,9 +103,48 @@ const poolModule = {
 const NOT_CONFIGURED_MESSAGE = 'The database is not configured. Set DATABASE_URL so records can be read and written.';
 
 /**
- * Run a parameterised query and return the full pg result.
+ * Whether *some* backing store is reachable — pg pool or D1 binding.
+ *
+ * domainQueries.js/vendorIngestionQueries.js/identityQueries.js guard every
+ * ported function with `if (!pool.hasStorage()) return <empty>;` before
+ * calling query()/rows(). On Cloudflare there is no DATABASE_URL and
+ * `poolModule.pool` is always null, so a guard that only checked `pool.pool`
+ * would short-circuit every D1-ported call before it ever reached the D1
+ * branch inside query(). This checks both so the guard only fires when
+ * neither store is configured.
  */
-async function query(text, params = []) {
+function hasStorage() {
+  return !!poolModule.pool || !!getD1Binding();
+}
+
+/**
+ * Run a parameterised query and return the full pg result.
+ *
+ * Pass `{ d1: true }` for a query against a table that has already been
+ * ported to Cloudflare D1 (see d1Bridge.js) — an explicit per-call-site
+ * opt-in, not automatic table sniffing, so only queries that have actually
+ * been verified against the migrated D1 schema take that path. On Node/Render
+ * (no Workers runtime, no D1 binding) this option is a no-op and the call
+ * falls straight through to the normal pg pool, unchanged.
+ *
+ * Most ported queries share one SQL string across both backends (placeholder
+ * syntax is the only difference, and d1Bridge.toD1Sql handles that). A few
+ * genuinely can't — e.g. Postgres's jsonb_set() has no Postgres/SQLite-shared
+ * spelling, SQLite's equivalent is json_set(). For those, pass `d1Text` with
+ * the SQLite version; it's used only on the D1 path, `text` is untouched for
+ * pg.
+ *
+ * Pass `d1Params` too when the two versions don't just differ in SQL text but
+ * need a different-shaped params array — e.g. Postgres's `= any($n)` binds
+ * one array parameter, but SQLite has no array parameter type at all, so the
+ * D1 side expands to `in (?, ?, ...)` and needs each value as its own bound
+ * param instead of one array.
+ */
+async function query(text, params = [], options = {}) {
+  if (options.d1) {
+    const db = getD1Binding();
+    if (db) return queryD1(db, options.d1Text || text, options.d1Params || params);
+  }
   if (!poolModule.pool) {
     throw new Error(NOT_CONFIGURED_MESSAGE);
   }
@@ -118,8 +158,8 @@ async function query(text, params = []) {
  * from repeating the same destructuring — and from silently reading `.rows` off
  * an undefined result if a mock forgets to supply it.
  */
-async function rows(text, params = []) {
-  const result = await query(text, params);
+async function rows(text, params = [], options = {}) {
+  const result = await query(text, params, options);
   return result.rows || [];
 }
 
@@ -233,6 +273,7 @@ async function closePool() {
 }
 
 poolModule.NOT_CONFIGURED_MESSAGE = NOT_CONFIGURED_MESSAGE;
+poolModule.hasStorage = hasStorage;
 poolModule.resolveConfig = resolveConfig;
 poolModule.createPool = createPool;
 poolModule.detectProvider = detectProvider;

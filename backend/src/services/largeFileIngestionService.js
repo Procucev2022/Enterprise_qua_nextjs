@@ -1,21 +1,105 @@
 // ==============================================================================
 // LARGE FILE STREAMING INGESTION SERVICE
 // ==============================================================================
-// Handles streaming ingestion of large Excel and CSV files (up to 1,000,000+ rows)
-// without memory spikes. Processes rows in configurable chunks, persists live
-// progress to `ingestion_jobs` and `vendor_ingestion_sessions`, and continues
-// asynchronously in the background even if the buyer closes the modal or browser.
-// ==============================================================================
-
-const fs = require('fs');
-const readline = require('readline');
+// Handles ingestion of large CSV files (tens of thousands of rows — see
+// VENDOR_INGESTION_CONFIG.MAX_VENDOR_MASTER_ROWS/MAX_PO_ROWS for the real
+// caps). Processes rows in configurable chunks, persists live progress to
+// `ingestion_jobs` and `vendor_ingestion_sessions`, and continues in the
+// background even if the buyer closes the modal or browser — on Workers,
+// "background" means handed to ctx.waitUntil() (see the getWaitUntil() calls
+// below), since an unawaited promise with nothing extending it can be
+// cancelled the instant the response is sent.
+//
+// The raw upload used to be written to a local temp file (fs.createWriteStream)
+// and streamed back off disk. Cloudflare Workers has no persistent local
+// filesystem at all, so that produced a job that looked started but could
+// never actually read its own file back — the upload now goes to R2 (the
+// same store RFQ attachments already use on this deployment) instead, via
+// r2Client/@aws-sdk/client-s3. It's read back as one buffered object rather
+// than a live stream: bufferBody's for-await-of pattern is what's already
+// proven to work against this SDK on Workers (see rfqAttachmentService.js),
+// and the real row caps above make a single ~75MB-max buffer safe — nothing
+// like the "1,000,000+ rows" this file's old top comment aspired to.
+const { PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const queries = require('../db/vendorIngestionQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
+const r2Client = require('./r2Client');
+const { getWaitUntil } = require('../db/d1Bridge');
 const { logger } = require('./loggerService');
 const {
   VENDOR_INGESTION_SESSION_STATUS,
   VENDOR_INGESTION_STEP,
+  VENDOR_INGESTION_CONFIG,
 } = require('../config/constants');
+
+/** Same buffering pattern rfqAttachmentService.js already uses against this SDK. */
+async function bufferBody(body) {
+  const chunks = [];
+  for await (const chunk of body) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
+/** Store a raw upload in R2 ahead of background processing. Throws if R2 isn't configured. */
+async function uploadToR2(key, buffer) {
+  const binding = r2Client.getBinding();
+  if (binding) {
+    // Native R2 binding — see r2Client.js's getBinding() for why this is
+    // preferred over the S3Client path below on Workers.
+    await binding.put(key, buffer, { httpMetadata: { contentType: 'text/csv' } });
+    return;
+  }
+  const client = r2Client.getClient();
+  if (!client) throw new Error('R2 storage is not configured — cannot accept a large file upload.');
+  await client.send(
+    new PutObjectCommand({ Bucket: r2Client.bucket(), Key: key, Body: buffer, ContentType: 'text/csv' })
+  );
+}
+
+/** Read the whole uploaded CSV back, or null if it's gone (R2 unconfigured, already cleaned up, etc). */
+async function downloadFromR2(key) {
+  const binding = r2Client.getBinding();
+  if (binding) {
+    try {
+      const object = await binding.get(key);
+      if (!object) return null;
+      return Buffer.from(await object.arrayBuffer());
+    } catch (err) {
+      logger.warn('Large-file R2 download failed', { key, error: err.message }, 'LARGE_FILE_INGESTION');
+      return null;
+    }
+  }
+  const client = r2Client.getClient();
+  if (!client) return null;
+  try {
+    const response = await client.send(new GetObjectCommand({ Bucket: r2Client.bucket(), Key: key }));
+    return bufferBody(response.Body);
+  } catch (err) {
+    logger.warn('Large-file R2 download failed', { key, error: err.message }, 'LARGE_FILE_INGESTION');
+    return null;
+  }
+}
+
+/** Best-effort cleanup — the object outliving one failed delete is not itself a correctness problem. */
+async function deleteFromR2(key) {
+  const binding = r2Client.getBinding();
+  if (binding) {
+    try {
+      await binding.delete(key);
+    } catch (err) {
+      logger.warn('Failed to clean up R2 ingestion upload', { key, error: err.message }, 'LARGE_FILE_INGESTION');
+    }
+    return;
+  }
+  const client = r2Client.getClient();
+  if (!client) return;
+  try {
+    await client.send(new DeleteObjectCommand({ Bucket: r2Client.bucket(), Key: key }));
+  } catch (err) {
+    logger.warn('Failed to clean up R2 ingestion upload', { key, error: err.message }, 'LARGE_FILE_INGESTION');
+  }
+}
 
 const LOG_CATEGORY = 'LARGE_FILE_INGESTION';
 const DEFAULT_BATCH_SIZE = 500;
@@ -287,7 +371,7 @@ async function processPoDumpBatch(sessionId, organizationId, batch, session) {
 /**
  * Execute background streaming ingestion of a CSV or TXT file
  */
-async function streamProcessCsvFile({ jobId, sessionId, organizationId, filePath, fileName, jobType, batchSize = DEFAULT_BATCH_SIZE }) {
+async function streamProcessCsvFile({ jobId, sessionId, organizationId, r2Key, fileName, jobType, batchSize = DEFAULT_BATCH_SIZE }) {
   try {
     const session = await queries.findSession(sessionId, organizationId);
     if (!session) {
@@ -307,29 +391,38 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, filePath
     const recentErrors = [];
 
     try {
-      // 1. First quick pass to count lines for exact total progress
-      const fileStreamCount = fs.createReadStream(filePath);
-      const rlCount = readline.createInterface({ input: fileStreamCount, crlfDelay: Infinity });
-      for await (const line of rlCount) {
-        if (line.trim().length > 0) totalLines++;
+      // One R2 read for the whole upload — see this file's top comment for why
+      // that's a safe amount to buffer (the real row caps top out ~75MB), and
+      // why it's buffered rather than fed through as a live stream. The old
+      // two-pass fs.createReadStream approach (open once just to count lines,
+      // again to actually process) doesn't apply once the content already
+      // sits in memory: the line count is immediate, and both "passes" below
+      // read from the same buffered text instead of two separate disk/R2 reads.
+      const buffer = await downloadFromR2(r2Key);
+      if (!buffer) {
+        await queries.updateIngestionJobProgress(jobId, organizationId, {
+          status: 'FAILED',
+          errorMessage: 'Uploaded file could not be read back from storage',
+          completedAt: new Date().toISOString(),
+        });
+        return;
       }
-      totalLines = Math.max(0, totalLines - 1); // Exclude header line
+      const text = buffer.toString('utf8');
+      const allLines = text.split(/\r\n|\r|\n/);
+
+      totalLines = Math.max(0, allLines.filter((line) => line.trim().length > 0).length - 1); // Exclude header line
 
       await queries.updateIngestionJobProgress(jobId, organizationId, {
         totalRecords: totalLines,
         status: 'PROCESSING',
       });
 
-      // 2. Stream and process in batches
-      const fileStream = fs.createReadStream(filePath);
-      const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-
       let isHeader = true;
       let headerMap = null;
       let currentBatch = [];
       let delimiter = ',';
 
-      for await (const line of rl) {
+      for (const line of allLines) {
         if (!line || line.trim().length === 0) continue;
 
         if (isHeader) {
@@ -457,13 +550,11 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, filePath
       });
     }
   } finally {
-    // Clean up temporary file unconditionally
-    try {
-      if (filePath && fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-      }
-    } catch (cleanErr) {
-      logger.warn('Failed to clean up temporary upload file', { filePath, error: cleanErr.message }, LOG_CATEGORY);
+    // Clean up the R2 upload unconditionally — deleteFromR2 is itself
+    // best-effort (logs and swallows its own failure), so this never masks
+    // whatever the try block above already reported.
+    if (r2Key) {
+      await deleteFromR2(r2Key);
     }
   }
 }
@@ -570,7 +661,7 @@ async function processArrayJob({ jobId, sessionId, organizationId, rows, fileNam
 /**
  * Start a background ingestion job for an uploaded file or array
  */
-async function startIngestionJob({ sessionUser, sessionId, filePath, rows, fileName, jobType, totalHint = 0 }) {
+async function startIngestionJob({ sessionUser, sessionId, fileBuffer, rows, fileName, jobType, totalHint = 0 }) {
   const organizationId = await resolveOrganizationId(sessionUser, sessionId);
   if (!organizationId) {
     throw new Error('Organization not linked to user');
@@ -578,6 +669,17 @@ async function startIngestionJob({ sessionUser, sessionId, filePath, rows, fileN
 
   // Clear any past cancellation markers for this session
   activeCancellations.delete(sessionId);
+
+  // Uploaded once, synchronously, before this returns — the background job
+  // (kicked off further down) reads it back from R2 by this same key, so it
+  // must already be durably stored by the time that job runs, not still
+  // in flight. This one write is comparatively fast; it's the row-by-row
+  // processing after it that's slow enough to need deferring.
+  let r2Key = null;
+  if (fileBuffer) {
+    r2Key = `${VENDOR_INGESTION_CONFIG.UPLOAD_STORAGE_DIR}/${sessionId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.csv`;
+    await uploadToR2(r2Key, fileBuffer);
+  }
 
   const total = rows ? rows.length : totalHint;
 
@@ -590,19 +692,33 @@ async function startIngestionJob({ sessionUser, sessionId, filePath, rows, fileN
     totalRecords: total,
   });
 
-  if (filePath) {
-    setImmediate(() => {
-      streamProcessCsvFile({
-        jobId: job.id,
-        sessionId,
-        organizationId,
-        filePath,
-        fileName,
-        jobType,
-      }).catch((err) => {
-        logger.error('Background ingestion job error', err, LOG_CATEGORY);
+  if (r2Key) {
+    // Wrapped in a Promise constructed and handed to waitUntil synchronously,
+    // right here — not inside the setImmediate callback. waitUntil only
+    // needs a Promise reference to hold the invocation open for; it doesn't
+    // need the underlying work to have started yet. Registering it any later
+    // (e.g. from inside the callback, after setImmediate has already fired)
+    // risks the response having gone out and the invocation already having
+    // ended by then, which is the exact bug this whole waitUntil pattern
+    // exists to avoid — see storeService.js's _background() for the fuller
+    // rationale, and worker.mjs for where getWaitUntil() ultimately reads
+    // Workers' waitUntil from.
+    const backgroundJob = new Promise((resolve) => {
+      setImmediate(() => {
+        streamProcessCsvFile({
+          jobId: job.id,
+          sessionId,
+          organizationId,
+          r2Key,
+          fileName,
+          jobType,
+        })
+          .catch((err) => logger.error('Background ingestion job error', err, LOG_CATEGORY))
+          .then(resolve);
       });
     });
+    const waitUntil = getWaitUntil();
+    if (waitUntil) waitUntil(backgroundJob);
     return job;
   } else if (Array.isArray(rows)) {
     if (rows.length <= 5000) {
@@ -625,18 +741,23 @@ async function startIngestionJob({ sessionUser, sessionId, filePath, rows, fileN
         failedRecords: 0,
       };
     } else {
-      setImmediate(() => {
-        processArrayJob({
-          jobId: job.id,
-          sessionId,
-          organizationId,
-          rows,
-          fileName,
-          jobType,
-        }).catch((err) => {
-          logger.error('Background array ingestion job error', err, LOG_CATEGORY);
+      // Same waitUntil registration pattern as the r2Key branch above.
+      const backgroundJob = new Promise((resolve) => {
+        setImmediate(() => {
+          processArrayJob({
+            jobId: job.id,
+            sessionId,
+            organizationId,
+            rows,
+            fileName,
+            jobType,
+          })
+            .catch((err) => logger.error('Background array ingestion job error', err, LOG_CATEGORY))
+            .then(resolve);
         });
       });
+      const waitUntil = getWaitUntil();
+      if (waitUntil) waitUntil(backgroundJob);
       return job;
     }
   }

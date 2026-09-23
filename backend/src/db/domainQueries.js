@@ -16,9 +16,13 @@ const pool = require('./pool');
 // ── Vendors ──────────────────────────────────────────────────────────────────
 
 async function getVendorsFromDB() {
-  if (!pool.pool) return [];
-  const result = await pool.query('SELECT raw FROM vendors ORDER BY created_at DESC');
-  return (result && result.rows) ? result.rows.map((row) => row.raw) : [];
+  if (!pool.hasStorage()) return [];
+  const result = await pool.query(
+    'SELECT raw FROM vendors ORDER BY created_at DESC',
+    [],
+    { d1: true }
+  );
+  return (result && result.rows) ? result.rows.map((row) => parseRaw(row.raw)) : [];
 }
 
 /**
@@ -33,9 +37,16 @@ async function getVendorsFromDB() {
  * a page request only ever touches the rows it actually returns.
  */
 async function getVendorsPageFromDB({ limit, offset, search = '', category = '', publicOnly = false, scopedBuyerId = '' } = {}) {
-  if (!pool.pool) return { rows: [], total: 0 };
+  if (!pool.hasStorage()) return { rows: [], total: 0 };
   const params = [];
+  // Two parallel condition lists, not one translated after the fact: ILIKE
+  // has no SQLite equivalent (LIKE + lower() instead), raw->>'x' is Postgres
+  // JSONB syntax (SQLite's is json_extract(raw,'$.x'), which already returns
+  // text for a scalar — no separate ::text cast needed), and (raw->'x')::text
+  // likewise becomes json_extract. Both lists push the exact same params in
+  // the exact same order, so one params array serves either query text.
   const conditions = [];
+  const d1Conditions = [];
   if (search) {
     params.push(`%${search}%`);
     // major_category/email/name/minorCategories are all backed by a trigram
@@ -45,6 +56,10 @@ async function getVendorsPageFromDB({ limit, offset, search = '', category = '',
       OR email ILIKE $${params.length}
       OR raw->>'name' ILIKE $${params.length}
       OR (raw->'minorCategories')::text ILIKE $${params.length})`);
+    d1Conditions.push(`(lower(major_category) LIKE lower($${params.length})
+      OR lower(email) LIKE lower($${params.length})
+      OR lower(json_extract(raw,'$.name')) LIKE lower($${params.length})
+      OR lower(json_extract(raw,'$.minorCategories')) LIKE lower($${params.length}))`);
   }
   if (category) {
     // An exact-match category filter (the CM's category dropdown), separate
@@ -53,12 +68,14 @@ async function getVendorsPageFromDB({ limit, offset, search = '', category = '',
     // match, unlike search's leading-wildcard ILIKE, so no trigram needed).
     params.push(category);
     conditions.push(`major_category = $${params.length}`);
+    d1Conditions.push(`major_category = $${params.length}`);
   }
   if (publicOnly) {
     // Mirrors storeService.getVendors' unscoped filter: a vendor tagged to a
     // specific buyer (buyerId/buyerAccountId set inside `raw`) is only meant
     // to be visible to that buyer, never in an anonymous/public listing.
     conditions.push(`(raw->>'buyerId') IS NULL AND (raw->>'buyerAccountId') IS NULL`);
+    d1Conditions.push(`json_extract(raw,'$.buyerId') IS NULL AND json_extract(raw,'$.buyerAccountId') IS NULL`);
   }
   if (scopedBuyerId) {
     // A buyer's paginated listing must include every public vendor (no
@@ -79,35 +96,74 @@ async function getVendorsPageFromDB({ limit, offset, search = '', category = '',
       OR lower(raw->>'buyerAccountId') = lower($${p})
       OR lower(raw->>'buyerEmail') = lower($${p})
     )`);
+    d1Conditions.push(`(
+      (json_extract(raw,'$.buyerId') IS NULL AND json_extract(raw,'$.buyerAccountId') IS NULL)
+      OR lower(json_extract(raw,'$.buyerId')) = lower($${p})
+      OR lower(json_extract(raw,'$.buyerAccountId')) = lower($${p})
+      OR lower(json_extract(raw,'$.buyerEmail')) = lower($${p})
+    )`);
   }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const d1Where = d1Conditions.length ? `WHERE ${d1Conditions.join(' AND ')}` : '';
 
   // Separate param arrays for the count vs. data query — sharing and
   // mutating one array across both calls works with a driver that sends the
   // query immediately, but is a needless footgun (and confusing to inspect
   // in tests) for no benefit.
-  const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM vendors ${where}`, [...params]);
+  const countResult = await pool.query(
+    `SELECT COUNT(*)::int AS total FROM vendors ${where}`,
+    [...params],
+    { d1: true, d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}` }
+  );
   const total = countResult.rows[0]?.total || 0;
 
   const dataParams = [...params, limit, offset];
   const dataResult = await pool.query(
     `SELECT raw FROM vendors ${where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
-    dataParams
+    dataParams,
+    {
+      d1: true,
+      d1Text: `SELECT raw FROM vendors ${d1Where} ORDER BY created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+    }
   );
-  return { rows: dataResult.rows.map((row) => row.raw), total };
+  return { rows: dataResult.rows.map((row) => parseRaw(row.raw)), total };
 }
 
 /** Single-row lookup by email — used to guarantee a specific vendor is
  * present in a capped/paginated listing without fetching the whole table. */
 async function getVendorByEmailFromDB(email) {
-  if (!pool.pool || !email) return null;
-  const result = await pool.query('SELECT raw FROM vendors WHERE email = $1 LIMIT 1', [email]);
-  return result.rows[0]?.raw || null;
+  if (!pool.hasStorage() || !email) return null;
+  const result = await pool.query(
+    'SELECT raw FROM vendors WHERE email = $1 LIMIT 1',
+    [email],
+    { d1: true }
+  );
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+}
+
+/** Single-row lookup by id — same reasoning as getVendorByEmailFromDB, keyed
+ * on the primary key instead. storeService.getVendorById only searches the
+ * in-memory this.vendors cache, which at 600k+ real vendors is a capped
+ * subset (see getVendorsPageFromDB's own comment) — a vendor surfaced by a
+ * live, D1-backed paginated search (e.g. the CM's "All Vendors" invite
+ * picker) can be entirely absent from that cache, making an id it just
+ * returned fail to resolve moments later. This is the D1 fallback for that. */
+async function getVendorByIdFromDB(id) {
+  if (!pool.hasStorage() || !id) return null;
+  const result = await pool.query(
+    'SELECT raw FROM vendors WHERE id = $1 LIMIT 1',
+    [id],
+    { d1: true }
+  );
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 async function upsertVendorInDB(vendor) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const { id, email, majorCategory, status, source } = vendor;
+  // See upsertEvaluationInDB's comment for why the D1 path needs its own
+  // ISO-formatted timestamp rather than plain CURRENT_TIMESTAMP/now() —
+  // created_at is sorted on directly by getVendorsFromDB/getVendorsPageFromDB.
   const result = await pool.query(
     `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
      VALUES ($1, $2, $3, $4, $5, $6, now())
@@ -119,14 +175,31 @@ async function upsertVendorInDB(vendor) {
        raw = EXCLUDED.raw,
        updated_at = now()
      RETURNING raw`,
-    [id, email || null, majorCategory || null, status || null, source || null, JSON.stringify(vendor)]
+    [id, email || null, majorCategory || null, status || null, source || null, JSON.stringify(vendor)],
+    {
+      d1: true,
+      d1Text: `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT (id) DO UPDATE SET
+       email = EXCLUDED.email,
+       major_category = EXCLUDED.major_category,
+       status = EXCLUDED.status,
+       source = EXCLUDED.source,
+       raw = EXCLUDED.raw,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     RETURNING raw`,
+    }
   );
-  return result.rows[0]?.raw || null;
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 async function deleteVendorInDB(id) {
-  if (!pool.pool) return false;
-  const result = await pool.query('DELETE FROM vendors WHERE id = $1', [id]);
+  if (!pool.hasStorage()) return false;
+  const result = await pool.query(
+    'DELETE FROM vendors WHERE id = $1',
+    [id],
+    { d1: true }
+  );
   return result.rowCount > 0;
 }
 
@@ -139,9 +212,11 @@ async function deleteVendorInDB(id) {
 // landed versus were silently skipped as a race-condition duplicate, so it
 // never has to guess or trust a fire-and-forget write.
 async function bulkInsertVendorsInDB(vendors) {
-  if (!pool.pool || vendors.length === 0) return [];
+  if (!pool.hasStorage() || vendors.length === 0) return [];
   const values = [];
-  const placeholders = vendors.map((vendor, i) => {
+  const placeholders = [];
+  const d1Placeholders = [];
+  vendors.forEach((vendor, i) => {
     const base = i * 6;
     values.push(
       vendor.id,
@@ -151,14 +226,26 @@ async function bulkInsertVendorsInDB(vendors) {
       vendor.source || null,
       JSON.stringify(vendor)
     );
-    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, now())`;
+    const cols = `$${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}`;
+    placeholders.push(`(${cols}, now())`);
+    // See upsertEvaluationInDB's comment: the D1 timestamp needs to match
+    // the ISO format migrated/D1-written rows already use for created_at to
+    // sort correctly, not plain CURRENT_TIMESTAMP/now().
+    d1Placeholders.push(`(${cols}, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`);
   });
   const result = await pool.query(
     `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
      VALUES ${placeholders.join(', ')}
      ON CONFLICT (email) DO NOTHING
      RETURNING email`,
-    values
+    values,
+    {
+      d1: true,
+      d1Text: `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
+     VALUES ${d1Placeholders.join(', ')}
+     ON CONFLICT (email) DO NOTHING
+     RETURNING email`,
+    }
   );
   return result.rows.map((row) => row.email);
 }
@@ -166,30 +253,32 @@ async function bulkInsertVendorsInDB(vendors) {
 // ── Bulk vendor import sessions ─────────────────────────────────────────────
 
 async function createBulkImportSessionInDB(id, createdByEmail, totalRowsDeclared) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const result = await pool.query(
     `INSERT INTO bulk_vendor_import_sessions (id, created_by_email, total_rows_declared)
      VALUES ($1, $2, $3)
      RETURNING id, status, total_rows_declared, processed_count, imported_count,
                missing_email_count, duplicate_count, invalid_count`,
-    [id, createdByEmail, totalRowsDeclared || 0]
+    [id, createdByEmail, totalRowsDeclared || 0],
+    { d1: true }
   );
   return result.rows[0] || null;
 }
 
 async function getBulkImportSessionFromDB(id) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const result = await pool.query(
     `SELECT id, status, total_rows_declared, processed_count, imported_count,
             missing_email_count, duplicate_count, invalid_count
      FROM bulk_vendor_import_sessions WHERE id = $1`,
-    [id]
+    [id],
+    { d1: true }
   );
   return result.rows[0] || null;
 }
 
 async function incrementBulkImportSessionInDB(id, delta) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const result = await pool.query(
     `UPDATE bulk_vendor_import_sessions SET
        processed_count = processed_count + $2,
@@ -202,7 +291,21 @@ async function incrementBulkImportSessionInDB(id, delta) {
      WHERE id = $1
      RETURNING id, status, total_rows_declared, processed_count, imported_count,
                missing_email_count, duplicate_count, invalid_count`,
-    [id, delta.processed || 0, delta.imported || 0, delta.missingEmail || 0, delta.duplicate || 0, delta.invalid || 0]
+    [id, delta.processed || 0, delta.imported || 0, delta.missingEmail || 0, delta.duplicate || 0, delta.invalid || 0],
+    {
+      d1: true,
+      d1Text: `UPDATE bulk_vendor_import_sessions SET
+       processed_count = processed_count + $2,
+       imported_count = imported_count + $3,
+       missing_email_count = missing_email_count + $4,
+       duplicate_count = duplicate_count + $5,
+       invalid_count = invalid_count + $6,
+       status = CASE WHEN processed_count + $2 >= total_rows_declared THEN 'COMPLETED' ELSE status END,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     WHERE id = $1
+     RETURNING id, status, total_rows_declared, processed_count, imported_count,
+               missing_email_count, duplicate_count, invalid_count`,
+    }
   );
   return result.rows[0] || null;
 }
@@ -210,14 +313,20 @@ async function incrementBulkImportSessionInDB(id, delta) {
 // ── RFQs ─────────────────────────────────────────────────────────────────────
 
 async function getRFQsFromDB() {
-  if (!pool.pool) return [];
-  const result = await pool.query('SELECT raw FROM rfqs ORDER BY created_at DESC');
-  return result.rows.map((row) => row.raw);
+  if (!pool.hasStorage()) return [];
+  const result = await pool.query(
+    'SELECT raw FROM rfqs ORDER BY created_at DESC',
+    [],
+    { d1: true }
+  );
+  return result.rows.map((row) => parseRaw(row.raw));
 }
 
 async function upsertRFQInDB(rfq) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const { id, rfqNumber, category, status, sourcingMode, budget } = rfq;
+  // See upsertEvaluationInDB's comment for why the D1 path needs its own
+  // ISO-formatted timestamp rather than plain CURRENT_TIMESTAMP.
   const result = await pool.query(
     `INSERT INTO rfqs (id, rfq_number, category, status, sourcing_mode, budget, raw, updated_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, now())
@@ -238,71 +347,134 @@ async function upsertRFQInDB(rfq) {
       sourcingMode || null,
       Number.isFinite(Number(budget)) ? Number(budget) : null,
       JSON.stringify(rfq),
-    ]
+    ],
+    {
+      d1: true,
+      d1Text: `INSERT INTO rfqs (id, rfq_number, category, status, sourcing_mode, budget, raw, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT (id) DO UPDATE SET
+       rfq_number = EXCLUDED.rfq_number,
+       category = EXCLUDED.category,
+       status = EXCLUDED.status,
+       sourcing_mode = EXCLUDED.sourcing_mode,
+       budget = EXCLUDED.budget,
+       raw = EXCLUDED.raw,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     RETURNING raw`,
+    }
   );
-  return result.rows[0]?.raw || null;
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 async function deleteRFQInDB(id) {
-  if (!pool.pool) return false;
-  const result = await pool.query('DELETE FROM rfqs WHERE id = $1', [id]);
+  if (!pool.hasStorage()) return false;
+  const result = await pool.query(
+    'DELETE FROM rfqs WHERE id = $1',
+    [id],
+    { d1: true }
+  );
   return result.rowCount > 0;
 }
 
 // ── Evaluations (append-only — no update/delete method exists) ────────────────
 
 async function getEvaluationsFromDB() {
-  if (!pool.pool) return [];
-  const result = await pool.query('SELECT raw FROM evaluations ORDER BY created_at DESC');
-  return result.rows.map((row) => row.raw);
+  if (!pool.hasStorage()) return [];
+  const result = await pool.query(
+    'SELECT raw FROM evaluations ORDER BY created_at DESC',
+    [],
+    { d1: true }
+  );
+  return result.rows.map((row) => parseRaw(row.raw));
 }
 
 async function upsertEvaluationInDB(evaluation) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const { id, vendorId, status } = evaluation;
+  // updated_at doesn't drive getEvaluationsFromDB's sort — created_at does,
+  // separately defaulted at the schema level — but CURRENT_TIMESTAMP still
+  // needs a D1-specific ISO form here: plain CURRENT_TIMESTAMP renders as
+  // "YYYY-MM-DD HH:MM:SS" on SQLite, which would sort inconsistently against
+  // any ISO-formatted ("...T...Z") timestamp already in the column from
+  // migrated data — same trap as authSessionQueries' purge comparison.
   const result = await pool.query(
     `INSERT INTO evaluations (id, vendor_id, status, raw, updated_at)
-     VALUES ($1, $2, $3, $4, now())
+     VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
      ON CONFLICT (id) DO UPDATE SET
        vendor_id = EXCLUDED.vendor_id,
        status = EXCLUDED.status,
        raw = EXCLUDED.raw,
-       updated_at = now()
+       updated_at = CURRENT_TIMESTAMP
      RETURNING raw`,
-    [id, vendorId || null, status || null, JSON.stringify(evaluation)]
+    [id, vendorId || null, status || null, JSON.stringify(evaluation)],
+    {
+      d1: true,
+      d1Text: `INSERT INTO evaluations (id, vendor_id, status, raw, updated_at)
+     VALUES ($1, $2, $3, $4, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT (id) DO UPDATE SET
+       vendor_id = EXCLUDED.vendor_id,
+       status = EXCLUDED.status,
+       raw = EXCLUDED.raw,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     RETURNING raw`,
+    }
   );
-  return result.rows[0]?.raw || null;
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 // ── Vendor catalogue ────────────────────────────────────────────────────────
 
 async function getVendorCatalogueFromDB() {
-  if (!pool.pool) return [];
-  const result = await pool.query('SELECT raw FROM vendor_catalogue ORDER BY created_at DESC');
-  return result.rows.map((row) => row.raw);
+  if (!pool.hasStorage()) return [];
+  const result = await pool.query(
+    'SELECT raw FROM vendor_catalogue ORDER BY created_at DESC',
+    [],
+    { d1: true }
+  );
+  return result.rows.map((row) => parseRaw(row.raw));
 }
 
 async function upsertCatalogueProductInDB(product) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const { id, vendorId, sku, category } = product;
+  // See upsertEvaluationInDB's comment: CURRENT_TIMESTAMP on D1 renders in a
+  // format that doesn't sort correctly against the ISO created_at/updated_at
+  // already in the column from migrated data, since this table's D1 default
+  // needs the same ISO form.
   const result = await pool.query(
     `INSERT INTO vendor_catalogue (id, vendor_id, sku, category, raw, updated_at)
-     VALUES ($1, $2, $3, $4, $5, now())
+     VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
      ON CONFLICT (id) DO UPDATE SET
        vendor_id = EXCLUDED.vendor_id,
        sku = EXCLUDED.sku,
        category = EXCLUDED.category,
        raw = EXCLUDED.raw,
-       updated_at = now()
+       updated_at = CURRENT_TIMESTAMP
      RETURNING raw`,
-    [id, vendorId || null, sku || null, category || null, JSON.stringify(product)]
+    [id, vendorId || null, sku || null, category || null, JSON.stringify(product)],
+    {
+      d1: true,
+      d1Text: `INSERT INTO vendor_catalogue (id, vendor_id, sku, category, raw, updated_at)
+     VALUES ($1, $2, $3, $4, $5, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT (id) DO UPDATE SET
+       vendor_id = EXCLUDED.vendor_id,
+       sku = EXCLUDED.sku,
+       category = EXCLUDED.category,
+       raw = EXCLUDED.raw,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     RETURNING raw`,
+    }
   );
-  return result.rows[0]?.raw || null;
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 async function deleteCatalogueProductInDB(id) {
-  if (!pool.pool) return false;
-  const result = await pool.query('DELETE FROM vendor_catalogue WHERE id = $1', [id]);
+  if (!pool.hasStorage()) return false;
+  const result = await pool.query(
+    'DELETE FROM vendor_catalogue WHERE id = $1',
+    [id],
+    { d1: true }
+  );
   return result.rowCount > 0;
 }
 
@@ -314,9 +486,13 @@ async function deleteCatalogueProductInDB(id) {
 // invariant it already has in memory.
 
 async function getBuyerAccountsFromDB() {
-  if (!pool.pool) return { accounts: [], activeId: null };
-  const result = await pool.query('SELECT id, is_active, raw FROM buyer_accounts ORDER BY created_at DESC');
-  const accounts = result.rows.map((row) => row.raw);
+  if (!pool.hasStorage()) return { accounts: [], activeId: null };
+  const result = await pool.query(
+    'SELECT id, is_active, raw FROM buyer_accounts ORDER BY created_at DESC',
+    [],
+    { d1: true }
+  );
+  const accounts = result.rows.map((row) => parseRaw(row.raw));
   const activeRow = result.rows.find((row) => row.is_active);
   return { accounts, activeId: activeRow ? activeRow.id : null };
 }
@@ -325,16 +501,22 @@ async function getBuyerAccountsFromDB() {
 // change made by any other process (a script, another instance) is visible on
 // the very next request instead of requiring this process to restart.
 async function getBuyerAccountByEmailFromDB(email) {
-  if (!pool.pool || !email) return null;
-  const result = await pool.query('SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1', [email]);
-  return result.rows[0]?.raw || null;
+  if (!pool.hasStorage() || !email) return null;
+  const result = await pool.query(
+    'SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1',
+    [email],
+    { d1: true }
+  );
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 async function upsertBuyerAccountInDB(account) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const { id, corporateEmail, status } = account;
   // is_active is deliberately not touched here — this saves the account's own
   // data, not which account is active. setActiveBuyerAccountInDB owns that flag.
+  // See upsertEvaluationInDB's comment for why the D1 path needs its own
+  // ISO-formatted timestamp rather than plain CURRENT_TIMESTAMP.
   const result = await pool.query(
     `INSERT INTO buyer_accounts (id, corporate_email, status, raw, updated_at)
      VALUES ($1, $2, $3, $4, now())
@@ -344,14 +526,29 @@ async function upsertBuyerAccountInDB(account) {
        raw = EXCLUDED.raw,
        updated_at = now()
      RETURNING raw`,
-    [id, corporateEmail || null, status || null, JSON.stringify(account)]
+    [id, corporateEmail || null, status || null, JSON.stringify(account)],
+    {
+      d1: true,
+      d1Text: `INSERT INTO buyer_accounts (id, corporate_email, status, raw, updated_at)
+     VALUES ($1, $2, $3, $4, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     ON CONFLICT (id) DO UPDATE SET
+       corporate_email = EXCLUDED.corporate_email,
+       status = EXCLUDED.status,
+       raw = EXCLUDED.raw,
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     RETURNING raw`,
+    }
   );
-  return result.rows[0]?.raw || null;
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 async function deleteBuyerAccountInDB(id) {
-  if (!pool.pool) return false;
-  const result = await pool.query('DELETE FROM buyer_accounts WHERE id = $1', [id]);
+  if (!pool.hasStorage()) return false;
+  const result = await pool.query(
+    'DELETE FROM buyer_accounts WHERE id = $1',
+    [id],
+    { d1: true }
+  );
   return result.rowCount > 0;
 }
 
@@ -360,8 +557,14 @@ async function deleteBuyerAccountInDB(id) {
 // alignActiveBuyerAccount's in-memory "not found" behaviour of leaving the
 // pointer unchanged from the caller's perspective (no row matches either way).
 async function setActiveBuyerAccountInDB(id) {
-  if (!pool.pool) return;
-  await pool.query('UPDATE buyer_accounts SET is_active = (id = $1)', [id]);
+  if (!pool.hasStorage()) return;
+  // (id = $1) evaluates to a boolean in Postgres and to 0/1 in SQLite —
+  // both assignable straight into is_active, no divergence needed here.
+  await pool.query(
+    'UPDATE buyer_accounts SET is_active = (id = $1)',
+    [id],
+    { d1: true }
+  );
 }
 
 // ── AI feed (100-item cap, trimmed here so triggerBatchChaser's bulk-insert
@@ -369,57 +572,91 @@ async function setActiveBuyerAccountInDB(id) {
 // trim without needing its own bookkeeping of which item to evict) ──────────
 
 async function getAIFeedFromDB() {
-  if (!pool.pool) return [];
-  const result = await pool.query('SELECT raw FROM ai_feed ORDER BY sequence DESC');
-  return result.rows.map((row) => row.raw);
+  if (!pool.hasStorage()) return [];
+  // sequence is a Postgres-side auto-generated identity column, same as
+  // notifications.sequence — see getNotificationsFromDB's comment. The D1
+  // path orders by SQLite's own implicit rowid instead.
+  const result = await pool.query(
+    'SELECT raw FROM ai_feed ORDER BY sequence DESC',
+    [],
+    { d1: true, d1Text: 'SELECT raw FROM ai_feed ORDER BY rowid DESC' }
+  );
+  return result.rows.map((row) => parseRaw(row.raw));
 }
 
 async function upsertAIFeedItemInDB(item) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const { id } = item;
   const result = await pool.query(
     `INSERT INTO ai_feed (id, raw) VALUES ($1, $2)
      ON CONFLICT (id) DO UPDATE SET raw = EXCLUDED.raw
      RETURNING raw`,
-    [id, JSON.stringify(item)]
+    [id, JSON.stringify(item)],
+    { d1: true }
   );
   await pool.query(
-    `DELETE FROM ai_feed WHERE id NOT IN (SELECT id FROM ai_feed ORDER BY sequence DESC LIMIT 100)`
+    `DELETE FROM ai_feed WHERE id NOT IN (SELECT id FROM ai_feed ORDER BY sequence DESC LIMIT 100)`,
+    [],
+    {
+      d1: true,
+      d1Text: `DELETE FROM ai_feed WHERE id NOT IN (SELECT id FROM ai_feed ORDER BY rowid DESC LIMIT 100)`,
+    }
   );
-  return result.rows[0]?.raw || null;
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 // ── Audit logs (SHA-256 hash chain — sequence must reflect exact insertion
 // order, see schema.sql's comment on audit_logs.sequence) ───────────────────
 
 async function getAuditLogsFromDB() {
-  if (!pool.pool) return [];
-  const result = await pool.query('SELECT raw FROM audit_logs ORDER BY sequence DESC');
-  return result.rows.map((row) => row.raw);
+  if (!pool.hasStorage()) return [];
+  // Reconstructing exact insertion order is load-bearing here — auditService
+  // walks this newest-first list checking each entry's previousHash against
+  // the next (older) one's own hash, so a wrong order looks like a broken
+  // tamper chain. Same sequence -> rowid substitution as ai_feed/
+  // notifications; SQLite's rowid gives the identical "strictly increases in
+  // insertion order" guarantee Postgres's BIGSERIAL sequence does.
+  const result = await pool.query(
+    'SELECT raw FROM audit_logs ORDER BY sequence DESC',
+    [],
+    { d1: true, d1Text: 'SELECT raw FROM audit_logs ORDER BY rowid DESC' }
+  );
+  return result.rows.map((row) => parseRaw(row.raw));
 }
 
 async function upsertAuditLogInDB(entry) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const { id } = entry;
   const result = await pool.query(
     `INSERT INTO audit_logs (id, raw) VALUES ($1, $2)
      ON CONFLICT (id) DO UPDATE SET raw = EXCLUDED.raw
      RETURNING raw`,
-    [id, JSON.stringify(entry)]
+    [id, JSON.stringify(entry)],
+    { d1: true }
   );
-  return result.rows[0]?.raw || null;
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 // ── Notifications ────────────────────────────────────────────────────────────
 
 async function getNotificationsFromDB() {
-  if (!pool.pool) return [];
-  const result = await pool.query('SELECT raw FROM notifications ORDER BY sequence DESC', []);
-  return result.rows.map((row) => row.raw);
+  if (!pool.hasStorage()) return [];
+  // `sequence` is a Postgres-side auto-generated identity column — it's
+  // never in any INSERT's column list, so a D1 row would have it NULL. D1
+  // has no auto-increment-on-conflict-free-PK equivalent here (id is TEXT,
+  // and SQLite's autoincrement rowid needs an INTEGER PRIMARY KEY), so the
+  // D1 path orders by SQLite's own implicit rowid instead, which already
+  // increases in insertion order and serves the same "newest first" need.
+  const result = await pool.query(
+    'SELECT raw FROM notifications ORDER BY sequence DESC',
+    [],
+    { d1: true, d1Text: 'SELECT raw FROM notifications ORDER BY rowid DESC' }
+  );
+  return result.rows.map((row) => parseRaw(row.raw));
 }
 
 async function insertNotificationInDB(notification) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const { id, recipientType, recipientId, kind, rfqId, read } = notification;
   const result = await pool.query(
     `INSERT INTO notifications (id, recipient_type, recipient_id, kind, rfq_id, is_read, raw)
@@ -428,15 +665,16 @@ async function insertNotificationInDB(notification) {
        is_read = EXCLUDED.is_read,
        raw = EXCLUDED.raw
      RETURNING raw`,
-    [id, recipientType, recipientId, kind, rfqId || null, !!read, JSON.stringify(notification)]
+    [id, recipientType, recipientId, kind, rfqId || null, !!read, JSON.stringify(notification)],
+    { d1: true }
   );
-  return result.rows[0]?.raw || null;
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 // One multi-row INSERT for the whole fan-out of a single RFQ to every matched
 // vendor, rather than a write per vendor.
 async function bulkInsertNotificationsInDB(notifications) {
-  if (!pool.pool || notifications.length === 0) return [];
+  if (!pool.hasStorage() || notifications.length === 0) return [];
   const values = [];
   const placeholders = notifications.map((n, i) => {
     const base = i * 7;
@@ -456,29 +694,45 @@ async function bulkInsertNotificationsInDB(notifications) {
      VALUES ${placeholders.join(', ')}
      ON CONFLICT (id) DO NOTHING
      RETURNING id`,
-    values
+    values,
+    { d1: true }
   );
   return result.rows.map((row) => row.id);
 }
 
 async function markNotificationReadInDB(id) {
-  if (!pool.pool) return false;
+  if (!pool.hasStorage()) return false;
+  // jsonb_set has no shared Postgres/SQLite spelling (SQLite's equivalent is
+  // json_set, and 'true'::jsonb is Postgres-only cast syntax), so this needs
+  // a real second SQL string for the D1 path rather than a placeholder swap.
   const result = await pool.query(
     `UPDATE notifications
        SET is_read = true, raw = jsonb_set(raw, '{read}', 'true'::jsonb)
      WHERE id = $1`,
-    [id]
+    [id],
+    {
+      d1: true,
+      d1Text: `UPDATE notifications
+       SET is_read = 1, raw = json_set(raw, '$.read', json('true'))
+     WHERE id = $1`,
+    }
   );
   return result.rowCount > 0;
 }
 
 async function markAllNotificationsReadInDB(recipientType, recipientId) {
-  if (!pool.pool) return 0;
+  if (!pool.hasStorage()) return 0;
   const result = await pool.query(
     `UPDATE notifications
        SET is_read = true, raw = jsonb_set(raw, '{read}', 'true'::jsonb)
      WHERE recipient_type = $1 AND recipient_id = $2 AND is_read = false`,
-    [recipientType, recipientId]
+    [recipientType, recipientId],
+    {
+      d1: true,
+      d1Text: `UPDATE notifications
+       SET is_read = 1, raw = json_set(raw, '$.read', json('true'))
+     WHERE recipient_type = $1 AND recipient_id = $2 AND is_read = false`,
+    }
   );
   return result.rowCount;
 }
@@ -486,48 +740,70 @@ async function markAllNotificationsReadInDB(recipientType, recipientId) {
 // ── Zoho OAuth token (single-row cache) ────────────────────────────────────────
 
 async function getZohoOAuthTokenFromDB() {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const result = await pool.query(
-    "SELECT access_token, expiry_time FROM zoho_oauth_token WHERE id = 'default'"
+    "SELECT access_token, expiry_time FROM zoho_oauth_token WHERE id = 'default'",
+    [],
+    { d1: true }
   );
   return result.rows[0] || null;
 }
 
 async function upsertZohoOAuthTokenInDB({ accessToken, expiryTime }) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const result = await pool.query(
     `INSERT INTO zoho_oauth_token (id, access_token, expiry_time, last_updated)
-     VALUES ('default', $1, $2, now())
+     VALUES ('default', $1, $2, CURRENT_TIMESTAMP)
      ON CONFLICT (id) DO UPDATE SET
        access_token = EXCLUDED.access_token,
        expiry_time = EXCLUDED.expiry_time,
-       last_updated = now()
+       last_updated = CURRENT_TIMESTAMP
      RETURNING access_token, expiry_time`,
-    [accessToken || null, expiryTime || null]
+    [accessToken || null, expiryTime || null],
+    { d1: true }
   );
   return result.rows[0] || null;
 }
 
 // ── Zoho payment links ──────────────────────────────────────────────────────────
 
+/**
+ * Postgres's jsonb columns are parsed into objects by the pg driver already;
+ * D1 has no JSON column type, so `raw` is stored/read there as plain TEXT and
+ * comes back as a string. Parsing only when it's a string keeps this one
+ * function correct against either backend without the callers needing to
+ * know which one actually served the row.
+ */
+function parseRaw(value) {
+  return typeof value === 'string' ? JSON.parse(value) : value;
+}
+
 async function getPaymentLinksFromDB() {
-  if (!pool.pool) return [];
-  const result = await pool.query('SELECT raw FROM payment_links ORDER BY created_at DESC');
-  return result.rows.map((row) => row.raw);
+  if (!pool.hasStorage()) return [];
+  const result = await pool.query(
+    'SELECT raw FROM payment_links ORDER BY created_at DESC',
+    [],
+    { d1: true }
+  );
+  return result.rows.map((row) => parseRaw(row.raw));
 }
 
 async function getPaymentLinkByZohoIdFromDB(zohoPaymentLinkId) {
-  if (!pool.pool) return null;
-  const result = await pool.query('SELECT raw FROM payment_links WHERE zoho_payment_link_id = $1', [zohoPaymentLinkId]);
-  return result.rows[0]?.raw || null;
+  if (!pool.hasStorage()) return null;
+  const result = await pool.query(
+    'SELECT raw FROM payment_links WHERE zoho_payment_link_id = $1',
+    [zohoPaymentLinkId],
+    { d1: true }
+  );
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 async function upsertPaymentLinkInDB(link) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const { id, zohoPaymentLinkId, vendorId, buyerAccountId, payerType, status } = link;
   const result = await pool.query(
     `INSERT INTO payment_links (id, zoho_payment_link_id, vendor_id, buyer_account_id, payer_type, status, raw, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+     VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
      ON CONFLICT (id) DO UPDATE SET
        zoho_payment_link_id = EXCLUDED.zoho_payment_link_id,
        vendor_id = EXCLUDED.vendor_id,
@@ -535,17 +811,19 @@ async function upsertPaymentLinkInDB(link) {
        payer_type = EXCLUDED.payer_type,
        status = EXCLUDED.status,
        raw = EXCLUDED.raw,
-       updated_at = now()
+       updated_at = CURRENT_TIMESTAMP
      RETURNING raw`,
-    [id, zohoPaymentLinkId || null, vendorId || null, buyerAccountId || null, payerType || 'vendor', status || null, JSON.stringify(link)]
+    [id, zohoPaymentLinkId || null, vendorId || null, buyerAccountId || null, payerType || 'vendor', status || null, JSON.stringify(link)],
+    { d1: true }
   );
-  return result.rows[0]?.raw || null;
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 module.exports = {
   getVendorsFromDB,
   getVendorsPageFromDB,
   getVendorByEmailFromDB,
+  getVendorByIdFromDB,
   createBulkImportSessionInDB,
   getBulkImportSessionFromDB,
   incrementBulkImportSessionInDB,

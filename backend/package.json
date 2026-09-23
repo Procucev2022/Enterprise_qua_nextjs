@@ -14,7 +14,9 @@
     "db:view": "node src/db/view.js",
     "create-buyer": "node scripts/create-buyer.js",
     "email:check": "node scripts/check-email.js",
-    "email:scheduler": "node scripts/email-scheduler.js"
+    "email:scheduler": "node scripts/email-scheduler.js",
+    "dev:worker": "wrangler dev",
+    "deploy:worker": "wrangler deploy"
   },
   "keywords": [
     "procurement",
@@ -43,6 +45,7 @@
   "devDependencies": {
     "jest": "^29.7.0",
     "nodemon": "^3.1.9",
-    "supertest": "^7.0.0"
+    "supertest": "^7.0.0",
+    "wrangler": "^4.136.1"
   }
 }

@@ -9,8 +9,40 @@ const apiRoutes = require('./routes');
 const graphqlRoutes = require('./routes/graphql');
 const requestLogger = require('./middleware/logger');
 const errorHandler = require('./middleware/errorHandler');
+const storeService = require('./services/storeService');
+const pool = require('./db/pool');
+const { logger } = require('./services/loggerService');
 
 const app = express();
+
+// Cloudflare Workers' entry point (worker.mjs) only calls app.listen() — it
+// skips server.js's bootstrapServer(), which is what normally hydrates
+// storeService from the database before the first request on Node/Render.
+// Workers also can't do that hydration eagerly at module load: I/O (a D1/pg
+// call) is only permitted once a request is being handled, not at top-level
+// script evaluation. So it happens here instead, lazily, once, on whichever
+// request happens to arrive first — same effect as the boot-time call on
+// Node, just deferred to inside a request context where it's actually
+// allowed to run. A concurrent second request while the first hydration is
+// still in flight reuses the same in-flight promise rather than issuing a
+// second one.
+// Guarded on pool.hasStorage(): with nothing configured (as in the Jest
+// suite, where jest.setup.js blanks DATABASE_URL and there's no D1 binding)
+// there's nothing to hydrate from, so this stays a no-op rather than calling
+// into hydrateFromDB()'s own logging on every single request/test.
+let hydrationPromise = null;
+app.use((req, res, next) => {
+  if (storeService.isHydratedFromDB || !pool.hasStorage()) return next();
+  if (!hydrationPromise) {
+    hydrationPromise = storeService
+      .hydrateFromDB()
+      .catch((err) => logger.error('Lazy on-request hydration failed', err, 'APP'))
+      .finally(() => {
+        hydrationPromise = null;
+      });
+  }
+  hydrationPromise.then(() => next());
+});
 
 // Security & Parsing Middlewares
 app.use(cors());

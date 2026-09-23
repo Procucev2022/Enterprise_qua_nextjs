@@ -2,13 +2,54 @@
 // LARGE FILE INGESTION SERVICE & JOBS TEST SUITE
 // ==============================================================================
 
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
+const { GetObjectCommand, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const largeFileIngestionService = require('../src/services/largeFileIngestionService');
 const queries = require('../src/db/vendorIngestionQueries');
 const buyerProfileQueries = require('../src/db/buyerProfileQueries');
+const r2Client = require('../src/services/r2Client');
 const { VENDOR_INGESTION_SESSION_STATUS, VENDOR_INGESTION_STEP } = require('../src/config/constants');
+
+/**
+ * Stands in for r2Client.getClient() — the real R2 upload/download/delete
+ * this file now goes through instead of local disk (Cloudflare Workers has
+ * no persistent filesystem; see largeFileIngestionService.js's top comment).
+ * `content` is what a GetObjectCommand "downloads" back; PutObjectCommand and
+ * DeleteObjectCommand just resolve, mirroring the real SDK's shape closely
+ * enough for these unit tests (real R2 round-trips are covered by this
+ * session's live verification against the deployed Worker, not by Jest).
+ */
+function mockR2Client(content) {
+  const send = jest.fn(async (command) => {
+    if (command instanceof GetObjectCommand) {
+      return { Body: Buffer.isBuffer(content) ? [content] : [Buffer.from(content, 'utf8')] };
+    }
+    if (command instanceof PutObjectCommand || command instanceof DeleteObjectCommand) {
+      return {};
+    }
+    throw new Error('Unexpected R2 command in test');
+  });
+  jest.spyOn(r2Client, 'getClient').mockReturnValue({ send });
+  jest.spyOn(r2Client, 'bucket').mockReturnValue('test-bucket');
+  return send;
+}
+
+/**
+ * Same idea as mockR2Client, but through the native R2 binding (getBinding())
+ * this file prefers on Workers — see largeFileIngestionService.js's uploadToR2/
+ * downloadFromR2/deleteFromR2 for why S3Client can't be used there at all.
+ */
+function mockR2Binding(content) {
+  const put = jest.fn(async () => {});
+  const get = jest.fn(async () => ({
+    arrayBuffer: async () => {
+      const buf = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8');
+      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    },
+  }));
+  const del = jest.fn(async () => {});
+  jest.spyOn(r2Client, 'getBinding').mockReturnValue({ put, get, delete: del });
+  return { put, get, delete: del };
+}
 
 describe('largeFileIngestionService unit tests', () => {
   afterEach(() => {
@@ -197,7 +238,6 @@ describe('largeFileIngestionService unit tests', () => {
 
   describe('Streaming CSV processing & resilience', () => {
     it('successfully streams and processes a Vendor Master CSV file', async () => {
-      const tempPath = path.join(os.tmpdir(), `test-vm-${Date.now()}.csv`);
       const csvContent = [
         'Vendor Code,Company Name,Contact Person,Email,Phone,Address,GSTIN,Rating',
         'VND-1,Vendor Alpha,Alice,alice@alpha.com,+91 91111 22222,Mumbai,27AAACA1111A1Z1,90',
@@ -205,8 +245,7 @@ describe('largeFileIngestionService unit tests', () => {
         'VND-3,Vendor Gamma,Charlie,charlie@gamma.com,+91 93333 44444,Pune,27AAACG3333C1Z3,85',
         '', // Empty line
       ].join('\n');
-
-      fs.writeFileSync(tempPath, csvContent, 'utf8');
+      const send = mockR2Client(csvContent);
 
       jest.spyOn(queries, 'findSession').mockResolvedValueOnce({
         id: 'session-1',
@@ -224,26 +263,26 @@ describe('largeFileIngestionService unit tests', () => {
           jobId: 'test-job-vm',
           sessionId: 'session-1',
           organizationId: 'org-1',
-          filePath: tempPath,
+          r2Key: 'uploads/vendor-ingestion/test-vm.csv',
           fileName: 'test-vm.csv',
           jobType: 'VENDOR_MASTER',
           batchSize: 2,
         })
       ).resolves.not.toThrow();
 
-      expect(fs.existsSync(tempPath)).toBe(false);
+      // Cleaned up from R2 (DeleteObjectCommand), not a local file — this is
+      // the same "unconditional cleanup" guarantee the old fs.unlinkSync had.
+      expect(send.mock.calls.some((call) => call[0] instanceof DeleteObjectCommand)).toBe(true);
     });
 
     it('successfully streams and processes a PO Dump CSV file with semicolons and batch boundaries', async () => {
-      const tempPath = path.join(os.tmpdir(), `test-po-${Date.now()}.csv`);
       const csvContent = [
         'PO Number;PO Date;Vendor Name;Line Item Description;Specs;Quantity;Unit;Unit Price;Total Spend;Department',
         'PO-101;2025-06-01;Apex Tech;Steel Rod;Grade A;10;Pcs;500;5000;Civil',
         'PO-102;2025-06-02;Apex Tech;Cement;Grade B;20;Bags;300;6000;Civil',
         'PO-103;2025-06-03;Apex Tech;Bricks;Grade C;30;Bags;100;3000;Civil',
       ].join('\n');
-
-      fs.writeFileSync(tempPath, csvContent, 'utf8');
+      mockR2Client(csvContent);
 
       jest.spyOn(queries, 'findSession').mockResolvedValueOnce({
         id: 'session-po',
@@ -263,19 +302,16 @@ describe('largeFileIngestionService unit tests', () => {
           jobId: 'test-job-po',
           sessionId: 'session-po',
           organizationId: 'org-1',
-          filePath: tempPath,
+          r2Key: 'uploads/vendor-ingestion/test-po.csv',
           fileName: 'test-po.csv',
           jobType: 'PO_DUMP',
           batchSize: 2, // Triggers both intermediate batch and remainder batch
         })
       ).resolves.not.toThrow();
-
-      expect(fs.existsSync(tempPath)).toBe(false);
     });
 
     it('handles stream processing when session is not found', async () => {
-      const tempPath = path.join(os.tmpdir(), `test-nosess-${Date.now()}.csv`);
-      fs.writeFileSync(tempPath, 'header1,header2\nval1,val2', 'utf8');
+      mockR2Client('header1,header2\nval1,val2');
 
       jest.spyOn(queries, 'findSession').mockResolvedValueOnce(null);
       const updateSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
@@ -284,7 +320,7 @@ describe('largeFileIngestionService unit tests', () => {
         jobId: 'test-job-nosess',
         sessionId: 'session-not-found',
         organizationId: 'org-1',
-        filePath: tempPath,
+        r2Key: 'uploads/vendor-ingestion/test-nosess.csv',
         fileName: 'test.csv',
         jobType: 'VENDOR_MASTER',
       });
@@ -294,26 +330,48 @@ describe('largeFileIngestionService unit tests', () => {
         'org-1',
         expect.objectContaining({ status: 'FAILED', errorMessage: 'Session not found' })
       );
-      expect(fs.existsSync(tempPath)).toBe(false);
     });
 
-    it('handles error during stream processing and marks job as FAILED', async () => {
-      const tempPath = path.join(os.tmpdir(), `test-err-${Date.now()}.csv`);
-      fs.writeFileSync(tempPath, 'header1\nrow1', 'utf8');
+    it('marks the job FAILED when the R2 object cannot be read back', async () => {
+      const send = jest.fn().mockRejectedValue(new Error('R2 object not found'));
+      jest.spyOn(r2Client, 'getClient').mockReturnValue({ send });
+      jest.spyOn(r2Client, 'bucket').mockReturnValue('test-bucket');
 
-      jest.spyOn(queries, 'findSession').mockResolvedValueOnce({ id: 'sess-1' });
-      jest.spyOn(queries, 'updateIngestionJobProgress').mockRejectedValueOnce(new Error('Fatal DB crash'));
+      jest.spyOn(queries, 'findSession').mockResolvedValueOnce({ id: 'sess-1', organizationId: 'org-1' });
+      const updateSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
 
       await largeFileIngestionService.streamProcessCsvFile({
-        jobId: 'test-job-err',
+        jobId: 'test-job-missing-r2',
         sessionId: 'sess-1',
         organizationId: 'org-1',
-        filePath: tempPath,
+        r2Key: 'uploads/vendor-ingestion/missing.csv',
         fileName: 'test.csv',
         jobType: 'VENDOR_MASTER',
       });
 
-      expect(fs.existsSync(tempPath)).toBe(false);
+      expect(updateSpy).toHaveBeenCalledWith(
+        'test-job-missing-r2',
+        'org-1',
+        expect.objectContaining({ status: 'FAILED', errorMessage: expect.stringContaining('could not be read back') })
+      );
+    });
+
+    it('handles error during stream processing and marks job as FAILED', async () => {
+      mockR2Client('header1\nrow1');
+
+      jest.spyOn(queries, 'findSession').mockResolvedValueOnce({ id: 'sess-1' });
+      jest.spyOn(queries, 'updateIngestionJobProgress').mockRejectedValueOnce(new Error('Fatal DB crash'));
+
+      await expect(
+        largeFileIngestionService.streamProcessCsvFile({
+          jobId: 'test-job-err',
+          sessionId: 'sess-1',
+          organizationId: 'org-1',
+          r2Key: 'uploads/vendor-ingestion/test-err.csv',
+          fileName: 'test.csv',
+          jobType: 'VENDOR_MASTER',
+        })
+      ).resolves.not.toThrow();
     });
   });
 
@@ -446,7 +504,8 @@ describe('largeFileIngestionService unit tests', () => {
       ).rejects.toThrow('Organization not linked to user');
     });
 
-    it('creates job and launches background filePath worker and array worker', async () => {
+    it('creates job, uploads to R2, and launches background file worker and array worker', async () => {
+      const send = mockR2Client('Vendor Code\nVND-1');
       jest.spyOn(queries, 'createIngestionJob').mockResolvedValue({
         id: 'job-file-1',
         status: 'PROCESSING',
@@ -457,12 +516,15 @@ describe('largeFileIngestionService unit tests', () => {
       const job1 = await largeFileIngestionService.startIngestionJob({
         sessionUser: { organizationId: 'org-1' },
         sessionId: 'sess-1',
-        filePath: 'path/to/file.csv',
+        fileBuffer: Buffer.from('Vendor Code\nVND-1', 'utf8'),
         fileName: 'file.csv',
         jobType: 'VENDOR_MASTER',
         totalHint: 100,
       });
       expect(job1.id).toBe('job-file-1');
+      // Uploaded to R2 synchronously before returning, not deferred with the
+      // rest of the row processing — see startIngestionJob's comment on why.
+      expect(send.mock.calls.some((call) => call[0] instanceof PutObjectCommand)).toBe(true);
 
       const job2 = await largeFileIngestionService.startIngestionJob({
         sessionUser: { organizationId: 'org-1' },
@@ -477,7 +539,109 @@ describe('largeFileIngestionService unit tests', () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
 
+    describe('R2 binding path (Workers)', () => {
+      it('uploads via the binding, processes, and cleans up via the binding', async () => {
+        const binding = mockR2Binding('Vendor Code\nVND-1,Vendor Alpha');
+        jest.spyOn(queries, 'createIngestionJob').mockResolvedValue({ id: 'job-binding-1', status: 'PROCESSING' });
+        jest.spyOn(queries, 'findSession').mockResolvedValue({ id: 'sess-1', organizationId: 'org-1' });
+        jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+        jest.spyOn(queries, 'bulkUpsertVendorMasterRecords').mockResolvedValue([{ id: 1 }]);
+        jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(1);
+        jest.spyOn(queries, 'updateSession').mockResolvedValue({});
+
+        await largeFileIngestionService.startIngestionJob({
+          sessionUser: { organizationId: 'org-1' },
+          sessionId: 'sess-1',
+          fileBuffer: Buffer.from('Vendor Code\nVND-1,Vendor Alpha', 'utf8'),
+          fileName: 'file.csv',
+          jobType: 'VENDOR_MASTER',
+        });
+
+        expect(binding.put).toHaveBeenCalledTimes(1);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        expect(binding.get).toHaveBeenCalledTimes(1);
+        expect(binding.delete).toHaveBeenCalledTimes(1);
+      });
+
+      it('returns null from downloadFromR2 when the binding get() throws', async () => {
+        const binding = mockR2Binding('irrelevant');
+        binding.get.mockRejectedValueOnce(new Error('binding read failed'));
+        jest.spyOn(queries, 'findSession').mockResolvedValueOnce({ id: 'sess-1', organizationId: 'org-1' });
+        const updateSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+
+        await largeFileIngestionService.streamProcessCsvFile({
+          jobId: 'job-binding-err',
+          sessionId: 'sess-1',
+          organizationId: 'org-1',
+          r2Key: 'uploads/vendor-ingestion/binding-err.csv',
+          fileName: 'test.csv',
+          jobType: 'VENDOR_MASTER',
+        });
+
+        expect(updateSpy).toHaveBeenCalledWith(
+          'job-binding-err',
+          'org-1',
+          expect.objectContaining({ status: 'FAILED', errorMessage: expect.stringContaining('could not be read back') })
+        );
+      });
+    });
+
+    // On Workers, an unawaited setImmediate-deferred promise can be cancelled
+    // the instant the response is sent — same reasoning as storeService.js's
+    // _background(). globalThis.__CF_WAIT_UNTIL__ is how worker.mjs's
+    // Workers-imported waitUntil reaches here; see d1Bridge.js's
+    // getWaitUntil().
+    describe('waitUntil registration on Workers', () => {
+      const originalWaitUntil = globalThis.__CF_WAIT_UNTIL__;
+
+      afterEach(() => {
+        globalThis.__CF_WAIT_UNTIL__ = originalWaitUntil;
+      });
+
+      it('hands the R2-backed background job to waitUntil when running on Workers', async () => {
+        mockR2Client('Vendor Code\nVND-1');
+        const waitUntilSpy = jest.fn();
+        globalThis.__CF_WAIT_UNTIL__ = waitUntilSpy;
+        jest.spyOn(queries, 'createIngestionJob').mockResolvedValue({ id: 'job-wu-1', status: 'PROCESSING' });
+        jest.spyOn(queries, 'findSession').mockResolvedValue({ id: 'sess-1' });
+        jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+
+        await largeFileIngestionService.startIngestionJob({
+          sessionUser: { organizationId: 'org-1' },
+          sessionId: 'sess-1',
+          fileBuffer: Buffer.from('Vendor Code\nVND-1', 'utf8'),
+          fileName: 'file.csv',
+          jobType: 'VENDOR_MASTER',
+        });
+
+        expect(waitUntilSpy).toHaveBeenCalledTimes(1);
+        expect(waitUntilSpy.mock.calls[0][0]).toBeInstanceOf(Promise);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+
+      it('hands the large-array background job to waitUntil when running on Workers', async () => {
+        const waitUntilSpy = jest.fn();
+        globalThis.__CF_WAIT_UNTIL__ = waitUntilSpy;
+        jest.spyOn(queries, 'createIngestionJob').mockResolvedValue({ id: 'job-wu-2', status: 'PROCESSING' });
+        jest.spyOn(queries, 'findSession').mockResolvedValue({ id: 'sess-1' });
+        jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+
+        const bigRows = Array.from({ length: 5001 }, (_, i) => ({ companyName: `Vendor ${i}` }));
+        await largeFileIngestionService.startIngestionJob({
+          sessionUser: { organizationId: 'org-1' },
+          sessionId: 'sess-1',
+          rows: bigRows,
+          fileName: 'vendors.xlsx',
+          jobType: 'VENDOR_MASTER',
+        });
+
+        expect(waitUntilSpy).toHaveBeenCalledTimes(1);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+    });
+
     it('logs error when background workers reject inside setImmediate', async () => {
+      mockR2Client('header\nrow');
       jest.spyOn(queries, 'createIngestionJob').mockResolvedValue({
         id: 'job-fail-bg',
         status: 'PROCESSING',
@@ -487,7 +651,7 @@ describe('largeFileIngestionService unit tests', () => {
       await largeFileIngestionService.startIngestionJob({
         sessionUser: { organizationId: 'org-1' },
         sessionId: 'sess-1',
-        filePath: 'path/to/nonexistent.csv',
+        fileBuffer: Buffer.from('header\nrow', 'utf8'),
         fileName: 'bad.csv',
         jobType: 'VENDOR_MASTER',
       });

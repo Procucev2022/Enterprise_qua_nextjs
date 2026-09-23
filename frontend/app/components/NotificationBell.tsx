@@ -95,7 +95,6 @@ export default function NotificationBell() {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
     setUnreadCount(0);
     await apiMarkAllRead();
-    void refresh();
   };
 
   const routeFor = (n: AppNotification): string | null => {

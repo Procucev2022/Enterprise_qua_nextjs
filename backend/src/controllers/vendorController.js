@@ -142,7 +142,7 @@ async function getVendors(req, res, next) {
     // re-parsed the entire directory on every click — the actual scale risk.
     // getVendorsPageFromDB applies the same public-or-mine scoping in SQL
     // when scopedBuyerId is set (skipped entirely for 'all').
-    if (page !== undefined && pool.pool) {
+    if (page !== undefined && pool.hasStorage()) {
       const pageNumber = Math.max(1, parseInt(page, 10) || 1);
       const pageSize = Math.min(
         MAX_VENDOR_PAGE_SIZE,
@@ -249,6 +249,15 @@ async function createVendor(req, res, next) {
     // email is authoritative, never whatever email the client body claims.
     if (req.user.role === 'vendor') {
       body.email = req.user.email;
+      // storeService.addVendor falls back to 'buyer_manual' when no source
+      // is given, which the frontend's isBuyerUploaded() classifier reads
+      // as "added by a buyer" — a genuine vendor self-registration then gets
+      // silently sorted into the wrong tab (buyer-summary's "Uploaded by
+      // Buyer" list instead of "Procucev Vendors"), and a buyer searching
+      // for that vendor by name/email in the tab it's actually documented
+      // to live in ("Category Manager uploads & Direct Self-Registration")
+      // finds nothing. Confirmed live.
+      body.source = 'self_registration';
     } else if (req.user.role === 'admin') {
       buyerId = (req.query && req.query.buyerId) || null;
     } else if (req.user.role === 'buyer') {

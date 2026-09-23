@@ -117,8 +117,13 @@ export const SUBSCRIPTION_MODE_ENTITLEMENTS: Record<string, SourcingMode[]> = {
  * it just now fails closed instead of open.
  */
 export function entitledSourcingModes(subscriptionPlan?: string | null): SourcingMode[] {
-  const plan = (subscriptionPlan || 'free_trial').trim().toLowerCase();
-  return SUBSCRIPTION_MODE_ENTITLEMENTS[plan] || SUBSCRIPTION_MODE_ENTITLEMENTS.free_trial;
+  // Neither branch routes through 'free_trial': free_trial itself now grants
+  // all three modes (a later, deliberate change), so falling back to it for
+  // either a missing OR an unrecognised plan string would reopen the exact
+  // free-upgrade bypass this fail-closed default exists to prevent.
+  if (!subscriptionPlan) return SUBSCRIPTION_MODE_ENTITLEMENTS.version_1;
+  const plan = subscriptionPlan.trim().toLowerCase();
+  return SUBSCRIPTION_MODE_ENTITLEMENTS[plan] || SUBSCRIPTION_MODE_ENTITLEMENTS.version_1;
 }
 
 export const BUYER_SUBSCRIPTION_PLANS = [

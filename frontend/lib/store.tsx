@@ -28,6 +28,9 @@ import {
   MajorMinorCategory,
 } from './types';
 import { authClient } from './authClient';
+import { installApiFetchPatch } from './apiFetchPatch';
+
+installApiFetchPatch();
 import {
   createPaymentLink,
   createBuyerPaymentLink as createBuyerPaymentLinkRequest,

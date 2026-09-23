@@ -544,3 +544,92 @@ describe('RFQ attachment HTTP routes', () => {
     });
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// The native R2 binding path (r2Client.js's getBinding()) — preferred over the
+// S3Client path above when running on Workers, where `new S3Client(...)`
+// itself throws (confirmed live against the deployed Worker; see
+// r2Client.js's getBinding() comment for the full story). Every test above
+// exercises the S3Client fallback since globalThis.__CF_ENV__ is unset by
+// default in this suite; these set it to prove the binding branch works too.
+describe('RFQ attachment storage service (Workers R2 binding path)', () => {
+  const originalCfEnv = globalThis.__CF_ENV__;
+  const bindingStore = new Map();
+
+  function fakeBinding() {
+    return {
+      put: jest.fn(async (key, body, opts) => {
+        bindingStore.set(key, { body, httpMetadata: opts.httpMetadata, customMetadata: opts.customMetadata });
+      }),
+      get: jest.fn(async (key) => {
+        const stored = bindingStore.get(key);
+        if (!stored) return null;
+        return {
+          httpMetadata: stored.httpMetadata,
+          customMetadata: stored.customMetadata,
+          arrayBuffer: async () => stored.body.buffer.slice(stored.body.byteOffset, stored.body.byteOffset + stored.body.byteLength),
+        };
+      }),
+    };
+  }
+
+  afterEach(() => {
+    globalThis.__CF_ENV__ = originalCfEnv;
+    bindingStore.clear();
+  });
+
+  test('saveAttachment writes through the binding when one is present', async () => {
+    globalThis.__CF_ENV__ = { R2_BUCKET: fakeBinding() };
+
+    const result = await attachments.saveAttachment({
+      fileName: 'binding-test.pdf',
+      mimeType: 'application/pdf',
+      content: pdfBody(),
+    });
+
+    expect(result.status).toBe(ATTACHMENT_STATUS.SAVED);
+    expect(bindingStore.size).toBe(1);
+  });
+
+  test('loadAttachment reads back through the binding when one is present', async () => {
+    globalThis.__CF_ENV__ = { R2_BUCKET: fakeBinding() };
+
+    const saved = await attachments.saveAttachment({
+      fileName: 'binding-roundtrip.pdf',
+      mimeType: 'application/pdf',
+      content: pdfBody(),
+    });
+
+    const loaded = await attachments.loadAttachment(saved.attachment.id);
+
+    expect(loaded).not.toBeNull();
+    expect(loaded.meta.fileName).toBe('binding-roundtrip.pdf');
+    expect(loaded.meta.mimeType).toBe('application/pdf');
+    expect(loaded.content.toString()).toBe(Buffer.from(pdfBody(), 'base64').toString());
+  });
+
+  test('loadAttachment returns null through the binding when the object is missing', async () => {
+    globalThis.__CF_ENV__ = { R2_BUCKET: fakeBinding() };
+    const loaded = await attachments.loadAttachment('a'.repeat(32));
+    expect(loaded).toBeNull();
+  });
+
+  test('saveAttachment fails closed when neither a binding nor S3 credentials are configured', async () => {
+    globalThis.__CF_ENV__ = {};
+    const originalAccountId = process.env.R2_ACCOUNT_ID;
+    delete process.env.R2_ACCOUNT_ID;
+
+    let freshAttachments;
+    jest.isolateModules(() => {
+      freshAttachments = require('../src/services/rfqAttachmentService');
+    });
+    const result = await freshAttachments.saveAttachment({
+      fileName: 'nobinding.pdf',
+      mimeType: 'application/pdf',
+      content: pdfBody(),
+    });
+
+    expect(result.status).toBe(ATTACHMENT_STATUS.WRITE_FAILED);
+    process.env.R2_ACCOUNT_ID = originalAccountId;
+  });
+});

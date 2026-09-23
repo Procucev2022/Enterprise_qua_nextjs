@@ -93,7 +93,7 @@ async function resolveActiveBuyerAccount(sessionUser) {
     };
   }
 
-  if (!pool.pool) {
+  if (!pool.hasStorage()) {
     // Fails closed. Returning a fabricated account here is exactly what made the
     // dashboard show another company's data.
     return {

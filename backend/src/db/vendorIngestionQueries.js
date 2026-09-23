@@ -66,6 +66,18 @@ function counter(value) {
 }
 
 /**
+ * Coerce a stored boolean column to a plain JS boolean.
+ *
+ * pg returns a real boolean for BOOLEAN columns. SQLite has no boolean type
+ * — D1 stores/returns true/false literals as the integers 1/0, so a bare
+ * `=== true` reads every D1-backed row's flag as false. See identityQueries.js's
+ * flag() for the same fix applied to the identity tables.
+ */
+function flag(value) {
+  return value === true || value === 1 || value === '1';
+}
+
+/**
  * Fallback match key for a vendor name.
  *
  * Lowercases, strips punctuation, collapses whitespace and removes trailing
@@ -157,7 +169,7 @@ function mapRowToSession(row) {
 
 /** Create a session. The caller has already resolved and validated the horizon. */
 async function insertSession({ organizationId, userId, userEmail, horizon }) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const id = newId('vis');
   const result = await pool.query(
     `insert into vendor_ingestion_sessions
@@ -176,7 +188,8 @@ async function insertSession({ organizationId, userId, userEmail, horizon }) {
       horizon ? horizon.startDate : null,
       horizon ? horizon.endDate : null,
       JSON.stringify({}),
-    ]
+    ],
+    { d1: true }
   );
   return result.rows[0] ? mapRowToSession(result.rows[0]) : null;
 }
@@ -189,18 +202,19 @@ async function insertSession({ organizationId, userId, userEmail, horizon }) {
  * and cannot be probed.
  */
 async function findSession(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return null;
-  const rows = await pool.rows(`${SESSION_SELECT} where id = $1 and organization_id = $2 limit 1`, [
-    sessionId,
-    organizationId,
-  ]);
+  if (!pool.hasStorage() || !sessionId || !organizationId) return null;
+  const rows = await pool.rows(
+    `${SESSION_SELECT} where id = $1 and organization_id = $2 limit 1`,
+    [sessionId, organizationId],
+    { d1: true }
+  );
   return rows.length > 0 ? mapRowToSession(rows[0]) : null;
 }
 
 /** Look up a session by its ID directly to resolve its organization */
 async function findSessionById(sessionId) {
-  if (!pool.pool || !sessionId) return null;
-  const rows = await pool.rows(`${SESSION_SELECT} where id = $1 limit 1`, [sessionId]);
+  if (!pool.hasStorage() || !sessionId) return null;
+  const rows = await pool.rows(`${SESSION_SELECT} where id = $1 limit 1`, [sessionId], { d1: true });
   return rows.length > 0 ? mapRowToSession(rows[0]) : null;
 }
 
@@ -210,10 +224,11 @@ async function findSessionById(sessionId) {
  * right thing to reopen, showing its results.
  */
 async function findLatestSession(organizationId) {
-  if (!pool.pool || !organizationId) return null;
+  if (!pool.hasStorage() || !organizationId) return null;
   const rows = await pool.rows(
     `${SESSION_SELECT} where organization_id = $1 order by created_at desc limit 1`,
-    [organizationId]
+    [organizationId],
+    { d1: true }
   );
   return rows.length > 0 ? mapRowToSession(rows[0]) : null;
 }
@@ -250,7 +265,7 @@ const SESSION_COLUMN_MAP = [
  * request body can never reach a column it has no business writing.
  */
 async function updateSession(sessionId, organizationId, patch = {}) {
-  if (!pool.pool || !sessionId || !organizationId) return null;
+  if (!pool.hasStorage() || !sessionId || !organizationId) return null;
 
   const assignments = [];
   const params = [];
@@ -271,7 +286,14 @@ async function updateSession(sessionId, organizationId, patch = {}) {
         set ${assignments.join(', ')}, updated_at = now()
       where id = $${index} and organization_id = $${index + 1}
       returning *`,
-    params
+    params,
+    {
+      d1: true,
+      d1Text: `update vendor_ingestion_sessions
+        set ${assignments.join(', ')}, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      where id = $${index} and organization_id = $${index + 1}
+      returning *`,
+    }
   );
   return result.rows[0] ? mapRowToSession(result.rows[0]) : null;
 }
@@ -310,7 +332,7 @@ function mapRowToIngestionJob(row) {
 }
 
 async function createIngestionJob({ sessionId, organizationId, jobType, fileName, totalRecords = 0 }) {
-  if (!pool.pool || !sessionId || !organizationId) {
+  if (!pool.hasStorage() || !sessionId || !organizationId) {
     return {
       id: newId('job'),
       sessionId,
@@ -333,13 +355,20 @@ async function createIngestionJob({ sessionId, organizationId, jobType, fileName
        (id, session_id, organization_id, job_type, file_name, status, total_records, started_at)
      values ($1, $2, $3, $4, $5, 'PROCESSING', $6, now())
      returning *`,
-    [id, sessionId, organizationId, jobType, fileName, totalRecords]
+    [id, sessionId, organizationId, jobType, fileName, totalRecords],
+    {
+      d1: true,
+      d1Text: `insert into ingestion_jobs
+       (id, session_id, organization_id, job_type, file_name, status, total_records, started_at)
+     values ($1, $2, $3, $4, $5, 'PROCESSING', $6, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     returning *`,
+    }
   );
   return rows.length > 0 ? mapRowToIngestionJob(rows[0]) : null;
 }
 
 async function updateIngestionJobProgress(jobId, organizationId, patch = {}) {
-  if (!pool.pool || !jobId || !organizationId) return null;
+  if (!pool.hasStorage() || !jobId || !organizationId) return null;
 
   const assignments = [];
   const params = [];
@@ -377,22 +406,30 @@ async function updateIngestionJobProgress(jobId, organizationId, patch = {}) {
         set ${assignments.join(', ')}, updated_at = now()
       where id = $${index} and organization_id = $${index + 1}
       returning *`,
-    params
+    params,
+    {
+      d1: true,
+      d1Text: `update ingestion_jobs
+        set ${assignments.join(', ')}, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      where id = $${index} and organization_id = $${index + 1}
+      returning *`,
+    }
   );
   return result.rows[0] ? mapRowToIngestionJob(result.rows[0]) : null;
 }
 
 async function findIngestionJob(jobId, organizationId) {
-  if (!pool.pool || !jobId || !organizationId) return null;
-  const rows = await pool.rows(`${INGESTION_JOB_SELECT} where id = $1 and organization_id = $2 limit 1`, [
-    jobId,
-    organizationId,
-  ]);
+  if (!pool.hasStorage() || !jobId || !organizationId) return null;
+  const rows = await pool.rows(
+    `${INGESTION_JOB_SELECT} where id = $1 and organization_id = $2 limit 1`,
+    [jobId, organizationId],
+    { d1: true }
+  );
   return rows.length > 0 ? mapRowToIngestionJob(rows[0]) : null;
 }
 
 async function findLatestIngestionJob(sessionId, organizationId, jobType = null) {
-  if (!pool.pool || !sessionId || !organizationId) return null;
+  if (!pool.hasStorage() || !sessionId || !organizationId) return null;
   const params = [sessionId, organizationId];
   let typeClause = '';
   if (jobType) {
@@ -401,16 +438,18 @@ async function findLatestIngestionJob(sessionId, organizationId, jobType = null)
   }
   const rows = await pool.rows(
     `${INGESTION_JOB_SELECT} where session_id = $1 and organization_id = $2 ${typeClause} order by created_at desc limit 1`,
-    params
+    params,
+    { d1: true }
   );
   return rows.length > 0 ? mapRowToIngestionJob(rows[0]) : null;
 }
 
 async function findActiveIngestionJobs(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId) return [];
   const rows = await pool.rows(
     `${INGESTION_JOB_SELECT} where session_id = $1 and organization_id = $2 and status in ('PENDING', 'PROCESSING') order by created_at desc`,
-    [sessionId, organizationId]
+    [sessionId, organizationId],
+    { d1: true }
   );
   return rows.map(mapRowToIngestionJob);
 }
@@ -430,13 +469,14 @@ async function findActiveIngestionJobs(sessionId, organizationId) {
  * classification rather than letting the model invent a taxonomy.
  */
 async function findOrganizationCategoryMaster(organizationId) {
-  if (!pool.pool || !organizationId) return [];
+  if (!pool.hasStorage() || !organizationId) return [];
   const rows = await pool.rows(
     `select division, category from org_division_category
       where organization_id = $1 and is_active is not false
         and division is not null and division <> ''
       order by division, category`,
-    [organizationId]
+    [organizationId],
+    { d1: true }
   );
 
   const grouped = new Map();
@@ -501,7 +541,7 @@ const VENDOR_MASTER_STRIDE = 14;
  * Returns the stored rows so the caller can report exactly what landed.
  */
 async function bulkUpsertVendorMasterRecords(sessionId, organizationId, rows = []) {
-  if (!pool.pool || !sessionId || !organizationId || rows.length === 0) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId || rows.length === 0) return [];
 
   const values = [];
   const placeholders = rows.map((row, i) => {
@@ -545,47 +585,75 @@ async function bulkUpsertVendorMasterRecords(sessionId, organizationId, rows = [
            raw = excluded.raw,
            updated_at = now()
      returning *`,
-    values
+    values,
+    {
+      d1: true,
+      d1Text: `insert into vendor_master_records
+       (id, session_id, organization_id, source_row_number, vendor_code, company_name,
+        normalized_name, contact_person, email, phone, address, gstin, rating, raw)
+     values ${placeholders.join(', ')}
+     on conflict (session_id, vendor_code) do update
+       set company_name = excluded.company_name,
+           normalized_name = excluded.normalized_name,
+           contact_person = excluded.contact_person,
+           email = excluded.email,
+           phone = excluded.phone,
+           address = excluded.address,
+           gstin = excluded.gstin,
+           rating = excluded.rating,
+           source_row_number = excluded.source_row_number,
+           raw = excluded.raw,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     returning *`,
+    }
   );
   return result.rows.map(mapRowToVendorMaster);
 }
 
 /** Every vendor-master row in a session, ordered as the sheet supplied them. */
 async function findVendorMasterRecords(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId) return [];
   const rows = await pool.rows(
     `${VENDOR_MASTER_SELECT} where session_id = $1 and organization_id = $2
       order by source_row_number nulls last, company_name`,
-    [sessionId, organizationId]
+    [sessionId, organizationId],
+    { d1: true }
   );
   return rows.map(mapRowToVendorMaster);
 }
 
 /** One vendor-master row, org-scoped. */
 async function findVendorMasterRecord(recordId, organizationId) {
-  if (!pool.pool || !recordId || !organizationId) return null;
-  const rows = await pool.rows(`${VENDOR_MASTER_SELECT} where id = $1 and organization_id = $2 limit 1`, [
-    recordId,
-    organizationId,
-  ]);
+  if (!pool.hasStorage() || !recordId || !organizationId) return null;
+  const rows = await pool.rows(
+    `${VENDOR_MASTER_SELECT} where id = $1 and organization_id = $2 limit 1`,
+    [recordId, organizationId],
+    { d1: true }
+  );
   return rows.length > 0 ? mapRowToVendorMaster(rows[0]) : null;
 }
 
 async function countVendorMasterRecords(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return 0;
+  if (!pool.hasStorage() || !sessionId || !organizationId) return 0;
   const rows = await pool.rows(
     'select count(*)::int as total from vendor_master_records where session_id = $1 and organization_id = $2',
-    [sessionId, organizationId]
+    [sessionId, organizationId],
+    {
+      d1: true,
+      d1Text:
+        'select CAST(count(*) AS INTEGER) as total from vendor_master_records where session_id = $1 and organization_id = $2',
+    }
   );
   return rows.length > 0 ? counter(rows[0].total) : 0;
 }
 
 /** Clear a session's vendor master so a corrected file replaces it wholesale. */
 async function deleteVendorMasterRecords(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return 0;
+  if (!pool.hasStorage() || !sessionId || !organizationId) return 0;
   const result = await pool.query(
     'delete from vendor_master_records where session_id = $1 and organization_id = $2',
-    [sessionId, organizationId]
+    [sessionId, organizationId],
+    { d1: true }
   );
   return result.rowCount || 0;
 }
@@ -606,7 +674,7 @@ const PO_STRIDE = 21;
  * catches a mis-selected horizon.
  */
 async function bulkInsertPoLineItems(sessionId, organizationId, rows = []) {
-  if (!pool.pool || !sessionId || !organizationId || rows.length === 0) return 0;
+  if (!pool.hasStorage() || !sessionId || !organizationId || rows.length === 0) return 0;
 
   const values = [];
   const placeholders = rows.map((row, i) => {
@@ -646,20 +714,28 @@ async function bulkInsertPoLineItems(sessionId, organizationId, rows = []) {
         item_description, specification, quantity, uom, spend, currency, department,
         material_code, existing_category, existing_subcategory, in_horizon)
      values ${placeholders.join(', ')}`,
-    values
+    values,
+    { d1: true }
   );
   return result.rowCount || 0;
 }
 
 /** Counts for the "inside / outside the selected period" summary. */
 async function countPoLineItems(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return { total: 0, inHorizon: 0, outsideHorizon: 0 };
+  if (!pool.hasStorage() || !sessionId || !organizationId) return { total: 0, inHorizon: 0, outsideHorizon: 0 };
   const rows = await pool.rows(
     `select count(*)::int as total,
             count(*) filter (where in_horizon)::int as in_horizon,
             count(*) filter (where not in_horizon)::int as outside_horizon
        from po_line_items where session_id = $1 and organization_id = $2`,
-    [sessionId, organizationId]
+    [sessionId, organizationId],
+    {
+      d1: true,
+      d1Text: `select CAST(count(*) AS INTEGER) as total,
+            CAST(count(*) filter (where in_horizon) AS INTEGER) as in_horizon,
+            CAST(count(*) filter (where not in_horizon) AS INTEGER) as outside_horizon
+       from po_line_items where session_id = $1 and organization_id = $2`,
+    }
   );
   if (rows.length === 0) return { total: 0, inHorizon: 0, outsideHorizon: 0 };
   return {
@@ -670,11 +746,12 @@ async function countPoLineItems(sessionId, organizationId) {
 }
 
 async function deletePoLineItems(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return 0;
-  const result = await pool.query('delete from po_line_items where session_id = $1 and organization_id = $2', [
-    sessionId,
-    organizationId,
-  ]);
+  if (!pool.hasStorage() || !sessionId || !organizationId) return 0;
+  const result = await pool.query(
+    'delete from po_line_items where session_id = $1 and organization_id = $2',
+    [sessionId, organizationId],
+    { d1: true }
+  );
   return result.rowCount || 0;
 }
 
@@ -695,7 +772,7 @@ async function deletePoLineItems(sessionId, organizationId) {
  * fact rather than the absence of one.
  */
 async function matchPoLineItemsToVendors(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) {
+  if (!pool.hasStorage() || !sessionId || !organizationId) {
     return { byVendorCode: 0, byGstin: 0, byName: 0, unmatched: 0 };
   }
 
@@ -703,10 +780,15 @@ async function matchPoLineItemsToVendors(sessionId, organizationId) {
     `update po_line_items
         set matched_vendor_record_id = null, match_strategy = null
       where session_id = $1 and organization_id = $2`,
-    [sessionId, organizationId]
+    [sessionId, organizationId],
+    { d1: true }
   );
   void clearResult;
 
+  // UPDATE ... FROM (a join-based update) is Postgres syntax that SQLite has
+  // also supported since 3.33 with an identical shape — verified directly
+  // against the real D1 database before relying on it here, so this is one
+  // genuinely shared query text, not a d1Text override.
   const byVendorCode = await pool.query(
     `update po_line_items p
         set matched_vendor_record_id = v.id, match_strategy = $3
@@ -717,7 +799,8 @@ async function matchPoLineItemsToVendors(sessionId, organizationId) {
         and p.vendor_code is not null and p.vendor_code <> ''
         and v.vendor_code is not null and v.vendor_code <> ''
         and lower(trim(p.vendor_code)) = lower(trim(v.vendor_code))`,
-    [sessionId, organizationId, VENDOR_MATCH_STRATEGY.VENDOR_CODE]
+    [sessionId, organizationId, VENDOR_MATCH_STRATEGY.VENDOR_CODE],
+    { d1: true }
   );
 
   const byGstin = await pool.query(
@@ -730,7 +813,8 @@ async function matchPoLineItemsToVendors(sessionId, organizationId) {
         and p.vendor_gstin is not null and p.vendor_gstin <> ''
         and v.gstin is not null and v.gstin <> ''
         and upper(trim(p.vendor_gstin)) = upper(trim(v.gstin))`,
-    [sessionId, organizationId, VENDOR_MATCH_STRATEGY.GSTIN]
+    [sessionId, organizationId, VENDOR_MATCH_STRATEGY.GSTIN],
+    { d1: true }
   );
 
   const byName = await pool.query(
@@ -743,14 +827,16 @@ async function matchPoLineItemsToVendors(sessionId, organizationId) {
         and p.normalized_vendor_name is not null and p.normalized_vendor_name <> ''
         and v.normalized_name is not null and v.normalized_name <> ''
         and p.normalized_vendor_name = v.normalized_name`,
-    [sessionId, organizationId, VENDOR_MATCH_STRATEGY.NORMALIZED_NAME]
+    [sessionId, organizationId, VENDOR_MATCH_STRATEGY.NORMALIZED_NAME],
+    { d1: true }
   );
 
   const unmatched = await pool.query(
     `update po_line_items
         set match_strategy = $3
       where session_id = $1 and organization_id = $2 and matched_vendor_record_id is null`,
-    [sessionId, organizationId, VENDOR_MATCH_STRATEGY.UNMATCHED]
+    [sessionId, organizationId, VENDOR_MATCH_STRATEGY.UNMATCHED],
+    { d1: true }
   );
 
   return {
@@ -772,10 +858,33 @@ async function matchPoLineItemsToVendors(sessionId, organizationId) {
  * every PO row into Node and reducing it, so the AI aggregation is one round
  * trip regardless of how many line items the dump held.
  */
+/**
+ * Build the same " | "-joined summary concat_ws(' | ', ...) produces on
+ * Postgres, skipping empty/null parts — used only for the D1 path, which
+ * fetches the raw description/spec/qty/uom parts instead of a pre-built
+ * string (SQLite has no concat_ws, and building it in SQL string-by-string
+ * with CASE/COALESCE for each optional part is far more error-prone than
+ * doing the equivalent join in JS on data D1 already had to return anyway).
+ */
+function buildLineSummary(part) {
+  const pieces = [
+    text(part.desc),
+    text(part.spec),
+    [text(part.qty), text(part.uom)].filter(Boolean).join(' '),
+  ].filter((p) => p !== '');
+  return pieces.join(' | ');
+}
+
 async function findVendorPurchasingProfiles(sessionId, organizationId, { descriptionLimit } = {}) {
-  if (!pool.pool || !sessionId || !organizationId) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId) return [];
   const limit = counter(descriptionLimit) || VENDOR_INGESTION_CONFIG.AI_MAX_PO_LINES_PER_VENDOR;
 
+  // The D1 variant aggregates the raw line parts (json_group_array of
+  // objects, ordered by spend like the Postgres array_agg) instead of a
+  // pre-concatenated string, and defers building + slicing the summary list
+  // to JS below — see buildLineSummary(). Postgres's array slice `[1:n]` has
+  // no SQLite equivalent either, so line_summaries there is capped in JS the
+  // same way regardless of which database served the row.
   const rows = await pool.rows(
     `select v.id                      as vendor_record_id,
             v.vendor_code,
@@ -822,29 +931,88 @@ async function findVendorPurchasingProfiles(sessionId, organizationId, { descrip
       group by v.id, v.vendor_code, v.company_name, v.email, v.contact_person,
                v.phone, v.address, v.gstin, v.rating
       order by coalesce(sum(p.spend), 0) desc, v.company_name`,
-    [sessionId, organizationId]
+    [sessionId, organizationId],
+    {
+      d1: true,
+      d1Text: `select v.id                      as vendor_record_id,
+            v.vendor_code,
+            v.company_name,
+            v.email,
+            v.contact_person,
+            v.phone,
+            v.address,
+            v.gstin,
+            v.rating,
+            CAST(count(p.id) AS INTEGER)          as po_line_count,
+            CAST(count(distinct p.po_number) AS INTEGER) as po_count,
+            coalesce(sum(p.spend), 0) as total_spend,
+            min(p.po_date)            as first_po_date,
+            max(p.po_date)            as last_po_date,
+            json_group_array(distinct p.department) filter (where p.department is not null and p.department <> '')
+              as departments,
+            json_group_array(distinct p.existing_category)
+              filter (where p.existing_category is not null and p.existing_category <> '')
+              as existing_categories,
+            json_group_array(json_object('desc', p.item_description, 'spec', p.specification, 'qty', p.quantity, 'uom', p.uom) order by p.spend desc)
+              filter (where p.id is not null)
+              as line_parts
+       from vendor_master_records v
+       left join (
+              select id, session_id, organization_id, matched_vendor_record_id, po_number, po_date,
+                     spend, department, existing_category, item_description, specification, quantity, uom
+                from po_line_items
+               where session_id = $1 and organization_id = $2 and in_horizon
+                 and matched_vendor_record_id is not null
+            ) p
+         on p.matched_vendor_record_id = v.id
+      where v.session_id = $1 and v.organization_id = $2
+      group by v.id, v.vendor_code, v.company_name, v.email, v.contact_person,
+               v.phone, v.address, v.gstin, v.rating
+      order by coalesce(sum(p.spend), 0) desc, v.company_name`,
+    }
   );
 
-  return rows.map((row) => ({
-    vendorRecordId: row.vendor_record_id,
-    vendorCode: text(row.vendor_code),
-    companyName: text(row.company_name),
-    email: text(row.email),
-    contactPerson: text(row.contact_person),
-    phone: text(row.phone),
-    address: text(row.address),
-    gstin: text(row.gstin),
-    rating: numeric(row.rating),
-    poLineCount: counter(row.po_line_count),
-    poCount: counter(row.po_count),
-    totalSpend: counter(row.total_spend),
-    firstPoDate: dateOnly(row.first_po_date),
-    lastPoDate: dateOnly(row.last_po_date),
-    departments: Array.isArray(row.departments) ? row.departments.filter(Boolean) : [],
-    existingCategories: Array.isArray(row.existing_categories) ? row.existing_categories.filter(Boolean) : [],
-    lineSummaries: Array.isArray(row.line_summaries) ? row.line_summaries.filter(Boolean) : [],
-    hasPoHistory: counter(row.po_line_count) > 0,
-  }));
+  return rows.map((row) => {
+    // pg: departments/existing_categories/line_summaries are already native
+    // arrays (departments/existing_categories) or an array of ready strings
+    // (line_summaries). D1: json_group_array columns come back as JSON
+    // strings that need parsing, and line_parts needs building into the
+    // same " | "-joined summary strings concat_ws produced on pg, then
+    // capped to `limit` the same way the pg array slice would have.
+    const departments = Array.isArray(row.departments)
+      ? row.departments
+      : JSON.parse(row.departments || '[]');
+    const existingCategories = Array.isArray(row.existing_categories)
+      ? row.existing_categories
+      : JSON.parse(row.existing_categories || '[]');
+    const lineSummaries = Array.isArray(row.line_summaries)
+      ? row.line_summaries.slice(0, limit)
+      : JSON.parse(row.line_parts || '[]')
+          .map(buildLineSummary)
+          .filter((s) => s !== '')
+          .slice(0, limit);
+
+    return {
+      vendorRecordId: row.vendor_record_id,
+      vendorCode: text(row.vendor_code),
+      companyName: text(row.company_name),
+      email: text(row.email),
+      contactPerson: text(row.contact_person),
+      phone: text(row.phone),
+      address: text(row.address),
+      gstin: text(row.gstin),
+      rating: numeric(row.rating),
+      poLineCount: counter(row.po_line_count),
+      poCount: counter(row.po_count),
+      totalSpend: counter(row.total_spend),
+      firstPoDate: dateOnly(row.first_po_date),
+      lastPoDate: dateOnly(row.last_po_date),
+      departments: departments.filter(Boolean),
+      existingCategories: existingCategories.filter(Boolean),
+      lineSummaries: lineSummaries.filter(Boolean),
+      hasPoHistory: counter(row.po_line_count) > 0,
+    };
+  });
 }
 
 /**
@@ -855,7 +1023,7 @@ async function findVendorPurchasingProfiles(sessionId, organizationId, { descrip
  * would hide that.
  */
 async function findUnmatchedPoVendors(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId) return [];
   const rows = await pool.rows(
     `select coalesce(nullif(vendor_name, ''), nullif(vendor_code, ''), 'Unidentified vendor') as vendor_label,
             vendor_code,
@@ -867,7 +1035,20 @@ async function findUnmatchedPoVendors(sessionId, organizationId) {
       group by vendor_label, vendor_code
       order by coalesce(sum(spend), 0) desc
       limit 200`,
-    [sessionId, organizationId]
+    [sessionId, organizationId],
+    {
+      d1: true,
+      d1Text: `select coalesce(nullif(vendor_name, ''), nullif(vendor_code, ''), 'Unidentified vendor') as vendor_label,
+            vendor_code,
+            CAST(count(*) AS INTEGER) as po_line_count,
+            coalesce(sum(spend), 0) as total_spend
+       from po_line_items
+      where session_id = $1 and organization_id = $2 and in_horizon
+        and matched_vendor_record_id is null
+      group by vendor_label, vendor_code
+      order by coalesce(sum(spend), 0) desc
+      limit 200`,
+    }
   );
   return rows.map((row) => ({
     vendorLabel: text(row.vendor_label),
@@ -923,8 +1104,8 @@ function mapRowToMapping(row) {
     attemptCount: counter(row.attempt_count),
     poCount: counter(row.po_count),
     totalSpend: counter(row.total_spend),
-    hasPoHistory: row.has_po_history === true,
-    isNewCategorySuggestion: row.is_new_category_suggestion === true,
+    hasPoHistory: flag(row.has_po_history),
+    isNewCategorySuggestion: flag(row.is_new_category_suggestion),
     suggestedNewCategory: text(row.suggested_new_category),
     reviewedBy: text(row.reviewed_by),
     reviewedAt: row.reviewed_at,
@@ -950,7 +1131,7 @@ const MAPPING_SEED_STRIDE = 13;
  * the match must not discard a decision the buyer already made.
  */
 async function seedCategoryMappings(sessionId, organizationId, profiles = []) {
-  if (!pool.pool || !sessionId || !organizationId || profiles.length === 0) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId || profiles.length === 0) return [];
 
   const values = [];
   const placeholders = profiles.map((profile, i) => {
@@ -1006,28 +1187,31 @@ async function seedCategoryMappings(sessionId, organizationId, profiles = []) {
            end,
            updated_at = now()
      returning *`,
-    values
+    values,
+    { d1: true }
   );
   return result.rows.map(mapRowToMapping);
 }
 
 /** Every mapping in a session, richest-spend first. */
 async function findCategoryMappings(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId) return [];
   const rows = await pool.rows(
     `${MAPPING_SELECT} where session_id = $1 and organization_id = $2
       order by total_spend desc, company_name`,
-    [sessionId, organizationId]
+    [sessionId, organizationId],
+    { d1: true }
   );
   return rows.map(mapRowToMapping);
 }
 
 /** One mapping by its vendor-master record id, org-scoped. */
 async function findCategoryMappingByVendorRecord(sessionId, organizationId, vendorRecordId) {
-  if (!pool.pool || !sessionId || !organizationId || !vendorRecordId) return null;
+  if (!pool.hasStorage() || !sessionId || !organizationId || !vendorRecordId) return null;
   const rows = await pool.rows(
     `${MAPPING_SELECT} where session_id = $1 and organization_id = $2 and vendor_record_id = $3 limit 1`,
-    [sessionId, organizationId, vendorRecordId]
+    [sessionId, organizationId, vendorRecordId],
+    { d1: true }
   );
   return rows.length > 0 ? mapRowToMapping(rows[0]) : null;
 }
@@ -1041,7 +1225,7 @@ async function findCategoryMappingByVendorRecord(sessionId, organizationId, vend
  * holding row locks across a network call to the model.
  */
 async function findQueuedCategoryMappings(sessionId, organizationId, limit) {
-  if (!pool.pool || !sessionId || !organizationId) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId) return [];
   const rows = await pool.rows(
     `${MAPPING_SELECT}
       where session_id = $1 and organization_id = $2
@@ -1055,20 +1239,22 @@ async function findQueuedCategoryMappings(sessionId, organizationId, limit) {
       VENDOR_AI_PROCESSING_STATUS.QUEUED,
       VENDOR_AI_PROCESSING_STATUS.PROCESSING,
       counter(limit) || VENDOR_INGESTION_CONFIG.AI_BATCH_SIZE,
-    ]
+    ],
+    { d1: true }
   );
   return rows.map(mapRowToMapping);
 }
 
 /** Flip one mapping to PROCESSING and count the attempt. */
 async function markMappingProcessing(mappingId, organizationId) {
-  if (!pool.pool || !mappingId || !organizationId) return null;
+  if (!pool.hasStorage() || !mappingId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_mappings
         set processing_status = $3, attempt_count = attempt_count + 1, updated_at = now()
       where id = $1 and organization_id = $2
       returning *`,
-    [mappingId, organizationId, VENDOR_AI_PROCESSING_STATUS.PROCESSING]
+    [mappingId, organizationId, VENDOR_AI_PROCESSING_STATUS.PROCESSING],
+    { d1: true }
   );
   return result.rows[0] ? mapRowToMapping(result.rows[0]) : null;
 }
@@ -1081,7 +1267,7 @@ async function markMappingProcessing(mappingId, organizationId) {
  * approved" independently readable for the audit trail (RULE 8).
  */
 async function saveAiSuggestion(mappingId, organizationId, suggestion) {
-  if (!pool.pool || !mappingId || !organizationId) return null;
+  if (!pool.hasStorage() || !mappingId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_mappings
         set ai_major_category = $3,
@@ -1113,7 +1299,29 @@ async function saveAiSuggestion(mappingId, organizationId, suggestion) {
       VENDOR_AI_PROCESSING_STATUS.COMPLETED,
       suggestion.isNewCategorySuggestion === true,
       nullable(suggestion.suggestedNewCategory),
-    ]
+    ],
+    {
+      d1: true,
+      // ::jsonb is Postgres-only cast syntax; D1's ai_minor_categories/
+      // ai_relevant_products columns are plain TEXT, so the same JSON-string
+      // params bind directly with no cast needed.
+      d1Text: `update vendor_category_mappings
+        set ai_major_category = $3,
+            ai_minor_categories = $4,
+            ai_relevant_products = $5,
+            ai_confidence = $6,
+            ai_reason = $7,
+            ai_model = $8,
+            source = $9,
+            status = $10,
+            processing_status = $11,
+            processing_error = null,
+            is_new_category_suggestion = $12,
+            suggested_new_category = $13,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      where id = $1 and organization_id = $2
+      returning *`,
+    }
   );
   return result.rows[0] ? mapRowToMapping(result.rows[0]) : null;
 }
@@ -1126,7 +1334,7 @@ async function saveAiSuggestion(mappingId, organizationId, suggestion) {
  * had and carries a readable reason plus a retryable FAILED state.
  */
 async function markMappingFailed(mappingId, organizationId, errorMessage) {
-  if (!pool.pool || !mappingId || !organizationId) return null;
+  if (!pool.hasStorage() || !mappingId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_mappings
         set processing_status = $3, status = $4, processing_error = $5, updated_at = now()
@@ -1138,20 +1346,22 @@ async function markMappingFailed(mappingId, organizationId, errorMessage) {
       VENDOR_AI_PROCESSING_STATUS.FAILED,
       VENDOR_MAPPING_STATUS.FAILED,
       nullable(errorMessage),
-    ]
+    ],
+    { d1: true }
   );
   return result.rows[0] ? mapRowToMapping(result.rows[0]) : null;
 }
 
 /** Re-queue one mapping for another classification pass. */
 async function requeueMapping(mappingId, organizationId) {
-  if (!pool.pool || !mappingId || !organizationId) return null;
+  if (!pool.hasStorage() || !mappingId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_mappings
         set processing_status = $3, processing_error = null, updated_at = now()
       where id = $1 and organization_id = $2 and has_po_history
       returning *`,
-    [mappingId, organizationId, VENDOR_AI_PROCESSING_STATUS.QUEUED]
+    [mappingId, organizationId, VENDOR_AI_PROCESSING_STATUS.QUEUED],
+    { d1: true }
   );
   return result.rows[0] ? mapRowToMapping(result.rows[0]) : null;
 }
@@ -1163,7 +1373,7 @@ async function requeueMapping(mappingId, organizationId) {
  * overwrite the original recommendation.
  */
 async function saveBuyerReview(mappingId, organizationId, review) {
-  if (!pool.pool || !mappingId || !organizationId) return null;
+  if (!pool.hasStorage() || !mappingId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_mappings
         set buyer_major_category = $3,
@@ -1185,18 +1395,33 @@ async function saveBuyerReview(mappingId, organizationId, review) {
       review.status,
       review.reviewAction,
       nullable(review.reviewedBy),
-    ]
+    ],
+    {
+      d1: true,
+      d1Text: `update vendor_category_mappings
+        set buyer_major_category = $3,
+            buyer_minor_categories = $4,
+            source = $5,
+            status = $6,
+            review_action = $7,
+            reviewed_by = $8,
+            reviewed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      where id = $1 and organization_id = $2
+      returning *`,
+    }
   );
   return result.rows[0] ? mapRowToMapping(result.rows[0]) : null;
 }
 
 /** Link a mapping to the live `vendors` row it produced. */
 async function attachVendorId(mappingId, organizationId, vendorId) {
-  if (!pool.pool || !mappingId || !organizationId) return null;
+  if (!pool.hasStorage() || !mappingId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_mappings set vendor_id = $3, updated_at = now()
       where id = $1 and organization_id = $2 returning *`,
-    [mappingId, organizationId, nullable(vendorId)]
+    [mappingId, organizationId, nullable(vendorId)],
+    { d1: true }
   );
   return result.rows[0] ? mapRowToMapping(result.rows[0]) : null;
 }
@@ -1220,7 +1445,7 @@ async function summarizeCategoryMappings(sessionId, organizationId) {
     mediumConfidence: 0,
     lowConfidence: 0,
   };
-  if (!pool.pool || !sessionId || !organizationId) return empty;
+  if (!pool.hasStorage() || !sessionId || !organizationId) return empty;
 
   const rows = await pool.rows(
     `select count(*)::int as total,
@@ -1256,7 +1481,27 @@ async function summarizeCategoryMappings(sessionId, organizationId) {
       VENDOR_AI_PROCESSING_STATUS.COMPLETED,
       90,
       70,
-    ]
+    ],
+    {
+      d1: true,
+      d1Text: `select CAST(count(*) AS INTEGER) as total,
+            CAST(count(*) filter (where status = $3) AS INTEGER) as ai_mapped,
+            CAST(count(*) filter (where status = $4) AS INTEGER) as approved,
+            CAST(count(*) filter (where status = $5) AS INTEGER) as pending_review,
+            CAST(count(*) filter (where status = $6) AS INTEGER) as self_map_required,
+            CAST(count(*) filter (where status = $7) AS INTEGER) as self_mapped,
+            CAST(count(*) filter (where status = $8) AS INTEGER) as rejected,
+            CAST(count(*) filter (where status = $9) AS INTEGER) as new_category_suggestions,
+            CAST(count(*) filter (where status = $10) AS INTEGER) as failed,
+            CAST(count(*) filter (where processing_status = $11) AS INTEGER) as queued,
+            CAST(count(*) filter (where processing_status = $12) AS INTEGER) as processing,
+            CAST(count(*) filter (where processing_status = $13) AS INTEGER) as completed,
+            CAST(count(*) filter (where ai_confidence >= $14) AS INTEGER) as high_confidence,
+            CAST(count(*) filter (where ai_confidence >= $15 and ai_confidence < $14) AS INTEGER) as medium_confidence,
+            CAST(count(*) filter (where ai_confidence is not null and ai_confidence < $15) AS INTEGER) as low_confidence
+       from vendor_category_mappings
+      where session_id = $1 and organization_id = $2`,
+    }
   );
   if (rows.length === 0) return empty;
   const row = rows[0];
@@ -1288,7 +1533,7 @@ async function summarizeCategoryMappings(sessionId, organizationId) {
  * service renders as its own "Self Mapping Required" bucket.
  */
 async function findCategorySegmentation(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId) return [];
   const rows = await pool.rows(
     `select coalesce(nullif(buyer_major_category, ''), nullif(ai_major_category, '')) as major_category,
             status,
@@ -1299,14 +1544,29 @@ async function findCategorySegmentation(sessionId, organizationId) {
       where session_id = $1 and organization_id = $2
       group by major_category, status
       order by major_category nulls last, status`,
-    [sessionId, organizationId]
+    [sessionId, organizationId],
+    {
+      d1: true,
+      // json_group_array(x ORDER BY y) is D1/SQLite's array_agg(x ORDER BY y)
+      // equivalent — confirmed directly against the real database before
+      // relying on it — and comes back as a JSON string, parsed below.
+      d1Text: `select coalesce(nullif(buyer_major_category, ''), nullif(ai_major_category, '')) as major_category,
+            status,
+            CAST(count(*) AS INTEGER) as vendor_count,
+            coalesce(sum(total_spend), 0) as total_spend,
+            json_group_array(company_name order by total_spend desc, company_name) as companies
+       from vendor_category_mappings
+      where session_id = $1 and organization_id = $2
+      group by major_category, status
+      order by major_category nulls last, status`,
+    }
   );
   return rows.map((row) => ({
     majorCategory: text(row.major_category),
     status: row.status,
     vendorCount: counter(row.vendor_count),
     totalSpend: counter(row.total_spend),
-    companies: Array.isArray(row.companies) ? row.companies.filter(Boolean) : [],
+    companies: (Array.isArray(row.companies) ? row.companies : JSON.parse(row.companies || '[]')).filter(Boolean),
   }));
 }
 
@@ -1319,7 +1579,7 @@ async function findCategorySegmentation(sessionId, organizationId) {
  * about a vendor yet.
  */
 async function findApprovedMappingsForOrganization(organizationId) {
-  if (!pool.pool || !organizationId) return [];
+  if (!pool.hasStorage() || !organizationId) return [];
   const rows = await pool.rows(
     `${MAPPING_SELECT}
       where organization_id = $1
@@ -1330,7 +1590,8 @@ async function findApprovedMappingsForOrganization(organizationId) {
       VENDOR_MAPPING_STATUS.BUYER_APPROVED,
       VENDOR_MAPPING_STATUS.AI_MAPPED,
       VENDOR_MAPPING_STATUS.SELF_MAPPED,
-    ]
+    ],
+    { d1: true }
   );
   return rows.map(mapRowToMapping);
 }
@@ -1358,7 +1619,7 @@ function mapRowToDispatch(row) {
 }
 
 async function insertDispatch({ sessionId, organizationId, template, majorCategory, recipientCount, dispatchedBy }) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const result = await pool.query(
     `insert into vendor_category_dispatches
        (id, session_id, organization_id, template, major_category, recipient_count, status, dispatched_by, raw)
@@ -1374,29 +1635,32 @@ async function insertDispatch({ sessionId, organizationId, template, majorCatego
       VENDOR_DISPATCH_STATUS.QUEUED,
       nullable(dispatchedBy),
       JSON.stringify({}),
-    ]
+    ],
+    { d1: true }
   );
   return result.rows[0] ? mapRowToDispatch(result.rows[0]) : null;
 }
 
 async function finalizeDispatch(dispatchId, organizationId, { sentCount, failedCount, skippedCount, status }) {
-  if (!pool.pool || !dispatchId || !organizationId) return null;
+  if (!pool.hasStorage() || !dispatchId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_dispatches
         set sent_count = $3, failed_count = $4, skipped_count = $5, status = $6, updated_at = now()
       where id = $1 and organization_id = $2
       returning *`,
-    [dispatchId, organizationId, counter(sentCount), counter(failedCount), counter(skippedCount), status]
+    [dispatchId, organizationId, counter(sentCount), counter(failedCount), counter(skippedCount), status],
+    { d1: true }
   );
   return result.rows[0] ? mapRowToDispatch(result.rows[0]) : null;
 }
 
 async function findDispatches(sessionId, organizationId) {
-  if (!pool.pool || !sessionId || !organizationId) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId) return [];
   const rows = await pool.rows(
     `select * from vendor_category_dispatches
       where session_id = $1 and organization_id = $2 order by created_at desc limit 100`,
-    [sessionId, organizationId]
+    [sessionId, organizationId],
+    { d1: true }
   );
   return rows.map(mapRowToDispatch);
 }
@@ -1449,10 +1713,20 @@ function mapRowToEmailLog(row) {
  * recipient list.
  */
 async function findEmailLogsByIdempotencyKeys(organizationId, keys = []) {
-  if (!pool.pool || !organizationId || keys.length === 0) return [];
+  if (!pool.hasStorage() || !organizationId || keys.length === 0) return [];
+  // = any($2) binds a single array parameter — a Postgres-only construct.
+  // SQLite has no array parameter type at all, so the D1 path expands to a
+  // dynamic IN (...) with one placeholder per key, each bound individually
+  // via d1Params rather than sharing pg's [organizationId, keys] shape.
+  const inPlaceholders = keys.map((_, i) => `$${i + 2}`).join(', ');
   const rows = await pool.rows(
     'select * from vendor_email_dispatch_log where organization_id = $1 and idempotency_key = any($2)',
-    [organizationId, keys]
+    [organizationId, keys],
+    {
+      d1: true,
+      d1Text: `select * from vendor_email_dispatch_log where organization_id = $1 and idempotency_key in (${inPlaceholders})`,
+      d1Params: [organizationId, ...keys],
+    }
   );
   return rows.map(mapRowToEmailLog);
 }
@@ -1476,7 +1750,7 @@ async function claimEmailSlot({
   template,
   majorCategory,
 }) {
-  if (!pool.pool) return null;
+  if (!pool.hasStorage()) return null;
   const idempotencyKey = buildIdempotencyKey({ organizationId, template, recipientEmail, majorCategory });
   const result = await pool.query(
     `insert into vendor_email_dispatch_log
@@ -1505,37 +1779,40 @@ async function claimEmailSlot({
       VENDOR_EMAIL_STATUS.QUEUED,
       VENDOR_EMAIL_STATUS.FAILED,
       VENDOR_EMAIL_STATUS.PENDING,
-    ]
+    ],
+    { d1: true }
   );
   return result.rows[0] ? mapRowToEmailLog(result.rows[0]) : null;
 }
 
 async function markEmailSent(logId, organizationId, messageId) {
-  if (!pool.pool || !logId || !organizationId) return null;
+  if (!pool.hasStorage() || !logId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_email_dispatch_log
         set status = $3, message_id = $4, detail = null, sent_at = now(), updated_at = now()
       where id = $1 and organization_id = $2
       returning *`,
-    [logId, organizationId, VENDOR_EMAIL_STATUS.SENT, nullable(messageId)]
+    [logId, organizationId, VENDOR_EMAIL_STATUS.SENT, nullable(messageId)],
+    { d1: true }
   );
   return result.rows[0] ? mapRowToEmailLog(result.rows[0]) : null;
 }
 
 async function markEmailFailed(logId, organizationId, detail) {
-  if (!pool.pool || !logId || !organizationId) return null;
+  if (!pool.hasStorage() || !logId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_email_dispatch_log
         set status = $3, detail = $4, updated_at = now()
       where id = $1 and organization_id = $2
       returning *`,
-    [logId, organizationId, VENDOR_EMAIL_STATUS.FAILED, nullable(detail)]
+    [logId, organizationId, VENDOR_EMAIL_STATUS.FAILED, nullable(detail)],
+    { d1: true }
   );
   return result.rows[0] ? mapRowToEmailLog(result.rows[0]) : null;
 }
 
 async function findEmailLogs(sessionId, organizationId, { status, limit } = {}) {
-  if (!pool.pool || !sessionId || !organizationId) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId) return [];
   const params = [sessionId, organizationId];
   let where = 'where session_id = $1 and organization_id = $2';
   if (status) {
@@ -1545,7 +1822,8 @@ async function findEmailLogs(sessionId, organizationId, { status, limit } = {}) 
   params.push(counter(limit) || 500);
   const rows = await pool.rows(
     `select * from vendor_email_dispatch_log ${where} order by created_at desc limit $${params.length}`,
-    params
+    params,
+    { d1: true }
   );
   return rows.map(mapRowToEmailLog);
 }
@@ -1553,7 +1831,7 @@ async function findEmailLogs(sessionId, organizationId, { status, limit } = {}) 
 /** Totals for the email status panel. */
 async function summarizeEmailLogs(sessionId, organizationId) {
   const empty = { total: 0, pending: 0, queued: 0, sent: 0, failed: 0, delivered: 0, bounced: 0 };
-  if (!pool.pool || !sessionId || !organizationId) return empty;
+  if (!pool.hasStorage() || !sessionId || !organizationId) return empty;
   const rows = await pool.rows(
     `select count(*)::int as total,
             count(*) filter (where status = $3)::int as pending,
@@ -1573,7 +1851,19 @@ async function summarizeEmailLogs(sessionId, organizationId) {
       VENDOR_EMAIL_STATUS.FAILED,
       VENDOR_EMAIL_STATUS.DELIVERED,
       VENDOR_EMAIL_STATUS.BOUNCED,
-    ]
+    ],
+    {
+      d1: true,
+      d1Text: `select CAST(count(*) AS INTEGER) as total,
+            CAST(count(*) filter (where status = $3) AS INTEGER) as pending,
+            CAST(count(*) filter (where status = $4) AS INTEGER) as queued,
+            CAST(count(*) filter (where status = $5) AS INTEGER) as sent,
+            CAST(count(*) filter (where status = $6) AS INTEGER) as failed,
+            CAST(count(*) filter (where status = $7) AS INTEGER) as delivered,
+            CAST(count(*) filter (where status = $8) AS INTEGER) as bounced
+       from vendor_email_dispatch_log
+      where session_id = $1 and organization_id = $2`,
+    }
   );
   if (rows.length === 0) return empty;
   const row = rows[0];
@@ -1611,7 +1901,7 @@ async function insertAuditEntry({
   oldValue,
   newValue,
 }) {
-  if (!pool.pool || !organizationId || !action) return null;
+  if (!pool.hasStorage() || !organizationId || !action) return null;
   const result = await pool.query(
     `insert into vendor_ingestion_audit
        (id, session_id, organization_id, user_id, user_email, action, entity_type, entity_id,
@@ -1629,13 +1919,21 @@ async function insertAuditEntry({
       nullable(entityId),
       oldValue === undefined || oldValue === null ? null : JSON.stringify(oldValue),
       newValue === undefined || newValue === null ? null : JSON.stringify(newValue),
-    ]
+    ],
+    {
+      d1: true,
+      d1Text: `insert into vendor_ingestion_audit
+       (id, session_id, organization_id, user_id, user_email, action, entity_type, entity_id,
+        old_value, new_value)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     returning id, created_at`,
+    }
   );
   return result.rows[0] || null;
 }
 
 async function findAuditEntries(organizationId, { sessionId, limit, offset } = {}) {
-  if (!pool.pool || !organizationId) return [];
+  if (!pool.hasStorage() || !organizationId) return [];
   const params = [organizationId];
   let where = 'where organization_id = $1';
   if (sessionId) {
@@ -1647,12 +1945,22 @@ async function findAuditEntries(organizationId, { sessionId, limit, offset } = {
   params.push(counter(offset));
   const offsetSlot = params.length;
 
+  // sequence is a Postgres-side auto-generated identity column, same as
+  // audit_logs/notifications/ai_feed — see getAuditLogsFromDB's comment in
+  // domainQueries.js. The D1 path orders by SQLite's own implicit rowid.
   const rows = await pool.rows(
     `select id, sequence, session_id, organization_id, user_id, user_email, action,
             entity_type, entity_id, old_value, new_value, created_at
        from vendor_ingestion_audit ${where}
       order by sequence desc limit $${limitSlot} offset $${offsetSlot}`,
-    params
+    params,
+    {
+      d1: true,
+      d1Text: `select id, sequence, session_id, organization_id, user_id, user_email, action,
+            entity_type, entity_id, old_value, new_value, created_at
+       from vendor_ingestion_audit ${where}
+      order by rowid desc limit $${limitSlot} offset $${offsetSlot}`,
+    }
   );
   return rows.map((row) => ({
     id: row.id,
@@ -1664,8 +1972,8 @@ async function findAuditEntries(organizationId, { sessionId, limit, offset } = {
     action: row.action,
     entityType: text(row.entity_type),
     entityId: text(row.entity_id),
-    oldValue: row.old_value,
-    newValue: row.new_value,
+    oldValue: typeof row.old_value === 'string' ? JSON.parse(row.old_value) : row.old_value,
+    newValue: typeof row.new_value === 'string' ? JSON.parse(row.new_value) : row.new_value,
     createdAt: row.created_at,
   }));
 }
@@ -1691,7 +1999,7 @@ async function insertAiClassificationLog({
   error,
   response,
 }) {
-  if (!pool.pool || !sessionId || !organizationId) return null;
+  if (!pool.hasStorage() || !sessionId || !organizationId) return null;
   const result = await pool.query(
     `insert into ai_classification_logs
        (id, session_id, organization_id, vendor_record_id, vendor_code, model, status,
@@ -1712,20 +2020,29 @@ async function insertAiClassificationLog({
       counter(durationMs),
       nullable(error),
       response === undefined || response === null ? null : JSON.stringify(response),
-    ]
+    ],
+    {
+      d1: true,
+      d1Text: `insert into ai_classification_logs
+       (id, session_id, organization_id, vendor_record_id, vendor_code, model, status,
+        attempt, prompt_chars, po_count, duration_ms, error, response)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+     returning id`,
+    }
   );
   return result.rows[0] || null;
 }
 
 async function findAiClassificationLogs(sessionId, organizationId, { limit } = {}) {
-  if (!pool.pool || !sessionId || !organizationId) return [];
+  if (!pool.hasStorage() || !sessionId || !organizationId) return [];
   const rows = await pool.rows(
     `select id, vendor_record_id, vendor_code, model, status, attempt, prompt_chars,
             po_count, duration_ms, error, created_at
        from ai_classification_logs
       where session_id = $1 and organization_id = $2
       order by created_at desc limit $3`,
-    [sessionId, organizationId, Math.min(counter(limit) || 200, 500)]
+    [sessionId, organizationId, Math.min(counter(limit) || 200, 500)],
+    { d1: true }
   );
   return rows.map((row) => ({
     id: row.id,

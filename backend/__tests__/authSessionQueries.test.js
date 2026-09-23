@@ -36,7 +36,10 @@ describe('Auth session queries (Neon PostgreSQL)', () => {
       expect(sql).toContain('attempts = 0');
       expect(params[0]).toBe('+919157154504_EMAIL_a@b.com');
       expect(params[1]).toBe('123456');
-      expect(params[2]).toEqual(new Date(expiresAt));
+      // An ISO string, not a raw Date object — D1's bind() only accepts
+      // TEXT/INTEGER/REAL/BLOB/NULL, and pg accepts an ISO string for a
+      // timestamptz column exactly as well as a Date.
+      expect(params[2]).toBe(new Date(expiresAt).toISOString());
     });
   });
 
@@ -115,7 +118,7 @@ describe('Auth session queries (Neon PostgreSQL)', () => {
       // Logging out twice is not an error, and the first revocation time is the
       // one worth keeping.
       expect(sql).toContain('on conflict (signature) do nothing');
-      expect(params).toEqual(['sig-1', new Date(expiresAt)]);
+      expect(params).toEqual(['sig-1', new Date(expiresAt).toISOString()]);
     });
   });
 

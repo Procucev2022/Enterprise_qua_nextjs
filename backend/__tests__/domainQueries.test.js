@@ -304,6 +304,37 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       });
     });
 
+    describe('getVendorByIdFromDB', () => {
+      test('no-ops when no pool is configured', async () => {
+        pool.pool = null;
+        await expect(domainQueries.getVendorByIdFromDB('v-1')).resolves.toBeNull();
+      });
+
+      test('no-ops when no id is given', async () => {
+        pool.pool = { query: jest.fn() };
+        await expect(domainQueries.getVendorByIdFromDB('')).resolves.toBeNull();
+        expect(pool.pool.query).not.toHaveBeenCalled();
+      });
+
+      test('returns the matching row', async () => {
+        const vendor = { id: 'v-1', email: 'a@b.com' };
+        const spy = jest.fn().mockResolvedValue({ rows: [{ raw: vendor }] });
+        pool.pool = { query: spy };
+        await expect(domainQueries.getVendorByIdFromDB('v-1')).resolves.toEqual(vendor);
+        expect(spy).toHaveBeenCalledWith('SELECT raw FROM vendors WHERE id = $1 LIMIT 1', ['v-1']);
+        // pool.query's 3rd arg ({d1:true}) is consumed by pool.js's own
+        // wrapper, not forwarded to the underlying pg driver mock — matches
+        // the existing assertion convention for every other test in this
+        // file (see deleteCatalogueProductInDB's test / this session's fix
+        // for that exact 2-vs-3-arg mismatch).
+      });
+
+      test('returns null when nothing matches', async () => {
+        pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+        await expect(domainQueries.getVendorByIdFromDB('missing')).resolves.toBeNull();
+      });
+    });
+
     test('upsertVendorInDB serializes the vendor and returns the stored raw row', async () => {
       const vendor = {
         id: 'v-1',
@@ -516,6 +547,22 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
       await expect(domainQueries.upsertEvaluationInDB({ id: 'eval-3' })).resolves.toBeNull();
     });
+
+    // evaluations has been ported to D1 (see d1Bridge.js), which has no JSON
+    // column type — raw comes back as a TEXT string there.
+    test('getEvaluationsFromDB parses a string raw column (D1)', async () => {
+      const evaluation = { id: 'eval-1', vendorId: 'v-1', status: 'CREATED' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(evaluation) }] }) };
+
+      await expect(domainQueries.getEvaluationsFromDB()).resolves.toEqual([evaluation]);
+    });
+
+    test('upsertEvaluationInDB parses a string raw column (D1)', async () => {
+      const evaluation = { id: 'eval-1', vendorId: 'v-1', status: 'CREATED' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(evaluation) }] }) };
+
+      await expect(domainQueries.upsertEvaluationInDB(evaluation)).resolves.toEqual(evaluation);
+    });
   });
 
   describe('vendor catalogue', () => {
@@ -557,6 +604,22 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       pool.pool = { query: jest.fn().mockResolvedValue({ rowCount: 0 }) };
       await expect(domainQueries.deleteCatalogueProductInDB('prod-x')).resolves.toBe(false);
     });
+
+    // vendor_catalogue has been ported to D1 (see d1Bridge.js), which has no
+    // JSON column type — raw comes back as a TEXT string there.
+    test('getVendorCatalogueFromDB parses a string raw column (D1)', async () => {
+      const product = { id: 'prod-1', sku: 'SKU-1' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(product) }] }) };
+
+      await expect(domainQueries.getVendorCatalogueFromDB()).resolves.toEqual([product]);
+    });
+
+    test('upsertCatalogueProductInDB parses a string raw column (D1)', async () => {
+      const product = { id: 'prod-1', sku: 'SKU-1' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(product) }] }) };
+
+      await expect(domainQueries.upsertCatalogueProductInDB(product)).resolves.toEqual(product);
+    });
   });
 
   describe('buyer accounts', () => {
@@ -578,6 +641,44 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
     test('getBuyerAccountsFromDB returns a null activeId when no row is flagged active', async () => {
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ id: 'buyer-1', is_active: false, raw: { id: 'buyer-1' } }] }) };
       await expect(domainQueries.getBuyerAccountsFromDB()).resolves.toEqual({ accounts: [{ id: 'buyer-1' }], activeId: null });
+    });
+
+    // buyer_accounts has been ported to D1 (see d1Bridge.js), which has no
+    // JSON column type — raw comes back as a TEXT string there.
+    test('getBuyerAccountsFromDB parses a string raw column (D1)', async () => {
+      const acc = { id: 'buyer-1' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ id: 'buyer-1', is_active: true, raw: JSON.stringify(acc) }] }) };
+      await expect(domainQueries.getBuyerAccountsFromDB()).resolves.toEqual({ accounts: [acc], activeId: 'buyer-1' });
+    });
+
+    test('getBuyerAccountByEmailFromDB returns the matching account', async () => {
+      const account = { id: 'buyer-1', corporateEmail: 'buyer@lt.com' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: account }] }) };
+
+      await expect(domainQueries.getBuyerAccountByEmailFromDB('buyer@lt.com')).resolves.toEqual(account);
+      expect(pool.pool.query).toHaveBeenCalledWith(
+        expect.stringContaining('WHERE lower(corporate_email) = lower($1)'),
+        ['buyer@lt.com']
+      );
+    });
+
+    test('getBuyerAccountByEmailFromDB parses a string raw column (D1)', async () => {
+      const account = { id: 'buyer-1', corporateEmail: 'buyer@lt.com' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(account) }] }) };
+
+      await expect(domainQueries.getBuyerAccountByEmailFromDB('buyer@lt.com')).resolves.toEqual(account);
+    });
+
+    test('getBuyerAccountByEmailFromDB returns null when nothing matched', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      await expect(domainQueries.getBuyerAccountByEmailFromDB('nobody@x.com')).resolves.toBeNull();
+    });
+
+    test('getBuyerAccountByEmailFromDB returns null when not configured or no email given', async () => {
+      pool.pool = { query: jest.fn() };
+      await expect(domainQueries.getBuyerAccountByEmailFromDB('')).resolves.toBeNull();
+      pool.pool = null;
+      await expect(domainQueries.getBuyerAccountByEmailFromDB('x@y.com')).resolves.toBeNull();
     });
 
     test('upsertBuyerAccountInDB serializes the account and returns the stored raw row', async () => {
@@ -616,6 +717,13 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       await domainQueries.setActiveBuyerAccountInDB('buyer-2');
       expect(pool.pool.query).toHaveBeenCalledWith('UPDATE buyer_accounts SET is_active = (id = $1)', ['buyer-2']);
     });
+
+    test('upsertBuyerAccountInDB parses a string raw column (D1)', async () => {
+      const account = { id: 'buyer-1', corporateEmail: 'buyer@lt.com' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(account) }] }) };
+
+      await expect(domainQueries.upsertBuyerAccountInDB(account)).resolves.toEqual(account);
+    });
   });
 
   describe('AI feed', () => {
@@ -646,6 +754,22 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
       await expect(domainQueries.upsertAIFeedItemInDB({ id: 'feed-2' })).resolves.toBeNull();
     });
+
+    // ai_feed has been ported to D1 (see d1Bridge.js), which has no JSON
+    // column type — raw comes back as a TEXT string there.
+    test('getAIFeedFromDB parses a string raw column (D1)', async () => {
+      const item = { id: 'feed-1', title: 'Call placed' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(item) }] }) };
+
+      await expect(domainQueries.getAIFeedFromDB()).resolves.toEqual([item]);
+    });
+
+    test('upsertAIFeedItemInDB parses a string raw column (D1)', async () => {
+      const item = { id: 'feed-1', title: 'Call placed' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(item) }] }) };
+
+      await expect(domainQueries.upsertAIFeedItemInDB(item)).resolves.toEqual(item);
+    });
   });
 
   describe('audit logs', () => {
@@ -672,6 +796,22 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
     test('upsertAuditLogInDB returns null when nothing came back', async () => {
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
       await expect(domainQueries.upsertAuditLogInDB({ id: 'log-2' })).resolves.toBeNull();
+    });
+
+    // audit_logs has been ported to D1 (see d1Bridge.js), which has no JSON
+    // column type — raw comes back as a TEXT string there.
+    test('getAuditLogsFromDB parses a string raw column (D1)', async () => {
+      const entry = { id: 'log-1', action: 'LOGIN' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(entry) }] }) };
+
+      await expect(domainQueries.getAuditLogsFromDB()).resolves.toEqual([entry]);
+    });
+
+    test('upsertAuditLogInDB parses a string raw column (D1)', async () => {
+      const entry = { id: 'log-1', action: 'LOGIN' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(entry) }] }) };
+
+      await expect(domainQueries.upsertAuditLogInDB(entry)).resolves.toEqual(entry);
     });
   });
 
@@ -839,6 +979,30 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
     test('getPaymentLinkByZohoIdFromDB returns null when nothing matched', async () => {
       pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
       await expect(domainQueries.getPaymentLinkByZohoIdFromDB('zoho-x')).resolves.toBeNull();
+    });
+
+    // payment_links has been ported to D1 (see d1Bridge.js), which has no
+    // JSON column type — `raw` comes back as a TEXT string there, not an
+    // already-parsed object the way pg's jsonb driver returns it.
+    test('getPaymentLinksFromDB parses a string raw column (D1)', async () => {
+      const link = { id: 'pl-1', status: 'CREATED' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(link) }] }) };
+
+      await expect(domainQueries.getPaymentLinksFromDB()).resolves.toEqual([link]);
+    });
+
+    test('getPaymentLinkByZohoIdFromDB parses a string raw column (D1)', async () => {
+      const link = { id: 'pl-1', zohoPaymentLinkId: 'zoho-1' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(link) }] }) };
+
+      await expect(domainQueries.getPaymentLinkByZohoIdFromDB('zoho-1')).resolves.toEqual(link);
+    });
+
+    test('upsertPaymentLinkInDB parses a string raw column (D1)', async () => {
+      const link = { id: 'pl-1', status: 'CREATED' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: JSON.stringify(link) }] }) };
+
+      await expect(domainQueries.upsertPaymentLinkInDB(link)).resolves.toEqual(link);
     });
 
     test('upsertPaymentLinkInDB serializes the link and returns the stored raw row', async () => {
