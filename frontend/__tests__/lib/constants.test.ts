@@ -284,8 +284,8 @@ describe('entitledSourcingModes', () => {
     expect(entitledSourcingModes('version_3')).toEqual(['mode_1', 'mode_2', 'mode_3']);
   });
 
-  it('falls back to the free_trial tier for an unrecognised plan string', () => {
-    expect(entitledSourcingModes('some_unknown_plan')).toEqual(['mode_1', 'mode_2', 'mode_3']);
+  it('falls back to the most restrictive tier for an unrecognised plan string, not to allowing everything', () => {
+    expect(entitledSourcingModes('some_unknown_plan')).toEqual(['mode_1']);
   });
 
   it('is case-insensitive and trims whitespace', () => {
