@@ -203,6 +203,12 @@ describe('API Route Endpoints', () => {
       expect(res.statusCode).toBe(201);
       expect(res.body.success).toBe(true);
       expect(res.body.data.name).toBe(newVendor.name);
+      // Found live: falling back to storeService's default ('buyer_manual')
+      // here made the frontend's isBuyerUploaded() classifier sort a real
+      // vendor self-registration into the "Uploaded by Buyer" tab instead of
+      // "Procucev Vendors", where it's documented to live and where a buyer
+      // would actually search for it.
+      expect(res.body.data.source).toBe('self_registration');
       testVendorId = res.body.data.id;
     });
 
