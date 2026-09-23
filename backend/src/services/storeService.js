@@ -483,9 +483,17 @@ class StoreService {
       // no account at all. One retry absorbs a transient blip; a real
       // failure marks the status 'failed' (visible to the buyer/CM) instead
       // of silently mailing broken credentials.
-      this._provisionVendorOnboarding(newVendor, actorEmail).catch((err) => {
-        logger.error(`Onboarding provisioning failed for ${newVendor.email}`, err, 'STORE_SERVICE');
-      });
+      // Was a bare .catch(), never handed to waitUntil — on Workers an
+      // unawaited promise like that can be cancelled the instant the
+      // response is sent (same class of bug as every other _background()
+      // call in this file), so this vendor's identity account and
+      // onboarding email silently never happened. Confirmed live: a buyer
+      // added a vendor, got a normal 201, and the vendor had no login at
+      // all afterward — no error surfaced anywhere.
+      this._background(
+        this._provisionVendorOnboarding(newVendor, actorEmail),
+        `Onboarding provisioning failed for ${newVendor.email}`
+      );
     }
 
     return newVendor;
@@ -701,16 +709,22 @@ class StoreService {
           );
         } else if (vendor.email) {
           const tempPassword = this._generateTempPassword();
-          identityQueries.insertVendorAccount({
-            email: vendor.email,
-            password: tempPassword,
-            phone: vendor.phone || null,
-            fullName: vendor.contactPerson || vendor.name,
-            organizationName: vendor.name,
-            createdBy: 'vendor-bulk-import',
-          }).catch((err) => {
-            logger.error(`Failed to create vendor identity account for ${vendor.email}`, err, 'STORE_SERVICE');
-          });
+          // Both handed to waitUntil (via _background) — bare fire-and-forget
+          // here meant Workers could cancel either before it actually ran,
+          // same bug confirmed live in addVendor's own onboarding call (see
+          // that comment). A bulk-imported vendor with no identity account
+          // and no onboarding email is a vendor with no way to ever log in.
+          this._background(
+            identityQueries.insertVendorAccount({
+              email: vendor.email,
+              password: tempPassword,
+              phone: vendor.phone || null,
+              fullName: vendor.contactPerson || vendor.name,
+              organizationName: vendor.name,
+              createdBy: 'vendor-bulk-import',
+            }),
+            `Failed to create vendor identity account for ${vendor.email}`
+          );
 
           const emailPayload = mailerService.buildVendorOnboardingEmail({
             to: vendor.email,
@@ -721,18 +735,17 @@ class StoreService {
             contactPhone: vendor.phone,
           });
 
-          mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding')
-            .then((delivery) => {
+          this._background(
+            mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding').then((delivery) => {
               if (delivery.sent) {
                 this.updateVendor(vendor.id, { onboardingEmailStatus: 'sent', tempPassword });
                 logger.info(`Onboarding email sent to ${vendor.email}`, { vendorId: vendor.id }, 'STORE_SERVICE');
               } else {
                 logger.warn(`Failed to send onboarding email to ${vendor.email}`, { reason: delivery.reason }, 'STORE_SERVICE');
               }
-            })
-            .catch((err) => {
-              logger.error(`Error sending onboarding email to ${vendor.email}`, err, 'STORE_SERVICE');
-            });
+            }),
+            `Error sending onboarding email to ${vendor.email}`
+          );
         }
       } else {
         results.push({ rowNumber, status: 'duplicate', email: vendor.email, reason: 'A vendor with this email already exists.' });
@@ -2146,59 +2159,74 @@ class StoreService {
       // insertVendorAccount's own `result.created === false` came back,
       // which is what this used to do) so the reset never happens at all.
       if (newVendor.email) {
-        identityQueries.findUserByEmail(newVendor.email).then((existingIdentity) => {
-          if (existingIdentity) {
-            logger.info(
-              `Skipped onboarding identity provisioning for ${newVendor.email}: an identity account already exists`,
-              { vendorId: newVendor.id },
-              'STORE_SERVICE'
-            );
-            return;
-          }
-
-          const tempPassword = this._generateTempPassword();
-
-          // Create vendor account in identity database
-          identityQueries.insertVendorAccount({
-            email: newVendor.email,
-            password: tempPassword,
-            phone: newVendor.phone || null,
-            fullName: newVendor.contactPerson || newVendor.name,
-            organizationName: newVendor.name,
-            createdBy: 'vendor-ingestion',
-          }).then((result) => {
-            if (result.created) {
-              logger.info(`Vendor identity account created for ${newVendor.email}`, { vendorId: newVendor.id }, 'STORE_SERVICE');
+        // The whole sequence below is handed to waitUntil (via _background),
+        // via a real async IIFE with genuine awaits — the previous version
+        // used nested .then()/.catch() chains where the inner
+        // insertVendorAccount/sendVendorIngestionEmail calls were never
+        // returned from their enclosing .then() callback, so even wrapping
+        // the outer promise wouldn't have covered them: the outer chain
+        // resolved as soon as its synchronous body finished, not once the
+        // inner unawaited calls actually completed. Confirmed live (same
+        // root cause as addVendor's own onboarding call, see that comment):
+        // a buyer-added vendor's identity account and onboarding email
+        // silently never happened.
+        this._background(
+          (async () => {
+            const existingIdentity = await identityQueries.findUserByEmail(newVendor.email).catch((err) => {
+              logger.error(`Failed to check existing identity for ${newVendor.email}`, err, 'STORE_SERVICE');
+              return null;
+            });
+            if (existingIdentity) {
+              logger.info(
+                `Skipped onboarding identity provisioning for ${newVendor.email}: an identity account already exists`,
+                { vendorId: newVendor.id },
+                'STORE_SERVICE'
+              );
+              return;
             }
-          }).catch((err) => {
-            logger.error(`Failed to create vendor identity account for ${newVendor.email}`, err, 'STORE_SERVICE');
-          });
 
-          // Send onboarding email to the vendor
-          const emailPayload = mailerService.buildVendorOnboardingEmail({
-            to: newVendor.email,
-            recipientName: newVendor.contactPerson || newVendor.name,
-            buyerOrganizationName: attributedAccount ? attributedAccount.organizationName : 'Procucev Enterprise',
-            vendorCode: newVendor.id,
-            tempPassword: tempPassword,
-            contactPhone: newVendor.phone,
-          });
+            const tempPassword = this._generateTempPassword();
 
-          mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding')
-            .then((delivery) => {
+            try {
+              const result = await identityQueries.insertVendorAccount({
+                email: newVendor.email,
+                password: tempPassword,
+                phone: newVendor.phone || null,
+                fullName: newVendor.contactPerson || newVendor.name,
+                organizationName: newVendor.name,
+                createdBy: 'vendor-ingestion',
+              });
+              if (result.created) {
+                logger.info(`Vendor identity account created for ${newVendor.email}`, { vendorId: newVendor.id }, 'STORE_SERVICE');
+              }
+            } catch (err) {
+              logger.error(`Failed to create vendor identity account for ${newVendor.email}`, err, 'STORE_SERVICE');
+              return;
+            }
+
+            const emailPayload = mailerService.buildVendorOnboardingEmail({
+              to: newVendor.email,
+              recipientName: newVendor.contactPerson || newVendor.name,
+              buyerOrganizationName: attributedAccount ? attributedAccount.organizationName : 'Procucev Enterprise',
+              vendorCode: newVendor.id,
+              tempPassword: tempPassword,
+              contactPhone: newVendor.phone,
+            });
+
+            try {
+              const delivery = await mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding');
               if (delivery.sent) {
                 this.updateVendor(newVendor.id, { onboardingEmailStatus: 'sent', tempPassword });
                 logger.info(`Onboarding email sent to ${newVendor.email}`, { vendorId: newVendor.id }, 'STORE_SERVICE');
               } else {
                 logger.warn(`Failed to send onboarding email to ${newVendor.email}`, { reason: delivery.reason }, 'STORE_SERVICE');
               }
-            })
-            .catch((err) => {
+            } catch (err) {
               logger.error(`Error sending onboarding email to ${newVendor.email}`, err, 'STORE_SERVICE');
-            });
-        }).catch((err) => {
-          logger.error(`Failed to check existing identity for ${newVendor.email}`, err, 'STORE_SERVICE');
-        });
+            }
+          })(),
+          `Onboarding provisioning failed for ${newVendor.email}`
+        );
       }
     });
 

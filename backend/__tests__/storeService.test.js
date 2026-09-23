@@ -134,6 +134,38 @@ describe('Store Service & Business Operations', () => {
       }
     });
 
+    // Found live, separately from the password-reset bug above: this call
+    // was a bare .catch(), never handed to waitUntil — a buyer added a
+    // vendor, got a normal 201, and the vendor's identity account never
+    // actually got created (or the onboarding email sent) because Workers
+    // cancelled the promise once the response went out.
+    test('addVendor hands its onboarding provisioning to waitUntil when running on Workers', async () => {
+      const originalWaitUntil = globalThis.__CF_WAIT_UNTIL__;
+      const waitUntilSpy = jest.fn();
+      globalThis.__CF_WAIT_UNTIL__ = waitUntilSpy;
+      const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({});
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
+
+      try {
+        storeService.addVendor(
+          { name: 'WaitUntil Co', email: 'waituntil-vendor@example.com', majorCategory: 'Fasteners' },
+          'buyer@example.com'
+        );
+
+        // addVendor's own DB persistence + audit log writes also go through
+        // waitUntil via the same _background() helper, so more than one call
+        // is expected here — this only asserts the onboarding call is one of
+        // them, not that it's the only one.
+        expect(waitUntilSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+        expect(waitUntilSpy.mock.calls.every((call) => call[0] instanceof Promise)).toBe(true);
+        await new Promise((resolve) => setImmediate(resolve));
+      } finally {
+        globalThis.__CF_WAIT_UNTIL__ = originalWaitUntil;
+        identitySpy.mockRestore();
+        sendSpy.mockRestore();
+      }
+    });
+
     // Found live: identityQueries.insertVendorAccount resets password+phone
     // on an *existing* identity account (correct for the CLI provisioning
     // script it also serves, wrong here) — an addVendor call for an email
