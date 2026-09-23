@@ -83,6 +83,33 @@ describe('d1Bridge', () => {
       expect(result).toEqual({ rows: [{ id: 1 }] });
     });
 
+    // Found live against the deployed Worker: the Invite Vendors "All
+    // Vendors" search hit "D1_ERROR: Wrong number of parameter bindings for
+    // SQL query." getVendorsPageFromDB's search condition references $1
+    // four times (one value, four ILIKE/LIKE clauses) — valid Postgres, but
+    // toD1Sql's blind text replace turns each of those four $1s into a
+    // separate ? placeholder while only one value was ever bound for them.
+    it('expands a value referenced by the same $n more than once to one bound value per occurrence', async () => {
+      const all = jest.fn().mockResolvedValue({ results: [] });
+      const bind = jest.fn().mockReturnValue({ all });
+      const prepare = jest.fn().mockReturnValue({ bind });
+      const db = { prepare };
+
+      const { queryD1 } = require('../src/db/d1Bridge');
+      await queryD1(
+        db,
+        'select * from vendors where (lower(a) like lower($1) or lower(b) like lower($1)) and c = $2',
+        ['%needle%', 'exact']
+      );
+
+      expect(prepare).toHaveBeenCalledWith(
+        'select * from vendors where (lower(a) like lower(?) or lower(b) like lower(?)) and c = ?'
+      );
+      // $1 appears twice, so its value is bound twice, in occurrence order,
+      // then $2's value once — three ? placeholders, three bound values.
+      expect(bind).toHaveBeenCalledWith('%needle%', '%needle%', 'exact');
+    });
+
     it('skips bind() when there are no params', async () => {
       const all = jest.fn().mockResolvedValue({ results: [] });
       const prepare = jest.fn().mockReturnValue({ all });

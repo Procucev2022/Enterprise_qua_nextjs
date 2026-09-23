@@ -42,6 +42,34 @@ function toD1Sql(text) {
 }
 
 /**
+ * Expand a pg-style params array to match every `$n` OCCURRENCE in `text`,
+ * in left-to-right order — not just every distinct placeholder.
+ *
+ * Postgres lets one bound value be referenced by the same `$n` more than
+ * once in a query (e.g. `WHERE a ILIKE $1 OR b ILIKE $1` — one value, two
+ * uses), and several D1-ported queries in this codebase genuinely do this
+ * (getVendorsPageFromDB's search condition alone reuses $1 four times).
+ * D1's `?` placeholders are purely positional with no reuse — toD1Sql's
+ * blind text replace turns each of those four `$1`s into four separate `?`,
+ * but the caller only supplied one value for them, so D1 throws "Wrong
+ * number of parameter bindings for SQL query." (confirmed live — this is
+ * exactly the bug that produced that error against the deployed Worker).
+ * This walks the original (pre-replace) text and, for every `$n` it finds,
+ * in the order `?` placeholders will actually appear in the converted SQL,
+ * pushes `params[n-1]` again — so a value referenced 4 times is bound 4
+ * times, matching what toD1Sql's expansion actually needs.
+ */
+function expandD1Params(text, params = []) {
+  const expanded = [];
+  const matches = text.match(/\$(\d+)/g) || [];
+  for (const match of matches) {
+    const index = Number(match.slice(1)) - 1;
+    expanded.push(params[index]);
+  }
+  return expanded;
+}
+
+/**
  * Run a query against D1, returning a result shaped like pg's: `{ rows,
  * rowCount }`. `rowCount` comes from D1's `meta.changes` — pg's `pg` driver
  * exposes it under that name for INSERT/UPDATE/DELETE, and a few call sites
@@ -50,7 +78,8 @@ function toD1Sql(text) {
  */
 async function queryD1(db, text, params = []) {
   const stmt = db.prepare(toD1Sql(text));
-  const bound = params.length > 0 ? stmt.bind(...params) : stmt;
+  const boundParams = expandD1Params(text, params);
+  const bound = boundParams.length > 0 ? stmt.bind(...boundParams) : stmt;
   const result = await bound.all();
   return { rows: result.results || [], rowCount: result.meta ? result.meta.changes : undefined };
 }
