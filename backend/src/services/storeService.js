@@ -492,6 +492,29 @@ class StoreService {
   }
 
   async _provisionVendorOnboarding(vendor, actorEmail = null) {
+    // Real, previously-shipped bug found live: identityQueries.insertVendorAccount
+    // unconditionally resets password + phone on an *existing* identity
+    // account when one is found for the email — correct for the CLI
+    // provisioning script this function shares that code with (an explicit
+    // admin action recreating known credentials), but this function runs
+    // automatically on every ordinary vendor-profile creation, including for
+    // an email that already has a real login the vendor actually knows and
+    // uses. That combination silently clobbered a real account's password
+    // with a random temp one the vendor was never told, breaking their login
+    // with no warning (confirmed live: yagnik.c@ahduni.edu.in). A vendor
+    // *profile* being created is not the same event as a vendor *identity*
+    // being created — this only provisions identity/sends onboarding
+    // credentials when there is genuinely no identity account yet.
+    const existingIdentity = await identityQueries.findUserByEmail(vendor.email).catch(() => null);
+    if (existingIdentity) {
+      logger.info(
+        `Skipped onboarding identity provisioning for ${vendor.email}: an identity account already exists`,
+        { vendorId: vendor.id },
+        'STORE_SERVICE'
+      );
+      return;
+    }
+
     const tempPassword = this._generateTempPassword();
 
     let identityCreated = false;
@@ -664,7 +687,19 @@ class StoreService {
           vendor,
         });
 
-        if (vendor.email) {
+        // eslint-disable-next-line no-await-in-loop
+        if (vendor.email && (await identityQueries.findUserByEmail(vendor.email).catch(() => null))) {
+          // Same real bug as _provisionVendorOnboarding's comment describes:
+          // insertVendorAccount resets password+phone on an existing
+          // identity account. A bulk import row for an email that already
+          // has a real login must never touch it or mail out fake "new"
+          // credentials for an account the buyer/vendor already uses.
+          logger.info(
+            `Skipped onboarding identity provisioning for ${vendor.email}: an identity account already exists`,
+            { vendorId: vendor.id },
+            'STORE_SERVICE'
+          );
+        } else if (vendor.email) {
           const tempPassword = this._generateTempPassword();
           identityQueries.insertVendorAccount({
             email: vendor.email,
@@ -2099,50 +2134,71 @@ class StoreService {
       createdThisRun.push({ row: idx + 1, vendor: newVendor });
       importedCount++;
 
-      // Create identity database account for the vendor so they can log in
+      // Create identity database account for the vendor so they can log in —
+      // but only if one doesn't already exist. insertVendorAccount resets
+      // password+phone on an *existing* identity account (correct for the
+      // CLI provisioning script it also serves; wrong here, where the row is
+      // just a historical-purchase-dump entry that may well already have a
+      // real login). Confirmed live: this exact class of call silently
+      // clobbered a real vendor's password with a random one they were never
+      // told, via bulkAddVendors' sibling path — see that fix's comment.
+      // Checked up front (not just logged after the fact once
+      // insertVendorAccount's own `result.created === false` came back,
+      // which is what this used to do) so the reset never happens at all.
       if (newVendor.email) {
-        const tempPassword = this._generateTempPassword();
-
-        // Create vendor account in identity database
-        identityQueries.insertVendorAccount({
-          email: newVendor.email,
-          password: tempPassword,
-          phone: newVendor.phone || null,
-          fullName: newVendor.contactPerson || newVendor.name,
-          organizationName: newVendor.name,
-          createdBy: 'vendor-ingestion',
-        }).then((result) => {
-          if (result.created) {
-            logger.info(`Vendor identity account created for ${newVendor.email}`, { vendorId: newVendor.id }, 'STORE_SERVICE');
-          } else {
-            logger.warn(`Vendor identity account already exists for ${newVendor.email}`, { vendorId: newVendor.id, reason: result.reason }, 'STORE_SERVICE');
+        identityQueries.findUserByEmail(newVendor.email).then((existingIdentity) => {
+          if (existingIdentity) {
+            logger.info(
+              `Skipped onboarding identity provisioning for ${newVendor.email}: an identity account already exists`,
+              { vendorId: newVendor.id },
+              'STORE_SERVICE'
+            );
+            return;
           }
-        }).catch((err) => {
-          logger.error(`Failed to create vendor identity account for ${newVendor.email}`, err, 'STORE_SERVICE');
-        });
 
-        // Send onboarding email to the vendor
-        const emailPayload = mailerService.buildVendorOnboardingEmail({
-          to: newVendor.email,
-          recipientName: newVendor.contactPerson || newVendor.name,
-          buyerOrganizationName: attributedAccount ? attributedAccount.organizationName : 'Procucev Enterprise',
-          vendorCode: newVendor.id,
-          tempPassword: tempPassword,
-          contactPhone: newVendor.phone,
-        });
+          const tempPassword = this._generateTempPassword();
 
-        mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding')
-          .then((delivery) => {
-            if (delivery.sent) {
-              this.updateVendor(newVendor.id, { onboardingEmailStatus: 'sent', tempPassword });
-              logger.info(`Onboarding email sent to ${newVendor.email}`, { vendorId: newVendor.id }, 'STORE_SERVICE');
-            } else {
-              logger.warn(`Failed to send onboarding email to ${newVendor.email}`, { reason: delivery.reason }, 'STORE_SERVICE');
+          // Create vendor account in identity database
+          identityQueries.insertVendorAccount({
+            email: newVendor.email,
+            password: tempPassword,
+            phone: newVendor.phone || null,
+            fullName: newVendor.contactPerson || newVendor.name,
+            organizationName: newVendor.name,
+            createdBy: 'vendor-ingestion',
+          }).then((result) => {
+            if (result.created) {
+              logger.info(`Vendor identity account created for ${newVendor.email}`, { vendorId: newVendor.id }, 'STORE_SERVICE');
             }
-          })
-          .catch((err) => {
-            logger.error(`Error sending onboarding email to ${newVendor.email}`, err, 'STORE_SERVICE');
+          }).catch((err) => {
+            logger.error(`Failed to create vendor identity account for ${newVendor.email}`, err, 'STORE_SERVICE');
           });
+
+          // Send onboarding email to the vendor
+          const emailPayload = mailerService.buildVendorOnboardingEmail({
+            to: newVendor.email,
+            recipientName: newVendor.contactPerson || newVendor.name,
+            buyerOrganizationName: attributedAccount ? attributedAccount.organizationName : 'Procucev Enterprise',
+            vendorCode: newVendor.id,
+            tempPassword: tempPassword,
+            contactPhone: newVendor.phone,
+          });
+
+          mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding')
+            .then((delivery) => {
+              if (delivery.sent) {
+                this.updateVendor(newVendor.id, { onboardingEmailStatus: 'sent', tempPassword });
+                logger.info(`Onboarding email sent to ${newVendor.email}`, { vendorId: newVendor.id }, 'STORE_SERVICE');
+              } else {
+                logger.warn(`Failed to send onboarding email to ${newVendor.email}`, { reason: delivery.reason }, 'STORE_SERVICE');
+              }
+            })
+            .catch((err) => {
+              logger.error(`Error sending onboarding email to ${newVendor.email}`, err, 'STORE_SERVICE');
+            });
+        }).catch((err) => {
+          logger.error(`Failed to check existing identity for ${newVendor.email}`, err, 'STORE_SERVICE');
+        });
       }
     });
 

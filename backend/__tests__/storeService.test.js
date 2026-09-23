@@ -134,6 +134,34 @@ describe('Store Service & Business Operations', () => {
       }
     });
 
+    // Found live: identityQueries.insertVendorAccount resets password+phone
+    // on an *existing* identity account (correct for the CLI provisioning
+    // script it also serves, wrong here) — an addVendor call for an email
+    // that already has a real login silently clobbered that login's real
+    // password with a random one the vendor was never told. Confirmed
+    // reproducing exactly this against a real deployed account.
+    test('addVendor never touches identity when an account already exists for the email', async () => {
+      const findSpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue({ id: 'existing-user-uuid' });
+      const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({});
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
+
+      try {
+        const v = storeService.addVendor({ name: 'Already Has Login Co', email: 'already-has-login@example.com', majorCategory: 'Fasteners' });
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(findSpy).toHaveBeenCalledWith('already-has-login@example.com');
+        expect(identitySpy).not.toHaveBeenCalled();
+        expect(sendSpy).not.toHaveBeenCalled();
+        // Left exactly as addVendor's own default set it — never touched
+        // again by the (skipped) onboarding path.
+        expect(storeService.getVendorById(v.id).onboardingEmailStatus).toBe('pending');
+      } finally {
+        findSpy.mockRestore();
+        identitySpy.mockRestore();
+        sendSpy.mockRestore();
+      }
+    });
+
     test('addVendor marks the invite failed (not silently pending) when the onboarding email fails to send', async () => {
       const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({});
       const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: false, reason: 'SMTP down' });
@@ -378,6 +406,27 @@ describe('Store Service & Business Operations', () => {
       expect(imported.find((v) => v.name === 'No Email Co Two').email).toBeNull();
     });
 
+    // Same real bug as addVendor's — bulkAddVendors shares insertVendorAccount's
+    // password-reset-on-existing-account behavior via its own onboarding call.
+    test('bulk-imported row never touches identity when an account already exists for the email', async () => {
+      const findSpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue({ id: 'existing-user-uuid' });
+      const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({});
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
+
+      try {
+        await storeService.bulkAddVendors([row({ rowNumber: 1, email: 'bulk-already-has-login@example.com' })]);
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(findSpy).toHaveBeenCalledWith('bulk-already-has-login@example.com');
+        expect(identitySpy).not.toHaveBeenCalled();
+        expect(sendSpy).not.toHaveBeenCalled();
+      } finally {
+        findSpy.mockRestore();
+        identitySpy.mockRestore();
+        sendSpy.mockRestore();
+      }
+    });
+
     test('imported vendors carry the source-tracking and default fields a bulk-Excel import implies', async () => {
       await storeService.bulkAddVendors([row({ rowNumber: 1, email: 'tagged@example.com' })]);
       const created = (await storeService.getVendors()).find((v) => v.email === 'tagged@example.com');
@@ -546,6 +595,34 @@ describe('Store Service & Business Operations', () => {
 
       const lastLog = storeService.getAuditLogs()[0];
       expect(lastLog.userEmail).toBe('historical-ingest@example.com');
+    });
+
+    // Same real bug as addVendor's/bulkAddVendors' — this path had its own,
+    // slightly different copy of the vulnerable code (it already checked
+    // insertVendorAccount's `result.created` afterward and logged a warning,
+    // but the password reset had already happened by then; that check was
+    // too late to prevent it).
+    test('a historical vendor row never touches identity when an account already exists for the email', async () => {
+      const findSpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue({ id: 'existing-user-uuid' });
+      const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({ created: true });
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
+
+      try {
+        await storeService.processHistoricalPurchaseData(
+          '1_year',
+          [{ companyName: 'Historical Already-Login Co', email: 'historical-already-login@example.com' }]
+        );
+        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(findSpy).toHaveBeenCalledWith('historical-already-login@example.com');
+        expect(identitySpy).not.toHaveBeenCalled();
+        expect(sendSpy).not.toHaveBeenCalled();
+      } finally {
+        findSpy.mockRestore();
+        identitySpy.mockRestore();
+        sendSpy.mockRestore();
+      }
     });
 
     test('processHistoricalPurchaseData rolls back a row whose Postgres write collides with an existing email (409) and reports it as skipped', async () => {
