@@ -651,48 +651,45 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     });
     expect(contextValue.buyerVendors.some((v: VendorEntry) => v.name === 'Precision Hydro Pumps')).toBe(true);
 
-    // 2. Import Buyer Vendors with diverse category mappings
-    act(() => {
-      const count = contextValue.importBuyerVendors([
-        {
-          name: 'FlowTech Systems',
-          contactPerson: 'Sunil Rao',
-          email: 'sunil@flowtech.in',
-          phone: '+91 98201 44111',
-          majorCategory: 'Engineering Spares - Mechanical',
-          minorCategories: ['Slurry Pumps'],
-          clientMappedCategories: ['Slurry Pumps'],
-          vendorSelectedCategories: [],
-          location: 'Mumbai, Maharashtra',
-          rating: 4.6,
-          source: 'buyer_manual',
-          status: 'PREFERRED ENTERPRISE SUPPLIER',
-          score: 90,
-          evaluated: true,
-        },
-        {
-          name: 'Self Declared Vendor',
-          contactPerson: 'Amit Kumar',
-          email: 'amit@selfdeclared.in',
-          phone: '+91 98201 44222',
-          majorCategory: 'Engineering Spares - Mechanical',
-          minorCategories: [],
-          clientMappedCategories: [],
-          vendorSelectedCategories: ['High Pressure Valves'],
-          location: '', // empty location branch
-          rating: 0,    // rating 0 branch
-          source: 'buyer_manual',
-          status: 'REGISTERED / NOT EVALUATED',
-          evaluated: false,
-        },
-        {
-          name: 'Existing Batch Vendor',
-          email: 'rajesh@apexindustrial.in',
-          location: 'Pune',
-        },
-      ]);
-      expect(count).toBe(3);
+    // 2. Add further buyer vendors with diverse category mappings (real bulk
+    // upload now goes through POST /api/vendors/bulk-import, covered
+    // separately in VendorUploadModal.test.tsx and the backend's own
+    // storeService.test.js — this just needs more vendors on the client-side
+    // buyerVendors list for the matching assertions below).
+    await act(async () => {
+      await contextValue.addBuyerVendor({
+        name: 'FlowTech Systems',
+        contactPerson: 'Sunil Rao',
+        email: 'sunil@flowtech.in',
+        phone: '+91 98201 44111',
+        majorCategory: 'Engineering Spares - Mechanical',
+        minorCategories: ['Slurry Pumps'],
+        clientMappedCategories: ['Slurry Pumps'],
+        vendorSelectedCategories: [],
+        location: 'Mumbai, Maharashtra',
+        rating: 4.6,
+        source: 'buyer_manual',
+        status: 'PREFERRED ENTERPRISE SUPPLIER',
+        score: 90,
+        evaluated: true,
+      });
+      await contextValue.addBuyerVendor({
+        name: 'Self Declared Vendor',
+        contactPerson: 'Amit Kumar',
+        email: 'amit@selfdeclared.in',
+        phone: '+91 98201 44222',
+        majorCategory: 'Engineering Spares - Mechanical',
+        minorCategories: [],
+        clientMappedCategories: [],
+        vendorSelectedCategories: ['High Pressure Valves'],
+        location: '', // empty location branch
+        rating: 0,    // rating 0 branch
+        source: 'buyer_manual',
+        status: 'REGISTERED / NOT EVALUATED',
+        evaluated: false,
+      });
     });
+    expect(contextValue.buyerVendors.some((v: VendorEntry) => v.name === 'FlowTech Systems')).toBe(true);
 
     // 3. Match Suitable Vendors across mode_1, mode_2, mode_3, unmatched categories, and customList
     const entities: ExtractedEntity[] = [
