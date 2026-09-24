@@ -110,7 +110,10 @@ export default function VendorProfilePage() {
         return;
       }
       try {
-        const res = await fetch(`/api/vendors/${encodeURIComponent(email)}`);
+        const token = authClient.getToken();
+        const res = await fetch(`/api/vendors/${encodeURIComponent(email)}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
         if (res.status === 404) {
           // No backend record yet for this vendor — first-time profile, blank form.
           if (!cancelled) setContactEmail(email);
