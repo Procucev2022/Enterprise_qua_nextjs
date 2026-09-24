@@ -168,7 +168,7 @@ jobs:
             }
   deploy:
     name: Deploy to Cloudflare
-    needs: pr-quality-check
+    needs: [backend-gate, frontend-gate]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
