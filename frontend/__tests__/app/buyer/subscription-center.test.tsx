@@ -13,7 +13,6 @@ describe('app/buyer/subscription-center.tsx', () => {
   const mockRefreshActiveBuyerAccount = jest.fn();
   const mockCreateBuyerPaymentLink = jest.fn();
   const mockCheckBuyerPaymentLinkStatus = jest.fn();
-  const mockUpdateBuyerSubscriptionPlan = jest.fn().mockResolvedValue({ success: true });
   const originalFetch = global.fetch;
 
   function mockStore(overrides: Record<string, unknown> = {}) {
@@ -25,7 +24,6 @@ describe('app/buyer/subscription-center.tsx', () => {
       refreshActiveBuyerAccount: mockRefreshActiveBuyerAccount,
       createBuyerPaymentLink: mockCreateBuyerPaymentLink,
       checkBuyerPaymentLinkStatus: mockCheckBuyerPaymentLinkStatus,
-      updateBuyerSubscriptionPlan: mockUpdateBuyerSubscriptionPlan,
       ...overrides,
     });
   }
@@ -138,14 +136,17 @@ describe('app/buyer/subscription-center.tsx', () => {
     expect(mockShowToast).toHaveBeenCalledWith('Reset Failed', expect.any(String), 'warning');
   });
 
-  it('clicking a paid plan upgrades the active subscription immediately', async () => {
+  it('clicking a paid plan opens the real Zoho checkout modal instead of granting the plan directly', async () => {
     render(<SubscriptionCenter />);
 
     fireEvent.click(screen.getByText('Subscribe to Version 2'));
-    await waitFor(() =>
-      expect(mockUpdateBuyerSubscriptionPlan).toHaveBeenCalledWith('version_2')
-    );
-    expect(mockShowToast).toHaveBeenCalledWith('Subscription Upgraded!', expect.any(String), 'success');
+    await waitFor(() => expect(screen.getByText('Secure Payment')).toBeInTheDocument());
+    // No direct plan grant — the modal is responsible for creating a real
+    // payment link and redirecting to Zoho, not this button.
+    expect(mockCreateBuyerPaymentLink).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('Cancel'));
+    await waitFor(() => expect(screen.queryByText('Secure Payment')).not.toBeInTheDocument());
   });
 
   it('renders the active-plan banner and disables the button for the currently active paid plan', () => {

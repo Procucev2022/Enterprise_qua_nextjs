@@ -286,7 +286,6 @@ interface AppContextType {
   setRemainingFreeRFQs: React.Dispatch<React.SetStateAction<number>>;
   activeSubscription: 'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none';
   setActiveSubscription: React.Dispatch<React.SetStateAction<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none'>>;
-  updateBuyerSubscriptionPlan: (plan: 'free_trial' | 'version_1' | 'version_2' | 'version_3') => Promise<boolean>;
   vendorSubscription: VendorSubscriptionPlan;
   setVendorSubscription: React.Dispatch<React.SetStateAction<VendorSubscriptionPlan>>;
   updateVendorSubscription: (plan: 'premium' | 'connect' | 'select') => Promise<boolean>;
@@ -425,35 +424,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return null;
     }
     return result.paymentUrl;
-  };
-
-  const updateBuyerSubscriptionPlan = async (plan: 'free_trial' | 'version_1' | 'version_2' | 'version_3'): Promise<boolean> => {
-    if (!activeBuyerAccount?.id) {
-      showToast('Subscription Update Failed', 'Could not find your buyer account.', 'warning');
-      return false;
-    }
-
-    try {
-      const res = await fetch(`/api/buyer-accounts/${encodeURIComponent(activeBuyerAccount.id)}`, {
-        method: 'PUT',
-        headers: authFetchHeaders(),
-        body: JSON.stringify({ subscriptionPlan: plan }),
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok || !data?.success) {
-        showToast('Subscription Update Failed', data?.error || 'Could not update plan. Please try again.', 'warning');
-        return false;
-      }
-
-      setActiveSubscription(plan);
-      setActiveBuyerAccount((prev) => (prev ? { ...prev, subscriptionPlan: plan } : prev));
-      setBuyerAccounts((prev) => prev.map((a) => (a.id === activeBuyerAccount.id ? { ...a, subscriptionPlan: plan } : a)));
-      return true;
-    } catch (err) {
-      console.error('Failed to update buyer subscription plan:', err);
-      showToast('Subscription Update Failed', 'Could not reach the server. Please try again.', 'warning');
-      return false;
-    }
   };
 
   const checkVendorPaymentLinkStatus = async (linkId: string): Promise<string | null> => {
@@ -2382,7 +2352,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setRemainingFreeRFQs,
         activeSubscription,
         setActiveSubscription,
-        updateBuyerSubscriptionPlan,
         vendorSubscription,
         setVendorSubscription,
         updateVendorSubscription,

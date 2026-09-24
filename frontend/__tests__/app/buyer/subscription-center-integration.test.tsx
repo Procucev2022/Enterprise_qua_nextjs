@@ -66,7 +66,7 @@ describe('SubscriptionCenter (real AppProvider integration)', () => {
     expect(await screen.findByText(/Used: 2 \/ 5/i)).toBeInTheDocument();
   });
 
-  it('subscribing to a plan calls updateBuyerSubscriptionPlan and updates plan immediately', async () => {
+  it('subscribing to a plan opens the real Zoho checkout modal and creates a real payment link on Pay', async () => {
     renderWithProvider(<SubscriptionCenter />);
     await act(async () => {
       await Promise.resolve();
@@ -78,12 +78,23 @@ describe('SubscriptionCenter (real AppProvider integration)', () => {
       await Promise.resolve();
     });
 
-    expect(global.fetch).toHaveBeenCalledWith(
+    expect(await screen.findByText('Secure Payment')).toBeInTheDocument();
+    // The plan is never granted directly via PUT from this button — only a
+    // real Zoho payment link is created once the user confirms in the modal.
+    expect(global.fetch).not.toHaveBeenCalledWith(
       '/api/buyer-accounts/buyer-int-1',
-      expect.objectContaining({
-        method: 'PUT',
-        body: JSON.stringify({ subscriptionPlan: 'version_2' }),
-      })
+      expect.objectContaining({ method: 'PUT' })
+    );
+
+    const payBtn = screen.getByText(/Pay ₹5/i);
+    await act(async () => {
+      fireEvent.click(payBtn);
+      await Promise.resolve();
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/buyer-accounts/buyer-int-1/subscription-payment',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ plan: 'version_2' }) })
     );
   });
 });
