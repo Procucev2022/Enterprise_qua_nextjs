@@ -27,7 +27,6 @@ export default function SubscriptionCenter() {
     refreshActiveBuyerAccount,
     createBuyerPaymentLink,
     checkBuyerPaymentLinkStatus,
-    updateBuyerSubscriptionPlan,
   } = useApp();
 
   const [pendingPayment, setPendingPayment] = useState<{ planId: 'version_1' | 'version_2' | 'version_3' } | null>(null);
@@ -73,17 +72,6 @@ export default function SubscriptionCenter() {
       window.history.replaceState(null, '', next);
     })();
   }, [activeBuyerAccount?.id, checkBuyerPaymentLinkStatus, refreshActiveBuyerAccount, showToast]);
-
-  const handleSubscribe = async (plan: 'version_1' | 'version_2' | 'version_3') => {
-    const success = await updateBuyerSubscriptionPlan(plan);
-    if (success) {
-      showToast(
-        'Subscription Upgraded!',
-        `Your account has been updated to ${PLAN_LABEL[plan]}. Active plan features are live immediately.`,
-        'success'
-      );
-    }
-  };
 
   const handleResetTrial = async () => {
     if (!activeBuyerAccount?.id) {
@@ -302,7 +290,7 @@ export default function SubscriptionCenter() {
               {/* Card Footer Button */}
               <div className="p-6 bg-slate-50 dark:bg-gray-950/40 border-t border-slate-150 dark:border-gray-800/60">
                 <button
-                  onClick={() => handleSubscribe(p.id)}
+                  onClick={() => setPendingPayment({ planId: p.id })}
                   disabled={isActive}
                   className={`btn w-full text-xs font-bold py-2 flex items-center justify-center gap-1.5 ${
                     isActive
