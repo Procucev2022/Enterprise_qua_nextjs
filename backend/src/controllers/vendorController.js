@@ -228,7 +228,7 @@ async function getVendorById(req, res, next) {
       buyerId = req.query.buyerId;
     }
     logger.info(`Fetching vendor with ID ${id}`, { id, buyerId }, 'VENDOR_CONTROLLER');
-    const vendor = storeService.getVendorById(id, buyerId);
+    const vendor = await storeService.getVendorByIdWithDBFallback(id, buyerId);
     if (!vendor) {
       logger.warn(`Vendor not found: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
@@ -317,7 +317,7 @@ async function createVendor(req, res, next) {
 async function updateVendor(req, res, next) {
   try {
     const { id } = req.params;
-    const existing = storeService.getVendorById(id, 'all');
+    const existing = await storeService.getVendorByIdWithDBFallback(id, 'all');
     if (!existing) {
       logger.warn(`Vendor not found for update: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
