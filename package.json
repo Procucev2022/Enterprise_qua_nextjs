@@ -25,6 +25,7 @@
     "check:fast": "node scripts/fast-check.js",
     "qc:fast": "node scripts/fast-check.js",
     "pre-commit": "node scripts/quality-check.js",
+    "install:all": "npm install && npm install --prefix frontend && npm install --prefix backend",
     "prepare": "node scripts/setup-git-hooks.js"
   },
   "devDependencies": {
