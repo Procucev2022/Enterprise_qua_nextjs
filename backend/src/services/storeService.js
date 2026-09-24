@@ -726,7 +726,14 @@ class StoreService {
         products: row.products || '',
         rating: 4.5,
         score: 85.0,
-        source: 'excel',
+        // A category manager's upload feeds the shared Procucev network
+        // ('excel', unscoped); a buyer's own upload is their private roster
+        // and carries buyerId/addedByBuyerCompany through from the
+        // controller (see vendorController.bulkImportVendors) — same
+        // attribution the single-add createVendor path already applies.
+        source: row.source || 'excel',
+        ...(row.buyerId ? { buyerId: row.buyerId } : {}),
+        ...(row.addedByBuyerCompany ? { addedByBuyerCompany: row.addedByBuyerCompany } : {}),
         status: 'REGISTERED / NOT EVALUATED',
         evaluated: false,
         hasRecord: false,

@@ -5,6 +5,7 @@ import { useApp } from '@/lib/store';
 import { fetchAllVendors } from '@/lib/rfqClient';
 import { fetchBuyerProfile } from '@/lib/buyerProfileClient';
 import { VendorEvaluationRecord, VendorEntry, VendorPageMeta } from '@/lib/types';
+import VendorUploadModal from '@/app/category-manager/VendorUploadModal';
 import {
   Search,
   Building2,
@@ -130,6 +131,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
   // CRUD Modals State
   const [addModalOpen, setAddModalOpen] = useState(false);
+  const [bulkUploadModalOpen, setBulkUploadModalOpen] = useState(false);
   const [isSubmittingAdd, setIsSubmittingAdd] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [viewModalOpen, setViewModalOpen] = useState(false);
@@ -1013,6 +1015,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           >
             <Plus size={14} /> Add Vendor
           </button>
+          <button
+            type="button"
+            data-testid="open-bulk-upload-modal"
+            onClick={() => setBulkUploadModalOpen(true)}
+            className="btn btn-secondary btn-sm flex items-center gap-1.5 shadow-sm"
+          >
+            <UploadCloud size={14} /> Import Vendors (Excel)
+          </button>
           {/* Upload Vendor Wizard Button */}
           {onNavigateToWizard && (
             <button
@@ -1381,6 +1391,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           </div>
         </div>
       )}
+
+      {/* ========================================================================= */}
+      {/* BULK UPLOAD VENDORS MODAL — same real POST /api/vendors/bulk-import path */}
+      {/* the category manager uses, scoped server-side to this buyer's own      */}
+      {/* private roster (buyerId/addedByBuyerCompany, source 'buyer_excel')     */}
+      {/* rather than the shared Procucev network.                              */}
+      {/* ========================================================================= */}
+      <VendorUploadModal isOpen={bulkUploadModalOpen} onClose={() => setBulkUploadModalOpen(false)} />
 
       {/* ========================================================================= */}
       {/* EDIT VENDOR MODAL */}

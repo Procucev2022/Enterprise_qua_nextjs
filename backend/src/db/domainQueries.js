@@ -211,43 +211,63 @@ async function deleteVendorInDB(id) {
 // upload); RETURNING email tells the caller exactly which rows really
 // landed versus were silently skipped as a race-condition duplicate, so it
 // never has to guess or trust a fire-and-forget write.
+// D1 (Cloudflare's SQLite) caps a single statement at 100 bound parameters —
+// see https://developers.cloudflare.com/d1/platform/limits/. At 6 params/row
+// (one multi-row INSERT), any request-sized batch beyond ~16 rows blew past
+// that cap and failed the entire chunk with "D1_ERROR: too many SQL
+// variables", not just the rows past the limit — a 1000-row upload chunk
+// (the frontend's BULK_IMPORT_CHUNK_SIZE) always failed 100% of its rows.
+// Sub-batching here (rather than shrinking the frontend's chunk size) keeps
+// the request-level chunk size free to stay large for network efficiency
+// while never emitting more than one safely-sized INSERT per round trip to
+// D1. Postgres's own bind-parameter ceiling (65535) is far above anything a
+// single request already caps out at (MAX_BULK_IMPORT_ROWS_PER_REQUEST),
+// so the same sub-batch size is simply a no-op cost there, not a limitation.
+const VENDOR_INSERT_SUB_BATCH_SIZE = 16;
+
 async function bulkInsertVendorsInDB(vendors) {
   if (!pool.hasStorage() || vendors.length === 0) return [];
-  const values = [];
-  const placeholders = [];
-  const d1Placeholders = [];
-  vendors.forEach((vendor, i) => {
-    const base = i * 6;
-    values.push(
-      vendor.id,
-      vendor.email || null,
-      vendor.majorCategory || null,
-      vendor.status || null,
-      vendor.source || null,
-      JSON.stringify(vendor)
+  const insertedEmails = [];
+  for (let start = 0; start < vendors.length; start += VENDOR_INSERT_SUB_BATCH_SIZE) {
+    const batch = vendors.slice(start, start + VENDOR_INSERT_SUB_BATCH_SIZE);
+    const values = [];
+    const placeholders = [];
+    const d1Placeholders = [];
+    batch.forEach((vendor, i) => {
+      const base = i * 6;
+      values.push(
+        vendor.id,
+        vendor.email || null,
+        vendor.majorCategory || null,
+        vendor.status || null,
+        vendor.source || null,
+        JSON.stringify(vendor)
+      );
+      const cols = `$${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}`;
+      placeholders.push(`(${cols}, now())`);
+      // See upsertEvaluationInDB's comment: the D1 timestamp needs to match
+      // the ISO format migrated/D1-written rows already use for created_at
+      // to sort correctly, not plain CURRENT_TIMESTAMP/now().
+      d1Placeholders.push(`(${cols}, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`);
+    });
+    // eslint-disable-next-line no-await-in-loop
+    const result = await pool.query(
+      `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
+       VALUES ${placeholders.join(', ')}
+       ON CONFLICT (email) DO NOTHING
+       RETURNING email`,
+      values,
+      {
+        d1: true,
+        d1Text: `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
+       VALUES ${d1Placeholders.join(', ')}
+       ON CONFLICT (email) DO NOTHING
+       RETURNING email`,
+      }
     );
-    const cols = `$${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}`;
-    placeholders.push(`(${cols}, now())`);
-    // See upsertEvaluationInDB's comment: the D1 timestamp needs to match
-    // the ISO format migrated/D1-written rows already use for created_at to
-    // sort correctly, not plain CURRENT_TIMESTAMP/now().
-    d1Placeholders.push(`(${cols}, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`);
-  });
-  const result = await pool.query(
-    `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
-     VALUES ${placeholders.join(', ')}
-     ON CONFLICT (email) DO NOTHING
-     RETURNING email`,
-    values,
-    {
-      d1: true,
-      d1Text: `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
-     VALUES ${d1Placeholders.join(', ')}
-     ON CONFLICT (email) DO NOTHING
-     RETURNING email`,
-    }
-  );
-  return result.rows.map((row) => row.email);
+    insertedEmails.push(...result.rows.map((row) => row.email));
+  }
+  return insertedEmails;
 }
 
 // ── Bulk vendor import sessions ─────────────────────────────────────────────

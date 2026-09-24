@@ -787,14 +787,16 @@ describe('Controllers Error & Edge-Case Coverage', () => {
   test('vendorController.getBulkImportSessionStatus: role gating, not-found, and success', async () => {
     const next = jest.fn();
     const categoryManagerUser = { role: 'category_manager', email: 'cm@procucev.com' };
-    const buyerUser = { role: 'buyer', email: 'buyer@procucev.com' };
+    const vendorUser = { role: 'vendor', email: 'vendor@procucev.com' };
 
     const unauthedRes = mockRes();
     await vendorController.getBulkImportSessionStatus({ params: { sessionId: 's-1' } }, unauthedRes, next);
     expect(unauthedRes.status).toHaveBeenCalledWith(401);
 
+    // A buyer may now also bulk-import their own vendor roster, so only a
+    // vendor role (never a bulk-import actor) is rejected here.
     const forbiddenRes = mockRes();
-    await vendorController.getBulkImportSessionStatus({ params: { sessionId: 's-1' }, user: buyerUser }, forbiddenRes, next);
+    await vendorController.getBulkImportSessionStatus({ params: { sessionId: 's-1' }, user: vendorUser }, forbiddenRes, next);
     expect(forbiddenRes.status).toHaveBeenCalledWith(403);
 
     const notFoundSpy = jest.spyOn(domainQueries, 'getBulkImportSessionFromDB').mockResolvedValueOnce(null);

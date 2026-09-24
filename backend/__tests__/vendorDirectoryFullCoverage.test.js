@@ -695,23 +695,30 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       expect(resEmailBuyer.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
     });
 
-    test('assertCategoryManagerRole branches', () => {
+    test('assertBulkImportRole branches', async () => {
       const res1 = mockRes();
       const next1 = jest.fn();
       vendorController.bulkImportVendors({ user: null }, res1, next1);
       expect(res1.status).toHaveBeenCalledWith(401);
 
       const res2 = mockRes();
-      vendorController.bulkImportVendors({ user: { role: 'buyer' } }, res2, next1);
+      vendorController.bulkImportVendors({ user: { role: 'vendor' } }, res2, next1);
       expect(res2.status).toHaveBeenCalledWith(403);
 
+      // A buyer role passes the gate but is 403'd separately if their session
+      // has no linked buyer organisation to attribute the upload to.
       const res3 = mockRes();
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce(null);
+      await vendorController.bulkImportVendors({ user: { role: 'buyer', email: 'nolink@b.com' } }, res3, next1);
+      expect(res3.status).toHaveBeenCalledWith(403);
+
+      const res4 = mockRes();
       vendorController.bulkImportVendors(
         { user: { role: 'category_manager' }, body: { vendors: [] } },
-        res3,
+        res4,
         next1
       );
-      expect(res3.status).not.toHaveBeenCalledWith(403);
+      expect(res4.status).not.toHaveBeenCalledWith(403);
     });
 
     test('getVendors and getVendorById with buyer scoping and error branches', async () => {
