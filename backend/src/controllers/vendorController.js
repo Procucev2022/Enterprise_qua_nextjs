@@ -307,7 +307,18 @@ async function createVendor(req, res, next) {
     // requests for the same new email) that the in-memory check above can't
     // catch — the pre-check above only stops the common, already-hydrated case.
     await storeService.confirmVendorPersisted(created);
-    res.status(201).json({ success: true, data: created });
+    // Awaited here rather than left to addVendor's internal fire-and-forget
+    // waitUntil call: that path can silently never complete on Workers (the
+    // request-scoped bindings it depends on aren't guaranteed to survive
+    // past the response), which is exactly how a real buyer-added vendor
+    // ended up with onboardingEmailStatus 'failed' and no identity account
+    // at all, with nothing surfacing the failure anywhere. This makes the
+    // provisioning outcome — success or failure — reflected in `created`
+    // before the response is sent.
+    if (created.email) {
+      await storeService.provisionVendorOnboarding(created, req.user && req.user.email);
+    }
+    res.status(201).json({ success: true, data: storeService.getVendorById(created.id, 'all') || created });
   } catch (err) {
     logger.error('Error creating vendor', err, 'VENDOR_CONTROLLER');
     next(err);
