@@ -85,6 +85,43 @@ async function queryD1(db, text, params = []) {
 }
 
 /**
+ * Run several INSERT/UPDATE statements against D1 as one `db.batch()` call.
+ *
+ * D1 enforces two separate limits a large multi-row bulk write can hit: at
+ * most 100 bound parameters per individual statement, and a cap on the
+ * number of subrequests a single Worker invocation may make (as low as 50
+ * on some plans) — each `db.prepare(...).bind(...).all()` call is its own
+ * subrequest. A naive fix for the parameter cap (splitting one big INSERT
+ * into many small multi-row INSERTs, each run with its own `queryD1` call)
+ * fixes the first limit but immediately hits the second: a 1000-row import
+ * split into 16-row statements is ~63 separate subrequests, well past a
+ * 50-subrequest cap (confirmed live: "Too many API requests by single
+ * Worker invocation").
+ *
+ * `db.batch([stmt1, stmt2, ...])` sends every statement to D1 in one round
+ * trip — one subrequest total, regardless of how many statements are in the
+ * batch — so each statement can safely be a single-row INSERT (well under
+ * the 100-param cap) without multiplying subrequest count. This is D1's own
+ * documented pattern for bulk writes, not a workaround.
+ *
+ * `rows` is an array of `{ text, params }` (pg-style `$n` placeholders,
+ * converted the same way a normal queryD1 call would). Returns one
+ * `{ rows, rowCount }`-shaped result per statement, in the same order.
+ */
+async function batchD1(db, statements) {
+  const prepared = statements.map(({ text, params = [] }) => {
+    const stmt = db.prepare(toD1Sql(text));
+    const boundParams = expandD1Params(text, params);
+    return boundParams.length > 0 ? stmt.bind(...boundParams) : stmt;
+  });
+  const results = await db.batch(prepared);
+  return results.map((result) => ({
+    rows: result.results || [],
+    rowCount: result.meta ? result.meta.changes : undefined,
+  }));
+}
+
+/**
  * Returns Workers' `waitUntil` (imported from `cloudflare:workers` in
  * worker.mjs, the only real ESM file in this backend — see its comment)
  * when running on Workers, else null. Used to extend a fire-and-forget
@@ -99,4 +136,4 @@ function getWaitUntil() {
   }
 }
 
-module.exports = { getD1Binding, toD1Sql, queryD1, getWaitUntil };
+module.exports = { getD1Binding, toD1Sql, queryD1, batchD1, getWaitUntil };
