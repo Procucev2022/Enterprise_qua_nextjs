@@ -35,6 +35,7 @@
     ".next-qc/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "vite.config.ts"
   ]
 }
