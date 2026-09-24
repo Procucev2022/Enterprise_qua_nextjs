@@ -901,15 +901,21 @@ describe('Store Service & Business Operations', () => {
       expect(afterInvite.find((c) => c.id === matched.id).alreadyInvited).toBe(true);
     });
 
-    test('a vendor the buyer added sees that buyer’s RFQ regardless of category', () => {
+    test('a vendor the buyer added sees that buyer’s RFQ only when their own category also covers it', () => {
       const v = storeService.addVendor({
         name: 'Rostered Vendor',
         email: 'rostered@ex.com',
         majorCategory: 'Bearings',
         addedByBuyerCompany: 'Acme Buyer Co',
       });
-      expect(storeService.vendorCoversRFQ(v, { category: 'Cables', buyerAccountName: 'Acme Buyer Co' })).toBe(true);
-      expect(storeService.vendorCoversRFQ(v, { category: 'Cables', buyerAccountName: 'Other Co' })).toBe(false);
+      // Same buyer, but the RFQ's category has nothing to do with this
+      // vendor's own category — a private-roster relationship grants
+      // eligibility, it never bypasses relevance (BUGS: Version 1 RFQs were
+      // reaching every vendor the buyer had ever uploaded, not just the
+      // ones actually relevant to the RFQ).
+      expect(storeService.vendorCoversRFQ(v, { category: 'Cables', buyerAccountName: 'Acme Buyer Co' })).toBe(false);
+      expect(storeService.vendorCoversRFQ(v, { category: 'Bearings', buyerAccountName: 'Acme Buyer Co' })).toBe(true);
+      expect(storeService.vendorCoversRFQ(v, { category: 'Bearings', buyerAccountName: 'Other Co' })).toBe(false);
     });
 
     test('an explicitly invited vendor (assignedVendors) sees the RFQ regardless of category', () => {
@@ -946,7 +952,7 @@ describe('Store Service & Business Operations', () => {
       expect(storeService.getRFQsForVendor('ghost@nowhere.test')).toEqual([]);
     });
 
-    test('notifyVendorsOfNewRFQ still fires (unchanged) — a rostered vendor is notified even off-category', () => {
+    test('notifyVendorsOfNewRFQ only fires for a rostered vendor whose own category also matches the RFQ', () => {
       const rostered = storeService.addVendor({
         name: 'Notify Rostered',
         email: 'notifyrostered@ex.com',
@@ -958,6 +964,9 @@ describe('Store Service & Business Operations', () => {
         corporateEmail: 'notify-roster@ex.com',
       });
       storeService.createRFQ({ title: 'Off-category but rostered', category: 'Totally-Different-Cat' }, buyer);
+      expect(storeService.getNotificationsFor('vendor', rostered.id)).toHaveLength(0);
+
+      storeService.createRFQ({ title: 'On-category and rostered', category: 'Bearings' }, buyer);
       expect(storeService.getNotificationsFor('vendor', rostered.id)).toHaveLength(1);
     });
   });

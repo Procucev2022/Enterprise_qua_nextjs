@@ -1747,12 +1747,24 @@ class StoreService {
   vendorCoversRFQ(vendor, rfq) {
     if (!vendor || !rfq) return false;
 
+    // Same-buyer-company match alone used to grant a private-roster vendor
+    // blanket access to every RFQ that buyer ever creates, regardless of
+    // whether the vendor's own category has anything to do with the RFQ —
+    // a Version 1 (Mode 1) RFQ for one category was reaching every vendor
+    // the buyer had ever uploaded, not just the ones actually relevant to
+    // it. Now also requires the vendor's own category to cover the RFQ,
+    // same rule candidateVendorsForRFQ/vendorCoversCategory already apply
+    // to the network-wide invite pool — a private roster relationship
+    // grants eligibility, it never bypasses relevance.
     if (
       vendor.addedByBuyerCompany &&
       rfq.buyerAccountName &&
       vendor.addedByBuyerCompany.trim().toLowerCase() === rfq.buyerAccountName.trim().toLowerCase()
     ) {
-      return true;
+      const signals = this._rfqCategorySignals(rfq);
+      if (signals.some((c) => this.vendorCoversCategory(vendor, c))) {
+        return true;
+      }
     }
 
     return this._isInvitedVendor(vendor, rfq);
