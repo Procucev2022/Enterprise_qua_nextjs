@@ -104,7 +104,11 @@ describe('Store Service & Business Operations', () => {
       expect(nullRevise).toBeNull();
     });
 
-    test('addVendor with an email sends a real onboarding invite (buyer manual "Add Vendor")', async () => {
+    // addVendor no longer auto-fires onboarding provisioning itself (see
+    // provisionVendorOnboarding's comment) — its only caller, createVendor's
+    // controller, now awaits provisionVendorOnboarding explicitly after
+    // addVendor returns. These tests call it the same way.
+    test('addVendor starts onboardingEmailStatus pending; provisionVendorOnboarding sends a real invite', async () => {
       const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({});
       const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
 
@@ -114,11 +118,10 @@ describe('Store Service & Business Operations', () => {
           'buyer@example.com'
         );
 
-        // Starts pending, not a fabricated "sent" — the actual send hasn't
-        // resolved yet at this point (it's fire-and-forget).
+        // Starts pending — addVendor itself never provisions anymore.
         expect(v.onboardingEmailStatus).toBe('pending');
 
-        await new Promise((resolve) => setImmediate(resolve));
+        await storeService.provisionVendorOnboarding(v, 'buyer@example.com');
 
         expect(identitySpy).toHaveBeenCalledWith(expect.objectContaining({
           email: 'invited-by-buyer@example.com',
@@ -134,52 +137,20 @@ describe('Store Service & Business Operations', () => {
       }
     });
 
-    // Found live, separately from the password-reset bug above: this call
-    // was a bare .catch(), never handed to waitUntil — a buyer added a
-    // vendor, got a normal 201, and the vendor's identity account never
-    // actually got created (or the onboarding email sent) because Workers
-    // cancelled the promise once the response went out.
-    test('addVendor hands its onboarding provisioning to waitUntil when running on Workers', async () => {
-      const originalWaitUntil = globalThis.__CF_WAIT_UNTIL__;
-      const waitUntilSpy = jest.fn();
-      globalThis.__CF_WAIT_UNTIL__ = waitUntilSpy;
-      const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({});
-      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
-
-      try {
-        storeService.addVendor(
-          { name: 'WaitUntil Co', email: 'waituntil-vendor@example.com', majorCategory: 'Fasteners' },
-          'buyer@example.com'
-        );
-
-        // addVendor's own DB persistence + audit log writes also go through
-        // waitUntil via the same _background() helper, so more than one call
-        // is expected here — this only asserts the onboarding call is one of
-        // them, not that it's the only one.
-        expect(waitUntilSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
-        expect(waitUntilSpy.mock.calls.every((call) => call[0] instanceof Promise)).toBe(true);
-        await new Promise((resolve) => setImmediate(resolve));
-      } finally {
-        globalThis.__CF_WAIT_UNTIL__ = originalWaitUntil;
-        identitySpy.mockRestore();
-        sendSpy.mockRestore();
-      }
-    });
-
     // Found live: identityQueries.insertVendorAccount resets password+phone
     // on an *existing* identity account (correct for the CLI provisioning
-    // script it also serves, wrong here) — an addVendor call for an email
-    // that already has a real login silently clobbered that login's real
+    // script it also serves, wrong here) — provisioning for an email that
+    // already has a real login would silently clobber that login's real
     // password with a random one the vendor was never told. Confirmed
     // reproducing exactly this against a real deployed account.
-    test('addVendor never touches identity when an account already exists for the email', async () => {
+    test('provisionVendorOnboarding never touches identity when an account already exists for the email', async () => {
       const findSpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue({ id: 'existing-user-uuid' });
       const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({});
       const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
 
       try {
         const v = storeService.addVendor({ name: 'Already Has Login Co', email: 'already-has-login@example.com', majorCategory: 'Fasteners' });
-        await new Promise((resolve) => setImmediate(resolve));
+        await storeService.provisionVendorOnboarding(v);
 
         expect(findSpy).toHaveBeenCalledWith('already-has-login@example.com');
         expect(identitySpy).not.toHaveBeenCalled();
@@ -194,13 +165,13 @@ describe('Store Service & Business Operations', () => {
       }
     });
 
-    test('addVendor marks the invite failed (not silently pending) when the onboarding email fails to send', async () => {
+    test('provisionVendorOnboarding marks the invite failed (not silently pending) when the onboarding email fails to send', async () => {
       const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({});
       const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: false, reason: 'SMTP down' });
 
       try {
         const v = storeService.addVendor({ name: 'Failed Send Co', email: 'failed-send@example.com', majorCategory: 'Fasteners' });
-        await new Promise((resolve) => setImmediate(resolve));
+        await storeService.provisionVendorOnboarding(v);
 
         expect(storeService.getVendorById(v.id).onboardingEmailStatus).toBe('failed');
       } finally {
@@ -209,14 +180,13 @@ describe('Store Service & Business Operations', () => {
       }
     });
 
-    test('addVendor never sends the onboarding email if the identity account could not be created after retrying (no broken credentials mailed out)', async () => {
+    test('provisionVendorOnboarding never sends the onboarding email if the identity account could not be created after retrying (no broken credentials mailed out)', async () => {
       const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockRejectedValue(new Error('ETIMEDOUT'));
       const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
 
       try {
         const v = storeService.addVendor({ name: 'Identity Down Co', email: 'identity-down@example.com', majorCategory: 'Fasteners' });
-        await new Promise((resolve) => setImmediate(resolve));
-        await new Promise((resolve) => setImmediate(resolve));
+        await storeService.provisionVendorOnboarding(v);
 
         expect(identitySpy).toHaveBeenCalledTimes(2); // one retry
         expect(sendSpy).not.toHaveBeenCalled();

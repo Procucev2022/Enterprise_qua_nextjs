@@ -545,29 +545,32 @@ class StoreService {
       action: `Registered vendor ${newVendor.name} in category ${newVendor.majorCategory}`,
     });
 
-    if (newVendor.email) {
-      // Sequenced, not two independent fire-and-forgets: the email promises
-      // real credentials, so it must never go out until the account those
-      // credentials unlock actually exists. A transient identity-DB blip
-      // (real failure mode: ETIMEDOUT) used to leave the two out of sync —
-      // vendor gets a "your account is ready" email whose password matches
-      // no account at all. One retry absorbs a transient blip; a real
-      // failure marks the status 'failed' (visible to the buyer/CM) instead
-      // of silently mailing broken credentials.
-      // Was a bare .catch(), never handed to waitUntil — on Workers an
-      // unawaited promise like that can be cancelled the instant the
-      // response is sent (same class of bug as every other _background()
-      // call in this file), so this vendor's identity account and
-      // onboarding email silently never happened. Confirmed live: a buyer
-      // added a vendor, got a normal 201, and the vendor had no login at
-      // all afterward — no error surfaced anywhere.
-      this._background(
-        this._provisionVendorOnboarding(newVendor, actorEmail),
-        `Onboarding provisioning failed for ${newVendor.email}`
-      );
-    }
-
+    // Onboarding provisioning is NOT auto-fired here anymore. It used to run
+    // via this._background(), a fire-and-forget waitUntil call — but that can
+    // silently never complete on Workers (confirmed live: a buyer added a
+    // vendor, got a normal 201, and the vendor had no login at all
+    // afterward, no error surfaced anywhere). Worse, once the controller
+    // started awaiting provisioning itself (see createVendor), having BOTH
+    // this background call and the controller's explicit await fire at once
+    // raced past _provisionVendorOnboarding's existing-identity guard before
+    // either had committed, creating two separate "user" rows for the same
+    // email with two different temp passwords — confirmed live. addVendor's
+    // only caller (createVendor) now awaits provisionVendorOnboarding
+    // itself, synchronously, before responding — see that controller.
     return newVendor;
+  }
+
+  /**
+   * Public entry point for callers that need onboarding provisioning to
+   * genuinely complete before they respond — e.g. createVendor's controller,
+   * which awaits this directly rather than relying on addVendor's internal
+   * fire-and-forget call (below). Safe to call twice for the same vendor:
+   * _provisionVendorOnboarding checks for an existing identity account first
+   * and no-ops if one is already there, so this and addVendor's own
+   * background attempt don't race into a double-create.
+   */
+  async provisionVendorOnboarding(vendor, actorEmail = null) {
+    return this._provisionVendorOnboarding(vendor, actorEmail);
   }
 
   async _provisionVendorOnboarding(vendor, actorEmail = null) {
