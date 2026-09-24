@@ -1148,6 +1148,80 @@ describe('Store Service & Business Operations', () => {
     });
   });
 
+  describe('getVendorByIdWithDBFallback', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    test('returns the in-memory vendor without touching D1 when it is already cached', async () => {
+      const domainQueries = require('../src/db/domainQueries');
+      const spy = jest.spyOn(domainQueries, 'getVendorByIdFromDB');
+      const vendor = storeService.addVendor({ name: 'Cached Vendor', email: 'cached@ex.com', majorCategory: 'Cache-Cat' });
+
+      const result = await storeService.getVendorByIdWithDBFallback(vendor.id, 'all');
+
+      expect(result).toMatchObject({ id: vendor.id, name: 'Cached Vendor' });
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    // this.vendors is a capped, bootstrap-time subset — a real, persisted
+    // vendor whose row simply wasn't in that subset previously 404'd on
+    // GET /api/vendors/:id (a vendor loading their own profile), which made
+    // the frontend treat it as a first-time profile and then hit a real
+    // UNIQUE-email conflict on save. Confirmed live against the deployed D1
+    // database for a genuinely existing vendor account.
+    test('falls back to D1 by id when the vendor is not in the in-memory cache, and caches it', async () => {
+      const domainQueries = require('../src/db/domainQueries');
+      const dbVendor = { id: 'db-only-profile-vendor', name: 'DB Only Profile Vendor', email: 'dbonlyprofile@ex.com' };
+      const idSpy = jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(dbVendor);
+      const emailSpy = jest.spyOn(domainQueries, 'getVendorByEmailFromDB');
+
+      const result = await storeService.getVendorByIdWithDBFallback('db-only-profile-vendor', 'all');
+
+      expect(idSpy).toHaveBeenCalledWith('db-only-profile-vendor');
+      expect(emailSpy).not.toHaveBeenCalled();
+      expect(result).toMatchObject(dbVendor);
+      // Cached for next time — a plain in-memory getVendorById now finds it.
+      expect(storeService.getVendorById('db-only-profile-vendor', 'all')).toEqual(dbVendor);
+    });
+
+    test('falls back to D1 by email when the id lookup misses (a vendor loading their own profile by email)', async () => {
+      const domainQueries = require('../src/db/domainQueries');
+      const dbVendor = { id: 'real-vendor-id', name: 'Email Lookup Vendor', email: 'emaillookup@ex.com' };
+      jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(null);
+      const emailSpy = jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockResolvedValue(dbVendor);
+
+      const result = await storeService.getVendorByIdWithDBFallback('emaillookup@ex.com', 'all');
+
+      expect(emailSpy).toHaveBeenCalledWith('emaillookup@ex.com');
+      expect(result).toMatchObject(dbVendor);
+    });
+
+    test('returns undefined when the vendor is unknown to both the cache and D1', async () => {
+      const domainQueries = require('../src/db/domainQueries');
+      jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(null);
+      jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockResolvedValue(null);
+
+      const result = await storeService.getVendorByIdWithDBFallback('truly-unknown-vendor', 'all');
+
+      expect(result).toBeUndefined();
+    });
+
+    test('respects scopedBuyerId ownership on the D1-fallback result, same as the in-memory path', async () => {
+      const domainQueries = require('../src/db/domainQueries');
+      const dbVendor = {
+        id: 'scoped-db-vendor',
+        name: 'Scoped DB Vendor',
+        email: 'scopeddb@ex.com',
+        buyerAccountId: 'buyer-acc-owner',
+      };
+      jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(dbVendor);
+
+      const unscoped = await storeService.getVendorByIdWithDBFallback('scoped-db-vendor', 'buyer-acc-someone-else');
+      expect(unscoped).toBeUndefined();
+    });
+  });
+
   describe('Transactional email (RFQ fan-out + quote-received)', () => {
     let inviteSpy;
     let quoteSpy;

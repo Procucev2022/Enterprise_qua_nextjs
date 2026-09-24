@@ -474,6 +474,28 @@ class StoreService {
     return matches ? vendor : undefined;
   }
 
+  /**
+   * getVendorById, but falls back to a direct D1/Postgres lookup (by id, then
+   * by email) when the in-memory `this.vendors` subset doesn't have the row.
+   *
+   * this.vendors is a capped, bootstrap-time subset (600k+ real vendors can't
+   * all live in memory — see getVendorsPageFromDB), so a vendor that exists
+   * for real but wasn't in that subset previously 404'd here even though it
+   * was genuinely persisted. That silently broke a vendor's own "load my
+   * profile" GET, which made the frontend treat it as a first-time profile
+   * (blank form) and then hit the real UNIQUE-email conflict on save. Mirrors
+   * the identical fallback already used for RFQ-invite vendor resolution.
+   */
+  async getVendorByIdWithDBFallback(id, scopedBuyerId = null) {
+    const inMemory = this.getVendorById(id, scopedBuyerId);
+    if (inMemory) return inMemory;
+    let vendor = await domainQueries.getVendorByIdFromDB(id);
+    if (!vendor) vendor = await domainQueries.getVendorByEmailFromDB(id);
+    if (!vendor) return undefined;
+    if (!this.vendors.some((v) => v.id === vendor.id)) this.vendors.push(vendor);
+    return this.getVendorById(vendor.id, scopedBuyerId);
+  }
+
   addVendor(vendorData, actorEmail = null, buyerId = null) {
     // A client-supplied id was previously trusted as-is (never checked for
     // uniqueness) and the auto-generated fallback was only the last 4 digits
