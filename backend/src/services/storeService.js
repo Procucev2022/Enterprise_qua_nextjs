@@ -762,6 +762,29 @@ class StoreService {
     }
     const insertedEmailSet = new Set(insertedEmails.map((e) => (e || '').toLowerCase()));
 
+    // One round trip for the whole batch instead of one findUserByEmail call
+    // per row — a bulk import chunk in the hundreds/thousands of rows made
+    // that many sequential D1 subrequests inside this loop alone, which hit
+    // the Workers per-invocation subrequest cap outright ("Too many API
+    // requests by single Worker invocation"), confirmed live.
+    const existingUsernames = await identityQueries
+      .findExistingUsernames(insertedEmails.filter(Boolean))
+      .catch(() => new Set());
+
+    // insertVendorAccount itself makes several sequential subrequests per
+    // call (role/org-type/status resolution + an org lookup + the insert),
+    // so firing it for every new row in a large chunk hits the same
+    // per-invocation subrequest cap the insert/lookup batching above just
+    // fixed — a 1000-new-row chunk alone would need ~5000 more subrequests.
+    // Capped rather than removed: a typical CM/buyer upload chunk (a
+    // realistic mix of duplicates/existing-in-DB rows, not 1000 all-new
+    // synthetic emails) stays exactly as responsive as before for the
+    // common case; only the excess beyond this cap is deferred, left
+    // 'pending' (already the row's default), for a follow-up onboarding
+    // pass rather than crashing the whole request.
+    const MAX_SYNCHRONOUS_ONBOARDING_PER_IMPORT = 15;
+    let provisionedThisImport = 0;
+
     for (const { rowNumber, vendor } of toInsert) {
       // A null-email row can never hit the ON CONFLICT (email) target, so it
       // always inserts — there is nothing to look up in insertedEmailSet.
@@ -778,8 +801,7 @@ class StoreService {
           vendor,
         });
 
-        // eslint-disable-next-line no-await-in-loop
-        if (vendor.email && (await identityQueries.findUserByEmail(vendor.email).catch(() => null))) {
+        if (vendor.email && existingUsernames.has(vendor.email.toLowerCase())) {
           // Same real bug as _provisionVendorOnboarding's comment describes:
           // insertVendorAccount resets password+phone on an existing
           // identity account. A bulk import row for an email that already
@@ -790,7 +812,8 @@ class StoreService {
             { vendorId: vendor.id },
             'STORE_SERVICE'
           );
-        } else if (vendor.email) {
+        } else if (vendor.email && provisionedThisImport < MAX_SYNCHRONOUS_ONBOARDING_PER_IMPORT) {
+          provisionedThisImport += 1;
           const tempPassword = this._generateTempPassword();
           // Both handed to waitUntil (via _background) — bare fire-and-forget
           // here meant Workers could cancel either before it actually ran,
@@ -828,6 +851,12 @@ class StoreService {
               }
             }),
             `Error sending onboarding email to ${vendor.email}`
+          );
+        } else if (vendor.email) {
+          logger.info(
+            `Deferred onboarding provisioning for ${vendor.email}: synchronous cap (${MAX_SYNCHRONOUS_ONBOARDING_PER_IMPORT}) reached for this import`,
+            { vendorId: vendor.id },
+            'STORE_SERVICE'
           );
         }
       } else {

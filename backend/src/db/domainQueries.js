@@ -12,6 +12,7 @@
 // ==============================================================================
 
 const pool = require('./pool');
+const { getD1Binding, batchD1 } = require('./d1Bridge');
 
 // ── Vendors ──────────────────────────────────────────────────────────────────
 
@@ -211,63 +212,66 @@ async function deleteVendorInDB(id) {
 // upload); RETURNING email tells the caller exactly which rows really
 // landed versus were silently skipped as a race-condition duplicate, so it
 // never has to guess or trust a fire-and-forget write.
-// D1 (Cloudflare's SQLite) caps a single statement at 100 bound parameters —
-// see https://developers.cloudflare.com/d1/platform/limits/. At 6 params/row
-// (one multi-row INSERT), any request-sized batch beyond ~16 rows blew past
-// that cap and failed the entire chunk with "D1_ERROR: too many SQL
-// variables", not just the rows past the limit — a 1000-row upload chunk
-// (the frontend's BULK_IMPORT_CHUNK_SIZE) always failed 100% of its rows.
-// Sub-batching here (rather than shrinking the frontend's chunk size) keeps
-// the request-level chunk size free to stay large for network efficiency
-// while never emitting more than one safely-sized INSERT per round trip to
-// D1. Postgres's own bind-parameter ceiling (65535) is far above anything a
-// single request already caps out at (MAX_BULK_IMPORT_ROWS_PER_REQUEST),
-// so the same sub-batch size is simply a no-op cost there, not a limitation.
-const VENDOR_INSERT_SUB_BATCH_SIZE = 16;
-
+//
+// D1 (Cloudflare's SQLite) enforces two separate limits a single big
+// multi-row INSERT can hit: at most 100 bound parameters per statement (at 6
+// params/row, ~16 rows), and a per-Worker-invocation cap on the number of
+// subrequests it may make (as low as 50 on some plans) — each individual D1
+// call is its own subrequest. Splitting one INSERT into many 16-row INSERTs
+// fixes the first limit but immediately hits the second (confirmed live: a
+// 1000-row chunk split into ~63 sequential 16-row INSERTs failed with "Too
+// many API requests by single Worker invocation"). `batchD1` (see
+// d1Bridge.js) solves both at once: every row becomes its own single-row
+// INSERT (well under the parameter cap), and the whole set is sent to D1 as
+// one `db.batch()` call — one subrequest total, regardless of row count.
+// Postgres has no such caps, so it keeps the original single multi-row
+// INSERT (its own 65535-parameter ceiling is far above anything a single
+// request already caps out at via MAX_BULK_IMPORT_ROWS_PER_REQUEST).
 async function bulkInsertVendorsInDB(vendors) {
   if (!pool.hasStorage() || vendors.length === 0) return [];
-  const insertedEmails = [];
-  for (let start = 0; start < vendors.length; start += VENDOR_INSERT_SUB_BATCH_SIZE) {
-    const batch = vendors.slice(start, start + VENDOR_INSERT_SUB_BATCH_SIZE);
-    const values = [];
-    const placeholders = [];
-    const d1Placeholders = [];
-    batch.forEach((vendor, i) => {
-      const base = i * 6;
-      values.push(
+
+  const d1 = getD1Binding();
+  if (d1) {
+    const statements = vendors.map((vendor) => ({
+      text: `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+       ON CONFLICT (email) DO NOTHING
+       RETURNING email`,
+      params: [
         vendor.id,
         vendor.email || null,
         vendor.majorCategory || null,
         vendor.status || null,
         vendor.source || null,
-        JSON.stringify(vendor)
-      );
-      const cols = `$${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}`;
-      placeholders.push(`(${cols}, now())`);
-      // See upsertEvaluationInDB's comment: the D1 timestamp needs to match
-      // the ISO format migrated/D1-written rows already use for created_at
-      // to sort correctly, not plain CURRENT_TIMESTAMP/now().
-      d1Placeholders.push(`(${cols}, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`);
-    });
-    // eslint-disable-next-line no-await-in-loop
-    const result = await pool.query(
-      `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
-       VALUES ${placeholders.join(', ')}
-       ON CONFLICT (email) DO NOTHING
-       RETURNING email`,
-      values,
-      {
-        d1: true,
-        d1Text: `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
-       VALUES ${d1Placeholders.join(', ')}
-       ON CONFLICT (email) DO NOTHING
-       RETURNING email`,
-      }
-    );
-    insertedEmails.push(...result.rows.map((row) => row.email));
+        JSON.stringify(vendor),
+      ],
+    }));
+    const results = await batchD1(d1, statements);
+    return results.flatMap((result) => result.rows.map((row) => row.email));
   }
-  return insertedEmails;
+
+  const values = [];
+  const placeholders = [];
+  vendors.forEach((vendor, i) => {
+    const base = i * 6;
+    values.push(
+      vendor.id,
+      vendor.email || null,
+      vendor.majorCategory || null,
+      vendor.status || null,
+      vendor.source || null,
+      JSON.stringify(vendor)
+    );
+    placeholders.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, now())`);
+  });
+  const result = await pool.query(
+    `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
+     VALUES ${placeholders.join(', ')}
+     ON CONFLICT (email) DO NOTHING
+     RETURNING email`,
+    values
+  );
+  return result.rows.map((row) => row.email);
 }
 
 // ── Bulk vendor import sessions ─────────────────────────────────────────────

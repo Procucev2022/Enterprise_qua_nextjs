@@ -411,7 +411,9 @@ describe('Store Service & Business Operations', () => {
     // Same real bug as addVendor's — bulkAddVendors shares insertVendorAccount's
     // password-reset-on-existing-account behavior via its own onboarding call.
     test('bulk-imported row never touches identity when an account already exists for the email', async () => {
-      const findSpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue({ id: 'existing-user-uuid' });
+      const findSpy = jest
+        .spyOn(identityQueries, 'findExistingUsernames')
+        .mockResolvedValue(new Set(['bulk-already-has-login@example.com']));
       const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({});
       const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
 
@@ -419,7 +421,7 @@ describe('Store Service & Business Operations', () => {
         await storeService.bulkAddVendors([row({ rowNumber: 1, email: 'bulk-already-has-login@example.com' })]);
         await new Promise((resolve) => setImmediate(resolve));
 
-        expect(findSpy).toHaveBeenCalledWith('bulk-already-has-login@example.com');
+        expect(findSpy).toHaveBeenCalledWith(['bulk-already-has-login@example.com']);
         expect(identitySpy).not.toHaveBeenCalled();
         expect(sendSpy).not.toHaveBeenCalled();
       } finally {
