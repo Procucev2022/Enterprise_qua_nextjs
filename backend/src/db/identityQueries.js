@@ -298,7 +298,7 @@ async function insertBuyerAccount({
   const orgName = organizationName || `${normalizedEmail.split('@')[0]} Enterprises`;
   const displayName = fullName || normalizedEmail.split('@')[0];
 
-  const existing = await findUserByEmail(normalizedEmail);
+  const existing = await findUserByEmailAndPhone(normalizedEmail, normalizedPhone);
   if (existing) {
     return { created: false, reason: 'ALREADY_EXISTS', user: existing };
   }
@@ -525,7 +525,7 @@ async function insertStaffAccount({
   const orgName = organizationName || `${normalizedEmail.split('@')[0]} Internal`;
   const displayName = fullName || normalizedEmail.split('@')[0];
 
-  const existing = await findUserByEmail(normalizedEmail);
+  const existing = await findUserByEmailAndPhone(normalizedEmail, normalizedPhone);
   if (existing) {
     return { created: false, reason: 'ALREADY_EXISTS', user: existing };
   }
