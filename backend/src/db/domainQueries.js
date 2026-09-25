@@ -142,6 +142,40 @@ async function getVendorByEmailFromDB(email) {
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
+/**
+ * A buyer's own uploaded/added vendors only (never the public network) —
+ * bounded, so it never reads more than `limit` rows regardless of table
+ * size. Used by storeService.getBootstrapData's buyer-scoped branch, which
+ * used to call storeService.getVendors() (a full unbounded re-sync of the
+ * entire vendors table) on every single bootstrap request for every buyer
+ * page load — the actual cause of D1's free-tier daily row-read cap being
+ * exhausted (6.7M rows read in 24h against a 20k-row table: confirmed live
+ * via `wrangler d1 info`). A buyer's own vendor count is realistically
+ * small, but this stays bounded rather than trusting that assumption.
+ */
+async function getVendorsByBuyerFromDB(buyerId, limit) {
+  if (!pool.hasStorage() || !buyerId) return [];
+  const result = await pool.query(
+    `SELECT raw FROM vendors
+     WHERE lower(raw->>'buyerId') = lower($1)
+        OR lower(raw->>'buyerAccountId') = lower($1)
+        OR lower(raw->>'buyerEmail') = lower($1)
+     ORDER BY created_at DESC
+     LIMIT $2`,
+    [buyerId, limit],
+    {
+      d1: true,
+      d1Text: `SELECT raw FROM vendors
+     WHERE lower(json_extract(raw,'$.buyerId')) = lower($1)
+        OR lower(json_extract(raw,'$.buyerAccountId')) = lower($1)
+        OR lower(json_extract(raw,'$.buyerEmail')) = lower($1)
+     ORDER BY created_at DESC
+     LIMIT $2`,
+    }
+  );
+  return result.rows.map((row) => parseRaw(row.raw));
+}
+
 /** Single-row lookup by id — same reasoning as getVendorByEmailFromDB, keyed
  * on the primary key instead. storeService.getVendorById only searches the
  * in-memory this.vendors cache, which at 600k+ real vendors is a capped
@@ -847,6 +881,7 @@ module.exports = {
   getVendorsFromDB,
   getVendorsPageFromDB,
   getVendorByEmailFromDB,
+  getVendorsByBuyerFromDB,
   getVendorByIdFromDB,
   createBulkImportSessionInDB,
   getBulkImportSessionFromDB,
