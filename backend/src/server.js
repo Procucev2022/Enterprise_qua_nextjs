@@ -57,7 +57,16 @@ function installCrashHandlers(proc = process) {
   });
 
   proc.on('uncaughtException', (err) => {
-    if (err && (err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || err.code === 'EPIPE' || err.code === 'ECONNABORTED')) {
+    const isTransient =
+      err &&
+      (err.code === 'ECONNRESET' ||
+        err.code === 'ETIMEDOUT' ||
+        err.code === 'EPIPE' ||
+        err.code === 'ECONNABORTED' ||
+        err.message?.includes('Connection terminated unexpectedly') ||
+        err.message?.includes('read ECONNRESET') ||
+        err.message?.includes('remaining connection slots are reserved'));
+    if (isTransient) {
       logger.error('Ignored transient network socket reset', err, 'SERVER');
       return;
     }

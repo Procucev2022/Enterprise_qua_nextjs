@@ -4,7 +4,13 @@ import React, { useState, useMemo } from 'react';
 import { useApp } from '@/lib/store';
 import { SOURCING_MODES } from '@/lib/constants';
 import { RFQItem } from '@/lib/types';
-import { RFQFollowUpDeepDiveModal, MultiChannelChaserModal } from '@/app/components/Modals';
+import {
+  RFQFollowUpDeepDiveModal,
+  MultiChannelChaserModal,
+  ActivePipelineModal,
+  IntakeSourcesModal,
+  SupplierQuotesModal,
+} from '@/app/components/Modals';
 import {
   TrendingUp,
   FileText,
@@ -56,6 +62,9 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
     vendorName: '',
   });
   const [rfqSourceFilter, setRfqSourceFilter] = useState<'all' | 'email_gateway' | 'web_portal' | 'manual_entry'>('all');
+  const [activePipelineModalOpen, setActivePipelineModalOpen] = useState(false);
+  const [intakeSourcesModalOpen, setIntakeSourcesModalOpen] = useState(false);
+  const [supplierQuotesModalOpen, setSupplierQuotesModalOpen] = useState(false);
 
   // GET /api/rfqs is itself scoped to the signed-in buyer's own account now
   // (server-side, via the same buyer_accounts record RFQs are stamped with —
@@ -254,10 +263,17 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
       {/* ── KPI Cards (4 Column Grid with RFQ Intake Source Breakdown) ── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Active RFQs */}
-        <div className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 relative overflow-hidden hover:border-indigo-400 dark:hover:border-indigo-500 transition-all shadow-xs flex flex-col justify-between min-h-[124px]">
+        <div
+          onClick={() => setActivePipelineModalOpen(true)}
+          className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 relative overflow-hidden hover:border-indigo-400 dark:hover:border-indigo-500 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[124px] group"
+          title="Click to view Active Pipeline details"
+        >
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">Active Pipeline</span>
-            <FileText size={16} className="text-indigo-500 dark:text-indigo-400" />
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">Active Pipeline</span>
+            <div className="flex items-center gap-1 text-[10px] text-indigo-600 dark:text-indigo-400 font-bold">
+              <FileText size={16} />
+              <ChevronRight size={11} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+            </div>
           </div>
           <div className="flex items-baseline justify-between mt-2">
             <div className="flex items-baseline gap-2">
@@ -272,11 +288,18 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
         </div>
 
         {/* Requisitions by Intake Source */}
-        <div className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-amber-200 dark:border-amber-900/50 relative overflow-hidden hover:border-amber-400 dark:hover:border-amber-500 transition-all shadow-xs flex flex-col justify-between min-h-[124px]">
+        <div
+          onClick={() => setIntakeSourcesModalOpen(true)}
+          className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-amber-200 dark:border-amber-900/50 relative overflow-hidden hover:border-amber-400 dark:hover:border-amber-500 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[124px] group"
+          title="Click to view Intake Sources breakdown"
+        >
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">Intake Sources</span>
-            <div className="p-1 rounded bg-amber-50 dark:bg-amber-950 text-amber-600 dark:text-amber-400">
-              <Mail size={14} />
+            <div className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400 font-bold">
+              <div className="p-1 rounded bg-amber-50 dark:bg-amber-950 text-amber-600 dark:text-amber-400">
+                <Mail size={14} />
+              </div>
+              <ChevronRight size={11} className="opacity-0 group-hover:opacity-100 transition-opacity" />
             </div>
           </div>
           <div className="space-y-1 my-1">
@@ -309,10 +332,17 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
         </div>
 
         {/* Pending Quotes */}
-        <div className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 relative overflow-hidden hover:border-sky-400 dark:hover:border-sky-500 transition-all shadow-xs flex flex-col justify-between min-h-[124px]">
+        <div
+          onClick={() => setSupplierQuotesModalOpen(true)}
+          className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 relative overflow-hidden hover:border-sky-400 dark:hover:border-sky-500 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[124px] group"
+          title="Click to view Supplier Quotes"
+        >
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">Supplier Quotes</span>
-            <Clock size={16} className="text-sky-500 dark:text-cyan-400" />
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 group-hover:text-sky-600 dark:group-hover:text-cyan-400 transition-colors">Supplier Quotes</span>
+            <div className="flex items-center gap-1 text-[10px] text-sky-600 dark:text-cyan-400 font-bold">
+              <Clock size={16} />
+              <ChevronRight size={11} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+            </div>
           </div>
           <div className="flex items-baseline justify-between mt-2">
             <div className="flex items-baseline gap-2">
@@ -665,6 +695,54 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
         onClose={() => setQuickChaserModalOpen(false)}
         rfqNumber={quickChaserData.rfqNumber}
         vendorName={quickChaserData.vendorName}
+      />
+
+      {/* Active Pipeline Details Modal */}
+      <ActivePipelineModal
+        isOpen={activePipelineModalOpen}
+        onClose={() => setActivePipelineModalOpen(false)}
+        rfqs={rfqs}
+        onOpenDeepDive={(rfq) => {
+          setActivePipelineModalOpen(false);
+          openRFQDeepDive(rfq);
+        }}
+        onNavigateToMatrix={(rfq) => {
+          setActivePipelineModalOpen(false);
+          setSelectedRFQForMatrix(rfq);
+          onNavigateToMatrix(rfq);
+        }}
+      />
+
+      {/* Intake Sources Breakdown Modal */}
+      <IntakeSourcesModal
+        isOpen={intakeSourcesModalOpen}
+        onClose={() => setIntakeSourcesModalOpen(false)}
+        rfqs={rfqs}
+        onOpenDeepDive={(rfq) => {
+          setIntakeSourcesModalOpen(false);
+          openRFQDeepDive(rfq);
+        }}
+        onNavigateToMatrix={(rfq) => {
+          setIntakeSourcesModalOpen(false);
+          setSelectedRFQForMatrix(rfq);
+          onNavigateToMatrix(rfq);
+        }}
+      />
+
+      {/* Supplier Quotes Overview Modal */}
+      <SupplierQuotesModal
+        isOpen={supplierQuotesModalOpen}
+        onClose={() => setSupplierQuotesModalOpen(false)}
+        rfqs={rfqs}
+        onNavigateToMatrix={(rfq) => {
+          setSupplierQuotesModalOpen(false);
+          setSelectedRFQForMatrix(rfq);
+          onNavigateToMatrix(rfq);
+        }}
+        onOpenDeepDive={(rfq) => {
+          setSupplierQuotesModalOpen(false);
+          openRFQDeepDive(rfq);
+        }}
       />
     </div>
   );

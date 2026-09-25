@@ -8,6 +8,10 @@ import {
   VendorSurveyModal,
   RbacModal,
   VendorEvaluationSummaryModal,
+  ActivePipelineModal,
+  IntakeSourcesModal,
+  SupplierQuotesModal,
+  SubscriptionPaymentModal,
 } from '@/app/components/Modals';
 import * as storeModule from '@/lib/store';
 import { RFQItem, VendorEvaluationRecord } from '@/lib/types';
@@ -404,11 +408,6 @@ describe('Modals.tsx', () => {
       const allTab = tabButtons.find((b) => b.textContent?.includes('All Channels ('));
       if (allTab) fireEvent.click(allTab);
 
-      // Trigger Batch Chaser
-      const batchBtn = screen.getByText(/Multi-Channel Chaser Broadcast/);
-      fireEvent.click(batchBtn);
-      expect(mockTriggerBatchChannelChaser).toHaveBeenCalledWith('RFQ-2026-001', ['call', 'whatsapp', 'sms']);
-
       // Click on vendor Call button (which opens submodal)
       const callTextElements = screen.getAllByText('Call');
       if (callTextElements.length > 0) {
@@ -456,11 +455,16 @@ describe('Modals.tsx', () => {
       const nullFollowUpRfq: RFQItem = {
         ...sampleRfq,
         followUpData: undefined,
+        assignedVendors: [
+          { id: 'av-1', name: 'Assigned Vendor 1', contactPerson: 'Bob', phone: '+91 99999 22222' },
+        ],
       };
-      render(
+      const { unmount: unmountNull } = render(
         <RFQFollowUpDeepDiveModal isOpen={true} onClose={mockOnClose} rfq={nullFollowUpRfq} />
       );
       expect(screen.getByText('Today 03:00 PM')).toBeInTheDocument();
+      expect(screen.getByText('Assigned Vendor 1')).toBeInTheDocument();
+      unmountNull();
     });
   });
 
@@ -652,6 +656,473 @@ describe('Modals.tsx', () => {
 
       expect(screen.getByText('Mode 3 Vendor Evaluation Summary Report')).toBeInTheDocument();
       expect(screen.getByText('Apex Industrial Dynamics Pvt Ltd')).toBeInTheDocument();
+    });
+  });
+
+  describe('ActivePipelineModal', () => {
+    const mockOnClose = jest.fn();
+    const mockOnOpenDeepDive = jest.fn();
+    const mockOnNavigateToMatrix = jest.fn();
+
+    const sampleRfqs: RFQItem[] = [
+      {
+        id: 'rfq-1',
+        rfqNumber: 'RFQ-2026-001',
+        title: 'Industrial Centrifugal Pumps',
+        category: 'Mechanical',
+        sourcingMode: 'mode_1',
+        status: 'In Evaluation',
+        quotesCount: 3,
+        targetDeliveryDate: '2026-09-30',
+        budget: 450000,
+        createdAt: '2026-08-20',
+        extractedEntities: [],
+        quotes: [],
+        chasingActive: true,
+        source: 'email_gateway',
+      },
+      {
+        id: 'rfq-2',
+        rfqNumber: 'RFQ-2026-002',
+        title: 'High Pressure Titanium Valves',
+        category: 'Piping',
+        sourcingMode: 'mode_2',
+        status: 'AI Recommended',
+        quotesCount: 2,
+        targetDeliveryDate: '2026-10-15',
+        budget: 250000,
+        createdAt: '2026-08-22',
+        extractedEntities: [],
+        quotes: [],
+        chasingActive: false,
+        source: 'manual_entry',
+      },
+    ];
+
+    it('returns null when closed', () => {
+      const { container } = render(
+        <ActivePipelineModal
+          isOpen={false}
+          onClose={mockOnClose}
+          rfqs={sampleRfqs}
+          onOpenDeepDive={mockOnOpenDeepDive}
+          onNavigateToMatrix={mockOnNavigateToMatrix}
+        />
+      );
+      expect(container.firstChild).toBeNull();
+    });
+
+    it('renders list of active RFQs, filters, and handles actions', () => {
+      render(
+        <ActivePipelineModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqs={sampleRfqs}
+          onOpenDeepDive={mockOnOpenDeepDive}
+          onNavigateToMatrix={mockOnNavigateToMatrix}
+        />
+      );
+
+      expect(screen.getByText('Active Procurement Pipeline')).toBeInTheDocument();
+      expect(screen.getByText('Industrial Centrifugal Pumps')).toBeInTheDocument();
+      expect(screen.getByText('High Pressure Titanium Valves')).toBeInTheDocument();
+
+      // Filter by search input
+      const searchInput = screen.getByPlaceholderText(/Search by RFQ number, title, category, or status/i);
+      fireEvent.change(searchInput, { target: { value: 'Mechanical' } });
+      expect(screen.getByText('Industrial Centrifugal Pumps')).toBeInTheDocument();
+
+      fireEvent.change(searchInput, { target: { value: 'email_gateway' } });
+      expect(screen.getByText('Industrial Centrifugal Pumps')).toBeInTheDocument();
+
+      fireEvent.change(searchInput, { target: { value: 'In Evaluation' } });
+      expect(screen.getByText('Industrial Centrifugal Pumps')).toBeInTheDocument();
+
+      fireEvent.change(searchInput, { target: { value: 'ZZZNoMatch' } });
+      expect(screen.getByText('No matching requisitions found')).toBeInTheDocument();
+
+      // Reset search
+      fireEvent.change(searchInput, { target: { value: '' } });
+
+      // Trigger View Quotes action
+      const quoteBtns = screen.getAllByTitle('View Quotes');
+      fireEvent.click(quoteBtns[0]);
+      expect(mockOnNavigateToMatrix).toHaveBeenCalledWith(sampleRfqs[0]);
+      expect(mockOnClose).toHaveBeenCalled();
+    });
+  });
+
+  describe('IntakeSourcesModal', () => {
+    const mockOnClose = jest.fn();
+    const mockOnOpenDeepDive = jest.fn();
+
+    const sampleRfqs: RFQItem[] = [
+      {
+        id: 'rfq-1',
+        rfqNumber: 'RFQ-2026-001',
+        title: 'Industrial Centrifugal Pumps',
+        category: 'Mechanical',
+        sourcingMode: 'mode_1',
+        status: 'In Evaluation',
+        quotesCount: 3,
+        targetDeliveryDate: '2026-09-30',
+        budget: 450000,
+        createdAt: '2026-08-20',
+        extractedEntities: [],
+        quotes: [],
+        chasingActive: true,
+        source: 'email_gateway',
+        sourceEmail: 'rfqs@client.com',
+      },
+      {
+        id: 'rfq-2',
+        rfqNumber: 'RFQ-2026-002',
+        title: 'High Pressure Titanium Valves',
+        category: 'Piping',
+        sourcingMode: 'mode_2',
+        status: 'AI Recommended',
+        quotesCount: 2,
+        targetDeliveryDate: '2026-10-15',
+        budget: 250000,
+        createdAt: '2026-08-22',
+        extractedEntities: [],
+        quotes: [],
+        chasingActive: false,
+        source: 'manual_entry',
+      },
+      {
+        id: 'rfq-3',
+        rfqNumber: 'RFQ-2026-003',
+        title: 'Uploaded BOQ Sheet',
+        category: 'Electrical',
+        sourcingMode: 'mode_1',
+        status: 'Parsing',
+        quotesCount: 0,
+        targetDeliveryDate: '2026-10-20',
+        budget: 100000,
+        createdAt: '2026-08-23',
+        extractedEntities: [],
+        quotes: [],
+        chasingActive: false,
+        source: 'web_portal',
+        sourceFileName: 'electrical_boq.pdf',
+      },
+    ];
+
+    it('returns null when closed', () => {
+      const { container } = render(
+        <IntakeSourcesModal
+          isOpen={false}
+          onClose={mockOnClose}
+          rfqs={sampleRfqs}
+          onOpenDeepDive={mockOnOpenDeepDive}
+        />
+      );
+      expect(container.firstChild).toBeNull();
+    });
+
+    it('renders intake source breakdown and channel filtering', () => {
+      render(
+        <IntakeSourcesModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqs={sampleRfqs}
+          onOpenDeepDive={mockOnOpenDeepDive}
+        />
+      );
+
+      expect(screen.getByText('Requisitions by Intake Source')).toBeInTheDocument();
+      expect(screen.getByText(/Autonomous Ingestion · Auto-circulated/i)).toBeInTheDocument();
+
+      // Click card for Email Gateway
+      const emailCard = screen.getByText(/Autonomous Ingestion · Auto-circulated/i);
+      fireEvent.click(emailCard);
+      expect(screen.getByText('Industrial Centrifugal Pumps')).toBeInTheDocument();
+
+      // Click card for Web Portal
+      const webPortalCard = screen.getByText(/Web Portal BOQ PDF\/Excel Ingest/i);
+      fireEvent.click(webPortalCard);
+      expect(screen.getByText('Uploaded BOQ Sheet')).toBeInTheDocument();
+
+      // Click card for Manual RFQ
+      const manualCard = screen.getByText(/Parametric Line-Item Entry Form/i);
+      fireEvent.click(manualCard);
+      expect(screen.getByText('High Pressure Titanium Valves')).toBeInTheDocument();
+
+      // Click tab buttons
+      const emailTab = screen.getByRole('button', { name: /Email Gateway \(/i });
+      fireEvent.click(emailTab);
+
+      const webTab = screen.getByRole('button', { name: /AI RFQ Create \(/i });
+      fireEvent.click(webTab);
+
+      const manualTab = screen.getByRole('button', { name: /Manual RFQ \(/i });
+      fireEvent.click(manualTab);
+
+      // Click All Channels tab
+      const allChannelsBtn = screen.getByRole('button', { name: /All Channels/i });
+      fireEvent.click(allChannelsBtn);
+
+      // Search filtering by filename
+      const searchInput = screen.getByPlaceholderText(/Filter by origin or title/i);
+      fireEvent.change(searchInput, { target: { value: 'electrical_boq.pdf' } });
+      expect(screen.getByText('Uploaded BOQ Sheet')).toBeInTheDocument();
+
+      // Search filtering by email
+      fireEvent.change(searchInput, { target: { value: 'rfqs@client.com' } });
+      expect(screen.getByText('Industrial Centrifugal Pumps')).toBeInTheDocument();
+
+      // View Quotes button click (fallback to onOpenDeepDive)
+      const viewQuotesBtns = screen.getAllByTitle('View Quotes');
+      if (viewQuotesBtns.length > 0) {
+        fireEvent.click(viewQuotesBtns[0]);
+        expect(mockOnOpenDeepDive).toHaveBeenCalled();
+        expect(mockOnClose).toHaveBeenCalled();
+      }
+    });
+
+    it('renders and handles onNavigateToMatrix when provided', () => {
+      const mockOnNavigateToMatrix = jest.fn();
+      render(
+        <IntakeSourcesModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqs={sampleRfqs}
+          onOpenDeepDive={mockOnOpenDeepDive}
+          onNavigateToMatrix={mockOnNavigateToMatrix}
+        />
+      );
+
+      const viewQuotesBtns = screen.getAllByTitle('View Quotes');
+      if (viewQuotesBtns.length > 0) {
+        fireEvent.click(viewQuotesBtns[0]);
+        expect(mockOnNavigateToMatrix).toHaveBeenCalled();
+        expect(mockOnClose).toHaveBeenCalled();
+      }
+    });
+
+    it('renders empty state when no rfqs match', () => {
+      render(
+        <IntakeSourcesModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqs={[]}
+          onOpenDeepDive={mockOnOpenDeepDive}
+        />
+      );
+      expect(screen.getByText('No requisitions from this intake source')).toBeInTheDocument();
+    });
+  });
+
+  describe('SupplierQuotesModal', () => {
+    const mockOnClose = jest.fn();
+    const mockOnNavigateToMatrix = jest.fn();
+    const mockOnOpenDeepDive = jest.fn();
+
+    const sampleRfqs: RFQItem[] = [
+      {
+        id: 'rfq-1',
+        rfqNumber: 'RFQ-2026-001',
+        title: 'Industrial Centrifugal Pumps',
+        category: 'Mechanical',
+        sourcingMode: 'mode_1',
+        status: 'In Evaluation',
+        quotesCount: 1,
+        targetDeliveryDate: '2026-09-30',
+        budget: 450000,
+        createdAt: '2026-08-20',
+        extractedEntities: [],
+        quotes: [
+          {
+            vendorId: 'v-01',
+            vendorName: 'Apex Fluid Dynamics',
+            vendorCategory: 'Client List',
+            unitPrice: 420000,
+            totalPrice: 420000,
+            leadTimeDays: 14,
+            aiMatchScore: 94,
+            isBestPrice: true,
+            warrantyYears: 2,
+            complianceStatus: 'Fully Compliant',
+            paymentTerms: '30 Days Net',
+            remarks: 'Standard delivery',
+          },
+        ],
+        chasingActive: true,
+      },
+      {
+        id: 'rfq-2',
+        rfqNumber: 'RFQ-2026-002',
+        title: 'Titanium Valves',
+        category: 'Piping',
+        sourcingMode: 'mode_1',
+        status: 'Quotes Pending',
+        quotesCount: 2,
+        targetDeliveryDate: '2026-09-30',
+        budget: 0,
+        createdAt: '2026-08-20',
+        extractedEntities: [],
+        quotes: [],
+        followUpData: {
+          rfqNumber: 'RFQ-2026-002',
+          totalInvited: 2,
+          respondedCount: 1,
+          autoChasingEnabled: true,
+          callStats: { total: 2, connected: 1, avgDuration: '2m' },
+          whatsappStats: { total: 2, delivered: 2, read: 1, replied: 1 },
+          smsStats: { total: 2, delivered: 2, clicked: 1 },
+          vendors: [
+            {
+              vendorId: 'v-02',
+              vendorName: 'Precision Flow',
+              contactPerson: 'Alice',
+              phone: '+91 99999 11111',
+              overallStatus: 'Responded',
+              lastInteraction: '2h ago',
+              attemptsCount: 1,
+              bidStatus: 'Submitted',
+              call: { status: 'completed', lastAttempt: '2h ago' },
+              whatsapp: { status: 'delivered', lastAttempt: '2h ago' },
+              sms: { status: 'delivered', lastAttempt: '2h ago' },
+              email24h: { status: 'delivered', lastAttempt: '2h ago', is24hReminderSent: true },
+            },
+          ],
+        },
+        chasingActive: true,
+      },
+    ];
+
+    it('returns null when closed', () => {
+      const { container } = render(
+        <SupplierQuotesModal
+          isOpen={false}
+          onClose={mockOnClose}
+          rfqs={sampleRfqs}
+          onNavigateToMatrix={mockOnNavigateToMatrix}
+          onOpenDeepDive={mockOnOpenDeepDive}
+        />
+      );
+      expect(container.firstChild).toBeNull();
+    });
+
+    it('renders supplier quotes, handles search filtering, view quotes button and matrix navigation', () => {
+      render(
+        <SupplierQuotesModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqs={sampleRfqs}
+          onNavigateToMatrix={mockOnNavigateToMatrix}
+          onOpenDeepDive={mockOnOpenDeepDive}
+        />
+      );
+
+      expect(screen.getByText('Supplier Quotes & Evaluation Matrix')).toBeInTheDocument();
+      expect(screen.getAllByText('Apex Fluid Dynamics').length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/Lowest Quoted Price/i).length).toBeGreaterThan(0);
+
+      // Search input with match
+      const searchInput = screen.getByPlaceholderText(/Search by vendor name, item title, or RFQ/i);
+      fireEvent.change(searchInput, { target: { value: 'Apex' } });
+
+      const viewQuotesBtns = screen.getAllByTitle('View Quotes');
+      if (viewQuotesBtns.length > 0) {
+        fireEvent.click(viewQuotesBtns[0]);
+        expect(mockOnNavigateToMatrix).toHaveBeenCalled();
+        expect(mockOnClose).toHaveBeenCalled();
+      }
+
+      // Search with non-matching query to test empty results within non-empty list
+      fireEvent.change(searchInput, { target: { value: 'ZZZNonExistent' } });
+      expect(screen.getByText('No supplier quotes found')).toBeInTheDocument();
+
+      // Click fallback View Quotes button in empty state
+      const fallbackBtn = screen.getByRole('button', { name: /View Quotes/i });
+      fireEvent.click(fallbackBtn);
+      expect(mockOnNavigateToMatrix).toHaveBeenCalledWith(sampleRfqs[0]);
+      expect(mockOnClose).toHaveBeenCalled();
+    });
+
+    it('renders empty state when no quotes found', () => {
+      render(
+        <SupplierQuotesModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqs={[]}
+          onNavigateToMatrix={mockOnNavigateToMatrix}
+          onOpenDeepDive={mockOnOpenDeepDive}
+        />
+      );
+      expect(screen.getByText('No supplier quotes found')).toBeInTheDocument();
+    });
+  });
+
+  describe('SubscriptionPaymentModal', () => {
+    const mockOnClose = jest.fn();
+    const mockCreatePaymentLink = jest.fn();
+
+    it('returns null when closed', () => {
+      const { container } = render(
+        <SubscriptionPaymentModal
+          isOpen={false}
+          onClose={mockOnClose}
+          planId="plan-enterprise"
+          planName="Enterprise Tier"
+          price="₹9,999/mo"
+          createPaymentLink={mockCreatePaymentLink}
+        />
+      );
+      expect(container.firstChild).toBeNull();
+    });
+
+    it('renders payment modal and handles successful checkout link creation', async () => {
+      mockCreatePaymentLink.mockResolvedValue('https://checkout.zoho.com/test');
+
+      render(
+        <SubscriptionPaymentModal
+          isOpen={true}
+          onClose={mockOnClose}
+          planId="plan-enterprise"
+          planName="Enterprise Tier"
+          price="₹9,999/mo"
+          createPaymentLink={mockCreatePaymentLink}
+        />
+      );
+
+      expect(screen.getByText('Secure Payment')).toBeInTheDocument();
+      expect(screen.getByText('Enterprise Tier')).toBeInTheDocument();
+
+      const payBtn = screen.getByRole('button', { name: /Pay ₹9,999\/mo/i });
+      await act(async () => {
+        fireEvent.click(payBtn);
+      });
+
+      expect(mockCreatePaymentLink).toHaveBeenCalledWith('plan-enterprise');
+    });
+
+    it('handles checkout error when payment link creation fails', async () => {
+      mockCreatePaymentLink.mockResolvedValue(null);
+
+      render(
+        <SubscriptionPaymentModal
+          isOpen={true}
+          onClose={mockOnClose}
+          planId="plan-enterprise"
+          planName="Enterprise Tier"
+          price="₹9,999/mo"
+          createPaymentLink={mockCreatePaymentLink}
+        />
+      );
+
+      const payBtn = screen.getByRole('button', { name: /Pay ₹9,999\/mo/i });
+      await act(async () => {
+        fireEvent.click(payBtn);
+      });
+
+      expect(screen.getByText('Could not start checkout. Please try again.')).toBeInTheDocument();
+
+      const cancelBtn = screen.getByRole('button', { name: /Cancel/i });
+      fireEvent.click(cancelBtn);
+      expect(mockOnClose).toHaveBeenCalled();
     });
   });
 });

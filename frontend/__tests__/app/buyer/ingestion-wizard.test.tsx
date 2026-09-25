@@ -499,17 +499,12 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     expect(screen.getByDisplayValue(categoriesData[0].majorCategory)).toBeInTheDocument();
   });
 
-  it('changes the target delivery date and per-item target date fields', () => {
+  it('changes the target delivery date field', () => {
     renderWizard();
 
     const dateInput = document.getElementById('rfq-date') as HTMLInputElement;
     fireEvent.change(dateInput, { target: { value: '2026-12-01' } });
     expect(dateInput).toHaveValue('2026-12-01');
-
-    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
-    const itemDateInput = within(row).getByLabelText(MODAL.colTargetDate) as HTMLInputElement;
-    fireEvent.change(itemDateInput, { target: { value: '2026-12-15' } });
-    expect(itemDateInput).toHaveValue('2026-12-15');
   });
 
   it('ignores a file input change carrying no files and one carrying an empty file list', () => {

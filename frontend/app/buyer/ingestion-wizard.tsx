@@ -928,7 +928,6 @@ export default function IngestionWizard({
                   <th className="px-3 py-2.5 font-bold">{MODAL.colSpecs}</th>
                   <th className="px-3 py-2.5 font-bold">{MODAL.colQty}</th>
                   <th className="px-3 py-2.5 font-bold">{MODAL.colUnit}</th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colTargetDate}</th>
                   <th className="px-3 py-2.5 font-bold">{MODAL.colMajor}</th>
                   <th className="px-3 py-2.5 font-bold">{MODAL.colMinor}</th>
                   <th className="px-3 py-2.5 text-center font-bold">Action</th>
@@ -993,19 +992,6 @@ export default function IngestionWizard({
                           className="w-24 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 font-medium focus:ring-2 focus:ring-indigo-500"
                         />
                         <FieldError message={errors.unit} />
-                      </td>
-
-                      {/* Target Date */}
-                      <td className="px-3 py-2.5 align-top">
-                        <input
-                          type="date"
-                          aria-label={MODAL.colTargetDate}
-                          min={new Date().toISOString().slice(0, 10)}
-                          value={item.targetDate}
-                          onChange={(e) => patchItem(item.id, { targetDate: e.target.value })}
-                          className="w-36 px-2 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-indigo-500"
-                        />
-                        <FieldError message={errors.targetDate} />
                       </td>
 
                       {/* Major Category */}

@@ -516,4 +516,40 @@ describe('app/buyer/command-center.tsx', () => {
     expect(screen.getByText('Custom Status RFQ')).toBeInTheDocument();
     expect(screen.getByText('Draft')).toBeInTheDocument();
   });
+
+  it('opens Active Pipeline, Intake Sources, and Supplier Quotes modals when clicking KPI cards', () => {
+    render(
+      <CommandCenter
+        onNavigateToWizard={mockNavigateToWizard}
+        onNavigateToMatrix={mockNavigateToMatrix}
+        onNavigateToSubscription={mockNavigateToSubscription}
+        onNavigateToDirectory={mockNavigateToDirectory}
+      />
+    );
+
+    // 1. Click Active Pipeline KPI card
+    const activePipelineCard = screen.getByTitle('Click to view Active Pipeline details');
+    fireEvent.click(activePipelineCard);
+    expect(screen.getByText('Comprehensive tracking of live RFQs, multi-channel response telemetry, and quote evaluation states.')).toBeInTheDocument();
+
+    // Close Active Pipeline modal
+    const closeButtons = screen.getAllByRole('button', { name: /Close/i });
+    fireEvent.click(closeButtons[0]);
+
+    // 2. Click Intake Sources KPI card
+    const intakeSourcesCard = screen.getByTitle('Click to view Intake Sources breakdown');
+    fireEvent.click(intakeSourcesCard);
+    expect(screen.getByText('3 Ingestion Channels')).toBeInTheDocument();
+    expect(screen.getByText('Channel-by-channel origin verification across Autonomous Email Gateway, Web Portal AI OCR, and Manual Entry.')).toBeInTheDocument();
+
+    // Close Intake Sources modal
+    const closeButtons2 = screen.getAllByRole('button', { name: /Close/i });
+    fireEvent.click(closeButtons2[0]);
+
+    // 3. Click Supplier Quotes KPI card
+    const supplierQuotesCard = screen.getByTitle('Click to view Supplier Quotes');
+    fireEvent.click(supplierQuotesCard);
+    expect(screen.getByText('Supplier Quotes & Evaluation Matrix')).toBeInTheDocument();
+    expect(screen.getByText('Consolidated parametric view of supplier price quotations, lead times, compliance ratings, and AI match scores.')).toBeInTheDocument();
+  });
 });

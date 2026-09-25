@@ -385,8 +385,8 @@ h1, h2, h3, h4, h5, h6 {
   border: 1px solid var(--border-medium);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-xl);
-  max-width: 680px;
   width: 100%;
+  max-width: min(96vw, 1150px);
   max-height: 90vh;
   overflow-y: auto;
   position: relative;
@@ -449,12 +449,16 @@ textarea:focus {
    utility class, so `pl-9` alone loses and the icon ends up sitting on top of
    the placeholder text. These element+class selectors win and reserve the gutter. */
 input.has-leading-icon,
+input[type="text"].has-leading-icon,
+input[type="search"].has-leading-icon,
 select.has-leading-icon {
-  padding-left: 2.375rem;
+  padding-left: 2.5rem !important;
 }
 
-input.has-trailing-icon {
-  padding-right: 2.375rem;
+input.has-trailing-icon,
+input[type="text"].has-trailing-icon,
+input[type="search"].has-trailing-icon {
+  padding-right: 2.5rem !important;
 }
 
 input[type="range"] {
