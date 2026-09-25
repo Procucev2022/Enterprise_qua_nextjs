@@ -112,7 +112,7 @@ async function main() {
   console.log(`  org uuid   : ${result.user.orgId}`);
   console.log(`  org name   : ${result.user.orgName}${result.organizationReused ? ' (reused existing)' : ' (created)'}`);
 
-  const verify = await identityQueries.findUserByEmail(args.email);
+  const verify = await identityQueries.findUserByEmailAndPhone(args.email, args.phone);
   const passwordOk = identityQueries.verifyStoredPassword(args.password, verify?.password);
   console.log(`\nVerification read-back: found=${!!verify} passwordMatches=${passwordOk} role=${verify?.role}`);
 }

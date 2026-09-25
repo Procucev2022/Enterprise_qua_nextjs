@@ -290,7 +290,7 @@ const AUTH_MESSAGES = {
   ACCOUNT_PENDING_APPROVAL:
     'This self-registered account is still awaiting administrator approval, so sign-in is blocked. You will be able to log in once it is approved.',
   ACCOUNT_ALREADY_EXISTS:
-    'An account already exists for this email address. Use the Sign In tab instead of creating a new account.',
+    'An account already exists for this email address and mobile number. Use the Sign In tab instead of creating a new account.',
 };
 
 // ==============================================================================
