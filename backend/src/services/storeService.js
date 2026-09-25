@@ -2845,19 +2845,41 @@ class StoreService {
           if (own) vendors = [own, ...vendors];
         }
       }
+    } else if (scopedBuyerId && pool.hasStorage()) {
+      // Own vendors first, unconditionally (a buyer's own vendor count is
+      // realistically small, but still bounded via getVendorsByBuyerFromDB
+      // rather than trusting that assumption) — the same "own vendors never
+      // get pushed out of the window" rule the comment below used to
+      // implement via a full in-memory sync. That in-memory sync
+      // (this.getVendors(scopedBuyerId)) was a full unbounded re-fetch of
+      // the ENTIRE vendors table on every single bootstrap call for every
+      // buyer page load — confirmed live as the actual cause of D1's
+      // free-tier daily row-read cap being exhausted (6.7M rows read in 24h
+      // against a 20k-row table, via `wrangler d1 info`). Public vendors
+      // only fill whatever room is left, fetched with the same bounded,
+      // public-only page query the unscoped branch above already uses.
+      const ownVendors = await domainQueries.getVendorsByBuyerFromDB(scopedBuyerId, MAX_BOOTSTRAP_VENDORS);
+      const remaining = Math.max(0, MAX_BOOTSTRAP_VENDORS - ownVendors.length);
+      const publicPage =
+        remaining > 0
+          ? await domainQueries.getVendorsPageFromDB({ limit: remaining, offset: 0, publicOnly: true })
+          : { rows: [], total: 0 };
+      vendors = [...ownVendors, ...publicPage.rows];
+      vendorsTotal = ownVendors.length + publicPage.total;
+      if (sessionEmail) {
+        const email = String(sessionEmail).toLowerCase();
+        if (!vendors.some((v) => (v.email || '').toLowerCase() === email)) {
+          const own = await domainQueries.getVendorByEmailFromDB(email);
+          if (own) vendors = [own, ...vendors];
+        }
+      }
     } else {
-      // Buyer-scoped (their own vendors) or no DB configured: a small enough
-      // set that the full in-memory path is fine.
+      // No DB configured: the in-memory-only fallback, a small enough set
+      // that the full in-memory path is fine. Same own-first-then-cap
+      // shape the DB-backed branches above apply, since there's no SQL
+      // LIMIT to lean on here.
       const allVendors = await this.getVendors(scopedBuyerId);
       vendorsTotal = allVendors.length;
-      // getVendors() mixes this buyer's own uploads together with every
-      // public/network vendor, newest-first. Once the public directory grew
-      // into the tens of thousands (a bulk Vendor Master import), a plain
-      // slice(0, 500) pushed a buyer's own (older) uploads out of the window
-      // entirely — "buyer uploaded vendors" silently vanished from their own
-      // dashboard the moment enough newer public vendors existed. A buyer's
-      // own vendor count is realistically small, so they go first,
-      // unconditionally; public ones only fill whatever room is left.
       const ownVendors = scopedBuyerId ? allVendors.filter((v) => v.buyerId === scopedBuyerId || v.buyerAccountId === scopedBuyerId) : [];
       const publicVendors = scopedBuyerId ? allVendors.filter((v) => !(v.buyerId === scopedBuyerId || v.buyerAccountId === scopedBuyerId)) : allVendors;
       vendors = [...ownVendors, ...publicVendors].slice(0, MAX_BOOTSTRAP_VENDORS);

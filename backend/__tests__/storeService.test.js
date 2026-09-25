@@ -1785,15 +1785,27 @@ describe('demo RFQ seeding', () => {
         expect(ownLookupSpy).not.toHaveBeenCalled();
       });
 
-      test('scoped (buyer-specific) bootstrap still uses the in-memory path even with a pool configured', async () => {
-        jest.spyOn(domainQueries, 'getVendorsFromDB').mockResolvedValue([]);
-        const pageSpy = jest.spyOn(domainQueries, 'getVendorsPageFromDB');
-        const own = storeService.addVendor({ name: 'Scoped Vendor', email: 'scoped-buyer-vendor@example.com', majorCategory: 'Cables', buyerId: 'buyer-123' });
+      test('scoped (buyer-specific) bootstrap uses bounded DB queries, never a full-table re-sync', async () => {
+        // Regression coverage for the real incident this fixed: the old
+        // in-memory path (storeService.getVendors) re-fetched the ENTIRE
+        // vendors table on every single scoped bootstrap call, which
+        // exhausted D1's free-tier daily row-read cap in production
+        // (confirmed live via `wrangler d1 info`: 6.7M rows read/24h against
+        // a 20k-row table).
+        const ownVendor = { id: 'v-own', email: 'scoped-buyer-vendor@example.com', buyerId: 'buyer-123' };
+        const ownSpy = jest.spyOn(domainQueries, 'getVendorsByBuyerFromDB').mockResolvedValue([ownVendor]);
+        const pageSpy = jest
+          .spyOn(domainQueries, 'getVendorsPageFromDB')
+          .mockResolvedValue({ rows: [{ id: 'v-public' }], total: 1 });
+        const fullTableSpy = jest.spyOn(domainQueries, 'getVendorsFromDB');
 
         const result = await storeService.getBootstrapData('buyer-123');
 
-        expect(pageSpy).not.toHaveBeenCalled();
-        expect(result.vendors.some((v) => v.id === own.id)).toBe(true);
+        expect(ownSpy).toHaveBeenCalledWith('buyer-123', expect.any(Number));
+        expect(pageSpy).toHaveBeenCalledWith(expect.objectContaining({ publicOnly: true }));
+        expect(fullTableSpy).not.toHaveBeenCalled();
+        expect(result.vendors.some((v) => v.id === 'v-own')).toBe(true);
+        expect(result.vendors.some((v) => v.id === 'v-public')).toBe(true);
       });
     });
   });
