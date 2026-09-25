@@ -1924,7 +1924,7 @@ export function SupplierQuotesModal({
 }: SupplierQuotesModalProps) {
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Flatten quotes across active RFQs or derive quotes from follow-up records if quotesCount > 0
+  // Flatten quotes across active RFQs
   const allQuotesWithRfq = useMemo(() => {
     const list: Array<{ quote: QuoteComparison; rfq: RFQItem }> = [];
     rfqs.forEach((rfq) => {
@@ -1932,33 +1932,6 @@ export function SupplierQuotesModal({
         rfq.quotes.forEach((quote) => {
           list.push({ quote, rfq });
         });
-      } else if ((rfq.quotesCount && rfq.quotesCount > 0) || (rfq.followUpData?.vendors && rfq.followUpData.vendors.length > 0)) {
-        // Build representative quotation previews from available follow-up vendors
-        const vendors = rfq.followUpData?.vendors || [];
-        const count = rfq.quotesCount || Math.min(vendors.length, 3);
-        for (let i = 0; i < count; i++) {
-          const v = vendors[i];
-          const baseBudget = rfq.budget > 0 ? rfq.budget : 250000;
-          const variance = (i === 0 ? -0.08 : i === 1 ? 0.04 : 0.12);
-          const calculatedPrice = Math.round(baseBudget * (1 + variance));
-          list.push({
-            quote: {
-              vendorId: v?.vendorId || `v-${i + 1}`,
-              vendorName: v?.vendorName || (i === 0 ? 'Apex Industrial Dynamics' : i === 1 ? 'Global Valve Technologies' : 'Precision Flow Controls Ltd'),
-              vendorCategory: (i === 0 ? 'Client List' : i === 1 ? 'Procucev - AI Rec' : 'Procucev Network') as any,
-              unitPrice: calculatedPrice,
-              totalPrice: calculatedPrice,
-              leadTimeDays: 10 + i * 4,
-              aiMatchScore: Math.round(96 - i * 4),
-              isBestPrice: i === 0,
-              warrantyYears: 2,
-              complianceStatus: i === 0 ? 'Fully Compliant' : i === 1 ? 'Fully Compliant' : 'Minor Exception',
-              paymentTerms: '30 Days Net',
-              remarks: 'Parametrically matched specs with ISO 9001 certification.',
-            },
-            rfq,
-          });
-        }
       }
     });
     return list;
@@ -2046,14 +2019,14 @@ export function SupplierQuotesModal({
           <div className="p-3.5 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 shadow-xs">
             <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">Top Match Score</div>
             <div className="text-2xl font-black text-emerald-900 dark:text-emerald-200 mono mt-1">
-              {bestScore > 0 ? `${bestScore}%` : '96%'}
+              {bestScore > 0 ? `${bestScore}%` : 'N/A'}
             </div>
             <div className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold mt-0.5">Highest AI parametric match</div>
           </div>
 
           <div className="p-3.5 rounded-xl bg-purple-50/60 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/40 shadow-xs">
             <div className="text-[11px] font-bold uppercase tracking-wider text-purple-700 dark:text-purple-400">Fully Compliant Bids</div>
-            <div className="text-2xl font-black text-purple-900 dark:text-purple-200 mono mt-1">{compliantQuotesCount || totalQuotesCount}</div>
+            <div className="text-2xl font-black text-purple-900 dark:text-purple-200 mono mt-1">{compliantQuotesCount}</div>
             <div className="text-xs text-purple-600 dark:text-purple-400 font-semibold mt-0.5">Technical specs verified</div>
           </div>
         </div>
@@ -2131,21 +2104,21 @@ export function SupplierQuotesModal({
                     <div className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-slate-100 dark:border-gray-800 shadow-2xs">
                       <span className="text-[10px] text-slate-400 uppercase font-bold block">Lead Time</span>
                       <span className="text-sm font-bold text-slate-800 dark:text-gray-200 mono">
-                        {quote.leadTimeDays || 14} Days
+                        {quote.leadTimeDays ? `${quote.leadTimeDays} Days` : 'N/A'}
                       </span>
                     </div>
 
                     <div className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-slate-100 dark:border-gray-800 shadow-2xs">
                       <span className="text-[10px] text-slate-400 uppercase font-bold block">AI Match Score</span>
                       <span className="text-sm font-black text-emerald-600 dark:text-emerald-400 mono">
-                        {quote.aiMatchScore || 85}%
+                        {quote.aiMatchScore !== undefined ? `${quote.aiMatchScore}%` : 'N/A'}
                       </span>
                     </div>
 
                     <div className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-slate-100 dark:border-gray-800 shadow-2xs">
                       <span className="text-[10px] text-slate-400 uppercase font-bold block">Warranty & Terms</span>
                       <span className="text-xs text-slate-700 dark:text-gray-300 font-semibold truncate block">
-                        {quote.warrantyYears || 1} yr • {quote.paymentTerms || '30 Days Net'}
+                        {quote.warrantyYears ? `${quote.warrantyYears} yr` : 'N/A'}{quote.paymentTerms ? ` • ${quote.paymentTerms}` : ''}
                       </span>
                     </div>
                   </div>

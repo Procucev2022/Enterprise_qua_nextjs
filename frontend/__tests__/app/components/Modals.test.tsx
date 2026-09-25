@@ -947,6 +947,34 @@ describe('Modals.tsx', () => {
             paymentTerms: '30 Days Net',
             remarks: 'Standard delivery',
           },
+          {
+            vendorId: 'v-02',
+            vendorName: 'Global Valves Ltd',
+            vendorCategory: 'Procucev Network',
+            unitPrice: 435000,
+            totalPrice: 435000,
+            leadTimeDays: 20,
+            aiMatchScore: 88,
+            isBestPrice: false,
+            warrantyYears: 1,
+            complianceStatus: 'Minor Exception',
+            paymentTerms: '45 Days Net',
+            remarks: 'Alternative seal material',
+          },
+          {
+            vendorId: 'v-03',
+            vendorName: 'Precision Dynamics',
+            vendorCategory: 'Procucev - AI Rec',
+            unitPrice: 450000,
+            totalPrice: 450000,
+            leadTimeDays: 25,
+            aiMatchScore: 82,
+            isBestPrice: false,
+            warrantyYears: 1,
+            complianceStatus: 'Pending Review' as any,
+            paymentTerms: '30 Days Net',
+            remarks: 'Pending test reports',
+          },
         ],
         chasingActive: true,
       },
@@ -957,7 +985,7 @@ describe('Modals.tsx', () => {
         category: 'Piping',
         sourcingMode: 'mode_1',
         status: 'Quotes Pending',
-        quotesCount: 2,
+        quotesCount: 0,
         targetDeliveryDate: '2026-09-30',
         budget: 0,
         createdAt: '2026-08-20',
@@ -971,22 +999,7 @@ describe('Modals.tsx', () => {
           callStats: { total: 2, connected: 1, avgDuration: '2m' },
           whatsappStats: { total: 2, delivered: 2, read: 1, replied: 1 },
           smsStats: { total: 2, delivered: 2, clicked: 1 },
-          vendors: [
-            {
-              vendorId: 'v-02',
-              vendorName: 'Precision Flow',
-              contactPerson: 'Alice',
-              phone: '+91 99999 11111',
-              overallStatus: 'Responded',
-              lastInteraction: '2h ago',
-              attemptsCount: 1,
-              bidStatus: 'Submitted',
-              call: { status: 'completed', lastAttempt: '2h ago' },
-              whatsapp: { status: 'delivered', lastAttempt: '2h ago' },
-              sms: { status: 'delivered', lastAttempt: '2h ago' },
-              email24h: { status: 'delivered', lastAttempt: '2h ago', is24hReminderSent: true },
-            },
-          ],
+          vendors: [],
         },
         chasingActive: true,
       },
@@ -1019,11 +1032,31 @@ describe('Modals.tsx', () => {
       expect(screen.getByText('Supplier Quotes & Evaluation Matrix')).toBeInTheDocument();
       expect(screen.getAllByText('Apex Fluid Dynamics').length).toBeGreaterThan(0);
       expect(screen.getAllByText(/Lowest Quoted Price/i).length).toBeGreaterThan(0);
+      expect(screen.getByText(/Minor Exception/i)).toBeInTheDocument();
+      expect(screen.getByText(/Pending Review/i)).toBeInTheDocument();
 
-      // Search input with match
+      // Search by vendor name
       const searchInput = screen.getByPlaceholderText(/Search by vendor name, item title, or RFQ/i);
       fireEvent.change(searchInput, { target: { value: 'Apex' } });
+      expect(screen.getByText('Apex Fluid Dynamics')).toBeInTheDocument();
 
+      // Search by RFQ number
+      fireEvent.change(searchInput, { target: { value: 'RFQ-2026-001' } });
+      expect(screen.getByText('Apex Fluid Dynamics')).toBeInTheDocument();
+
+      // Search by title
+      fireEvent.change(searchInput, { target: { value: 'Centrifugal' } });
+      expect(screen.getByText('Apex Fluid Dynamics')).toBeInTheDocument();
+
+      // Search by compliance status
+      fireEvent.change(searchInput, { target: { value: 'Minor Exception' } });
+      expect(screen.getByText('Global Valves Ltd')).toBeInTheDocument();
+
+      // View RFQ details links
+      const viewRfqLinks = screen.getAllByTitle('View RFQ Details');
+      expect(viewRfqLinks.length).toBeGreaterThan(0);
+
+      // View Quotes action
       const viewQuotesBtns = screen.getAllByTitle('View Quotes');
       if (viewQuotesBtns.length > 0) {
         fireEvent.click(viewQuotesBtns[0]);
