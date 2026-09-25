@@ -611,7 +611,6 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                       <th className="px-2 py-2 font-bold">{MODAL.colMinor}</th>
                       <th className="px-2 py-2 font-bold">{MODAL.colQty}</th>
                       <th className="px-2 py-2 font-bold">{MODAL.colUnit}</th>
-                      <th className="px-2 py-2 font-bold">{MODAL.colTargetDate}</th>
                       <th className="px-2 py-2" />
                     </tr>
                   </thead>
@@ -707,17 +706,6 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                               className="w-28"
                             />
                             <FieldError message={errors.unit} />
-                          </td>
-                          <td className="px-2 py-2 align-top">
-                            <input
-                              type="date"
-                              aria-label={MODAL.colTargetDate}
-                              min={new Date().toISOString().slice(0, 10)}
-                              value={item.targetDate}
-                              onChange={(e) => patchItem(item.id, { targetDate: e.target.value })}
-                              className="w-36"
-                            />
-                            <FieldError message={errors.targetDate} />
                           </td>
                           <td className="px-2 py-2 align-top">
                             <button
