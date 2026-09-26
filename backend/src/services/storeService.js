@@ -474,6 +474,28 @@ class StoreService {
     return matches ? vendor : undefined;
   }
 
+  /**
+   * getVendorById, but falls back to a direct D1/Postgres lookup (by id, then
+   * by email) when the in-memory `this.vendors` subset doesn't have the row.
+   *
+   * this.vendors is a capped, bootstrap-time subset (600k+ real vendors can't
+   * all live in memory — see getVendorsPageFromDB), so a vendor that exists
+   * for real but wasn't in that subset previously 404'd here even though it
+   * was genuinely persisted. That silently broke a vendor's own "load my
+   * profile" GET, which made the frontend treat it as a first-time profile
+   * (blank form) and then hit the real UNIQUE-email conflict on save. Mirrors
+   * the identical fallback already used for RFQ-invite vendor resolution.
+   */
+  async getVendorByIdWithDBFallback(id, scopedBuyerId = null) {
+    const inMemory = this.getVendorById(id, scopedBuyerId);
+    if (inMemory) return inMemory;
+    let vendor = await domainQueries.getVendorByIdFromDB(id);
+    if (!vendor) vendor = await domainQueries.getVendorByEmailFromDB(id);
+    if (!vendor) return undefined;
+    if (!this.vendors.some((v) => v.id === vendor.id)) this.vendors.push(vendor);
+    return this.getVendorById(vendor.id, scopedBuyerId);
+  }
+
   addVendor(vendorData, actorEmail = null, buyerId = null) {
     // A client-supplied id was previously trusted as-is (never checked for
     // uniqueness) and the auto-generated fallback was only the last 4 digits
@@ -523,29 +545,32 @@ class StoreService {
       action: `Registered vendor ${newVendor.name} in category ${newVendor.majorCategory}`,
     });
 
-    if (newVendor.email) {
-      // Sequenced, not two independent fire-and-forgets: the email promises
-      // real credentials, so it must never go out until the account those
-      // credentials unlock actually exists. A transient identity-DB blip
-      // (real failure mode: ETIMEDOUT) used to leave the two out of sync —
-      // vendor gets a "your account is ready" email whose password matches
-      // no account at all. One retry absorbs a transient blip; a real
-      // failure marks the status 'failed' (visible to the buyer/CM) instead
-      // of silently mailing broken credentials.
-      // Was a bare .catch(), never handed to waitUntil — on Workers an
-      // unawaited promise like that can be cancelled the instant the
-      // response is sent (same class of bug as every other _background()
-      // call in this file), so this vendor's identity account and
-      // onboarding email silently never happened. Confirmed live: a buyer
-      // added a vendor, got a normal 201, and the vendor had no login at
-      // all afterward — no error surfaced anywhere.
-      this._background(
-        this._provisionVendorOnboarding(newVendor, actorEmail),
-        `Onboarding provisioning failed for ${newVendor.email}`
-      );
-    }
-
+    // Onboarding provisioning is NOT auto-fired here anymore. It used to run
+    // via this._background(), a fire-and-forget waitUntil call — but that can
+    // silently never complete on Workers (confirmed live: a buyer added a
+    // vendor, got a normal 201, and the vendor had no login at all
+    // afterward, no error surfaced anywhere). Worse, once the controller
+    // started awaiting provisioning itself (see createVendor), having BOTH
+    // this background call and the controller's explicit await fire at once
+    // raced past _provisionVendorOnboarding's existing-identity guard before
+    // either had committed, creating two separate "user" rows for the same
+    // email with two different temp passwords — confirmed live. addVendor's
+    // only caller (createVendor) now awaits provisionVendorOnboarding
+    // itself, synchronously, before responding — see that controller.
     return newVendor;
+  }
+
+  /**
+   * Public entry point for callers that need onboarding provisioning to
+   * genuinely complete before they respond — e.g. createVendor's controller,
+   * which awaits this directly rather than relying on addVendor's internal
+   * fire-and-forget call (below). Safe to call twice for the same vendor:
+   * _provisionVendorOnboarding checks for an existing identity account first
+   * and no-ops if one is already there, so this and addVendor's own
+   * background attempt don't race into a double-create.
+   */
+  async provisionVendorOnboarding(vendor, actorEmail = null) {
+    return this._provisionVendorOnboarding(vendor, actorEmail);
   }
 
   async _provisionVendorOnboarding(vendor, actorEmail = null) {
@@ -701,7 +726,14 @@ class StoreService {
         products: row.products || '',
         rating: 4.5,
         score: 85.0,
-        source: 'excel',
+        // A category manager's upload feeds the shared Procucev network
+        // ('excel', unscoped); a buyer's own upload is their private roster
+        // and carries buyerId/addedByBuyerCompany through from the
+        // controller (see vendorController.bulkImportVendors) — same
+        // attribution the single-add createVendor path already applies.
+        source: row.source || 'excel',
+        ...(row.buyerId ? { buyerId: row.buyerId } : {}),
+        ...(row.addedByBuyerCompany ? { addedByBuyerCompany: row.addedByBuyerCompany } : {}),
         status: 'REGISTERED / NOT EVALUATED',
         evaluated: false,
         hasRecord: false,
@@ -730,6 +762,29 @@ class StoreService {
     }
     const insertedEmailSet = new Set(insertedEmails.map((e) => (e || '').toLowerCase()));
 
+    // One round trip for the whole batch instead of one findUserByEmail call
+    // per row — a bulk import chunk in the hundreds/thousands of rows made
+    // that many sequential D1 subrequests inside this loop alone, which hit
+    // the Workers per-invocation subrequest cap outright ("Too many API
+    // requests by single Worker invocation"), confirmed live.
+    const existingUsernames = await identityQueries
+      .findExistingUsernames(insertedEmails.filter(Boolean))
+      .catch(() => new Set());
+
+    // insertVendorAccount itself makes several sequential subrequests per
+    // call (role/org-type/status resolution + an org lookup + the insert),
+    // so firing it for every new row in a large chunk hits the same
+    // per-invocation subrequest cap the insert/lookup batching above just
+    // fixed — a 1000-new-row chunk alone would need ~5000 more subrequests.
+    // Capped rather than removed: a typical CM/buyer upload chunk (a
+    // realistic mix of duplicates/existing-in-DB rows, not 1000 all-new
+    // synthetic emails) stays exactly as responsive as before for the
+    // common case; only the excess beyond this cap is deferred, left
+    // 'pending' (already the row's default), for a follow-up onboarding
+    // pass rather than crashing the whole request.
+    const MAX_SYNCHRONOUS_ONBOARDING_PER_IMPORT = 15;
+    let provisionedThisImport = 0;
+
     for (const { rowNumber, vendor } of toInsert) {
       // A null-email row can never hit the ON CONFLICT (email) target, so it
       // always inserts — there is nothing to look up in insertedEmailSet.
@@ -746,8 +801,7 @@ class StoreService {
           vendor,
         });
 
-        // eslint-disable-next-line no-await-in-loop
-        if (vendor.email && (await identityQueries.findUserByEmail(vendor.email).catch(() => null))) {
+        if (vendor.email && existingUsernames.has(vendor.email.toLowerCase())) {
           // Same real bug as _provisionVendorOnboarding's comment describes:
           // insertVendorAccount resets password+phone on an existing
           // identity account. A bulk import row for an email that already
@@ -758,7 +812,8 @@ class StoreService {
             { vendorId: vendor.id },
             'STORE_SERVICE'
           );
-        } else if (vendor.email) {
+        } else if (vendor.email && provisionedThisImport < MAX_SYNCHRONOUS_ONBOARDING_PER_IMPORT) {
+          provisionedThisImport += 1;
           const tempPassword = this._generateTempPassword();
           // Both handed to waitUntil (via _background) — bare fire-and-forget
           // here meant Workers could cancel either before it actually ran,
@@ -796,6 +851,12 @@ class StoreService {
               }
             }),
             `Error sending onboarding email to ${vendor.email}`
+          );
+        } else if (vendor.email) {
+          logger.info(
+            `Deferred onboarding provisioning for ${vendor.email}: synchronous cap (${MAX_SYNCHRONOUS_ONBOARDING_PER_IMPORT}) reached for this import`,
+            { vendorId: vendor.id },
+            'STORE_SERVICE'
           );
         }
       } else {
@@ -1686,12 +1747,24 @@ class StoreService {
   vendorCoversRFQ(vendor, rfq) {
     if (!vendor || !rfq) return false;
 
+    // Same-buyer-company match alone used to grant a private-roster vendor
+    // blanket access to every RFQ that buyer ever creates, regardless of
+    // whether the vendor's own category has anything to do with the RFQ —
+    // a Version 1 (Mode 1) RFQ for one category was reaching every vendor
+    // the buyer had ever uploaded, not just the ones actually relevant to
+    // it. Now also requires the vendor's own category to cover the RFQ,
+    // same rule candidateVendorsForRFQ/vendorCoversCategory already apply
+    // to the network-wide invite pool — a private roster relationship
+    // grants eligibility, it never bypasses relevance.
     if (
       vendor.addedByBuyerCompany &&
       rfq.buyerAccountName &&
       vendor.addedByBuyerCompany.trim().toLowerCase() === rfq.buyerAccountName.trim().toLowerCase()
     ) {
-      return true;
+      const signals = this._rfqCategorySignals(rfq);
+      if (signals.some((c) => this.vendorCoversCategory(vendor, c))) {
+        return true;
+      }
     }
 
     return this._isInvitedVendor(vendor, rfq);
@@ -2772,19 +2845,41 @@ class StoreService {
           if (own) vendors = [own, ...vendors];
         }
       }
+    } else if (scopedBuyerId && pool.hasStorage()) {
+      // Own vendors first, unconditionally (a buyer's own vendor count is
+      // realistically small, but still bounded via getVendorsByBuyerFromDB
+      // rather than trusting that assumption) — the same "own vendors never
+      // get pushed out of the window" rule the comment below used to
+      // implement via a full in-memory sync. That in-memory sync
+      // (this.getVendors(scopedBuyerId)) was a full unbounded re-fetch of
+      // the ENTIRE vendors table on every single bootstrap call for every
+      // buyer page load — confirmed live as the actual cause of D1's
+      // free-tier daily row-read cap being exhausted (6.7M rows read in 24h
+      // against a 20k-row table, via `wrangler d1 info`). Public vendors
+      // only fill whatever room is left, fetched with the same bounded,
+      // public-only page query the unscoped branch above already uses.
+      const ownVendors = await domainQueries.getVendorsByBuyerFromDB(scopedBuyerId, MAX_BOOTSTRAP_VENDORS);
+      const remaining = Math.max(0, MAX_BOOTSTRAP_VENDORS - ownVendors.length);
+      const publicPage =
+        remaining > 0
+          ? await domainQueries.getVendorsPageFromDB({ limit: remaining, offset: 0, publicOnly: true })
+          : { rows: [], total: 0 };
+      vendors = [...ownVendors, ...publicPage.rows];
+      vendorsTotal = ownVendors.length + publicPage.total;
+      if (sessionEmail) {
+        const email = String(sessionEmail).toLowerCase();
+        if (!vendors.some((v) => (v.email || '').toLowerCase() === email)) {
+          const own = await domainQueries.getVendorByEmailFromDB(email);
+          if (own) vendors = [own, ...vendors];
+        }
+      }
     } else {
-      // Buyer-scoped (their own vendors) or no DB configured: a small enough
-      // set that the full in-memory path is fine.
+      // No DB configured: the in-memory-only fallback, a small enough set
+      // that the full in-memory path is fine. Same own-first-then-cap
+      // shape the DB-backed branches above apply, since there's no SQL
+      // LIMIT to lean on here.
       const allVendors = await this.getVendors(scopedBuyerId);
       vendorsTotal = allVendors.length;
-      // getVendors() mixes this buyer's own uploads together with every
-      // public/network vendor, newest-first. Once the public directory grew
-      // into the tens of thousands (a bulk Vendor Master import), a plain
-      // slice(0, 500) pushed a buyer's own (older) uploads out of the window
-      // entirely — "buyer uploaded vendors" silently vanished from their own
-      // dashboard the moment enough newer public vendors existed. A buyer's
-      // own vendor count is realistically small, so they go first,
-      // unconditionally; public ones only fill whatever room is left.
       const ownVendors = scopedBuyerId ? allVendors.filter((v) => v.buyerId === scopedBuyerId || v.buyerAccountId === scopedBuyerId) : [];
       const publicVendors = scopedBuyerId ? allVendors.filter((v) => !(v.buyerId === scopedBuyerId || v.buyerAccountId === scopedBuyerId)) : allVendors;
       vendors = [...ownVendors, ...publicVendors].slice(0, MAX_BOOTSTRAP_VENDORS);

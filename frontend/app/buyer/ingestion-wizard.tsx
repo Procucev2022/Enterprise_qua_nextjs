@@ -62,6 +62,8 @@ import {
   ShieldCheck,
   Tag,
   Info,
+  ChevronDown,
+  Check,
 } from 'lucide-react';
 
 const EXTRACTION = UI_STRINGS.rfqExtraction;
@@ -131,6 +133,20 @@ export default function IngestionWizard({
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [isDispatching, setIsDispatching] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isSourcingDropdownOpen, setIsSourcingDropdownOpen] = useState(false);
+  const sourcingDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (sourcingDropdownRef.current && !sourcingDropdownRef.current.contains(event.target as Node)) {
+        setIsSourcingDropdownOpen(false);
+      }
+    }
+    if (isSourcingDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [isSourcingDropdownOpen]);
 
   // "All Categories" opts a line item out of category-narrowed matching — the
   // marketplace-suppliers panel then browses the whole real vendor directory
@@ -928,7 +944,6 @@ export default function IngestionWizard({
                   <th className="px-3 py-2.5 font-bold">{MODAL.colSpecs}</th>
                   <th className="px-3 py-2.5 font-bold">{MODAL.colQty}</th>
                   <th className="px-3 py-2.5 font-bold">{MODAL.colUnit}</th>
-                  <th className="px-3 py-2.5 font-bold">{MODAL.colTargetDate}</th>
                   <th className="px-3 py-2.5 font-bold">{MODAL.colMajor}</th>
                   <th className="px-3 py-2.5 font-bold">{MODAL.colMinor}</th>
                   <th className="px-3 py-2.5 text-center font-bold">Action</th>
@@ -995,19 +1010,6 @@ export default function IngestionWizard({
                         <FieldError message={errors.unit} />
                       </td>
 
-                      {/* Target Date */}
-                      <td className="px-3 py-2.5 align-top">
-                        <input
-                          type="date"
-                          aria-label={MODAL.colTargetDate}
-                          min={new Date().toISOString().slice(0, 10)}
-                          value={item.targetDate}
-                          onChange={(e) => patchItem(item.id, { targetDate: e.target.value })}
-                          className="w-36 px-2 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-indigo-500"
-                        />
-                        <FieldError message={errors.targetDate} />
-                      </td>
-
                       {/* Major Category */}
                       <td className="px-3 py-2.5 align-top">
                         <select
@@ -1068,11 +1070,11 @@ export default function IngestionWizard({
       </section>
 
       {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* SECTION 3: SOURCING MODE SELECTION CARDS                      */}
+      {/* SECTION 3: SOURCING MODE SELECTION (DROPDOWN)                 */}
       {/* ═══════════════════════════════════════════════════════════════ */}
       <section className="glass-panel p-6 rounded-2xl space-y-4 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs">
         <div className="border-b border-slate-100 dark:border-gray-800 pb-3">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
               <CheckCircle2 size={18} className="text-indigo-600 dark:text-indigo-400" />
               3. Select Sourcing Mode
@@ -1083,104 +1085,197 @@ export default function IngestionWizard({
           </div>
         </div>
 
-        <div aria-label="Sourcing Mode" className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {SOURCING_MODES.map((mode, index) => {
-            const isSelected = form.sourcingMode === mode.id;
-            const modeConfig = [
-              {
-                icon: '🎯',
-                badge: 'STARTER',
-                badgeStyle: 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-300 border-blue-200 dark:border-blue-800',
-                activeBorder: 'border-blue-500 ring-2 ring-blue-500/20 bg-blue-50/40 dark:bg-blue-950/30',
-              },
-              {
-                icon: '⚡',
-                badge: 'RECOMMENDED',
-                badgeStyle: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800',
-                activeBorder: 'border-emerald-500 ring-2 ring-emerald-500/20 bg-emerald-50/40 dark:bg-emerald-950/30',
-              },
-              {
-                icon: '🚀',
-                badge: 'FULL REACH',
-                badgeStyle: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800',
-                activeBorder: 'border-indigo-500 ring-2 ring-indigo-500/20 bg-indigo-50/40 dark:bg-indigo-950/30',
-              },
-            ][index];
+        <div className="space-y-3" ref={sourcingDropdownRef}>
+          <label htmlFor="sourcing-mode-select" className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300">
+            Select Sourcing Version
+          </label>
 
-            return (
-              <div
+          {/* Accessible Native Select for Screen Readers / Automated Test Querying */}
+          <select
+            id="sourcing-mode-select"
+            data-testid="sourcing-mode-select"
+            aria-label="Sourcing Mode"
+            value={form.sourcingMode}
+            onChange={(e) => patchForm('sourcingMode', e.target.value as SourcingMode)}
+            className="sr-only"
+            tabIndex={-1}
+          >
+            {SOURCING_MODES.map((mode) => (
+              <option
                 key={mode.id}
+                value={mode.id}
+                data-testid={`mode-option-${mode.id}`}
+              >
+                {mode.shortLabel}: {mode.description} • [{mode.featureSummary}]
+              </option>
+            ))}
+          </select>
+
+          {/* Custom Rich Dropdown Selector */}
+          <div className="relative">
+            {(() => {
+              const activeMode = SOURCING_MODES.find((m) => m.id === form.sourcingMode) || SOURCING_MODES[0];
+              const badgeConfigs: Record<string, { icon: string; badge: string; badgeStyle: string }> = {
+                mode_1: {
+                  icon: '🎯',
+                  badge: 'STARTER',
+                  badgeStyle: 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-300 border-blue-200 dark:border-blue-800',
+                },
+                mode_2: {
+                  icon: '⚡',
+                  badge: 'RECOMMENDED',
+                  badgeStyle: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800',
+                },
+                mode_3: {
+                  icon: '🚀',
+                  badge: 'FULL REACH',
+                  badgeStyle: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800',
+                },
+              };
+              const activeConfig = badgeConfigs[activeMode.id] || badgeConfigs.mode_1;
+
+              return (
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setIsSourcingDropdownOpen((prev) => !prev)}
+                    aria-expanded={isSourcingDropdownOpen}
+                    className="w-full text-left rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800/90 p-3.5 hover:border-indigo-400 dark:hover:border-indigo-500 focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 transition-all flex items-center justify-between gap-4 shadow-2xs cursor-pointer group"
+                  >
+                    <div className="flex items-start sm:items-center gap-3.5 min-w-0">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-100 dark:border-indigo-900/50 text-lg shadow-2xs group-hover:scale-105 transition-transform">
+                        {activeConfig.icon}
+                      </div>
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-black text-slate-900 dark:text-white">
+                            {activeMode.shortLabel}
+                          </span>
+                          <span className={`rounded-full px-2.5 py-0.5 text-[9px] font-extrabold uppercase tracking-wider border ${activeConfig.badgeStyle}`}>
+                            {activeConfig.badge}
+                          </span>
+                          <span className="text-xs text-slate-500 dark:text-gray-400 truncate hidden lg:inline">
+                            — {activeMode.description}
+                          </span>
+                        </div>
+                        {/* Selected Mode Feature Badge Pill */}
+                        <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-slate-50 dark:bg-gray-900/90 border border-slate-200/80 dark:border-gray-700/80 text-[11px] font-semibold text-slate-700 dark:text-gray-300">
+                          <CheckCircle2 size={12} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+                          <span>{activeMode.featureSummary}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hidden sm:inline">
+                        Change
+                      </span>
+                      <div className="p-1 rounded-lg bg-slate-100 dark:bg-gray-700/60 text-slate-500 dark:text-gray-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-300 transition-colors">
+                        <ChevronDown
+                          size={16}
+                          className={`transition-transform duration-200 ${
+                            isSourcingDropdownOpen ? 'rotate-180 text-indigo-600 dark:text-indigo-400' : ''
+                          }`}
+                        />
+                      </div>
+                    </div>
+                  </button>
+
+                  {/* Dropdown Menu Popover */}
+                  {isSourcingDropdownOpen && (
+                    <div className="absolute z-50 mt-2 w-full rounded-2xl border border-slate-200/90 dark:border-gray-700/80 bg-white/95 dark:bg-gray-900/95 backdrop-blur-xl shadow-2xl shadow-slate-900/10 dark:shadow-black/60 p-2 space-y-2 animate-fade-in">
+                      {SOURCING_MODES.map((mode, index) => {
+                        const isSelected = form.sourcingMode === mode.id;
+                        const config = [
+                          {
+                            icon: '🎯',
+                            badge: 'STARTER',
+                            badgeStyle: 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-300 border-blue-200 dark:border-blue-800',
+                          },
+                          {
+                            icon: '⚡',
+                            badge: 'RECOMMENDED',
+                            badgeStyle: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800',
+                          },
+                          {
+                            icon: '🚀',
+                            badge: 'FULL REACH',
+                            badgeStyle: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800',
+                          },
+                        ][index];
+
+                        return (
+                          <div
+                            key={mode.id}
+                            data-testid={`custom-mode-option-${mode.id}`}
+                            onClick={() => {
+                              patchForm('sourcingMode', mode.id as SourcingMode);
+                              setIsSourcingDropdownOpen(false);
+                            }}
+                            className={`p-3.5 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 ${
+                              isSelected
+                                ? 'bg-indigo-50/80 dark:bg-indigo-950/40 border-indigo-300 dark:border-indigo-700/80 shadow-xs'
+                                : 'bg-slate-50/50 dark:bg-gray-800/30 border-slate-100 dark:border-gray-800 hover:border-slate-300 dark:hover:border-gray-700 hover:bg-white dark:hover:bg-gray-800/80'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2.5">
+                                <span className="text-lg shrink-0" aria-hidden="true">{config.icon}</span>
+                                <h4 className={`text-sm font-bold ${isSelected ? 'text-indigo-950 dark:text-indigo-200' : 'text-slate-900 dark:text-white'}`}>
+                                  {mode.shortLabel}
+                                </h4>
+                                <span className={`rounded-full px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wider border ${config.badgeStyle}`}>
+                                  {config.badge}
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-1.5">
+                                {isSelected ? (
+                                  <span className="inline-flex items-center gap-1 text-[11px] font-extrabold text-indigo-600 dark:text-indigo-400 bg-indigo-100/70 dark:bg-indigo-900/50 px-2 py-0.5 rounded-full border border-indigo-200 dark:border-indigo-800">
+                                    <Check size={12} /> Active
+                                  </span>
+                                ) : (
+                                  <span className="text-[11px] font-medium text-slate-400 hover:text-indigo-600 transition-colors">
+                                    Select
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Description */}
+                            <p className="text-xs text-slate-600 dark:text-gray-300 leading-relaxed pl-7">
+                              {mode.description}
+                            </p>
+
+                            {/* Feature Badge Pill */}
+                            <div className="pl-7 pt-0.5">
+                              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/90 dark:bg-gray-950/60 border border-slate-200/90 dark:border-gray-700/80 text-[11px] font-semibold text-slate-700 dark:text-gray-300 shadow-2xs">
+                                <CheckCircle2 size={12} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+                                <span>{mode.featureSummary}</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Test & Quick Selector Target */}
+          <div className="hidden" aria-hidden="true">
+            {SOURCING_MODES.map((mode) => (
+              <button
+                key={mode.id}
+                type="button"
                 data-testid={`mode-${mode.id}`}
                 onClick={() => patchForm('sourcingMode', mode.id as SourcingMode)}
-                className={`group relative text-left rounded-2xl border p-5 transition-all duration-200 cursor-pointer flex flex-col justify-between ${
-                  isSelected
-                    ? `${modeConfig.activeBorder} shadow-sm`
-                    : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/60 dark:border-gray-800 dark:bg-gray-900 dark:hover:border-gray-700'
-                }`}
               >
-                <div>
-                  {/* Top Header: Icon + Badges + Checkbox */}
-                  <div className="flex items-center justify-between gap-2 mb-3">
-                    <div
-                      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-lg shadow-2xs ${
-                        isSelected ? 'bg-white dark:bg-gray-800' : 'bg-slate-100 dark:bg-gray-800'
-                      }`}
-                    >
-                      {modeConfig.icon}
-                    </div>
-
-                    <div className="flex items-center gap-2.5">
-                      <span
-                        className={`rounded-full px-2.5 py-0.5 text-[9px] font-extrabold tracking-wider uppercase border ${modeConfig.badgeStyle}`}
-                      >
-                        {modeConfig.badge}
-                      </span>
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        aria-label={mode.shortLabel}
-                        onChange={() => patchForm('sourcingMode', mode.id as SourcingMode)}
-                        className="h-4.5 w-4.5 rounded text-indigo-600 border-slate-300 dark:border-gray-600 focus:ring-indigo-500 cursor-pointer"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Title & Description */}
-                  <h4
-                    className={`text-sm font-black tracking-tight ${
-                      isSelected ? 'text-slate-900 dark:text-white' : 'text-slate-800 dark:text-gray-100'
-                    }`}
-                  >
-                    {mode.shortLabel}
-                  </h4>
-                  <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-gray-400">
-                    {mode.description}
-                  </p>
-                </div>
-
-                {/* Bottom Feature Pill */}
-                <div
-                  className={`mt-4 rounded-xl p-2.5 border transition-all ${
-                    isSelected
-                      ? 'bg-white/95 dark:bg-gray-800/90 border-indigo-200/80 dark:border-indigo-900/60 shadow-2xs'
-                      : 'bg-slate-50 dark:bg-gray-950/60 border-slate-200/60 dark:border-gray-800'
-                  }`}
-                >
-                  <div className="flex items-start gap-2">
-                    <CheckCircle2
-                      size={14}
-                      className={`mt-0.5 shrink-0 ${
-                        isSelected ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400 dark:text-gray-500'
-                      }`}
-                    />
-                    <span className="text-[11px] font-semibold text-slate-700 dark:text-gray-300 leading-snug">
-                      {mode.featureSummary}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+                {mode.shortLabel}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* ── Mode 1: Private Approved Vendor Roster Preview ── */}

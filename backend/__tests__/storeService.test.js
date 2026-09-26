@@ -104,7 +104,11 @@ describe('Store Service & Business Operations', () => {
       expect(nullRevise).toBeNull();
     });
 
-    test('addVendor with an email sends a real onboarding invite (buyer manual "Add Vendor")', async () => {
+    // addVendor no longer auto-fires onboarding provisioning itself (see
+    // provisionVendorOnboarding's comment) — its only caller, createVendor's
+    // controller, now awaits provisionVendorOnboarding explicitly after
+    // addVendor returns. These tests call it the same way.
+    test('addVendor starts onboardingEmailStatus pending; provisionVendorOnboarding sends a real invite', async () => {
       const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({});
       const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
 
@@ -114,11 +118,10 @@ describe('Store Service & Business Operations', () => {
           'buyer@example.com'
         );
 
-        // Starts pending, not a fabricated "sent" — the actual send hasn't
-        // resolved yet at this point (it's fire-and-forget).
+        // Starts pending — addVendor itself never provisions anymore.
         expect(v.onboardingEmailStatus).toBe('pending');
 
-        await new Promise((resolve) => setImmediate(resolve));
+        await storeService.provisionVendorOnboarding(v, 'buyer@example.com');
 
         expect(identitySpy).toHaveBeenCalledWith(expect.objectContaining({
           email: 'invited-by-buyer@example.com',
@@ -134,52 +137,20 @@ describe('Store Service & Business Operations', () => {
       }
     });
 
-    // Found live, separately from the password-reset bug above: this call
-    // was a bare .catch(), never handed to waitUntil — a buyer added a
-    // vendor, got a normal 201, and the vendor's identity account never
-    // actually got created (or the onboarding email sent) because Workers
-    // cancelled the promise once the response went out.
-    test('addVendor hands its onboarding provisioning to waitUntil when running on Workers', async () => {
-      const originalWaitUntil = globalThis.__CF_WAIT_UNTIL__;
-      const waitUntilSpy = jest.fn();
-      globalThis.__CF_WAIT_UNTIL__ = waitUntilSpy;
-      const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({});
-      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
-
-      try {
-        storeService.addVendor(
-          { name: 'WaitUntil Co', email: 'waituntil-vendor@example.com', majorCategory: 'Fasteners' },
-          'buyer@example.com'
-        );
-
-        // addVendor's own DB persistence + audit log writes also go through
-        // waitUntil via the same _background() helper, so more than one call
-        // is expected here — this only asserts the onboarding call is one of
-        // them, not that it's the only one.
-        expect(waitUntilSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
-        expect(waitUntilSpy.mock.calls.every((call) => call[0] instanceof Promise)).toBe(true);
-        await new Promise((resolve) => setImmediate(resolve));
-      } finally {
-        globalThis.__CF_WAIT_UNTIL__ = originalWaitUntil;
-        identitySpy.mockRestore();
-        sendSpy.mockRestore();
-      }
-    });
-
     // Found live: identityQueries.insertVendorAccount resets password+phone
     // on an *existing* identity account (correct for the CLI provisioning
-    // script it also serves, wrong here) — an addVendor call for an email
-    // that already has a real login silently clobbered that login's real
+    // script it also serves, wrong here) — provisioning for an email that
+    // already has a real login would silently clobber that login's real
     // password with a random one the vendor was never told. Confirmed
     // reproducing exactly this against a real deployed account.
-    test('addVendor never touches identity when an account already exists for the email', async () => {
+    test('provisionVendorOnboarding never touches identity when an account already exists for the email', async () => {
       const findSpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue({ id: 'existing-user-uuid' });
       const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({});
       const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
 
       try {
         const v = storeService.addVendor({ name: 'Already Has Login Co', email: 'already-has-login@example.com', majorCategory: 'Fasteners' });
-        await new Promise((resolve) => setImmediate(resolve));
+        await storeService.provisionVendorOnboarding(v);
 
         expect(findSpy).toHaveBeenCalledWith('already-has-login@example.com');
         expect(identitySpy).not.toHaveBeenCalled();
@@ -194,13 +165,13 @@ describe('Store Service & Business Operations', () => {
       }
     });
 
-    test('addVendor marks the invite failed (not silently pending) when the onboarding email fails to send', async () => {
+    test('provisionVendorOnboarding marks the invite failed (not silently pending) when the onboarding email fails to send', async () => {
       const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({});
       const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: false, reason: 'SMTP down' });
 
       try {
         const v = storeService.addVendor({ name: 'Failed Send Co', email: 'failed-send@example.com', majorCategory: 'Fasteners' });
-        await new Promise((resolve) => setImmediate(resolve));
+        await storeService.provisionVendorOnboarding(v);
 
         expect(storeService.getVendorById(v.id).onboardingEmailStatus).toBe('failed');
       } finally {
@@ -209,14 +180,13 @@ describe('Store Service & Business Operations', () => {
       }
     });
 
-    test('addVendor never sends the onboarding email if the identity account could not be created after retrying (no broken credentials mailed out)', async () => {
+    test('provisionVendorOnboarding never sends the onboarding email if the identity account could not be created after retrying (no broken credentials mailed out)', async () => {
       const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockRejectedValue(new Error('ETIMEDOUT'));
       const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
 
       try {
         const v = storeService.addVendor({ name: 'Identity Down Co', email: 'identity-down@example.com', majorCategory: 'Fasteners' });
-        await new Promise((resolve) => setImmediate(resolve));
-        await new Promise((resolve) => setImmediate(resolve));
+        await storeService.provisionVendorOnboarding(v);
 
         expect(identitySpy).toHaveBeenCalledTimes(2); // one retry
         expect(sendSpy).not.toHaveBeenCalled();
@@ -441,7 +411,9 @@ describe('Store Service & Business Operations', () => {
     // Same real bug as addVendor's — bulkAddVendors shares insertVendorAccount's
     // password-reset-on-existing-account behavior via its own onboarding call.
     test('bulk-imported row never touches identity when an account already exists for the email', async () => {
-      const findSpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue({ id: 'existing-user-uuid' });
+      const findSpy = jest
+        .spyOn(identityQueries, 'findExistingUsernames')
+        .mockResolvedValue(new Set(['bulk-already-has-login@example.com']));
       const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({});
       const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
 
@@ -449,7 +421,7 @@ describe('Store Service & Business Operations', () => {
         await storeService.bulkAddVendors([row({ rowNumber: 1, email: 'bulk-already-has-login@example.com' })]);
         await new Promise((resolve) => setImmediate(resolve));
 
-        expect(findSpy).toHaveBeenCalledWith('bulk-already-has-login@example.com');
+        expect(findSpy).toHaveBeenCalledWith(['bulk-already-has-login@example.com']);
         expect(identitySpy).not.toHaveBeenCalled();
         expect(sendSpy).not.toHaveBeenCalled();
       } finally {
@@ -929,15 +901,21 @@ describe('Store Service & Business Operations', () => {
       expect(afterInvite.find((c) => c.id === matched.id).alreadyInvited).toBe(true);
     });
 
-    test('a vendor the buyer added sees that buyer’s RFQ regardless of category', () => {
+    test('a vendor the buyer added sees that buyer’s RFQ only when their own category also covers it', () => {
       const v = storeService.addVendor({
         name: 'Rostered Vendor',
         email: 'rostered@ex.com',
         majorCategory: 'Bearings',
         addedByBuyerCompany: 'Acme Buyer Co',
       });
-      expect(storeService.vendorCoversRFQ(v, { category: 'Cables', buyerAccountName: 'Acme Buyer Co' })).toBe(true);
-      expect(storeService.vendorCoversRFQ(v, { category: 'Cables', buyerAccountName: 'Other Co' })).toBe(false);
+      // Same buyer, but the RFQ's category has nothing to do with this
+      // vendor's own category — a private-roster relationship grants
+      // eligibility, it never bypasses relevance (BUGS: Version 1 RFQs were
+      // reaching every vendor the buyer had ever uploaded, not just the
+      // ones actually relevant to the RFQ).
+      expect(storeService.vendorCoversRFQ(v, { category: 'Cables', buyerAccountName: 'Acme Buyer Co' })).toBe(false);
+      expect(storeService.vendorCoversRFQ(v, { category: 'Bearings', buyerAccountName: 'Acme Buyer Co' })).toBe(true);
+      expect(storeService.vendorCoversRFQ(v, { category: 'Bearings', buyerAccountName: 'Other Co' })).toBe(false);
     });
 
     test('an explicitly invited vendor (assignedVendors) sees the RFQ regardless of category', () => {
@@ -974,7 +952,7 @@ describe('Store Service & Business Operations', () => {
       expect(storeService.getRFQsForVendor('ghost@nowhere.test')).toEqual([]);
     });
 
-    test('notifyVendorsOfNewRFQ still fires (unchanged) — a rostered vendor is notified even off-category', () => {
+    test('notifyVendorsOfNewRFQ only fires for a rostered vendor whose own category also matches the RFQ', () => {
       const rostered = storeService.addVendor({
         name: 'Notify Rostered',
         email: 'notifyrostered@ex.com',
@@ -986,6 +964,9 @@ describe('Store Service & Business Operations', () => {
         corporateEmail: 'notify-roster@ex.com',
       });
       storeService.createRFQ({ title: 'Off-category but rostered', category: 'Totally-Different-Cat' }, buyer);
+      expect(storeService.getNotificationsFor('vendor', rostered.id)).toHaveLength(0);
+
+      storeService.createRFQ({ title: 'On-category and rostered', category: 'Bearings' }, buyer);
       expect(storeService.getNotificationsFor('vendor', rostered.id)).toHaveLength(1);
     });
   });
@@ -1145,6 +1126,80 @@ describe('Store Service & Business Operations', () => {
 
       expect(result.invitedCount).toBe(1);
       await new Promise((r) => setImmediate(r)); // let the rejected promise settle
+    });
+  });
+
+  describe('getVendorByIdWithDBFallback', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    test('returns the in-memory vendor without touching D1 when it is already cached', async () => {
+      const domainQueries = require('../src/db/domainQueries');
+      const spy = jest.spyOn(domainQueries, 'getVendorByIdFromDB');
+      const vendor = storeService.addVendor({ name: 'Cached Vendor', email: 'cached@ex.com', majorCategory: 'Cache-Cat' });
+
+      const result = await storeService.getVendorByIdWithDBFallback(vendor.id, 'all');
+
+      expect(result).toMatchObject({ id: vendor.id, name: 'Cached Vendor' });
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    // this.vendors is a capped, bootstrap-time subset — a real, persisted
+    // vendor whose row simply wasn't in that subset previously 404'd on
+    // GET /api/vendors/:id (a vendor loading their own profile), which made
+    // the frontend treat it as a first-time profile and then hit a real
+    // UNIQUE-email conflict on save. Confirmed live against the deployed D1
+    // database for a genuinely existing vendor account.
+    test('falls back to D1 by id when the vendor is not in the in-memory cache, and caches it', async () => {
+      const domainQueries = require('../src/db/domainQueries');
+      const dbVendor = { id: 'db-only-profile-vendor', name: 'DB Only Profile Vendor', email: 'dbonlyprofile@ex.com' };
+      const idSpy = jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(dbVendor);
+      const emailSpy = jest.spyOn(domainQueries, 'getVendorByEmailFromDB');
+
+      const result = await storeService.getVendorByIdWithDBFallback('db-only-profile-vendor', 'all');
+
+      expect(idSpy).toHaveBeenCalledWith('db-only-profile-vendor');
+      expect(emailSpy).not.toHaveBeenCalled();
+      expect(result).toMatchObject(dbVendor);
+      // Cached for next time — a plain in-memory getVendorById now finds it.
+      expect(storeService.getVendorById('db-only-profile-vendor', 'all')).toEqual(dbVendor);
+    });
+
+    test('falls back to D1 by email when the id lookup misses (a vendor loading their own profile by email)', async () => {
+      const domainQueries = require('../src/db/domainQueries');
+      const dbVendor = { id: 'real-vendor-id', name: 'Email Lookup Vendor', email: 'emaillookup@ex.com' };
+      jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(null);
+      const emailSpy = jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockResolvedValue(dbVendor);
+
+      const result = await storeService.getVendorByIdWithDBFallback('emaillookup@ex.com', 'all');
+
+      expect(emailSpy).toHaveBeenCalledWith('emaillookup@ex.com');
+      expect(result).toMatchObject(dbVendor);
+    });
+
+    test('returns undefined when the vendor is unknown to both the cache and D1', async () => {
+      const domainQueries = require('../src/db/domainQueries');
+      jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(null);
+      jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockResolvedValue(null);
+
+      const result = await storeService.getVendorByIdWithDBFallback('truly-unknown-vendor', 'all');
+
+      expect(result).toBeUndefined();
+    });
+
+    test('respects scopedBuyerId ownership on the D1-fallback result, same as the in-memory path', async () => {
+      const domainQueries = require('../src/db/domainQueries');
+      const dbVendor = {
+        id: 'scoped-db-vendor',
+        name: 'Scoped DB Vendor',
+        email: 'scopeddb@ex.com',
+        buyerAccountId: 'buyer-acc-owner',
+      };
+      jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(dbVendor);
+
+      const unscoped = await storeService.getVendorByIdWithDBFallback('scoped-db-vendor', 'buyer-acc-someone-else');
+      expect(unscoped).toBeUndefined();
     });
   });
 
@@ -1730,15 +1785,27 @@ describe('demo RFQ seeding', () => {
         expect(ownLookupSpy).not.toHaveBeenCalled();
       });
 
-      test('scoped (buyer-specific) bootstrap still uses the in-memory path even with a pool configured', async () => {
-        jest.spyOn(domainQueries, 'getVendorsFromDB').mockResolvedValue([]);
-        const pageSpy = jest.spyOn(domainQueries, 'getVendorsPageFromDB');
-        const own = storeService.addVendor({ name: 'Scoped Vendor', email: 'scoped-buyer-vendor@example.com', majorCategory: 'Cables', buyerId: 'buyer-123' });
+      test('scoped (buyer-specific) bootstrap uses bounded DB queries, never a full-table re-sync', async () => {
+        // Regression coverage for the real incident this fixed: the old
+        // in-memory path (storeService.getVendors) re-fetched the ENTIRE
+        // vendors table on every single scoped bootstrap call, which
+        // exhausted D1's free-tier daily row-read cap in production
+        // (confirmed live via `wrangler d1 info`: 6.7M rows read/24h against
+        // a 20k-row table).
+        const ownVendor = { id: 'v-own', email: 'scoped-buyer-vendor@example.com', buyerId: 'buyer-123' };
+        const ownSpy = jest.spyOn(domainQueries, 'getVendorsByBuyerFromDB').mockResolvedValue([ownVendor]);
+        const pageSpy = jest
+          .spyOn(domainQueries, 'getVendorsPageFromDB')
+          .mockResolvedValue({ rows: [{ id: 'v-public' }], total: 1 });
+        const fullTableSpy = jest.spyOn(domainQueries, 'getVendorsFromDB');
 
         const result = await storeService.getBootstrapData('buyer-123');
 
-        expect(pageSpy).not.toHaveBeenCalled();
-        expect(result.vendors.some((v) => v.id === own.id)).toBe(true);
+        expect(ownSpy).toHaveBeenCalledWith('buyer-123', expect.any(Number));
+        expect(pageSpy).toHaveBeenCalledWith(expect.objectContaining({ publicOnly: true }));
+        expect(fullTableSpy).not.toHaveBeenCalled();
+        expect(result.vendors.some((v) => v.id === 'v-own')).toBe(true);
+        expect(result.vendors.some((v) => v.id === 'v-public')).toBe(true);
       });
     });
   });

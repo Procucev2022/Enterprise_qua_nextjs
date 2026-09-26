@@ -486,15 +486,12 @@ describe('ManualRFQModal: header and item fields', () => {
     expect(payload.targetDeliveryDate).toBe('2026-10-31');
   });
 
-  it('records the per-item specs and target date on the payload', async () => {
+  it('records the per-item specs on the payload', async () => {
     renderModal();
     fillRow();
     const row = firstRow();
     fireEvent.change(within(row).getByLabelText(MODAL.colSpecs), {
       target: { value: 'SS316 impeller, 415V' },
-    });
-    fireEvent.change(within(row).getByLabelText(MODAL.colTargetDate), {
-      target: { value: '2026-11-05' },
     });
     fillDelivery();
     clickSave();
@@ -502,7 +499,6 @@ describe('ManualRFQModal: header and item fields', () => {
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
     const item = rfqClient.createRFQ.mock.calls[0][0].extractedEntities[0];
     expect(item.technicalSpecs).toBe('SS316 impeller, 415V');
-    expect(item.targetDate).toBe('2026-11-05');
   });
 
   it('clears an entered budget back to unstated rather than to zero', () => {

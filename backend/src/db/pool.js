@@ -76,7 +76,14 @@ function resolveConfig(env = process.env) {
 function createPool(env = process.env) {
   const config = resolveConfig(env);
   if (!config) return null;
-  return new Pool(config);
+  const pool = new Pool(config);
+  pool.on('error', (err) => {
+    // Idle client dropped connection or transient network reset - log and prevent process termination
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn('[DATABASE_POOL] Transient idle client error (recovering):', err.message);
+    }
+  });
+  return pool;
 }
 
 function detectProvider(connectionString) {

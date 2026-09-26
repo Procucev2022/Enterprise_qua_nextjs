@@ -215,16 +215,60 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     await waitFor(() => expect(mockClassify).toHaveBeenCalled());
   });
 
-  it('switches sourcing mode when clicking sourcing cards', () => {
+  it('switches sourcing mode when selecting from dropdown', () => {
     renderWizard();
 
-    const mode2 = screen.getByLabelText('Version 2');
-    const mode3 = screen.getByLabelText('Version 3');
-    expect(mode2).toBeChecked();
+    const select = screen.getByRole('combobox', { name: /Sourcing Mode/i }) as HTMLSelectElement;
+    expect(select.value).toBe('mode_2');
 
-    fireEvent.click(mode3);
-    expect(mode3).toBeChecked();
-    expect(mode2).not.toBeChecked();
+    fireEvent.change(select, { target: { value: 'mode_3' } });
+    expect(select.value).toBe('mode_3');
+  });
+
+  it('toggles custom sourcing dropdown, selects options, and closes on outside click', () => {
+    renderWizard();
+
+    // Toggle dropdown open
+    const trigger = screen.getByRole('button', { name: /Change/i });
+    fireEvent.click(trigger);
+    expect(screen.getByTestId('custom-mode-option-mode_1')).toBeInTheDocument();
+
+    // Select Mode 1
+    fireEvent.click(screen.getByTestId('custom-mode-option-mode_1'));
+    expect(screen.queryByTestId('custom-mode-option-mode_1')).not.toBeInTheDocument();
+
+    // Toggle open again and click inside (should not close)
+    fireEvent.click(trigger);
+    expect(screen.getByTestId('custom-mode-option-mode_2')).toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByTestId('custom-mode-option-mode_2'));
+    
+    // Select Mode 2
+    fireEvent.click(screen.getByTestId('custom-mode-option-mode_2'));
+    expect(screen.queryByTestId('custom-mode-option-mode_2')).not.toBeInTheDocument();
+
+    // Toggle open again
+    fireEvent.click(trigger);
+    expect(screen.getByTestId('custom-mode-option-mode_3')).toBeInTheDocument();
+
+    // Click Mode 3
+    fireEvent.click(screen.getByTestId('custom-mode-option-mode_3'));
+    expect(screen.queryByTestId('custom-mode-option-mode_3')).not.toBeInTheDocument();
+
+    // Toggle open and click outside
+    fireEvent.click(trigger);
+    expect(screen.getByTestId('custom-mode-option-mode_2')).toBeInTheDocument();
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByTestId('custom-mode-option-mode_2')).not.toBeInTheDocument();
+  });
+
+  it('allows clicking quick sourcing mode button targets', () => {
+    renderWizard();
+    fireEvent.click(screen.getByTestId('mode-mode_3'));
+    const select = screen.getByRole('combobox', { name: /Sourcing Mode/i }) as HTMLSelectElement;
+    expect(select.value).toBe('mode_3');
+
+    fireEvent.click(screen.getByTestId('mode-mode_1'));
+    expect(select.value).toBe('mode_1');
   });
 
   it('validates required fields on submission and dispatches RFQ on valid input', async () => {
@@ -499,17 +543,12 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     expect(screen.getByDisplayValue(categoriesData[0].majorCategory)).toBeInTheDocument();
   });
 
-  it('changes the target delivery date and per-item target date fields', () => {
+  it('changes the target delivery date field', () => {
     renderWizard();
 
     const dateInput = document.getElementById('rfq-date') as HTMLInputElement;
     fireEvent.change(dateInput, { target: { value: '2026-12-01' } });
     expect(dateInput).toHaveValue('2026-12-01');
-
-    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
-    const itemDateInput = within(row).getByLabelText(MODAL.colTargetDate) as HTMLInputElement;
-    fireEvent.change(itemDateInput, { target: { value: '2026-12-15' } });
-    expect(itemDateInput).toHaveValue('2026-12-15');
   });
 
   it('ignores a file input change carrying no files and one carrying an empty file list', () => {

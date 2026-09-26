@@ -165,3 +165,41 @@ jobs:
                 body: body,
               });
             }
+  deploy:
+    name: Deploy to Cloudflare
+    needs: [backend-gate, frontend-gate]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Dependencies
+        run: |
+          npm ci --legacy-peer-deps || npm install --legacy-peer-deps
+          npm ci --prefix frontend --legacy-peer-deps || npm install --prefix frontend --legacy-peer-deps
+          npm ci --prefix backend --legacy-peer-deps || npm install --prefix backend --legacy-peer-deps
+
+      - name: Build Frontend (Vinext)
+        run: npm run build:vinext
+        working-directory: frontend
+
+      - name: Deploy to Cloudflare
+        run: npx wrangler deploy
+        working-directory: frontend
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy Enterprise Backend Worker
+        run: npx wrangler deploy
+        working-directory: backend
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

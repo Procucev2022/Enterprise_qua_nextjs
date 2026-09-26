@@ -12,6 +12,7 @@
 // ==============================================================================
 
 const pool = require('./pool');
+const { getD1Binding, batchD1 } = require('./d1Bridge');
 
 // ── Vendors ──────────────────────────────────────────────────────────────────
 
@@ -141,6 +142,40 @@ async function getVendorByEmailFromDB(email) {
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
+/**
+ * A buyer's own uploaded/added vendors only (never the public network) —
+ * bounded, so it never reads more than `limit` rows regardless of table
+ * size. Used by storeService.getBootstrapData's buyer-scoped branch, which
+ * used to call storeService.getVendors() (a full unbounded re-sync of the
+ * entire vendors table) on every single bootstrap request for every buyer
+ * page load — the actual cause of D1's free-tier daily row-read cap being
+ * exhausted (6.7M rows read in 24h against a 20k-row table: confirmed live
+ * via `wrangler d1 info`). A buyer's own vendor count is realistically
+ * small, but this stays bounded rather than trusting that assumption.
+ */
+async function getVendorsByBuyerFromDB(buyerId, limit) {
+  if (!pool.hasStorage() || !buyerId) return [];
+  const result = await pool.query(
+    `SELECT raw FROM vendors
+     WHERE lower(raw->>'buyerId') = lower($1)
+        OR lower(raw->>'buyerAccountId') = lower($1)
+        OR lower(raw->>'buyerEmail') = lower($1)
+     ORDER BY created_at DESC
+     LIMIT $2`,
+    [buyerId, limit],
+    {
+      d1: true,
+      d1Text: `SELECT raw FROM vendors
+     WHERE lower(json_extract(raw,'$.buyerId')) = lower($1)
+        OR lower(json_extract(raw,'$.buyerAccountId')) = lower($1)
+        OR lower(json_extract(raw,'$.buyerEmail')) = lower($1)
+     ORDER BY created_at DESC
+     LIMIT $2`,
+    }
+  );
+  return result.rows.map((row) => parseRaw(row.raw));
+}
+
 /** Single-row lookup by id — same reasoning as getVendorByEmailFromDB, keyed
  * on the primary key instead. storeService.getVendorById only searches the
  * in-memory this.vendors cache, which at 600k+ real vendors is a capped
@@ -211,11 +246,46 @@ async function deleteVendorInDB(id) {
 // upload); RETURNING email tells the caller exactly which rows really
 // landed versus were silently skipped as a race-condition duplicate, so it
 // never has to guess or trust a fire-and-forget write.
+//
+// D1 (Cloudflare's SQLite) enforces two separate limits a single big
+// multi-row INSERT can hit: at most 100 bound parameters per statement (at 6
+// params/row, ~16 rows), and a per-Worker-invocation cap on the number of
+// subrequests it may make (as low as 50 on some plans) — each individual D1
+// call is its own subrequest. Splitting one INSERT into many 16-row INSERTs
+// fixes the first limit but immediately hits the second (confirmed live: a
+// 1000-row chunk split into ~63 sequential 16-row INSERTs failed with "Too
+// many API requests by single Worker invocation"). `batchD1` (see
+// d1Bridge.js) solves both at once: every row becomes its own single-row
+// INSERT (well under the parameter cap), and the whole set is sent to D1 as
+// one `db.batch()` call — one subrequest total, regardless of row count.
+// Postgres has no such caps, so it keeps the original single multi-row
+// INSERT (its own 65535-parameter ceiling is far above anything a single
+// request already caps out at via MAX_BULK_IMPORT_ROWS_PER_REQUEST).
 async function bulkInsertVendorsInDB(vendors) {
   if (!pool.hasStorage() || vendors.length === 0) return [];
+
+  const d1 = getD1Binding();
+  if (d1) {
+    const statements = vendors.map((vendor) => ({
+      text: `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+       ON CONFLICT (email) DO NOTHING
+       RETURNING email`,
+      params: [
+        vendor.id,
+        vendor.email || null,
+        vendor.majorCategory || null,
+        vendor.status || null,
+        vendor.source || null,
+        JSON.stringify(vendor),
+      ],
+    }));
+    const results = await batchD1(d1, statements);
+    return results.flatMap((result) => result.rows.map((row) => row.email));
+  }
+
   const values = [];
   const placeholders = [];
-  const d1Placeholders = [];
   vendors.forEach((vendor, i) => {
     const base = i * 6;
     values.push(
@@ -226,26 +296,14 @@ async function bulkInsertVendorsInDB(vendors) {
       vendor.source || null,
       JSON.stringify(vendor)
     );
-    const cols = `$${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}`;
-    placeholders.push(`(${cols}, now())`);
-    // See upsertEvaluationInDB's comment: the D1 timestamp needs to match
-    // the ISO format migrated/D1-written rows already use for created_at to
-    // sort correctly, not plain CURRENT_TIMESTAMP/now().
-    d1Placeholders.push(`(${cols}, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`);
+    placeholders.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, now())`);
   });
   const result = await pool.query(
     `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
      VALUES ${placeholders.join(', ')}
      ON CONFLICT (email) DO NOTHING
      RETURNING email`,
-    values,
-    {
-      d1: true,
-      d1Text: `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
-     VALUES ${d1Placeholders.join(', ')}
-     ON CONFLICT (email) DO NOTHING
-     RETURNING email`,
-    }
+    values
   );
   return result.rows.map((row) => row.email);
 }
@@ -823,6 +881,7 @@ module.exports = {
   getVendorsFromDB,
   getVendorsPageFromDB,
   getVendorByEmailFromDB,
+  getVendorsByBuyerFromDB,
   getVendorByIdFromDB,
   createBulkImportSessionInDB,
   getBulkImportSessionFromDB,

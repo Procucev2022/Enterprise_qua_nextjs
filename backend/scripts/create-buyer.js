@@ -88,7 +88,7 @@ async function main() {
 
   // Prove the credentials actually authenticate through the same read path the
   // login endpoint uses, rather than trusting the INSERT alone.
-  const verify = await identityQueries.findUserByEmail(args.email);
+  const verify = await identityQueries.findUserByEmailAndPhone(args.email, args.phone);
   const passwordOk = identityQueries.verifyStoredPassword(args.password, verify?.password);
   console.log(`\nVerification read-back: found=${!!verify} passwordMatches=${passwordOk} role=${verify?.role}`);
 }

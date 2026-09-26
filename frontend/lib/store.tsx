@@ -168,7 +168,6 @@ interface AppContextType {
   buyerVendors: VendorEntry[];
   addBuyerVendor: (vendor: Omit<VendorEntry, 'id'>) => Promise<VendorEntry | null>;
   updateBuyerVendor: (vendorId: string, updates: Partial<VendorEntry>) => void;
-  importBuyerVendors: (vendorsToImport: Omit<VendorEntry, 'id'>[]) => number;
   deleteBuyerVendor: (vendorId: string) => void;
   matchSuitableVendors: (entities: ExtractedEntity[], mode: SourcingMode, customList?: VendorEntry[]) => VendorEntry[];
   generateVendorOnboardingEmail: (vendor: VendorEntry, isExisting: boolean, tempPassword?: string) => VendorOnboardingEmailPayload;
@@ -286,7 +285,6 @@ interface AppContextType {
   setRemainingFreeRFQs: React.Dispatch<React.SetStateAction<number>>;
   activeSubscription: 'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none';
   setActiveSubscription: React.Dispatch<React.SetStateAction<'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'none'>>;
-  updateBuyerSubscriptionPlan: (plan: 'free_trial' | 'version_1' | 'version_2' | 'version_3') => Promise<boolean>;
   vendorSubscription: VendorSubscriptionPlan;
   setVendorSubscription: React.Dispatch<React.SetStateAction<VendorSubscriptionPlan>>;
   updateVendorSubscription: (plan: 'premium' | 'connect' | 'select') => Promise<boolean>;
@@ -425,35 +423,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return null;
     }
     return result.paymentUrl;
-  };
-
-  const updateBuyerSubscriptionPlan = async (plan: 'free_trial' | 'version_1' | 'version_2' | 'version_3'): Promise<boolean> => {
-    if (!activeBuyerAccount?.id) {
-      showToast('Subscription Update Failed', 'Could not find your buyer account.', 'warning');
-      return false;
-    }
-
-    try {
-      const res = await fetch(`/api/buyer-accounts/${encodeURIComponent(activeBuyerAccount.id)}`, {
-        method: 'PUT',
-        headers: authFetchHeaders(),
-        body: JSON.stringify({ subscriptionPlan: plan }),
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok || !data?.success) {
-        showToast('Subscription Update Failed', data?.error || 'Could not update plan. Please try again.', 'warning');
-        return false;
-      }
-
-      setActiveSubscription(plan);
-      setActiveBuyerAccount((prev) => (prev ? { ...prev, subscriptionPlan: plan } : prev));
-      setBuyerAccounts((prev) => prev.map((a) => (a.id === activeBuyerAccount.id ? { ...a, subscriptionPlan: plan } : a)));
-      return true;
-    } catch (err) {
-      console.error('Failed to update buyer subscription plan:', err);
-      showToast('Subscription Update Failed', 'Could not reach the server. Please try again.', 'warning');
-      return false;
-    }
   };
 
   const checkVendorPaymentLinkStatus = async (linkId: string): Promise<string | null> => {
@@ -1447,64 +1416,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return newV;
   };
 
-  const importBuyerVendors = (vendorsToImport: Omit<VendorEntry, 'id'>[]): number => {
-    const buyerCompany = activeBuyerAccount?.organizationName || 'Larsen & Toubro Limited';
-    const buyerName = activeBuyerAccount?.contactPerson || 'Rajesh Sharma (CPO)';
-    const nextDate = new Date(Date.now() + 3 * 86400000).toISOString().substring(0, 10) + ' (Day 3)';
-    const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC';
-
-    let existingCount = 0;
-    let newCount = 0;
-
-    const created: VendorEntry[] = vendorsToImport.map((v, i) => {
-      const isExisting = checkVendorInPlatformDatabase(v);
-      if (isExisting) existingCount++;
-      else newCount++;
-      const tempPassword = generateTempPassword(v.name);
-
-      return {
-        ...v,
-        id: `v-bulk-${Date.now()}-${i}`,
-        source: 'buyer_excel',
-        rating: v.rating || 4.5,
-        isExistingInDatabase: isExisting,
-        onboardingEmailStatus: 'sent',
-        onboardingEmailDispatchedAt: timestamp,
-        tempPassword,
-        firstLoginCompleted: false,
-        reminderCadence: 'every_3_days',
-        nextReminderDate: nextDate,
-        remindersSentCount: 0,
-        addedByBuyerCompany: buyerCompany,
-        addedByBuyerName: buyerName,
-        profileCompletionStatus: 'pending',
-      };
-    });
-
-    setBuyerVendors((prev) => [...created, ...prev]);
-
-    addFeedItem(
-      `Batch Vendor Upload: ${created.length} Suppliers Processed`,
-      `Verified against Procucev Database: ${existingCount} Existing Suppliers + ${newCount} New Unregistered Suppliers. Onboarding emails with temporary passwords, OTP instructions, and 3-day reminder schedules dispatched to all.`,
-      'invitation',
-      undefined,
-      `${created.length} Vendors`,
-      'email'
-    );
-
-    addAuditLog(
-      `Imported ${created.length} vendors via Excel (${existingCount} existing in database, ${newCount} new); Dispatched onboarding emails with login credentials and every-3-day reminder pipelines.`
-    );
-
-    showToast(
-      'Vendors Processed & Emails Dispatched',
-      `${created.length} vendors processed (${existingCount} in DB, ${newCount} new). Onboarding emails & 3-day reminders active.`,
-      'success'
-    );
-
-    return created.length;
-  };
-
   const updateBuyerVendor = (vendorId: string, updates: Partial<VendorEntry>) => {
     setBuyerVendors((prev) =>
       prev.map((v) => (v.id === vendorId ? { ...v, ...updates } : v))
@@ -2382,7 +2293,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setRemainingFreeRFQs,
         activeSubscription,
         setActiveSubscription,
-        updateBuyerSubscriptionPlan,
         vendorSubscription,
         setVendorSubscription,
         updateVendorSubscription,
@@ -2412,7 +2322,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         buyerVendors,
         addBuyerVendor,
         updateBuyerVendor,
-        importBuyerVendors,
         deleteBuyerVendor,
         matchSuitableVendors,
         generateVendorOnboardingEmail,

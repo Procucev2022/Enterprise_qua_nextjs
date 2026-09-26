@@ -1,8 +1,10 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import Link from 'next/link';
 import { useApp } from '@/lib/store';
-import { RFQItem, VendorEvaluationRecord } from '@/lib/types';
+import { RFQItem, VendorEvaluationRecord, QuoteComparison, VendorFollowUpRecord } from '@/lib/types';
+import { SOURCING_MODES } from '@/lib/constants';
 import {
   X,
   FileCheck,
@@ -21,6 +23,25 @@ import {
   Sliders,
   Hash,
   CreditCard,
+  FileText,
+  Clock,
+  Mail,
+  UploadCloud,
+  FileSpreadsheet,
+  Phone,
+  Smartphone,
+  ChevronRight,
+  Search,
+  Layers,
+  TrendingUp,
+  Tag,
+  Building2,
+  Calendar,
+  ExternalLink,
+  Filter,
+  Check,
+  Info,
+  Eye,
 } from 'lucide-react';
 
 interface POLineItem {
@@ -487,17 +508,31 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
   if (!isOpen || !rfq) return null;
 
   const followUp = rfq.followUpData;
-  // A vendor invited straight onto assignedVendors (see
-  // storeService.inviteVendorsToRFQ) never got the simulated chaser
-  // dispatch's call/whatsapp/sms sub-objects built for it — every field
-  // below assumes they always exist, which crashed the whole modal for
-  // any such vendor. Normalized once here instead of guarding every
-  // access site individually.
-  const vendors = (followUp?.vendors || []).map((v) => ({
+  const totalInvitedVendors = followUp?.totalInvited ?? (followUp?.vendors?.length || rfq.assignedVendors?.length || 0);
+
+  // Normalize vendor telemetry records
+  const rawVendors: VendorFollowUpRecord[] = (followUp?.vendors && followUp.vendors.length > 0)
+    ? followUp.vendors
+    : (rfq.assignedVendors || []).map((av, idx) => ({
+        vendorId: av.id || `v-${idx + 1}`,
+        vendorName: av.name,
+        contactPerson: av.contactPerson || 'Authorized Representative',
+        phone: av.phone || 'N/A',
+        overallStatus: 'Pending' as const,
+        lastInteraction: 'Outreach queued',
+        attemptsCount: 0,
+        bidStatus: 'Pending' as const,
+        call: { status: 'scheduled' as const, lastAttempt: 'Not yet dispatched' },
+        whatsapp: { status: 'pending' as const, lastAttempt: 'Not yet dispatched' },
+        sms: { status: 'pending' as const, lastAttempt: 'Not yet dispatched' },
+        email24h: { status: 'pending' as const, lastAttempt: '', is24hReminderSent: false },
+      }));
+
+  const vendors: VendorFollowUpRecord[] = rawVendors.map((v) => ({
     ...v,
-    call: v.call || { status: 'not_dispatched', lastAttempt: 'Not yet dispatched' },
-    whatsapp: v.whatsapp || { status: 'not_dispatched', lastAttempt: 'Not yet dispatched' },
-    sms: v.sms || { status: 'not_dispatched', lastAttempt: 'Not yet dispatched' },
+    call: v.call || { status: 'scheduled' as const, lastAttempt: 'Not yet dispatched' },
+    whatsapp: v.whatsapp || { status: 'pending' as const, lastAttempt: 'Not yet dispatched' },
+    sms: v.sms || { status: 'pending' as const, lastAttempt: 'Not yet dispatched' },
   }));
 
   const filteredVendors = vendors.filter((v) => {
@@ -511,176 +546,184 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
   const getCallBadge = (status: string) => {
     switch (status) {
       case 'completed':
-        return <span className="badge badge-emerald">📞 Connected ({status})</span>;
+        return <span className="badge badge-emerald text-[11px] px-2 py-0.5">📞 Connected</span>;
       case 'connected':
-        return <span className="badge badge-blue">📞 In Call</span>;
+        return <span className="badge badge-blue text-[11px] px-2 py-0.5">📞 In Call</span>;
       case 'voicemail':
-        return <span className="badge badge-amber">📞 Voicemail Left</span>;
+        return <span className="badge badge-amber text-[11px] px-2 py-0.5">📞 Voicemail Left</span>;
       case 'scheduled':
-        return <span className="badge badge-purple">📞 Callback Queued</span>;
+        return <span className="badge badge-purple text-[11px] px-2 py-0.5">📞 Callback Queued</span>;
+      case 'not_dispatched':
+        return <span className="badge badge-gray text-[11px] px-2 py-0.5">⏳ Queued</span>;
       default:
-        return <span className="badge badge-blue">📞 {status}</span>;
+        return <span className="badge badge-blue text-[11px] px-2 py-0.5">📞 {status}</span>;
     }
   };
 
   const getWhatsAppBadge = (status: string) => {
     switch (status) {
       case 'replied':
-        return <span className="badge badge-emerald">💬 Replied / Bid In</span>;
+        return <span className="badge badge-emerald text-[11px] px-2 py-0.5">💬 Replied / Bid In</span>;
       case 'read':
-        return <span className="badge badge-blue">💬 Read (Link Clicked)</span>;
+        return <span className="badge badge-blue text-[11px] px-2 py-0.5">💬 Read (Link Clicked)</span>;
       case 'delivered':
-        return <span className="badge badge-amber">💬 Delivered</span>;
+        return <span className="badge badge-amber text-[11px] px-2 py-0.5">💬 Delivered</span>;
       case 'pending':
-        return <span className="badge badge-purple">💬 Queued</span>;
+        return <span className="badge badge-purple text-[11px] px-2 py-0.5">💬 Queued</span>;
+      case 'not_dispatched':
+        return <span className="badge badge-gray text-[11px] px-2 py-0.5">⏳ Queued</span>;
       default:
-        return <span className="badge badge-blue">💬 {status}</span>;
+        return <span className="badge badge-blue text-[11px] px-2 py-0.5">💬 {status}</span>;
     }
   };
 
   const getSMSBadge = (status: string) => {
     switch (status) {
       case 'clicked':
-        return <span className="badge badge-emerald">📱 Link Clicked</span>;
+        return <span className="badge badge-emerald text-[11px] px-2 py-0.5">📱 Link Clicked</span>;
       case 'delivered':
-        return <span className="badge badge-blue">📱 Delivered (DLT)</span>;
+        return <span className="badge badge-blue text-[11px] px-2 py-0.5">📱 Delivered (DLT)</span>;
       case 'sent':
-        return <span className="badge badge-amber">📱 Sent</span>;
+        return <span className="badge badge-amber text-[11px] px-2 py-0.5">📱 Sent</span>;
+      case 'not_dispatched':
+        return <span className="badge badge-gray text-[11px] px-2 py-0.5">⏳ Queued</span>;
       default:
-        return <span className="badge badge-purple">📱 {status}</span>;
+        return <span className="badge badge-purple text-[11px] px-2 py-0.5">📱 {status}</span>;
     }
   };
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-content max-w-4xl p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-indigo-500/40 animate-fade-in max-h-[92vh] flex flex-col">
+    <div className="modal-overlay" onClick={onClose}>
+      <div
+        className="modal-content max-w-6xl p-6 sm:p-7 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-indigo-500/40 animate-fade-in max-h-[92vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Modal Header */}
-        <div className="flex items-start justify-between pb-4 border-b border-slate-200 dark:border-gray-800">
-          <div>
-            <div className="flex items-center gap-2.5 flex-wrap">
-              <span className="px-2.5 py-0.5 rounded-md font-extrabold text-xs mono bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/30">
-                {rfq.rfqNumber}
-              </span>
-              <h2 className="text-lg font-black text-slate-900 dark:text-white">
-                RFQ AI Follow-Up Telemetry & Deep Dive
-              </h2>
-              <span className="badge badge-purple">Multi-Channel</span>
+        <div className="flex items-start justify-between pb-4 border-b border-slate-200 dark:border-gray-800 shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="p-3 rounded-xl bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/30 shadow-xs">
+              <Phone size={24} />
             </div>
-            <p className="text-xs text-slate-600 dark:text-gray-300 mt-1 font-medium">
-              {rfq.title} • <span className="text-slate-500 dark:text-gray-400">Target Delivery: {rfq.targetDeliveryDate}</span>
-            </p>
+            <div>
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <span className="px-2.5 py-0.5 rounded-md font-extrabold text-xs mono bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800">
+                  {rfq.rfqNumber}
+                </span>
+                <h2 className="text-xl font-extrabold text-slate-900 dark:text-white">
+                  RFQ AI Follow-Up Telemetry & Deep Dive
+                </h2>
+                <span className="badge badge-purple text-xs font-bold px-2.5 py-0.5">Multi-Channel</span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
+                {rfq.title} • <span className="font-semibold text-slate-700 dark:text-gray-300">Target Delivery: {rfq.targetDeliveryDate || 'Standard'}</span> • <span className="text-indigo-600 dark:text-indigo-400 font-bold">{vendors.length} Vendors Empanelled</span>
+              </p>
+            </div>
           </div>
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800"
+            className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 transition-colors"
           >
-            <X size={20} />
+            <X size={22} />
           </button>
         </div>
 
         {/* 4-Channel Live Metric Strip */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 my-4">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5 my-4 shrink-0">
           {/* Channel 1: Call (Voice Bot) */}
-          <div className="p-3 rounded-xl bg-purple-50/60 dark:bg-purple-950/20 border border-purple-200 dark:border-purple-800/40 relative overflow-hidden">
-            <div className="flex items-center justify-between text-[11px] font-bold text-purple-900 dark:text-purple-300">
-              <span className="flex items-center gap-1">
+          <div className="p-3.5 rounded-xl bg-purple-50/70 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/40 shadow-xs">
+            <div className="flex items-center justify-between text-[11px] font-bold text-purple-800 dark:text-purple-300 uppercase tracking-wider">
+              <span className="flex items-center gap-1.5">
                 <span>📞</span> VOICE CALLS
               </span>
-              <span className="mono text-[10px] bg-purple-100 dark:bg-purple-900/60 px-1.5 py-0.5 rounded">
-                Avg {followUp?.callStats.avgDuration || '1m 30s'}
-              </span>
+              {followUp?.callStats?.avgDuration ? (
+                <span className="mono text-[10px] bg-purple-100 dark:bg-purple-900/60 px-2 py-0.5 rounded font-black">
+                  Avg {followUp.callStats.avgDuration}
+                </span>
+              ) : null}
             </div>
             <div className="mt-2 flex items-baseline gap-1.5">
-              <span className="text-xl font-black text-purple-950 dark:text-purple-100 mono">
-                {followUp?.callStats.connected || 0} / {followUp?.callStats.total || 0}
+              <span className="text-2xl font-black text-purple-950 dark:text-purple-100 mono">
+                {followUp?.callStats?.connected ?? 0} / {followUp?.callStats?.total ?? 0}
               </span>
-              <span className="text-[10px] text-purple-700 dark:text-purple-300 font-semibold">Connected</span>
+              <span className="text-xs text-purple-700 dark:text-purple-300 font-semibold">Connected</span>
             </div>
-            <p className="text-[9px] text-purple-600 dark:text-purple-400 mt-0.5">
-              Autonomous intent & transcript
+            <p className="text-[11px] text-purple-600 dark:text-purple-400 mt-0.5">
+              Autonomous intent & transcription
             </p>
           </div>
 
           {/* Channel 2: WhatsApp */}
-          <div className="p-3 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/40 relative overflow-hidden">
-            <div className="flex items-center justify-between text-[11px] font-bold text-emerald-900 dark:text-emerald-300">
-              <span className="flex items-center gap-1">
+          <div className="p-3.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 shadow-xs">
+            <div className="flex items-center justify-between text-[11px] font-bold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider">
+              <span className="flex items-center gap-1.5">
                 <MessageSquare size={13} /> WHATSAPP BOT
               </span>
-              <span className="mono text-[10px] bg-emerald-100 dark:bg-emerald-900/60 px-1.5 py-0.5 rounded">
-                {followUp?.whatsappStats.read || 0} Read
+              <span className="mono text-[10px] bg-emerald-100 dark:bg-emerald-900/60 px-2 py-0.5 rounded font-black">
+                {followUp?.whatsappStats?.read ?? 0} Read
               </span>
             </div>
             <div className="mt-2 flex items-baseline gap-1.5">
-              <span className="text-xl font-black text-emerald-950 dark:text-emerald-100 mono">
-                {followUp?.whatsappStats.replied || 0} / {followUp?.whatsappStats.total || 0}
+              <span className="text-2xl font-black text-emerald-950 dark:text-emerald-100 mono">
+                {followUp?.whatsappStats?.replied ?? 0} / {followUp?.whatsappStats?.total ?? 0}
               </span>
-              <span className="text-[10px] text-emerald-700 dark:text-emerald-300 font-semibold">Bids Submitted</span>
+              <span className="text-xs text-emerald-700 dark:text-emerald-300 font-semibold">Bids Submitted</span>
             </div>
-            <p className="text-[9px] text-emerald-600 dark:text-emerald-400 mt-0.5">
-              1-click bid links & receipts
+            <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-0.5">
+              1-click bid submission & receipts
             </p>
           </div>
 
           {/* Channel 3: SMS Direct */}
-          <div className="p-3 rounded-xl bg-sky-50/60 dark:bg-cyan-950/20 border border-sky-200 dark:border-cyan-800/40 relative overflow-hidden">
-            <div className="flex items-center justify-between text-[11px] font-bold text-sky-900 dark:text-cyan-300">
-              <span className="flex items-center gap-1">
+          <div className="p-3.5 rounded-xl bg-sky-50/70 dark:bg-cyan-950/30 border border-sky-200 dark:border-cyan-800/40 shadow-xs">
+            <div className="flex items-center justify-between text-[11px] font-bold text-sky-800 dark:text-cyan-300 uppercase tracking-wider">
+              <span className="flex items-center gap-1.5">
                 <span>📱</span> SMS ALERTS
               </span>
-              <span className="mono text-[10px] bg-sky-100 dark:bg-cyan-900/60 px-1.5 py-0.5 rounded">
+              <span className="mono text-[10px] bg-sky-100 dark:bg-cyan-900/60 px-2 py-0.5 rounded font-black">
                 DLT Verified
               </span>
             </div>
             <div className="mt-2 flex items-baseline gap-1.5">
-              <span className="text-xl font-black text-sky-950 dark:text-cyan-100 mono">
-                {followUp?.smsStats.delivered || 0} / {followUp?.smsStats.total || 0}
+              <span className="text-2xl font-black text-sky-950 dark:text-cyan-100 mono">
+                {followUp?.smsStats?.delivered ?? 0} / {followUp?.smsStats?.total ?? 0}
               </span>
-              <span className="text-[10px] text-sky-700 dark:text-cyan-300 font-semibold">Delivered</span>
+              <span className="text-xs text-sky-700 dark:text-cyan-300 font-semibold">Delivered</span>
             </div>
-            <p className="text-[9px] text-sky-600 dark:text-cyan-400 mt-0.5">
+            <p className="text-[11px] text-sky-600 dark:text-cyan-400 mt-0.5">
               Carrier priority sales alerts
             </p>
           </div>
 
           {/* Channel 4: 24h Email Reminder Escalation */}
-          <div className="p-3 rounded-xl bg-amber-50/70 dark:bg-amber-955/20 border border-amber-200 dark:border-amber-800/40 relative overflow-hidden">
-            <div className="flex items-center justify-between text-[11px] font-bold text-amber-900 dark:text-amber-300">
-              <span className="flex items-center gap-1">
-                <span>✉️</span> 24H EMAIL REMINDER
+          <div className="p-3.5 rounded-xl bg-amber-50/70 dark:bg-amber-955/30 border border-amber-200 dark:border-amber-800/40 shadow-xs">
+            <div className="flex items-center justify-between text-[11px] font-bold text-amber-800 dark:text-amber-300 uppercase tracking-wider">
+              <span className="flex items-center gap-1.5">
+                <Mail size={13} /> 24H EMAIL ESCALATION
               </span>
-              <span className="mono text-[10px] bg-amber-100 dark:bg-amber-900/60 px-1.5 py-0.5 rounded font-black">
+              <span className="mono text-[10px] bg-amber-100 dark:bg-amber-900/60 px-2 py-0.5 rounded font-black">
                 Next-Day
               </span>
             </div>
             <div className="mt-2 flex items-baseline gap-1.5">
-              <span className="text-xl font-black text-amber-950 dark:text-amber-100 mono">
-                {followUp?.emailStats?.sent24h || 2} / {followUp?.totalInvited || 5}
+              <span className="text-2xl font-black text-amber-950 dark:text-amber-100 mono">
+                {followUp?.emailStats?.sent24h ?? 0} / {totalInvitedVendors}
               </span>
-              <span className="text-[10px] text-amber-700 dark:text-amber-300 font-semibold">Escalations Sent</span>
+              <span className="text-xs text-amber-700 dark:text-amber-300 font-semibold">Escalations Sent</span>
             </div>
-            <p className="text-[9px] text-amber-600 dark:text-amber-400 mt-0.5">
-              Re-attaches RFQ BOQ if no SMS/Call/WA response in 24h
+            <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-0.5">
+              Automated BOQ re-attachment
             </p>
           </div>
         </div>
 
-        {/* 24-Hour Follow-Up Escalation Rule Banner */}
-        <div className="p-3 rounded-xl bg-amber-50/90 dark:bg-amber-955/40 text-amber-900 dark:text-amber-200 border border-amber-250/60 dark:border-amber-800/60 text-xs flex items-center gap-2.5 shadow-xs mb-3">
-          <span className="text-base shrink-0">⏳</span>
-          <div className="leading-relaxed">
-            <strong>Automated 24-Hour Chaser Rule</strong>: If a vendor does not respond to SMS (5m), Voice Call (6h), and WhatsApp (12h) within 24 hours of initial RFQ email, an automated <strong>24h Reminder Email</strong> is dropped the next day re-attaching the RFQ specifications & requesting immediate quotation submission.
-          </div>
-        </div>
-
         {/* Channel Filter & Batch Action Toolbar */}
-        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-gray-800 text-xs">
-          <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-gray-800/90 p-1 rounded-xl">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-gray-800 text-xs shrink-0">
+          <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-gray-800/90 p-1 rounded-xl w-full sm:w-auto overflow-x-auto">
             <button
               onClick={() => setActiveChannelTab('all')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all ${
+              className={`px-3.5 py-1.5 rounded-lg font-bold transition-all shrink-0 ${
                 activeChannelTab === 'all'
-                  ? 'bg-white dark:bg-gray-900 text-slate-900 dark:text-white shadow-sm'
+                  ? 'bg-white dark:bg-gray-900 text-slate-900 dark:text-white shadow-xs'
                   : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
@@ -688,88 +731,83 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
             </button>
             <button
               onClick={() => setActiveChannelTab('call')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1 ${
+              className={`px-3.5 py-1.5 rounded-lg font-bold transition-all shrink-0 flex items-center gap-1 ${
                 activeChannelTab === 'call'
-                  ? 'bg-white dark:bg-gray-900 text-purple-700 dark:text-purple-300 shadow-sm'
+                  ? 'bg-white dark:bg-gray-900 text-purple-700 dark:text-purple-300 shadow-xs'
                   : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
-              <span>📞</span> Calls ({followUp?.callStats.total || 0})
+              <span>📞</span> Calls ({followUp?.callStats?.total ?? 0})
             </button>
             <button
               onClick={() => setActiveChannelTab('whatsapp')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1 ${
+              className={`px-3.5 py-1.5 rounded-lg font-bold transition-all shrink-0 flex items-center gap-1 ${
                 activeChannelTab === 'whatsapp'
-                  ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-sm'
+                  ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-xs'
                   : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
-              <MessageSquare size={12} /> WhatsApp ({followUp?.whatsappStats.total || 0})
+              <MessageSquare size={13} /> WhatsApp ({followUp?.whatsappStats?.total ?? 0})
             </button>
             <button
               onClick={() => setActiveChannelTab('sms')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1 ${
+              className={`px-3.5 py-1.5 rounded-lg font-bold transition-all shrink-0 flex items-center gap-1 ${
                 activeChannelTab === 'sms'
-                  ? 'bg-white dark:bg-gray-900 text-sky-700 dark:text-cyan-300 shadow-sm'
+                  ? 'bg-white dark:bg-gray-900 text-sky-700 dark:text-cyan-300 shadow-xs'
                   : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
-              <span>📱</span> SMS ({followUp?.smsStats.total || 0})
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => triggerBatchChannelChaser(rfq.rfqNumber, ['call', 'whatsapp', 'sms'])}
-              className="btn btn-primary btn-sm text-[11px] shadow-sm"
-            >
-              <Sparkles size={12} /> ⚡ Multi-Channel Chaser Broadcast (Call + WA + SMS)
+              <span>📱</span> SMS ({followUp?.smsStats?.total ?? 0})
             </button>
           </div>
         </div>
 
         {/* Vendor-by-Vendor Deep Dive List */}
-        <div className="flex-1 overflow-y-auto my-3 space-y-3 pr-1">
+        <div className="flex-1 overflow-y-auto my-3 space-y-3 pr-1 min-h-[260px]">
           {filteredVendors.length === 0 ? (
-            <div className="p-8 text-center text-slate-400 dark:text-gray-500 text-xs">
-              No vendors found for this channel filter.
+            <div className="p-12 text-center text-slate-400 dark:text-gray-500 text-xs">
+              <Phone size={32} className="mx-auto mb-2 opacity-40 text-indigo-500" />
+              <p className="font-bold text-slate-700 dark:text-gray-300 text-sm">No vendors found for this channel filter.</p>
+              <p className="text-xs text-slate-400 mt-1">Select &apos;All Channels&apos; or broadcast follow-ups across your roster.</p>
             </div>
           ) : (
             filteredVendors.map((vendor) => (
               <div
                 key={vendor.vendorId}
-                className="p-4 rounded-xl bg-slate-50 dark:bg-gray-950/70 border border-slate-200 dark:border-gray-800 hover:border-indigo-400 dark:hover:border-indigo-500/50 transition-all text-xs space-y-3"
+                className="p-4 rounded-xl bg-slate-50/80 dark:bg-gray-800/50 border border-slate-200 dark:border-gray-800 hover:border-indigo-400 dark:hover:border-indigo-500/50 transition-all text-xs space-y-3 shadow-2xs"
               >
                 {/* Vendor Header */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-200 dark:border-gray-800/80">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200/80 dark:border-gray-800">
                   <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-extrabold text-slate-900 dark:text-white text-sm">
-                        {vendor.vendorName}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-extrabold text-slate-900 dark:text-white text-sm flex items-center gap-1.5">
+                        <Building2 size={15} className="text-slate-400" /> {vendor.vendorName}
                       </span>
-                      <span className="text-slate-500 dark:text-gray-400 text-xs mono">({vendor.phone})</span>
+                      {vendor.phone && vendor.phone !== 'N/A' && (
+                        <span className="text-slate-500 dark:text-gray-400 text-xs mono">({vendor.phone})</span>
+                      )}
                       <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          vendor.overallStatus === 'Responded'
+                        className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                          vendor.overallStatus === 'Responded' || vendor.bidStatus === 'Submitted'
                             ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800'
                             : 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800'
                         }`}
                       >
-                        {vendor.overallStatus} • Bid {vendor.bidStatus}
+                        {vendor.overallStatus} • Bid: {vendor.bidStatus}
                       </span>
                     </div>
-                    <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                      Contact: <span className="text-slate-700 dark:text-gray-300 font-medium">{vendor.contactPerson}</span> • Last Interaction: {vendor.lastInteraction} (Attempt #{vendor.attemptsCount})
+                    <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-1">
+                      Contact: <span className="text-slate-700 dark:text-gray-300 font-semibold">{vendor.contactPerson || 'Authorized Representative'}</span> • Last Interaction: <span className="font-medium text-slate-700 dark:text-gray-300">{vendor.lastInteraction || 'Pending outreach'}</span> {vendor.attemptsCount > 0 && `(Attempt #${vendor.attemptsCount})`}
                     </p>
                   </div>
 
                   {/* Channel Action Buttons */}
-                  <div className="flex items-center gap-1.5 flex-wrap">
+                  <div className="flex items-center gap-2 flex-wrap shrink-0">
                     <button
                       onClick={() =>
                         setActiveVendorModal({ vendorName: vendor.vendorName, channel: 'call' })
                       }
-                      className="px-2.5 py-1 rounded-lg bg-purple-50 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-700/50 hover:bg-purple-100 font-semibold text-[11px] flex items-center gap-1"
+                      className="px-3 py-1.5 rounded-lg bg-purple-50 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-700/50 hover:bg-purple-100 dark:hover:bg-purple-900/70 font-bold text-xs flex items-center gap-1.5 transition-colors shadow-2xs"
                     >
                       <span>📞</span> Call
                     </button>
@@ -777,15 +815,15 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                       onClick={() =>
                         setActiveVendorModal({ vendorName: vendor.vendorName, channel: 'whatsapp' })
                       }
-                      className="px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-700/50 hover:bg-emerald-100 font-semibold text-[11px] flex items-center gap-1"
+                      className="px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-700/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/70 font-bold text-xs flex items-center gap-1.5 transition-colors shadow-2xs"
                     >
-                      <MessageSquare size={11} /> WhatsApp
+                      <MessageSquare size={13} /> WhatsApp
                     </button>
                     <button
                       onClick={() =>
                         setActiveVendorModal({ vendorName: vendor.vendorName, channel: 'sms' })
                       }
-                      className="px-2.5 py-1 rounded-lg bg-sky-50 dark:bg-cyan-900/40 text-sky-700 dark:text-cyan-300 border border-sky-200 dark:border-cyan-700/50 hover:bg-sky-100 font-semibold text-[11px] flex items-center gap-1"
+                      className="px-3 py-1.5 rounded-lg bg-sky-50 dark:bg-cyan-900/40 text-sky-700 dark:text-cyan-300 border border-sky-200 dark:border-cyan-700/50 hover:bg-sky-100 dark:hover:bg-cyan-900/70 font-bold text-xs flex items-center gap-1.5 transition-colors shadow-2xs"
                     >
                       <span>📱</span> SMS
                     </button>
@@ -795,7 +833,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                 {/* 4-Channel Status Cards */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                   {/* Call Details */}
-                  <div className="p-3 rounded-lg bg-white dark:bg-gray-900/90 border border-slate-200 dark:border-gray-800 space-y-1.5">
+                  <div className="p-3 rounded-lg bg-white dark:bg-gray-900/90 border border-slate-200 dark:border-gray-800 space-y-1.5 shadow-2xs">
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1 text-[11px]">
                         <span>📞</span> AI Voice Bot
@@ -803,7 +841,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                       {getCallBadge(vendor.call.status)}
                     </div>
                     <div className="text-[10px] text-slate-500 dark:text-gray-400 flex justify-between">
-                      <span>Last Call: {vendor.call.lastAttempt}</span>
+                      <span>Status: {vendor.call.lastAttempt}</span>
                       {vendor.call.duration && <span className="mono font-semibold">{vendor.call.duration}</span>}
                     </div>
                     {vendor.call.summary && (
@@ -819,7 +857,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                   </div>
 
                   {/* WhatsApp Details */}
-                  <div className="p-3 rounded-lg bg-white dark:bg-gray-900/90 border border-slate-200 dark:border-gray-800 space-y-1.5">
+                  <div className="p-3 rounded-lg bg-white dark:bg-gray-900/90 border border-slate-200 dark:border-gray-800 space-y-1.5 shadow-2xs">
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1 text-[11px]">
                         <MessageSquare size={12} className="text-emerald-500" /> WhatsApp Chaser
@@ -842,7 +880,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                   </div>
 
                   {/* SMS Details */}
-                  <div className="p-3 rounded-lg bg-white dark:bg-gray-900/90 border border-slate-200 dark:border-gray-800 space-y-1.5">
+                  <div className="p-3 rounded-lg bg-white dark:bg-gray-900/90 border border-slate-200 dark:border-gray-800 space-y-1.5 shadow-2xs">
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1 text-[11px]">
                         <span>📱</span> SMS Direct Alert
@@ -852,37 +890,38 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                     <div className="text-[10px] text-slate-500 dark:text-gray-400">
                       Status Date: {vendor.sms.lastAttempt}
                     </div>
-                    <p className="text-[11px] text-slate-700 dark:text-gray-300 leading-snug">
-                      Priority RFQ shortlink notification delivered to mobile gateway.
-                    </p>
-                    {vendor.sms.deliveryReport && (
-                      <span className="text-[10px] text-sky-600 dark:text-cyan-400 font-mono">
+                    {vendor.sms.deliveryReport ? (
+                      <span className="text-[10px] text-sky-600 dark:text-cyan-400 font-mono block">
                         Gateway: {vendor.sms.deliveryReport}
                       </span>
+                    ) : (
+                      <p className="text-[11px] text-slate-600 dark:text-gray-400 leading-snug">
+                        Direct SMS notification route.
+                      </p>
                     )}
                   </div>
 
                   {/* 24h Email Reminder Details */}
-                  <div className="p-3 rounded-lg bg-white dark:bg-gray-900/90 border border-slate-200 dark:border-gray-800 space-y-1.5">
+                  <div className="p-3 rounded-lg bg-white dark:bg-gray-900/90 border border-slate-200 dark:border-gray-800 space-y-1.5 shadow-2xs">
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1 text-[11px]">
-                        <span>✉️</span> 24h Email Reminder
+                        <Mail size={12} className="text-amber-500" /> 24h Email Escalation
                       </span>
                       {vendor.email24h?.is24hReminderSent ? (
-                        <span className="badge badge-amber">✉️ Dispatched (+24h)</span>
+                        <span className="badge badge-amber text-[11px] px-2 py-0.5">✉️ Dispatched</span>
                       ) : vendor.bidStatus === 'Submitted' || vendor.overallStatus === 'Responded' ? (
-                        <span className="badge badge-emerald">✅ Bid Submitted</span>
+                        <span className="badge badge-emerald text-[11px] px-2 py-0.5">✅ Bid Submitted</span>
                       ) : (
-                        <span className="badge badge-purple">⏳ Pending 24h</span>
+                        <span className="badge badge-purple text-[11px] px-2 py-0.5">⏳ Pending 24h</span>
                       )}
                     </div>
                     <div className="text-[10px] text-slate-500 dark:text-gray-400">
-                      {vendor.email24h?.lastAttempt ? `Sent: ${vendor.email24h.lastAttempt}` : 'Automated rule: Sent 24h after RFQ if no Call/WA/SMS response'}
+                      {vendor.email24h?.lastAttempt ? `Sent: ${vendor.email24h.lastAttempt}` : 'Follow-up escalation queue'}
                     </div>
-                    <p className="text-[11px] text-slate-700 dark:text-gray-300 leading-snug">
+                    <p className="text-[11px] text-slate-600 dark:text-gray-400 leading-snug">
                       {vendor.email24h?.is24hReminderSent
                         ? 'BOQ specs re-attached via email. Urgent bid submission requested.'
-                        : 'Dispatches 24h post-RFQ if vendor fails to respond to Call/WA/SMS.'}
+                        : 'Dispatches if vendor fails to respond to initial follow-up.'}
                     </p>
                   </div>
                 </div>
@@ -892,12 +931,12 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
         </div>
 
         {/* Modal Footer */}
-        <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-gray-800">
-          <div className="text-[11px] text-slate-500 dark:text-gray-400 flex items-center gap-2">
+        <div className="flex items-center justify-between pt-3.5 mt-1 border-t border-slate-200 dark:border-gray-800 text-xs text-slate-500 dark:text-gray-400 shrink-0">
+          <div className="flex items-center gap-2">
             <span className="live-dot" />
             <span>Next Automated Follow-Up Wave: <strong className="text-slate-800 dark:text-gray-200">{followUp?.nextScheduledChaser || 'Today 03:00 PM'}</strong></span>
           </div>
-          <button onClick={onClose} className="btn btn-secondary btn-sm">
+          <button onClick={onClose} className="btn btn-secondary btn-sm font-bold px-4">
             Close Deep Dive
           </button>
         </div>
@@ -1279,6 +1318,843 @@ export function VendorEvaluationSummaryModal({ isOpen, onClose, record }: Evalua
             </div>
           </div>
         ) : null}
+      </div>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════════════════
+   1. ACTIVE PIPELINE MODAL
+════════════════════════════════════════════════════════════════════════════════ */
+interface ActivePipelineModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  rfqs: RFQItem[];
+  onOpenDeepDive: (rfq: RFQItem) => void;
+  onNavigateToMatrix: (rfq: RFQItem) => void;
+}
+
+export function ActivePipelineModal({
+  isOpen,
+  onClose,
+  rfqs,
+  onOpenDeepDive,
+  onNavigateToMatrix,
+}: ActivePipelineModalProps) {
+  const [searchTerm, setSearchTerm] = useState('');
+
+  const totalActiveRFQs = rfqs.length;
+  const inEvaluationCount = rfqs.filter((r) => r.status === 'In Evaluation').length;
+  const aiRecommendedCount = rfqs.filter((r) => r.status === 'AI Recommended').length;
+  const quotesPendingCount = rfqs.filter((r) => r.status === 'Quotes Pending' || r.status === 'Parsing').length;
+  const totalQuotes = rfqs.reduce((acc, r) => acc + (r.quotesCount || (r.quotes ? r.quotes.length : 0)), 0);
+
+  const filteredRfqs = rfqs.filter((rfq) => {
+    if (!searchTerm) return true;
+    const term = searchTerm.toLowerCase();
+    return (
+      rfq.rfqNumber.toLowerCase().includes(term) ||
+      rfq.title.toLowerCase().includes(term) ||
+      rfq.category.toLowerCase().includes(term) ||
+      (rfq.status && rfq.status.toLowerCase().includes(term)) ||
+      (rfq.source && rfq.source.toLowerCase().includes(term))
+    );
+  });
+
+  if (!isOpen) return null;
+
+  const getSourceBadge = (source?: string) => {
+    if (source === 'email_gateway') {
+      return (
+        <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 flex items-center gap-1.5 shrink-0">
+          <Mail size={11} className="text-amber-600 dark:text-amber-400" />
+          <span>Email Gateway (Autonomous)</span>
+        </span>
+      );
+    }
+    if (source === 'manual_entry') {
+      return (
+        <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1.5 shrink-0">
+          <FileSpreadsheet size={11} className="text-emerald-600 dark:text-emerald-400" />
+          <span>Manual RFQ Form</span>
+        </span>
+      );
+    }
+    return (
+      <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 flex items-center gap-1.5 shrink-0">
+        <UploadCloud size={11} className="text-indigo-600 dark:text-indigo-400" />
+        <span>AI RFQ Ingestion</span>
+      </span>
+    );
+  };
+
+  const getModeBadge = (modeId: string) => {
+    const mode = SOURCING_MODES.find((m) => m.id === modeId);
+    if (!mode) return null;
+    return (
+      <span
+        className="px-2.5 py-1 rounded-md text-[10px] font-bold tracking-wide"
+        style={{
+          backgroundColor: `${mode.badgeColor}15`,
+          color: mode.badgeColor,
+          border: `1px solid ${mode.badgeColor}35`,
+        }}
+      >
+        {mode.code} ({mode.shortLabel})
+      </span>
+    );
+  };
+
+  const getStatusBadge = (status: RFQItem['status']) => {
+    switch (status) {
+      case 'AI Recommended':
+        return <span className="badge badge-emerald text-xs px-2.5 py-1">AI Recommended</span>;
+      case 'In Evaluation':
+        return <span className="badge badge-blue text-xs px-2.5 py-1">In Evaluation</span>;
+      case 'PO Generated':
+        return <span className="badge badge-purple text-xs px-2.5 py-1">PO Generated</span>;
+      case 'Parsing':
+        return <span className="badge badge-amber text-xs px-2.5 py-1">OCR Parsing</span>;
+      default:
+        return <span className="badge badge-blue text-xs px-2.5 py-1">{status}</span>;
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div
+        className="modal-content max-w-6xl p-6 sm:p-7 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-indigo-500/40 animate-fade-in max-h-[92vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between pb-4 border-b border-slate-200 dark:border-gray-800 shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="p-3 rounded-xl bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/30 shadow-xs">
+              <Layers size={24} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <h2 className="text-xl font-extrabold text-slate-900 dark:text-white">Active Procurement Pipeline</h2>
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800">
+                  {totalActiveRFQs} Total Requisitions
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
+                Comprehensive tracking of live RFQs, multi-channel response telemetry, and quote evaluation states.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 transition-colors"
+          >
+            <X size={22} />
+          </button>
+        </div>
+
+        {/* Metrics Banner */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5 my-4 shrink-0">
+          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700 shadow-xs">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-400">Total Active Requisitions</div>
+            <div className="text-2xl font-black text-slate-900 dark:text-white mono mt-1">{totalActiveRFQs}</div>
+            <div className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold mt-0.5">100% On Schedule</div>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-blue-50/60 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800/40 shadow-xs">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-blue-700 dark:text-blue-400">In Evaluation</div>
+            <div className="text-2xl font-black text-blue-900 dark:text-blue-200 mono mt-1">{inEvaluationCount}</div>
+            <div className="text-xs text-blue-600 dark:text-blue-400 font-semibold mt-0.5">Parametric Scoring Active</div>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 shadow-xs">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">AI Recommended</div>
+            <div className="text-2xl font-black text-emerald-900 dark:text-emerald-200 mono mt-1">{aiRecommendedCount}</div>
+            <div className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold mt-0.5">Ready for PO Approval</div>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-purple-50/60 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/40 shadow-xs">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-purple-700 dark:text-purple-400">Total Quotes Received</div>
+            <div className="text-2xl font-black text-purple-900 dark:text-purple-200 mono mt-1">{totalQuotes}</div>
+            <div className="text-xs text-purple-600 dark:text-purple-400 font-semibold mt-0.5">Across All Modes</div>
+          </div>
+        </div>
+
+        {/* Filters and Search Bar */}
+        <div className="flex items-center gap-2.5 mb-3 pb-3 border-b border-slate-100 dark:border-gray-800 shrink-0">
+          <div className="relative flex-1 w-full">
+            <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Search by RFQ number, title, category, or status..."
+              className="has-leading-icon w-full pl-10 pr-3.5 py-2 text-xs rounded-lg border border-slate-200 dark:border-gray-700 bg-slate-50/50 dark:bg-gray-800/50 text-slate-800 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+          </div>
+        </div>
+
+        {/* Requisitions List */}
+        <div className="flex-1 overflow-y-auto space-y-3 pr-1 min-h-[300px]">
+          {filteredRfqs.length === 0 ? (
+            <div className="p-12 text-center text-slate-400 dark:text-gray-500">
+              <FileText size={36} className="mx-auto mb-2 opacity-40 text-indigo-500" />
+              <p className="text-sm font-bold text-slate-700 dark:text-gray-300">No matching requisitions found</p>
+              <p className="text-xs mt-1 text-slate-400">Try adjusting your search query or status/source filters.</p>
+            </div>
+          ) : (
+            filteredRfqs.map((rfq) => (
+              <div
+                key={rfq.id}
+                className="p-4 rounded-xl bg-slate-50/80 dark:bg-gray-800/50 border border-slate-200 dark:border-gray-800 hover:border-indigo-400 dark:hover:border-indigo-600 transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-2xs"
+              >
+                <div className="space-y-2 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-black mono text-indigo-600 dark:text-indigo-400">{rfq.rfqNumber}</span>
+                    {getSourceBadge(rfq.source)}
+                    {getModeBadge(rfq.sourcingMode)}
+                    {getStatusBadge(rfq.status)}
+                    <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-slate-200 dark:bg-gray-700 text-slate-800 dark:text-gray-200 mono">
+                      {rfq.quotesCount || (rfq.quotes ? rfq.quotes.length : 0)} quotes received
+                    </span>
+                  </div>
+
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white leading-snug">{rfq.title}</h3>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs text-slate-600 dark:text-gray-300">
+                    <div>
+                      Category: <strong className="text-slate-800 dark:text-gray-100">{rfq.category}</strong>
+                    </div>
+                    <div>
+                      Target Delivery: <strong className="text-slate-800 dark:text-gray-100">{rfq.targetDeliveryDate || 'Standard'}</strong>
+                    </div>
+                    <div>
+                      Estimated Budget: <strong className="text-slate-800 dark:text-gray-100">{rfq.budget > 0 ? `₹${rfq.budget.toLocaleString()}` : 'Unspecified'}</strong>
+                    </div>
+                  </div>
+
+                  {rfq.followUpData && (
+                    <div className="flex items-center gap-2 pt-1 text-[11px] text-slate-600 dark:text-gray-300 flex-wrap">
+                      <span className="px-2 py-0.5 rounded-md bg-purple-50 dark:bg-purple-950/50 text-purple-700 dark:text-purple-300 font-semibold border border-purple-200 dark:border-purple-800">
+                        📞 {rfq.followUpData.callStats.connected}/{rfq.followUpData.callStats.total} Calls
+                      </span>
+                      <span className="px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 font-semibold border border-emerald-200 dark:border-emerald-800">
+                        💬 {rfq.followUpData.whatsappStats.read}/{rfq.followUpData.whatsappStats.total} WA Read
+                      </span>
+                      <span className="px-2 py-0.5 rounded-md bg-sky-50 dark:bg-cyan-950/50 text-sky-700 dark:text-cyan-300 font-semibold border border-sky-200 dark:border-cyan-800">
+                        📱 {rfq.followUpData.smsStats.delivered} SMS
+                      </span>
+                      <span className="text-indigo-600 dark:text-indigo-400 font-bold ml-1">
+                        {rfq.followUpData.respondedCount}/{rfq.followUpData.totalInvited} vendors responded
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex md:flex-col items-center md:items-end gap-2 shrink-0">
+                  <Link
+                    href={`/buyer/rfq-details?rfq=${encodeURIComponent(rfq.rfqNumber)}`}
+                    onClick={onClose}
+                    className="btn btn-secondary btn-sm font-bold flex items-center gap-1.5 w-full justify-center shadow-xs"
+                    title="View RFQ Details"
+                  >
+                    <Eye size={13} /> View RFQ
+                  </Link>
+
+                  {((rfq.quotesCount && rfq.quotesCount > 0) || (rfq.quotes && rfq.quotes.length > 0) || rfq.status === 'AI Recommended' || rfq.status === 'In Evaluation') && (
+                    <button
+                      onClick={() => {
+                        onClose();
+                        onNavigateToMatrix(rfq);
+                      }}
+                      className="btn btn-emerald btn-sm font-bold flex items-center gap-1.5 w-full justify-center shadow-xs"
+                      title="View Quotes"
+                    >
+                      <Sparkles size={13} /> View Quotes
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-between pt-4 mt-2 border-t border-slate-200 dark:border-gray-800 text-xs text-slate-500 dark:text-gray-400 shrink-0">
+          <span>Showing {filteredRfqs.length} of {totalActiveRFQs} requisitions</span>
+          <button onClick={onClose} className="btn btn-secondary btn-sm font-bold px-4">Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════════════════
+   2. INTAKE SOURCES MODAL
+════════════════════════════════════════════════════════════════════════════════ */
+interface IntakeSourcesModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  rfqs: RFQItem[];
+  onOpenDeepDive: (rfq: RFQItem) => void;
+  onNavigateToMatrix?: (rfq: RFQItem) => void;
+}
+
+export function IntakeSourcesModal({
+  isOpen,
+  onClose,
+  rfqs,
+  onOpenDeepDive,
+  onNavigateToMatrix,
+}: IntakeSourcesModalProps) {
+  const [selectedSourceTab, setSelectedSourceTab] = useState<'all' | 'email_gateway' | 'web_portal' | 'manual_entry'>('all');
+  const [searchTerm, setSearchTerm] = useState('');
+
+  const totalActiveRFQs = rfqs.length;
+  const emailGatewayRFQs = rfqs.filter((r) => r.source === 'email_gateway');
+  const webPortalRFQs = rfqs.filter((r) => r.source === 'web_portal' || !r.source);
+  const manualRFQs = rfqs.filter((r) => r.source === 'manual_entry');
+
+  const filteredRfqs = rfqs.filter((rfq) => {
+    const matchesTab =
+      selectedSourceTab === 'all'
+        ? true
+        : selectedSourceTab === 'web_portal'
+        ? rfq.source === 'web_portal' || !rfq.source
+        : rfq.source === selectedSourceTab;
+
+    const matchesSearch =
+      !searchTerm ||
+      rfq.rfqNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      rfq.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      rfq.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (rfq.sourceEmail && rfq.sourceEmail.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      (rfq.sourceFileName && rfq.sourceFileName.toLowerCase().includes(searchTerm.toLowerCase()));
+
+    return matchesTab && matchesSearch;
+  });
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div
+        className="modal-content max-w-6xl p-6 sm:p-7 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-amber-200 dark:border-amber-900/50 animate-fade-in max-h-[92vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between pb-4 border-b border-slate-200 dark:border-gray-800 shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-800 shadow-xs">
+              <Mail size={24} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <h2 className="text-xl font-extrabold text-slate-900 dark:text-white">Requisitions by Intake Source</h2>
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
+                  3 Ingestion Channels
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
+                Channel-by-channel origin verification across Autonomous Email Gateway, Web Portal AI OCR, and Manual Entry.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 transition-colors"
+          >
+            <X size={22} />
+          </button>
+        </div>
+
+        {/* 3 Source Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 my-4 shrink-0">
+          {/* Email Gateway */}
+          <div
+            onClick={() => setSelectedSourceTab('email_gateway')}
+            className={`p-4 rounded-xl border transition-all cursor-pointer shadow-xs ${
+              selectedSourceTab === 'email_gateway'
+                ? 'bg-amber-50 dark:bg-amber-950/50 border-amber-400 dark:border-amber-500 ring-2 ring-amber-400/20'
+                : 'bg-white dark:bg-gray-800/60 border-amber-200 dark:border-amber-900/40 hover:border-amber-300'
+            }`}
+          >
+            <div className="flex items-center justify-between text-xs font-bold text-amber-700 dark:text-amber-400">
+              <span className="flex items-center gap-1.5">
+                <Mail size={15} /> 📧 Email Gateway
+              </span>
+              <span className="mono text-xs font-black">
+                {totalActiveRFQs > 0 ? Math.round((emailGatewayRFQs.length / totalActiveRFQs) * 100) : 0}%
+              </span>
+            </div>
+            <div className="text-2xl font-black text-amber-900 dark:text-amber-200 mono mt-2">
+              {emailGatewayRFQs.length} <span className="text-xs font-normal text-slate-500">RFQs</span>
+            </div>
+            <p className="text-xs text-amber-700 dark:text-amber-400 mt-1 font-medium">
+              ⚡ Autonomous Ingestion · Auto-circulated
+            </p>
+          </div>
+
+          {/* AI RFQ Create */}
+          <div
+            onClick={() => setSelectedSourceTab('web_portal')}
+            className={`p-4 rounded-xl border transition-all cursor-pointer shadow-xs ${
+              selectedSourceTab === 'web_portal'
+                ? 'bg-indigo-50 dark:bg-indigo-950/50 border-indigo-400 dark:border-indigo-500 ring-2 ring-indigo-400/20'
+                : 'bg-white dark:bg-gray-800/60 border-indigo-200 dark:border-indigo-900/40 hover:border-indigo-300'
+            }`}
+          >
+            <div className="flex items-center justify-between text-xs font-bold text-indigo-700 dark:text-indigo-400">
+              <span className="flex items-center gap-1.5">
+                <UploadCloud size={15} /> 🌐 AI RFQ Create
+              </span>
+              <span className="mono text-xs font-black">
+                {totalActiveRFQs > 0 ? Math.round((webPortalRFQs.length / totalActiveRFQs) * 100) : 0}%
+              </span>
+            </div>
+            <div className="text-2xl font-black text-indigo-900 dark:text-indigo-200 mono mt-2">
+              {webPortalRFQs.length} <span className="text-xs font-normal text-slate-500">RFQs</span>
+            </div>
+            <p className="text-xs text-indigo-700 dark:text-indigo-400 mt-1 font-medium">
+              📄 Web Portal BOQ PDF/Excel Ingest
+            </p>
+          </div>
+
+          {/* Manual RFQ */}
+          <div
+            onClick={() => setSelectedSourceTab('manual_entry')}
+            className={`p-4 rounded-xl border transition-all cursor-pointer shadow-xs ${
+              selectedSourceTab === 'manual_entry'
+                ? 'bg-emerald-50 dark:bg-emerald-950/50 border-emerald-400 dark:border-emerald-500 ring-2 ring-emerald-400/20'
+                : 'bg-white dark:bg-gray-800/60 border-emerald-200 dark:border-emerald-900/40 hover:border-emerald-300'
+            }`}
+          >
+            <div className="flex items-center justify-between text-xs font-bold text-emerald-700 dark:text-emerald-400">
+              <span className="flex items-center gap-1.5">
+                <FileSpreadsheet size={15} /> ✏️ Manual RFQ
+              </span>
+              <span className="mono text-xs font-black">
+                {totalActiveRFQs > 0 ? Math.round((manualRFQs.length / totalActiveRFQs) * 100) : 0}%
+              </span>
+            </div>
+            <div className="text-2xl font-black text-emerald-900 dark:text-emerald-200 mono mt-2">
+              {manualRFQs.length} <span className="text-xs font-normal text-slate-500">RFQs</span>
+            </div>
+            <p className="text-xs text-emerald-700 dark:text-emerald-400 mt-1 font-medium">
+              ✍️ Parametric Line-Item Entry Form
+            </p>
+          </div>
+        </div>
+
+        {/* Tab & Search Strip */}
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-2.5 mb-3 pb-3 border-b border-slate-100 dark:border-gray-800 shrink-0">
+          <div className="flex items-center gap-2 overflow-x-auto w-full sm:w-auto">
+            <button
+              onClick={() => setSelectedSourceTab('all')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 ${
+                selectedSourceTab === 'all'
+                  ? 'bg-slate-800 dark:bg-white text-white dark:text-slate-900 shadow-xs'
+                  : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 hover:bg-slate-200'
+              }`}
+            >
+              All Channels ({rfqs.length})
+            </button>
+            <button
+              onClick={() => setSelectedSourceTab('email_gateway')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+                selectedSourceTab === 'email_gateway'
+                  ? 'bg-amber-600 text-white shadow-xs'
+                  : 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-900/40'
+              }`}
+            >
+              <Mail size={13} /> Email Gateway ({emailGatewayRFQs.length})
+            </button>
+            <button
+              onClick={() => setSelectedSourceTab('web_portal')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+                selectedSourceTab === 'web_portal'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-900/40'
+              }`}
+            >
+              <UploadCloud size={13} /> AI RFQ Create ({webPortalRFQs.length})
+            </button>
+            <button
+              onClick={() => setSelectedSourceTab('manual_entry')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+                selectedSourceTab === 'manual_entry'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/40'
+              }`}
+            >
+              <FileSpreadsheet size={13} /> Manual RFQ ({manualRFQs.length})
+            </button>
+          </div>
+
+          <div className="relative w-full sm:w-72">
+            <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Filter by origin or title..."
+              className="has-leading-icon w-full pl-10 pr-3.5 py-2 text-xs rounded-lg border border-slate-200 dark:border-gray-700 bg-slate-50/50 dark:bg-gray-800/50 text-slate-800 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-amber-500"
+            />
+          </div>
+        </div>
+
+        {/* Source Items List */}
+        <div className="flex-1 overflow-y-auto space-y-3 pr-1 min-h-[300px]">
+          {filteredRfqs.length === 0 ? (
+            <div className="p-12 text-center text-slate-400 dark:text-gray-500">
+              <Mail size={36} className="mx-auto mb-2 opacity-40 text-amber-500" />
+              <p className="text-sm font-bold text-slate-700 dark:text-gray-300">No requisitions from this intake source</p>
+              <p className="text-xs mt-1 text-slate-400">Send an RFQ email to your corporate gateway or use AI RFQ generator to ingest.</p>
+            </div>
+          ) : (
+            filteredRfqs.map((rfq) => (
+              <div
+                key={rfq.id}
+                className="p-4 rounded-xl bg-slate-50/80 dark:bg-gray-800/50 border border-slate-200 dark:border-gray-800 hover:border-amber-400 dark:hover:border-amber-600 transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-2xs"
+              >
+                <div className="space-y-2 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-black mono text-indigo-600 dark:text-indigo-400">{rfq.rfqNumber}</span>
+                    {rfq.source === 'email_gateway' && (
+                      <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800 flex items-center gap-1.5">
+                        <Mail size={12} /> Origin: {rfq.sourceEmail || 'Autonomous Corporate Email Gateway'}
+                      </span>
+                    )}
+                    {rfq.source === 'manual_entry' && (
+                      <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 flex items-center gap-1.5">
+                        <FileSpreadsheet size={12} /> Direct Keyed Requisition
+                      </span>
+                    )}
+                    {(rfq.source === 'web_portal' || !rfq.source) && (
+                      <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800 flex items-center gap-1.5">
+                        <UploadCloud size={12} /> Document: {rfq.sourceFileName || 'Uploaded BOQ Document'}
+                      </span>
+                    )}
+                    <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-slate-200 dark:bg-gray-700 text-slate-800 dark:text-gray-200">
+                      {rfq.status}
+                    </span>
+                  </div>
+
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white leading-snug">{rfq.title}</h3>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs text-slate-600 dark:text-gray-300">
+                    <div>
+                      Category: <strong className="text-slate-800 dark:text-gray-100">{rfq.category}</strong>
+                    </div>
+                    <div>
+                      Extracted Items: <strong className="text-slate-800 dark:text-gray-100">{rfq.extractedEntities?.length || 1} items</strong>
+                    </div>
+                    <div>
+                      Quotes Received: <strong className="text-slate-800 dark:text-gray-100">{rfq.quotesCount || (rfq.quotes ? rfq.quotes.length : 0)}</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex md:flex-col items-center md:items-end gap-2 shrink-0">
+                  <Link
+                    href={`/buyer/rfq-details?rfq=${encodeURIComponent(rfq.rfqNumber)}`}
+                    onClick={onClose}
+                    className="btn btn-secondary btn-sm font-bold flex items-center gap-1.5 w-full justify-center shadow-xs"
+                    title="View RFQ Details"
+                  >
+                    <Eye size={13} /> View RFQ
+                  </Link>
+
+                  {((rfq.quotesCount && rfq.quotesCount > 0) || (rfq.quotes && rfq.quotes.length > 0) || rfq.status === 'AI Recommended' || rfq.status === 'In Evaluation') && (
+                    <button
+                      onClick={() => {
+                        onClose();
+                        if (onNavigateToMatrix) {
+                          onNavigateToMatrix(rfq);
+                        } else {
+                          onOpenDeepDive(rfq);
+                        }
+                      }}
+                      className="btn btn-emerald btn-sm font-bold flex items-center gap-1.5 w-full justify-center shadow-xs"
+                      title="View Quotes"
+                    >
+                      <Sparkles size={13} /> View Quotes
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Informational Box */}
+        <div className="mt-3.5 p-3.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 text-xs text-amber-900 dark:text-amber-200 flex items-center gap-2.5 shrink-0">
+          <Info size={18} className="text-amber-600 dark:text-amber-400 shrink-0" />
+          <span>
+            <strong>Autonomous Routing Pipeline:</strong> Inbound RFQ emails are instantly parsed via LLM OCR to extract BOQs and match empanelled vendor rosters before initiating multi-channel chasers.
+          </span>
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-between pt-3.5 mt-2 border-t border-slate-200 dark:border-gray-800 text-xs text-slate-500 dark:text-gray-400 shrink-0">
+          <span>Showing {filteredRfqs.length} requisitions in selected channel</span>
+          <button onClick={onClose} className="btn btn-secondary btn-sm font-bold px-4">Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════════════════
+   3. SUPPLIER QUOTES MODAL
+════════════════════════════════════════════════════════════════════════════════ */
+interface SupplierQuotesModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  rfqs: RFQItem[];
+  onNavigateToMatrix: (rfq: RFQItem) => void;
+  onOpenDeepDive: (rfq: RFQItem) => void;
+}
+
+export function SupplierQuotesModal({
+  isOpen,
+  onClose,
+  rfqs,
+  onNavigateToMatrix,
+  onOpenDeepDive,
+}: SupplierQuotesModalProps) {
+  const [searchTerm, setSearchTerm] = useState('');
+
+  // Flatten quotes across active RFQs
+  const allQuotesWithRfq = useMemo(() => {
+    const list: Array<{ quote: QuoteComparison; rfq: RFQItem }> = [];
+    rfqs.forEach((rfq) => {
+      if (rfq.quotes && rfq.quotes.length > 0) {
+        rfq.quotes.forEach((quote) => {
+          list.push({ quote, rfq });
+        });
+      }
+    });
+    return list;
+  }, [rfqs]);
+
+  if (!isOpen) return null;
+
+  const totalQuotesCount = allQuotesWithRfq.length;
+  const inEvaluationRfqs = rfqs.filter((r) => r.status === 'In Evaluation' || r.status === 'AI Recommended');
+  const bestScore = allQuotesWithRfq.length > 0 ? Math.max(...allQuotesWithRfq.map((q) => q.quote.aiMatchScore || 0)) : 0;
+  const compliantQuotesCount = allQuotesWithRfq.filter((q) => q.quote.complianceStatus === 'Fully Compliant').length;
+
+  const filteredQuotes = allQuotesWithRfq.filter(({ quote, rfq }) => {
+    const matchesSearch =
+      !searchTerm ||
+      quote.vendorName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      rfq.rfqNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      rfq.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (quote.complianceStatus && quote.complianceStatus.toLowerCase().includes(searchTerm.toLowerCase()));
+
+    return matchesSearch;
+  });
+
+  const sortedQuotes = [...filteredQuotes].sort((a, b) => {
+    return (b.quote.aiMatchScore || 0) - (a.quote.aiMatchScore || 0);
+  });
+
+  const getComplianceBadge = (status: QuoteComparison['complianceStatus']) => {
+    switch (status) {
+      case 'Fully Compliant':
+        return <span className="badge badge-emerald text-xs px-2.5 py-1">✓ Fully Compliant</span>;
+      case 'Minor Exception':
+        return <span className="badge badge-amber text-xs px-2.5 py-1">⚠ Minor Exception</span>;
+      default:
+        return <span className="badge badge-blue text-xs px-2.5 py-1">⏳ {status || 'Pending Review'}</span>;
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div
+        className="modal-content max-w-6xl p-6 sm:p-7 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-sky-200 dark:border-cyan-900/50 animate-fade-in max-h-[92vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between pb-4 border-b border-slate-200 dark:border-gray-800 shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="p-3 rounded-xl bg-sky-50 dark:bg-cyan-950/60 text-sky-600 dark:text-cyan-400 border border-sky-200 dark:border-cyan-800 shadow-xs">
+              <Clock size={24} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <h2 className="text-xl font-extrabold text-slate-900 dark:text-white">Supplier Quotes & Evaluation Matrix</h2>
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-sky-100 dark:bg-cyan-950 text-sky-800 dark:text-cyan-300 border border-sky-300 dark:border-cyan-800">
+                  {totalQuotesCount} Received Bids
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
+                Consolidated parametric view of supplier price quotations, lead times, compliance ratings, and AI match scores.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 transition-colors"
+          >
+            <X size={22} />
+          </button>
+        </div>
+
+        {/* Top KPI Metrics Banner */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5 my-4 shrink-0">
+          <div className="p-3.5 rounded-xl bg-sky-50/60 dark:bg-cyan-950/30 border border-sky-200 dark:border-cyan-800/40 shadow-xs">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-sky-700 dark:text-cyan-400">Total Bids Ingested</div>
+            <div className="text-2xl font-black text-sky-900 dark:text-cyan-100 mono mt-1">{totalQuotesCount}</div>
+            <div className="text-xs text-sky-600 dark:text-cyan-400 font-semibold mt-0.5">Across all active RFQs</div>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-blue-50/60 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800/40 shadow-xs">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-blue-700 dark:text-blue-400">In Evaluation</div>
+            <div className="text-2xl font-black text-blue-900 dark:text-blue-200 mono mt-1">{inEvaluationRfqs.length}</div>
+            <div className="text-xs text-blue-600 dark:text-blue-400 font-semibold mt-0.5">RFQs under review</div>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 shadow-xs">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">Top Match Score</div>
+            <div className="text-2xl font-black text-emerald-900 dark:text-emerald-200 mono mt-1">
+              {bestScore > 0 ? `${bestScore}%` : 'N/A'}
+            </div>
+            <div className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold mt-0.5">Highest AI parametric match</div>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-purple-50/60 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/40 shadow-xs">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-purple-700 dark:text-purple-400">Fully Compliant Bids</div>
+            <div className="text-2xl font-black text-purple-900 dark:text-purple-200 mono mt-1">{compliantQuotesCount}</div>
+            <div className="text-xs text-purple-600 dark:text-purple-400 font-semibold mt-0.5">Technical specs verified</div>
+          </div>
+        </div>
+
+        {/* Filter Controls Row */}
+        <div className="flex items-center gap-2.5 mb-3 pb-3 border-b border-slate-100 dark:border-gray-800 shrink-0">
+          <div className="relative flex-1 w-full">
+            <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Search by vendor name, item title, or RFQ..."
+              className="has-leading-icon w-full pl-10 pr-3.5 py-2 text-xs rounded-lg border border-slate-200 dark:border-gray-700 bg-slate-50/50 dark:bg-gray-800/50 text-slate-800 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-sky-500"
+            />
+          </div>
+        </div>
+
+        {/* Quotes List */}
+        <div className="flex-1 overflow-y-auto space-y-3 pr-1 min-h-[300px]">
+          {sortedQuotes.length === 0 ? (
+            <div className="p-12 text-center text-slate-400 dark:text-gray-500">
+              <Clock size={36} className="mx-auto mb-2 opacity-40 text-sky-500" />
+              <p className="text-sm font-bold text-slate-700 dark:text-gray-300">No supplier quotes found</p>
+              <p className="text-xs mt-1 text-slate-400">
+                {rfqs.length > 0
+                  ? 'Suppliers have been invited and autonomous follow-ups are chasing bids.'
+                  : 'Create or ingest an RFQ to start receiving supplier quotes.'}
+              </p>
+              {rfqs.length > 0 && (
+                <button
+                  onClick={() => {
+                    onClose();
+                    onNavigateToMatrix(rfqs[0]);
+                  }}
+                  className="btn btn-secondary btn-sm font-bold mt-3 inline-flex items-center gap-1.5"
+                >
+                  <Sparkles size={13} /> View Quotes
+                </button>
+              )}
+            </div>
+          ) : (
+            sortedQuotes.map(({ quote, rfq }, idx) => (
+              <div
+                key={`${rfq.id}-${quote.vendorId}-${idx}`}
+                className="p-4 rounded-xl bg-slate-50/80 dark:bg-gray-800/50 border border-slate-200 dark:border-gray-800 hover:border-sky-400 dark:hover:border-sky-600 transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-2xs"
+              >
+                <div className="space-y-2 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-black mono text-indigo-600 dark:text-indigo-400">{rfq.rfqNumber}</span>
+                    <span className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                      <Building2 size={14} className="text-slate-400" /> {quote.vendorName}
+                    </span>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 dark:bg-gray-700 text-slate-700 dark:text-gray-300 border border-slate-200 dark:border-gray-600">
+                      {quote.vendorCategory || 'Client List'}
+                    </span>
+                    {quote.isBestPrice && (
+                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300">
+                        ⚡ Lowest Quoted Price
+                      </span>
+                    )}
+                    {getComplianceBadge(quote.complianceStatus)}
+                  </div>
+
+                  <p className="text-xs font-semibold text-slate-700 dark:text-gray-300">{rfq.title}</p>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1 text-xs">
+                    <div className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-slate-100 dark:border-gray-800 shadow-2xs">
+                      <span className="text-[10px] text-slate-400 uppercase font-bold block">Quoted Price</span>
+                      <span className="text-sm font-black text-slate-900 dark:text-white mono">
+                        ₹{(quote.totalPrice || quote.unitPrice || 0).toLocaleString()}
+                      </span>
+                    </div>
+
+                    <div className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-slate-100 dark:border-gray-800 shadow-2xs">
+                      <span className="text-[10px] text-slate-400 uppercase font-bold block">Lead Time</span>
+                      <span className="text-sm font-bold text-slate-800 dark:text-gray-200 mono">
+                        {quote.leadTimeDays ? `${quote.leadTimeDays} Days` : 'N/A'}
+                      </span>
+                    </div>
+
+                    <div className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-slate-100 dark:border-gray-800 shadow-2xs">
+                      <span className="text-[10px] text-slate-400 uppercase font-bold block">AI Match Score</span>
+                      <span className="text-sm font-black text-emerald-600 dark:text-emerald-400 mono">
+                        {quote.aiMatchScore !== undefined ? `${quote.aiMatchScore}%` : 'N/A'}
+                      </span>
+                    </div>
+
+                    <div className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-slate-100 dark:border-gray-800 shadow-2xs">
+                      <span className="text-[10px] text-slate-400 uppercase font-bold block">Warranty & Terms</span>
+                      <span className="text-xs text-slate-700 dark:text-gray-300 font-semibold truncate block">
+                        {quote.warrantyYears ? `${quote.warrantyYears} yr` : 'N/A'}{quote.paymentTerms ? ` • ${quote.paymentTerms}` : ''}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex md:flex-col items-center md:items-end gap-2 shrink-0">
+                  <Link
+                    href={`/buyer/rfq-details?rfq=${encodeURIComponent(rfq.rfqNumber)}`}
+                    onClick={onClose}
+                    className="btn btn-secondary btn-sm font-bold flex items-center gap-1.5 w-full justify-center shadow-xs"
+                    title="View RFQ Details"
+                  >
+                    <Eye size={13} /> View RFQ
+                  </Link>
+
+                  <button
+                    onClick={() => {
+                      onClose();
+                      onNavigateToMatrix(rfq);
+                    }}
+                    className="btn btn-primary btn-sm font-bold flex items-center gap-1.5 w-full justify-center shadow-xs"
+                    title="View Quotes"
+                  >
+                    <Sparkles size={13} /> View Quotes
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-between pt-4 mt-2 border-t border-slate-200 dark:border-gray-800 text-xs text-slate-500 dark:text-gray-400 shrink-0">
+          <span>Showing {sortedQuotes.length} quotes across active pipeline</span>
+          <button onClick={onClose} className="btn btn-secondary btn-sm font-bold px-4">Close</button>
+        </div>
       </div>
     </div>
   );

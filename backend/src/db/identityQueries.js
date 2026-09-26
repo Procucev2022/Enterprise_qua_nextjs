@@ -154,6 +154,34 @@ async function findUserByEmail(email) {
 }
 
 /**
+ * Which of these emails already have a real identity account — used before
+ * bulk-provisioning onboarding for a batch of newly bulk-imported vendors
+ * (see storeService.bulkAddVendors), so a row whose email already has a
+ * login is never re-provisioned (that would reset its real password/phone —
+ * see that call site's comment). One round trip for the whole batch, same
+ * `= any($n)` / D1 `in (...)` pattern as
+ * vendorIngestionQueries.findEmailLogsByIdempotencyKeys — a per-row
+ * findUserByEmail call in a loop was the actual cause of a 1000-row bulk
+ * import hitting the Workers per-invocation subrequest cap ("Too many API
+ * requests by single Worker invocation"), confirmed live.
+ */
+async function findExistingUsernames(emails = []) {
+  if (!pool.hasStorage() || emails.length === 0) return new Set();
+  const lowered = emails.map((e) => String(e).trim().toLowerCase());
+  const inPlaceholders = lowered.map((_, i) => `$${i + 1}`).join(', ');
+  const result = await pool.rows(
+    `select lower(username) as username from "user" where lower(username) = any($1)`,
+    [lowered],
+    {
+      d1: true,
+      d1Text: `select lower(username) as username from "user" where lower(username) in (${inPlaceholders})`,
+      d1Params: lowered,
+    }
+  );
+  return new Set(result.map((row) => row.username));
+}
+
+/**
  * Look up an account by email + phone together.
  *
  * Sign-in narrows to the pair because email alone can match more than one row,
@@ -270,7 +298,7 @@ async function insertBuyerAccount({
   const orgName = organizationName || `${normalizedEmail.split('@')[0]} Enterprises`;
   const displayName = fullName || normalizedEmail.split('@')[0];
 
-  const existing = await findUserByEmail(normalizedEmail);
+  const existing = await findUserByEmailAndPhone(normalizedEmail, normalizedPhone);
   if (existing) {
     return { created: false, reason: 'ALREADY_EXISTS', user: existing };
   }
@@ -497,7 +525,7 @@ async function insertStaffAccount({
   const orgName = organizationName || `${normalizedEmail.split('@')[0]} Internal`;
   const displayName = fullName || normalizedEmail.split('@')[0];
 
-  const existing = await findUserByEmail(normalizedEmail);
+  const existing = await findUserByEmailAndPhone(normalizedEmail, normalizedPhone);
   if (existing) {
     return { created: false, reason: 'ALREADY_EXISTS', user: existing };
   }
@@ -955,6 +983,7 @@ module.exports = {
   flag,
   mapRowToUser,
   findUserByEmail,
+  findExistingUsernames,
   findUserByEmailAndPhone,
   listUsers,
   resolveMasterUuid,

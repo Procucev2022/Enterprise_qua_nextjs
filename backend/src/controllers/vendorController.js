@@ -46,20 +46,22 @@ async function assertVendorOwnership(req, res, vendorOrEmail) {
 }
 
 /**
- * Bulk vendor upload is a category manager's tool for onboarding a whole
- * vendor master list at once — a buyer or a vendor themselves has no
- * business bulk-registering other companies' vendor records. Kept separate
- * from assertVendorOwnership (single-record, vendor-self-or-admin) since the
+ * Bulk vendor upload is available to a category manager (onboarding a whole
+ * vendor master list into the shared Procucev network) and to a buyer
+ * (onboarding their own private roster, same as the single-add path already
+ * scopes to that buyer) — a vendor themselves has no business
+ * bulk-registering other companies' vendor records. Kept separate from
+ * assertVendorOwnership (single-record, vendor-self-or-admin) since the
  * roles allowed and the reasoning are both different.
  */
-function assertCategoryManagerRole(req, res) {
+function assertBulkImportRole(req, res) {
   const user = req.user;
   if (!user) {
     res.status(401).json({ success: false, error: 'Authentication required.' });
     return false;
   }
-  if (user.role === 'category_manager' || user.role === 'admin') return true;
-  res.status(403).json({ success: false, error: 'Only a category manager may bulk-import vendors.' });
+  if (user.role === 'category_manager' || user.role === 'admin' || user.role === 'buyer') return true;
+  res.status(403).json({ success: false, error: 'Only a category manager, buyer, or admin may bulk-import vendors.' });
   return false;
 }
 
@@ -228,7 +230,7 @@ async function getVendorById(req, res, next) {
       buyerId = req.query.buyerId;
     }
     logger.info(`Fetching vendor with ID ${id}`, { id, buyerId }, 'VENDOR_CONTROLLER');
-    const vendor = storeService.getVendorById(id, buyerId);
+    const vendor = await storeService.getVendorByIdWithDBFallback(id, buyerId);
     if (!vendor) {
       logger.warn(`Vendor not found: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
@@ -307,7 +309,18 @@ async function createVendor(req, res, next) {
     // requests for the same new email) that the in-memory check above can't
     // catch — the pre-check above only stops the common, already-hydrated case.
     await storeService.confirmVendorPersisted(created);
-    res.status(201).json({ success: true, data: created });
+    // Awaited here rather than left to addVendor's internal fire-and-forget
+    // waitUntil call: that path can silently never complete on Workers (the
+    // request-scoped bindings it depends on aren't guaranteed to survive
+    // past the response), which is exactly how a real buyer-added vendor
+    // ended up with onboardingEmailStatus 'failed' and no identity account
+    // at all, with nothing surfacing the failure anywhere. This makes the
+    // provisioning outcome — success or failure — reflected in `created`
+    // before the response is sent.
+    if (created.email) {
+      await storeService.provisionVendorOnboarding(created, req.user && req.user.email);
+    }
+    res.status(201).json({ success: true, data: storeService.getVendorById(created.id, 'all') || created });
   } catch (err) {
     logger.error('Error creating vendor', err, 'VENDOR_CONTROLLER');
     next(err);
@@ -317,7 +330,7 @@ async function createVendor(req, res, next) {
 async function updateVendor(req, res, next) {
   try {
     const { id } = req.params;
-    const existing = storeService.getVendorById(id, 'all');
+    const existing = await storeService.getVendorByIdWithDBFallback(id, 'all');
     if (!existing) {
       logger.warn(`Vendor not found for update: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
@@ -622,7 +635,24 @@ const MAX_BULK_IMPORT_ROWS_PER_REQUEST = 2000;
 
 async function bulkImportVendors(req, res, next) {
   try {
-    if (!assertCategoryManagerRole(req, res)) return;
+    if (!assertBulkImportRole(req, res)) return;
+
+    // A buyer's bulk upload is their own private roster (same
+    // buyerId/addedByBuyerCompany/source attribution as the single-add path
+    // in createVendor), never the shared Procucev network a category
+    // manager's upload feeds — resolved server-side from the authenticated
+    // buyer's own account, never trusted from the request body.
+    let buyerAttribution = null;
+    if (req.user.role === 'buyer') {
+      const buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
+      if (!buyerAccount) {
+        return res.status(403).json({
+          success: false,
+          error: 'Your account is not linked to a buyer organization yet, so vendors cannot be bulk-imported.',
+        });
+      }
+      buyerAttribution = { buyerId: buyerAccount.id, addedByBuyerCompany: buyerAccount.organizationName, source: 'buyer_excel' };
+    }
 
     const rows = Array.isArray(req.body.vendors) ? req.body.vendors : null;
     if (!rows || rows.length === 0) {
@@ -670,6 +700,7 @@ async function bulkImportVendors(req, res, next) {
       const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.vendorBulkImportRow, row);
       rowsToImport.push({
         ...row,
+        ...(buyerAttribution || {}),
         rowNumber,
         hasIssues: !isValid,
         issues: isValid ? [] : Object.values(errors),
@@ -720,7 +751,7 @@ async function bulkImportVendors(req, res, next) {
 
 async function getBulkImportSessionStatus(req, res, next) {
   try {
-    if (!assertCategoryManagerRole(req, res)) return;
+    if (!assertBulkImportRole(req, res)) return;
     const session = await domainQueries.getBulkImportSessionFromDB(req.params.sessionId);
     if (!session) {
       return res.status(404).json({ success: false, error: 'Import session not found.' });
