@@ -185,6 +185,51 @@ describe('mailerService', () => {
       expect(freshMailerService.isGmailApiConfigured()).toBe(true);
       expect(freshMailerService.isConfigured()).toBe(true);
     });
+
+    // Regression coverage for the real bug this fixed: no VENDOR_SMTP_*/
+    // VENDOR_EMAIL_GATEWAY_* mailbox has ever been configured, so every
+    // vendor onboarding/invite/quote email was silently no-op'ing even
+    // before the Gmail API existed — deliverVendor must fall back to it
+    // rather than continuing to drop the email.
+    test('deliverVendor falls back to the Gmail API when no vendor mailbox is configured', async () => {
+      let freshMailerService;
+      let capturedRequestBody;
+      jest.isolateModules(() => {
+        process.env.NODE_ENV = 'development';
+        delete process.env.VENDOR_SMTP_USER;
+        delete process.env.VENDOR_SMTP_PASSWORD;
+        process.env.GMAIL_CLIENT_ID = 'test-client-id';
+        process.env.GMAIL_CLIENT_SECRET = 'test-client-secret';
+        process.env.GMAIL_REFRESH_TOKEN = 'test-refresh-token';
+        jest.doMock('googleapis', () => ({
+          google: {
+            auth: { OAuth2: jest.fn().mockImplementation(() => ({ setCredentials: jest.fn() })) },
+            gmail: jest.fn(() => ({
+              users: {
+                messages: {
+                  send: jest.fn(({ requestBody }) => {
+                    capturedRequestBody = requestBody;
+                    return Promise.resolve({ data: { id: 'gmail-vendor-msg-id' } });
+                  }),
+                },
+              },
+            })),
+          },
+        }));
+        freshMailerService = require('../src/services/mailerService');
+      });
+
+      const res = await freshMailerService.sendRfqInviteEmail('vendor@example.com', {
+        rfq: { rfqNumber: 'RFQ-1', title: 'T' },
+        recipientName: 'Vendor',
+      });
+
+      expect(res).toEqual({ sent: true, messageId: 'gmail-vendor-msg-id' });
+      const decoded = Buffer.from(capturedRequestBody.raw, 'base64url').toString('utf8');
+      expect(decoded).toContain('To: vendor@example.com');
+
+      process.env.NODE_ENV = 'test';
+    });
   });
 
   describe('buildRfqInviteEmail', () => {

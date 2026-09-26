@@ -153,6 +153,18 @@ function vendorGatewayAddress() {
 
 /**
  * Send one message through the vendor transporter.
+ *
+ * Falls back to the Gmail API (the same account buyer-side mail already uses
+ * — see deliver()) when no dedicated vendor mailbox (VENDOR_SMTP_USER or
+ * VENDOR_EMAIL_GATEWAY_USER) is configured, rather than silently no-op'ing.
+ * This is the actual
+ * fix for vendor onboarding emails never arriving: no vendor mailbox has
+ * ever been set up (VENDOR_SMTP_USER/PASSWORD are unset), so every one of
+ * these calls was already dropping the email before the Gmail API even
+ * existed here — it just never surfaced because deliverVendor no-ops
+ * quietly. The email will show as sent from the buyer Gmail account until a
+ * dedicated vendor mailbox is authorized the same way (see
+ * scripts/get-gmail-refresh-token.js).
  */
 async function deliverVendor(message, label) {
   if (process.env.NODE_ENV === 'test') {
@@ -161,6 +173,14 @@ async function deliverVendor(message, label) {
 
   const activeTransporter = getVendorTransporter();
   if (!activeTransporter) {
+    if (isGmailApiConfigured()) {
+      logger.warn(
+        `Vendor SMTP not configured — falling back to the Gmail API (buyer account) for ${label}`,
+        { to: message.to },
+        'MAILER_SERVICE'
+      );
+      return deliverViaGmailApi(message, label);
+    }
     logger.warn(`Vendor SMTP not configured (VENDOR_SMTP_USER/VENDOR_SMTP_PASSWORD unset) — ${label} not sent`, { to: message.to }, 'MAILER_SERVICE');
     return { sent: false, reason: 'SMTP not configured' };
   }
