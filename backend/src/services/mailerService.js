@@ -294,7 +294,21 @@ async function deliverViaResend(message, label) {
 
 /** True when GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN are all set. */
 function isGmailApiConfigured() {
-  return Boolean(process.env.GMAIL_CLIENT_ID && process.env.GMAIL_CLIENT_SECRET && process.env.GMAIL_REFRESH_TOKEN);
+  const hasClientId = Boolean(process.env.GMAIL_CLIENT_ID);
+  const hasClientSecret = Boolean(process.env.GMAIL_CLIENT_SECRET);
+  const hasRefreshToken = Boolean(process.env.GMAIL_REFRESH_TOKEN);
+  if (!hasClientId || !hasClientSecret || !hasRefreshToken) {
+    // Diagnostic only — booleans, never the secret values themselves.
+    // Added while tracking down why the Gmail API branch wasn't firing in
+    // production despite `wrangler secret list` confirming all three are
+    // registered on the Worker.
+    logger.warn(
+      'Gmail API not configured',
+      { hasClientId, hasClientSecret, hasRefreshToken },
+      'MAILER_SERVICE'
+    );
+  }
+  return hasClientId && hasClientSecret && hasRefreshToken;
 }
 
 let gmailOAuthClient;
