@@ -29,6 +29,7 @@ const emailIngestionService = require('./emailIngestionService');
 const geminiService = require('./geminiService');
 const rfqIngestionService = require('./rfqIngestionService');
 const storeService = require('./storeService');
+const domainQueries = require('../db/domainQueries');
 const mailerService = require('./mailerService');
 const emailGatewayQueries = require('../db/emailGatewayQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
@@ -536,10 +537,17 @@ async function resolveVendorFromEmail(fromAddress, targetRfq = null) {
   const direct = storeService.getVendorById(email, 'all');
   if (direct) return direct;
 
-  const allVendors = storeService.getVendors ? await storeService.getVendors() : [];
-  const found = allVendors.find(
-    (v) => (v.email && v.email.toLowerCase() === email) || (v.corporateEmail && v.corporateEmail.toLowerCase() === email)
-  );
+  // A bounded single-row lookup, not storeService.getVendors() — that method
+  // re-syncs from the DB with a full unbounded table read on every call (see
+  // its own doc comment), and this runs once per inbound email the gateway
+  // processes, which would multiply that cost by every email received. No DB
+  // configured means there's nothing to bound against, so that in-memory
+  // fallback is still needed in that case (e.g. under test).
+  const found = pool.hasStorage()
+    ? await domainQueries.getVendorByEmailFromDB(email)
+    : (await storeService.getVendors()).find(
+        (v) => (v.email && v.email.toLowerCase() === email) || (v.corporateEmail && v.corporateEmail.toLowerCase() === email)
+      );
   if (found) return found;
 
   if (targetRfq) {
