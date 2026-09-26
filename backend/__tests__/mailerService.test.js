@@ -95,6 +95,98 @@ describe('mailerService', () => {
     process.env.NODE_ENV = 'test';
   });
 
+  describe('Gmail API delivery (GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN)', () => {
+    afterEach(() => {
+      delete process.env.GMAIL_CLIENT_ID;
+      delete process.env.GMAIL_CLIENT_SECRET;
+      delete process.env.GMAIL_REFRESH_TOKEN;
+      delete process.env.GMAIL_SENDER_EMAIL;
+      process.env.NODE_ENV = 'test';
+    });
+
+    test('sendOtpEmail sends via the Gmail API when configured, taking priority over SMTP/Resend', async () => {
+      let freshMailerService;
+      let capturedRequestBody;
+      jest.isolateModules(() => {
+        process.env.NODE_ENV = 'development';
+        process.env.GMAIL_CLIENT_ID = 'test-client-id';
+        process.env.GMAIL_CLIENT_SECRET = 'test-client-secret';
+        process.env.GMAIL_REFRESH_TOKEN = 'test-refresh-token';
+        process.env.GMAIL_SENDER_EMAIL = 'sender@example.com';
+        // Also set SMTP/Resend to prove Gmail API wins the priority order.
+        process.env.SMTP_USER = 'should-not-be-used@example.com';
+        process.env.SMTP_PASSWORD = 'app-password';
+        jest.doMock('googleapis', () => ({
+          google: {
+            auth: {
+              OAuth2: jest.fn().mockImplementation(() => ({
+                setCredentials: jest.fn(),
+              })),
+            },
+            gmail: jest.fn(() => ({
+              users: {
+                messages: {
+                  send: jest.fn(({ requestBody }) => {
+                    capturedRequestBody = requestBody;
+                    return Promise.resolve({ data: { id: 'gmail-msg-id' } });
+                  }),
+                },
+              },
+            })),
+          },
+        }));
+        freshMailerService = require('../src/services/mailerService');
+      });
+
+      const res = await freshMailerService.sendOtpEmail('someone@example.com', '4321', 60);
+      expect(res.sent).toBe(true);
+      expect(res.messageId).toBe('gmail-msg-id');
+
+      const decoded = Buffer.from(capturedRequestBody.raw, 'base64url').toString('utf8');
+      expect(decoded).toContain('To: someone@example.com');
+      expect(decoded).toContain('From: "Procucev Enterprise" <sender@example.com>');
+      expect(decoded).toContain('4321');
+
+      delete process.env.SMTP_USER;
+      delete process.env.SMTP_PASSWORD;
+    });
+
+    test('propagates a Gmail API send failure to the caller', async () => {
+      let freshMailerService;
+      jest.isolateModules(() => {
+        process.env.NODE_ENV = 'development';
+        process.env.GMAIL_CLIENT_ID = 'test-client-id';
+        process.env.GMAIL_CLIENT_SECRET = 'test-client-secret';
+        process.env.GMAIL_REFRESH_TOKEN = 'test-refresh-token';
+        jest.doMock('googleapis', () => ({
+          google: {
+            auth: { OAuth2: jest.fn().mockImplementation(() => ({ setCredentials: jest.fn() })) },
+            gmail: jest.fn(() => ({
+              users: { messages: { send: jest.fn().mockRejectedValue(new Error('Gmail API quota exceeded')) } },
+            })),
+          },
+        }));
+        freshMailerService = require('../src/services/mailerService');
+      });
+
+      await expect(freshMailerService.sendOtpEmail('someone@example.com', '1234', 600)).rejects.toThrow(
+        'Gmail API quota exceeded'
+      );
+    });
+
+    test('isConfigured reports true when only the Gmail API is configured', () => {
+      let freshMailerService;
+      jest.isolateModules(() => {
+        process.env.GMAIL_CLIENT_ID = 'test-client-id';
+        process.env.GMAIL_CLIENT_SECRET = 'test-client-secret';
+        process.env.GMAIL_REFRESH_TOKEN = 'test-refresh-token';
+        freshMailerService = require('../src/services/mailerService');
+      });
+      expect(freshMailerService.isGmailApiConfigured()).toBe(true);
+      expect(freshMailerService.isConfigured()).toBe(true);
+    });
+  });
+
   describe('buildRfqInviteEmail', () => {
     const RFQ = {
       rfqNumber: 'RFQ-2026-00500',
