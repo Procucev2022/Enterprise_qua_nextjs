@@ -1,0 +1,55 @@
+name: Deploy to Cloudflare (Development)
+
+on:
+  push:
+    branches:
+      - dev
+      - develop
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-dev-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-dev:
+    name: Deploy to Cloudflare Development Environment
+    runs-on: ubuntu-latest
+    environment: dev
+    timeout-minutes: 15
+
+    env:
+      CI: "true"
+      NODE_OPTIONS: "--max-old-space-size=4096"
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Dependencies
+        run: |
+          npm ci --legacy-peer-deps || npm install --legacy-peer-deps
+          npm ci --prefix frontend --legacy-peer-deps || npm install --prefix frontend --legacy-peer-deps
+          npm ci --prefix backend --legacy-peer-deps || npm install --prefix backend --legacy-peer-deps
+
+      - name: Build Frontend (Vinext)
+        run: npm run build:vinext
+        working-directory: frontend
+
+      - name: Deploy Frontend to Cloudflare (Dev Environment)
+        run: npx wrangler deploy --env dev
+        working-directory: frontend
+
+      - name: Deploy Backend Worker to Cloudflare (Dev Environment)
+        run: npx wrangler deploy --env dev
+        working-directory: backend

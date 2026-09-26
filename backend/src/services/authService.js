@@ -8,7 +8,7 @@ const identityQueries = require('../db/identityQueries');
 const authSessionQueries = require('../db/authSessionQueries');
 const { getWaitUntil } = require('../db/d1Bridge');
 
-const CONFIGURED_AUTH_SECRET = process.env.AUTH_SECRET || process.env.JWT_SECRET || '';
+let cachedEphemeralSecret = null;
 
 /**
  * Resolve the session-signing key.
@@ -23,27 +23,57 @@ const CONFIGURED_AUTH_SECRET = process.env.AUTH_SECRET || process.env.JWT_SECRET
  * generated per process: unset stays usable for local work, but the key is not
  * knowable from the source, and tokens simply stop verifying after a restart
  * rather than remaining forgeable forever.
+ *
+ * Note: Generating random bytes (crypto.randomBytes) or accessing unhandled I/O
+ * in the global scope is disallowed by Cloudflare Workers runtime. This resolution
+ * is therefore evaluated lazily on demand when signing/verifying tokens inside
+ * request handlers, rather than at module load time.
  */
-function resolveAuthSecret(env = process.env) {
-  const configured = env.AUTH_SECRET || env.JWT_SECRET || '';
+function resolveAuthSecret(env) {
+  if (env && env !== process.env) {
+    const configured = env.AUTH_SECRET || env.JWT_SECRET || '';
+    if (configured) return configured;
+
+    if (env.NODE_ENV === 'production') {
+      throw new Error(
+        'AUTH_SECRET (or JWT_SECRET) must be set in production. Refusing to start without a session-signing key.'
+      );
+    }
+
+    const ephemeral = crypto.randomBytes(48).toString('hex');
+    logger.warn(
+      'AUTH_SECRET/JWT_SECRET is not set — generated a random key for this process only. Sessions will not survive a restart and will not be valid across workers. Set AUTH_SECRET in backend/.env.',
+      {},
+      'AUTH_SERVICE'
+    );
+    return ephemeral;
+  }
+
+  const cfEnv = typeof globalThis !== 'undefined' ? globalThis.__CF_ENV__ : undefined;
+  const configured =
+    process.env.AUTH_SECRET ||
+    process.env.JWT_SECRET ||
+    (cfEnv && (cfEnv.AUTH_SECRET || cfEnv.JWT_SECRET)) ||
+    '';
   if (configured) return configured;
 
-  if (env.NODE_ENV === 'production') {
+  const nodeEnv = (cfEnv && cfEnv.NODE_ENV) || process.env.NODE_ENV;
+  if (nodeEnv === 'production') {
     throw new Error(
       'AUTH_SECRET (or JWT_SECRET) must be set in production. Refusing to start without a session-signing key.'
     );
   }
 
-  const ephemeral = crypto.randomBytes(48).toString('hex');
-  logger.warn(
-    'AUTH_SECRET/JWT_SECRET is not set — generated a random key for this process only. Sessions will not survive a restart and will not be valid across workers. Set AUTH_SECRET in backend/.env.',
-    {},
-    'AUTH_SERVICE'
-  );
-  return ephemeral;
+  if (!cachedEphemeralSecret) {
+    cachedEphemeralSecret = crypto.randomBytes(48).toString('hex');
+    logger.warn(
+      'AUTH_SECRET/JWT_SECRET is not set — generated a random key for this process only. Sessions will not survive a restart and will not be valid across workers. Set AUTH_SECRET in backend/.env.',
+      {},
+      'AUTH_SERVICE'
+    );
+  }
+  return cachedEphemeralSecret;
 }
-
-const AUTH_SECRET = resolveAuthSecret();
 
 const SESSION_TTL_SECONDS = 24 * 60 * 60;
 
@@ -198,8 +228,9 @@ function generateSessionToken(user) {
     })
   ).toString('base64url');
 
+  const authSecret = resolveAuthSecret();
   const signature = crypto
-    .createHmac('sha256', AUTH_SECRET)
+    .createHmac('sha256', authSecret)
     .update(`${header}.${payload}`)
     .digest('base64url');
 
@@ -225,8 +256,9 @@ function verifySessionToken(token) {
   }
 
   const [header, payload, signature] = parts;
+  const authSecret = resolveAuthSecret();
   const expectedSignature = crypto
-    .createHmac('sha256', AUTH_SECRET)
+    .createHmac('sha256', authSecret)
     .update(`${header}.${payload}`)
     .digest('base64url');
 
@@ -668,3 +700,11 @@ module.exports = {
   hydrateFromDB,
   SESSION_TTL_SECONDS,
 };
+
+Object.defineProperty(module.exports, 'AUTH_SECRET', {
+  get() {
+    return resolveAuthSecret();
+  },
+  enumerable: true,
+  configurable: true,
+});

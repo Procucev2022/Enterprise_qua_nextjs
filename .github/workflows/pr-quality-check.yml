@@ -1,13 +1,12 @@
-name: Enterprise CI Pipeline & Quality Gate
+name: PR Quality Gate
 
 on:
-  push:
-    branches: [main, master, develop, "database-migrate-**", "bug-ui-fixes", "**"]
   pull_request:
-    branches: [main, master, develop, "bug-ui-fixes"]
+    types: [opened, synchronize, reopened]
+    branches: ["**"]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: pr-qc-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
