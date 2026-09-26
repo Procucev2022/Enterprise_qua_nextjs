@@ -142,7 +142,12 @@ function resolveVendorConfig(env = process.env) {
         : env.EMAIL_GATEWAY_SECURE || 'true'
     ).toLowerCase() !== 'false',
     user: (env.VENDOR_EMAIL_GATEWAY_USER || 'srinu20252026@gmail.com').trim(),
-    password: env.VENDOR_EMAIL_GATEWAY_PASSWORD || 'oycrikpkvnjirwgo',
+    // No hardcoded fallback — a Gmail App Password is a live credential and
+    // must come from the environment only. An unset password here means the
+    // IMAP connection attempt fails/is skipped, same as any other
+    // unconfigured gateway var, rather than silently authenticating with a
+    // secret baked into source.
+    password: env.VENDOR_EMAIL_GATEWAY_PASSWORD || '',
     address: (
       env.VENDOR_EMAIL_GATEWAY_ADDRESS ||
       env.VENDOR_EMAIL_GATEWAY_USER ||
