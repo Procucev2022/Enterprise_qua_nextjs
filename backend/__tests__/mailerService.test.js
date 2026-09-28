@@ -1174,6 +1174,55 @@ describe('mailerService', () => {
       });
       await expect(fresh.deliverVendor({ to: 'vendor@abc.com' }, 'Vendor Invite')).rejects.toThrow('Vendor SMTP down');
     });
+
+    // Regression coverage for a real production incident: once VENDOR_SMTP_*
+    // secrets were configured, every vendor onboarding/invite email silently
+    // stopped arriving. Root cause confirmed live via wrangler tail: raw SMTP
+    // (nodemailer) cannot run on Cloudflare Workers at all — its TLS layer
+    // doesn't implement `rejectUnauthorized`, so activeTransporter.sendMail()
+    // always throws "The options.rejectUnauthorized option is not
+    // implemented" the moment a real vendor transporter gets configured.
+    // Before this fix, that error propagated straight to the caller with no
+    // fallback — the Gmail API fallback above only ever ran when no vendor
+    // transporter existed at all, never when one existed but failed to send.
+    test('deliverVendor falls back to the Gmail API when a configured vendor SMTP transporter fails to send (e.g. Workers TLS incompatibility)', async () => {
+      let fresh;
+      jest.isolateModules(() => {
+        process.env.NODE_ENV = 'development';
+        process.env.VENDOR_SMTP_USER = 'srinu20252026@gmail.com';
+        process.env.VENDOR_SMTP_PASSWORD = 'password';
+        process.env.GMAIL_CLIENT_ID = 'client-id';
+        process.env.GMAIL_CLIENT_SECRET = 'client-secret';
+        process.env.GMAIL_REFRESH_TOKEN = 'refresh-token';
+        jest.doMock('nodemailer', () => ({
+          createTransport: jest.fn(() => ({
+            sendMail: jest.fn().mockRejectedValue(new Error('The options.rejectUnauthorized option is not implemented')),
+          })),
+        }));
+        jest.doMock('googleapis', () => ({
+          google: {
+            auth: { OAuth2: jest.fn(() => ({ setCredentials: jest.fn() })) },
+            gmail: jest.fn(() => ({
+              users: {
+                messages: {
+                  send: jest.fn().mockResolvedValue({ data: { id: 'gmail-fallback-msg-1' } }),
+                },
+              },
+            })),
+          },
+        }));
+        fresh = require('../src/services/mailerService');
+      });
+
+      const res = await fresh.deliverVendor({ to: 'vendor@abc.com', subject: 'RFQ Invite' }, 'Vendor Invite');
+
+      expect(res.sent).toBe(true);
+      expect(res.messageId).toBe('gmail-fallback-msg-1');
+
+      delete process.env.GMAIL_CLIENT_ID;
+      delete process.env.GMAIL_CLIENT_SECRET;
+      delete process.env.GMAIL_REFRESH_TOKEN;
+    });
   });
 });
 

@@ -186,9 +186,32 @@ async function deliverVendor(message, label) {
   }
 
   logger.info(`Dispatching ${label} to ${message.to}`, { subject: message.subject }, 'MAILER_SERVICE');
-  const info = await activeTransporter.sendMail(message);
-  logger.info(`${label} sent successfully to ${message.to}`, { messageId: info.messageId }, 'MAILER_SERVICE');
-  return { sent: true, messageId: info.messageId };
+  try {
+    const info = await activeTransporter.sendMail(message);
+    logger.info(`${label} sent successfully to ${message.to}`, { messageId: info.messageId }, 'MAILER_SERVICE');
+    return { sent: true, messageId: info.messageId };
+  } catch (err) {
+    // Raw SMTP (nodemailer) cannot run on Cloudflare Workers at all — its TLS
+    // socket layer doesn't implement `rejectUnauthorized`, so every send
+    // through a real VENDOR_SMTP_USER/PASSWORD transporter throws "The
+    // options.rejectUnauthorized option is not implemented" the moment one
+    // gets configured (confirmed live: this silently broke every vendor
+    // onboarding/invite email the day VENDOR_SMTP_* secrets were first set,
+    // since before that getVendorTransporter() returned undefined and this
+    // function's own fallback above never got a chance to run). Falling back
+    // to the Gmail API here — the same proven-working path used when no
+    // vendor mailbox is configured at all — rather than letting a transport
+    // this platform can't support take the whole vendor mail path down.
+    if (isGmailApiConfigured()) {
+      logger.warn(
+        `Vendor SMTP send failed for ${label} — falling back to the Gmail API (buyer account)`,
+        { to: message.to, errorMessage: err.message },
+        'MAILER_SERVICE'
+      );
+      return deliverViaGmailApi(message, label);
+    }
+    throw err;
+  }
 }
 
 // ── Autonomous email-gateway: buyer requisition inbound notification ─────────
