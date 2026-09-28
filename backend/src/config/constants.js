@@ -604,7 +604,7 @@ const EMAIL_INGESTION_CONFIG = {
   // Outlook's Compound File Binary format, which is not RFC822 and is refused
   // with an instruction to re-export rather than failing silently.
   MSG_PATTERN: /\.msg$/i,
-  MAX_BYTES: Number(process.env.EMAIL_INGESTION_MAX_BYTES || 10 * 1024 * 1024),
+  MAX_BYTES: Number(process.env.EMAIL_INGESTION_MAX_BYTES || 15 * 1024 * 1024),
   MAX_ATTACHMENTS: Number(process.env.EMAIL_INGESTION_MAX_ATTACHMENTS || 10),
   // Cap on how much of a decoded text attachment is appended, so one oversized
   // CSV cannot crowd the body out of the extractor's context window.
@@ -911,7 +911,7 @@ const EMAIL_INGESTION_MESSAGES = {
   NO_CONTENT:
     'This email has no readable body and no PDF, image or CSV attachment to extract from. If the requisition is in a spreadsheet, upload it through the BOQ Spreadsheet / Drawing tab.',
   TOO_LARGE: `That email is larger than the ${Math.floor(
-    Number(process.env.EMAIL_INGESTION_MAX_BYTES || 10 * 1024 * 1024) / (1024 * 1024)
+    Number(process.env.EMAIL_INGESTION_MAX_BYTES || 15 * 1024 * 1024) / (1024 * 1024)
   )}MB limit. Forward just the requisition without the earlier thread, or upload the attachment on its own.`,
   UNREADABLE:
     'This email could not be parsed. Re-export it from your mail client as a .eml file, or add the line items manually.',
