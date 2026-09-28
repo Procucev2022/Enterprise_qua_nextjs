@@ -269,4 +269,46 @@ describe('app/buyer/subscription-center.tsx', () => {
       window.history.pushState({}, '', originalLocation);
     }
   });
+
+  it('renders active premium plan banners for version_1, version_2, and version_3', () => {
+    mockStore({ activeSubscription: 'version_1' });
+    const { rerender } = render(<SubscriptionCenter />);
+    expect(screen.getByText(/Active Premium Plan: Version 1/i)).toBeInTheDocument();
+
+    mockStore({ activeSubscription: 'version_2' });
+    rerender(<SubscriptionCenter />);
+    expect(screen.getByText(/Active Premium Plan: Version 2/i)).toBeInTheDocument();
+
+    mockStore({ activeSubscription: 'version_3' });
+    rerender(<SubscriptionCenter />);
+    expect(screen.getByText(/Active Premium Plan: Version 3/i)).toBeInTheDocument();
+  });
+
+  it('handles reset trial network error gracefully', async () => {
+    global.fetch = jest.fn().mockRejectedValueOnce(new Error('Network drop'));
+    render(<SubscriptionCenter />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Reset to Free Account/i));
+    });
+
+    expect(mockShowToast).toHaveBeenCalledWith('Reset Failed', 'Could not reach the server. Please try again.', 'warning');
+  });
+
+  it('shows info toast when payment link status returns CANCELED', async () => {
+    const originalLocation = window.location.href;
+    mockCheckBuyerPaymentLinkStatus.mockResolvedValueOnce('CANCELED');
+    window.history.pushState({}, '', '/buyer/subscription-center?linkId=pl-cancelled');
+
+    try {
+      render(<SubscriptionCenter />);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(mockShowToast).toHaveBeenCalledWith('Payment Cancelled', 'No changes were made to your subscription.', 'info');
+    } finally {
+      window.history.pushState({}, '', originalLocation);
+    }
+  });
 });

@@ -36,7 +36,7 @@ import {
   Info,
 } from 'lucide-react';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
-import { CURRENCY, SOURCING_MODES, entitledSourcingModes } from '@/lib/constants';
+import { CURRENCY, SOURCING_MODES, entitledSourcingModes, RFQ_DOCUMENT_LIMITS } from '@/lib/constants';
 import { createRFQ, extractLineItemsFromDocument, fetchAllVendors, uploadRFQAttachment } from '@/lib/rfqClient';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
 import {
@@ -218,6 +218,10 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     const failures: string[] = [];
 
     for (const file of Array.from(files)) {
+      if (file.size > RFQ_DOCUMENT_LIMITS.MAX_FILE_SIZE_BYTES) {
+        failures.push(`${file.name}: File exceeds the 15 MB limit`);
+        continue;
+      }
       // eslint-disable-next-line no-await-in-loop -- reported per file, so each
       // upload has to resolve before the next is attempted.
       const result = await uploadRFQAttachment(file);
@@ -259,6 +263,10 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     let derivedBudget: number | null = null;
 
     for (const file of files) {
+      if (file.size > RFQ_DOCUMENT_LIMITS.MAX_FILE_SIZE_BYTES) {
+        failures.push(`${file.name}: File exceeds the 15 MB limit`);
+        continue;
+      }
       // eslint-disable-next-line no-await-in-loop -- each document is reported
       // against itself, so they are read one at a time.
       const request = await buildExtractionRequest(file);
