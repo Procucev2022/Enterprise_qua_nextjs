@@ -1243,7 +1243,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     id="add-vendor-contact"
                     type="text"
                     required
-                    placeholder="e.g. Govardhan"
+                    placeholder="e.g. John Doe"
                     value={formContactPerson}
                     onChange={(e) => setFormContactPerson(e.target.value)}
                     className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
@@ -1273,7 +1273,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   id="add-vendor-email"
                   type="email"
                   required
-                  placeholder="e.g. govardhan@example.com"
+                  placeholder="e.g. contact@example.com"
                   value={formEmail}
                   onChange={(e) => setFormEmail(e.target.value)}
                   className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"

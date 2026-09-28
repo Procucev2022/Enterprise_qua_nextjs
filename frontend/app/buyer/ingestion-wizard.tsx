@@ -2015,7 +2015,7 @@ export default function IngestionWizard({
                   <input
                     type="text"
                     required
-                    placeholder="e.g. Govardhan"
+                    placeholder="e.g. John Doe"
                     value={vendorFormContactPerson}
                     onChange={(e) => setVendorFormContactPerson(e.target.value)}
                     className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
@@ -2043,7 +2043,7 @@ export default function IngestionWizard({
                 <input
                   type="email"
                   required
-                  placeholder="e.g. govardhan@example.com"
+                  placeholder="e.g. contact@example.com"
                   value={vendorFormEmail}
                   onChange={(e) => setVendorFormEmail(e.target.value)}
                   className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
