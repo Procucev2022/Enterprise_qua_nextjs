@@ -434,6 +434,7 @@ export default function LoginPage() {
   const fieldLabel = 'text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450';
   const iconClass = 'absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none';
   const fieldInput = 'has-leading-icon text-xs';
+  const plainInput = 'text-xs !pl-2.5 !pr-2';
   const otpInput = 'has-leading-icon text-xs font-mono font-bold tracking-widest text-center';
   const primaryBtn =
     'btn btn-primary w-full text-xs font-bold py-2.5 flex items-center justify-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed';
@@ -875,7 +876,7 @@ export default function LoginPage() {
                           placeholder="e.g. Pune"
                           value={regCity}
                           onChange={(e) => setRegCity(e.target.value)}
-                          className={fieldInput}
+                          className={plainInput}
                           required
                         />
                       </div>
@@ -889,7 +890,7 @@ export default function LoginPage() {
                           placeholder="e.g. Maharashtra"
                           value={regState}
                           onChange={(e) => setRegState(e.target.value)}
-                          className={fieldInput}
+                          className={plainInput}
                           required
                         />
                       </div>
@@ -903,7 +904,7 @@ export default function LoginPage() {
                           placeholder="e.g. 411001"
                           value={regPincode}
                           onChange={(e) => setRegPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                          className={`${fieldInput} font-mono`}
+                          className={`${plainInput} font-mono`}
                           maxLength={6}
                           required
                         />
