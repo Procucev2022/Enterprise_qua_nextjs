@@ -1223,6 +1223,88 @@ describe('mailerService', () => {
       delete process.env.GMAIL_CLIENT_SECRET;
       delete process.env.GMAIL_REFRESH_TOKEN;
     });
+
+    // A dedicated vendor mailbox Gmail identity — same OAuth2 "app"
+    // (GMAIL_CLIENT_ID/SECRET) as the buyer's, but its own refresh token and
+    // sender address, so vendor mail no longer has to appear to come from
+    // the buyer's account and never touches SMTP (which can't work on
+    // Workers at all) in the first place.
+    describe('vendor Gmail API (dedicated vendor mailbox)', () => {
+      afterEach(() => {
+        delete process.env.GMAIL_CLIENT_ID;
+        delete process.env.GMAIL_CLIENT_SECRET;
+        delete process.env.VENDOR_GMAIL_REFRESH_TOKEN;
+        delete process.env.VENDOR_GMAIL_SENDER_EMAIL;
+        delete process.env.VENDOR_SMTP_USER;
+        delete process.env.VENDOR_SMTP_PASSWORD;
+      });
+
+      test('isVendorGmailApiConfigured is true only when client id/secret and the vendor refresh token are all set', () => {
+        let fresh;
+        jest.isolateModules(() => {
+          fresh = require('../src/services/mailerService');
+        });
+        expect(fresh.isVendorGmailApiConfigured()).toBe(false);
+
+        jest.isolateModules(() => {
+          process.env.GMAIL_CLIENT_ID = 'client-id';
+          process.env.GMAIL_CLIENT_SECRET = 'client-secret';
+          fresh = require('../src/services/mailerService');
+        });
+        expect(fresh.isVendorGmailApiConfigured()).toBe(false);
+
+        jest.isolateModules(() => {
+          process.env.GMAIL_CLIENT_ID = 'client-id';
+          process.env.GMAIL_CLIENT_SECRET = 'client-secret';
+          process.env.VENDOR_GMAIL_REFRESH_TOKEN = 'vendor-refresh-token';
+          fresh = require('../src/services/mailerService');
+        });
+        expect(fresh.isVendorGmailApiConfigured()).toBe(true);
+      });
+
+      test('deliverVendor prefers the dedicated vendor Gmail mailbox over VENDOR_SMTP_*, and sends from VENDOR_GMAIL_SENDER_EMAIL', async () => {
+        let fresh;
+        let sendArgs;
+        let createTransport;
+        jest.isolateModules(() => {
+          process.env.NODE_ENV = 'development';
+          process.env.GMAIL_CLIENT_ID = 'client-id';
+          process.env.GMAIL_CLIENT_SECRET = 'client-secret';
+          process.env.VENDOR_GMAIL_REFRESH_TOKEN = 'vendor-refresh-token';
+          process.env.VENDOR_GMAIL_SENDER_EMAIL = 'srinu20252026@gmail.com';
+          // Present but must never be touched — vendor Gmail API takes
+          // priority, so this transporter should never even be built.
+          process.env.VENDOR_SMTP_USER = 'srinu20252026@gmail.com';
+          process.env.VENDOR_SMTP_PASSWORD = 'password';
+          createTransport = jest.fn();
+          jest.doMock('nodemailer', () => ({ createTransport }));
+          jest.doMock('googleapis', () => ({
+            google: {
+              auth: { OAuth2: jest.fn(() => ({ setCredentials: jest.fn() })) },
+              gmail: jest.fn(() => ({
+                users: {
+                  messages: {
+                    send: jest.fn((args) => {
+                      sendArgs = args;
+                      return Promise.resolve({ data: { id: 'vendor-gmail-msg-1' } });
+                    }),
+                  },
+                },
+              })),
+            },
+          }));
+          fresh = require('../src/services/mailerService');
+        });
+
+        const res = await fresh.deliverVendor({ to: 'vendor@abc.com', subject: 'RFQ Invite', html: '<p>hi</p>' }, 'Vendor Invite');
+
+        expect(res.sent).toBe(true);
+        expect(res.messageId).toBe('vendor-gmail-msg-1');
+        const decodedRaw = Buffer.from(sendArgs.requestBody.raw, 'base64url').toString('utf8');
+        expect(decodedRaw).toContain('srinu20252026@gmail.com');
+        expect(createTransport).not.toHaveBeenCalled();
+      });
+    });
   });
 });
 
