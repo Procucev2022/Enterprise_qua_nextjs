@@ -824,8 +824,8 @@ export default function CategorySummaryDashboard() {
                           <tr key={qIdx} className="hover:bg-slate-50/50 dark:hover:bg-gray-950/50">
                             <td className="p-2.5 font-mono font-bold text-indigo-600 dark:text-indigo-400">{item.rfq.rfqNumber}</td>
                             <td className="p-2.5 font-semibold text-slate-900 dark:text-white">{item.quote.vendorName}</td>
-                            <td className="p-2.5 text-right font-mono text-slate-700 dark:text-gray-300">₹{(item.quote.unitPrice || 0).toLocaleString()}</td>
-                            <td className="p-2.5 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">₹{(item.quote.totalPrice || 0).toLocaleString()}</td>
+                            <td className="p-2.5 text-right font-mono text-slate-700 dark:text-gray-300">₹{(item.quote.unitPrice || 0).toLocaleString('en-IN')}</td>
+                            <td className="p-2.5 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">₹{(item.quote.totalPrice || 0).toLocaleString('en-IN')}</td>
                             <td className="p-2.5 text-center font-mono">{item.quote.leadTimeDays || 7} Days</td>
                             <td className="p-2.5 text-center">
                               <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600">
@@ -1132,8 +1132,8 @@ export default function CategorySummaryDashboard() {
                           <tr key={idx} className="hover:bg-slate-50/50 dark:hover:bg-gray-950/50">
                             <td className="p-2.5 font-mono font-bold text-indigo-600 dark:text-indigo-400">{item.rfq.rfqNumber}</td>
                             <td className="p-2.5 font-semibold text-slate-900 dark:text-white">{item.quote.vendorName}</td>
-                            <td className="p-2.5 text-right font-mono text-slate-700 dark:text-gray-300">₹{(item.quote.unitPrice || 0).toLocaleString()}</td>
-                            <td className="p-2.5 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">₹{(item.quote.totalPrice || 0).toLocaleString()}</td>
+                            <td className="p-2.5 text-right font-mono text-slate-700 dark:text-gray-300">₹{(item.quote.unitPrice || 0).toLocaleString('en-IN')}</td>
+                            <td className="p-2.5 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">₹{(item.quote.totalPrice || 0).toLocaleString('en-IN')}</td>
                             <td className="p-2.5 text-center font-mono">{item.quote.leadTimeDays || 7} Days</td>
                             <td className="p-2.5 text-center">
                               <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600">
