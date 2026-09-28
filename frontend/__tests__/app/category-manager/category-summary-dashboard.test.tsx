@@ -274,6 +274,30 @@ describe('category-summary-dashboard pure helpers', () => {
       expect(doesBuyerMatchRfq(account, rfq)).toBe(true);
     });
 
+    it('returns false when no fields match', () => {
+      const rfq = makeRfq({
+        category: 'IT',
+        createdAt: '2026-06-01',
+        buyerAccountId: 'diff-id',
+        buyerAccountName: 'Different Corp',
+        raisedByEmail: 'diff@other.com',
+      });
+      expect(doesBuyerMatchRfq(account, rfq)).toBe(false);
+    });
+
+    it('synthesizes quotes with default vendor and pricing when budget and vendors are absent', () => {
+      const rfq = makeRfq({
+        category: 'Civil Works',
+        createdAt: '2026-06-01',
+        quotesCount: 1,
+        budget: undefined,
+      });
+      const result = extractQuotesFromRfqs([rfq], []);
+      expect(result).toHaveLength(1);
+      expect(result[0].quote.vendorName).toBe('Supplier Response #1');
+      expect(result[0].quote.unitPrice).toBe(50000);
+    });
+
     it('returns false for unrelated rfq', () => {
       const rfq = makeRfq({ category: 'IT', createdAt: '2026-06-01', buyerAccountId: 'acc-999' });
       expect(doesBuyerMatchRfq(account, rfq)).toBe(false);
@@ -846,6 +870,54 @@ describe('CategorySummaryDashboard', () => {
       expect(formatContactPerson('   ')).toBe('Sales Coordinator');
       expect(formatContactPerson('')).toBe('Sales Coordinator');
       expect(formatContactPerson(undefined)).toBe('Sales Coordinator');
+    });
+
+    it('formats location correctly with city and state combinations', () => {
+      expect(formatLocation('Mumbai', 'Maharashtra')).toBe('Mumbai, Maharashtra');
+      expect(formatLocation('Delhi', '')).toBe('Delhi');
+      expect(formatLocation('', 'Karnataka')).toBe('National');
+      expect(formatLocation('', '')).toBe('National');
+      expect(formatLocation(undefined, undefined)).toBe('National');
+    });
+
+    it('formats contact info with phone and email combinations', () => {
+      expect(formatContactInfo('+91 99999 88888', 'a@b.com')).toBe('+91 99999 88888');
+      expect(formatContactInfo('', 'a@b.com')).toBe('a@b.com');
+      expect(formatContactInfo('', '')).toBe('—');
+      expect(formatContactInfo(undefined, undefined)).toBe('—');
+    });
+
+    it('calculates parseTimestamp, growthPercentFor, and demandStatusFor accurately', () => {
+      expect(parseTimestamp('invalid-date')).toBe(0);
+      expect(parseTimestamp('2026-06-01T00:00:00Z')).toBeGreaterThan(0);
+
+      const now = Date.now();
+      const currentRfq = makeRfq({ category: 'Civil Works', createdAt: new Date(now - 86400000).toISOString() });
+      const priorRfq = makeRfq({ category: 'Civil Works', createdAt: new Date(now - 10 * 86400000).toISOString() });
+
+      expect(growthPercentFor([currentRfq, priorRfq], 7)).toBe(0);
+      expect(growthPercentFor([currentRfq], 7)).toBe(null);
+      expect(growthPercentFor([], 7)).toBe(0);
+
+      expect(demandStatusFor(15)).toBe('High Demand');
+      expect(demandStatusFor(7)).toBe('Optimal');
+      expect(demandStatusFor(3)).toBe('Growing');
+      expect(demandStatusFor(1)).toBe('Emerging');
+      expect(demandStatusFor(0)).toBe('No Activity');
+    });
+
+    it('renders GrowthBadge with various values', () => {
+      const { container: positive } = render(<GrowthBadge value={25} />);
+      expect(positive.textContent).toContain('+25%');
+
+      const { container: negative } = render(<GrowthBadge value={-15} />);
+      expect(negative.textContent).toContain('-15%');
+
+      const { container: flat } = render(<GrowthBadge value={0} />);
+      expect(flat.textContent).toContain('Flat');
+
+      const { container: newBadge } = render(<GrowthBadge value={null} />);
+      expect(newBadge.textContent).toContain('New');
     });
   });
 });
