@@ -289,14 +289,17 @@ export interface PincodeValidationResult {
 /**
  * Validates Indian PIN code format and performs live postal verification lookup via Postal PIN Code API
  */
-export async function validatePincode(pincode: string): Promise<PincodeValidationResult> {
+export async function validatePincode(
+  pincode: string,
+  isIndianFormat: boolean = true
+): Promise<PincodeValidationResult> {
   const pin = (pincode || '').trim();
   if (!pin) {
     return { isValid: false, message: 'PIN code is required' };
   }
 
-  // International postal codes allowed if not 6-digit number
-  if (!/^\d+$/.test(pin)) {
+  // International postal codes allowed if not 6-digit number or explicitly non-Indian
+  if (!isIndianFormat || !/^\d+$/.test(pin)) {
     if (PINCODE_PATTERN.test(pin)) {
       return { isValid: true };
     }
