@@ -2299,4 +2299,28 @@ describe('lib/store.tsx - channel chasers and bids', () => {
       expect(ctx().auditLogs[0].action).toContain('PO');
     });
   });
+
+  describe('updateBuyerVendor & deleteBuyerVendor', () => {
+    it('updates a buyer vendor and syncs to backend', async () => {
+      const ctx = await mountStore();
+      const firstVendor = ctx().buyerVendors[0];
+      if (firstVendor) {
+        await act(async () => {
+          ctx().updateBuyerVendor(firstVendor.id, { name: 'Updated Vendor Name' });
+        });
+        expect(ctx().buyerVendors.find((v: { id: string }) => v.id === firstVendor.id)?.name).toBe('Updated Vendor Name');
+      }
+    });
+
+    it('deletes a buyer vendor from the store', async () => {
+      const ctx = await mountStore();
+      const firstVendor = ctx().buyerVendors[0];
+      if (firstVendor) {
+        await act(async () => {
+          ctx().deleteBuyerVendor(firstVendor.id);
+        });
+        expect(ctx().buyerVendors.find((v: { id: string }) => v.id === firstVendor.id)).toBeUndefined();
+      }
+    });
+  });
 });

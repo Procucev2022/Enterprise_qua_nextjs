@@ -531,6 +531,12 @@ export default function IngestionWizard({
         }
       }
 
+      if (form.sourcingMode === 'mode_1' && (!mode1AssignedVendors || mode1AssignedVendors.length === 0)) {
+        setSubmitError('Version 1 (Client Sourcing) requires at least one private vendor to be added/selected before creating the RFQ.');
+        showToast('Private Vendor Required', 'Version 1 requires at least one private vendor in your roster before dispatching.', 'warning');
+        return;
+      }
+
       // ALL_CATEGORIES_OPTION is a UI-only sentinel that opts a line item out
       // of category-narrowed matching — never a real taxonomy value, so it
       // must never reach the server as this item's majorCategory.
