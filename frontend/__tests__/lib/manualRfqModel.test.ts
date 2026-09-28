@@ -13,6 +13,7 @@ import {
   createEmptyManualRFQLineItem,
   fromExtractedEntity,
   isManualRFQLineItemComplete,
+  isPastDateString,
   removeManualRFQLineItem,
   toExtractedEntity,
   toRFQCreatePayload,
@@ -150,6 +151,16 @@ describe('validateManualRFQLineItem', () => {
       targetDate: 'Target date cannot be earlier than today.',
     });
   });
+
+  it('validates isPastDateString edge cases', () => {
+    expect(isPastDateString('')).toBe(false);
+    expect(isPastDateString(null)).toBe(false);
+    expect(isPastDateString(undefined)).toBe(false);
+    expect(isPastDateString('   ')).toBe(false);
+    expect(isPastDateString('not-a-date')).toBe(false);
+    expect(isPastDateString('2020-01-01')).toBe(true);
+    expect(isPastDateString('2099-12-31')).toBe(false);
+  });
 });
 
 describe('validateManualRFQForm', () => {
@@ -191,12 +202,18 @@ describe('validateManualRFQForm', () => {
 
   // Blank and malformed are reported differently: telling a buyer who typed
   // nothing that the format is wrong sends them hunting for a typo.
-  it('distinguishes a blank pincode from a malformed one', () => {
+  it('distinguishes a blank pincode from a malformed or dummy one', () => {
     expect(validateManualRFQForm(completeForm({ deliveryPincode: '' })).formErrors.deliveryPincode).toBe(
       MANUAL.deliveryPincodeRequired
     );
     expect(validateManualRFQForm(completeForm({ deliveryPincode: '!!' })).formErrors.deliveryPincode).toBe(
       MANUAL.deliveryPincodeInvalid
+    );
+    expect(validateManualRFQForm(completeForm({ deliveryPincode: '123456' })).formErrors.deliveryPincode).toBe(
+      MANUAL.deliveryPincodeDummy
+    );
+    expect(validateManualRFQForm(completeForm({ deliveryPincode: '111111' })).formErrors.deliveryPincode).toBe(
+      MANUAL.deliveryPincodeDummy
     );
   });
 
@@ -331,6 +348,13 @@ describe('toRFQCreatePayload', () => {
   // ceiling of nothing.
   it('sends zero for an unanswered budget', () => {
     expect(toRFQCreatePayload(completeForm({ estimatedBudget: null })).budget).toBe(0);
+  });
+
+  it('handles empty lineItems safely in toRFQCreatePayload', () => {
+    const payload = toRFQCreatePayload(completeForm({ title: '', majorCategory: '', targetDeliveryDate: '', lineItems: [] }));
+    expect(payload.title).toBe('');
+    expect(payload.category).toBe('');
+    expect(payload.targetDeliveryDate).toBe('');
   });
 
   it('tolerates a form with no line items', () => {

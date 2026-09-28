@@ -22,7 +22,7 @@
 // ==============================================================================
 
 import { hasMajorCategory, hasMinorCategory } from './categoryTaxonomy';
-import { PINCODE_PATTERN } from './validationSchemas';
+import { PINCODE_PATTERN, isDummyPincode } from './validationSchemas';
 import { UI_STRINGS, formatString } from './uiStrings';
 import type {
   ExtractedEntity,
@@ -190,6 +190,8 @@ export function validateManualRFQForm(form: ManualRFQForm): ManualRFQValidation 
     formErrors.deliveryPincode = MANUAL.deliveryPincodeRequired;
   } else if (!PINCODE_PATTERN.test(pincode)) {
     formErrors.deliveryPincode = MANUAL.deliveryPincodeInvalid;
+  } else if (isDummyPincode(pincode)) {
+    formErrors.deliveryPincode = MANUAL.deliveryPincodeDummy || 'Dummy or sequential PIN codes (e.g. 123456, 111111) are not allowed.';
   }
 
   // Optional, but a negative ceiling is meaningless rather than merely absent.

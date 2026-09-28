@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import KanbanBoard from '@/app/category-manager/kanban-board';
 import SpendDashboard from '@/app/category-manager/spend-dashboard';
 import BuyerConsole from '@/app/category-manager/buyer-console';
@@ -547,6 +547,36 @@ describe('Category Manager Screens Suite', () => {
       expect(() => fireEvent.click(callBtns[0])).not.toThrow();
 
       global.fetch = baseImpl as unknown as typeof global.fetch;
+    });
+
+    test('opens summary card filter modals and triggers Matrix and Review actions', async () => {
+      const onMatrix = jest.fn();
+      renderWithProvider(<KanbanBoard onNavigateToMatrix={onMatrix} onNavigateToSpend={jest.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/RFQs In Pipeline/i)).toBeInTheDocument();
+      });
+
+      // Click RFQs In Pipeline card
+      fireEvent.click(screen.getByText(/RFQs In Pipeline/i));
+      const dialog = screen.getByRole('dialog');
+      expect(within(dialog).getByRole('heading', { name: 'RFQs In Pipeline' })).toBeInTheDocument();
+
+      // Click Matrix or Review button inside the modal table
+      const matrixOrReviewBtns = within(dialog).getAllByRole('button', { name: /Matrix|Review/i });
+      if (matrixOrReviewBtns.length > 0) {
+        fireEvent.click(matrixOrReviewBtns[0]);
+      }
+
+      // Open Awaiting Quotes card
+      fireEvent.click(screen.getByText(/Awaiting Quotes/i));
+      const awaitingDialog = screen.getByRole('dialog');
+      expect(within(awaitingDialog).getByRole('heading', { name: 'Awaiting Quotes' })).toBeInTheDocument();
+
+      // Close using close button
+      const closeBtn = within(awaitingDialog).getByTitle('Close');
+      fireEvent.click(closeBtn);
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
   });
 

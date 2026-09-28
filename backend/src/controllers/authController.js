@@ -36,15 +36,15 @@ async function login(req, res, next) {
 
 async function requestOtp(req, res, next) {
   try {
-    const { email, mobile, roleHint } = req.body || {};
+    const { email, mobile, roleHint, isRegistration } = req.body || {};
     const ipAddress = getClientIp(req);
 
-    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.requestOtp, { email, mobile, roleHint });
+    const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.requestOtp, { email, mobile, roleHint, isRegistration });
     if (!isValid) {
       return res.status(400).json({ success: false, error: Object.values(errors)[0] });
     }
 
-    const result = await authService.requestOtp(email, mobile, roleHint, ipAddress);
+    const result = await authService.requestOtp(email, mobile, roleHint, ipAddress, isRegistration);
     res.json(result);
   } catch (err) {
     logger.warn('OTP request failed in authController', { error: err.message, email: req.body?.email }, 'AUTH_CONTROLLER');

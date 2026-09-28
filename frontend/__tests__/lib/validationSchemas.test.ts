@@ -6,6 +6,8 @@ import {
   PHONE_PATTERN,
   INDIAN_MOBILE_PATTERN,
   PINCODE_PATTERN,
+  INDIAN_PINCODE_PATTERN,
+  isDummyPincode,
   FormSchema,
 } from '../../lib/validationSchemas';
 import { UI_STRINGS } from '../../lib/uiStrings';
@@ -233,6 +235,31 @@ describe('PINCODE_PATTERN', () => {
     ['12345678901', 'longer than ten characters'],
   ])('rejects %s (%s)', (value) => {
     expect(PINCODE_PATTERN.test(value)).toBe(false);
+  });
+});
+
+describe('INDIAN_PINCODE_PATTERN & isDummyPincode', () => {
+  test('INDIAN_PINCODE_PATTERN validates Indian 6 digit pin', () => {
+    expect(INDIAN_PINCODE_PATTERN.test('400701')).toBe(true);
+    expect(INDIAN_PINCODE_PATTERN.test('012345')).toBe(false);
+    expect(INDIAN_PINCODE_PATTERN.test('40070')).toBe(false);
+    expect(INDIAN_PINCODE_PATTERN.test('4007011')).toBe(false);
+  });
+
+  test('isDummyPincode rejects dummy and sequential pin patterns', () => {
+    expect(isDummyPincode('123456')).toBe(true);
+    expect(isDummyPincode('654321')).toBe(true);
+    expect(isDummyPincode('000000')).toBe(true);
+    expect(isDummyPincode('111111')).toBe(true);
+    expect(isDummyPincode('999999')).toBe(true);
+    expect(isDummyPincode('121212')).toBe(true);
+    expect(isDummyPincode('400701')).toBe(false);
+    expect(isDummyPincode('560001')).toBe(false);
+    expect(isDummyPincode('')).toBe(false);
+    expect(isDummyPincode('   ')).toBe(false);
+    expect(isDummyPincode(null)).toBe(false);
+    expect(isDummyPincode(undefined)).toBe(false);
+    expect(isDummyPincode(123456)).toBe(false);
   });
 });
 

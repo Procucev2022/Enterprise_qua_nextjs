@@ -446,6 +446,9 @@ describe('LoginPage', () => {
     };
 
     it('creates a real account and signs the new user in after dual OTP verification', async () => {
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({
+        success: true,
+      });
       (authClient.register as jest.Mock).mockResolvedValue({
         success: true,
         user: BUYER_SESSION,
@@ -457,7 +460,9 @@ describe('LoginPage', () => {
       fillValidForm();
       fireEvent.click(submitButton(/Create Account/i));
 
-      expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      });
       completeDualOtp('123456', '654321');
 
       await waitFor(() => {
@@ -483,6 +488,9 @@ describe('LoginPage', () => {
         role: 'vendor' as const,
         vendorId: 'vnd-1',
       };
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({
+        success: true,
+      });
       (authClient.register as jest.Mock).mockResolvedValue({
         success: true,
         user: vendorUser,
@@ -499,7 +507,9 @@ describe('LoginPage', () => {
       typeInto(/^Password$/i, 'Pass@1234');
 
       fireEvent.click(submitButton(/Create Account/i));
-      expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      });
       completeDualOtp();
 
       await waitFor(() => {
@@ -517,6 +527,9 @@ describe('LoginPage', () => {
     });
 
     it('never fabricates a GSTIN for the new buyer record', async () => {
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({
+        success: true,
+      });
       (authClient.register as jest.Mock).mockResolvedValue({
         success: true,
         user: BUYER_SESSION,
@@ -527,6 +540,9 @@ describe('LoginPage', () => {
       openRegister();
       fillValidForm();
       fireEvent.click(submitButton(/Create Account/i));
+      await waitFor(() => {
+        expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      });
       completeDualOtp();
 
       await waitFor(() => expect(addBuyerAccount).toHaveBeenCalled());
@@ -575,6 +591,9 @@ describe('LoginPage', () => {
     });
 
     it('reports a duplicate account from the server', async () => {
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({
+        success: true,
+      });
       (authClient.register as jest.Mock).mockResolvedValue({
         success: false,
         error: 'An account already exists for this email address.',
@@ -584,6 +603,9 @@ describe('LoginPage', () => {
       openRegister();
       fillValidForm();
       fireEvent.click(submitButton(/Create Account/i));
+      await waitFor(() => {
+        expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      });
       completeDualOtp();
 
       await waitFor(() => {
@@ -597,29 +619,39 @@ describe('LoginPage', () => {
     });
 
     it('rejects incomplete OTP inputs during dual OTP verification', async () => {
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({
+        success: true,
+      });
       render(<LoginPage />);
       openRegister();
       fillValidForm();
       fireEvent.click(submitButton(/Create Account/i));
 
-      expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      });
       completeDualOtp('123', '456');
 
       expect(showToast).toHaveBeenCalledWith(
         'Incomplete OTPs',
-        'Please enter both the 6-digit Email OTP and 6-digit Mobile OTP.',
+        'Please enter the 6-digit Email OTP or Mobile OTP.',
         'warning'
       );
       expect(authClient.register).not.toHaveBeenCalled();
     });
 
-    it('navigates back to the registration form when clicking Back on dual OTP step', () => {
+    it('navigates back to the registration form when clicking Back on dual OTP step', async () => {
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({
+        success: true,
+      });
       render(<LoginPage />);
       openRegister();
       fillValidForm();
       fireEvent.click(submitButton(/Create Account/i));
 
-      expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      });
       fireEvent.click(screen.getByRole('button', { name: /Back/i }));
       expect(screen.getByLabelText(/Full Name/i)).toBeInTheDocument();
       expect(screen.queryByText(/Dual OTP Identity Verification/i)).not.toBeInTheDocument();

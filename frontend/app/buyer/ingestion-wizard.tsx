@@ -26,6 +26,7 @@ import {
   updateManualRFQLineItem,
   validateManualRFQForm,
 } from '@/lib/manualRfqModel';
+import { PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import { extractRfqCategorySignals, matchVendorAgainstSignals } from '@/lib/vendorMatching';
@@ -300,6 +301,8 @@ export default function IngestionWizard({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [pincodeError, setPincodeError] = useState<string | null>(null);
+
   const validation = useMemo(() => validateManualRFQForm(form), [form]);
   const formErrors = submitAttempted ? validation.formErrors : {};
   const lineItemErrors = submitAttempted ? validation.lineItemErrors : {};
@@ -307,6 +310,26 @@ export default function IngestionWizard({
   const patchForm = useCallback(<K extends keyof ManualRFQForm>(key: K, value: ManualRFQForm[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
   }, []);
+
+  useEffect(() => {
+    const raw = form.deliveryPincode.trim();
+    if (!raw) {
+      setPincodeError(null);
+      return;
+    }
+
+    if (isDummyPincode(raw)) {
+      setPincodeError(UI_STRINGS.manualRfq.deliveryPincodeDummy);
+      return;
+    }
+
+    if (raw.length >= 3 && !PINCODE_PATTERN.test(raw)) {
+      setPincodeError(UI_STRINGS.manualRfq.deliveryPincodeInvalid);
+      return;
+    }
+
+    setPincodeError(null);
+  }, [form.deliveryPincode]);
 
   const patchItem = useCallback((id: string, patch: Partial<ManualRFQLineItem>) => {
     setForm((prev) => updateManualRFQLineItem(prev, id, patch));
@@ -879,7 +902,7 @@ export default function IngestionWizard({
               maxLength={10}
               className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white mono font-semibold focus:ring-2 focus:ring-indigo-500"
             />
-            <FieldError message={formErrors.deliveryPincode} />
+            <FieldError message={formErrors.deliveryPincode || pincodeError || undefined} />
           </div>
 
           {/* Target Delivery Date */}

@@ -2416,7 +2416,10 @@ describe('lib/store.tsx - channel chasers and bids', () => {
       expect(nullVendorLinkStatus).toBeNull();
 
       // createBuyerPaymentLink when activeBuyerAccount is missing
-      const noBuyerPayResult = await ctx().createBuyerPaymentLink('annual_pro');
+      let noBuyerPayResult: string | null = null;
+      await act(async () => {
+        noBuyerPayResult = await ctx().createBuyerPaymentLink('annual_pro');
+      });
       expect(noBuyerPayResult).toBeNull();
     });
   });

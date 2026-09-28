@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { logger } = require('./loggerService');
 const storeService = require('./storeService');
 const mailerService = require('./mailerService');
+const smsService = require('./smsService');
 const { AUTH_MESSAGES, IDENTITY_OTP_CONFIG, PASSWORD_MIN_LENGTH } = require('../config/constants');
 const pool = require('../db/pool');
 const identityQueries = require('../db/identityQueries');
@@ -452,13 +453,13 @@ async function changePassword({ userUuid, email, currentPassword, newPassword, i
 }
 
 /**
- * Generate and dispatch a 6-digit email OTP.
+ * Generate and dispatch a 6-digit email and SMS OTP.
  *
- * The email + mobile pair is validated and the approval gates are applied first,
- * and only then is a code issued, stored and emailed. Only for an account that
- * already exists — use `register` to create one first.
+ * Supports both:
+ * 1. Existing account sign-in: validates user exists & is active/approved before dispatch.
+ * 2. New account registration: validates user does not already exist before dispatch.
  */
-async function requestOtp(email, mobile, roleHint, ipAddress) {
+async function requestOtp(email, mobile, roleHint, ipAddress, isRegistration = false) {
   if (!email) {
     throw new Error(AUTH_MESSAGES.OTP_EMAIL_REQUIRED);
   }
@@ -469,17 +470,28 @@ async function requestOtp(email, mobile, roleHint, ipAddress) {
   const normalizedEmail = email.trim().toLowerCase();
   const submittedMobile = String(mobile).trim();
 
-  const user = await loadIdentityUser(normalizedEmail, submittedMobile);
-  if (!user) {
-    logger.warn(
-      `OTP requested for an unrecognised email + mobile pair: ${normalizedEmail}`,
-      { ipAddress },
-      'AUTH_SERVICE'
-    );
-    throw new Error(AUTH_MESSAGES.INVALID_USERNAME_OR_MOBILE);
+  let user = null;
+  if (pool.hasStorage()) {
+    try {
+      user = await loadIdentityUser(normalizedEmail, submittedMobile);
+    } catch {
+      user = null;
+    }
   }
 
-  assertUserCanSignIn(user, normalizedEmail, ipAddress);
+  if (isRegistration) {
+    // For account creation / registration, do not block OTP dispatch on existing or non-existing accounts ("dont check existing vendor and buyer").
+  } else {
+    if (!user) {
+      logger.warn(
+        `OTP requested for an unrecognised email + mobile pair: ${normalizedEmail}`,
+        { ipAddress },
+        'AUTH_SERVICE'
+      );
+      throw new Error(AUTH_MESSAGES.INVALID_USERNAME_OR_MOBILE);
+    }
+    assertUserCanSignIn(user, normalizedEmail, ipAddress);
+  }
 
   const code = generateOtpCode();
   const expiresAt = Date.now() + OTP_EXPIRY_MS;
@@ -501,20 +513,27 @@ async function requestOtp(email, mobile, roleHint, ipAddress) {
     const otpEmailSend = mailerService
       .sendOtpEmail(normalizedEmail, code, OTP_EXPIRY_MS / 1000)
       .catch((e) => logger.error('OTP email dispatch error', e, 'AUTH_SERVICE'));
+    const otpSmsSend = smsService
+      .sendOtpSms(submittedMobile, code, OTP_EXPIRY_MS / 1000)
+      .catch((e) => logger.error('OTP SMS dispatch error', e, 'AUTH_SERVICE'));
+
     const waitUntil = getWaitUntil();
-    if (waitUntil) waitUntil(otpEmailSend);
+    if (waitUntil) {
+      waitUntil(otpEmailSend);
+      waitUntil(otpSmsSend);
+    }
   }
 
-  logger.info(`OTP generated for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
+  logger.info(`OTP generated for ${normalizedEmail} and mobile ${submittedMobile} [Registration: ${Boolean(isRegistration)}]`, { ipAddress }, 'AUTH_SERVICE');
   storeService.addAuditLog({
     userEmail: normalizedEmail,
-    action: `Instant ${OTP_LENGTH}-digit OTP dispatched to corporate email (${normalizedEmail})`,
+    action: `Instant ${OTP_LENGTH}-digit OTP dispatched to email (${normalizedEmail}) and mobile (${submittedMobile}) [Registration: ${Boolean(isRegistration)}]`,
     ipAddress,
   });
 
   return {
     success: true,
-    message: `Verification OTP dispatched to ${normalizedEmail}`,
+    message: `Verification OTP dispatched to ${normalizedEmail} and mobile`,
     email: normalizedEmail,
     // Only echoed back in tests or when SMTP isn't configured, so local/dev/test
     // runs without real email delivery can still complete the OTP flow; once
@@ -588,7 +607,7 @@ async function verifyOtp(email, code, ipAddress, mobile) {
  * Register a new user / enterprise entity. The only path that creates an account.
  */
 async function registerUser(payload, ipAddress) {
-  const { name, email, password, mobile, orgName, role } = payload;
+  const { name, email, password, mobile, orgName, role, emailOtp, mobileOtp, code } = payload;
   if (!email) throw new Error(AUTH_MESSAGES.REGISTRATION_EMAIL_REQUIRED);
   if (!password) throw new Error(AUTH_MESSAGES.EMAIL_PASSWORD_REQUIRED);
   if (!mobile) throw new Error(AUTH_MESSAGES.MOBILE_REQUIRED);
@@ -598,6 +617,29 @@ async function registerUser(payload, ipAddress) {
   }
 
   const normalizedEmail = email.trim().toLowerCase();
+  const submittedMobile = String(mobile).trim();
+
+  // If OTP code was provided with registration, verify and delete it
+  const submittedCode = code || emailOtp || mobileOtp;
+  if (submittedCode) {
+    const otpKey = buildOtpKey(normalizedEmail, submittedMobile);
+    const storedOtp = await authSessionQueries.findOtp(otpKey);
+    if (storedOtp) {
+      if (Date.now() > storedOtp.expiresAt) {
+        await authSessionQueries.deleteOtp(otpKey);
+        throw new Error(AUTH_MESSAGES.INVALID_OTP);
+      }
+      const isValidCode =
+        storedOtp.code.length === String(submittedCode).length &&
+        crypto.timingSafeEqual(Buffer.from(storedOtp.code), Buffer.from(String(submittedCode)));
+      if (!isValidCode) {
+        await authSessionQueries.incrementOtpAttempts(otpKey);
+        throw new Error(AUTH_MESSAGES.INVALID_OTP);
+      }
+      await authSessionQueries.deleteOtp(otpKey);
+    }
+  }
+
   const isVendor = role === 'vendor';
   const insertFn = isVendor ? identityQueries.insertVendorAccount : identityQueries.insertBuyerAccount;
 

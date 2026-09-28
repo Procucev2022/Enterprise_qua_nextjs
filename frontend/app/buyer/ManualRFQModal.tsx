@@ -48,6 +48,7 @@ import {
   updateManualRFQLineItem,
   validateManualRFQForm,
 } from '@/lib/manualRfqModel';
+import { PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type {
   ManualRFQForm,
@@ -163,6 +164,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     return () => clearTimeout(t);
   }, [categoryFetchSignals]);
 
+  const [pincodeError, setPincodeError] = useState<string | null>(null);
+
   const validation = useMemo(() => validateManualRFQForm(form), [form]);
 
   // Held back until the buyer tries to save. Validating on open would greet them
@@ -173,6 +176,26 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
   const patchForm = useCallback(<K extends keyof ManualRFQForm>(key: K, value: ManualRFQForm[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
   }, []);
+
+  useEffect(() => {
+    const raw = form.deliveryPincode.trim();
+    if (!raw) {
+      setPincodeError(null);
+      return;
+    }
+
+    if (isDummyPincode(raw)) {
+      setPincodeError(UI_STRINGS.manualRfq.deliveryPincodeDummy);
+      return;
+    }
+
+    if (raw.length >= 3 && !PINCODE_PATTERN.test(raw)) {
+      setPincodeError(UI_STRINGS.manualRfq.deliveryPincodeInvalid);
+      return;
+    }
+
+    setPincodeError(null);
+  }, [form.deliveryPincode]);
 
   const patchItem = useCallback((id: string, patch: Partial<ManualRFQLineItem>) => {
     setForm((prev) => updateManualRFQLineItem(prev, id, patch));
@@ -560,14 +583,14 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                 type="text"
                 required
                 aria-required
-                aria-invalid={!!formErrors.deliveryPincode}
+                aria-invalid={!!formErrors.deliveryPincode || !!pincodeError}
                 value={form.deliveryPincode}
                 onChange={(e) => patchForm('deliveryPincode', e.target.value)}
                 placeholder={MODAL.deliveryPincodePlaceholder}
                 maxLength={10}
                 className="mono font-semibold"
               />
-              <FieldError message={formErrors.deliveryPincode} />
+              <FieldError message={formErrors.deliveryPincode || pincodeError || undefined} />
             </div>
 
             <div>

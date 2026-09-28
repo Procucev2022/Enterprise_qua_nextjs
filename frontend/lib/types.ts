@@ -1929,6 +1929,7 @@ export interface OtpRequestPayload {
   /** Registered mobile number the code is issued against. */
   mobile: string;
   roleHint?: UserRole;
+  isRegistration?: boolean;
 }
 
 export interface OtpVerifyPayload {
@@ -1945,6 +1946,9 @@ export interface RegisterPayload {
   mobile?: string;
   role?: UserRole;
   orgName?: string;
+  emailOtp?: string;
+  mobileOtp?: string;
+  code?: string;
 }
 
 

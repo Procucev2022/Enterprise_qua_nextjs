@@ -217,7 +217,7 @@ export default function LoginPage() {
   };
 
   // ── Registration: Step 1 Validate details & request OTPs ──────────────────
-  const handleInitiateRegister = (e: React.FormEvent) => {
+  const handleInitiateRegister = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!regName.trim() || !regEmail.trim() || !regMobile.trim() || !regPassword) {
@@ -233,14 +233,33 @@ export default function LoginPage() {
       return;
     }
 
-    setRegStep('dual_otp');
-    setRegEmailOtp('');
-    setRegMobileOtp('');
-    showToast(
-      'Verification Codes Sent',
-      `6-digit OTPs have been sent to ${regEmail.trim().toLowerCase()} and +91 ${regMobile.trim()}.`,
-      'info'
-    );
+    setSubmitting(true);
+    try {
+      const email = regEmail.trim().toLowerCase();
+      const mobile = regMobile.trim();
+      const response = await authClient.requestOtp(
+        email,
+        mobile,
+        selectedRegRole,
+        true
+      );
+
+      if (!response.success) {
+        fail(AUTH.registrationFailedTitle, response.error);
+        return;
+      }
+
+      setRegStep('dual_otp');
+      setRegEmailOtp('');
+      setRegMobileOtp('');
+      showToast(
+        'Verification Codes Sent',
+        `6-digit OTP has been dispatched to ${email} and mobile +91 ${mobile} via SMS gateway.`,
+        'success'
+      );
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   // ── Registration: Step 2 Verify Both Email OTP & Mobile OTP and create account ──────────
@@ -250,8 +269,8 @@ export default function LoginPage() {
     const emailOtp = regEmailOtp.trim();
     const mobileOtp = regMobileOtp.trim();
 
-    if (emailOtp.length !== OTP_CODE_LENGTH || mobileOtp.length !== OTP_CODE_LENGTH) {
-      showToast('Incomplete OTPs', 'Please enter both the 6-digit Email OTP and 6-digit Mobile OTP.', 'warning');
+    if (emailOtp.length !== OTP_CODE_LENGTH && mobileOtp.length !== OTP_CODE_LENGTH) {
+      showToast('Incomplete OTPs', 'Please enter the 6-digit Email OTP or Mobile OTP.', 'warning');
       return;
     }
 
@@ -265,6 +284,9 @@ export default function LoginPage() {
         mobile: regMobile.trim(),
         role: selectedRegRole,
         orgName: regOrgName.trim() || regName.trim(),
+        emailOtp,
+        mobileOtp,
+        code: mobileOtp || emailOtp,
       });
 
       if (!response.success || !response.user) {
