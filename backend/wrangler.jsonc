@@ -45,5 +45,64 @@
       "*/5 * * * *",
       "*/10 * * * *"
     ]
+  },
+  "env": {
+    "dev": {
+      "name": "procucev-enterprise-backend",
+      "vars": {
+        "NODE_ENV": "development"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "enterprise-qua-d1",
+          "database_id": "63af6c6f-3606-4afa-b0c7-9f9db6296d61"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "R2_BUCKET",
+          "bucket_name": "procucec-dev"
+        }
+      ]
+    },
+    "prod": {
+      "name": "procucev-enterprise-backend",
+      "vars": {
+        "NODE_ENV": "production"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "enterprise-qua-d1",
+          "database_id": "63af6c6f-3606-4afa-b0c7-9f9db6296d61"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "R2_BUCKET",
+          "bucket_name": "procucec-prod"
+        }
+      ]
+    },
+    "production": {
+      "name": "procucev-enterprise-backend",
+      "vars": {
+        "NODE_ENV": "production"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "enterprise-qua-d1",
+          "database_id": "63af6c6f-3606-4afa-b0c7-9f9db6296d61"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "R2_BUCKET",
+          "bucket_name": "procucec-prod"
+        }
+      ]
+    }
   }
 }
