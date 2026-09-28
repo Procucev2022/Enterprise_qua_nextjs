@@ -564,6 +564,11 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/Contact Person/i), { target: { value: 'Someone' } });
       fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'rejected@vendor.test' } });
       fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '9876543210' } });
+      fireEvent.change(screen.getByLabelText(/Major Category/i), { target: { value: 'Electrical' } });
+      fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Mumbai' } });
+      fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
+      fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '400001' } });
+      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27AAAAA0000A1Z5' } });
       fireEvent.click(screen.getByTestId('submit-add-vendor'));
 
       await waitFor(() => expect(mockAddBuyerVendor).toHaveBeenCalled());

@@ -265,3 +265,89 @@ export function validateFormData(schema: FormSchema, data: Record<string, any>):
     fieldErrors,
   };
 }
+
+export interface PostOfficeDetail {
+  Name: string;
+  Description?: string;
+  BranchType?: string;
+  DeliveryStatus?: string;
+  Circle?: string;
+  District: string;
+  Division?: string;
+  Region?: string;
+  State: string;
+  Country?: string;
+  Pincode?: string;
+}
+
+export interface PincodeValidationResult {
+  isValid: boolean;
+  message?: string;
+  postOffices?: PostOfficeDetail[];
+}
+
+/**
+ * Validates Indian PIN code format and performs live postal verification lookup via Postal PIN Code API
+ */
+export async function validatePincode(
+  pincode: string,
+  isIndianFormat: boolean = true
+): Promise<PincodeValidationResult> {
+  const pin = (pincode || '').trim();
+  if (!pin) {
+    return { isValid: false, message: 'PIN code is required' };
+  }
+
+  // International postal codes allowed if not 6-digit number or explicitly non-Indian
+  if (!isIndianFormat || !/^\d+$/.test(pin)) {
+    if (PINCODE_PATTERN.test(pin)) {
+      return { isValid: true };
+    }
+    return { isValid: false, message: 'Invalid postal code format' };
+  }
+
+  // Format check for Indian 6-digit PIN code
+  if (!INDIAN_PINCODE_PATTERN.test(pin)) {
+    return {
+      isValid: false,
+      message: 'PIN Code must be 6 digits and cannot start with 0',
+    };
+  }
+
+  // Dummy PIN code detection
+  if (isDummyPincode(pin)) {
+    return {
+      isValid: false,
+      message: 'Invalid test or sequential PIN code. Enter a valid postal code.',
+    };
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+    const response = await fetch(`https://api.postalpincode.in/pincode/${pin}`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      return { isValid: true }; // Network fallback
+    }
+
+    const data = await response.json();
+    if (Array.isArray(data) && data.length > 0 && data[0].Status === 'Success') {
+      return {
+        isValid: true,
+        postOffices: data[0].PostOffice || [],
+      };
+    } else {
+      return {
+        isValid: false,
+        message: 'PIN Code is not found or invalid in postal records.',
+      };
+    }
+  } catch (error) {
+    return { isValid: true }; // Network fallback
+  }
+}
+

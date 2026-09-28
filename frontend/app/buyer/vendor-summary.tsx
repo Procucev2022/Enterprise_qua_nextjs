@@ -5,6 +5,7 @@ import { useApp } from '@/lib/store';
 import { fetchAllVendors } from '@/lib/rfqClient';
 import { fetchBuyerProfile } from '@/lib/buyerProfileClient';
 import { VendorEvaluationRecord, VendorEntry, VendorPageMeta } from '@/lib/types';
+import { getMinorCategories } from '@/lib/categoryTaxonomy';
 import VendorUploadModal from '@/app/category-manager/VendorUploadModal';
 import {
   Search,
@@ -222,8 +223,18 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   // clears the form once the backend actually confirms the write.
   const handleAddVendorSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formName.trim() || !formMajorCategory || !formEmail.trim() || !formContactPerson.trim() || !formPhone.trim()) {
-      showToast('Validation Error', 'Please complete all required fields.', 'warning');
+    if (
+      !formName.trim() ||
+      !formMajorCategory ||
+      !formEmail.trim() ||
+      !formContactPerson.trim() ||
+      !formPhone.trim() ||
+      !formCity.trim() ||
+      !formState.trim() ||
+      !formPincode.trim() ||
+      !formGst.trim()
+    ) {
+      showToast('Validation Error', 'Please complete all required fields including City, State, Pincode and GSTIN.', 'warning');
       return;
     }
 
@@ -1207,7 +1218,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               </button>
             </div>
 
-            <form onSubmit={handleAddVendorSubmit} className="overflow-y-auto my-3 space-y-3 pr-1 text-xs">
+            <form onSubmit={handleAddVendorSubmit} noValidate className="overflow-y-auto my-3 space-y-3 pr-1 text-xs">
               <div>
                 <label htmlFor="add-vendor-name" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
                   Company Name <span className="text-rose-500">*</span>
@@ -1216,6 +1227,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   id="add-vendor-name"
                   type="text"
                   required
+                  placeholder="e.g. Ashok Industries"
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
                   className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
@@ -1231,6 +1243,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     id="add-vendor-contact"
                     type="text"
                     required
+                    placeholder="e.g. John Doe"
                     value={formContactPerson}
                     onChange={(e) => setFormContactPerson(e.target.value)}
                     className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
@@ -1244,6 +1257,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     id="add-vendor-phone"
                     type="tel"
                     required
+                    placeholder="e.g. 9000000001"
                     value={formPhone}
                     onChange={(e) => setFormPhone(e.target.value)}
                     className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
@@ -1259,6 +1273,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   id="add-vendor-email"
                   type="email"
                   required
+                  placeholder="e.g. contact@example.com"
                   value={formEmail}
                   onChange={(e) => setFormEmail(e.target.value)}
                   className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
@@ -1273,7 +1288,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   id="add-vendor-major-category"
                   required
                   value={formMajorCategory}
-                  onChange={(e) => setFormMajorCategory(e.target.value)}
+                  onChange={(e) => {
+                    setFormMajorCategory(e.target.value);
+                    setFormMinorCategories([]);
+                  }}
                   className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
                 >
                   {availableMajorCategories.map((cat) => (
@@ -1285,7 +1303,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">Minor Categories</label>
+                <label htmlFor="add-vendor-minor-category" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                  Minor Categories
+                </label>
                 <div className="flex flex-wrap gap-1.5 mb-1.5">
                   {formMinorCategories.map((tag) => (
                     <span
@@ -1299,62 +1319,99 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     </span>
                   ))}
                 </div>
-                <input
-                  type="text"
-                  value={formMinorInput}
-                  onChange={(e) => setFormMinorInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      handleAddMinorCategoryTag(formMinorInput);
-                    }
-                  }}
-                  placeholder="Type a minor category and press Enter"
-                  className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
-                />
+                <div className="space-y-1.5">
+                  <select
+                    id="add-vendor-minor-category"
+                    value=""
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        handleAddMinorCategoryTag(e.target.value);
+                      }
+                    }}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                  >
+                    <option value="">Select Minor Category from dropdown...</option>
+                    {(formMajorCategory ? getMinorCategories(formMajorCategory) : []).map((minor) => (
+                      <option key={minor} value={minor}>
+                        {minor}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="text"
+                    value={formMinorInput}
+                    onChange={(e) => setFormMinorInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddMinorCategoryTag(formMinorInput);
+                      }
+                    }}
+                    placeholder="Type a minor category and press Enter"
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label htmlFor="add-vendor-city" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">City</label>
+                  <label htmlFor="add-vendor-city" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    City <span className="text-rose-500">*</span>
+                  </label>
                   <input
                     id="add-vendor-city"
                     type="text"
+                    required
+                    placeholder="e.g. Pune"
                     value={formCity}
                     onChange={(e) => setFormCity(e.target.value)}
                     className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
                   />
                 </div>
                 <div>
-                  <label htmlFor="add-vendor-state" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">State</label>
+                  <label htmlFor="add-vendor-state" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    State <span className="text-rose-500">*</span>
+                  </label>
                   <input
                     id="add-vendor-state"
                     type="text"
+                    required
+                    placeholder="e.g. Maharashtra"
                     value={formState}
                     onChange={(e) => setFormState(e.target.value)}
                     className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
                   />
                 </div>
                 <div>
-                  <label htmlFor="add-vendor-pincode" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">Pincode</label>
+                  <label htmlFor="add-vendor-pincode" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    Pincode <span className="text-rose-500">*</span>
+                  </label>
                   <input
                     id="add-vendor-pincode"
                     type="text"
+                    required
+                    placeholder="e.g. 411001"
+                    maxLength={6}
                     value={formPincode}
-                    onChange={(e) => setFormPincode(e.target.value)}
-                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                    onChange={(e) => setFormPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 font-mono"
                   />
                 </div>
               </div>
 
               <div>
-                <label htmlFor="add-vendor-gstin" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">GSTIN</label>
+                <label htmlFor="add-vendor-gstin" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                  GSTIN <span className="text-rose-500">*</span>
+                </label>
                 <input
                   id="add-vendor-gstin"
                   type="text"
+                  required
+                  placeholder="e.g. 27AAAAA0000A1Z5"
+                  maxLength={15}
                   value={formGst}
-                  onChange={(e) => setFormGst(e.target.value)}
-                  className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                  onChange={(e) => setFormGst(e.target.value.toUpperCase())}
+                  className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 uppercase font-mono"
                 />
               </div>
 

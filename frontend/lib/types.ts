@@ -1638,6 +1638,9 @@ export interface BuyerAccount {
   accountSource: 'public_system' | 'web_registration' | 'enterprise_sso';
   status: 'ACTIVE_VERIFIED' | 'PENDING_ALIGNMENT' | 'SYNCED_LEGACY';
   primaryPlantLocation: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
   supportedMajorCategories: string[];
   supportedMinorCategories?: string[];
   totalRFQsCreated: number;
@@ -1946,6 +1949,10 @@ export interface RegisterPayload {
   mobile?: string;
   role?: UserRole;
   orgName?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  gstin?: string;
   emailOtp?: string;
   mobileOtp?: string;
   code?: string;

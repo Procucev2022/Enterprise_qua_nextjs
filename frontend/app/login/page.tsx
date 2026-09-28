@@ -23,6 +23,9 @@ import {
   ShieldCheck,
   Key,
   Users,
+  RotateCcw,
+  MapPin,
+  FileText,
 } from 'lucide-react';
 
 const AUTH = UI_STRINGS.auth;
@@ -69,6 +72,10 @@ export default function LoginPage() {
   const [regEmail, setRegEmail] = useState('');
   const [regMobile, setRegMobile] = useState('');
   const [regPassword, setRegPassword] = useState('');
+  const [regGstin, setRegGstin] = useState('');
+  const [regCity, setRegCity] = useState('');
+  const [regState, setRegState] = useState('');
+  const [regPincode, setRegPincode] = useState('');
   const [selectedRegRole, setSelectedRegRole] = useState<'buyer' | 'vendor'>('buyer');
   const [regStep, setRegStep] = useState<'form' | 'dual_otp'>('form');
   const [regEmailOtp, setRegEmailOtp] = useState('');
@@ -147,7 +154,8 @@ export default function LoginPage() {
   const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    const mobile = loginMobile.trim();
+    const rawMobile = loginMobile.trim();
+    const mobile = rawMobile.replace(/[\s\-()]/g, '');
 
     // The identity service issues the code against the email + mobile pair, so
     // both are required before a code can be requested.
@@ -172,7 +180,7 @@ export default function LoginPage() {
         fail(AUTH.otpRequestFailedTitle, response.error);
         return;
       }
-      setLoginOtpInput('');
+      setLoginOtpInput(response.demoCode || '');
       setLoginOtpSent(true);
       showToast(
         AUTH.welcomeBackTitle,
@@ -180,7 +188,39 @@ export default function LoginPage() {
           email,
           codeLength: OTP_CODE_LENGTH,
           expiryMinutes: OTP_EXPIRY_MINUTES,
-        }),
+        }) + (response.demoCode ? ` (Dev OTP: ${response.demoCode})` : ''),
+        'success'
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleResendLoginOtp = async () => {
+    if (submitting) return;
+    const email = loginEmail.trim().toLowerCase();
+    const mobile = loginMobile.trim().replace(/[\s\-()]/g, '');
+    if (!email || !mobile) {
+      showToast(AUTH.missingFieldsTitle, AUTH.emailAndMobileRequired, 'warning');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const response = await authClient.requestOtp(
+        email,
+        mobile,
+        selectedRole === 'vendor' ? 'vendor' : 'buyer'
+      );
+      if (!response.success) {
+        fail(AUTH.otpRequestFailedTitle, response.error);
+        return;
+      }
+      if (response.demoCode) {
+        setLoginOtpInput(response.demoCode);
+      }
+      showToast(
+        'OTP Resent',
+        `Fresh verification code dispatched to ${email}` + (response.demoCode ? ` (Dev OTP: ${response.demoCode})` : ''),
         'success'
       );
     } finally {
@@ -220,23 +260,39 @@ export default function LoginPage() {
   const handleInitiateRegister = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!regName.trim() || !regEmail.trim() || !regMobile.trim() || !regPassword) {
-      showToast(AUTH.missingFieldsTitle, AUTH.registrationFieldsRequired, 'warning');
+    const rawMobile = regMobile.trim();
+    const mobile = rawMobile.replace(/[\s\-()]/g, '');
+
+    if (
+      !regName.trim() ||
+      !regOrgName.trim() ||
+      !regEmail.trim() ||
+      !mobile ||
+      !regPassword ||
+      !regGstin.trim() ||
+      !regCity.trim() ||
+      !regState.trim() ||
+      !regPincode.trim()
+    ) {
+      showToast(AUTH.missingFieldsTitle, 'Please fill in all mandatory fields including Company Name, GSTIN, City, State, and Pincode.', 'warning');
       return;
     }
     if (regPassword.length < MIN_PASSWORD_LENGTH) {
       showToast(AUTH.registrationFailedTitle, AUTH.passwordTooShort, 'warning');
       return;
     }
-    if (!INDIAN_MOBILE_PATTERN.test(regMobile.trim())) {
+    if (!INDIAN_MOBILE_PATTERN.test(mobile)) {
       showToast(AUTH.registrationFailedTitle, AUTH.mobileInvalid, 'warning');
+      return;
+    }
+    if (!/^[1-9][0-9]{5}$/.test(regPincode.trim())) {
+      showToast(AUTH.registrationFailedTitle, 'PIN Code must be 6 digits and cannot start with 0.', 'warning');
       return;
     }
 
     setSubmitting(true);
     try {
       const email = regEmail.trim().toLowerCase();
-      const mobile = regMobile.trim();
       const response = await authClient.requestOtp(
         email,
         mobile,
@@ -250,11 +306,47 @@ export default function LoginPage() {
       }
 
       setRegStep('dual_otp');
-      setRegEmailOtp('');
-      setRegMobileOtp('');
+      setRegEmailOtp(response.demoCode || '');
+      setRegMobileOtp(response.demoCode || '');
       showToast(
         'Verification Codes Sent',
-        `6-digit OTP has been dispatched to ${email} and mobile +91 ${mobile} via SMS gateway.`,
+        `6-digit OTP has been dispatched to ${email} and mobile +91 ${mobile} via SMS gateway.` +
+        (response.demoCode ? ` (Dev OTP: ${response.demoCode})` : ''),
+        'success'
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleResendRegOtp = async () => {
+    if (submitting) return;
+    const email = regEmail.trim().toLowerCase();
+    const mobile = regMobile.trim().replace(/[\s\-()]/g, '');
+    if (!email || !mobile) {
+      showToast(AUTH.missingFieldsTitle, AUTH.registrationFieldsRequired, 'warning');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const response = await authClient.requestOtp(
+        email,
+        mobile,
+        selectedRegRole,
+        true
+      );
+      if (!response.success) {
+        fail(AUTH.registrationFailedTitle, response.error);
+        return;
+      }
+      if (response.demoCode) {
+        setRegEmailOtp(response.demoCode);
+        setRegMobileOtp(response.demoCode);
+      }
+      showToast(
+        'OTP Resent',
+        `Fresh 6-digit OTPs sent to ${email} and +91 ${mobile}` +
+        (response.demoCode ? ` (Dev OTP: ${response.demoCode})` : ''),
         'success'
       );
     } finally {
@@ -284,6 +376,10 @@ export default function LoginPage() {
         mobile: regMobile.trim(),
         role: selectedRegRole,
         orgName: regOrgName.trim() || regName.trim(),
+        city: regCity.trim(),
+        state: regState.trim(),
+        pincode: regPincode.trim(),
+        gstin: regGstin.trim().toUpperCase(),
         emailOtp,
         mobileOtp,
         code: mobileOtp || emailOtp,
@@ -296,14 +392,17 @@ export default function LoginPage() {
 
       if (selectedRegRole === 'buyer') {
         addBuyerAccount({
-          organizationName: response.user.orgName || regName.trim(),
+          organizationName: regOrgName.trim() || response.user.orgName || regName.trim(),
           brandName: regOrgName.trim() || regName.trim(),
           corporateEmail: email,
           contactPerson: regName.trim(),
           contactDesignation: 'Procurement Specialist',
           mobileNumber: regMobile.trim(),
-          gstin: '',
-          primaryPlantLocation: '',
+          gstin: regGstin.trim().toUpperCase(),
+          primaryPlantLocation: `${regCity.trim()}, ${regState.trim()} (${regPincode.trim()})`,
+          city: regCity.trim(),
+          state: regState.trim(),
+          pincode: regPincode.trim(),
           industrySector: 'Enterprise SCM & Manufacturing',
           sourcingMode: 'mode_2',
           subscriptionPlan: 'free_trial',
@@ -335,6 +434,7 @@ export default function LoginPage() {
   const fieldLabel = 'text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450';
   const iconClass = 'absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none';
   const fieldInput = 'has-leading-icon text-xs';
+  const plainInput = 'text-xs !pl-2.5 !pr-2';
   const otpInput = 'has-leading-icon text-xs font-mono font-bold tracking-widest text-center';
   const primaryBtn =
     'btn btn-primary w-full text-xs font-bold py-2.5 flex items-center justify-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed';
@@ -422,22 +522,20 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={() => { setAuthTab('login'); setLoginOtpSent(false); }}
-                className={`text-sm font-black pb-2 transition-all ${
-                  authTab === 'login'
+                className={`text-sm font-black pb-2 transition-all ${authTab === 'login'
                     ? 'text-indigo-600 dark:text-indigo-400 border-b-2 border-indigo-600 dark:border-indigo-400'
                     : 'text-slate-400 dark:text-gray-500 hover:text-slate-600'
-                }`}
+                  }`}
               >
                 Sign In
               </button>
               <button
                 type="button"
                 onClick={() => { setAuthTab('register'); setSelectedRole('buyer'); setLoginOtpSent(false); }}
-                className={`text-sm font-black pb-2 transition-all ${
-                  authTab === 'register'
+                className={`text-sm font-black pb-2 transition-all ${authTab === 'register'
                     ? 'text-indigo-600 dark:text-indigo-400 border-b-2 border-indigo-600 dark:border-indigo-400'
                     : 'text-slate-400 dark:text-gray-500 hover:text-slate-600'
-                }`}
+                  }`}
               >
                 Create Account
               </button>
@@ -463,11 +561,10 @@ export default function LoginPage() {
                         key={r.key}
                         type="button"
                         onClick={() => { setSelectedRole(r.key); setLoginOtpSent(false); }}
-                        className={`p-2 rounded-xl border font-bold flex items-center gap-1.5 justify-center transition-all ${
-                          selectedRole === r.key
+                        className={`p-2 rounded-xl border font-bold flex items-center gap-1.5 justify-center transition-all ${selectedRole === r.key
                             ? 'bg-indigo-50 dark:bg-indigo-950/60 border-indigo-500 text-indigo-700 dark:text-indigo-300'
                             : 'bg-slate-50 dark:bg-gray-950 border-slate-200 dark:border-gray-800 text-slate-600 dark:text-gray-450 hover:bg-slate-100'
-                        }`}
+                          }`}
                       >
                         {r.icon} {r.label}
                       </button>
@@ -484,22 +581,20 @@ export default function LoginPage() {
                     <button
                       type="button"
                       onClick={() => { setBuyerAuthMode('password'); setLoginOtpSent(false); }}
-                      className={`flex-1 py-1.5 rounded-lg font-bold text-[11px] transition-all flex items-center justify-center gap-1 ${
-                        buyerAuthMode === 'password'
+                      className={`flex-1 py-1.5 rounded-lg font-bold text-[11px] transition-all flex items-center justify-center gap-1 ${buyerAuthMode === 'password'
                           ? 'bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
                           : 'text-slate-500 hover:text-slate-700'
-                      }`}
+                        }`}
                     >
                       <Lock size={12} /> Password
                     </button>
                     <button
                       type="button"
                       onClick={() => { setBuyerAuthMode('email_otp'); setLoginOtpSent(false); }}
-                      className={`flex-1 py-1.5 rounded-lg font-bold text-[11px] transition-all flex items-center justify-center gap-1 ${
-                        buyerAuthMode === 'email_otp'
+                      className={`flex-1 py-1.5 rounded-lg font-bold text-[11px] transition-all flex items-center justify-center gap-1 ${buyerAuthMode === 'email_otp'
                           ? 'bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
                           : 'text-slate-500 hover:text-slate-700'
-                      }`}
+                        }`}
                     >
                       <Mail size={12} /> Email OTP
                     </button>
@@ -633,6 +728,18 @@ export default function LoginPage() {
                       </div>
                     </div>
 
+                    <div className="flex justify-between items-center text-xs">
+                      <button
+                        type="button"
+                        onClick={handleResendLoginOtp}
+                        disabled={submitting}
+                        className="text-indigo-600 dark:text-indigo-400 font-semibold hover:underline flex items-center gap-1"
+                      >
+                        <RotateCcw size={12} className={submitting ? 'animate-spin' : ''} />
+                        <span>Resend OTP</span>
+                      </button>
+                    </div>
+
                     <div className="flex gap-2">
                       <button type="button" onClick={() => setLoginOtpSent(false)} className="btn btn-secondary text-xs w-1/3 py-2.5">
                         Back
@@ -655,11 +762,10 @@ export default function LoginPage() {
                       setSelectedRegRole('buyer');
                       setRegStep('form');
                     }}
-                    className={`py-1.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
-                      selectedRegRole === 'buyer'
+                    className={`py-1.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${selectedRegRole === 'buyer'
                         ? 'bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
                         : 'text-slate-500 dark:text-gray-400 hover:text-slate-700'
-                    }`}
+                      }`}
                   >
                     <Building2 size={13} />
                     <span>Buyer</span>
@@ -670,11 +776,10 @@ export default function LoginPage() {
                       setSelectedRegRole('vendor');
                       setRegStep('form');
                     }}
-                    className={`py-1.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
-                      selectedRegRole === 'vendor'
+                    className={`py-1.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${selectedRegRole === 'vendor'
                         ? 'bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
                         : 'text-slate-500 dark:text-gray-400 hover:text-slate-700'
-                    }`}
+                      }`}
                   >
                     <Truck size={13} />
                     <span>Vendor Partner</span>
@@ -720,7 +825,7 @@ export default function LoginPage() {
 
                     <div className="space-y-1">
                       <label htmlFor="reg-org" className={fieldLabel}>
-                        {selectedRegRole === 'buyer' ? 'Company Name / Legal Name' : 'Vendor Enterprise / Company Name'}
+                        {selectedRegRole === 'buyer' ? 'Company Name / Legal Name' : 'Vendor Enterprise / Company Name'} <span className="text-red-500">*</span>
                       </label>
                       <div className="relative">
                         <Building2 className={iconClass} size={14} />
@@ -736,12 +841,78 @@ export default function LoginPage() {
                           value={regOrgName}
                           onChange={(e) => setRegOrgName(e.target.value)}
                           className={fieldInput}
+                          required
                         />
                       </div>
                     </div>
 
                     <div className="space-y-1">
-                      <label htmlFor="reg-email" className={fieldLabel}>Corporate Email ID</label>
+                      <label htmlFor="reg-gstin" className={fieldLabel}>
+                        GSTIN / GST Number <span className="text-red-500">*</span>
+                      </label>
+                      <div className="relative">
+                        <FileText className={iconClass} size={14} />
+                        <input
+                          id="reg-gstin"
+                          type="text"
+                          placeholder="e.g. 27AAAAA0000A1Z5"
+                          value={regGstin}
+                          onChange={(e) => setRegGstin(e.target.value.toUpperCase())}
+                          className={`${fieldInput} font-mono uppercase`}
+                          maxLength={15}
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="space-y-1">
+                        <label htmlFor="reg-city" className={fieldLabel}>
+                          City <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          id="reg-city"
+                          type="text"
+                          placeholder="e.g. Pune"
+                          value={regCity}
+                          onChange={(e) => setRegCity(e.target.value)}
+                          className={plainInput}
+                          required
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label htmlFor="reg-state" className={fieldLabel}>
+                          State <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          id="reg-state"
+                          type="text"
+                          placeholder="e.g. Maharashtra"
+                          value={regState}
+                          onChange={(e) => setRegState(e.target.value)}
+                          className={plainInput}
+                          required
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label htmlFor="reg-pincode" className={fieldLabel}>
+                          Pincode <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          id="reg-pincode"
+                          type="text"
+                          placeholder="e.g. 411001"
+                          value={regPincode}
+                          onChange={(e) => setRegPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                          className={`${plainInput} font-mono`}
+                          maxLength={6}
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label htmlFor="reg-email" className={fieldLabel}>Corporate Email ID <span className="text-red-500">*</span></label>
                       <div className="relative">
                         <Mail className={iconClass} size={14} />
                         <input
@@ -758,7 +929,7 @@ export default function LoginPage() {
                     </div>
 
                     <div className="space-y-1">
-                      <label htmlFor="reg-mobile" className={fieldLabel}>Mobile Number (WhatsApp Enabled)</label>
+                      <label htmlFor="reg-mobile" className={fieldLabel}>Mobile Number (WhatsApp Enabled) <span className="text-red-500">*</span></label>
                       <div className="relative">
                         <Phone className={iconClass} size={14} />
                         <input
@@ -851,6 +1022,18 @@ export default function LoginPage() {
                           required
                         />
                       </div>
+                    </div>
+
+                    <div className="flex justify-between items-center text-xs">
+                      <button
+                        type="button"
+                        onClick={handleResendRegOtp}
+                        disabled={submitting}
+                        className="text-indigo-600 dark:text-indigo-400 font-semibold hover:underline flex items-center gap-1"
+                      >
+                        <RotateCcw size={12} className={submitting ? 'animate-spin' : ''} />
+                        <span>Resend Verification Codes</span>
+                      </button>
                     </div>
 
                     <div className="flex gap-2 pt-2">

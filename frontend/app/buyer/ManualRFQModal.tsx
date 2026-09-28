@@ -48,7 +48,7 @@ import {
   updateManualRFQLineItem,
   validateManualRFQForm,
 } from '@/lib/manualRfqModel';
-import { PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
+import { PINCODE_PATTERN, isDummyPincode, validatePincode, PostOfficeDetail } from '@/lib/validationSchemas';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type {
   ManualRFQForm,
@@ -92,6 +92,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
   let entitledModes: ReturnType<typeof entitledSourcingModes> = entitledSourcingModes(null);
   let remainingFreeRFQs = 5;
   let activeSubscription = 'free_trial';
+  let activeBuyerAccount: any = null;
   try {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     const store = useApp();
@@ -99,12 +100,32 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     entitledModes = entitledSourcingModes(store?.activeBuyerAccount?.subscriptionPlan ?? store?.activeSubscription);
     remainingFreeRFQs = store?.activeBuyerAccount?.remainingFreeRFQs ?? store?.remainingFreeRFQs ?? 5;
     activeSubscription = store?.activeBuyerAccount?.subscriptionPlan ?? store?.activeSubscription ?? 'free_trial';
+    activeBuyerAccount = store?.activeBuyerAccount;
   } catch {
     buyerVendors = [];
   }
   const isPaidPlan = ['version_1', 'version_2', 'version_3'].includes(activeSubscription);
   const isQuotaExhausted = !isPaidPlan && remainingFreeRFQs <= 0;
   const [form, setForm] = useState<ManualRFQForm>(createEmptyManualRFQForm);
+
+  useEffect(() => {
+    if (isOpen && activeBuyerAccount) {
+      const defaultLoc = activeBuyerAccount.city && activeBuyerAccount.state
+        ? `${activeBuyerAccount.city}, ${activeBuyerAccount.state}`
+        : (activeBuyerAccount.primaryPlantLocation || '');
+      const defaultPin = activeBuyerAccount.pincode || '';
+      setForm((prev) => {
+        if (!prev.deliveryLocation && !prev.deliveryPincode && (defaultLoc || defaultPin)) {
+          return {
+            ...prev,
+            deliveryLocation: prev.deliveryLocation || defaultLoc,
+            deliveryPincode: prev.deliveryPincode || defaultPin,
+          };
+        }
+        return prev;
+      });
+    }
+  }, [isOpen, activeBuyerAccount]);
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -165,6 +186,9 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
   }, [categoryFetchSignals]);
 
   const [pincodeError, setPincodeError] = useState<string | null>(null);
+  const [pincodeValidating, setPincodeValidating] = useState(false);
+  const [pincodePostOffices, setPincodePostOffices] = useState<PostOfficeDetail[]>([]);
+  const pincodeDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
   const validation = useMemo(() => validateManualRFQForm(form), [form]);
 
@@ -179,22 +203,53 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
 
   useEffect(() => {
     const raw = form.deliveryPincode.trim();
+    if (pincodeDebounceRef.current) {
+      clearTimeout(pincodeDebounceRef.current);
+    }
     if (!raw) {
       setPincodeError(null);
+      setPincodeValidating(false);
+      setPincodePostOffices([]);
       return;
     }
 
     if (isDummyPincode(raw)) {
       setPincodeError(UI_STRINGS.manualRfq.deliveryPincodeDummy);
+      setPincodeValidating(false);
+      setPincodePostOffices([]);
       return;
     }
 
     if (raw.length >= 3 && !PINCODE_PATTERN.test(raw)) {
       setPincodeError(UI_STRINGS.manualRfq.deliveryPincodeInvalid);
+      setPincodeValidating(false);
+      setPincodePostOffices([]);
       return;
     }
 
-    setPincodeError(null);
+    if (/^\d{6}$/.test(raw)) {
+      setPincodeValidating(true);
+      pincodeDebounceRef.current = setTimeout(async () => {
+        try {
+          const res = await validatePincode(raw);
+          if (!res.isValid) {
+            setPincodeError(res.message || UI_STRINGS.manualRfq.deliveryPincodeInvalid);
+            setPincodePostOffices([]);
+          } else {
+            setPincodeError(null);
+            setPincodePostOffices(res.postOffices || []);
+          }
+        } catch {
+          setPincodeError(null);
+        } finally {
+          setPincodeValidating(false);
+        }
+      }, 350);
+    } else {
+      setPincodeError(null);
+      setPincodeValidating(false);
+      setPincodePostOffices([]);
+    }
   }, [form.deliveryPincode]);
 
   const patchItem = useCallback((id: string, patch: Partial<ManualRFQLineItem>) => {
@@ -551,6 +606,52 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
               <FieldError message={formErrors.estimatedBudget} />
             </div>
 
+            {/* Delivery Pincode */}
+            <div>
+              <label
+                htmlFor="manual-rfq-pincode"
+                className="block font-semibold text-slate-600 dark:text-gray-400 mb-1"
+              >
+                {MODAL.deliveryPincodeLabel}
+                <span className="text-rose-600 dark:text-rose-400 font-bold" aria-hidden="true">
+                  *
+                </span>
+              </label>
+              <div className="relative">
+                <input
+                  id="manual-rfq-pincode"
+                  type="text"
+                  required
+                  aria-required
+                  aria-invalid={!!formErrors.deliveryPincode || !!pincodeError}
+                  value={form.deliveryPincode}
+                  onChange={(e) => patchForm('deliveryPincode', e.target.value)}
+                  placeholder={MODAL.deliveryPincodePlaceholder}
+                  maxLength={10}
+                  className="mono font-semibold pr-20"
+                />
+                <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1 pointer-events-none">
+                  {pincodeValidating && (
+                    <span className="text-indigo-500 flex items-center gap-1 text-xs">
+                      <Loader2 size={14} className="animate-spin" />
+                    </span>
+                  )}
+                  {!pincodeValidating && pincodePostOffices.length > 0 && !pincodeError && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800 shadow-xs">
+                      <CheckCircle2 size={11} className="shrink-0 text-emerald-600 dark:text-emerald-400" /> Valid
+                    </span>
+                  )}
+                  {!pincodeValidating && pincodeError && form.deliveryPincode.trim().length >= 6 && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800 shadow-xs">
+                      <AlertCircle size={11} className="shrink-0 text-rose-600 dark:text-rose-400" /> Invalid
+                    </span>
+                  )}
+                </div>
+              </div>
+              <FieldError message={formErrors.deliveryPincode} />
+            </div>
+
+            {/* Delivery Location */}
             <div>
               <label
                 htmlFor="manual-rfq-location"
@@ -574,31 +675,6 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                 className="font-medium"
               />
               <FieldError message={formErrors.deliveryLocation} />
-            </div>
-
-            <div>
-              <label
-                htmlFor="manual-rfq-pincode"
-                className="block font-semibold text-slate-600 dark:text-gray-400 mb-1"
-              >
-                {MODAL.deliveryPincodeLabel}
-                <span className="text-rose-600 dark:text-rose-400 font-bold" aria-hidden="true">
-                  *
-                </span>
-              </label>
-              <input
-                id="manual-rfq-pincode"
-                type="text"
-                required
-                aria-required
-                aria-invalid={!!formErrors.deliveryPincode || !!pincodeError}
-                value={form.deliveryPincode}
-                onChange={(e) => patchForm('deliveryPincode', e.target.value)}
-                placeholder={MODAL.deliveryPincodePlaceholder}
-                maxLength={10}
-                className="mono font-semibold"
-              />
-              <FieldError message={formErrors.deliveryPincode || pincodeError || undefined} />
             </div>
 
             <div>

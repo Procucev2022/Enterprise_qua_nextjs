@@ -21,7 +21,10 @@
 //   compared against one that has them.
 // ==============================================================================
 
-import { hasMajorCategory, hasMinorCategory } from './categoryTaxonomy';
+import {
+  hasMajorCategory,
+  hasMinorCategory,
+} from './categoryTaxonomy';
 import { PINCODE_PATTERN, isDummyPincode } from './validationSchemas';
 import { UI_STRINGS, formatString } from './uiStrings';
 import type {
@@ -317,7 +320,7 @@ export function fromExtractedEntity(entity: ExtractedEntity): ManualRFQLineItem 
     majorCategory,
     // Scoped to the major that survived: a minor from a discarded major cannot be
     // valid, and the dropdown would not offer it.
-    minorCategory: taxonomyMinorOrBlank(majorCategory, clean(entity.minorCategory)),
+    minorCategory: taxonomyMinorOrBlank(majorCategory, clean(entity.minorCategory) || clean(entity.category)),
   };
 }
 

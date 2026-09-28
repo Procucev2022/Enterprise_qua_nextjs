@@ -75,18 +75,22 @@ export function getMajorCategories(): string[] {
 
 /** Minor categories under a major, or an empty list when the major is unknown. */
 export function getMinorCategories(major: string): string[] {
-  const group = groups.find((g) => taxonomyKey(g.majorCategory) === taxonomyKey(major));
+  if (!major) return [];
+  const key = taxonomyKey(major);
+  const group = groups.find((g) => taxonomyKey(g.majorCategory) === key);
   return group ? group.minorCategories || [] : [];
 }
 
 /** Whether the master contains this major category. */
 export function hasMajorCategory(major: string): boolean {
-  return majorsByKey.has(taxonomyKey(major));
+  return Boolean(major && majorsByKey.has(taxonomyKey(major)));
 }
 
 /** Whether the master contains this minor under this major. */
 export function hasMinorCategory(major: string, minor: string): boolean {
-  return minorsByMajorKey.get(taxonomyKey(major))?.has(taxonomyKey(minor)) ?? false;
+  if (!major || !minor) return false;
+  const minors = minorsByMajorKey.get(taxonomyKey(major));
+  return Boolean(minors && minors.has(taxonomyKey(minor)));
 }
 
 /**
@@ -97,9 +101,15 @@ export function hasMinorCategory(major: string, minor: string): boolean {
  * dropdown.
  */
 export function findMajorForMinor(minor: string): string {
+  if (!minor) return '';
   const key = taxonomyKey(minor);
-  const group = groups.find((g) => (g.minorCategories || []).some((m) => taxonomyKey(m) === key));
-  return group ? group.majorCategory : '';
+  let found = '';
+  minorsByMajorKey.forEach((minors, majorKey) => {
+    if (!found && minors.has(key)) {
+      found = majorsByKey.get(majorKey) || '';
+    }
+  });
+  return found;
 }
 
 /** Total minor categories across every major, for the summary counters. */
