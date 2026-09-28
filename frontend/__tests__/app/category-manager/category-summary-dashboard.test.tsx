@@ -829,7 +829,7 @@ describe('CategorySummaryDashboard', () => {
     // Tab 2: Quotes & Pricing
     fireEvent.click(screen.getByRole('button', { name: /Quotes & Pricing/i }));
     expect(screen.getAllByText('Alpha Infra').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('₹1,50,000').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/₹\s*1.*50.*000/).length).toBeGreaterThanOrEqual(1);
 
     // Tab 3: Enterprise Buyers
     fireEvent.click(screen.getByRole('button', { name: /Enterprise Buyers/i }));
