@@ -245,7 +245,7 @@ describe('category-summary-dashboard pure helpers', () => {
   });
 
   describe('doesBuyerMatchRfq', () => {
-    const account: BuyerAccount = {
+    const account: BuyerAccount = makeBuyerAccount({
       id: 'acc-1',
       organizationName: 'Acme Corp',
       contactPerson: 'Jane Doe',
@@ -504,7 +504,7 @@ describe('CategorySummaryDashboard', () => {
       minorCategories: ['Concrete'],
     });
 
-    const mockAccount: BuyerAccount = {
+    const mockAccount: BuyerAccount = makeBuyerAccount({
       id: 'b-1',
       organizationName: 'Tata Projects',
       contactPerson: 'Sunil Verma',
@@ -599,7 +599,7 @@ describe('CategorySummaryDashboard', () => {
   });
 
   it('switches between tabs in Category Details modal and handles explore action from categories KPI modal', () => {
-    const mockVendor: VendorEntry = {
+    const mockVendor: VendorEntry = makeVendor({
       id: 'v-1',
       name: 'Apex Concrete Ltd',
       majorCategory: 'Civil Works',
@@ -763,7 +763,7 @@ describe('CategorySummaryDashboard', () => {
       phone: '+91 9876543210',
     });
 
-    const mockAccount: BuyerAccount = {
+    const mockAccount: BuyerAccount = makeBuyerAccount({
       id: 'b-1',
       organizationName: 'L&T Construction',
       contactPerson: 'Amit Patel',
