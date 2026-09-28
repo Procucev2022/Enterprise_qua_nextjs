@@ -346,4 +346,244 @@ describe('isTextFile and isWordDocument', () => {
     const req = await buildExtractionRequest(file);
     expect(req.documentText).toContain('Centrifugal Water Pump 500 GPM');
   });
+
+  test('parseDocxXml parses xml with entities, tabs, and table cells', () => {
+    const { parseDocxXml } = require('@/lib/documentExtraction');
+    const xml = '<w:document><w:body><w:p><w:r><w:t>Header &amp; Title &lt;1&gt;</w:t></w:r></w:p><w:tr><w:tc><w:t>Col &quot;A&quot; &#39;test&#39;</w:t></w:tc><w:tc><w:t>Col B<w:tab/>Val</w:t></w:tc></w:tr></w:body></w:document>';
+    const parsed = parseDocxXml(xml);
+    expect(parsed).toContain('Header & Title <1>');
+    expect(parsed).toContain('Col "A" \'test\'');
+    expect(parsed).toContain('Col B Val');
+  });
+
+  test('readAsText reads file as string and handles reader error', async () => {
+    const { readAsText } = require('@/lib/documentExtraction');
+    const file = new File(['Hello World Text'], 'sample.txt', { type: 'text/plain' });
+    const text = await readAsText(file);
+    expect(text).toBe('Hello World Text');
+
+    const badFile = { name: 'bad.txt' } as unknown as File;
+    const originalFileReader = global.FileReader;
+    global.FileReader = class MockFileReader {
+      onerror: (() => void) | null = null;
+      readAsText() {
+        if (this.onerror) this.onerror();
+      }
+    } as unknown as typeof FileReader;
+
+    await expect(readAsText(badFile)).rejects.toThrow('read failed');
+    global.FileReader = originalFileReader;
+  });
+
+  test('readAsBase64 and readAsArrayBuffer handle error events', async () => {
+    const { readAsBase64, readAsArrayBuffer } = require('@/lib/documentExtraction');
+    const originalFileReader = global.FileReader;
+    global.FileReader = class MockFileReader {
+      onerror: (() => void) | null = null;
+      readAsDataURL() {
+        if (this.onerror) this.onerror();
+      }
+      readAsArrayBuffer() {
+        if (this.onerror) this.onerror();
+      }
+    } as unknown as typeof FileReader;
+
+    const fakeFile = {} as File;
+    await expect(readAsBase64(fakeFile)).rejects.toThrow('read failed');
+    await expect(readAsArrayBuffer(fakeFile)).rejects.toThrow('read failed');
+    global.FileReader = originalFileReader;
+  });
+
+  test('extractDocxText with compressed stream (compMethod 8) using DecompressionStream', async () => {
+    const { extractDocxText } = require('@/lib/documentExtraction');
+    const fn = 'word/document.xml';
+    const xml = '<w:document><w:body><w:p><w:r><w:t>Compressed Motor 10HP</w:t></w:r></w:p></w:body></w:document>';
+    const enc = new TextEncoder();
+    const fnBytes = enc.encode(fn);
+    const fakeCompBytes = enc.encode('fake-deflate-data');
+
+    const header = new Uint8Array(30 + fnBytes.length + fakeCompBytes.length);
+    header[0] = 0x50; header[1] = 0x4b; header[2] = 0x03; header[3] = 0x04;
+    header[8] = 8; header[9] = 0; // compMethod = 8
+    header[18] = fakeCompBytes.length & 0xff; header[19] = 0;
+    header[26] = fnBytes.length & 0xff; header[27] = 0;
+    header.set(fnBytes, 30);
+    header.set(fakeCompBytes, 30 + fnBytes.length);
+
+    const originalDS = (global as unknown as { DecompressionStream?: unknown }).DecompressionStream;
+    class MockDecompressionStream {
+      writable = {
+        getWriter: () => ({
+          write: jest.fn(),
+          close: jest.fn(),
+        }),
+      };
+      readable = {};
+    }
+    (global as unknown as { DecompressionStream: unknown }).DecompressionStream = MockDecompressionStream;
+
+    const originalResponse = global.Response;
+    global.Response = jest.fn(() => ({
+      text: jest.fn().mockResolvedValue(xml),
+    })) as unknown as typeof Response;
+
+    const text = await extractDocxText(header.buffer);
+    expect(text).toContain('Compressed Motor 10HP');
+
+    // Test DecompressionStream failure branch
+    global.Response = jest.fn(() => ({
+      text: jest.fn().mockRejectedValue(new Error('Decompress fail')),
+    })) as unknown as typeof Response;
+    const textFail = await extractDocxText(header.buffer);
+    expect(textFail).toBe('');
+
+    (global as unknown as { DecompressionStream?: unknown }).DecompressionStream = originalDS;
+    global.Response = originalResponse;
+  });
+
+  test('extractPdfText handles octal escapes and DecompressionStream', async () => {
+    const { extractPdfText } = require('@/lib/documentExtraction');
+    // \101 is 'A', \102 is 'B'
+    const pdfContent = '%PDF-1.4\nstream\n(\\101\\102\\103 Item) Tj\n[(\\104\\105\\106 Code)] TJ\nendstream';
+    const enc = new TextEncoder();
+    const buffer = enc.encode(pdfContent).buffer;
+
+    const text = await extractPdfText(buffer);
+    expect(text).toContain('ABC Item');
+    expect(text).toContain('DEF Code');
+
+    // With DecompressionStream
+    const originalDS = (global as unknown as { DecompressionStream?: unknown }).DecompressionStream;
+    class MockDecompressionStream {
+      writable = {
+        getWriter: () => ({
+          write: jest.fn(),
+          close: jest.fn(),
+        }),
+      };
+      readable = {};
+    }
+    (global as unknown as { DecompressionStream: unknown }).DecompressionStream = MockDecompressionStream;
+
+    const originalResponse = global.Response;
+    global.Response = jest.fn(() => ({
+      text: jest.fn().mockResolvedValue('(Decompressed Line Item) Tj'),
+    })) as unknown as typeof Response;
+
+    const textWithDS = await extractPdfText(buffer);
+    expect(textWithDS).toContain('Decompressed Line Item');
+
+    // Error handling in extractPdfText (Symbol causes TypeError when converted to Uint8Array)
+    const throwingBuffer = Symbol('bad') as unknown as ArrayBuffer;
+    const failedText = await extractPdfText(throwingBuffer);
+    expect(failedText).toBe('');
+
+    (global as unknown as { DecompressionStream?: unknown }).DecompressionStream = originalDS;
+    global.Response = originalResponse;
+  });
+
+  test('extractDocxText handles TextDecoder fallback when decode throws', async () => {
+    const { extractDocxText } = require('@/lib/documentExtraction');
+    const fn = 'word/document.xml';
+    const xml = '<w:document><w:body><w:p><w:r><w:t>Fallback Text Motor</w:t></w:r></w:p></w:body></w:document>';
+    const enc = new TextEncoder();
+    const fnBytes = enc.encode(fn);
+    const xmlBytes = enc.encode(xml);
+    const header = new Uint8Array(30 + fnBytes.length + xmlBytes.length);
+    header[0] = 0x50; header[1] = 0x4b; header[2] = 0x03; header[3] = 0x04;
+    header[8] = 0; header[9] = 0; // compMethod = 0
+    header[18] = xmlBytes.length & 0xff; header[19] = (xmlBytes.length >> 8) & 0xff;
+    header[26] = fnBytes.length & 0xff; header[27] = 0;
+    header.set(fnBytes, 30);
+    header.set(xmlBytes, 30 + fnBytes.length);
+
+    const origDecode = TextDecoder.prototype.decode;
+    TextDecoder.prototype.decode = jest.fn(() => {
+      throw new Error('Decoder failed');
+    });
+
+    try {
+      const extracted = await extractDocxText(header.buffer);
+      expect(extracted).toContain('Fallback Text Motor');
+    } finally {
+      TextDecoder.prototype.decode = origDecode;
+    }
+  });
+
+  test('buildExtractionRequest handles docx with extracted text and fallback', async () => {
+    const { buildExtractionRequest } = require('@/lib/documentExtraction');
+
+    // 1. Docx with real uncompressed word/document.xml payload
+    const fn = 'word/document.xml';
+    const xml = '<w:document><w:body><w:p><w:r><w:t>Extracted Docx Text Items</w:t></w:r></w:p></w:body></w:document>';
+    const enc = new TextEncoder();
+    const fnBytes = enc.encode(fn);
+    const xmlBytes = enc.encode(xml);
+    const header = new Uint8Array(30 + fnBytes.length + xmlBytes.length);
+    header[0] = 0x50; header[1] = 0x4b; header[2] = 0x03; header[3] = 0x04;
+    header[8] = 0; header[9] = 0; // compMethod = 0
+    header[18] = xmlBytes.length & 0xff; header[19] = (xmlBytes.length >> 8) & 0xff;
+    header[26] = fnBytes.length & 0xff; header[27] = 0;
+    header.set(fnBytes, 30);
+    header.set(xmlBytes, 30 + fnBytes.length);
+
+    const file1 = new File([header.buffer], 'spec.docx', { type: '' });
+    const req1 = await buildExtractionRequest(file1);
+    expect(req1.documentText).toContain('Extracted Docx Text Items');
+
+    // 2. Corrupt/empty docx payload falls back to inlineData
+    const file2 = new File(['not a valid docx zip buffer'], 'broken.docx', { type: '' });
+    const req2 = await buildExtractionRequest(file2);
+    expect(req2.inlineData).toBeDefined();
+    expect(req2.documentText).toBeUndefined();
+  });
+
+  test('extractDocxText ignores non-document zip entries and truncated headers', async () => {
+    const { extractDocxText } = require('@/lib/documentExtraction');
+
+    // 1. Non-matching zip entry (e.g. word/settings.xml)
+    const fn = 'word/settings.xml';
+    const enc = new TextEncoder();
+    const fnBytes = enc.encode(fn);
+    const header1 = new Uint8Array(30 + fnBytes.length);
+    header1[0] = 0x50; header1[1] = 0x4b; header1[2] = 0x03; header1[3] = 0x04;
+    header1[26] = fnBytes.length & 0xff; header1[27] = 0;
+    header1.set(fnBytes, 30);
+    const text1 = await extractDocxText(header1.buffer);
+    expect(text1).toBe('');
+
+    // 2. Truncated zip header where fnOffset + fnLen > bytes.length
+    const header2 = new Uint8Array(35);
+    header2[0] = 0x50; header2[1] = 0x4b; header2[2] = 0x03; header2[3] = 0x04;
+    header2[26] = 100; // fnLen = 100, larger than 35
+    const text2 = await extractDocxText(header2.buffer);
+    expect(text2).toBe('');
+  });
+
+  test('readAsText yields empty string when reader.result is null', async () => {
+    const { readAsText } = require('@/lib/documentExtraction');
+    const originalFileReader = global.FileReader;
+    global.FileReader = class MockFileReader {
+      result = null;
+      onload: (() => void) | null = null;
+      readAsText() {
+        if (this.onload) this.onload();
+      }
+    } as unknown as typeof FileReader;
+
+    const file = new File([''], 'empty.txt');
+    const text = await readAsText(file);
+    expect(text).toBe('');
+    global.FileReader = originalFileReader;
+  });
+
+  test('extractPdfText handles empty Tj and TJ operators and empty decompressed streams', async () => {
+    const { extractPdfText } = require('@/lib/documentExtraction');
+    const pdfContent = '%PDF-1.4\nstream\n() Tj\n[()] TJ\n(   ) Tj\n[(   )] TJ\nendstream';
+    const enc = new TextEncoder();
+    const buffer = enc.encode(pdfContent).buffer;
+    const text = await extractPdfText(buffer);
+    expect(text).toBe('');
+  });
 });
+

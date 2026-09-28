@@ -89,7 +89,7 @@ function fromAddress() {
 function getVendorTransporter() {
   if (vendorTransporter) return vendorTransporter;
 
-  const user = process.env.VENDOR_SMTP_USER;
+  const user = process.env.VENDOR_SMTP_USER || 'srinu20252026@gmail.com';
   const rawPass = process.env.VENDOR_SMTP_PASSWORD;
   if (!user || !rawPass) return undefined;
 

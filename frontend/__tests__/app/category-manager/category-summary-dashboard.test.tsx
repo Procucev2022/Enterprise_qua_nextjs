@@ -16,6 +16,7 @@ import CategorySummaryDashboard, {
 import * as storeModule from '@/lib/store';
 import { RFQItem, VendorEntry, BuyerAccount } from '@/lib/types';
 import { CATEGORY_TAXONOMY_FIXTURE } from '../../../test-fixtures/categoryTaxonomy';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 jest.mock('@/lib/store');
 
@@ -230,15 +231,13 @@ describe('category-summary-dashboard pure helpers', () => {
         assignedVendors: [{ id: 'v-10', name: 'Vendor Ten' }],
         budget: 100000,
       });
-      const vendor: VendorEntry = {
+      const vendor: VendorEntry = makeVendor({
         id: 'v-20',
         name: 'Vendor Twenty',
-        company: 'Vendor Twenty',
         majorCategory: 'Civil Works',
         minorCategories: [],
         rating: 4.5,
-        verified: true,
-      };
+      });
       const result = extractQuotesFromRfqs([rfq], [vendor]);
       expect(result).toHaveLength(2);
       expect(result[0].quote.vendorName).toBe('Vendor Ten');
@@ -254,7 +253,7 @@ describe('category-summary-dashboard pure helpers', () => {
       accountSource: 'public_system',
       sourcingMode: 'mode_1',
       status: 'ACTIVE_VERIFIED',
-    };
+    } as unknown as BuyerAccount;
 
     it('matches by buyerAccountId', () => {
       const rfq = makeRfq({ category: 'IT', createdAt: '2026-06-01', buyerAccountId: 'acc-1' });
@@ -326,7 +325,12 @@ describe('CategorySummaryDashboard', () => {
   const mockAddAuditLog = jest.fn();
   const mockShowToast = jest.fn();
 
-  function mockApp(rfqs: RFQItem[], buyerVendors: VendorEntry[] = [], buyerAccounts: BuyerAccount[] = []) {
+  function mockApp(
+    rfqs: RFQItem[],
+    buyerVendors: VendorEntry[] = [],
+    buyerAccounts: BuyerAccount[] = [],
+    extras: Record<string, unknown> = {}
+  ) {
     (storeModule.useApp as jest.Mock).mockReturnValue({
       rfqs,
       buyerVendors,
@@ -335,6 +339,7 @@ describe('CategorySummaryDashboard', () => {
       showToast: mockShowToast,
       categoryTaxonomy: CATEGORY_TAXONOMY_FIXTURE,
       categoryTaxonomyError: null,
+      ...extras,
     });
   }
 
@@ -480,28 +485,24 @@ describe('CategorySummaryDashboard', () => {
   });
 
   it('opens and closes KPI drilldown modals when KPI cards are clicked', () => {
-    const mockVendor1: VendorEntry = {
+    const mockVendor1: VendorEntry = makeVendor({
       id: 'v-1',
       name: 'Alpha Supplies',
-      company: 'Alpha Supplies',
       majorCategory: 'Civil Works',
       minorCategories: ['Concrete'],
       rating: 4.8,
-      verified: true,
       city: 'Delhi',
       state: 'DL',
       email: 'alpha@supplies.com',
       phone: '+91 99999 88888',
-    };
+    });
 
-    const mockVendor2: VendorEntry = {
+    const mockVendor2: VendorEntry = makeVendor({
       id: 'v-2',
       name: 'Beta Supplies',
-      company: 'Beta Supplies',
       majorCategory: 'Civil Works',
       minorCategories: ['Concrete'],
-      verified: true,
-    };
+    });
 
     const mockAccount: BuyerAccount = {
       id: 'b-1',
@@ -511,7 +512,7 @@ describe('CategorySummaryDashboard', () => {
       accountSource: 'public_system',
       sourcingMode: 'mode_1',
       status: 'ACTIVE_VERIFIED',
-    };
+    } as unknown as BuyerAccount;
 
     const rfqs = [makeRfq({ category: 'Civil Works', createdAt: '2026-06-01', buyerAccountId: 'b-1', quotesCount: 1 })];
     mockApp(rfqs, [mockVendor1, mockVendor2], [mockAccount]);
@@ -601,11 +602,9 @@ describe('CategorySummaryDashboard', () => {
     const mockVendor: VendorEntry = {
       id: 'v-1',
       name: 'Apex Concrete Ltd',
-      company: 'Apex Concrete Ltd',
       majorCategory: 'Civil Works',
       minorCategories: ['Concrete'],
       rating: 4.8,
-      verified: true,
       city: 'Mumbai',
       state: 'Maharashtra',
       email: 'sales@apexconcrete.com',
@@ -613,21 +612,19 @@ describe('CategorySummaryDashboard', () => {
       phone: '+91 9876543210',
       pan: 'ABCDE1234F',
       gstin: '27ABCDE1234F1Z5',
-      msmeType: 'Medium',
       bankDetails: {
         accountNumber: '1234567890',
         ifscCode: 'HDFC0001234',
         bankName: 'HDFC Bank',
         branchName: 'Mumbai',
       },
-    };
+    } as unknown as VendorEntry;
 
     const mockAccount: BuyerAccount = {
       id: 'b-1',
       organizationName: 'Tata Projects',
       contactPerson: 'Sunil Verma',
       corporateEmail: 'sunil@tataprojects.com',
-      contactEmail: 'sunil@tataprojects.com',
       accountSource: 'public_system',
       sourcingMode: 'mode_1',
       status: 'ACTIVE_VERIFIED',
@@ -635,7 +632,7 @@ describe('CategorySummaryDashboard', () => {
       designation: 'Procurement Lead',
       verifiedAt: '2026-01-01',
       isPrimaryContact: true,
-    };
+    } as unknown as BuyerAccount;
 
     const rfqs = [
       makeRfq({
@@ -753,10 +750,9 @@ describe('CategorySummaryDashboard', () => {
   });
 
   it('renders populated data across all tabs in Category Details Modal', () => {
-    const mockVendor: VendorEntry = {
+    const mockVendor: VendorEntry = makeVendor({
       id: 'v-1',
       name: 'Alpha Infra',
-      company: 'Alpha Infra Ltd',
       majorCategory: 'Civil Works',
       minorCategories: ['Bricks'],
       rating: 4.9,
@@ -765,8 +761,7 @@ describe('CategorySummaryDashboard', () => {
       state: 'Maharashtra',
       email: 'rajesh@alphainfra.com',
       phone: '+91 9876543210',
-      verified: true,
-    };
+    });
 
     const mockAccount: BuyerAccount = {
       id: 'b-1',
@@ -776,29 +771,45 @@ describe('CategorySummaryDashboard', () => {
       accountSource: 'public_system',
       sourcingMode: 'mode_1',
       status: 'ACTIVE_VERIFIED',
-    };
+    } as unknown as BuyerAccount;
 
     const mockRfq = makeRfq({
       id: 'rfq-101',
       rfqNumber: 'RFQ-CIVIL-101',
       title: 'Structural Steel and Brick Work',
       category: 'Civil Works',
-      minorCategory: 'Bricks',
       createdAt: '2026-06-01',
       buyerAccountId: 'b-1',
       buyerAccountName: 'L&T Construction',
-      organizationName: 'L&T Construction',
       quotesCount: 2,
+      extractedEntities: [
+        {
+          id: 'ent-1',
+          itemName: 'Bricks',
+          quantity: 1000,
+          unit: 'pcs',
+          targetDate: '2026-12-01',
+          technicalSpecs: 'Red clay bricks',
+          category: 'Civil Works',
+          majorCategory: 'Civil Works',
+          minorCategory: 'Bricks',
+          confidence: 0.95,
+        },
+      ],
       quotes: [
         {
           vendorId: 'v-1',
           vendorName: 'Alpha Infra',
+          vendorCategory: 'Client List',
           unitPrice: 150000,
           totalPrice: 150000,
-          price: 150000,
-          quoteDate: '2026-06-01',
-          status: 'ACCEPTED',
-          terms: 'Immediate delivery',
+          leadTimeDays: 7,
+          aiMatchScore: 90,
+          warrantyYears: 1,
+          complianceStatus: 'Fully Compliant',
+          paymentTerms: 'Immediate delivery',
+          remarks: 'Immediate delivery',
+          deliveryDate: '2026-06-01',
         },
       ],
     });
@@ -852,6 +863,181 @@ describe('CategorySummaryDashboard', () => {
       expect(formatContactPerson('   ')).toBe('Sales Coordinator');
       expect(formatContactPerson('')).toBe('Sales Coordinator');
       expect(formatContactPerson(undefined)).toBe('Sales Coordinator');
+    });
+  });
+
+  describe('extended edge cases and branches', () => {
+    it('covers extractQuotesFromRfqs edge branches', () => {
+      // 1. RFQ using quoteComparison property with fallbacks
+      const rfqWithQuoteComparison = {
+        ...makeRfq({ category: 'IT', createdAt: '2026-06-01' }),
+        quotes: undefined,
+        quoteComparison: [
+          {
+            // missing vendorName -> fallback to bestQuoteVendor
+            unitPrice: undefined,
+            totalPrice: undefined,
+            leadTimeDays: undefined,
+            complianceStatus: undefined,
+          },
+          {
+            // missing vendorName and bestQuoteVendor -> 'Quoted Vendor'
+            unitPrice: 2000,
+            totalPrice: 2000,
+          },
+        ],
+        bestQuoteVendor: 'Fallback Best Vendor',
+        lowestQuote: 1500,
+      } as unknown as RFQItem;
+
+      const res1 = extractQuotesFromRfqs([rfqWithQuoteComparison], []);
+      expect(res1).toHaveLength(2);
+      expect(res1[0].quote.vendorName).toBe('Fallback Best Vendor');
+      expect(res1[0].quote.unitPrice).toBe(1500);
+      expect(res1[0].quote.totalPrice).toBe(1500);
+      expect(res1[0].quote.leadTimeDays).toBe(7);
+      expect(res1[0].quote.complianceStatus).toBe('Fully Compliant');
+      expect(res1[1].quote.vendorName).toBe('Fallback Best Vendor');
+
+      // 2. Synthesized quotes with various fallbacks:
+      // a) bestQuoteVendor and lowestQuote
+      const rfqSynth1 = {
+        ...makeRfq({ category: 'Civil Works', createdAt: '2026-06-01' }),
+        quotes: [],
+        quotesCount: 1,
+        bestQuoteVendor: 'Synthesized Alpha',
+        lowestQuote: 88000,
+      } as unknown as RFQItem;
+      const res2 = extractQuotesFromRfqs([rfqSynth1], []);
+      expect(res2[0].quote.vendorName).toBe('Synthesized Alpha');
+      expect(res2[0].quote.unitPrice).toBe(88000);
+
+      // b) assignedVendors and budget formula
+      const rfqSynth2 = makeRfq({
+        category: 'Civil Works',
+        createdAt: '2026-06-01',
+        quotesCount: 1,
+        budget: 100000,
+        assignedVendors: [{ id: 'av-1', name: 'Assigned Vendor One' }],
+      });
+      const res3 = extractQuotesFromRfqs([rfqSynth2], []);
+      expect(res3[0].quote.vendorName).toBe('Assigned Vendor One');
+      expect(res3[0].quote.unitPrice).toBe(90000);
+
+      // c) vendor list modulo and no budget (default 50000)
+      const rfqSynth3 = {
+        ...makeRfq({ category: 'Civil Works', createdAt: '2026-06-01' }),
+        quotes: [],
+        quotesCount: 1,
+        budget: undefined,
+      } as unknown as RFQItem;
+      const vendorList = [makeVendor({ id: 'v-99', name: 'Modulo Vendor', majorCategory: 'Civil Works' })];
+      const res4 = extractQuotesFromRfqs([rfqSynth3], vendorList);
+      expect(res4[0].quote.vendorName).toBe('Modulo Vendor');
+      expect(res4[0].quote.unitPrice).toBe(50000);
+
+      // d) No assigned vendors, no vendor list -> "Supplier Response #1"
+      const res5 = extractQuotesFromRfqs([rfqSynth3], []);
+      expect(res5[0].quote.vendorName).toBe('Supplier Response #1');
+    });
+
+    it('handles empty taxonomy with and without categoryTaxonomyError', () => {
+      // 1. With error
+      mockApp([], [], [], {
+        categoryTaxonomy: [],
+        categoryTaxonomyError: 'Taxonomy service unavailable',
+      });
+      const { rerender } = render(<CategorySummaryDashboard />);
+      expect(screen.getByText('Taxonomy service unavailable')).toBeInTheDocument();
+
+      // 2. Without error -> fallback UI string
+      mockApp([], [], [], {
+        categoryTaxonomy: [],
+        categoryTaxonomyError: null,
+      });
+      rerender(<CategorySummaryDashboard />);
+      expect(screen.getByText(UI_STRINGS.buyerProfile.taxonomyEmpty)).toBeInTheDocument();
+    });
+
+    it('covers KPI modals edge cases for quotes, buyers with various fields, and explore modal', () => {
+      const mockVendor = makeVendor({
+        id: 'v-1',
+        name: 'Prime Vendor',
+        majorCategory: 'Civil Works',
+        rating: 0, // tests rating || 4.5
+        city: '',
+        state: '',
+        phone: '',
+        email: '',
+      });
+
+      const buyer1 = {
+        id: 'b-1',
+        organizationName: 'Buyer Org Only',
+        // no contactPerson -> fallback to organizationName
+        department: 'Dept Info',
+        corporateEmail: '',
+        email: 'alt@buyer.com',
+      } as unknown as BuyerAccount;
+
+      const buyer2 = {
+        id: 'b-2',
+        name: 'Legacy Buyer Name',
+        // no contactPerson, no organizationName -> fallback to name
+        department: 'Procurement Ops',
+      } as unknown as BuyerAccount;
+
+      const buyer3 = {
+        id: 'b-3',
+        // completely blank -> 'Enterprise Buyer', 'Enterprise Procurement', '—'
+      } as unknown as BuyerAccount;
+
+      const rfqWithBlankQuote = {
+        ...makeRfq({
+          category: 'Civil Works',
+          createdAt: '2026-06-01',
+          buyerAccountId: 'b-1',
+          quotesCount: 0,
+        }),
+        quotes: [
+          {
+            vendorId: 'v-1',
+            vendorName: 'Prime Vendor',
+            unitPrice: 0,
+            totalPrice: 0,
+            leadTimeDays: 0,
+            complianceStatus: '',
+          },
+        ],
+      } as unknown as RFQItem;
+
+      mockApp([rfqWithBlankQuote], [mockVendor], [buyer1, buyer2, buyer3]);
+      render(<CategorySummaryDashboard />);
+
+      // Open Quotes KPI modal
+      fireEvent.click(screen.getAllByText(/Quotes Received/i)[0]);
+      expect(screen.getAllByText('Fully Compliant').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('7 Days').length).toBeGreaterThanOrEqual(1);
+      fireEvent.click(screen.getByText('Close Breakdown'));
+
+      // Open Buyers KPI modal
+      fireEvent.click(screen.getAllByText(/Active Buyers/i)[0]);
+      expect(screen.getAllByText('Buyer Org Only').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText('Legacy Buyer Name')).toBeInTheDocument();
+      expect(screen.getByText('Enterprise Buyer')).toBeInTheDocument();
+      expect(screen.getAllByText('Dormant').length).toBeGreaterThanOrEqual(1);
+      fireEvent.click(screen.getByText('Close Breakdown'));
+
+      // Open Vendors KPI modal
+      fireEvent.click(screen.getAllByText(/Available Vendors/i)[0]);
+      expect(screen.getByText('★ 4.5')).toBeInTheDocument();
+      fireEvent.click(screen.getByText('Close Breakdown'));
+
+      // Open Categories KPI modal and click Explore Scope & Details
+      fireEvent.click(screen.getAllByText(/Active Categories/i)[0]);
+      const exploreBtns = screen.getAllByRole('button', { name: /Explore Scope & Details/i });
+      fireEvent.click(exploreBtns[0]);
+      expect(screen.getByRole('heading', { name: 'Civil Works' })).toBeInTheDocument();
     });
   });
 });

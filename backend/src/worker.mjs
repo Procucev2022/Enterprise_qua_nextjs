@@ -22,6 +22,16 @@ import zohoReconciliationService from './services/zohoReconciliationService.js';
 // its own require/import of the virtual module.
 globalThis.__CF_ENV__ = env;
 
+// Sync Workers env secrets & vars to process.env so CommonJS modules reading
+// process.env (e.g. mailerService, emailGatewayService) find them reliably.
+if (env && typeof env === 'object') {
+  for (const [k, v] of Object.entries(env)) {
+    if (typeof v === 'string' && process.env[k] === undefined) {
+      process.env[k] = v;
+    }
+  }
+}
+
 // storeService.js's persistence writes are all fire-and-forget: `promise
 // .catch(err => logger.error(...))`, never awaited by the caller, so the
 // HTTP response doesn't wait on the DB write. That is fine on Node/Render,
@@ -53,6 +63,13 @@ const httpHandler = httpServerHandler({ port: PORT });
 // for the interval-based startPolling machinery, which has nothing to run
 // inside here.
 async function scheduled(controller, workerEnv, ctx) {
+  if (workerEnv && typeof workerEnv === 'object') {
+    for (const [k, v] of Object.entries(workerEnv)) {
+      if (typeof v === 'string') {
+        process.env[k] = v;
+      }
+    }
+  }
   const cron = controller.cron;
   if (cron === EMAIL_GATEWAY_CRON) {
     await emailGatewayService.pollBothInboxesOnce();
