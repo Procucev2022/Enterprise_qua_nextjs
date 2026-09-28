@@ -350,15 +350,11 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
           >
             <ArrowLeft size={14} /> Back to Opportunity Feed
           </button>
-          <div className="flex items-center gap-2">
+          <div>
             <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
               Sourcing Enquiries & Quotation Tracking
             </h1>
-            <span className="badge badge-emerald">Screen 3.2</span>
           </div>
-          <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
-            Review active RFQs received from eligible buyers, download specifications, and track submitted email quotation status.
-          </p>
         </div>
       </div>
 

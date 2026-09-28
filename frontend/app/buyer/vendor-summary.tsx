@@ -1002,9 +1002,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             <Building2 className="text-indigo-600 dark:text-indigo-400" size={24} />
             Vendor Directory &amp; Management
           </h1>
-          <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-            Manage your organization&apos;s empanelled suppliers, select vendors, add new suppliers, and edit company profiles.
-          </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <button

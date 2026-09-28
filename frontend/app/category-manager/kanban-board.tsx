@@ -197,15 +197,9 @@ export default function KanbanBoard({
       {/* Title & Top Toolbar */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
         <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
-              Operational Monitoring Kanban & Chasing Control
-            </h1>
-            <span className="badge badge-purple">Screen 2.1</span>
-          </div>
-          <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
-            Category pipeline governance, Mode 1/2/3 AI chaser dispatch engine, and operational analytics controls.
-          </p>
+          <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
+            Operational Monitoring Kanban & Chasing Control
+          </h1>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">

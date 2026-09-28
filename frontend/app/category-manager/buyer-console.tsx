@@ -135,15 +135,9 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
       {/* Title Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
         <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
-              Buyer Wise Command Console & Analytics
-            </h1>
-            <span className="badge badge-purple">Screen 2.3</span>
-          </div>
-          <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
-            Category Manager Central Command: check buyer wise status of RFQ summaries, drill down into line-item details, and inspect company analytics.
-          </p>
+          <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
+            Buyer Wise Command Console & Analytics
+          </h1>
         </div>
       </div>
 

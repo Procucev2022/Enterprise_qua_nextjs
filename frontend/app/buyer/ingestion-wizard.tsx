@@ -583,15 +583,9 @@ export default function IngestionWizard({
       {/* Header */}
       <div className="flex items-center justify-between pb-4 border-b border-slate-200 dark:border-slate-800">
         <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
-              AI RFQ Ingestion & Multi-Mode Sourcing Dispatch
-            </h1>
-            <span className="badge badge-purple">Screen 1.2</span>
-          </div>
-          <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
-            Create RFQ directly, upload BOQ documents or forwarded requisition emails, extract line items with AI, and dispatch to verified suppliers.
-          </p>
+          <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
+            AI RFQ Ingestion & Multi-Mode Sourcing Dispatch
+          </h1>
         </div>
         <div className="flex items-center gap-2">
           <button
