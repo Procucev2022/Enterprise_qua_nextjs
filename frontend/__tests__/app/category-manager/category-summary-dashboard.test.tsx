@@ -230,15 +230,13 @@ describe('category-summary-dashboard pure helpers', () => {
         assignedVendors: [{ id: 'v-10', name: 'Vendor Ten' }],
         budget: 100000,
       });
-      const vendor: VendorEntry = {
+      const vendor: VendorEntry = makeVendor({
         id: 'v-20',
         name: 'Vendor Twenty',
-        company: 'Vendor Twenty',
         majorCategory: 'Civil Works',
         minorCategories: [],
         rating: 4.5,
-        verified: true,
-      };
+      });
       const result = extractQuotesFromRfqs([rfq], [vendor]);
       expect(result).toHaveLength(2);
       expect(result[0].quote.vendorName).toBe('Vendor Ten');
@@ -246,7 +244,7 @@ describe('category-summary-dashboard pure helpers', () => {
   });
 
   describe('doesBuyerMatchRfq', () => {
-    const account: BuyerAccount = {
+    const account: BuyerAccount = makeBuyerAccount({
       id: 'acc-1',
       organizationName: 'Acme Corp',
       contactPerson: 'Jane Doe',
@@ -254,7 +252,7 @@ describe('category-summary-dashboard pure helpers', () => {
       accountSource: 'public_system',
       sourcingMode: 'mode_1',
       status: 'ACTIVE_VERIFIED',
-    };
+    });
 
     it('matches by buyerAccountId', () => {
       const rfq = makeRfq({ category: 'IT', createdAt: '2026-06-01', buyerAccountId: 'acc-1' });
@@ -480,30 +478,26 @@ describe('CategorySummaryDashboard', () => {
   });
 
   it('opens and closes KPI drilldown modals when KPI cards are clicked', () => {
-    const mockVendor1: VendorEntry = {
+    const mockVendor1: VendorEntry = makeVendor({
       id: 'v-1',
       name: 'Alpha Supplies',
-      company: 'Alpha Supplies',
       majorCategory: 'Civil Works',
       minorCategories: ['Concrete'],
       rating: 4.8,
-      verified: true,
       city: 'Delhi',
       state: 'DL',
       email: 'alpha@supplies.com',
       phone: '+91 99999 88888',
-    };
+    });
 
-    const mockVendor2: VendorEntry = {
+    const mockVendor2: VendorEntry = makeVendor({
       id: 'v-2',
       name: 'Beta Supplies',
-      company: 'Beta Supplies',
       majorCategory: 'Civil Works',
       minorCategories: ['Concrete'],
-      verified: true,
-    };
+    });
 
-    const mockAccount: BuyerAccount = {
+    const mockAccount: BuyerAccount = makeBuyerAccount({
       id: 'b-1',
       organizationName: 'Tata Projects',
       contactPerson: 'Sunil Verma',
@@ -511,7 +505,7 @@ describe('CategorySummaryDashboard', () => {
       accountSource: 'public_system',
       sourcingMode: 'mode_1',
       status: 'ACTIVE_VERIFIED',
-    };
+    });
 
     const rfqs = [makeRfq({ category: 'Civil Works', createdAt: '2026-06-01', buyerAccountId: 'b-1', quotesCount: 1 })];
     mockApp(rfqs, [mockVendor1, mockVendor2], [mockAccount]);
@@ -598,14 +592,12 @@ describe('CategorySummaryDashboard', () => {
   });
 
   it('switches between tabs in Category Details modal and handles explore action from categories KPI modal', () => {
-    const mockVendor: VendorEntry = {
+    const mockVendor: VendorEntry = makeVendor({
       id: 'v-1',
       name: 'Apex Concrete Ltd',
-      company: 'Apex Concrete Ltd',
       majorCategory: 'Civil Works',
       minorCategories: ['Concrete'],
       rating: 4.8,
-      verified: true,
       city: 'Mumbai',
       state: 'Maharashtra',
       email: 'sales@apexconcrete.com',
@@ -613,29 +605,18 @@ describe('CategorySummaryDashboard', () => {
       phone: '+91 9876543210',
       pan: 'ABCDE1234F',
       gstin: '27ABCDE1234F1Z5',
-      msmeType: 'Medium',
-      bankDetails: {
-        accountNumber: '1234567890',
-        ifscCode: 'HDFC0001234',
-        bankName: 'HDFC Bank',
-        branchName: 'Mumbai',
-      },
-    };
+      msme: 'Medium',
+    });
 
-    const mockAccount: BuyerAccount = {
+    const mockAccount: BuyerAccount = makeBuyerAccount({
       id: 'b-1',
       organizationName: 'Tata Projects',
       contactPerson: 'Sunil Verma',
       corporateEmail: 'sunil@tataprojects.com',
-      contactEmail: 'sunil@tataprojects.com',
       accountSource: 'public_system',
       sourcingMode: 'mode_1',
       status: 'ACTIVE_VERIFIED',
-      department: 'Infrastructure',
-      designation: 'Procurement Lead',
-      verifiedAt: '2026-01-01',
-      isPrimaryContact: true,
-    };
+    });
 
     const rfqs = [
       makeRfq({
@@ -753,10 +734,9 @@ describe('CategorySummaryDashboard', () => {
   });
 
   it('renders populated data across all tabs in Category Details Modal', () => {
-    const mockVendor: VendorEntry = {
+    const mockVendor: VendorEntry = makeVendor({
       id: 'v-1',
       name: 'Alpha Infra',
-      company: 'Alpha Infra Ltd',
       majorCategory: 'Civil Works',
       minorCategories: ['Bricks'],
       rating: 4.9,
@@ -765,10 +745,9 @@ describe('CategorySummaryDashboard', () => {
       state: 'Maharashtra',
       email: 'rajesh@alphainfra.com',
       phone: '+91 9876543210',
-      verified: true,
-    };
+    });
 
-    const mockAccount: BuyerAccount = {
+    const mockAccount: BuyerAccount = makeBuyerAccount({
       id: 'b-1',
       organizationName: 'L&T Construction',
       contactPerson: 'Amit Patel',
@@ -776,29 +755,44 @@ describe('CategorySummaryDashboard', () => {
       accountSource: 'public_system',
       sourcingMode: 'mode_1',
       status: 'ACTIVE_VERIFIED',
-    };
+    });
 
     const mockRfq = makeRfq({
       id: 'rfq-101',
       rfqNumber: 'RFQ-CIVIL-101',
       title: 'Structural Steel and Brick Work',
       category: 'Civil Works',
-      minorCategory: 'Bricks',
       createdAt: '2026-06-01',
       buyerAccountId: 'b-1',
       buyerAccountName: 'L&T Construction',
-      organizationName: 'L&T Construction',
       quotesCount: 2,
+      extractedEntities: [
+        {
+          id: 'ee-1',
+          itemName: 'Bricks',
+          quantity: 5000,
+          unit: 'pcs',
+          targetDate: '2026-07-01',
+          technicalSpecs: '',
+          confidence: 0.9,
+          category: 'Civil Works',
+          majorCategory: 'Civil Works',
+          minorCategory: 'Bricks',
+        },
+      ],
       quotes: [
         {
           vendorId: 'v-1',
           vendorName: 'Alpha Infra',
+          vendorCategory: 'Client List',
           unitPrice: 150000,
           totalPrice: 150000,
-          price: 150000,
-          quoteDate: '2026-06-01',
-          status: 'ACCEPTED',
-          terms: 'Immediate delivery',
+          leadTimeDays: 30,
+          aiMatchScore: 90,
+          warrantyYears: 1,
+          complianceStatus: 'Fully Compliant',
+          paymentTerms: 'Immediate delivery',
+          remarks: '',
         },
       ],
     });
