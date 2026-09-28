@@ -435,10 +435,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 const parentCompany = getParentCompany(opp.buyer);
                 const isDirectBuyer = isOwnBuyerRfq(opp.rfqNumber);
                 const freeCredits = effectiveFreeCredits;
-                const isLocked = !isDirectBuyer && (
-                  vendorSubscription === 'premium' ||
-                  (vendorSubscription !== 'connect' && vendorSubscription !== 'select' && freeCredits <= 0)
-                );
+                const isLocked = !isDirectBuyer && vendorSubscription !== 'connect' && vendorSubscription !== 'select' && freeCredits <= 0;
                 
                 // Condition: If buyer uploaded this vendor (isOwnBuyerRfq), show even before quote is submitted.
                 // Otherwise, show only after quote is submitted and updated in the system (quote !== undefined || opp.status === 'submitted').

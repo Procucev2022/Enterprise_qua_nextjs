@@ -5,6 +5,8 @@ import {
   flattenWorkbook,
   readAsBase64,
   readAsArrayBuffer,
+  readAsText,
+  extractPdfText,
   buildExtractionRequest,
 } from '@/lib/documentExtraction';
 
@@ -458,6 +460,27 @@ describe('isTextFile and isWordDocument', () => {
     const result = parseDocxXml(xml);
     expect(result).toContain('Header Value');
     expect(result).toContain('NextLine');
+  });
+
+  test('readAsText reads file contents as string', async () => {
+    const file = new File(['sample text content'], 'sample.txt', { type: 'text/plain' });
+    const content = await readAsText(file);
+    expect(content).toBe('sample text content');
+  });
+
+  test('extractPdfText parses plain and array Tj text streams from buffer', async () => {
+    const streamContent = 'stream\n(Centrifugal Pump 50HP) Tj\n[(Valve) -20 (Gate)] TJ\nendstream';
+    const encoder = new TextEncoder();
+    const buffer = encoder.encode(streamContent).buffer;
+
+    const result = await extractPdfText(buffer);
+    expect(result).toContain('Centrifugal Pump 50HP');
+    expect(result).toContain('Valve Gate');
+  });
+
+  test('extractPdfText handles empty or corrupt buffer gracefully', async () => {
+    expect(await extractPdfText(new ArrayBuffer(0))).toBe('');
+    expect(await extractPdfText(null as any)).toBe('');
   });
 });
 

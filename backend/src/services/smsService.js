@@ -40,15 +40,25 @@ async function sendOtpSms(mobile, code, expiresInSeconds = 900) {
     return { success: false, error: 'Invalid mobile number format' };
   }
 
-  const minutes = Math.round(expiresInSeconds / 60) || 15;
-  const message = `Your Procucev verification code is ${code}. Valid for ${minutes} minutes. Do not share this OTP.`;
+  // In test environment, skip live HTTP dispatch to avoid spamming recipient with test OTPs
+  if (process.env.NODE_ENV === 'test') {
+    logger.info(`[TEST MODE] Mock SMS OTP dispatched to 91${formattedNumber} (Code: ${code})`, {}, 'SMS_SERVICE');
+    return {
+      success: true,
+      messageId: 'mock-test-sms-id',
+      response: 'OK (Test Mode)',
+    };
+  }
+
+  // DLT Approved Template: "OTP for registering your access to Get My quoTe (GMT): <OTP>. Valid for 5 mins. Do not share. - Team Procucev."
+  const message = `OTP for registering your access to Get My quoTe (GMT): ${code}. Valid for 5 mins. Do not share. - Team Procucev.`;
 
   const payload = {
     user: SMS_GATEWAY_CONFIG.USER,
     pass: SMS_GATEWAY_CONFIG.PASS,
-    sms: [
+    smstosend: [
       {
-        to: formattedNumber,
+        to: `91${formattedNumber}`,
         from: SMS_GATEWAY_CONFIG.SENDER,
         smstext: message,
         smsgid: SMS_GATEWAY_CONFIG.SMSGID,
@@ -72,7 +82,7 @@ async function sendOtpSms(mobile, code, expiresInSeconds = 900) {
     clearTimeout(timeout);
 
     const responseText = await res.text();
-    logger.info(`SMS OTP dispatched to ${formattedNumber}`, { status: res.status, response: responseText }, 'SMS_SERVICE');
+    logger.info(`SMS OTP dispatched to 91${formattedNumber}`, { status: res.status, response: responseText }, 'SMS_SERVICE');
 
     return {
       success: res.ok,

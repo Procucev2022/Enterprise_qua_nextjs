@@ -1042,4 +1042,13 @@ describe('RFQDeleteDialog', () => {
     release();
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
+
+  it('renders field level error badges and messages on invalid delivery location and pincode', async () => {
+    renderEdit(buildRFQ({ deliveryLocation: '', deliveryPincode: '' }));
+    clickSave();
+    await waitFor(() => {
+      expect(screen.getByText(EDIT.deliveryLocationRequired)).toBeInTheDocument();
+      expect(screen.getByText(EDIT.deliveryPincodeRequired)).toBeInTheDocument();
+    });
+  });
 });

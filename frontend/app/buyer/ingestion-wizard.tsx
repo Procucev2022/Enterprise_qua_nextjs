@@ -26,7 +26,7 @@ import {
   updateManualRFQLineItem,
   validateManualRFQForm,
 } from '@/lib/manualRfqModel';
-import { PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
+import { PINCODE_PATTERN, isDummyPincode, validatePincode, PostOfficeDetail } from '@/lib/validationSchemas';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import { extractRfqCategorySignals, matchVendorAgainstSignals } from '@/lib/vendorMatching';
@@ -65,6 +65,7 @@ import {
   Info,
   ChevronDown,
   Check,
+  X,
 } from 'lucide-react';
 
 const EXTRACTION = UI_STRINGS.rfqExtraction;
@@ -114,6 +115,8 @@ export default function IngestionWizard({
     showToast,
     activeSubscription: storeSubscription,
     buyerVendors,
+    addBuyerVendor,
+    categoryTaxonomy,
     remainingFreeRFQs: storeRemaining,
     activeBuyerAccount,
   } = useApp();
@@ -130,6 +133,106 @@ export default function IngestionWizard({
     ...createEmptyManualRFQForm(),
     sourcingMode: currentMode || 'mode_2',
   }));
+
+  // Auto-prefill delivery location and pincode from active buyer profile
+  useEffect(() => {
+    if (activeBuyerAccount) {
+      const defaultLoc = activeBuyerAccount.city && activeBuyerAccount.state
+        ? `${activeBuyerAccount.city}, ${activeBuyerAccount.state}`
+        : (activeBuyerAccount.primaryPlantLocation || '');
+      const defaultPin = activeBuyerAccount.pincode || '';
+      setForm((prev) => {
+        if (!prev.deliveryLocation && !prev.deliveryPincode && (defaultLoc || defaultPin)) {
+          return {
+            ...prev,
+            deliveryLocation: prev.deliveryLocation || defaultLoc,
+            deliveryPincode: prev.deliveryPincode || defaultPin,
+          };
+        }
+        return prev;
+      });
+    }
+  }, [activeBuyerAccount]);
+
+  const [mode1VendorSearch, setMode1VendorSearch] = useState('');
+  const [isAddVendorModalOpen, setIsAddVendorModalOpen] = useState(false);
+  const [vendorFormName, setVendorFormName] = useState('');
+  const [vendorFormContactPerson, setVendorFormContactPerson] = useState('');
+  const [vendorFormPhone, setVendorFormPhone] = useState('');
+  const [vendorFormEmail, setVendorFormEmail] = useState('');
+  const [vendorFormMajorCategory, setVendorFormMajorCategory] = useState('');
+  const [vendorFormMinorCategories, setVendorFormMinorCategories] = useState<string[]>([]);
+  const [vendorFormCity, setVendorFormCity] = useState('');
+  const [vendorFormState, setVendorFormState] = useState('');
+  const [vendorFormPincode, setVendorFormPincode] = useState('');
+  const [vendorFormGstin, setVendorFormGstin] = useState('');
+  const [isSubmittingVendor, setIsSubmittingVendor] = useState(false);
+
+  const resetAddVendorForm = () => {
+    setVendorFormName('');
+    setVendorFormContactPerson('');
+    setVendorFormPhone('');
+    setVendorFormEmail('');
+    setVendorFormMajorCategory(taxonomyMajors()[0] || 'IT');
+    setVendorFormMinorCategories([]);
+    setVendorFormCity('');
+    setVendorFormState('');
+    setVendorFormPincode('');
+    setVendorFormGstin('');
+  };
+
+  const handleAddVendorSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (
+      !vendorFormName.trim() ||
+      !vendorFormContactPerson.trim() ||
+      !vendorFormPhone.trim() ||
+      !vendorFormEmail.trim() ||
+      !vendorFormMajorCategory ||
+      !vendorFormCity.trim() ||
+      !vendorFormState.trim() ||
+      !vendorFormPincode.trim() ||
+      !vendorFormGstin.trim()
+    ) {
+      showToast('Missing Details', 'Please fill in all mandatory fields including City, State, Pincode, and GSTIN.', 'warning');
+      return;
+    }
+
+    if (!/^[1-9][0-9]{5}$/.test(vendorFormPincode.trim())) {
+      showToast('Invalid Pincode', 'Please enter a valid 6-digit PIN code.', 'warning');
+      return;
+    }
+
+    setIsSubmittingVendor(true);
+    try {
+      await addBuyerVendor({
+        name: vendorFormName.trim(),
+        contactPerson: vendorFormContactPerson.trim(),
+        phone: vendorFormPhone.trim(),
+        email: vendorFormEmail.trim().toLowerCase(),
+        majorCategory: vendorFormMajorCategory,
+        minorCategories: vendorFormMinorCategories,
+        city: vendorFormCity.trim(),
+        state: vendorFormState.trim(),
+        pincode: vendorFormPincode.trim(),
+        gst: vendorFormGstin.trim().toUpperCase(),
+        location: `${vendorFormCity.trim()}, ${vendorFormState.trim()}`,
+        status: 'PREFERRED ENTERPRISE SUPPLIER',
+        rating: 4.5,
+        score: 90,
+        source: 'buyer_uploaded',
+        addedByBuyerCompany: activeBuyerAccount?.organizationName || 'My Organization',
+        annualTurnover: '₹1 Cr - ₹10 Cr',
+      });
+      showToast('Vendor Added', `${vendorFormName.trim()} was successfully added to your approved vendor roster.`, 'success');
+      setIsAddVendorModalOpen(false);
+      resetAddVendorForm();
+    } catch (err: any) {
+      showToast('Failed to Add Vendor', err?.message || 'Could not save vendor.', 'warning');
+    } finally {
+      setIsSubmittingVendor(false);
+    }
+  };
 
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [isDispatching, setIsDispatching] = useState(false);
@@ -302,6 +405,9 @@ export default function IngestionWizard({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [pincodeError, setPincodeError] = useState<string | null>(null);
+  const [pincodeValidating, setPincodeValidating] = useState(false);
+  const [pincodePostOffices, setPincodePostOffices] = useState<PostOfficeDetail[]>([]);
+  const pincodeDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
   const validation = useMemo(() => validateManualRFQForm(form), [form]);
   const formErrors = submitAttempted ? validation.formErrors : {};
@@ -313,22 +419,53 @@ export default function IngestionWizard({
 
   useEffect(() => {
     const raw = form.deliveryPincode.trim();
+    if (pincodeDebounceRef.current) {
+      clearTimeout(pincodeDebounceRef.current);
+    }
     if (!raw) {
       setPincodeError(null);
+      setPincodeValidating(false);
+      setPincodePostOffices([]);
       return;
     }
 
     if (isDummyPincode(raw)) {
       setPincodeError(UI_STRINGS.manualRfq.deliveryPincodeDummy);
+      setPincodeValidating(false);
+      setPincodePostOffices([]);
       return;
     }
 
     if (raw.length >= 3 && !PINCODE_PATTERN.test(raw)) {
       setPincodeError(UI_STRINGS.manualRfq.deliveryPincodeInvalid);
+      setPincodeValidating(false);
+      setPincodePostOffices([]);
       return;
     }
 
-    setPincodeError(null);
+    if (/^\d{6}$/.test(raw)) {
+      setPincodeValidating(true);
+      pincodeDebounceRef.current = setTimeout(async () => {
+        try {
+          const res = await validatePincode(raw);
+          if (!res.isValid) {
+            setPincodeError(res.message || UI_STRINGS.manualRfq.deliveryPincodeInvalid);
+            setPincodePostOffices([]);
+          } else {
+            setPincodeError(null);
+            setPincodePostOffices(res.postOffices || []);
+          }
+        } catch {
+          setPincodeError(null);
+        } finally {
+          setPincodeValidating(false);
+        }
+      }, 350);
+    } else {
+      setPincodeError(null);
+      setPincodeValidating(false);
+      setPincodePostOffices([]);
+    }
   }, [form.deliveryPincode]);
 
   const patchItem = useCallback((id: string, patch: Partial<ManualRFQLineItem>) => {
@@ -867,6 +1004,44 @@ export default function IngestionWizard({
             <FieldError message={formErrors.estimatedBudget} />
           </div>
 
+          {/* Delivery Pincode */}
+          <div>
+            <label htmlFor="rfq-pincode" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+              {MODAL.deliveryPincodeLabel}
+              <span className="text-rose-600 dark:text-rose-400 font-bold ml-0.5">*</span>
+            </label>
+            <div className="relative">
+              <input
+                id="rfq-pincode"
+                type="text"
+                required
+                value={form.deliveryPincode}
+                onChange={(e) => patchForm('deliveryPincode', e.target.value)}
+                placeholder={MODAL.deliveryPincodePlaceholder}
+                maxLength={10}
+                className="w-full px-3 py-2 pr-20 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white mono font-semibold focus:ring-2 focus:ring-indigo-500"
+              />
+              <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1 pointer-events-none">
+                {pincodeValidating && (
+                  <span className="text-indigo-500 flex items-center gap-1 text-xs">
+                    <Loader2 size={14} className="animate-spin" />
+                  </span>
+                )}
+                {!pincodeValidating && pincodePostOffices.length > 0 && !pincodeError && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800 shadow-xs">
+                    <CheckCircle2 size={11} className="shrink-0 text-emerald-600 dark:text-emerald-400" /> Valid
+                  </span>
+                )}
+                {!pincodeValidating && pincodeError && form.deliveryPincode.trim().length >= 6 && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800 shadow-xs">
+                    <AlertCircle size={11} className="shrink-0 text-rose-600 dark:text-rose-400" /> Invalid
+                  </span>
+                )}
+              </div>
+            </div>
+            <FieldError message={formErrors.deliveryPincode} />
+          </div>
+
           {/* Delivery Location */}
           <div>
             <label htmlFor="rfq-location" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
@@ -884,25 +1059,6 @@ export default function IngestionWizard({
               className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-indigo-500"
             />
             <FieldError message={formErrors.deliveryLocation} />
-          </div>
-
-          {/* Delivery Pincode */}
-          <div>
-            <label htmlFor="rfq-pincode" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-              {MODAL.deliveryPincodeLabel}
-              <span className="text-rose-600 dark:text-rose-400 font-bold ml-0.5">*</span>
-            </label>
-            <input
-              id="rfq-pincode"
-              type="text"
-              required
-              value={form.deliveryPincode}
-              onChange={(e) => patchForm('deliveryPincode', e.target.value)}
-              placeholder={MODAL.deliveryPincodePlaceholder}
-              maxLength={10}
-              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white mono font-semibold focus:ring-2 focus:ring-indigo-500"
-            />
-            <FieldError message={formErrors.deliveryPincode || pincodeError || undefined} />
           </div>
 
           {/* Target Delivery Date */}
@@ -1314,7 +1470,7 @@ export default function IngestionWizard({
         {/* ── Mode 1: Private Approved Vendor Roster Preview ── */}
         {form.sourcingMode === 'mode_1' && (
           <div className="mt-5 rounded-2xl border border-blue-200 dark:border-blue-900/60 bg-blue-50/40 dark:bg-blue-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-blue-100 dark:border-blue-900/40 pb-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-blue-100 dark:border-blue-900/40 pb-3">
               <div className="flex items-center gap-2">
                 <div className="p-1.5 rounded-lg bg-blue-600 text-white shadow-xs">
                   <Building2 size={16} />
@@ -1330,7 +1486,14 @@ export default function IngestionWizard({
                           ? uploaded.filter((v) => matchVendorAgainstSignals(v, signals).isMatch)
                           : [];
                         const effective = matched.length > 0 ? matched : uploaded;
-                        return effective.length;
+                        const filtered = mode1VendorSearch.trim()
+                          ? effective.filter((v) =>
+                              v.name.toLowerCase().includes(mode1VendorSearch.toLowerCase()) ||
+                              v.email?.toLowerCase().includes(mode1VendorSearch.toLowerCase()) ||
+                              v.majorCategory?.toLowerCase().includes(mode1VendorSearch.toLowerCase())
+                            )
+                          : effective;
+                        return filtered.length;
                       })()} Suppliers Found
                     </span>
                   </h3>
@@ -1339,9 +1502,29 @@ export default function IngestionWizard({
                   </p>
                 </div>
               </div>
-              <span className="text-[10px] font-bold text-blue-700 dark:text-blue-300 bg-blue-100/70 dark:bg-blue-900/50 px-2.5 py-1 rounded-full border border-blue-200 dark:border-blue-800 shrink-0">
-                🔒 Private Roster Only
-              </span>
+              <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap shrink-0">
+                <input
+                  type="text"
+                  placeholder="Filter vendors..."
+                  value={mode1VendorSearch}
+                  onChange={(e) => setMode1VendorSearch(e.target.value)}
+                  className="text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-800 dark:text-gray-200 w-36 sm:w-44 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetAddVendorForm();
+                    setIsAddVendorModalOpen(true);
+                  }}
+                  className="btn btn-primary btn-xs py-1.5 px-3 font-bold flex items-center gap-1 shrink-0 cursor-pointer shadow-xs"
+                >
+                  <Plus size={13} />
+                  <span>Add Vendor</span>
+                </button>
+                <span className="text-[10px] font-bold text-blue-700 dark:text-blue-300 bg-blue-100/70 dark:bg-blue-900/50 px-2.5 py-1.5 rounded-full border border-blue-200 dark:border-blue-800 shrink-0">
+                  🔒 Private Roster Only
+                </span>
+              </div>
             </div>
 
             {(() => {
@@ -1350,7 +1533,14 @@ export default function IngestionWizard({
               const matched = mode1Signals.length > 0
                 ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, mode1Signals).isMatch)
                 : [];
-              const myVendors = matched.length > 0 ? matched : allMyVendors;
+              const effective = matched.length > 0 ? matched : allMyVendors;
+              const myVendors = mode1VendorSearch.trim()
+                ? effective.filter((v) =>
+                    v.name.toLowerCase().includes(mode1VendorSearch.toLowerCase()) ||
+                    v.email?.toLowerCase().includes(mode1VendorSearch.toLowerCase()) ||
+                    v.majorCategory?.toLowerCase().includes(mode1VendorSearch.toLowerCase())
+                  )
+                : effective;
               if (myVendors.length === 0) {
                 return (
                   <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-2">
@@ -1775,6 +1965,216 @@ export default function IngestionWizard({
           </button>
         )}
       </div>
+
+      {/* ── Inline Add Vendor Modal for Mode 1 Roster ── */}
+      {isAddVendorModalOpen && (
+        <div className="modal-overlay !z-[1100]">
+          <div className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-gray-800 animate-fade-in flex flex-col max-h-[90vh]">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-gray-800">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400">
+                  <Plus size={18} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">Add Approved Vendor</h3>
+                  <p className="text-[11px] text-slate-500 dark:text-gray-400">
+                    Add a vendor you deal with directly — added to your private vendor roster.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAddVendorModalOpen(false)}
+                disabled={isSubmittingVendor}
+                className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 disabled:opacity-40 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddVendorSubmit} className="overflow-y-auto my-3 space-y-3 pr-1 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                  Company Name <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Ashok Industries"
+                  value={vendorFormName}
+                  onChange={(e) => setVendorFormName(e.target.value)}
+                  className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    Contact Person Name <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Govardhan"
+                    value={vendorFormContactPerson}
+                    onChange={(e) => setVendorFormContactPerson(e.target.value)}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    Phone <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="tel"
+                    required
+                    placeholder="e.g. 9000000001"
+                    value={vendorFormPhone}
+                    onChange={(e) => setVendorFormPhone(e.target.value)}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                  Email <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="email"
+                  required
+                  placeholder="e.g. govardhan@example.com"
+                  value={vendorFormEmail}
+                  onChange={(e) => setVendorFormEmail(e.target.value)}
+                  className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                  Major Category <span className="text-rose-500">*</span>
+                </label>
+                <select
+                  required
+                  value={vendorFormMajorCategory}
+                  onChange={(e) => {
+                    setVendorFormMajorCategory(e.target.value);
+                    setVendorFormMinorCategories([]);
+                  }}
+                  className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
+                >
+                  <option value="">Select Major Category...</option>
+                  {taxonomyMajors().map((cat) => (
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {vendorFormMajorCategory && minorsFor(vendorFormMajorCategory).length > 0 && (
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    Minor Category
+                  </label>
+                  <select
+                    value={vendorFormMinorCategories[0] || ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setVendorFormMinorCategories(val ? [val] : []);
+                    }}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
+                  >
+                    <option value="">Select Minor Category...</option>
+                    {minorsFor(vendorFormMajorCategory).map((minor) => (
+                      <option key={minor} value={minor}>
+                        {minor}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    City <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Pune"
+                    value={vendorFormCity}
+                    onChange={(e) => setVendorFormCity(e.target.value)}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    State <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Maharashtra"
+                    value={vendorFormState}
+                    onChange={(e) => setVendorFormState(e.target.value)}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    Pincode <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={6}
+                    placeholder="e.g. 411001"
+                    value={vendorFormPincode}
+                    onChange={(e) => setVendorFormPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                  GSTIN / GST Number <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  maxLength={15}
+                  placeholder="e.g. 27AAAAA0000A1Z5"
+                  value={vendorFormGstin}
+                  onChange={(e) => setVendorFormGstin(e.target.value.toUpperCase())}
+                  className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white font-mono uppercase"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200 dark:border-gray-800">
+                <button
+                  type="button"
+                  onClick={() => setIsAddVendorModalOpen(false)}
+                  disabled={isSubmittingVendor}
+                  className="btn btn-ghost btn-sm cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingVendor}
+                  className="btn btn-primary btn-sm font-bold flex items-center gap-1.5 shadow-md cursor-pointer"
+                >
+                  {isSubmittingVendor ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
+                  <span>Add Vendor</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

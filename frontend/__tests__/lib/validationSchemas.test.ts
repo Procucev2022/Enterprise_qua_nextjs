@@ -1,6 +1,7 @@
 import {
   FORM_SCHEMAS,
   validateFormData,
+  validatePincode,
   EMAIL_PATTERN,
   GSTIN_PATTERN,
   PHONE_PATTERN,
@@ -171,6 +172,12 @@ describe('Frontend validationSchemas Unit Tests', () => {
     const res3 = validateFormData(customSchema, { plainReq: 'ok', plainNum: 100, plainStr: '123' });
     expect(res3.fieldErrors.plainNum).toBe('plainNum cannot exceed 50');
     expect(res3.fieldErrors.plainStr).toBe('plainStr format is invalid');
+
+    // String rule with non-string value (e.g. number coerced)
+    const res4 = validateFormData({ strField: { type: 'string', minLength: 2 } }, { strField: 123 });
+    expect(res4.isValid).toBe(true);
+    const res5 = validateFormData({ strField: { type: 'string', minLength: 5 } }, { strField: 123 });
+    expect(res5.isValid).toBe(false);
   });
 
   test('handles null schema and empty inputs safely', () => {
@@ -251,8 +258,10 @@ describe('INDIAN_PINCODE_PATTERN & isDummyPincode', () => {
     expect(isDummyPincode('654321')).toBe(true);
     expect(isDummyPincode('000000')).toBe(true);
     expect(isDummyPincode('111111')).toBe(true);
+    expect(isDummyPincode('222222')).toBe(true);
     expect(isDummyPincode('999999')).toBe(true);
     expect(isDummyPincode('121212')).toBe(true);
+    expect(isDummyPincode('7777777')).toBe(true);
     expect(isDummyPincode('400701')).toBe(false);
     expect(isDummyPincode('560001')).toBe(false);
     expect(isDummyPincode('')).toBe(false);
@@ -323,3 +332,122 @@ describe('rfqIngestion schema', () => {
     expect(fieldErrors.deliveryPincode).toBe(UI_STRINGS.rfqExtraction.deliveryPincodeInvalidMessage);
   });
 });
+
+describe('validatePincode async postal API validator', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
+  test('returns invalid for empty or non-string input', async () => {
+    const res1 = await validatePincode('');
+    expect(res1.isValid).toBe(false);
+    expect(res1.message).toBe('PIN code is required');
+
+    const res2 = await validatePincode('   ');
+    expect(res2.isValid).toBe(false);
+    expect(res2.message).toBe('PIN code is required');
+
+    const res3 = await validatePincode(null as any);
+    expect(res3.isValid).toBe(false);
+    expect(res3.message).toBe('PIN code is required');
+  });
+
+  test('handles non-Indian postal codes', async () => {
+    const validUk = await validatePincode('SW1A 1AA', false);
+    expect(validUk.isValid).toBe(true);
+
+    const invalidUk = await validatePincode('!', false);
+    expect(invalidUk.isValid).toBe(false);
+    expect(invalidUk.message).toBe('Invalid postal code format');
+  });
+
+  test('rejects invalid Indian PIN format', async () => {
+    const startsWithZero = await validatePincode('012345');
+    expect(startsWithZero.isValid).toBe(false);
+    expect(startsWithZero.message).toContain('cannot start with 0');
+
+    const shortPin = await validatePincode('40070');
+    expect(shortPin.isValid).toBe(false);
+    expect(shortPin.message).toContain('must be 6 digits');
+  });
+
+  test('rejects dummy and sequential PIN codes', async () => {
+    const dummy = await validatePincode('123456');
+    expect(dummy.isValid).toBe(false);
+    expect(dummy.message).toContain('Invalid test or sequential PIN code');
+  });
+
+  test('resolves successfully when postal API returns Success', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [
+        {
+          Status: 'Success',
+          PostOffice: [
+            {
+              Name: 'Koparkhairane',
+              District: 'Thane',
+              State: 'Maharashtra',
+            },
+          ],
+        },
+      ],
+    } as any);
+
+    const res = await validatePincode('400709');
+    expect(res.isValid).toBe(true);
+    expect(res.postOffices?.[0].Name).toBe('Koparkhairane');
+  });
+
+  test('resolves successfully with empty postOffices when PostOffice is missing', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [
+        {
+          Status: 'Success',
+        },
+      ],
+    } as any);
+
+    const res = await validatePincode('400709');
+    expect(res.isValid).toBe(true);
+    expect(res.postOffices).toEqual([]);
+  });
+
+  test('returns invalid when postal API returns Error / not found', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [
+        {
+          Status: 'Error',
+          Message: 'No records found',
+        },
+      ],
+    } as any);
+
+    const res = await validatePincode('400799');
+    expect(res.isValid).toBe(false);
+    expect(res.message).toBe('PIN Code is not found or invalid in postal records.');
+  });
+
+  test('falls back gracefully on non-ok HTTP status', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+    } as any);
+
+    const res = await validatePincode('400701');
+    expect(res.isValid).toBe(true);
+  });
+
+  test('falls back gracefully on network or JSON parse exception', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
+
+    const res = await validatePincode('400701');
+    expect(res.isValid).toBe(true);
+  });
+});
+

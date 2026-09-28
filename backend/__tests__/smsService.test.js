@@ -1,0 +1,87 @@
+const smsService = require('../src/services/smsService');
+
+describe('smsService Unit Tests', () => {
+  const originalEnv = process.env.NODE_ENV;
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    process.env.NODE_ENV = originalEnv;
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
+  describe('formatMobileNumber', () => {
+    test('handles empty or null inputs', () => {
+      expect(smsService.formatMobileNumber('')).toBe('');
+      expect(smsService.formatMobileNumber(null)).toBe('');
+      expect(smsService.formatMobileNumber(undefined)).toBe('');
+    });
+
+    test('strips country code 91 if 12 digits', () => {
+      expect(smsService.formatMobileNumber('919157154504')).toBe('9157154504');
+    });
+
+    test('strips leading 0 if 11 digits', () => {
+      expect(smsService.formatMobileNumber('09157154504')).toBe('9157154504');
+    });
+
+    test('retains 10 digits', () => {
+      expect(smsService.formatMobileNumber('9157154504')).toBe('9157154504');
+    });
+  });
+
+  describe('sendOtpSms', () => {
+    test('rejects invalid mobile number', async () => {
+      const res = await smsService.sendOtpSms('123', '123456');
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('Invalid mobile number format');
+    });
+
+    test('returns mock success in test environment', async () => {
+      process.env.NODE_ENV = 'test';
+      const res = await smsService.sendOtpSms('9157154504', '123456');
+      expect(res.success).toBe(true);
+      expect(res.messageId).toBe('mock-test-sms-id');
+    });
+
+    test('performs live HTTP post in non-test environment', async () => {
+      process.env.NODE_ENV = 'production';
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => '{"status":"success","msgid":"MSG123"}',
+      });
+
+      const res = await smsService.sendOtpSms('9157154504', '123456');
+      expect(res.success).toBe(true);
+      expect(res.response).toContain('MSG123');
+      expect(global.fetch).toHaveBeenCalledWith(
+        smsService.SMS_GATEWAY_CONFIG.URL,
+        expect.objectContaining({
+          method: 'POST',
+        })
+      );
+    });
+
+    test('handles gateway error response in non-test environment', async () => {
+      process.env.NODE_ENV = 'production';
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: async () => 'Internal Server Error',
+      });
+
+      const res = await smsService.sendOtpSms('9157154504', '123456');
+      expect(res.success).toBe(false);
+    });
+
+    test('handles gateway network exception gracefully', async () => {
+      process.env.NODE_ENV = 'production';
+      global.fetch = jest.fn().mockRejectedValue(new Error('Gateway unreachable'));
+
+      const res = await smsService.sendOtpSms('9157154504', '123456');
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('Gateway unreachable');
+    });
+  });
+});

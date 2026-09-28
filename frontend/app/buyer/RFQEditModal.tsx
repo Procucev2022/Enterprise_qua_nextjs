@@ -19,10 +19,10 @@
 // ==============================================================================
 
 import React, { useRef, useState } from 'react';
-import { AlertCircle, Loader2, Paperclip, Plus, Save, Trash2, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Loader2, Paperclip, Plus, Save, Trash2, X } from 'lucide-react';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { CURRENCY, RFQ_STATUSES, formatFileSize, formatIndianDateTime } from '@/lib/constants';
-import { PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
+import { PINCODE_PATTERN, isDummyPincode, validatePincode, PostOfficeDetail } from '@/lib/validationSchemas';
 import { uploadRFQAttachment } from '@/lib/rfqClient';
 import { isPastDateString } from '@/lib/manualRfqModel';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
@@ -177,7 +177,7 @@ export function validateRFQEdit(form: RFQEditFormState): RFQEditFormErrors {
   if (form.category.trim() === '') errors.category = EDIT.categoryRequired;
   if (form.budget !== null && form.budget < 0) errors.budget = EDIT.budgetNegative;
   if (form.targetDeliveryDate && isPastDateString(form.targetDeliveryDate)) {
-    errors.targetDeliveryDate = EDIT.targetDateCannotBePast || 'Target date cannot be earlier than today.';
+    errors.targetDeliveryDate = EDIT.targetDateCannotBePast;
   }
   if (form.deliveryLocation.trim().length < 3) errors.deliveryLocation = EDIT.deliveryLocationRequired;
 
@@ -187,7 +187,7 @@ export function validateRFQEdit(form: RFQEditFormState): RFQEditFormErrors {
   } else if (!PINCODE_PATTERN.test(pincode)) {
     errors.deliveryPincode = EDIT.deliveryPincodeInvalid;
   } else if (isDummyPincode(pincode)) {
-    errors.deliveryPincode = EDIT.deliveryPincodeDummy || 'Dummy or sequential PIN codes (e.g. 123456, 111111) are not allowed.';
+    errors.deliveryPincode = EDIT.deliveryPincodeDummy;
   }
 
   // An RFQ with no line items has nothing for a vendor to quote against.
@@ -208,7 +208,7 @@ export function validateRFQEdit(form: RFQEditFormState): RFQEditFormErrors {
           : row.majorCategory.trim() === ''
           ? EDIT.majorCategoryRequired
           : row.targetDate && isPastDateString(row.targetDate)
-          ? (EDIT.targetDateCannotBePast || 'Target date cannot be earlier than today.')
+          ? EDIT.targetDateCannotBePast
           : null;
       return message ? formatString(EDIT.lineItemErrorSummary, { row: index + 1, message }) : null;
     }, null);
@@ -549,6 +549,26 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                 <FieldError message={errors.targetDeliveryDate} />
               </div>
 
+              {/* Delivery Pincode */}
+              <div>
+                <label htmlFor="rfq-edit-pincode" className="block font-semibold text-slate-600 dark:text-gray-400 mb-1">
+                  {EDIT.deliveryPincodeLabel}
+                </label>
+                <div className="relative">
+                  <input
+                    id="rfq-edit-pincode"
+                    type="text"
+                    value={form.deliveryPincode}
+                    onChange={(e) => patch('deliveryPincode', e.target.value)}
+                    aria-invalid={!!errors.deliveryPincode}
+                    maxLength={10}
+                    className="mono font-semibold pr-20"
+                  />
+                </div>
+                <FieldError message={errors.deliveryPincode} />
+              </div>
+
+              {/* Delivery Location */}
               <div>
                 <label htmlFor="rfq-edit-location" className="block font-semibold text-slate-600 dark:text-gray-400 mb-1">
                   {EDIT.deliveryLocationLabel}
@@ -563,22 +583,6 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                   className="font-medium"
                 />
                 <FieldError message={errors.deliveryLocation} />
-              </div>
-
-              <div>
-                <label htmlFor="rfq-edit-pincode" className="block font-semibold text-slate-600 dark:text-gray-400 mb-1">
-                  {EDIT.deliveryPincodeLabel}
-                </label>
-                <input
-                  id="rfq-edit-pincode"
-                  type="text"
-                  value={form.deliveryPincode}
-                  onChange={(e) => patch('deliveryPincode', e.target.value)}
-                  aria-invalid={!!errors.deliveryPincode}
-                  maxLength={10}
-                  className="mono font-semibold"
-                />
-                <FieldError message={errors.deliveryPincode} />
               </div>
             </div>
           </section>
