@@ -171,6 +171,14 @@ async function deliverVendor(message, label) {
     return { sent: false, reason: 'test environment' };
   }
 
+  // The dedicated vendor mailbox, same as buyer-side deliver()'s own
+  // Gmail-API-first behavior — takes priority over VENDOR_SMTP_*, which can
+  // never actually send from Cloudflare Workers (see deliverVendor's own
+  // SMTP-failure fallback below for why).
+  if (isVendorGmailApiConfigured()) {
+    return deliverViaVendorGmailApi(message, label);
+  }
+
   const activeTransporter = getVendorTransporter();
   if (!activeTransporter) {
     if (isGmailApiConfigured()) {
@@ -186,9 +194,32 @@ async function deliverVendor(message, label) {
   }
 
   logger.info(`Dispatching ${label} to ${message.to}`, { subject: message.subject }, 'MAILER_SERVICE');
-  const info = await activeTransporter.sendMail(message);
-  logger.info(`${label} sent successfully to ${message.to}`, { messageId: info.messageId }, 'MAILER_SERVICE');
-  return { sent: true, messageId: info.messageId };
+  try {
+    const info = await activeTransporter.sendMail(message);
+    logger.info(`${label} sent successfully to ${message.to}`, { messageId: info.messageId }, 'MAILER_SERVICE');
+    return { sent: true, messageId: info.messageId };
+  } catch (err) {
+    // Raw SMTP (nodemailer) cannot run on Cloudflare Workers at all — its TLS
+    // socket layer doesn't implement `rejectUnauthorized`, so every send
+    // through a real VENDOR_SMTP_USER/PASSWORD transporter throws "The
+    // options.rejectUnauthorized option is not implemented" the moment one
+    // gets configured (confirmed live: this silently broke every vendor
+    // onboarding/invite email the day VENDOR_SMTP_* secrets were first set,
+    // since before that getVendorTransporter() returned undefined and this
+    // function's own fallback above never got a chance to run). Falling back
+    // to the Gmail API here — the same proven-working path used when no
+    // vendor mailbox is configured at all — rather than letting a transport
+    // this platform can't support take the whole vendor mail path down.
+    if (isGmailApiConfigured()) {
+      logger.warn(
+        `Vendor SMTP send failed for ${label} — falling back to the Gmail API (buyer account)`,
+        { to: message.to, errorMessage: err.message },
+        'MAILER_SERVICE'
+      );
+      return deliverViaGmailApi(message, label);
+    }
+    throw err;
+  }
 }
 
 // ── Autonomous email-gateway: buyer requisition inbound notification ─────────
@@ -359,6 +390,52 @@ async function deliverViaGmailApi(message, label) {
   logger.info(`Dispatching ${label} to ${message.to} via Gmail API`, { subject: message.subject }, 'MAILER_SERVICE');
   const raw = buildRawMimeMessage({
     from: process.env.GMAIL_SENDER_EMAIL ? `"Procucev Enterprise" <${process.env.GMAIL_SENDER_EMAIL}>` : fromAddress(),
+    to: message.to,
+    subject: message.subject,
+    html: message.html,
+    replyTo: message.replyTo,
+  });
+  const res = await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
+  logger.info(`${label} sent successfully to ${message.to}`, { messageId: res.data.id }, 'MAILER_SERVICE');
+  return { sent: true, messageId: res.data.id };
+}
+
+/**
+ * True when a dedicated vendor-mailbox Gmail identity is configured.
+ *
+ * Reuses the same OAuth2 "app" (GMAIL_CLIENT_ID/SECRET — one Google Cloud
+ * client can authorize any number of Google accounts) with its own refresh
+ * token, minted the same way as the buyer one (see
+ * scripts/get-gmail-refresh-token.js), signed in as the dedicated vendor
+ * mailbox instead of the buyer account. This is the real fix for vendor
+ * mail always appearing to come from the buyer's Gmail account: raw SMTP
+ * (the original VENDOR_SMTP_* design) can never work on Cloudflare Workers
+ * at all (confirmed live — its TLS layer doesn't implement
+ * rejectUnauthorized), so a second identity has to go through the Gmail
+ * API too, not through SMTP with different credentials.
+ */
+function isVendorGmailApiConfigured() {
+  return Boolean(process.env.GMAIL_CLIENT_ID) && Boolean(process.env.GMAIL_CLIENT_SECRET) && Boolean(process.env.VENDOR_GMAIL_REFRESH_TOKEN);
+}
+
+let vendorGmailOAuthClient;
+
+function getVendorGmailOAuthClient() {
+  if (vendorGmailOAuthClient) return vendorGmailOAuthClient;
+  if (!isVendorGmailApiConfigured()) return undefined;
+  vendorGmailOAuthClient = new google.auth.OAuth2(process.env.GMAIL_CLIENT_ID, process.env.GMAIL_CLIENT_SECRET);
+  vendorGmailOAuthClient.setCredentials({ refresh_token: process.env.VENDOR_GMAIL_REFRESH_TOKEN });
+  return vendorGmailOAuthClient;
+}
+
+/** Same as deliverViaGmailApi, but signed in as the dedicated vendor mailbox. */
+async function deliverViaVendorGmailApi(message, label) {
+  const auth = getVendorGmailOAuthClient();
+  const gmail = google.gmail({ version: 'v1', auth });
+
+  logger.info(`Dispatching ${label} to ${message.to} via vendor Gmail API`, { subject: message.subject }, 'MAILER_SERVICE');
+  const raw = buildRawMimeMessage({
+    from: process.env.VENDOR_GMAIL_SENDER_EMAIL ? `"Procucev Enterprise" <${process.env.VENDOR_GMAIL_SENDER_EMAIL}>` : vendorFromAddress(),
     to: message.to,
     subject: message.subject,
     html: message.html,
@@ -1204,7 +1281,7 @@ function isConfigured() {
 }
 
 function isVendorConfigured() {
-  return Boolean(process.env.VENDOR_SMTP_USER && process.env.VENDOR_SMTP_PASSWORD);
+  return isVendorGmailApiConfigured() || Boolean(process.env.VENDOR_SMTP_USER && process.env.VENDOR_SMTP_PASSWORD);
 }
 
 module.exports = {
@@ -1244,5 +1321,6 @@ module.exports = {
   isConfigured,
   isVendorConfigured,
   isGmailApiConfigured,
+  isVendorGmailApiConfigured,
 };
 
