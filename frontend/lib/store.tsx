@@ -1846,10 +1846,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                 ],
           };
 
+          const targetName = String(vendorName || '').trim().toLowerCase();
+
           const updatedVendors = baseFollowUp.vendors.map((v) => {
-            if (v.vendorName.toLowerCase().includes(vendorName.toLowerCase()) || vendorName.toLowerCase().includes(v.vendorName.toLowerCase()) || vendorName === 'All Pending Suppliers') {
+            const vName = String(v?.vendorName || (v as any)?.name || (v as any)?.companyName || 'Supplier').trim().toLowerCase();
+            const isMatch =
+              targetName === 'all pending suppliers' ||
+              !targetName ||
+              (vName && targetName && (vName.includes(targetName) || targetName.includes(vName)));
+
+            if (isMatch) {
               return {
                 ...v,
+                vendorName: v?.vendorName || (v as any)?.name || (v as any)?.companyName || 'Supplier',
                 attemptsCount: (v.attemptsCount || 0) + 1,
                 lastInteraction: timeNow,
                 overallStatus: 'Follow-up Active' as const,

@@ -13,6 +13,23 @@ const PHONE_REGEX = /^[+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{7,15}$/;
 // frontend/lib/validationSchemas.ts.
 const PINCODE_REGEX = /^[A-Za-z0-9][A-Za-z0-9\s-]{2,9}$/;
 
+const DUMMY_PINCODES = new Set([
+  '000000', '111111', '222222', '333333', '444444',
+  '555555', '666666', '777777', '888888', '999999',
+  '012345', '123456', '234567', '345678', '456789', '567890',
+  '654321', '765432', '876543', '987654', '098765',
+  '121212', '212121', '123123', '321321', '000001', '100000',
+]);
+
+function isDummyPincode(pincode) {
+  if (!pincode) return false;
+  const clean = String(pincode).trim().replace(/\s+/g, '');
+  if (!clean) return false;
+  if (DUMMY_PINCODES.has(clean)) return true;
+  if (/^(\d)\1{5,}$/.test(clean)) return true;
+  return false;
+}
+
 // Indian mobile number accepted at sign-in and registration. Mirrors
 // INDIAN_MOBILE_PATTERN in frontend/lib/validationSchemas.ts. The identity
 // schema stores these normalised to +91XXXXXXXXXX, so the submitted value must
@@ -121,6 +138,7 @@ const VALIDATION_SCHEMAS = {
       required: true,
       pattern: PINCODE_REGEX,
       message: 'Pincode is required and must be 3 to 10 letters, digits, spaces or hyphens.',
+      custom: (val) => (isDummyPincode(val) ? 'Dummy or sequential PIN codes (e.g. 123456, 111111) are not allowed.' : null),
     },
     // Metadata for documents already stored by POST /api/rfqs/attachments.
     attachments: { type: 'array', required: false },
@@ -168,6 +186,7 @@ const VALIDATION_SCHEMAS = {
       required: false,
       pattern: PINCODE_REGEX,
       message: 'Pincode must be 3 to 10 letters, digits, spaces or hyphens.',
+      custom: (val) => (isDummyPincode(val) ? 'Dummy or sequential PIN codes (e.g. 123456, 111111) are not allowed.' : null),
     },
     targetDeliveryDate: { type: 'string', required: false },
     extractedEntities: { type: 'array', required: false },
@@ -319,6 +338,7 @@ const VALIDATION_SCHEMAS = {
       message: INDIAN_MOBILE_MESSAGE,
     },
     roleHint: { type: 'string', required: false },
+    isRegistration: { type: 'boolean', required: false },
   },
 
   verifyOtp: {
@@ -365,6 +385,9 @@ const VALIDATION_SCHEMAS = {
     mobile: { type: 'string', required: false, pattern: INDIAN_MOBILE_REGEX, message: INDIAN_MOBILE_MESSAGE },
     role: { type: 'string', required: false },
     orgName: { type: 'string', required: false },
+    emailOtp: { type: 'string', required: false },
+    mobileOtp: { type: 'string', required: false },
+    code: { type: 'string', required: false },
   },
 
   // Buyer organisation profile submitted by PUT /api/buyer-profile/me.
@@ -556,6 +579,13 @@ function validatePayload(schema, data = {}) {
           errors[field] = rules.message || `${field} is in an invalid format.`;
           continue;
         }
+        if (rules.custom && typeof rules.custom === 'function') {
+          const customError = rules.custom(str);
+          if (customError) {
+            errors[field] = customError;
+            continue;
+          }
+        }
         if (rules.enum && !rules.enum.includes(str)) {
           errors[field] = `${field} must be one of: ${rules.enum.join(', ')}.`;
           continue;
@@ -570,6 +600,13 @@ function validatePayload(schema, data = {}) {
       } else {
         sanitized[field] = value;
       }
+
+      if (rules.custom && typeof rules.custom === 'function' && rules.type !== 'string') {
+        const customError = rules.custom(value);
+        if (customError) {
+          errors[field] = customError;
+        }
+      }
     }
   }
 
@@ -583,6 +620,8 @@ function validatePayload(schema, data = {}) {
 module.exports = {
   EMAIL_REGEX,
   PINCODE_REGEX,
+  DUMMY_PINCODES,
+  isDummyPincode,
   GSTIN_REGEX,
   GSTIN_MESSAGE,
   PHONE_REGEX,

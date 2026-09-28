@@ -115,14 +115,15 @@ class AuthClient {
   }
 
   /**
-   * Request a 4-digit email OTP. Only succeeds for an account that exists.
+   * Request an email and SMS OTP. Works for existing sign-in or new user registration.
    */
   public async requestOtp(
     email: string,
     mobile: string,
-    roleHint?: OtpRequestPayload['roleHint']
+    roleHint?: OtpRequestPayload['roleHint'],
+    isRegistration?: boolean
   ): Promise<AuthResponse> {
-    const payload: OtpRequestPayload = { email, mobile, roleHint };
+    const payload: OtpRequestPayload = { email, mobile, roleHint, isRegistration };
     return this.postJson('/api/auth/request-otp', payload);
   }
 

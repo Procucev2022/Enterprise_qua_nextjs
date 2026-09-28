@@ -20,6 +20,7 @@ const cryptoRoutes = require('./crypto');
 const authRoutes = require('./auth');
 const zohoRoutes = require('./zoho');
 const vendorIngestionRoutes = require('./vendorIngestion');
+const pincodeRoutes = require('./pincode');
 
 // Mount sub-routers
 router.use('/auth', authRoutes);
@@ -41,6 +42,7 @@ router.use('/logs', logsRoutes);
 router.use('/graphql', graphqlRoutes);
 router.use('/crypto', cryptoRoutes);
 router.use('/zoho', zohoRoutes);
+router.use('/pincode', pincodeRoutes);
 
 module.exports = router;
 

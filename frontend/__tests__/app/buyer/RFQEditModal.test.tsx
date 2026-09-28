@@ -259,6 +259,7 @@ describe('validateRFQEdit', () => {
     ['short location', { deliveryLocation: 'ab' }, 'deliveryLocation', EDIT.deliveryLocationRequired],
     ['blank pincode', { deliveryPincode: '  ' }, 'deliveryPincode', EDIT.deliveryPincodeRequired],
     ['malformed pincode', { deliveryPincode: '!!' }, 'deliveryPincode', EDIT.deliveryPincodeInvalid],
+    ['dummy pincode', { deliveryPincode: '123456' }, 'deliveryPincode', EDIT.deliveryPincodeDummy],
   ])('rejects a %s', (_case, patch, field, message) => {
     expect(validateRFQEdit({ ...valid(), ...patch })[field as 'title']).toBe(message);
   });

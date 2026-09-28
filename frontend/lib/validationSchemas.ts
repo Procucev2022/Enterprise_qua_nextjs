@@ -40,6 +40,26 @@ export const INDIAN_MOBILE_PATTERN = /^(?:\+?91[-\s]?|0)?[6-9]\d{9}$/;
  */
 export const PINCODE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9\s-]{2,9}$/;
 
+export const DUMMY_PINCODES = new Set([
+  '000000', '111111', '222222', '333333', '444444',
+  '555555', '666666', '777777', '888888', '999999',
+  '012345', '123456', '234567', '345678', '456789', '567890',
+  '654321', '765432', '876543', '987654', '098765',
+  '121212', '212121', '123123', '321321', '000001', '100000',
+]);
+
+/**
+ * Checks if a string is a dummy, test, or sequential PIN code
+ */
+export function isDummyPincode(pincode: unknown): boolean {
+  if (!pincode || typeof pincode !== 'string') return false;
+  const clean = pincode.trim().replace(/\s+/g, '');
+  if (!clean) return false;
+  if (DUMMY_PINCODES.has(clean)) return true;
+  if (/^(\d)\1{5,}$/.test(clean)) return true;
+  return false;
+}
+
 /**
  * Statutory identifiers on the buyer organisation profile. Each mirrors the
  * corresponding regex in backend/src/config/validationSchemas.js, which is the

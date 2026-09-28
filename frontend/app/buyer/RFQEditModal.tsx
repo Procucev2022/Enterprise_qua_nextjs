@@ -22,7 +22,7 @@ import React, { useRef, useState } from 'react';
 import { AlertCircle, Loader2, Paperclip, Plus, Save, Trash2, X } from 'lucide-react';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { CURRENCY, RFQ_STATUSES, formatFileSize, formatIndianDateTime } from '@/lib/constants';
-import { PINCODE_PATTERN } from '@/lib/validationSchemas';
+import { PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
 import { uploadRFQAttachment } from '@/lib/rfqClient';
 import { isPastDateString } from '@/lib/manualRfqModel';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
@@ -186,6 +186,8 @@ export function validateRFQEdit(form: RFQEditFormState): RFQEditFormErrors {
     errors.deliveryPincode = EDIT.deliveryPincodeRequired;
   } else if (!PINCODE_PATTERN.test(pincode)) {
     errors.deliveryPincode = EDIT.deliveryPincodeInvalid;
+  } else if (isDummyPincode(pincode)) {
+    errors.deliveryPincode = EDIT.deliveryPincodeDummy || 'Dummy or sequential PIN codes (e.g. 123456, 111111) are not allowed.';
   }
 
   // An RFQ with no line items has nothing for a vendor to quote against.
