@@ -9,6 +9,14 @@ const SMS_GATEWAY_CONFIG = {
   SMSGID: process.env.SMS_GATEWAY_SMSGID || 'TEST',
 };
 
+// In-memory cooldown throttle cache to prevent infinite / spam loop SMS dispatches to the same phone number
+const recentSmsDispatches = new Map();
+const SMS_THROTTLE_WINDOW_MS = 30000; // 30-second throttle cooldown per destination number
+
+function clearSmsThrottleCache() {
+  recentSmsDispatches.clear();
+}
+
 /**
  * Normalizes Indian mobile number for SMS gateway delivery (10 national digits)
  * @param {string} mobile
@@ -39,6 +47,19 @@ async function sendOtpSms(mobile, code, expiresInSeconds = 900) {
     logger.warn('SMS dispatch skipped: Invalid mobile number format', { mobile }, 'SMS_SERVICE');
     return { success: false, error: 'Invalid mobile number format' };
   }
+
+  const now = Date.now();
+  const lastSent = recentSmsDispatches.get(formattedNumber) || 0;
+  if (process.env.NODE_ENV !== 'test' && now - lastSent < SMS_THROTTLE_WINDOW_MS) {
+    logger.warn(`SMS dispatch throttled: ${formattedNumber} requested within ${SMS_THROTTLE_WINDOW_MS / 1000}s cooldown`, {}, 'SMS_SERVICE');
+    return {
+      success: true,
+      throttled: true,
+      messageId: 'throttled-cooldown',
+      response: 'OK (Throttled)',
+    };
+  }
+  recentSmsDispatches.set(formattedNumber, now);
 
   // In test environment, skip live HTTP dispatch to avoid spamming recipient with test OTPs
   if (process.env.NODE_ENV === 'test') {
@@ -101,4 +122,5 @@ module.exports = {
   SMS_GATEWAY_CONFIG,
   formatMobileNumber,
   sendOtpSms,
+  clearSmsThrottleCache,
 };

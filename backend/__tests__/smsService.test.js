@@ -4,9 +4,14 @@ describe('smsService Unit Tests', () => {
   const originalEnv = process.env.NODE_ENV;
   const originalFetch = global.fetch;
 
+  beforeEach(() => {
+    smsService.clearSmsThrottleCache();
+  });
+
   afterEach(() => {
     process.env.NODE_ENV = originalEnv;
     global.fetch = originalFetch;
+    smsService.clearSmsThrottleCache();
     jest.restoreAllMocks();
   });
 
@@ -61,6 +66,26 @@ describe('smsService Unit Tests', () => {
           method: 'POST',
         })
       );
+    });
+
+    test('throttles rapid repeated dispatches to the same mobile number', async () => {
+      process.env.NODE_ENV = 'production';
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => '{"status":"success","msgid":"MSG123"}',
+      });
+
+      const first = await smsService.sendOtpSms('9157154504', '123456');
+      expect(first.success).toBe(true);
+      expect(first.throttled).toBeUndefined();
+
+      // Second immediate call within 30s cooldown should be throttled
+      const second = await smsService.sendOtpSms('9157154504', '654321');
+      expect(second.success).toBe(true);
+      expect(second.throttled).toBe(true);
+      expect(second.messageId).toBe('throttled-cooldown');
+      expect(global.fetch).toHaveBeenCalledTimes(1);
     });
 
     test('handles gateway error response in non-test environment', async () => {
