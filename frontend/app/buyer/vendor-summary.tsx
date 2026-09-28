@@ -1012,14 +1012,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           >
             <Plus size={14} /> Add Vendor
           </button>
-          <button
-            type="button"
-            data-testid="open-bulk-upload-modal"
-            onClick={() => setBulkUploadModalOpen(true)}
-            className="btn btn-secondary btn-sm flex items-center gap-1.5 shadow-sm"
-          >
-            <UploadCloud size={14} /> Import Vendors (Excel)
-          </button>
           {/* Upload Vendor Wizard Button */}
           {onNavigateToWizard && (
             <button

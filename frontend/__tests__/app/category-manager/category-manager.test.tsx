@@ -355,6 +355,13 @@ describe('Category Manager Screens Suite', () => {
 
       const escalateBtns = screen.getAllByRole('button', { name: /Escalate to Buyer/i });
       fireEvent.click(escalateBtns[0]);
+
+      // Open & Review Categories action on parsing RFQ card
+      const reviewActionBtns = screen.getAllByRole('button', { name: /Open & Review Categories/i });
+      fireEvent.click(reviewActionBtns[0]);
+      expect(screen.getByText(/Edit RFQ/i)).toBeInTheDocument();
+      const cancelEditBtn = screen.getByRole('button', { name: /Cancel/i });
+      fireEvent.click(cancelEditBtn);
     });
 
     test('the scored card never throws when no matrix-navigation callback is supplied', async () => {
@@ -424,12 +431,27 @@ describe('Category Manager Screens Suite', () => {
       const reviewBtns = screen.queryAllByRole('button', { name: /Review/i });
       if (reviewBtns.length > 0) {
         fireEvent.click(reviewBtns[0]);
+        const cancelEditBtn = screen.queryByRole('button', { name: /Cancel/i });
+        if (cancelEditBtn) fireEvent.click(cancelEditBtn);
       }
 
       // Column 1 review action button
-      const colReviewBtns = screen.queryAllByRole('button', { name: /Review Categories/i });
+      const colReviewBtns = screen.queryAllByRole('button', { name: /Review Categories|Open & Review Categories/i });
       if (colReviewBtns.length > 0) {
         fireEvent.click(colReviewBtns[0]);
+        const cancelBtn = screen.queryByRole('button', { name: /Cancel/i });
+        if (cancelBtn) fireEvent.click(cancelBtn);
+      }
+
+      // Re-test summary modal click when onNavigateToMatrix is not supplied
+      renderWithProvider(<KanbanBoard onNavigateToSpend={jest.fn()} />);
+      const quotesBtn2 = screen.getAllByRole('button', { name: /Quotes Received/i });
+      fireEvent.click(quotesBtn2[quotesBtn2.length - 1]);
+      const matrixBtns2 = screen.queryAllByRole('button', { name: /Matrix/i });
+      if (matrixBtns2.length > 0) {
+        fireEvent.click(matrixBtns2[0]);
+        const cancelEditBtn2 = screen.queryByRole('button', { name: /Cancel/i });
+        if (cancelEditBtn2) fireEvent.click(cancelEditBtn2);
       }
     });
 

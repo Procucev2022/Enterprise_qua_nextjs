@@ -128,9 +128,14 @@ export default function KanbanBoard({
       showToast('No RFQs Awaiting Quotes', 'There are no RFQs in Quotes Pending to batch-chase.', 'info');
       return;
     }
-    col2_pending.forEach((rfq) => triggerBatchChannelChaser(rfq.rfqNumber, ['call', 'whatsapp', 'sms']));
+    col2_pending.forEach((rfq) => triggerBatchChannelChaser(rfq.rfqNumber, ['call', 'whatsapp', 'sms'], true));
     addAuditLog(
       `Executed Global Override: Multi-Channel Batch Follow-up (Call + WhatsApp + SMS) to ${col2_pending.length} pending RFQ(s)`
+    );
+    showToast(
+      'Multi-Channel Batch Broadcast Active!',
+      `AI chasing dispatched across Call, WhatsApp, and SMS for ${col2_pending.length} pending RFQ(s).`,
+      'success'
     );
   };
 
