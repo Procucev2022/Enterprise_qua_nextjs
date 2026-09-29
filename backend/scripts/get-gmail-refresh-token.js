@@ -8,7 +8,17 @@ const fs = require('fs');
 const http = require('http');
 const { google } = require('googleapis');
 
-const SCOPES = ['https://www.googleapis.com/auth/gmail.send'];
+// gmail.send alone is enough for outbound mail, but emailGatewayService's
+// pollViaGmailApi also needs to list/read unread messages and clear the
+// UNREAD label once one's been ingested — gmail.modify covers both read and
+// label-write access (gmail.readonly would cover the read half only). A
+// refresh token minted before this needs to be re-authorized to pick up the
+// wider grant; the previous send-only token still works for sending, it
+// just gets "insufficient permission" from any poll attempt.
+const SCOPES = [
+  'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/gmail.modify',
+];
 
 async function main() {
   const credPath = process.argv[2];
