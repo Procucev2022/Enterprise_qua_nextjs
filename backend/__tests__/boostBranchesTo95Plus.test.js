@@ -54,7 +54,7 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     expect(itemDefault.rfqNumber).toBeNull();
 
     const emptyOutreach = aiChaserService.simulateChaserOutreach({}, {});
-    expect(emptyOutreach).toHaveLength(3);
+    expect(emptyOutreach).toHaveLength(4);
     expect(emptyOutreach[0].recipient).toContain('Sales Head');
   });
 

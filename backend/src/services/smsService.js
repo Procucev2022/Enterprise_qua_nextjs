@@ -18,6 +18,17 @@ function clearSmsThrottleCache() {
 }
 
 /**
+ * Clear the throttle entry for a single phone number.
+ * Called by rfqChaserScheduler before each scheduled chaser dispatch so the
+ * chaser always fires regardless of a recent immediate invite send.
+ * @param {string} mobile
+ */
+function clearSmsThrottleForPhone(mobile) {
+  const formatted = formatMobileNumber(mobile);
+  if (formatted) recentSmsDispatches.delete(formatted);
+}
+
+/**
  * Normalizes Indian mobile number for SMS gateway delivery (10 national digits)
  * @param {string} mobile
  * @returns {string}
@@ -118,9 +129,108 @@ async function sendOtpSms(mobile, code, expiresInSeconds = 900) {
   }
 }
 
+/**
+ * Dispatches an RFQ chaser SMS to a supplier
+ * @param {Object} params
+ * @param {string} params.mobile
+ * @param {string} params.vendorName
+ * @param {string} params.rfqNumber
+ * @param {string} params.rfqTitle
+ * @param {string} [params.bidLink]
+ * @returns {Promise<{ success: boolean, messageId?: string, throttled?: boolean, error?: string }>}
+ */
+async function sendRFQChaserSms({ mobile, vendorName, rfqNumber, rfqTitle, bidLink }) {
+  const formattedNumber = formatMobileNumber(mobile);
+  if (!formattedNumber || formattedNumber.length !== 10) {
+    logger.warn('SMS dispatch skipped: Invalid mobile number format', { mobile }, 'SMS_SERVICE');
+    return { success: false, error: 'Invalid mobile number format' };
+  }
+
+  const now = Date.now();
+  const lastSent = recentSmsDispatches.get(formattedNumber) || 0;
+  if (process.env.NODE_ENV !== 'test' && now - lastSent < SMS_THROTTLE_WINDOW_MS) {
+    return {
+      success: true,
+      throttled: true,
+      messageId: 'sms-throttled',
+    };
+  }
+  recentSmsDispatches.set(formattedNumber, now);
+
+  if (process.env.NODE_ENV === 'test') {
+    return {
+      success: true,
+      messageId: 'mock-test-sms-chaser',
+    };
+  }
+
+  const message = `[PRCU-RFQ] RFQ Alert ${rfqNumber}: You are invited to bid for "${rfqTitle || rfqNumber}". Submit quote: ${bidLink || 'https://procucev.com'} - Team Procucev.`;
+
+  const payload = {
+    user: SMS_GATEWAY_CONFIG.USER,
+    pass: SMS_GATEWAY_CONFIG.PASS,
+    smstosend: [
+      {
+        to: `91${formattedNumber}`,
+        from: SMS_GATEWAY_CONFIG.SENDER,
+        smstext: message,
+        smsgid: SMS_GATEWAY_CONFIG.SMSGID,
+      },
+    ],
+  };
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+
+    const res = await fetch(SMS_GATEWAY_CONFIG.URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/plain, */*',
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    const responseText = await res.text();
+    const messageId = `sms-${Date.now()}`;
+
+    if (res.ok) {
+      logger.info(
+        `SMS RFQ chaser dispatched to 91${formattedNumber} for ${rfqNumber}`,
+        { status: res.status, response: responseText, rfqNumber, vendorName },
+        'SMS_SERVICE'
+      );
+    } else {
+      logger.warn(
+        `SMS RFQ chaser gateway error for 91${formattedNumber} — HTTP ${res.status}`,
+        { status: res.status, response: responseText, rfqNumber, vendorName },
+        'SMS_SERVICE'
+      );
+    }
+
+    return {
+      success: res.ok,
+      messageId,
+      response: responseText,
+    };
+  } catch (err) {
+    logger.error(
+      `Failed to dispatch RFQ Chaser SMS to 91${formattedNumber} for ${rfqNumber}`,
+      err,
+      'SMS_SERVICE'
+    );
+    return { success: false, error: err.message };
+  }
+}
+
 module.exports = {
   SMS_GATEWAY_CONFIG,
   formatMobileNumber,
   sendOtpSms,
+  sendRFQChaserSms,
   clearSmsThrottleCache,
+  clearSmsThrottleForPhone,
 };

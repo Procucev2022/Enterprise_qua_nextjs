@@ -275,6 +275,7 @@ interface MultiChannelChaserModalProps {
   onClose: () => void;
   rfqNumber: string;
   vendorName: string;
+  vendorPhone?: string;
   initialChannel?: 'call' | 'whatsapp' | 'sms';
 }
 
@@ -283,11 +284,12 @@ export function MultiChannelChaserModal({
   onClose,
   rfqNumber,
   vendorName,
+  vendorPhone,
   initialChannel = 'whatsapp',
 }: MultiChannelChaserModalProps) {
   const { triggerChannelChaser } = useApp();
   const [selectedChannel, setSelectedChannel] = useState<'call' | 'whatsapp' | 'sms'>(initialChannel);
-  const [phone, setPhone] = useState('+91 98201 44820');
+  const [phone, setPhone] = useState(vendorPhone || '');
   const [template, setTemplate] = useState('urgent_reminder');
   const [customMsg, setCustomMsg] = useState(
     `Hello ${vendorName}, this is Procucev Enterprise QUA AI. We require your line-item quotation for ${rfqNumber} within 24 hours to include in the comparative matrix. Click here to submit instantly: https://portal.procucev.com/bid/${rfqNumber}`
@@ -300,6 +302,20 @@ export function MultiChannelChaserModal({
     setSelectedChannel(initialChannel);
   }, [initialChannel]);
 
+  // Sync phone and message content whenever the modal re-opens for a different vendor
+  useEffect(() => {
+    if (isOpen) {
+      setPhone(vendorPhone || '');
+      setCustomMsg(
+        `Hello ${vendorName}, this is Procucev Enterprise QUA AI. We require your line-item quotation for ${rfqNumber} within 24 hours to include in the comparative matrix. Click here to submit instantly: https://portal.procucev.com/bid/${rfqNumber}`
+      );
+      setCallScript(
+        `"Hello, this is Procucev Autonomous Voice Bot calling on behalf of the Enterprise Buyer regarding ${rfqNumber}. We noticed your quote submission is pending. Can you confirm if you will submit by 4:00 PM today?"`
+      );
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, vendorName, vendorPhone, rfqNumber]);
+
   if (!isOpen) return null;
 
   const handleSend = () => {
@@ -308,8 +324,8 @@ export function MultiChannelChaserModal({
   };
 
   return (
-    <div className="modal-overlay !z-[1050]">
-      <div className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-indigo-500/40 animate-fade-in">
+    <div className="modal-overlay !z-[1050]" onClick={onClose}>
+      <div className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-indigo-500/40 animate-fade-in" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-gray-800">
           <div className="flex items-center gap-2.5">
             <div
@@ -502,6 +518,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
   const [activeChannelTab, setActiveChannelTab] = useState<'all' | 'call' | 'whatsapp' | 'sms'>('all');
   const [activeVendorModal, setActiveVendorModal] = useState<{
     vendorName: string;
+    phone: string;
     channel: 'call' | 'whatsapp' | 'sms';
   } | null>(null);
 
@@ -793,7 +810,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                             : 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800'
                         }`}
                       >
-                        {vendor.overallStatus} • Bid: {vendor.bidStatus}
+                        {vendor.overallStatus}
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-1">
@@ -805,7 +822,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                   <div className="flex items-center gap-2 flex-wrap shrink-0">
                     <button
                       onClick={() =>
-                        setActiveVendorModal({ vendorName: vendor.vendorName, channel: 'call' })
+                        setActiveVendorModal({ vendorName: vendor.vendorName, phone: vendor.phone || '', channel: 'call' })
                       }
                       className="px-3 py-1.5 rounded-lg bg-purple-50 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-700/50 hover:bg-purple-100 dark:hover:bg-purple-900/70 font-bold text-xs flex items-center gap-1.5 transition-colors shadow-2xs"
                     >
@@ -813,7 +830,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                     </button>
                     <button
                       onClick={() =>
-                        setActiveVendorModal({ vendorName: vendor.vendorName, channel: 'whatsapp' })
+                        setActiveVendorModal({ vendorName: vendor.vendorName, phone: vendor.phone || '', channel: 'whatsapp' })
                       }
                       className="px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-700/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/70 font-bold text-xs flex items-center gap-1.5 transition-colors shadow-2xs"
                     >
@@ -821,7 +838,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                     </button>
                     <button
                       onClick={() =>
-                        setActiveVendorModal({ vendorName: vendor.vendorName, channel: 'sms' })
+                        setActiveVendorModal({ vendorName: vendor.vendorName, phone: vendor.phone || '', channel: 'sms' })
                       }
                       className="px-3 py-1.5 rounded-lg bg-sky-50 dark:bg-cyan-900/40 text-sky-700 dark:text-cyan-300 border border-sky-200 dark:border-cyan-700/50 hover:bg-sky-100 dark:hover:bg-cyan-900/70 font-bold text-xs flex items-center gap-1.5 transition-colors shadow-2xs"
                     >
@@ -949,6 +966,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
           onClose={() => setActiveVendorModal(null)}
           rfqNumber={rfq.rfqNumber}
           vendorName={activeVendorModal.vendorName}
+          vendorPhone={activeVendorModal.phone}
           initialChannel={activeVendorModal.channel}
         />
       )}

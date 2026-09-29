@@ -11,6 +11,7 @@
     "test:coverage": "jest --coverage --maxWorkers=2 && node scripts/verify-coverage.js",
     "check:coverage": "node scripts/verify-coverage.js",
     "db:migrate": "node src/db/migrate.js",
+    "db:migrate:d1": "node scripts/migrate-d1.js",
     "db:view": "node src/db/view.js",
     "create-buyer": "node scripts/create-buyer.js",
     "email:check": "node scripts/check-email.js",

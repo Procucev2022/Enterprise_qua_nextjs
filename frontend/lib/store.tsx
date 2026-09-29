@@ -1741,7 +1741,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const triggerChannelChaser = (
     rfqNumber: string,
     channel: 'call' | 'whatsapp' | 'sms' | 'email',
-    vendorName = 'Apex Supplies Ltd.',
+    vendorName = 'Vendor',
     customNote?: string,
     suppressToast = false
   ) => {
@@ -1944,7 +1944,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const triggerWhatsAppChaser = (rfqNumber: string, vendorName = 'Apex Supplies Ltd.') => {
+  const triggerWhatsAppChaser = (rfqNumber: string, vendorName = 'Vendor') => {
     triggerChannelChaser(rfqNumber, 'whatsapp', vendorName);
   };
 
@@ -2078,6 +2078,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const adoptCreatedRFQ = (rfq: RFQItem) => {
     setRfqs((prev) => [rfq, ...prev.filter((r) => r.rfqNumber !== rfq.rfqNumber)]);
     addAuditLog(`Created ${rfq.rfqNumber} (${rfq.title})`, rfq.rfqNumber);
+    void refreshAIFeed();
   };
 
   /**
