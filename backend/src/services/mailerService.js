@@ -236,7 +236,7 @@ function buildRequisitionEmail(to, rfq = {}, fromEmail = '') {
         <tr style="border-bottom: 1px solid #e2e8f0;">
           <td style="padding: 10px; font-weight: bold;">${index + 1}. ${item.itemName || item.name || 'Line Item'}</td>
           <td style="padding: 10px; text-align: center;">${item.quantity || 1} ${item.unit || item.uom || 'Units'}</td>
-          <td style="padding: 10px; font-size: 12px; color: #475569;">${item.technicalSpecs || item.specs || item.description || '-'}</td>
+          <td style="padding: 10px; font-size: 12px; color: #475569;">${item.technicalSpecs || item.specs || item.requirements || item.description || '-'}</td>
         </tr>
       `).join('')
     : `<tr><td colspan="3" style="padding: 10px; color: #64748b;">No specific line items itemized.</td></tr>`;
@@ -467,6 +467,10 @@ async function deliver(message, label) {
     return { sent: false, reason: 'test environment' };
   }
 
+  if (process.env.EMAIL_PROVIDER === 'resend') {
+    return deliverViaResend(message, label);
+  }
+
   if (isGmailApiConfigured()) {
     return deliverViaGmailApi(message, label);
   }
@@ -553,7 +557,7 @@ function normalizeToAndContext(toOrParams, maybeContext) {
 }
 
 function emailGatewayAddress() {
-  return process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || 'rfqprocucev@gmail.com';
+  return process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || 'navin.procucev@gmail.com';
 }
 
 function buildRfqInviteEmail(to, context = {}) {
@@ -1330,5 +1334,6 @@ module.exports = {
   isVendorConfigured,
   isGmailApiConfigured,
   isVendorGmailApiConfigured,
+  getGmailOAuthClient,
 };
 

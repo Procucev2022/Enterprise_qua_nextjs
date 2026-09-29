@@ -495,7 +495,7 @@ describe('mailerService', () => {
       const original = process.env.EMAIL_GATEWAY_ADDRESS;
       delete process.env.EMAIL_GATEWAY_ADDRESS;
       delete process.env.EMAIL_GATEWAY_USER;
-      expect(mailerService.emailGatewayAddress()).toBe('rfqprocucev@gmail.com');
+      expect(mailerService.emailGatewayAddress()).toBe('navin.procucev@gmail.com');
 
       process.env.EMAIL_GATEWAY_ADDRESS = 'custom@procucev.com';
       expect(mailerService.emailGatewayAddress()).toBe('custom@procucev.com');

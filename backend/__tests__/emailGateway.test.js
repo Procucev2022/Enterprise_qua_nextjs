@@ -2768,6 +2768,151 @@ Can you quote something?
     });
   });
 
+  describe('pollViaGmailApi', () => {
+    test('skips if gmail auth client is not configured', async () => {
+      jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue(null);
+      const res = await emailGatewayService.pollViaGmailApi();
+      expect(res.skipped).toBe(true);
+      expect(res.reason).toContain('not configured');
+    });
+
+    test('handles empty message list cleanly', async () => {
+      const mockAuth = { dummy: true };
+      jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue(mockAuth);
+      const googleapis = require('googleapis');
+      const listMock = jest.fn().mockResolvedValue({ data: { messages: [] } });
+      jest.spyOn(googleapis.google, 'gmail').mockReturnValue({
+        users: { messages: { list: listMock } },
+      });
+
+      const res = await emailGatewayService.pollViaGmailApi({ maxPerPoll: 5 });
+      expect(res.skipped).toBe(false);
+      expect(res.considered).toBe(0);
+      expect(res.ingested).toBe(0);
+    });
+
+    test('skips already processed messages and removes unread label', async () => {
+      const mockAuth = { dummy: true };
+      jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue(mockAuth);
+      const googleapis = require('googleapis');
+      const listMock = jest.fn().mockResolvedValue({
+        data: { messages: [{ id: 'msg-already-1' }] },
+      });
+      const modifyMock = jest.fn().mockResolvedValue({});
+      jest.spyOn(googleapis.google, 'gmail').mockReturnValue({
+        users: {
+          messages: {
+            list: listMock,
+            modify: modifyMock,
+          },
+        },
+      });
+      jest.spyOn(emailGatewayQueries, 'hasProcessed').mockResolvedValue(true);
+
+      const res = await emailGatewayService.pollViaGmailApi({ maxPerPoll: 5 });
+      expect(res.skipped).toBe(false);
+      expect(res.considered).toBe(1);
+      expect(res.ingested).toBe(0);
+      expect(modifyMock).toHaveBeenCalledWith({
+        userId: 'me',
+        id: 'msg-already-1',
+        requestBody: { removeLabelIds: ['UNREAD'] },
+      });
+    });
+
+    test('handles unreadable raw messages gracefully', async () => {
+      const mockAuth = { dummy: true };
+      jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue(mockAuth);
+      const googleapis = require('googleapis');
+      const listMock = jest.fn().mockResolvedValue({
+        data: { messages: [{ id: 'msg-unreadable-1' }] },
+      });
+      const getMock = jest.fn().mockResolvedValue({ data: {} });
+      jest.spyOn(googleapis.google, 'gmail').mockReturnValue({
+        users: {
+          messages: {
+            list: listMock,
+            get: getMock,
+          },
+        },
+      });
+      jest.spyOn(emailGatewayQueries, 'hasProcessed').mockResolvedValue(false);
+
+      const res = await emailGatewayService.pollViaGmailApi({ maxPerPoll: 5 });
+      expect(res.considered).toBe(1);
+      expect(res.outcomes[0].status).toBe(INGESTION_OUTCOME.UNREADABLE);
+    });
+
+    test('processes valid raw message, marks processed in ledger, and removes UNREAD', async () => {
+      const mockAuth = { dummy: true };
+      jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue(mockAuth);
+      const googleapis = require('googleapis');
+      const listMock = jest.fn().mockResolvedValue({
+        data: { messages: [{ id: 'msg-valid-1' }] },
+      });
+      const rawEml = Buffer.from(fixtures.PLAIN_REQUISITION_EML, 'utf8').toString('base64url');
+      const getMock = jest.fn().mockResolvedValue({ data: { raw: rawEml } });
+      const modifyMock = jest.fn().mockResolvedValue({});
+      jest.spyOn(googleapis.google, 'gmail').mockReturnValue({
+        users: {
+          messages: {
+            list: listMock,
+            get: getMock,
+            modify: modifyMock,
+          },
+        },
+      });
+      jest.spyOn(emailGatewayQueries, 'hasProcessed').mockResolvedValue(false);
+      const recordSpy = jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue({});
+      jest.spyOn(emailGatewayService, 'processMessage').mockResolvedValue({
+        status: INGESTION_OUTCOME.INGESTED,
+        detail: 'Ingested',
+        message: { messageId: '<msg-valid-1@test.com>', fromAddress: 'buyer@test.com', subject: 'RFQ' },
+        rfq: { id: 'rfq-gmail-1', rfqNumber: 'RFQ-GM-1' },
+      });
+
+      const res = await emailGatewayService.pollViaGmailApi({ maxPerPoll: 5 });
+      expect(res.considered).toBe(1);
+      expect(res.ingested).toBe(1);
+      expect(recordSpy).toHaveBeenCalled();
+      expect(modifyMock).toHaveBeenCalledWith({
+        userId: 'me',
+        id: 'msg-valid-1',
+        requestBody: { removeLabelIds: ['UNREAD'] },
+      });
+    });
+
+    test('captures and handles list error gracefully', async () => {
+      const mockAuth = { dummy: true };
+      jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue(mockAuth);
+      const googleapis = require('googleapis');
+      jest.spyOn(googleapis.google, 'gmail').mockReturnValue({
+        users: {
+          messages: {
+            list: jest.fn().mockRejectedValue(new Error('OAuth token expired')),
+          },
+        },
+      });
+
+      const res = await emailGatewayService.pollViaGmailApi({ maxPerPoll: 5 });
+      expect(res.skipped).toBe(false);
+      expect(res.error).toBe('OAuth token expired');
+    });
+
+    test('delegates pollOnce to pollViaGmailApi when config.method is gmail_api', async () => {
+      const pollSpy = jest.spyOn(emailGatewayService, 'pollViaGmailApi').mockResolvedValue({ skipped: false, ingested: 2 });
+      jest.spyOn(mailerService, 'isGmailApiConfigured').mockReturnValue(true);
+      const res = await emailGatewayService.pollOnce({
+        enabled: true,
+        method: 'gmail_api',
+        user: 'navin.procucev@gmail.com',
+        gatewayAddress: 'navin.procucev@gmail.com',
+      });
+      expect(pollSpy).toHaveBeenCalled();
+      expect(res.ingested).toBe(2);
+    });
+  });
+
   afterAll(() => {
     emailGatewayService.stopPolling();
   });

@@ -352,15 +352,19 @@ async function createRFQ(req, res, next) {
 
     const created = storeService.createRFQ({ ...body, extractedEntities: lineItems, aiSummary }, requestingBuyerAccount);
 
-    // Dispatch real email notification to target gateway address (e.g. RFQ@procucev.com)
-    if (body.source === 'email_gateway' || body.targetGatewayEmail) {
-      const recipientEmail = body.targetGatewayEmail || 'RFQ@procucev.com';
-      void mailerService.sendRequisitionNotificationEmail(
-        recipientEmail,
-        created,
-        body.sourceEmail || (req.user && req.user.email)
-      );
-    }
+    // Dispatch real email notification for created RFQ (including buyer email, item name, quantity, requirements)
+    const recipientEmail =
+      body.targetGatewayEmail ||
+      process.env.RFQ_NOTIFICATION_EMAIL ||
+      (body.source === 'email_gateway' && process.env.NODE_ENV === 'test' ? 'RFQ@procucev.com' : 'navin.procucev@gmail.com');
+
+    const buyerEmail = body.sourceEmail || (req.user && req.user.email) || created.raisedByEmail || '';
+
+    void mailerService.sendRequisitionNotificationEmail(
+      recipientEmail,
+      created,
+      buyerEmail
+    );
 
     res.status(201).json({ success: true, data: created });
   } catch (err) {

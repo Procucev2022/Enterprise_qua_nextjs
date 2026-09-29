@@ -41,6 +41,12 @@ async function main() {
   await storeService.hydrateFromDB();
   console.log(`✔ Loaded ${(storeService.buyerAccounts || []).length} buyer accounts from database.`);
 
+  // In manual check mode, scan unread emails received in the last 24 hours
+  emailGatewayService.runtime.watchingSince = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  if (emailGatewayService.vendorRuntime) {
+    emailGatewayService.vendorRuntime.watchingSince = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  }
+
   // Check gateway status for both mailboxes
   const status = await emailGatewayService.getStatus();
   console.log(`✔ Inbox 1 (Requisitions): ${status.mailboxUser || 'Not configured'} (${status.host || 'N/A'}) - Address: ${status.gatewayAddress || 'N/A'}`);

@@ -92,6 +92,7 @@ function resolveConfig(env = process.env) {
 
   return {
     enabled: String(env.EMAIL_GATEWAY_ENABLED || '').toLowerCase() === 'true',
+    method: String(env.EMAIL_GATEWAY_METHOD || '').toLowerCase(),
     host: (env.EMAIL_GATEWAY_HOST || '').trim(),
     port: Number(env.EMAIL_GATEWAY_PORT || 993),
     secure: String(env.EMAIL_GATEWAY_SECURE || 'true').toLowerCase() !== 'false',
@@ -178,6 +179,9 @@ function resolveVendorConfig(env = process.env) {
 
 /** True when enough is configured to attempt a connection. */
 function isConfigured(config = resolveConfig()) {
+  if (config.method === 'gmail_api') {
+    return Boolean(config.user && mailerService.isGmailApiConfigured());
+  }
   return !!(config.host && config.user && config.password);
 }
 
@@ -191,6 +195,14 @@ function isConfigured(config = resolveConfig()) {
  * Returns a message, or null when the combination looks sane.
  */
 function describeConfigurationFault(config = resolveConfig()) {
+  if (config.method === 'gmail_api') {
+    if (!config.user) {
+      return EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED;
+    }
+    return mailerService.isGmailApiConfigured()
+      ? null
+      : 'Gmail API not configured (GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, and GMAIL_REFRESH_TOKEN required)';
+  }
   if (/^smtp\./i.test(config.host)) {
     return EMAIL_GATEWAY_MESSAGES.SMTP_HOST_CONFIGURED.replace('{host}', config.host);
   }
@@ -502,7 +514,7 @@ function isOutgoingSystemMessage(message, config = {}) {
   const buyerUser = String(
     process.env.EMAIL_GATEWAY_USER ||
     process.env.SMTP_USER ||
-    'rfqprocucev@gmail.com'
+    'navin.procucev@gmail.com'
   ).trim().toLowerCase();
 
   return (
@@ -510,13 +522,14 @@ function isOutgoingSystemMessage(message, config = {}) {
     senderEmail === vendorUser ||
     senderEmail === buyerUser ||
     senderEmail === 'srinu20252026@gmail.com' ||
+    senderEmail === 'navin.procucev@gmail.com' ||
     senderEmail === 'rfqprocucev@gmail.com'
   );
 }
 
 /**
  * Resolve vendor record from sender email address or vendor directory.
- * Internal platform / gateway addresses (srinu20252026@gmail.com, rfqprocucev@gmail.com)
+ * Internal platform / gateway addresses (srinu20252026@gmail.com, navin.procucev@gmail.com)
  * are NEVER resolved as a vendor.
  */
 async function resolveVendorFromEmail(fromAddress, targetRfq = null) {
@@ -524,13 +537,14 @@ async function resolveVendorFromEmail(fromAddress, targetRfq = null) {
   const email = String(fromAddress).trim().toLowerCase();
 
   const vendorGatewayAddr = (process.env.VENDOR_EMAIL_GATEWAY_ADDRESS || process.env.VENDOR_EMAIL_GATEWAY_USER || 'srinu20252026@gmail.com').toLowerCase();
-  const buyerGatewayAddr = (process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || 'rfqprocucev@gmail.com').toLowerCase();
+  const buyerGatewayAddr = (process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || 'navin.procucev@gmail.com').toLowerCase();
 
   // Internal gateway accounts can NEVER be a vendor
   if (
     email === vendorGatewayAddr ||
     email === buyerGatewayAddr ||
     email === 'srinu20252026@gmail.com' ||
+    email === 'navin.procucev@gmail.com' ||
     email === 'rfqprocucev@gmail.com'
   ) {
     return null;
@@ -1038,6 +1052,116 @@ async function processMessage(rawSource, config = resolveConfig()) {
 }
 
 /**
+ * Ingest unread emails via Gmail REST API instead of IMAP.
+ */
+async function pollViaGmailApi(config = resolveConfig()) {
+  const auth = mailerService.getGmailOAuthClient ? mailerService.getGmailOAuthClient() : null;
+  if (!auth) {
+    return { skipped: true, reason: 'Gmail API client not configured' };
+  }
+
+  const { google } = require('googleapis');
+  const gmail = google.gmail({ version: 'v1', auth });
+  const outcomes = [];
+  runtime.isPolling = true;
+  runtime.consideredThisRun = 0;
+  runtime.ingestedThisRun = 0;
+  const startedAt = Date.now();
+
+  try {
+    const listRes = await gmail.users.messages.list({
+      userId: 'me',
+      q: 'is:unread',
+      maxResults: config.maxPerPoll,
+    });
+
+    const messages = listRes.data.messages || [];
+    for (const msgRef of messages) {
+      runtime.consideredThisRun += 1;
+      const dedupeKey = `gmail-api-${msgRef.id}`;
+      if (await emailGatewayQueries.hasProcessed(dedupeKey)) {
+        try {
+          await gmail.users.messages.modify({
+            userId: 'me',
+            id: msgRef.id,
+            requestBody: { removeLabelIds: ['UNREAD'] },
+          });
+        } catch (_) {}
+        outcomes.push({ uid: msgRef.id, messageId: dedupeKey, status: EMAIL_GATEWAY_MESSAGES.ALREADY_PROCESSED });
+        continue;
+      }
+
+      const rawRes = await gmail.users.messages.get({
+        userId: 'me',
+        id: msgRef.id,
+        format: 'raw',
+      });
+
+      if (!rawRes.data || !rawRes.data.raw) {
+        outcomes.push({ uid: msgRef.id, status: INGESTION_OUTCOME.UNREADABLE });
+        continue;
+      }
+
+      const rawBuffer = Buffer.from(rawRes.data.raw, 'base64url');
+      const result = await emailGateway.processMessage(rawBuffer, config);
+      const resolvedMessageId =
+        (result.message && result.message.messageId) || dedupeKey;
+
+      await emailGatewayQueries.recordProcessed({
+        messageId: resolvedMessageId,
+        status: result.status,
+        detail: result.detail,
+        fromAddress: result.message ? result.message.fromAddress : null,
+        subject: result.message ? result.message.subject : null,
+        rfqId: result.rfq ? result.rfq.id : null,
+        rfqNumber:
+          result.rfqs && result.rfqs.length > 1
+            ? result.rfqs.map((r) => r.rfqNumber).join(', ')
+            : result.rfq
+            ? result.rfq.rfqNumber
+            : null,
+      });
+
+      if (
+        result.status === INGESTION_OUTCOME.INGESTED ||
+        result.status === INGESTION_OUTCOME.QUOTE_INGESTED ||
+        result.status === INGESTION_OUTCOME.CREDITS_EXHAUSTED ||
+        result.status === INGESTION_OUTCOME.SKIPPED_OUTBOUND
+      ) {
+        if (result.status !== INGESTION_OUTCOME.SKIPPED_OUTBOUND && result.status !== INGESTION_OUTCOME.CREDITS_EXHAUSTED) {
+          runtime.ingestedThisRun += 1;
+        }
+        try {
+          await gmail.users.messages.modify({
+            userId: 'me',
+            id: msgRef.id,
+            requestBody: { removeLabelIds: ['UNREAD'] },
+          });
+        } catch (_) {}
+      }
+      outcomes.push({ uid: msgRef.id, messageId: resolvedMessageId, status: result.status });
+    }
+
+    runtime.lastError = null;
+    return {
+      skipped: false,
+      considered: runtime.consideredThisRun,
+      ingested: runtime.ingestedThisRun,
+      pending: Math.max(messages.length - config.maxPerPoll, 0),
+      outcomes,
+    };
+  } catch (err) {
+    runtime.lastError = err.message;
+    logger.error(`Gmail API email gateway poll failed: ${err.message}`, err, 'EMAIL_GATEWAY');
+    return { skipped: false, error: err.message, considered: runtime.consideredThisRun, outcomes };
+  } finally {
+    runtime.isPolling = false;
+    runtime.lastPollAt = new Date().toISOString();
+    runtime.lastPollDurationMs = Date.now() - startedAt;
+  }
+}
+
+/**
  * Read the mailbox once and ingest whatever is new.
  *
  * Only unseen messages are fetched, and only up to `maxPerPoll` per run so a
@@ -1069,6 +1193,10 @@ async function pollOnce(config = resolveConfig()) {
       'EMAIL_GATEWAY'
     );
     return { skipped: true, reason: configurationFault };
+  }
+
+  if (config.method === 'gmail_api') {
+    return await emailGateway.pollViaGmailApi(config);
   }
 
   runtime.isPolling = true;
@@ -1586,6 +1714,7 @@ const emailGateway = {
   processVendorQuoteMessage,
   processMessage,
   pollOnce,
+  pollViaGmailApi,
   pollVendorOnce,
   pollBothInboxesOnce,
   startPolling,

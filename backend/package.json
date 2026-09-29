@@ -15,6 +15,7 @@
     "create-buyer": "node scripts/create-buyer.js",
     "email:check": "node scripts/check-email.js",
     "email:scheduler": "node scripts/email-scheduler.js",
+    "email:test": "node scripts/test-rfq-email.js",
     "dev:worker": "wrangler dev",
     "deploy:worker": "wrangler deploy"
   },
