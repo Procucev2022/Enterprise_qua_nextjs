@@ -641,6 +641,25 @@ describe('emailGatewayService.pollViaGmailApi', () => {
     });
   });
 
+  // Regression coverage for a real production bug: the query used to bound
+  // itself with `after:<runtime.watchingSince>`, an in-memory value that
+  // resets to "now" on every fresh Workers isolate. Confirmed live: a test
+  // email sent minutes earlier was never found because the isolate serving
+  // the poll request had `watchingSince` set later than the email's own
+  // timestamp. The query must never depend on that ephemeral value.
+  test('lists unread mail without an after: date bound, since runtime.watchingSince cannot be relied on across Workers isolates', async () => {
+    jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
+    const api = gmailApi();
+    jest.spyOn(googleapis.google, 'gmail').mockReturnValue(api);
+    emailGatewayService.runtime.watchingSince = new Date(Date.now() + 60_000).toISOString(); // even a "future" isolate reset must not exclude mail
+
+    await emailGatewayService.pollViaGmailApi(emailGatewayService.resolveConfig(FULL_ENV));
+
+    expect(api.users.messages.list).toHaveBeenCalledWith(
+      expect.objectContaining({ q: 'is:unread' })
+    );
+  });
+
   test('skips a message already in the ledger without re-ingesting it', async () => {
     jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
     jest.spyOn(emailGatewayQueries, 'hasProcessed').mockResolvedValue(true);

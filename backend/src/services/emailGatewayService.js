@@ -1096,13 +1096,21 @@ async function pollViaGmailApi(config = resolveConfig()) {
   const outcomes = [];
 
   try {
-    // Gmail's own search syntax, not IMAP SEARCH — `after:` takes Unix
-    // seconds. Same "only mail since watching began" bound the IMAP path
-    // applies below, so an existing backlog is never worked through.
-    const afterSeconds = Math.floor(new Date(runtime.watchingSince).getTime() / 1000);
+    // Deliberately NOT bounded by runtime.watchingSince the way the IMAP
+    // path below is — confirmed live this genuinely breaks on Workers:
+    // `runtime` is plain in-memory module state, and Cloudflare spins up a
+    // fresh isolate (resetting it to "now") far more often than a Node
+    // process restarts, so `after:<watchingSince>` silently excluded mail
+    // sent just seconds earlier in the *previous* isolate — every poll
+    // reported considered:0 for a message that was genuinely sitting
+    // unread. `is:unread` + maxPerPoll + our own ledger dedupe
+    // (emailGatewayQueries.hasProcessed, checked per message below) are
+    // sufficient for correctness without a time bound that can't be kept
+    // reliably on this platform; a pre-existing backlog is handled by
+    // marking it read once out of band, not by a bound in this query.
     const listRes = await gmail.users.messages.list({
       userId: 'me',
-      q: `is:unread after:${afterSeconds}`,
+      q: 'is:unread',
       maxResults: config.maxPerPoll,
     });
     runtime.lastConnectedAt = new Date().toISOString();
