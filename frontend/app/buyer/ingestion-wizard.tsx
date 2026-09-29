@@ -692,10 +692,15 @@ export default function IngestionWizard({
       if ((form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2') && Array.isArray(buyerVendors)) {
         const allMyUploadedVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
         const { signals: dispatchSignals } = extractRfqCategorySignals(updatedForm);
-        const matched = dispatchSignals.length > 0
+        // No fallback to "every uploaded vendor" when nothing matches this
+        // RFQ's category — that used to send the RFQ to a buyer's entire
+        // private roster regardless of relevance (confirmed live: an IT
+        // vendor got assigned to a Mechanical RFQ because none of the
+        // buyer's vendors happened to be in Mechanical). Only category
+        // signal-free RFQs (nothing to filter against) still list everyone.
+        const myUploadedVendors = dispatchSignals.length > 0
           ? allMyUploadedVendors.filter((v) => matchVendorAgainstSignals(v, dispatchSignals).isMatch)
-          : [];
-        const myUploadedVendors = matched.length > 0 ? matched : allMyUploadedVendors;
+          : allMyUploadedVendors;
         if (myUploadedVendors.length > 0) {
           mode1AssignedVendors = myUploadedVendors.map(toAssignedVendorEntry);
         }
@@ -1482,10 +1487,9 @@ export default function IngestionWizard({
                       {(() => {
                         const uploaded = buyerVendors.filter((v) => isBuyerUploaded(v));
                         const { signals } = extractRfqCategorySignals(form);
-                        const matched = signals.length > 0
+                        const effective = signals.length > 0
                           ? uploaded.filter((v) => matchVendorAgainstSignals(v, signals).isMatch)
-                          : [];
-                        const effective = matched.length > 0 ? matched : uploaded;
+                          : uploaded;
                         const filtered = mode1VendorSearch.trim()
                           ? effective.filter((v) =>
                               v.name.toLowerCase().includes(mode1VendorSearch.toLowerCase()) ||
@@ -1530,10 +1534,9 @@ export default function IngestionWizard({
             {(() => {
               const allMyVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
               const { signals: mode1Signals } = extractRfqCategorySignals(form);
-              const matched = mode1Signals.length > 0
+              const effective = mode1Signals.length > 0
                 ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, mode1Signals).isMatch)
-                : [];
-              const effective = matched.length > 0 ? matched : allMyVendors;
+                : allMyVendors;
               const myVendors = mode1VendorSearch.trim()
                 ? effective.filter((v) =>
                     v.name.toLowerCase().includes(mode1VendorSearch.toLowerCase()) ||
