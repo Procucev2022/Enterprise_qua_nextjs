@@ -42,7 +42,7 @@
   // scheduled() tells the two triggers apart on controller.cron.
   "triggers": {
     "crons": [
-      "*/5 * * * *",
+      "* * * * *",
       "*/10 * * * *"
     ]
   }
