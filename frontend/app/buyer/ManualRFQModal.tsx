@@ -15,7 +15,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
-import { extractRfqCategorySignals, getCategoryMatchedProcucevVendors } from '@/lib/vendorMatching';
+import { extractRfqCategorySignals, getCategoryMatchedProcucevVendors, matchVendorAgainstSignals } from '@/lib/vendorMatching';
 import {
   Plus,
   Trash2,
@@ -375,7 +375,15 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
 
     if (form.sourcingMode === 'mode_1') {
       if (Array.isArray(buyerVendors)) {
-        const myUploadedVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+        const allMyUploadedVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+        // Category-scoped, same as the ingestion wizard — this had NO
+        // category filtering at all before, unconditionally assigning every
+        // uploaded vendor to every mode_1 RFQ regardless of relevance
+        // (confirmed live: an IT vendor assigned to a Mechanical RFQ).
+        const { signals } = extractRfqCategorySignals(form);
+        const myUploadedVendors = signals.length > 0
+          ? allMyUploadedVendors.filter((v) => matchVendorAgainstSignals(v, signals).isMatch)
+          : allMyUploadedVendors;
         if (myUploadedVendors.length > 0) {
           mode1AssignedVendors = myUploadedVendors.map((v) => ({
             id: v.id,
