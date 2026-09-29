@@ -178,6 +178,14 @@ function resolveVendorConfig(env = process.env) {
 
 /** True when enough is configured to attempt a connection. */
 function isConfigured(config = resolveConfig()) {
+  // Each mailbox has its own Gmail API identity (buyer: GMAIL_*, vendor:
+  // VENDOR_GMAIL_*) — checking the wrong one would report the vendor
+  // gateway as configured just because the buyer's Gmail API happens to be
+  // set up, or vice versa.
+  const gmailApiConfigured = config.isVendorMailbox
+    ? mailerService.isVendorGmailApiConfigured()
+    : mailerService.isGmailApiConfigured();
+  if (gmailApiConfigured) return true;
   return !!(config.host && config.user && config.password);
 }
 
@@ -191,6 +199,12 @@ function isConfigured(config = resolveConfig()) {
  * Returns a message, or null when the combination looks sane.
  */
 function describeConfigurationFault(config = resolveConfig()) {
+  // The Gmail API path never opens an IMAP socket at all, so none of the
+  // IMAP-specific misconfiguration checks below apply to it.
+  const gmailApiConfigured = config.isVendorMailbox
+    ? mailerService.isVendorGmailApiConfigured()
+    : mailerService.isGmailApiConfigured();
+  if (gmailApiConfigured) return null;
   if (/^smtp\./i.test(config.host)) {
     return EMAIL_GATEWAY_MESSAGES.SMTP_HOST_CONFIGURED.replace('{host}', config.host);
   }
@@ -504,11 +518,16 @@ function isOutgoingSystemMessage(message, config = {}) {
     process.env.SMTP_USER ||
     'rfqprocucev@gmail.com'
   ).trim().toLowerCase();
+  // The Gmail API buyer identity (used both to send and, now, to poll) is a
+  // separate credential from EMAIL_GATEWAY_USER/SMTP_USER — read from its
+  // own var rather than assuming it matches either.
+  const gmailApiUser = String(process.env.GMAIL_SENDER_EMAIL || '').trim().toLowerCase();
 
   return (
     senderEmail === mailboxUser ||
     senderEmail === vendorUser ||
     senderEmail === buyerUser ||
+    (gmailApiUser && senderEmail === gmailApiUser) ||
     senderEmail === 'srinu20252026@gmail.com' ||
     senderEmail === 'rfqprocucev@gmail.com'
   );
@@ -525,11 +544,13 @@ async function resolveVendorFromEmail(fromAddress, targetRfq = null) {
 
   const vendorGatewayAddr = (process.env.VENDOR_EMAIL_GATEWAY_ADDRESS || process.env.VENDOR_EMAIL_GATEWAY_USER || 'srinu20252026@gmail.com').toLowerCase();
   const buyerGatewayAddr = (process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || 'rfqprocucev@gmail.com').toLowerCase();
+  const gmailApiAddr = String(process.env.GMAIL_SENDER_EMAIL || '').trim().toLowerCase();
 
   // Internal gateway accounts can NEVER be a vendor
   if (
     email === vendorGatewayAddr ||
     email === buyerGatewayAddr ||
+    (gmailApiAddr && email === gmailApiAddr) ||
     email === 'srinu20252026@gmail.com' ||
     email === 'rfqprocucev@gmail.com'
   ) {
@@ -1038,6 +1059,151 @@ async function processMessage(rawSource, config = resolveConfig()) {
 }
 
 /**
+ * Read the buyer intake mailbox once via the Gmail REST API instead of IMAP.
+ *
+ * IMAP cannot hold a reliable socket open from Cloudflare Workers at all —
+ * confirmed live: every scheduled poll here failed with "Unexpected close" /
+ * "NoConnection", the same category of TLS-socket limitation that made raw
+ * SMTP unusable for outbound mail (see mailerService.deliverVendor's own
+ * Gmail-API fallback for that story). The Gmail API is plain HTTPS, so it
+ * works from Workers the same way any other fetch call does.
+ *
+ * Shares the exact same processMessage()/emailGatewayQueries ledger as the
+ * IMAP path below — this is only a different transport for fetching
+ * messages, not a second parsing pipeline. Uses navin.procucev@gmail.com
+ * (whatever GMAIL_SENDER_EMAIL/GMAIL_REFRESH_TOKEN actually point to — no
+ * address is hardcoded here) via the same Gmail OAuth client outbound mail
+ * already uses, so the refresh token needs the gmail.readonly and
+ * gmail.modify scopes in addition to gmail.send (re-authorize via
+ * scripts/get-gmail-refresh-token.js if the existing token predates this).
+ */
+async function pollViaGmailApi(config = resolveConfig()) {
+  if (runtime.isPolling) {
+    return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.POLL_ALREADY_RUNNING };
+  }
+  const auth = mailerService.getGmailOAuthClient();
+  if (!auth) {
+    return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
+  }
+
+  const { google } = require('googleapis');
+  const gmail = google.gmail({ version: 'v1', auth });
+
+  runtime.isPolling = true;
+  runtime.consideredThisRun = 0;
+  runtime.ingestedThisRun = 0;
+  const startedAt = Date.now();
+  const outcomes = [];
+
+  try {
+    // Deliberately NOT bounded by runtime.watchingSince the way the IMAP
+    // path below is — confirmed live this genuinely breaks on Workers:
+    // `runtime` is plain in-memory module state, and Cloudflare spins up a
+    // fresh isolate (resetting it to "now") far more often than a Node
+    // process restarts, so `after:<watchingSince>` silently excluded mail
+    // sent just seconds earlier in the *previous* isolate — every poll
+    // reported considered:0 for a message that was genuinely sitting
+    // unread. `is:unread` + maxPerPoll + our own ledger dedupe
+    // (emailGatewayQueries.hasProcessed, checked per message below) are
+    // sufficient for correctness without a time bound that can't be kept
+    // reliably on this platform; a pre-existing backlog is handled by
+    // marking it read once out of band, not by a bound in this query.
+    const listRes = await gmail.users.messages.list({
+      userId: 'me',
+      q: 'is:unread',
+      maxResults: config.maxPerPoll,
+    });
+    runtime.lastConnectedAt = new Date().toISOString();
+
+    const messages = listRes.data.messages || [];
+    for (const ref of messages) {
+      runtime.consideredThisRun += 1;
+      // Gmail's own message id is already a stable per-message identifier —
+      // no envelope Message-ID header to fall back to parsing here first,
+      // unlike the IMAP path.
+      const dedupeKey = `gmail-${ref.id}`;
+      try {
+        // Ours is the authoritative dedupe check; see emailGatewayQueries.
+        if (await emailGatewayQueries.hasProcessed(dedupeKey)) {
+          await gmail.users.messages
+            .modify({ userId: 'me', id: ref.id, requestBody: { removeLabelIds: ['UNREAD'] } })
+            .catch(() => {});
+          outcomes.push({ uid: ref.id, messageId: dedupeKey, status: EMAIL_GATEWAY_MESSAGES.ALREADY_PROCESSED });
+          continue;
+        }
+
+        const full = await gmail.users.messages.get({ userId: 'me', id: ref.id, format: 'raw' });
+        if (!full.data || !full.data.raw) {
+          outcomes.push({ uid: ref.id, status: INGESTION_OUTCOME.UNREADABLE });
+          continue;
+        }
+        const rawSource = Buffer.from(full.data.raw, 'base64url');
+
+        const result = await emailGateway.processMessage(rawSource, config);
+        const resolvedMessageId = (result.message && result.message.messageId) || dedupeKey;
+
+        await emailGatewayQueries.recordProcessed({
+          messageId: resolvedMessageId,
+          status: result.status,
+          detail: result.detail,
+          fromAddress: result.message ? result.message.fromAddress : null,
+          subject: result.message ? result.message.subject : null,
+          rfqId: result.rfq ? result.rfq.id : null,
+          rfqNumber:
+            result.rfqs && result.rfqs.length > 1
+              ? result.rfqs.map((r) => r.rfqNumber).join(', ')
+              : result.rfq
+              ? result.rfq.rfqNumber
+              : null,
+        });
+
+        if (
+          result.status === INGESTION_OUTCOME.INGESTED ||
+          result.status === INGESTION_OUTCOME.QUOTE_INGESTED ||
+          result.status === INGESTION_OUTCOME.CREDITS_EXHAUSTED ||
+          result.status === INGESTION_OUTCOME.SKIPPED_OUTBOUND
+        ) {
+          if (result.status !== INGESTION_OUTCOME.SKIPPED_OUTBOUND && result.status !== INGESTION_OUTCOME.CREDITS_EXHAUSTED) {
+            runtime.ingestedThisRun += 1;
+          }
+          // Marked read only for a message we actually acted on, and only after
+          // the ledger write, so a failed write leaves it to be retried — same
+          // ordering the IMAP path uses and for the same reason.
+          await gmail.users.messages.modify({ userId: 'me', id: ref.id, requestBody: { removeLabelIds: ['UNREAD'] } });
+        }
+        outcomes.push({ uid: ref.id, messageId: resolvedMessageId, status: result.status });
+      } catch (err) {
+        logger.error('Inbound message could not be processed (Gmail API)', err, 'EMAIL_GATEWAY');
+        await emailGatewayQueries
+          .recordProcessed({ messageId: dedupeKey, status: INGESTION_OUTCOME.FAILED, detail: err.message })
+          .catch(() => {});
+        outcomes.push({ uid: ref.id, messageId: dedupeKey, status: INGESTION_OUTCOME.FAILED });
+      }
+    }
+
+    runtime.lastError = null;
+    return {
+      skipped: false,
+      considered: runtime.consideredThisRun,
+      ingested: runtime.ingestedThisRun,
+      pending: Math.max((listRes.data.resultSizeEstimate || messages.length) - messages.length, 0),
+      outcomes,
+    };
+  } catch (err) {
+    // An API or auth failure (e.g. an insufficiently-scoped refresh token).
+    // Reported through status rather than thrown, same convention as the
+    // IMAP path, so the panel can explain it and the interval keeps trying.
+    runtime.lastError = err.message;
+    logger.error(`Email gateway poll failed (Gmail API): ${err.message}`, err, 'EMAIL_GATEWAY');
+    return { skipped: false, error: err.message, considered: runtime.consideredThisRun, outcomes };
+  } finally {
+    runtime.isPolling = false;
+    runtime.lastPollAt = new Date().toISOString();
+    runtime.lastPollDurationMs = Date.now() - startedAt;
+  }
+}
+
+/**
  * Read the mailbox once and ingest whatever is new.
  *
  * Only unseen messages are fetched, and only up to `maxPerPoll` per run so a
@@ -1053,6 +1219,13 @@ async function processMessage(rawSource, config = resolveConfig()) {
 async function pollOnce(config = resolveConfig()) {
   if (runtime.isPolling) {
     return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.POLL_ALREADY_RUNNING };
+  }
+  // Prefer the Gmail API whenever it's configured — see pollViaGmailApi's
+  // own comment for why IMAP can't be relied on from Workers at all. IMAP
+  // stays as the fallback for a non-Workers deployment (local dev / Render)
+  // with no Gmail API credentials set up.
+  if (mailerService.isGmailApiConfigured()) {
+    return emailGateway.pollViaGmailApi(config);
   }
   if (!isConfigured(config)) {
     return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
@@ -1586,6 +1759,7 @@ const emailGateway = {
   processVendorQuoteMessage,
   processMessage,
   pollOnce,
+  pollViaGmailApi,
   pollVendorOnce,
   pollBothInboxesOnce,
   startPolling,

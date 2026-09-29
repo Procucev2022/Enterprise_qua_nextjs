@@ -10,6 +10,23 @@
 // per test case and are unaffected by this default.
 process.env.DATABASE_URL = '';
 
+// Same reasoning, same mechanism, for the real Gmail API credentials: without
+// this, mailerService.isGmailApiConfigured()/isVendorGmailApiConfigured()
+// come back true in every test process (backend/.env has real values for
+// live use), which silently made emailGatewayService's IMAP-path tests
+// exercise the Gmail API branch instead of the IMAP configuration/fault
+// logic they were actually written to test — 32 failures the moment
+// pollOnce/isConfigured/describeConfigurationFault started checking
+// isGmailApiConfigured() first. Tests that specifically exercise the Gmail
+// API path (mailerService.test.js, emailGateway.test.js's own
+// pollViaGmailApi describe block) set their own values per test via
+// jest.isolateModules, which overrides this default within that scope and
+// is unaffected by it.
+process.env.GMAIL_CLIENT_ID = '';
+process.env.GMAIL_CLIENT_SECRET = '';
+process.env.GMAIL_REFRESH_TOKEN = '';
+process.env.VENDOR_GMAIL_REFRESH_TOKEN = '';
+
 // Session-signing key, pinned for the whole test process.
 //
 // authService resolves this once at module load. Without it, a non-production
