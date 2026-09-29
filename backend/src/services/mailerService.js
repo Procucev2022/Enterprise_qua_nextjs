@@ -365,11 +365,19 @@ function getGmailOAuthClient() {
  * to what the three fields this app ever sends actually need.
  */
 function buildRawMimeMessage({ from, to, subject, html, replyTo }) {
+  // RFC 5322 requires Date and treats Message-ID as strongly recommended.
+  // Gmail's own relay normally injects both when a raw message omits them,
+  // but leaving them out is still a real gap some stricter receiving filters
+  // (spam-sensitive or disposable-inbox providers especially) penalize —
+  // cheap to set explicitly rather than rely on the relay's own fallback.
+  const domain = (from.match(/<([^>]+)>/)?.[1] || from).split('@')[1] || 'procucev.com';
   const headers = [
     `From: ${from}`,
     `To: ${to}`,
     replyTo ? `Reply-To: ${replyTo}` : null,
     `Subject: =?UTF-8?B?${Buffer.from(subject || '', 'utf8').toString('base64')}?=`,
+    `Date: ${new Date().toUTCString()}`,
+    `Message-ID: <${Date.now()}.${Math.random().toString(36).slice(2)}@${domain}>`,
     'MIME-Version: 1.0',
     'Content-Type: text/html; charset=UTF-8',
   ].filter(Boolean);
