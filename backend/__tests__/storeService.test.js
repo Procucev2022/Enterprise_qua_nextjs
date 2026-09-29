@@ -952,6 +952,38 @@ describe('Store Service & Business Operations', () => {
       expect(storeService.getRFQsForVendor('ghost@nowhere.test')).toEqual([]);
     });
 
+    // Regression coverage for a real production bug: createRFQ's network-wide
+    // category-matched auto-invite used to run for BOTH mode_1 and mode_2,
+    // even though mode_1 is explicitly advertised to buyers as "🔒 Private
+    // Roster Only" / "strictly dispatched to your private, pre-approved
+    // supplier network" (ingestion-wizard.tsx) — a vendor never added to a
+    // buyer's own roster was silently assigned a mode_1 RFQ anyway. Only
+    // mode_2 ("Hybrid Sourcing Pool: Private Roster + AI Routing") is meant
+    // to reach out beyond the buyer's own roster.
+    test('createRFQ auto-invites category-matched network vendors for mode_2 but never for mode_1', () => {
+      const networkVendor = storeService.addVendor({
+        name: 'Network Only Vendor',
+        email: 'network-only@ex.com',
+        majorCategory: 'Mode-Scope-Cat',
+      });
+
+      const mode1RFQ = storeService.createRFQ({
+        id: 'rfq-mode1-scope-test',
+        title: 'Mode 1 enquiry',
+        category: 'Mode-Scope-Cat',
+        sourcingMode: 'mode_1',
+      });
+      const mode2RFQ = storeService.createRFQ({
+        id: 'rfq-mode2-scope-test',
+        title: 'Mode 2 enquiry',
+        category: 'Mode-Scope-Cat',
+        sourcingMode: 'mode_2',
+      });
+
+      expect((mode1RFQ.assignedVendors || []).map((v) => v.id)).not.toContain(networkVendor.id);
+      expect((mode2RFQ.assignedVendors || []).map((v) => v.id)).toContain(networkVendor.id);
+    });
+
     test('notifyVendorsOfNewRFQ only fires for a rostered vendor whose own category also matches the RFQ', () => {
       const rostered = storeService.addVendor({
         name: 'Notify Rostered',

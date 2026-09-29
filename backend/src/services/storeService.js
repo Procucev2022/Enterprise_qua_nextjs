@@ -1463,14 +1463,23 @@ class StoreService {
       },
     };
 
-    // Category-based vendor invite for Version 1 (mode_1) and Version 2
-    // (mode_2): every vendor whose major/minor category matches this RFQ is
-    // merged into assignedVendors, in addition to whatever the client
-    // already supplied (e.g. the buyer's own private roster). Reuses
+    // Category-based network-wide vendor invite — Version 2 (mode_2, "Hybrid
+    // Sourcing Pool: Private Roster + AI Routing") ONLY. Every vendor whose
+    // major/minor category matches this RFQ is merged into assignedVendors,
+    // in addition to whatever the client already supplied. Reuses
     // candidateVendorsForRFQ (same category-match rule the CM's invite
-    // picker uses) — this bypasses the invite-only requirement deliberately
-    // for these two modes only.
-    if (newRFQ.sourcingMode === 'mode_1' || newRFQ.sourcingMode === 'mode_2') {
+    // picker uses) — this bypasses the invite-only requirement deliberately,
+    // but only for mode_2, which is explicitly advertised to buyers as
+    // hybrid. Version 1 (mode_1) is advertised as "🔒 Private Roster Only" /
+    // "strictly dispatched to your private, pre-approved supplier network"
+    // (see ingestion-wizard.tsx) — this used to also run for mode_1, quietly
+    // pulling in network-wide vendors having nothing to do with the buyer's
+    // own roster and breaking that explicit promise (confirmed live: a
+    // vendor never added to a buyer's private roster received a mode_1 RFQ
+    // meant to stay strictly private). mode_1 now only ever gets whatever
+    // the client-supplied assignedVendors already contains (the buyer's own
+    // roster, category-filtered on the frontend).
+    if (newRFQ.sourcingMode === 'mode_2') {
       // Capped: a bulk-imported category can match thousands of vendors (seen
       // live: 3000+ on a single RFQ, a 787KB payload) — embedding all of them
       // in assignedVendors on every future read of this RFQ is exactly the
@@ -1486,7 +1495,7 @@ class StoreService {
         (a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0)
       );
 
-      if (newRFQ.sourcingMode === 'mode_2' && newRFQ.deliveryPincode) {
+      if (newRFQ.deliveryPincode) {
         const MAX_MODE2_PINCODE_INVITES = 100;
         const targetPincode = String(newRFQ.deliveryPincode).trim();
         const pincodeMatches = categoryMatches.filter(
