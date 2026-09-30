@@ -14,20 +14,20 @@ const { logger } = require('./loggerService');
 // ─────────────────────────────────────────────────────────────────────────────
 const WHATSAPP_CONFIG = {
   // ── sendmsg.in (primary) ──────────────────────────────────────────────────
-  SENDMSG_BASE_URL:      process.env.WHATSAPP_BASE_URL          || 'https://media.sendmsg.in',
-  SENDMSG_TEMPLATE_URL:  process.env.WHATSAPP_TEMPLATE_BASE_URL  || 'https://wsapi.sendmsg.in',
-  USERNAME:              process.env.WHATSAPP_USERNAME            || '',
-  PASSWORD:              process.env.WHATSAPP_PASSWORD            || '',
-  FROM_NUMBER:           process.env.WHATSAPP_FROM_NUMBER         || '',
-  TEMPLATE_RFQ_INVITE:   process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION || 'rfq_notification_for_sellers_for_rfq_feb_5',
+  SENDMSG_BASE_URL: process.env.WHATSAPP_BASE_URL || 'https://media.sendmsg.in',
+  SENDMSG_TEMPLATE_URL: process.env.WHATSAPP_TEMPLATE_BASE_URL || 'https://wsapi.sendmsg.in',
+  USERNAME: process.env.WHATSAPP_USERNAME || '',
+  PASSWORD: process.env.WHATSAPP_PASSWORD || '',
+  FROM_NUMBER: process.env.WHATSAPP_FROM_NUMBER || '',
+  TEMPLATE_RFQ_INVITE: process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION || 'rfq_notification_for_sellers_for_rfq_feb_5',
 
   // ── Meta Cloud API (secondary) ────────────────────────────────────────────
-  META_API_URL:         process.env.WHATSAPP_API_URL             || 'https://graph.facebook.com/v19.0',
-  PHONE_NUMBER_ID:      process.env.WHATSAPP_PHONE_NUMBER_ID     || '',
-  ACCESS_TOKEN:         process.env.WHATSAPP_ACCESS_TOKEN        || '',
+  META_API_URL: process.env.WHATSAPP_API_URL || 'https://graph.facebook.com/v19.0',
+  PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
+  ACCESS_TOKEN: process.env.WHATSAPP_ACCESS_TOKEN || '',
 
   // ── Shared ────────────────────────────────────────────────────────────────
-  SUPPORT_NUMBER:       process.env.WHATSAPP_SUPPORT_NUMBER      || '+917090170855',
+  SUPPORT_NUMBER: process.env.WHATSAPP_SUPPORT_NUMBER || '+917090170855',
 };
 
 // In-memory throttle cache (30-second cooldown per destination number)
