@@ -99,13 +99,31 @@ function buildDirectWhatsAppLink(phone, messageText) {
  * @param {object} params
  * @returns {object} keyed placeholders dict { "0": val0, ... }
  */
-function _buildRfqTemplatePlaceholders({ rfqNumber, rfqTitle, deliveryDate, deliveryLocation, portalLink }) {
+function _buildRfqTemplatePlaceholders({ vendorName, contactPerson, rfqNumber, rfqTitle, deliveryDate, deliveryLocation, portalLink }) {
+  const currentTemplate = WHATSAPP_CONFIG.TEMPLATE_RFQ_INVITE || '';
+  const defaultFrontend = process.env.PUBLIC_FRONTEND_URL || 'https://procucev-enterprise-frontend.procucev-enterprise.workers.dev';
+  const resolvedPortalLink = portalLink || `${defaultFrontend}/vendor/quotation-form?rfq=${encodeURIComponent(rfqNumber || '')}`;
+
+  // 6-placeholder template: rfq_reminder_notification_v2
+  // {{1}} Vendor Name  {{2}} Title  {{3}} RFQ No  {{4}} Delivery Date  {{5}} Location  {{6}} Portal link
+  if (currentTemplate.includes('v2') || currentTemplate.includes('reminder')) {
+    return {
+      '0': String(vendorName || contactPerson || 'Partner'),
+      '1': String(rfqTitle || 'RFQ Requirement'),
+      '2': String(rfqNumber || 'N/A'),
+      '3': deliveryDate ? String(deliveryDate) : 'As per RFQ',
+      '4': deliveryLocation ? String(deliveryLocation) : 'India',
+      '5': resolvedPortalLink,
+    };
+  }
+
+  // Legacy 5-placeholder template: rfq_notification_for_sellers_for_rfq_feb_5
   return {
     '0': String(rfqNumber || 'N/A'),
     '1': deliveryDate ? String(deliveryDate) : 'N/A',
     '2': deliveryLocation ? String(deliveryLocation) : 'N/A',
     '3': rfqTitle ? String(rfqTitle) : 'N/A',
-    '4': portalLink || (process.env.PUBLIC_FRONTEND_URL || 'https://procucev.com'),
+    '4': resolvedPortalLink,
   };
 }
 
@@ -290,6 +308,8 @@ async function sendRFQInvitationWhatsApp({
   ) {
     try {
       const placeholders = _buildRfqTemplatePlaceholders({
+        vendorName,
+        contactPerson,
         rfqNumber,
         rfqTitle,
         deliveryDate,
