@@ -276,6 +276,40 @@ describe('emailGatewayService.processMessage', () => {
     expect(createSpy).not.toHaveBeenCalled();
   });
 
+  // Real incident: a bounce ("Undeliverable: ...") for a notification the
+  // gateway itself sent was treated as a genuine unauthorized sender, so the
+  // gateway replied with ANOTHER "unauthorized buyer" notification straight
+  // back to the bounce address — which bounced again, generating another
+  // copy of the same message, reprocessed (and re-notified) on every single
+  // poll cycle forever, since an unauthorized sender is deliberately never
+  // marked read. That eventually rate-limited the Gmail API account this ran
+  // under, blocking every other outbound send and poll.
+  test('skips a mail-system bounce/auto-reply without notifying it, breaking the bounce notification loop', async () => {
+    const bounceEml = [
+      'Return-Path: <>',
+      'Message-ID: <bounce-1@mrd-tw.us-east-1.eo.internal>',
+      'Date: Wed, 30 Sep 2026 17:50:25 +0000',
+      'From: Mail Delivery Subsystem <postmaster@hiredify-com-bounceio-net.bounceio.net>',
+      'To: srinu20252026@gmail.com',
+      'Subject: Undeliverable: Enterprise QUA - Buyer Registration Required',
+      'MIME-Version: 1.0',
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      'Your message could not be delivered.',
+      '',
+    ].join('\r\n');
+
+    const sendAckSpy = jest.spyOn(mailerService, 'sendUnauthorizedBuyerNotificationEmail');
+    const createSpy = jest.spyOn(storeService, 'createRFQ');
+
+    const result = await emailGatewayService.processMessage(Buffer.from(bounceEml, 'utf8'), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.SKIPPED_OUTBOUND);
+    // No reply of any kind — sending one is exactly what re-arms the loop.
+    expect(sendAckSpy).not.toHaveBeenCalled();
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
   test('refuses a message the parser cannot read', async () => {
     const result = await emailGatewayService.processMessage(Buffer.from(''), config());
     expect(result.status).toBe(INGESTION_OUTCOME.UNREADABLE);
