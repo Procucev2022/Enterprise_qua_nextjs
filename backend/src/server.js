@@ -3,6 +3,7 @@ const pool = require('./db/pool');
 const storeService = require('./services/storeService');
 const emailGatewayService = require('./services/emailGatewayService');
 const zohoReconciliationService = require('./services/zohoReconciliationService');
+const rfqChaserScheduler = require('./services/rfqChaserScheduler');
 const { logger } = require('./services/loggerService');
 
 const PORT = process.env.PORT || 4000;
@@ -80,6 +81,11 @@ function installCrashHandlers(proc = process) {
 async function bootstrapServer(port = PORT) {
   await reportDatabaseHealth();
   await storeService.hydrateFromDB();
+
+  // Re-arm any chaser jobs that were pending when the server last stopped.
+  // Runs after hydration so RFQ/vendor context is available if needed.
+  rfqChaserScheduler.recoverChasersOnBoot();
+
   const server = app.listen(port);
   // Started after the store is hydrated: ingesting a requisition needs the buyer
   // accounts loaded to attribute it to one. No-ops unless a mailbox is configured

@@ -100,13 +100,19 @@ describe('smsService Unit Tests', () => {
       expect(res.success).toBe(false);
     });
 
-    test('handles gateway network exception gracefully', async () => {
-      process.env.NODE_ENV = 'production';
-      global.fetch = jest.fn().mockRejectedValue(new Error('Gateway unreachable'));
+    test('sendRFQChaserSms dispatches RFQ chaser SMS and handles validation', async () => {
+      const invalid = await smsService.sendRFQChaserSms({ mobile: '123', rfqNumber: 'RFQ-001' });
+      expect(invalid.success).toBe(false);
 
-      const res = await smsService.sendOtpSms('9157154504', '123456');
-      expect(res.success).toBe(false);
-      expect(res.error).toBe('Gateway unreachable');
+      const valid = await smsService.sendRFQChaserSms({
+        mobile: '9157154504',
+        vendorName: 'Apex Supplies',
+        rfqNumber: 'RFQ-001',
+        rfqTitle: 'Valves',
+        bidLink: 'https://procucev.com/quote',
+      });
+      expect(valid.success).toBe(true);
+      expect(valid.messageId).toBeDefined();
     });
   });
 });

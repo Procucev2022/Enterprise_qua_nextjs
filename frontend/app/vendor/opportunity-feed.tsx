@@ -25,6 +25,7 @@ import {
   Sparkles,
   Package,
   ArrowRight,
+  MessageSquare,
 } from 'lucide-react';
 
 interface OpportunityFeedProps {
@@ -701,6 +702,9 @@ export default function OpportunityFeed({
                         <span className="font-bold text-amber-600 dark:text-amber-300 mono flex items-center gap-1">
                           <Clock size={11} /> {opp.deadline}
                         </span>
+                        <span className="inline-flex items-center gap-1 text-[9px] text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-1.5 py-0.25 rounded font-mono mt-1 border border-emerald-200 dark:border-emerald-800">
+                          ⚡ 24h SLA Active
+                        </span>
                       </div>
                       <div>
                         <span className="text-slate-400 dark:text-gray-500 block text-[10px]">Est. Value</span>
@@ -712,12 +716,12 @@ export default function OpportunityFeed({
                       </div>
                     </div>
 
-                    <div className="pt-2 flex items-center justify-between">
+                    <div className="pt-2 flex items-center justify-between flex-wrap gap-2">
                       <span className="text-[10px] text-slate-500 dark:text-gray-400">
                         Location: <span className="text-slate-800 dark:text-gray-300 font-medium">{opp.deliveryLocation.split('/')[0]}</span>
                       </span>
                       
-                      <div className="flex gap-2">
+                      <div className="flex gap-2 flex-wrap">
                         {/* View full RFQ details, same data the buyer/CM see */}
                         <button
                           onClick={() => router.push(`/vendor/rfq-details?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
@@ -735,6 +739,16 @@ export default function OpportunityFeed({
                         >
                           <Mail size={12} className="text-indigo-650 dark:text-indigo-400" />
                           <span>Download RFQ</span>
+                        </button>
+
+                        {/* Submit Quote Button */}
+                        <button
+                          onClick={() => router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
+                          className="btn btn-primary btn-xs p-1.5 flex items-center justify-center gap-1 font-bold shadow-sm"
+                          title="Submit Detailed Quotation"
+                        >
+                          <Send size={12} />
+                          <span>Submit Quote</span>
                         </button>
 
                         {isLocked && (
@@ -1055,12 +1069,13 @@ export default function OpportunityFeed({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-3 shrink-0 self-end sm:self-auto font-bold text-slate-900 dark:text-white">
+                    <div className="flex items-center gap-3 shrink-0 self-end sm:self-auto font-bold text-slate-900 dark:text-white flex-wrap">
                       <div className="text-right text-[11px] text-slate-500 dark:text-gray-450 hidden sm:block">
                         <span>Deadline: {opp.deadline}</span>
+                        <span className="block text-[9px] text-emerald-600 dark:text-emerald-400 font-mono">⚡ 24h SLA Active</span>
                       </div>
 
-                      <div className="flex gap-2">
+                      <div className="flex gap-2 flex-wrap">
                         {/* View full RFQ details, same data the buyer/CM see */}
                         <button
                           onClick={() => router.push(`/vendor/rfq-details?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
@@ -1078,6 +1093,16 @@ export default function OpportunityFeed({
                         >
                           <Mail size={12} className="text-indigo-650 dark:text-indigo-400" />
                           <span>Download RFQ</span>
+                        </button>
+
+                        {/* Submit Quote Button */}
+                        <button
+                          onClick={() => router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
+                          className="btn btn-primary btn-xs p-1.5 flex items-center justify-center gap-1 font-bold shadow-sm"
+                          title="Submit Detailed Quotation"
+                        >
+                          <Send size={12} />
+                          <span>Submit Quote</span>
                         </button>
 
                         {isLocked && (

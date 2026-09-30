@@ -82,6 +82,22 @@ function simulateChaserOutreach(rfq, vendor) {
     })
   );
 
+  // 4. 24-Hour Escalation Email Notice
+  actions.push(
+    generateAIFeedItem({
+      type: 'email',
+      title: '24h Scheduled Escalation Email Dispatched',
+      message: `Automated RFQ invitation and BOQ line-item schedule delivered to ${contactPerson} (${vendor.email || 'vendor@partner.com'}).`,
+      recipient: `${contactPerson} (${vendor.email || 'vendor@partner.com'})`,
+      rfqNumber,
+      buyerAccountId,
+      channelDetails: {
+        subject: `[ACTION REQUIRED] Request for Quotation: ${rfq.title || rfqNumber}`,
+        status: 'Delivered · 24h SLA quote turnaround counter active',
+      },
+    })
+  );
+
   return actions;
 }
 
