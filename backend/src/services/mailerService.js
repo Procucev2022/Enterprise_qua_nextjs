@@ -1051,6 +1051,74 @@ async function sendVendorIssueAcknowledgementEmail(toOrParams, maybeContext) {
   return deliverVendor(buildVendorIssueAcknowledgementEmail(toOrParams, maybeContext), 'vendor issue acknowledgment email');
 }
 
+// ── Vendor Category Mismatch: request update & exclude from shortlist ────────
+
+function buildVendorCategoryMismatchEmail(toOrParams, maybeContext) {
+  const { to, context } = normalizeToAndContext(toOrParams, maybeContext);
+  const {
+    rfq = {},
+    rfqNumber,
+    rfqTitle,
+    rfqCategory,
+    vendorName,
+    vendorCurrentCategory,
+    buyerAccountName,
+    buyerEmail,
+    cc,
+  } = context;
+
+  const targetRfqNumber = rfqNumber || rfq.rfqNumber || 'RFQ';
+  const targetTitle = rfqTitle || rfq.title || 'Procurement Requisition';
+  const targetCategory = rfqCategory || rfq.category || 'Requisition Category';
+  const currentCategory = vendorCurrentCategory || 'Not specified / general';
+  const subject = `Action Required: Category Mismatch for RFQ #${targetRfqNumber} – Please Update Business Profile`;
+
+  const profileUrl = `${vendorSignInUrl()}?redirect=${encodeURIComponent('/vendor/vendor-profile')}`;
+
+  const inner = `
+    <p>${vendorName ? `Dear <strong>${vendorName}</strong>,` : 'Hello,'}</p>
+    <p>You were identified as a potential supplier for RFQ <strong>#${targetRfqNumber}</strong> (${targetTitle})${buyerAccountName ? ` released by <strong>${buyerAccountName}</strong>` : ''}.</p>
+    
+    <div style="background: #fffbeb; border: 1px solid #f59e0b; color: #92400e; padding: 14px; border-radius: 6px; margin: 16px 0;">
+      <strong>⚠️ Category Mismatch Identified – Business Profile Update Required</strong><br/>
+      Our automated sourcing engine identified that your currently registered supplier category details do not cover the requested procurement category for this RFQ:
+      <table style="width: 100%; margin-top: 10px; font-size: 13px; border-collapse: collapse;">
+        <tr>
+          <td style="padding: 4px 8px; font-weight: bold; width: 40%; color: #78350f;">Requested RFQ Category:</td>
+          <td style="padding: 4px 8px; font-weight: bold; color: #1e3a8a;">${targetCategory}</td>
+        </tr>
+        <tr>
+          <td style="padding: 4px 8px; font-weight: bold; color: #78350f;">Your Registered Category:</td>
+          <td style="padding: 4px 8px; color: #b91c1c;">${currentCategory}</td>
+        </tr>
+      </table>
+    </div>
+
+    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 14px; margin: 16px 0; color: #334155; font-size: 13px;">
+      <strong>Shortlist Status:</strong><br/>
+      In accordance with enterprise procurement governance, <strong>your company has not been included in the RFQ vendor shortlist</strong>. To become eligible for this and future sourcing opportunities in this category, please update and verify your business details and category taxonomy profile.
+    </div>
+
+    <div style="text-align: center; margin: 24px 0;">
+      <a href="${profileUrl}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 14px;">Update Business & Category Details</a>
+    </div>
+    <p style="font-size: 12px; color: #64748b; text-align: center;">Once your category details are updated and verified, your profile will immediately become eligible for shortlisting.</p>
+  `;
+
+  return {
+    from: vendorFromAddress(),
+    to,
+    replyTo: vendorGatewayAddress(),
+    cc: cc || (buyerEmail ? buyerEmail : undefined),
+    subject,
+    html: wrapEmail('PROCUCEV ENTERPRISE', 'Vendor Category Update Required', inner),
+  };
+}
+
+async function sendVendorCategoryMismatchEmail(toOrParams, maybeContext) {
+  return deliverVendor(buildVendorCategoryMismatchEmail(toOrParams, maybeContext), 'vendor category mismatch notification email');
+}
+
 /**
  * Sends a requisition notification email when a buyer creates/ingests an RFQ.
  */
@@ -1509,6 +1577,8 @@ module.exports = {
   sendRfqFinalComparisonEmail,
   buildVendorIssueAcknowledgementEmail,
   sendVendorIssueAcknowledgementEmail,
+  buildVendorCategoryMismatchEmail,
+  sendVendorCategoryMismatchEmail,
   vendorUpgradeUrl,
   buildVendorCreditsExhaustedEmail,
   sendVendorCreditsExhaustedEmail,

@@ -701,3 +701,41 @@ export async function replyToRFQInquiry(
     return { success: false, error: err?.message || 'Network error submitting reply.' };
   }
 }
+
+export interface RequestVendorCategoryUpdatePayload {
+  vendorId?: string;
+  vendorEmail?: string;
+  vendorName?: string;
+  rfqCategory?: string;
+  rfqTitle?: string;
+  rfqNumber?: string;
+}
+
+/**
+ * Dispatch an email to a vendor requesting them to update their category details.
+ */
+export async function requestVendorCategoryUpdateEmail(
+  payload: RequestVendorCategoryUpdatePayload
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  const token = authClient.getToken();
+
+  try {
+    const res = await fetch('/api/rfqs/request-vendor-category-update', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const body = await res.json();
+    if (!res.ok || !body.success) {
+      return { success: false, error: body.error || 'Failed to dispatch category update email.' };
+    }
+    return { success: true, message: body.message };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error requesting category update.' };
+  }
+}
+

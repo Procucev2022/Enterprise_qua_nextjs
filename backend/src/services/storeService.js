@@ -1516,9 +1516,62 @@ class StoreService {
         whatsappStats: { total: 0, delivered: 0, read: 0, replied: 0 },
         smsStats: { total: 0, delivered: 0, clicked: 0 },
         autoChasingEnabled: true,
-        vendors: Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : [],
       },
     };
+
+    // Verify each vendor in assignedVendors against the RFQ's category signals.
+    // If a vendor does not match the category:
+    // 1. Exclude the vendor from the RFQ vendor shortlist (assignedVendors).
+    // 2. Dispatch an email to the vendor requesting them to update their category/business details.
+    // 3. Record an audit log.
+    const rfqCategorySignals = this._rfqCategorySignals(newRFQ);
+    const buyerEmail = requestingBuyerAccount ? requestingBuyerAccount.corporateEmail : rfqData.raisedByEmail || null;
+    if (rfqCategorySignals.length > 0 && Array.isArray(newRFQ.assignedVendors) && newRFQ.assignedVendors.length > 0) {
+      const shortlisted = [];
+      const mismatched = [];
+
+      for (const v of newRFQ.assignedVendors) {
+        const resolved = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
+        const hasCategory = resolved.majorCategory || (Array.isArray(resolved.minorCategories) && resolved.minorCategories.length > 0);
+        const isMatch = !hasCategory || rfqCategorySignals.some((sig) => this.vendorCoversCategory(resolved, sig));
+        if (isMatch) {
+          shortlisted.push(v);
+        } else {
+          mismatched.push(resolved);
+        }
+      }
+
+      newRFQ.assignedVendors = shortlisted;
+      if (newRFQ.followUpData) {
+        newRFQ.followUpData.totalInvited = shortlisted.length;
+        newRFQ.followUpData.vendors = shortlisted;
+      }
+
+      for (const vendor of mismatched) {
+        const vendorEmail = vendor.email || (vendor.id && vendor.id.includes('@') ? vendor.id : null);
+        if (vendorEmail) {
+          this._background(
+            mailerService.sendVendorCategoryMismatchEmail(vendorEmail, {
+              rfq: newRFQ,
+              rfqNumber,
+              rfqTitle: newRFQ.title,
+              rfqCategory: newRFQ.category || rfqCategorySignals[0] || 'Procurement Category',
+              vendorName: vendor.contactPerson || vendor.name,
+              vendorCurrentCategory: vendor.majorCategory || (Array.isArray(vendor.minorCategories) ? vendor.minorCategories.join(', ') : 'Not specified'),
+              buyerAccountName: newRFQ.buyerAccountName,
+              buyerEmail,
+              cc: buyerEmail || undefined,
+            }),
+            'Failed to email category mismatch notice to vendor'
+          );
+        }
+        this.addAuditLog({
+          userEmail: buyerEmail || SYSTEM_ACTOR_EMAIL,
+          action: `Vendor ${vendor.name || vendor.id} excluded from RFQ shortlist due to category mismatch. Category update request sent.`,
+          rfqNumber,
+        });
+      }
+    }
 
     // Category-based network-wide vendor invite — Version 2 (mode_2, "Hybrid
     // Sourcing Pool: Private Roster + AI Routing") ONLY. Every vendor whose
@@ -2123,6 +2176,9 @@ class StoreService {
 
     const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
     const newlyInvited = [];
+    const mismatchedVendors = [];
+    const signals = this._rfqCategorySignals(rfq);
+
     for (const id of Array.isArray(vendorIds) ? vendorIds : []) {
       let vendor = this.getVendorById(id);
       if (!vendor) {
@@ -2139,9 +2195,50 @@ class StoreService {
       }
       if (!vendor) continue;
       if (this._isInvitedVendor(vendor, rfq)) continue;
+
+      const hasCategory = vendor.majorCategory || (Array.isArray(vendor.minorCategories) && vendor.minorCategories.length > 0);
+      const isMatch = signals.length === 0 || !hasCategory || signals.some((c) => this.vendorCoversCategory(vendor, c));
+
+      if (!isMatch) {
+        mismatchedVendors.push(vendor);
+        continue;
+      }
+
       newlyInvited.push(vendor);
     }
-    if (newlyInvited.length === 0) return { updatedRFQ: rfq, invitedCount: 0 };
+
+    // For any mismatched vendor: dispatch update email to vendor (with buyer cc)
+    for (const vendor of mismatchedVendors) {
+      if (vendor.email) {
+        const buyerEmail = this.resolveBuyerEmailForRFQ(rfq);
+        this._background(
+          mailerService.sendVendorCategoryMismatchEmail(vendor.email, {
+            rfq,
+            rfqNumber: rfq.rfqNumber,
+            rfqTitle: rfq.title,
+            rfqCategory: rfq.category || signals[0] || 'Procurement Category',
+            vendorName: vendor.contactPerson || vendor.name,
+            vendorCurrentCategory: vendor.majorCategory || (Array.isArray(vendor.minorCategories) ? vendor.minorCategories.join(', ') : 'Not specified'),
+            buyerAccountName: rfq.buyerAccountName,
+            buyerEmail,
+            cc: buyerEmail || undefined,
+          }),
+          'Failed to email category mismatch notice to vendor'
+        );
+      }
+      this.addAuditLog({
+        userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
+        action: `Vendor ${vendor.name} (${vendor.id}) excluded from RFQ shortlist due to category mismatch. Profile update email sent.`,
+        rfqNumber: rfq.rfqNumber,
+      });
+    }
+
+    if (newlyInvited.length === 0) {
+      if (mismatchedVendors.length === 0) {
+        return { updatedRFQ: rfq, invitedCount: 0 };
+      }
+      return { updatedRFQ: rfq, invitedCount: 0, excludedCount: mismatchedVendors.length, excludedVendors: mismatchedVendors };
+    }
 
     const entries = newlyInvited.map((v) => ({
       id: v.id,
@@ -2254,7 +2351,63 @@ class StoreService {
 
     }
 
-    return { updatedRFQ, invitedCount: newlyInvited.length };
+    return {
+      updatedRFQ,
+      invitedCount: newlyInvited.length,
+      excludedCount: mismatchedVendors.length,
+      excludedVendors: mismatchedVendors,
+    };
+  }
+
+  /**
+   * Validates vendor candidates against RFQ category signals.
+   * Shortlists vendors matching the category, and excludes mismatched vendors
+   * while dispatching profile update request emails to them.
+   */
+  validateAndShortlistVendors(rfq, vendorList, buyerEmail) {
+    if (!rfq || !Array.isArray(vendorList)) return { shortlisted: [], excluded: [] };
+    const signals = this._rfqCategorySignals(rfq);
+    const shortlisted = [];
+    const excluded = [];
+
+    for (const v of vendorList) {
+      const vendorRecord = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
+      const hasCategory = vendorRecord.majorCategory || (Array.isArray(vendorRecord.minorCategories) && vendorRecord.minorCategories.length > 0);
+      const isMatch = signals.length === 0 || !hasCategory || signals.some((sig) => this.vendorCoversCategory(vendorRecord, sig));
+
+      if (isMatch) {
+        shortlisted.push(v);
+      } else {
+        excluded.push(vendorRecord);
+      }
+    }
+
+    for (const vendor of excluded) {
+      const vendorEmail = vendor.email || (vendor.id && vendor.id.includes('@') ? vendor.id : null);
+      if (vendorEmail) {
+        this._background(
+          mailerService.sendVendorCategoryMismatchEmail(vendorEmail, {
+            rfq,
+            rfqNumber: rfq.rfqNumber,
+            rfqTitle: rfq.title,
+            rfqCategory: rfq.category || signals[0] || 'Procurement Category',
+            vendorName: vendor.contactPerson || vendor.name,
+            vendorCurrentCategory: vendor.majorCategory || (Array.isArray(vendor.minorCategories) ? vendor.minorCategories.join(', ') : 'Not specified'),
+            buyerAccountName: rfq.buyerAccountName,
+            buyerEmail,
+            cc: buyerEmail || undefined,
+          }),
+          'Failed to email category mismatch notice to vendor'
+        );
+      }
+      this.addAuditLog({
+        userEmail: buyerEmail || SYSTEM_ACTOR_EMAIL,
+        action: `Vendor ${vendor.name || vendor.id} excluded from RFQ shortlist due to category mismatch. Category update request sent.`,
+        rfqNumber: rfq.rfqNumber,
+      });
+    }
+
+    return { shortlisted, excluded };
   }
 
   /** The RFQs one vendor may see, in the store's current (newest-first) order. */

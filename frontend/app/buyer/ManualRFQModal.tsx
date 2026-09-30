@@ -43,7 +43,7 @@ import {
 } from 'lucide-react';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { CURRENCY, SOURCING_MODES, entitledSourcingModes, RFQ_DOCUMENT_LIMITS } from '@/lib/constants';
-import { createRFQ, extractLineItemsFromDocument, fetchAllVendors, uploadRFQAttachment } from '@/lib/rfqClient';
+import { createRFQ, extractLineItemsFromDocument, fetchAllVendors, uploadRFQAttachment, requestVendorCategoryUpdateEmail } from '@/lib/rfqClient';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
 import {
   addManualRFQLineItem,
@@ -99,9 +99,10 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
   let remainingFreeRFQs = 5;
   let activeSubscription = 'free_trial';
   let activeBuyerAccount: any = null;
+  let store: ReturnType<typeof useApp> | null = null;
   try {
     // eslint-disable-next-line react-hooks/rules-of-hooks
-    const store = useApp();
+    store = useApp();
     buyerVendors = store?.buyerVendors || [];
     entitledModes = entitledSourcingModes(store?.activeBuyerAccount?.subscriptionPlan ?? store?.activeSubscription);
     remainingFreeRFQs = store?.activeBuyerAccount?.remainingFreeRFQs ?? store?.remainingFreeRFQs ?? 5;
@@ -145,6 +146,37 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
   const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
   const [vendorSearchQuery, setVendorSearchQuery] = useState<string>('');
   const [confirmationRfq, setConfirmationRfq] = useState<RFQItem | null>(null);
+  const [sendingCategoryEmailVendors, setSendingCategoryEmailVendors] = useState<string[]>([]);
+  const [sentCategoryEmailVendors, setSentCategoryEmailVendors] = useState<string[]>([]);
+
+  const handleSendCategoryUpdateEmail = async (vendor: any, signals: string[]) => {
+    const vendorKey = vendor?.id || vendor?.email;
+    if (!vendorKey) return;
+    setSendingCategoryEmailVendors((prev) => [...prev, vendorKey]);
+    try {
+      const res = await requestVendorCategoryUpdateEmail({
+        vendorId: vendor.id,
+        vendorEmail: vendor.email,
+        vendorName: vendor.name || vendor.contactPerson,
+        rfqCategory: signals.join(', ') || form.lineItems?.[0]?.majorCategory || 'Requested Category',
+        rfqTitle: form.title || 'Procurement Requisition',
+      });
+      if (res.success) {
+        setSentCategoryEmailVendors((prev) => [...prev, vendorKey]);
+        store?.showToast?.(
+          'Category Update Email Sent',
+          `An email has been sent to ${vendor.name || vendor.contactPerson || 'Vendor'} (${vendor.email}) requesting them to update their category to match this RFQ.`,
+          'success'
+        );
+      } else {
+        store?.showToast?.('Email Delivery Issue', res.error || 'Failed to dispatch email.', 'warning');
+      }
+    } catch (err: any) {
+      store?.showToast?.('Error', err?.message || 'Failed to send update email.', 'warning');
+    } finally {
+      setSendingCategoryEmailVendors((prev) => prev.filter((id) => id !== vendorKey));
+    }
+  };
   const [isAttaching, setIsAttaching] = useState(false);
   const [attachError, setAttachError] = useState<string | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
@@ -393,14 +425,31 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
       if (Array.isArray(buyerVendors)) {
         const allMyUploadedVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
         const { signals } = extractRfqCategorySignals(form);
-        const myUploadedVendors = signals.length > 0
-          ? allMyUploadedVendors.filter((v) => matchVendorAgainstSignals(v, signals).isMatch)
+        const candidatePool = selectedVendorIds.length > 0
+          ? allMyUploadedVendors.filter((v) => selectedVendorIds.includes(v.id))
           : allMyUploadedVendors;
-        const vendorsToAssign = selectedVendorIds.length > 0
-          ? myUploadedVendors.filter((v) => selectedVendorIds.includes(v.id))
-          : myUploadedVendors;
-        if (vendorsToAssign.length > 0) {
-          mode1AssignedVendors = vendorsToAssign.map((v) => ({
+
+        const matchingVendors: typeof candidatePool = [];
+        const mismatchedVendors: typeof candidatePool = [];
+
+        for (const v of candidatePool) {
+          if (signals.length === 0 || matchVendorAgainstSignals(v, signals).isMatch) {
+            matchingVendors.push(v);
+          } else {
+            mismatchedVendors.push(v);
+          }
+        }
+
+        if (mismatchedVendors.length > 0) {
+          store?.showToast?.(
+            'Shortlist Adjusted',
+            `${mismatchedVendors.length} vendor(s) have category mismatches and were excluded from RFQ shortlist. Update request email dispatched.`,
+            'info'
+          );
+        }
+
+        if (matchingVendors.length > 0) {
+          mode1AssignedVendors = matchingVendors.map((v) => ({
             id: v.id,
             name: v.name || 'Enterprise Vendor',
             email: v.email || null,
@@ -1208,6 +1257,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                             ? vendor.vendorSelectedCategories
                             : [];
 
+                          const matchResult = categoryFetchSignals.length > 0
+                            ? matchVendorAgainstSignals(vendor, categoryFetchSignals)
+                            : { isMatch: true };
+                          const isCategoryMismatch = categoryFetchSignals.length > 0 && !matchResult.isMatch;
+
                           return (
                             <div
                               key={vendor.id || idx}
@@ -1223,7 +1277,9 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                               }}
                               className={`rounded-lg border p-2.5 space-y-1.5 shadow-2xs cursor-pointer transition-all ${
                                 isSelected
-                                  ? 'border-emerald-400 dark:border-emerald-600 bg-emerald-50/30 dark:bg-emerald-950/20 ring-1 ring-emerald-400/40'
+                                  ? isCategoryMismatch
+                                    ? 'border-amber-400 dark:border-amber-600 bg-amber-50/30 dark:bg-amber-950/20 ring-1 ring-amber-400/40'
+                                    : 'border-emerald-400 dark:border-emerald-600 bg-emerald-50/30 dark:bg-emerald-950/20 ring-1 ring-emerald-400/40'
                                   : 'border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60'
                               }`}
                             >
@@ -1231,7 +1287,9 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                                 <div className="flex items-center gap-1.5 min-w-0">
                                   <div className={`w-3.5 h-3.5 rounded flex items-center justify-center shrink-0 border text-[9px] ${
                                     isSelected
-                                      ? 'bg-emerald-600 border-emerald-600 text-white'
+                                      ? isCategoryMismatch
+                                        ? 'bg-amber-600 border-amber-600 text-white'
+                                        : 'bg-emerald-600 border-emerald-600 text-white'
                                       : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800'
                                   }`}>
                                     {isSelected && <Check size={10} />}
@@ -1240,9 +1298,19 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                                     {idx + 1}. {vendor.name}
                                   </span>
                                 </div>
-                                <span className="badge badge-emerald text-[8px] font-bold shrink-0">
-                                  Preferred
-                                </span>
+                                {isCategoryMismatch ? (
+                                  <span
+                                    data-testid="category-mismatch-badge"
+                                    className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border border-amber-300 dark:border-amber-700 shrink-0"
+                                    title="Category mismatch with RFQ. Excluded from shortlist until updated."
+                                  >
+                                    ⚠️ Mismatch
+                                  </span>
+                                ) : (
+                                  <span className="badge badge-emerald text-[8px] font-bold shrink-0">
+                                    Preferred
+                                  </span>
+                                )}
                               </div>
 
                               <div className="space-y-0.5 text-[10px] text-slate-500 dark:text-gray-400 pl-5">
@@ -1293,6 +1361,37 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                                   </div>
                                 )}
                               </div>
+                              {isCategoryMismatch && (
+                                <div className="pt-1.5 border-t border-amber-200/60 dark:border-amber-900/40">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleSendCategoryUpdateEmail(vendor, categoryFetchSignals);
+                                    }}
+                                    disabled={sendingCategoryEmailVendors.includes(vendor.id || vendor.email)}
+                                    className="w-full py-1 px-2 rounded-md text-[9px] font-bold bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white flex items-center justify-center gap-1 transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+                                    title="Send email requesting vendor to update category"
+                                  >
+                                    {sendingCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
+                                      <>
+                                        <Loader2 size={10} className="animate-spin" />
+                                        <span>Sending Email...</span>
+                                      </>
+                                    ) : sentCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
+                                      <>
+                                        <CheckCircle2 size={10} />
+                                        <span>Update Email Sent ✓</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Mail size={10} />
+                                        <span>Send Email to Update Category</span>
+                                      </>
+                                    )}
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           );
                         })}

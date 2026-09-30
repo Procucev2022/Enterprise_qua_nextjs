@@ -258,10 +258,102 @@ async function inviteVendors(req, res, next) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
     const result = await storeService.inviteVendorsToRFQ(id, vendorIds, req.user && req.user.email);
-    logger.info(`Invited vendors to RFQ ${id}`, { id, invitedCount: result.invitedCount }, 'RFQ_CONTROLLER');
-    res.json({ success: true, data: result.updatedRFQ, invitedCount: result.invitedCount });
+    res.json({
+      success: true,
+      data: result.updatedRFQ,
+      invitedCount: result.invitedCount,
+      excludedCount: result.excludedCount || 0,
+      excludedVendors: result.excludedVendors || [],
+    });
   } catch (err) {
     logger.error(`Error inviting vendors to RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
+/**
+ * Validate vendor candidates against RFQ category before shortlisting.
+ * Excludes category mismatched vendors and dispatches profile update emails.
+ */
+async function validateVendorCategories(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { vendorIds } = req.body || {};
+    if (!Array.isArray(vendorIds) || vendorIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'vendorIds must be a non-empty array.' });
+    }
+    const rfq = await storeService.getRFQByIdAsync(id);
+    if (!rfq || !(await canAccessRfq(req, rfq))) {
+      return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+    }
+    const resolvedVendors = vendorIds.map((vid) => storeService.getVendorById(vid, 'all') || { id: vid }).filter(Boolean);
+    const result = storeService.validateAndShortlistVendors(rfq, resolvedVendors, req.user && req.user.email);
+    res.json({
+      success: true,
+      shortlisted: result.shortlisted,
+      excluded: result.excluded,
+      message: result.excluded.length > 0
+        ? `${result.excluded.length} vendor(s) have category mismatches and were excluded from shortlist. Profile update emails sent.`
+        : 'All vendors match RFQ category.',
+    });
+  } catch (err) {
+    logger.error(`Error validating vendor categories for RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
+/**
+ * Buyer-triggered email requesting a vendor to update their category details.
+ * Useful during RFQ creation when a vendor's registered category does not match
+ * the required category of the RFQ line items.
+ */
+async function requestVendorCategoryUpdate(req, res, next) {
+  try {
+    const { vendorId, vendorEmail, vendorName, rfqCategory, rfqTitle, rfqNumber } = req.body || {};
+    let vendor = vendorId ? storeService.getVendorById(vendorId, 'all') : null;
+    if (!vendor && vendorEmail) {
+      vendor = typeof storeService.getVendorByEmail === 'function' ? storeService.getVendorByEmail(vendorEmail) : null;
+    }
+    const targetEmail = vendor ? vendor.email : vendorEmail;
+    if (!targetEmail) {
+      return res.status(400).json({ success: false, error: 'Target vendor email or valid vendorId is required.' });
+    }
+
+    const buyerAccount = req.user && req.user.email ? await storeService.getBuyerAccountByEmail(req.user.email) : null;
+    const buyerName = buyerAccount ? (buyerAccount.companyName || buyerAccount.name) : (req.user ? req.user.name : 'Buyer');
+    const buyerEmail = buyerAccount ? buyerAccount.corporateEmail : (req.user ? req.user.email : null);
+
+    const targetVendorName = vendor ? (vendor.name || vendor.contactPerson) : (vendorName || 'Supplier');
+    const targetCurrentCategory = vendor ? (vendor.majorCategory || (Array.isArray(vendor.minorCategories) ? vendor.minorCategories.join(', ') : '')) : 'Not specified';
+
+    await mailerService.sendVendorCategoryMismatchEmail(targetEmail, {
+      rfqNumber: rfqNumber || 'NEW-RFQ',
+      rfqTitle: rfqTitle || 'Procurement Requisition',
+      rfqCategory: rfqCategory || 'Required Procurement Category',
+      vendorName: targetVendorName,
+      vendorCurrentCategory: targetCurrentCategory,
+      buyerAccountName: buyerName,
+      buyerEmail,
+    });
+
+    storeService.recordAuditEntry({
+      actor: req.user ? req.user.email : 'system',
+      actorType: 'buyer',
+      action: 'vendor_category_update_requested',
+      target: targetEmail,
+      details: {
+        vendorId: vendor ? vendor.id : vendorId,
+        rfqCategory,
+        vendorCurrentCategory: targetCurrentCategory,
+      },
+    });
+
+    return res.json({
+      success: true,
+      message: `Category update email sent to ${targetVendorName} (${targetEmail}).`,
+    });
+  } catch (err) {
+    logger.error('Failed to request vendor category update', err, 'RFQ_CONTROLLER');
     next(err);
   }
 }
@@ -1044,4 +1136,6 @@ module.exports = {
   approvePO,
   addInquiry,
   replyInquiry,
+  validateVendorCategories,
+  requestVendorCategoryUpdate,
 };

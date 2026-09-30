@@ -1475,6 +1475,41 @@ describe('mailerService', () => {
       });
     });
   });
+
+  describe('Vendor Category Mismatch Email', () => {
+    test('buildVendorCategoryMismatchEmail builds a structured notice with category details and link', () => {
+      const email = mailerService.buildVendorCategoryMismatchEmail('vendor@example.com', {
+        rfqNumber: 'RFQ-999',
+        rfqTitle: 'Heavy Machinery Steel Plates',
+        rfqCategory: 'Raw Material',
+        vendorName: 'Apex Industrial',
+        vendorCurrentCategory: 'IT Hardware',
+        buyerAccountName: 'Tata Steel Procurement',
+        buyerEmail: 'buyer@tatasteel.com',
+      });
+
+      expect(email.to).toBe('vendor@example.com');
+      expect(email.cc).toBe('buyer@tatasteel.com');
+      expect(email.subject).toContain('Action Required: Category Mismatch for RFQ #RFQ-999');
+      expect(email.html).toContain('Apex Industrial');
+      expect(email.html).toContain('Heavy Machinery Steel Plates');
+      expect(email.html).toContain('Raw Material');
+      expect(email.html).toContain('IT Hardware');
+      expect(email.html).toContain('your company has not been included in the RFQ vendor shortlist');
+      expect(email.html).toContain('vendor-profile');
+    });
+
+    test('sendVendorCategoryMismatchEmail delivers in test environment', async () => {
+      const res = await mailerService.sendVendorCategoryMismatchEmail('vendor@example.com', {
+        rfqNumber: 'RFQ-888',
+        rfqTitle: 'Bearings',
+        rfqCategory: 'Mechanical',
+        vendorName: 'Delta Bearings',
+      });
+
+      expect(res).toEqual({ sent: false, reason: 'test environment' });
+    });
+  });
 });
 
 

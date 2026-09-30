@@ -24,6 +24,8 @@ router.post('/extract', authenticate, rfqController.extractRFQFromDocument);
 // buyer can pull the mailbox now instead of waiting for the next interval.
 router.get('/email-gateway/status', authenticate, rfqController.getEmailGatewayStatus);
 router.post('/email-gateway/poll', authenticate, rfqController.pollEmailGateway);
+// Buyer-triggered request to email a vendor to update their category
+router.post('/request-vendor-category-update', authenticate, rfqController.requestVendorCategoryUpdate);
 // Registered before '/:id' so 'attachments' is not read as an RFQ identifier.
 // Both require a session: an attachment is commercial-in-confidence, so the
 // download must never be anonymous.
@@ -54,5 +56,6 @@ router.post(
   requireRole('category_manager', 'admin'),
   rfqController.inviteVendors
 );
+router.post('/:id/validate-vendor-categories', authenticate, rfqController.validateVendorCategories);
 
 module.exports = router;
