@@ -7,6 +7,7 @@ const SMS_GATEWAY_CONFIG = {
   PASS: process.env.SMS_GATEWAY_PASS || 'TzlzyMcFEZRF',
   SENDER: process.env.SMS_GATEWAY_SENDER || 'PROCUC',
   SMSGID: process.env.SMS_GATEWAY_SMSGID || 'TEST',
+  RFQ_SMSGID: process.env.SMS_GATEWAY_RFQ_SMSGID || process.env.SMS_GATEWAY_SMSGID || 'TEST',
 };
 
 // In-memory cooldown throttle cache to prevent infinite / spam loop SMS dispatches to the same phone number
@@ -164,7 +165,9 @@ async function sendRFQChaserSms({ mobile, vendorName, rfqNumber, rfqTitle, bidLi
     };
   }
 
-  const message = `[PRCU-RFQ] RFQ Alert ${rfqNumber}: You are invited to bid for "${rfqTitle || rfqNumber}". Submit quote: ${bidLink || 'https://procucev.com'} - Team Procucev.`;
+  const defaultFrontend = process.env.PUBLIC_FRONTEND_URL || 'https://procucev-enterprise-frontend.procucev-enterprise.workers.dev';
+  const resolvedBidLink = bidLink || `${defaultFrontend}/vendor/quotation-form?rfq=${encodeURIComponent(rfqNumber)}`;
+  const message = `[PRCU-RFQ] RFQ Alert ${rfqNumber}: You are invited to bid for ${rfqTitle || rfqNumber}. Submit quote: ${resolvedBidLink} - Team Procucev.`;
 
   const payload = {
     user: SMS_GATEWAY_CONFIG.USER,
@@ -174,7 +177,7 @@ async function sendRFQChaserSms({ mobile, vendorName, rfqNumber, rfqTitle, bidLi
         to: `91${formattedNumber}`,
         from: SMS_GATEWAY_CONFIG.SENDER,
         smstext: message,
-        smsgid: SMS_GATEWAY_CONFIG.SMSGID,
+        smsgid: SMS_GATEWAY_CONFIG.RFQ_SMSGID,
       },
     ],
   };

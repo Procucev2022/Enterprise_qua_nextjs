@@ -70,7 +70,7 @@ function formatWhatsAppNumber(phone) {
  * @returns {string}
  */
 function generateOneClickBidUrl(rfqNumber, vendorEmail) {
-  const base = process.env.PUBLIC_FRONTEND_URL || 'https://procucev.com';
+  const base = process.env.PUBLIC_FRONTEND_URL || 'https://procucev-enterprise-frontend.procucev-enterprise.workers.dev';
   const emailParam = vendorEmail ? `&email=${encodeURIComponent(vendorEmail)}` : '';
   return `${base}/vendor/quotation-form?rfq=${encodeURIComponent(rfqNumber)}&source=wa_1click${emailParam}`;
 }
