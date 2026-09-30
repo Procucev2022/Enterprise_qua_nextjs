@@ -57,8 +57,21 @@ const { OTP_LENGTH, OTP_EXPIRY_MS, OTP_KEY_SEPARATOR } = IDENTITY_OTP_CONFIG;
  * Keying on the pair rather than the email alone means a code issued for one
  * registered mobile number cannot be replayed against a different one.
  */
-function buildOtpKey(normalizedEmail, mobile) {
-  return `${identityQueries.normalizePhone(mobile)}${OTP_KEY_SEPARATOR}${normalizedEmail}`;
+function buildOtpKey(normalizedEmail, mobile, channel = '') {
+  let cleanMobile = String(mobile || '').trim();
+  let ch = channel;
+  if (!ch) {
+    if (cleanMobile.endsWith('_email')) {
+      ch = 'email';
+      cleanMobile = cleanMobile.slice(0, -6);
+    } else if (cleanMobile.endsWith('_mobile')) {
+      ch = 'mobile';
+      cleanMobile = cleanMobile.slice(0, -7);
+    }
+  }
+  const normPhone = identityQueries.normalizePhone(cleanMobile);
+  const suffix = ch ? `_${ch}` : '';
+  return `${normPhone}${suffix}${OTP_KEY_SEPARATOR}${normalizedEmail}`;
 }
 
 /**
@@ -688,6 +701,7 @@ async function registerUser(payload, ipAddress) {
     // Both passed -> delete stored registration OTPs
     if (storedEmailOtp) await authSessionQueries.deleteOtp(emailOtpKey);
     if (storedMobileOtp) await authSessionQueries.deleteOtp(mobileOtpKey);
+    await authSessionQueries.deleteOtp(buildOtpKey(normalizedEmail, submittedMobile));
   } else {
     // Fallback single OTP verification
     const singleOtpKey = buildOtpKey(normalizedEmail, submittedMobile);

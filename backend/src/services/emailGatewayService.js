@@ -598,6 +598,18 @@ async function resolveVendorFromEmail(fromAddress, targetRfq = null) {
   return null;
 }
 
+function isVendorIssueOrQueryMessage(message) {
+  if (!message) return false;
+  const text = [message.bodyText, message.textBody, message.text, message.subject].filter(Boolean).join('\n').toLowerCase();
+  const issueKeywords = [
+    /\b(issue|query|clarification|doubt|question|enquiry|inquiry|concern|problem)\b/i,
+    /\b(unable to quote|cannot quote|cannot provide|drawing missing|specification unclear|datasheet missing|specs missing)\b/i,
+    /\b(please clarify|could you explain|please confirm|request for clarification|need more info|more details required)\b/i,
+    /\b(delivery location unclear|payment terms query|not able to bid|technical question)\b/i,
+  ];
+  return issueKeywords.some((pattern) => pattern.test(text));
+}
+
 /**
  * Ingests a vendor quotation received via email into the referenced RFQ.
  */
@@ -662,6 +674,58 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
 
   const rfqItems = targetRfq.extractedEntities || targetRfq.lineItems || [];
   const rfqQty = rfqItems.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0) || 1;
+
+  const emailText = [message.bodyText, message.textBody, message.text, message.subject].filter(Boolean).join('\n');
+  const isIssueOrQuery = isVendorIssueOrQueryMessage(message) || Boolean(extraction && (extraction.isQuery || extraction.hasIssue || extraction.isInquiry));
+
+  if (isIssueOrQuery) {
+    logger.warn(
+      `Vendor reply from ${vendorRecord.name} for RFQ ${targetRfq.rfqNumber} identified as an issue/query. Failing quotation creation and withholding bid generation.`,
+      { rfqNumber: targetRfq.rfqNumber, vendorId: vendorRecord.id, fromAddress: message.fromAddress },
+      'EMAIL_GATEWAY'
+    );
+
+    storeService.addAuditLog({
+      userEmail: message.fromAddress || SYSTEM_ACTOR_EMAIL,
+      action: `Quotation creation failed for ${targetRfq.rfqNumber} from ${vendorRecord.name}: Reply identified as vendor issue/query. Bid not generated.`,
+      rfqNumber: targetRfq.rfqNumber,
+    });
+
+    if (typeof storeService.addInquiryToRFQ === 'function') {
+      try {
+        storeService.addInquiryToRFQ(targetRfq.id, {
+          message: emailText,
+          vendorName: vendorRecord.name,
+          vendorEmail: message.fromAddress,
+          vendorId: vendorRecord.id,
+        });
+      } catch (inqErr) {
+        logger.error('Failed to log vendor inquiry to RFQ', inqErr, 'EMAIL_GATEWAY');
+      }
+    }
+
+    try {
+      await mailerService.sendVendorIssueAcknowledgementEmail(message.fromAddress, {
+        rfq: targetRfq,
+        rfqNumber: targetRfq.rfqNumber,
+        rfqTitle: targetRfq.title,
+        vendorName: vendorRecord.name,
+        issueMessage: emailText.slice(0, 500),
+        reason: 'Quotation creation has failed and no bid was generated because your email contains an issue or clarification query regarding the RFQ.',
+        cc: ccList.length > 0 ? ccList.join(', ') : undefined,
+      });
+    } catch (mailErr) {
+      logger.error('Failed to send vendor issue acknowledgment email', mailErr, 'EMAIL_GATEWAY');
+    }
+
+    return {
+      status: INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED,
+      detail: `Quotation creation failed for RFQ ${targetRfq.rfqNumber} from ${vendorRecord.name}: Vendor replied with an issue or query. Quotation has not been generated and buyer has been notified in CC.`,
+      message,
+      rfq: targetRfq,
+      isIssueOrQuery: true,
+    };
+  }
 
   let unitPriceNum = Number(extraction.unitPrice);
   if ((!extraction.unitPrice || isNaN(unitPriceNum) || unitPriceNum <= 0) && Number(extraction.totalPrice) > 0) {

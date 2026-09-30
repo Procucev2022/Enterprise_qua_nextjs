@@ -99,12 +99,44 @@ async function canAccessRfq(req, rfq) {
   return !!scope.buyerAccountId && rfq.buyerAccountId === scope.buyerAccountId;
 }
 
+/**
+ * Received quotes shall remain hidden from the buyer for 48 hours after RFQ release.
+ * After 48 hours or upon RFQ closure, quotes become visible.
+ */
+function applyQuotesVisibility(rfq, role) {
+  if (!rfq) return rfq;
+  if (role !== 'buyer') return rfq;
+
+  const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
+  const createdAtMs = rfq.createdAt ? new Date(rfq.createdAt).getTime() : 0;
+  const isWithin48h = createdAtMs > 0 && Date.now() - createdAtMs < FORTY_EIGHT_HOURS_MS;
+  const isClosed = rfq.status === 'Closed';
+
+  if (isWithin48h && !isClosed) {
+    const unhideAt = new Date(createdAtMs + FORTY_EIGHT_HOURS_MS).toISOString();
+    return {
+      ...rfq,
+      quotes: [],
+      quotesCount: 0,
+      quotesHidden: true,
+      quotesHiddenUntil: unhideAt,
+      quotesHiddenReason: 'Received quotes remain hidden from the buyer for 48 hours after release to preserve bidding integrity.',
+    };
+  }
+
+  return {
+    ...rfq,
+    quotesHidden: false,
+  };
+}
+
 /** Apply a read scope to the full RFQ list. */
 function scopedRfqList(scope) {
   const all = storeService.getRFQs();
   if (!scope.restricted) return all;
   if (scope.role === 'vendor') return all.filter((rfq) => storeService.vendorCoversRFQ(scope.vendor, rfq));
-  return all.filter((rfq) => !!scope.buyerAccountId && rfq.buyerAccountId === scope.buyerAccountId);
+  const buyerRfqs = all.filter((rfq) => !!scope.buyerAccountId && rfq.buyerAccountId === scope.buyerAccountId);
+  return buyerRfqs.map((rfq) => applyQuotesVisibility(rfq, scope.role));
 }
 
 // Fields a buyer's own edit may touch. Deliberately a whitelist: id,
@@ -250,7 +282,8 @@ async function getRFQById(req, res, next) {
       logger.warn(`RFQ not found for ID: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
-    res.json({ success: true, data: rfq });
+    const role = req.user && req.user.role;
+    res.json({ success: true, data: applyQuotesVisibility(rfq, role) });
   } catch (err) {
     logger.error(`Error fetching RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
     next(err);
@@ -933,6 +966,22 @@ async function addInquiry(req, res, next) {
 
     if (!result) {
       return res.status(404).json({ success: false, error: 'Failed to add inquiry to RFQ.' });
+    }
+
+    // Dispatch acknowledgment email to vendor with buyer in CC
+    const recipientVendorEmail = vendorEmail || (req.user && req.user.email);
+    const buyerEmail = storeService.resolveBuyerEmailForRFQ(rfq);
+    if (recipientVendorEmail) {
+      mailerService
+        .sendVendorIssueAcknowledgementEmail(recipientVendorEmail, {
+          rfq,
+          rfqNumber: rfq.rfqNumber,
+          rfqTitle: rfq.title,
+          vendorName: vendorName || (req.user && req.user.name) || 'Vendor Partner',
+          issueMessage: message.trim(),
+          cc: buyerEmail || undefined,
+        })
+        .catch((err) => logger.error('Failed to send vendor inquiry acknowledgment email', err, 'RFQ_CONTROLLER'));
     }
 
     res.status(201).json({ success: true, data: result.inquiry, rfq: result.updatedRfq });

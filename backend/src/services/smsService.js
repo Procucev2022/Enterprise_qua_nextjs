@@ -229,11 +229,111 @@ async function sendRFQChaserSms({ mobile, vendorName, rfqNumber, rfqTitle, bidLi
   }
 }
 
+/**
+ * Dispatches an SMS acknowledgment regarding quotation comparison to the buyer upon RFQ closure
+ * @param {Object} params
+ * @param {string} params.mobile
+ * @param {string} params.buyerName
+ * @param {string} params.rfqNumber
+ * @param {number} [params.quotesCount=0]
+ * @param {string} [params.matrixLink]
+ * @returns {Promise<{ success: boolean, messageId?: string, throttled?: boolean, error?: string }>}
+ */
+async function sendBuyerComparisonSms({ mobile, buyerName, rfqNumber, quotesCount = 0, matrixLink }) {
+  const formattedNumber = formatMobileNumber(mobile);
+  if (!formattedNumber || formattedNumber.length !== 10) {
+    logger.warn('SMS dispatch skipped: Invalid buyer mobile number format', { mobile }, 'SMS_SERVICE');
+    return { success: false, error: 'Invalid mobile number format' };
+  }
+
+  const now = Date.now();
+  const lastSent = recentSmsDispatches.get(formattedNumber) || 0;
+  if (process.env.NODE_ENV !== 'test' && now - lastSent < SMS_THROTTLE_WINDOW_MS) {
+    return {
+      success: true,
+      throttled: true,
+      messageId: 'sms-throttled',
+    };
+  }
+  recentSmsDispatches.set(formattedNumber, now);
+
+  if (process.env.NODE_ENV === 'test') {
+    return {
+      success: true,
+      messageId: 'mock-test-sms-buyer-comparison',
+    };
+  }
+
+  const defaultFrontend = process.env.PUBLIC_FRONTEND_URL || 'https://procucev-enterprise-frontend.procucev-enterprise.workers.dev';
+  const resolvedLink = matrixLink || `${defaultFrontend}/buyer/quote-matrix?rfq=${encodeURIComponent(rfqNumber)}`;
+  const message = `[PRCU-RFQ] RFQ ${rfqNumber} closed. Quotation comparison matrix is ready (${quotesCount} quotes). Review: ${resolvedLink} - Team Procucev.`;
+
+  const payload = {
+    user: SMS_GATEWAY_CONFIG.USER,
+    pass: SMS_GATEWAY_CONFIG.PASS,
+    smstosend: [
+      {
+        to: `91${formattedNumber}`,
+        from: SMS_GATEWAY_CONFIG.SENDER,
+        smstext: message,
+        smsgid: SMS_GATEWAY_CONFIG.RFQ_SMSGID,
+      },
+    ],
+  };
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+
+    const res = await fetch(SMS_GATEWAY_CONFIG.URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/plain, */*',
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    const responseText = await res.text();
+    const messageId = `sms-comp-${Date.now()}`;
+
+    if (res.ok) {
+      logger.info(
+        `Buyer quotation comparison SMS dispatched to 91${formattedNumber} for ${rfqNumber}`,
+        { status: res.status, response: responseText, rfqNumber },
+        'SMS_SERVICE'
+      );
+    } else {
+      logger.warn(
+        `Buyer quotation comparison SMS gateway error for 91${formattedNumber} — HTTP ${res.status}`,
+        { status: res.status, response: responseText, rfqNumber },
+        'SMS_SERVICE'
+      );
+    }
+
+    return {
+      success: res.ok,
+      messageId,
+      response: responseText,
+    };
+  } catch (err) {
+    logger.error(
+      `Failed to dispatch buyer comparison SMS to 91${formattedNumber} for ${rfqNumber}`,
+      err,
+      'SMS_SERVICE'
+    );
+    return { success: false, error: err.message };
+  }
+}
+
 module.exports = {
   SMS_GATEWAY_CONFIG,
   formatMobileNumber,
   sendOtpSms,
   sendRFQChaserSms,
+  sendBuyerComparisonSms,
   clearSmsThrottleCache,
   clearSmsThrottleForPhone,
 };

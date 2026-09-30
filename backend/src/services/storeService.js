@@ -952,30 +952,7 @@ class StoreService {
     return false;
   }
 
-  /**
-   * Resolve a buyer account record by email or organization ID.
-   */
-  async getBuyerAccountByEmail(email) {
-    if (!email) return null;
-    const normalized = String(email).trim().toLowerCase();
-    const inMem = Array.isArray(this.buyerAccounts)
-      ? this.buyerAccounts.find(
-          (b) =>
-            String(b.corporateEmail || b.email || '').toLowerCase() === normalized ||
-            String(b.id || '').toLowerCase() === normalized
-        )
-      : null;
-    if (inMem) return inMem;
-    if (pool.hasStorage()) {
-      try {
-        const fromDb = await domainQueries.getBuyerAccountByEmailFromDB(normalized);
-        if (fromDb) return fromDb;
-      } catch {
-        // Ignored
-      }
-    }
-    return null;
-  }
+
 
   /**
    * Check whether a vendor is eligible to submit a quotation for an RFQ.
@@ -1341,7 +1318,38 @@ class StoreService {
   // ==========================================
   // 3. RFQS
   // ==========================================
+  /**
+   * Checks all open RFQs that have reached 48 hours after release and officially closes them,
+   * triggering final comparison evaluation email and SMS acknowledgment to the buyer.
+   */
+  checkAndClose48HourRFQs() {
+    const now = Date.now();
+    const fortyEightHoursMs = 48 * 60 * 60 * 1000;
+    const closedList = [];
+
+    for (let i = 0; i < this.rfqs.length; i++) {
+      const rfq = this.rfqs[i];
+      if (rfq && rfq.status !== 'Closed') {
+        const createdMs = rfq.createdAt ? new Date(rfq.createdAt).getTime() : 0;
+        if (createdMs > 0 && now - createdMs >= fortyEightHoursMs) {
+          const updated = {
+            ...rfq,
+            status: 'Closed',
+            closedAt: new Date(now).toISOString(),
+            closedReason: 'Official closure 48 hours after release',
+          };
+          this.rfqs[i] = updated;
+          this._persistRFQ(updated);
+          this.notifyOfRFQClosure(updated);
+          closedList.push(updated);
+        }
+      }
+    }
+    return closedList;
+  }
+
   getRFQs() {
+    this.checkAndClose48HourRFQs();
     return this.rfqs.map((r) => (r.quotes ? { ...r, quotes: evaluateQuotes(r.quotes) } : r));
   }
 
@@ -2372,6 +2380,19 @@ class StoreService {
     });
     this.notifications.unshift(notification);
     this._persistNotification(notification);
+
+    // Dispatches final comparison email to the buyer
+    const buyerEmail = this.resolveBuyerEmailForRFQ(rfq);
+    if (buyerEmail) {
+      mailerService
+        .sendRfqFinalComparisonEmail(buyerEmail, {
+          rfq,
+          quotes: rfq.quotes || [],
+          recipientName: rfq.buyerAccountName || rfq.buyerName,
+        })
+        .catch((err) => logger.error(`Failed to send RFQ final comparison email for ${rfq.rfqNumber}`, err, 'STORE_SERVICE'));
+    }
+
     return notification;
   }
 
@@ -2388,6 +2409,21 @@ class StoreService {
       });
       this.notifications.unshift(buyerNotif);
       this._persistNotification(buyerNotif);
+
+      // Dispatches final comparison & closure result email to the buyer
+      const buyerEmail = this.resolveBuyerEmailForRFQ(rfq);
+      if (buyerEmail) {
+        mailerService
+          .sendRfqFinalComparisonEmail(buyerEmail, {
+            rfq,
+            quotes: rfq.quotes || [],
+            recipientName: rfq.buyerAccountName || rfq.buyerName,
+          })
+          .catch((err) => logger.error(`Failed to send RFQ final closure comparison email for ${rfq.rfqNumber}`, err, 'STORE_SERVICE'));
+      }
+
+      // Dispatches SMS acknowledgment regarding quotation comparison to the buyer within 10 minutes
+      this.scheduleBuyerComparisonSms(rfq, 0);
     }
     const matches = this.vendors.filter((v) => this.vendorCoversRFQ(v, rfq));
     if (matches.length > 0) {
@@ -2404,6 +2440,35 @@ class StoreService {
       );
       this.notifications.unshift(...vendorNotifs);
       this._persistNotificationBatch(vendorNotifs);
+    }
+  }
+
+  /**
+   * Schedules an SMS acknowledgment to the buyer regarding quotation comparison upon RFQ closure within 10 minutes.
+   */
+  async scheduleBuyerComparisonSms(rfq, delayMs = 0) {
+    const effectiveDelay = Math.min(Math.max(0, delayMs), 10 * 60 * 1000);
+    const trigger = async () => {
+      try {
+        const buyer = rfq.buyerEmail ? await this.getBuyerAccountByEmail(rfq.buyerEmail) : null;
+        const mobile = rfq.buyerPhone || (buyer && (buyer.phone || buyer.mobile || buyer.contactPhone));
+        if (mobile) {
+          await smsService.sendBuyerComparisonSms({
+            mobile,
+            buyerName: rfq.buyerAccountName || rfq.buyerName,
+            rfqNumber: rfq.rfqNumber,
+            quotesCount: rfq.quotesCount || (rfq.quotes ? rfq.quotes.length : 0),
+          });
+        }
+      } catch (err) {
+        logger.error(`Error sending buyer comparison SMS for ${rfq.rfqNumber}`, err, 'STORE_SERVICE');
+      }
+    };
+
+    if (effectiveDelay > 0 && process.env.NODE_ENV !== 'test') {
+      setTimeout(trigger, effectiveDelay);
+    } else {
+      await trigger();
     }
   }
 
