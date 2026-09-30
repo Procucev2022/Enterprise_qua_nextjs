@@ -643,8 +643,8 @@ describe('LoginPage', () => {
       completeDualOtp('123', '456');
 
       expect(showToast).toHaveBeenCalledWith(
-        'Incomplete OTPs',
-        'Please enter the 6-digit Email OTP or Mobile OTP.',
+        'Both OTPs Required',
+        'Please enter both the 6-digit Email OTP and the 6-digit Mobile SMS OTP.',
         'warning'
       );
       expect(authClient.register).not.toHaveBeenCalled();

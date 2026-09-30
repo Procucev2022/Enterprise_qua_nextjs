@@ -729,6 +729,26 @@ const VENDOR_EMAIL_GATEWAY_CONFIG = {
   DEFAULT_FROM_NAME: 'Procucev Enterprise',
 };
 
+// ==============================================================================
+// RFQ MULTI-CHANNEL CHASER TIMING (Version 1 / mode_1 flow)
+// ==============================================================================
+// Controls when each channel fires after an RFQ is created or a vendor is
+// invited. Stored here so tests and the scheduler share a single source of truth
+// and the delays can be tuned without touching service logic.
+//
+//  Channel      Delay    Rationale
+//  ---------    -----    -----------------------------------------
+//  WhatsApp       0 ms   Immediate — highest open-rate, real-time
+//  SMS          5 min    Short follow-up nudge for vendors who miss WhatsApp
+//  Email         24 h    Formal follow-up with full RFQ details for records
+//
+// Override via environment variables for testing / ops without a code deploy.
+const CHASER_DELAYS = {
+  WHATSAPP_MS:  Number(process.env.CHASER_WHATSAPP_DELAY_MS  ?? 0),
+  SMS_MS:       Number(process.env.CHASER_SMS_DELAY_MS       ?? 5 * 60 * 1000),   // 5 min
+  EMAIL_MS:     Number(process.env.CHASER_EMAIL_DELAY_MS     ?? 24 * 60 * 60 * 1000), // 24 h
+};
+
 /**
  * Mapping between buyer subscription plans and their corresponding RFQ sourcing / version mode.
  * - version_1: mode_1 (Version 1: Client Roster Sourcing Plan)
@@ -1416,6 +1436,7 @@ module.exports = {
   validatePayload,
   BUYER_SUBSCRIPTION_TO_SOURCING_MODE,
   resolveBuyerSourcingMode,
+  CHASER_DELAYS,
 };
 
 

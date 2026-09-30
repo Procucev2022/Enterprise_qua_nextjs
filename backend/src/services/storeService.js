@@ -13,11 +13,19 @@ const identityQueries = require('../db/identityQueries');
 const { getWaitUntil } = require('../db/d1Bridge');
 const { createAuditEntry, verifyAuditTrail } = require('./auditService');
 const { evaluateQuotes, calculate360Evaluation, calculateRevisedRating } = require('./evaluationService');
-const { simulateChaserOutreach } = require('./aiChaserService');
+const { simulateChaserOutreach, generateAIFeedItem } = require('./aiChaserService');
 // Called through the namespace so tests can stub the senders without rewiring
 // storeService; every send is fire-and-forget and no-ops under test / when SMTP
 // is unconfigured.
 const mailerService = require('./mailerService');
+// Real multi-channel outreach services — both are fire-and-forget and
+// no-op under test (NODE_ENV === 'test') or when credentials are not
+// configured, matching the same pattern mailerService uses above.
+const whatsAppService = require('./whatsAppService');
+const smsService = require('./smsService');
+// Timed chaser scheduler — schedules WhatsApp (immediate), SMS (+5 min),
+// and reminder email (+24 h) for every vendor on an RFQ.
+const rfqChaserScheduler = require('./rfqChaserScheduler');
 const { logger } = require('./loggerService');
 
 // Bound on the vendors table read at boot hydration (see hydrateFromDB) —
@@ -43,6 +51,22 @@ class StoreService {
     //
     // An empty collection now means exactly that — no rows — and is reported as
     // such rather than back-filled.
+    this.buyerAccounts = [];
+    this.activeBuyerAccount = null;
+    this.vendors = [];
+    this.rfqs = [];
+    this.evaluations = [];
+    this.auditLogs = [];
+    this.aiFeed = [];
+    this.notifications = [];
+    this.vendorCatalogue = [];
+    this.paymentLinks = [];
+    this.systemConfig = JSON.parse(JSON.stringify(INITIAL_SYSTEM_CONFIG));
+    this.azureHealth = JSON.parse(JSON.stringify(INITIAL_AZURE_HEALTH));
+    this.isHydratedFromDB = false;
+  }
+
+  reset() {
     this.buyerAccounts = [];
     this.activeBuyerAccount = null;
     this.vendors = [];
@@ -929,6 +953,31 @@ class StoreService {
   }
 
   /**
+   * Resolve a buyer account record by email or organization ID.
+   */
+  async getBuyerAccountByEmail(email) {
+    if (!email) return null;
+    const normalized = String(email).trim().toLowerCase();
+    const inMem = Array.isArray(this.buyerAccounts)
+      ? this.buyerAccounts.find(
+          (b) =>
+            String(b.corporateEmail || b.email || '').toLowerCase() === normalized ||
+            String(b.id || '').toLowerCase() === normalized
+        )
+      : null;
+    if (inMem) return inMem;
+    if (pool.hasStorage()) {
+      try {
+        const fromDb = await domainQueries.getBuyerAccountByEmailFromDB(normalized);
+        if (fromDb) return fromDb;
+      } catch {
+        // Ignored
+      }
+    }
+    return null;
+  }
+
+  /**
    * Check whether a vendor is eligible to submit a quotation for an RFQ.
    *
    * Initial allowance: Each vendor starts with 5 free quotation credits.
@@ -1552,10 +1601,41 @@ class StoreService {
       });
     }
 
+    // System event for RFQ creation
+    this.addAIFeedItem(
+      generateAIFeedItem({
+        type: 'ingestion',
+        title: `Autonomous Sourcing Engine Initialized: ${rfqNumber}`,
+        message: `RFQ ${rfqNumber} created with ${(newRFQ.extractedEntities || []).length} line items. Multi-channel AI chasers dispatched across ${(newRFQ.assignedVendors || []).length} vendor(s).`,
+        recipient: 'Procurement AI Orchestrator',
+        rfqNumber,
+        buyerAccountId: newRFQ.buyerAccountId,
+      })
+    );
+
     // In-app alert to every vendor whose category covers this RFQ, and an email
     // to the top matched vendors (same category, ranked by pincode + tier).
     this.notifyVendorsOfNewRFQ(newRFQ);
     this.emailRFQToMatchedVendors(newRFQ);
+
+    // Timed multi-channel chaser sequence for every assigned vendor:
+    //   • WhatsApp — immediate
+    //   • SMS      — +5 minutes
+    //   • Email    — +24 hours (reminder alongside the upfront invite above)
+    // Only fires for mode_1 and mode_2 (mode_3 has no auto-assigned vendors
+    // at creation time; inviteVendorsToRFQ schedules chasers when they are
+    // manually added later).
+    if (
+      (newRFQ.sourcingMode === 'mode_1' || newRFQ.sourcingMode === 'mode_2') &&
+      Array.isArray(newRFQ.assignedVendors) &&
+      newRFQ.assignedVendors.length > 0
+    ) {
+      rfqChaserScheduler.scheduleRFQChasers(
+        newRFQ,
+        newRFQ.assignedVendors,
+        (vendor) => this.checkVendorQuotationEligibility(vendor)
+      );
+    }
 
     return newRFQ;
   }
@@ -1636,7 +1716,12 @@ class StoreService {
     const beforeLen = this.rfqs.length;
     this.rfqs = this.rfqs.filter((r) => r.id !== id && r.rfqNumber !== id);
     const removed = this.rfqs.length < beforeLen;
-    if (removed) this._removeRFQ(id);
+    if (removed) {
+      this._removeRFQ(id);
+      // Cancel any pending WhatsApp/SMS/email chaser timers so deleted RFQs
+      // don't trigger ghost dispatches minutes or hours later.
+      rfqChaserScheduler.clearScheduledChasers(id);
+    }
     return removed;
   }
 
@@ -1913,6 +1998,59 @@ class StoreService {
           'Failed to email RFQ invite to vendor'
         );
       }
+
+      // Real WhatsApp dispatch — fire-and-forget alongside the simulation.
+      // No-ops when WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_ACCESS_TOKEN are unset
+      // (falls back to wa.me deep-link logging), and skips entirely in test env.
+      if (vendor.phone) {
+        const bidUrl = whatsAppService.generateOneClickBidUrl(updatedRFQ.rfqNumber, vendor.email);
+        this._background(
+          whatsAppService.sendRFQInvitationWhatsApp({
+            phone: vendor.phone,
+            vendorName: vendor.name,
+            contactPerson: vendor.contactPerson,
+            rfqNumber: updatedRFQ.rfqNumber,
+            rfqTitle: updatedRFQ.title,
+            vendorEmail: vendor.email,
+          }).then((result) => {
+            logger.info(
+              `WhatsApp RFQ invite to ${vendor.name} (${vendor.phone}): ${result.success ? `sent (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
+              { vendorId: vendor.id, rfqNumber: updatedRFQ.rfqNumber, success: result.success },
+              'STORE_SERVICE'
+            );
+          }),
+          'Failed to dispatch WhatsApp RFQ invite'
+        );
+
+        // Real SMS chaser — fire-and-forget. Uses the same DLT gateway as OTP.
+        this._background(
+          smsService.sendRFQChaserSms({
+            mobile: vendor.phone,
+            vendorName: vendor.name,
+            rfqNumber: updatedRFQ.rfqNumber,
+            rfqTitle: updatedRFQ.title,
+            bidLink: bidUrl,
+          }).then((result) => {
+            logger.info(
+              `SMS RFQ invite to ${vendor.name} (${vendor.phone}): ${result.success ? `sent (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
+              { vendorId: vendor.id, rfqNumber: updatedRFQ.rfqNumber, success: result.success },
+              'STORE_SERVICE'
+            );
+          }),
+          'Failed to dispatch SMS RFQ invite'
+        );
+      }
+
+      // Timed multi-channel chaser — same 3-channel sequence as createRFQ.
+      // scheduleVendorChaser is idempotent-safe: it creates new timers each
+      // call, so a vendor invited twice simply queues a second sequence (which
+      // is guarded upstream by the _isInvitedVendor duplicate check anyway).
+      rfqChaserScheduler.scheduleVendorChaser(
+        updatedRFQ,
+        vendor,
+        this.checkVendorQuotationEligibility(vendor)
+      );
+
     }
 
     return { updatedRFQ, invitedCount: newlyInvited.length };
@@ -2780,6 +2918,51 @@ class StoreService {
     vendors.forEach((vendor) => {
       const logs = simulateChaserOutreach(rfq, vendor);
       outreachLogs.push(...logs);
+
+      // Real multi-channel outreach — fire-and-forget alongside simulation.
+      // Both services no-op in test env or when credentials are unset.
+      if (vendor.phone) {
+        const bidUrl = whatsAppService.generateOneClickBidUrl(rfq.rfqNumber, vendor.email);
+
+        if (channels.includes('whatsapp')) {
+          this._background(
+            whatsAppService.sendRFQInvitationWhatsApp({
+              phone: vendor.phone,
+              vendorName: vendor.name,
+              contactPerson: vendor.contactPerson,
+              rfqNumber: rfq.rfqNumber,
+              rfqTitle: rfq.title,
+              vendorEmail: vendor.email,
+            }).then((result) => {
+              logger.info(
+                `[CHASER] WhatsApp to ${vendor.name} (${vendor.phone}): ${result.success ? `delivered (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
+                { vendorId: vendor.id, rfqNumber: rfq.rfqNumber, success: result.success },
+                'STORE_SERVICE'
+              );
+            }),
+            'Failed to dispatch chaser WhatsApp'
+          );
+        }
+
+        if (channels.includes('sms')) {
+          this._background(
+            smsService.sendRFQChaserSms({
+              mobile: vendor.phone,
+              vendorName: vendor.name,
+              rfqNumber: rfq.rfqNumber,
+              rfqTitle: rfq.title,
+              bidLink: bidUrl,
+            }).then((result) => {
+              logger.info(
+                `[CHASER] SMS to ${vendor.name} (${vendor.phone}): ${result.success ? `sent (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
+                { vendorId: vendor.id, rfqNumber: rfq.rfqNumber, success: result.success },
+                'STORE_SERVICE'
+              );
+            }),
+            'Failed to dispatch chaser SMS'
+          );
+        }
+      }
     });
 
     this.aiFeed.unshift(...outreachLogs);

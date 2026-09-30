@@ -1,25 +1,30 @@
 // ==============================================================================
-// D1 BRIDGE — lets pool.query() transparently serve reads from Cloudflare D1
+// D1 BRIDGE — lets pool.query() transparently serve reads/writes from
+//              Cloudflare D1, regardless of runtime.
 // ==============================================================================
-// This app's single Postgres choke point (pool.js) is being ported to D1 table
-// by table (see /home/manav/procurecv/db_migrate.md for the full scoping). Until
-// every table has moved, a query against a table D1 already has (currently just
-// the taxonomy tables: role, org_types, master_status, category_division) can be
-// served from D1 while everything else still goes to Postgres over pg — which
-// doesn't work reliably from the Workers runtime's TCP layer anyway.
+// THREE PATHS — in priority order:
+//
+//   1. Workers binding  (production on Cloudflare Workers)
+//      globalThis.__CF_ENV__.DB  is the bound D1 database object.
+//      Used by getD1Binding() / queryD1() / batchD1().
+//
+//   2. D1 HTTP REST API  (Node dev / Render / any non-Workers host)
+//      When CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_D1_DATABASE_ID +
+//      CLOUDFLARE_API_TOKEN are set, queries are forwarded to the
+//      Cloudflare REST endpoint:
+//        POST /accounts/:account/d1/database/:db/query
+//      getD1HttpClient() returns a pseudo-binding shaped like a Workers
+//      D1 binding so queryD1() / batchD1() work unchanged.  The HTTP
+//      client is initialised lazily on first call and cached for the
+//      process lifetime.
+//
+//   3. pg (PostgreSQL via DATABASE_URL)
+//      Handled entirely in pool.js — this file is not involved.
 //
 // `cloudflare:workers` only resolves inside the Workers runtime, never under
-// Node/Render, so getD1Binding() below is a plain, cheap no-op there — this file
-// changes nothing about the existing Node/pg path.
-//
-// This file is CommonJS (required deep under app.js), and the bundler only
-// resolves `cloudflare:*` specifiers through a static ESM import — calling
-// `require('cloudflare:workers')` here throws "Dynamic require ... is not
-// supported" every time, which a bare try/catch swallowed silently, so every
-// D1-ported query fell back to the pg pool without ever reaching D1. Real
-// ESM `import { env } from 'cloudflare:workers'` only exists in worker.mjs
-// (the actual Workers entry point), which stashes it on `globalThis.__CF_ENV__`
-// once at module load, for this file to read back synchronously instead.
+// Node/Render, so getD1Binding() below is a plain, cheap no-op there.
+// Real ESM `import { env } from 'cloudflare:workers'` only exists in
+// worker.mjs, which stashes it on `globalThis.__CF_ENV__` at module load.
 // ==============================================================================
 
 /** Returns the D1 binding (env.DB) when running on Workers with it configured, else null. */
@@ -31,6 +36,102 @@ function getD1Binding() {
     return null;
   }
 }
+
+// ── D1 HTTP REST API client (Node / Render) ──────────────────────────────────
+
+let _d1HttpClient = undefined; // undefined = not yet resolved, null = not configured
+
+/**
+ * Returns a pseudo D1 binding that forwards queries to Cloudflare's D1 REST
+ * API via `fetch`.  Works from any Node.js host (local dev, Render, etc.).
+ *
+ * The returned object exposes `prepare(sql)` whose result has `.bind(...args)`
+ * and `.all()` — exactly the surface that queryD1() / batchD1() call — so
+ * both helpers work without modification whether the caller has a real Workers
+ * binding or this HTTP shim.
+ *
+ * Returns null when the required env vars are absent.
+ */
+function getD1HttpClient() {
+  if (_d1HttpClient !== undefined) return _d1HttpClient;
+
+  const accountId  = process.env.CLOUDFLARE_ACCOUNT_ID;
+  const databaseId = process.env.CLOUDFLARE_D1_DATABASE_ID;
+  const apiToken   = process.env.CLOUDFLARE_API_TOKEN;
+
+  if (!accountId || !databaseId || !apiToken) {
+    _d1HttpClient = null;
+    return null;
+  }
+
+  const baseUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`;
+  const headers = {
+    'Authorization': `Bearer ${apiToken}`,
+    'Content-Type':  'application/json',
+  };
+
+  /**
+   * Execute one SQL statement via the REST API.
+   * Returns `{ rows, rowCount }` shaped like pg / the Workers binding.
+   */
+  async function execHttp(sql, params = []) {
+    const body = JSON.stringify({ sql, params });
+    const res  = await fetch(baseUrl, { method: 'POST', headers, body });
+
+    const text = await res.text();
+    let json;
+    try { json = JSON.parse(text); } catch {
+      throw new Error(`D1 HTTP API returned non-JSON (${res.status}): ${text.slice(0, 200)}`);
+    }
+
+    if (!res.ok || !json.success) {
+      const msg = (json.errors && json.errors[0] && json.errors[0].message) || text.slice(0, 300);
+      throw new Error(`D1 HTTP query failed (${res.status}): ${msg}`);
+    }
+
+    // The REST API wraps results in json.result[0]
+    const result = Array.isArray(json.result) ? json.result[0] : json.result;
+    return {
+      rows:     (result && result.results) || [],
+      rowCount: (result && result.meta && result.meta.changes) ?? undefined,
+    };
+  }
+
+  /**
+   * Execute multiple statements as a single batch (one HTTP round-trip each
+   * for the REST API — D1's HTTP API does not have a true batch endpoint, so
+   * we run them in parallel via Promise.all, which is still far cheaper than
+   * sequential awaits and mirrors the Workers db.batch() intent).
+   */
+  async function batchHttp(statements) {
+    return Promise.all(statements.map(({ sql, params }) => execHttp(sql, params)));
+  }
+
+  // Build a shim that looks like a Workers D1 binding to queryD1() / batchD1()
+  _d1HttpClient = {
+    _isHttpClient: true,
+    prepare(sql) {
+      return {
+        _sql: sql,
+        bind(...args) {
+          return { _sql: sql, _params: args, all: () => execHttp(sql, args) };
+        },
+        all: () => execHttp(sql, []),
+      };
+    },
+    batch: (stmts) => batchHttp(stmts.map((s) => ({ sql: s._sql, params: s._params || [] }))),
+    _execHttp:  execHttp,
+    _batchHttp: batchHttp,
+  };
+
+  return _d1HttpClient;
+}
+
+/** Reset the cached HTTP client (useful in tests or after env changes). */
+function resetD1HttpClientCache() {
+  _d1HttpClient = undefined;
+}
+
 
 /**
  * Postgres uses $1/$2/... positional placeholders; D1 (SQLite) uses plain `?`.
@@ -115,10 +216,14 @@ async function batchD1(db, statements) {
     return boundParams.length > 0 ? stmt.bind(...boundParams) : stmt;
   });
   const results = await db.batch(prepared);
-  return results.map((result) => ({
-    rows: result.results || [],
-    rowCount: result.meta ? result.meta.changes : undefined,
-  }));
+  return results.map((result) => {
+    // Workers binding returns { results, meta }; HTTP client returns { rows, rowCount }
+    if (result && result.rows !== undefined) return result;
+    return {
+      rows:     result.results || [],
+      rowCount: result.meta ? result.meta.changes : undefined,
+    };
+  });
 }
 
 /**
@@ -136,4 +241,4 @@ function getWaitUntil() {
   }
 }
 
-module.exports = { getD1Binding, toD1Sql, queryD1, batchD1, getWaitUntil };
+module.exports = { getD1Binding, getD1HttpClient, resetD1HttpClientCache, toD1Sql, expandD1Params, queryD1, batchD1, getWaitUntil };

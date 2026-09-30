@@ -176,6 +176,11 @@ describe('Store Service — remaining branch coverage', () => {
         getAuditLogsFromDB: jest.fn().mockResolvedValue([]),
         getNotificationsFromDB: jest.fn().mockResolvedValue([]),
         getPaymentLinksFromDB: jest.fn().mockResolvedValue([]),
+        insertChaserJobInDB: jest.fn().mockResolvedValue(null),
+        markChaserJobFiredInDB: jest.fn().mockResolvedValue(undefined),
+        markChaserJobFailedInDB: jest.fn().mockResolvedValue(undefined),
+        cancelChaserJobsForRFQInDB: jest.fn().mockResolvedValue(undefined),
+        getPendingChaserJobsFromDB: jest.fn().mockResolvedValue([]),
         ...overrides,
       };
     }
@@ -393,6 +398,11 @@ describe('Store Service — remaining branch coverage', () => {
         bulkInsertNotificationsInDB: jest.fn().mockResolvedValue([]),
         markNotificationReadInDB: jest.fn().mockResolvedValue(false),
         markAllNotificationsReadInDB: jest.fn().mockResolvedValue(0),
+        insertChaserJobInDB: jest.fn().mockResolvedValue(null),
+        markChaserJobFiredInDB: jest.fn().mockResolvedValue(undefined),
+        markChaserJobFailedInDB: jest.fn().mockResolvedValue(undefined),
+        cancelChaserJobsForRFQInDB: jest.fn().mockResolvedValue(undefined),
+        getPendingChaserJobsFromDB: jest.fn().mockResolvedValue([]),
         ...overrides,
       };
     }

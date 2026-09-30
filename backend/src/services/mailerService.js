@@ -455,6 +455,49 @@ async function deliverViaVendorGmailApi(message, label) {
 }
 
 /**
+ * True when a dedicated "quote received" alert-mailbox Gmail identity is
+ * configured (manav.procucev@gmail.com). Same reused OAuth "app"
+ * (GMAIL_CLIENT_ID/SECRET) with its own refresh token, minted the same way
+ * as the buyer/vendor identities — kept as a THIRD, separate identity
+ * (rather than reusing VENDOR_GMAIL_REFRESH_TOKEN) so this notification's
+ * send volume/quota never shares a bucket with either the buyer's inbound-
+ * polling mailbox (navin.procucev@gmail.com, GMAIL_REFRESH_TOKEN) or the
+ * existing vendor-outbound mailbox (VENDOR_GMAIL_REFRESH_TOKEN) — changing
+ * this is explicitly meant not to touch either of those.
+ */
+function isQuoteAlertGmailApiConfigured() {
+  return Boolean(process.env.GMAIL_CLIENT_ID) && Boolean(process.env.GMAIL_CLIENT_SECRET) && Boolean(process.env.QUOTE_ALERT_GMAIL_REFRESH_TOKEN);
+}
+
+let quoteAlertGmailOAuthClient;
+
+function getQuoteAlertGmailOAuthClient() {
+  if (quoteAlertGmailOAuthClient) return quoteAlertGmailOAuthClient;
+  if (!isQuoteAlertGmailApiConfigured()) return undefined;
+  quoteAlertGmailOAuthClient = new google.auth.OAuth2(process.env.GMAIL_CLIENT_ID, process.env.GMAIL_CLIENT_SECRET);
+  quoteAlertGmailOAuthClient.setCredentials({ refresh_token: process.env.QUOTE_ALERT_GMAIL_REFRESH_TOKEN });
+  return quoteAlertGmailOAuthClient;
+}
+
+/** Same as deliverViaGmailApi, but signed in as the dedicated quote-alert mailbox. */
+async function deliverViaQuoteAlertGmailApi(message, label) {
+  const auth = getQuoteAlertGmailOAuthClient();
+  const gmail = google.gmail({ version: 'v1', auth });
+
+  logger.info(`Dispatching ${label} to ${message.to} via quote-alert Gmail API`, { subject: message.subject }, 'MAILER_SERVICE');
+  const raw = buildRawMimeMessage({
+    from: process.env.QUOTE_ALERT_GMAIL_SENDER_EMAIL ? `"Procucev Enterprise" <${process.env.QUOTE_ALERT_GMAIL_SENDER_EMAIL}>` : fromAddress(),
+    to: message.to,
+    subject: message.subject,
+    html: message.html,
+    replyTo: message.replyTo,
+  });
+  const res = await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
+  logger.info(`${label} sent successfully to ${message.to}`, { messageId: res.data.id }, 'MAILER_SERVICE');
+  return { sent: true, messageId: res.data.id };
+}
+
+/**
  * Send one message through the shared transporter.
  *
  * No-ops (without throwing) during test runs and when neither the Gmail API,
@@ -866,7 +909,11 @@ function buildQuoteReceivedEmail(to, { rfq, quote, recipientName }) {
 }
 
 async function sendQuoteReceivedEmail(to, context) {
-  return deliver(buildQuoteReceivedEmail(to, context), 'quote-received email');
+  const message = buildQuoteReceivedEmail(to, context);
+  if (process.env.NODE_ENV !== 'test' && isQuoteAlertGmailApiConfigured()) {
+    return deliverViaQuoteAlertGmailApi(message, 'quote-received email');
+  }
+  return deliver(message, 'quote-received email');
 }
 
 /**
@@ -1330,6 +1377,7 @@ module.exports = {
   isVendorConfigured,
   isGmailApiConfigured,
   isVendorGmailApiConfigured,
+  isQuoteAlertGmailApiConfigured,
   getGmailOAuthClient,
 };
 

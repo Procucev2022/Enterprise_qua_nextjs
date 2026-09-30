@@ -17,17 +17,18 @@ describe('AI Chaser Service', () => {
     expect(item.rfqNumber).toBe('RFQ-2026-0891');
   });
 
-  test('simulateChaserOutreach generates Voice, WhatsApp, and SMS actions', () => {
+  test('simulateChaserOutreach generates Voice, WhatsApp, SMS, and Email actions', () => {
     const rfq = { rfqNumber: 'RFQ-2026-0891', title: 'Hydraulic Pumps' };
-    const vendor = { name: 'Apex Supplies', contactPerson: 'Rajesh', phone: '+91 98000 11111' };
+    const vendor = { name: 'Apex Supplies', contactPerson: 'Rajesh', phone: '+91 98000 11111', email: 'rajesh@apex.com' };
 
     const actions = simulateChaserOutreach(rfq, vendor);
     expect(Array.isArray(actions)).toBe(true);
-    expect(actions.length).toBe(3);
+    expect(actions.length).toBe(4);
 
     const types = actions.map((a) => a.type);
     expect(types).toContain('whatsapp');
     expect(types).toContain('call');
     expect(types).toContain('sms');
+    expect(types).toContain('email');
   });
 });

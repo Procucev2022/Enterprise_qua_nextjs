@@ -2137,3 +2137,31 @@ Raise  Pr from Rfq to main branch now all changes i want to push into main raise
 ```text
 resolve this confit and push the code in to git
 ```
+
+---
+
+**Timestamp**: 2026-09-29T11:00:00Z
+```text
+gref this rfq vendor why sms not receved in my mobile number ? use only cloudflare d1 database
+```
+
+---
+
+**Timestamp**: 2026-09-29T11:15:00Z
+```text
+fix you and in terminal check rfq flow use this vendor mobile number 9157154504 and vendor email nodos31566@bitproy.com
+```
+
+---
+
+**Timestamp**: 2026-09-29T11:30:00Z
+```text
+this receved in my whatsapp and vendor dashboard not showing this rfq why
+```
+
+---
+
+**Timestamp**: 2026-09-29T12:00:00Z
+```text
+sms why not trigered after 5 minutes ? and testing whatsapp and sms flow this rfq whatsapp and sms not receved check
+```

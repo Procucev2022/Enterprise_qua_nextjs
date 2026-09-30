@@ -26,6 +26,7 @@ process.env.GMAIL_CLIENT_ID = '';
 process.env.GMAIL_CLIENT_SECRET = '';
 process.env.GMAIL_REFRESH_TOKEN = '';
 process.env.VENDOR_GMAIL_REFRESH_TOKEN = '';
+process.env.QUOTE_ALERT_GMAIL_REFRESH_TOKEN = '';
 
 // Session-signing key, pinned for the whole test process.
 //
