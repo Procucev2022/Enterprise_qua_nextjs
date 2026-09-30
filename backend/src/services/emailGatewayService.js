@@ -460,6 +460,34 @@ function processLineItemsAndGroups(lineItems, extraction = {}, buyerLocation = {
 }
 
 /**
+ * Detects a mail-system bounce/auto-reply (a delivery-failure notice for
+ * something the gateway itself sent), so it is never mistaken for a genuine
+ * unauthorized sender.
+ *
+ * This matters beyond mislabeling: treating a bounce as an unauthorized
+ * sender makes resolveSenderAuthorisation's rejection path fire another
+ * outbound "unauthorized buyer" notification email BACK to the bounce
+ * address — which bounces again, generating another copy of the same
+ * message. Confirmed live: since SENDER_NOT_ALLOWED is deliberately never
+ * marked read (so a human can review a genuine unauthorized sender), an
+ * unrecognized bounce is never marked read either, so the exact same
+ * handful of bounce messages got reprocessed and re-notified on every
+ * single poll cycle indefinitely — sending far more mail than any real
+ * traffic would, which is what actually rate-limited the Gmail API account
+ * this ran under, blocking every other outbound/poll operation behind it.
+ */
+function isBounceOrAutoReplyMessage(message) {
+  if (!message) return false;
+  const fromAddress = String(message.fromAddress || '').trim().toLowerCase();
+  if (/^(postmaster|mailer-daemon|mail-daemon|bounce[s]?)@/.test(fromAddress)) return true;
+  const subject = String(message.subject || '').trim().toLowerCase();
+  if (/^(undeliverable|delivery status notification|mail delivery failed|returned mail|failure notice)/.test(subject)) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Extract referenced RFQ number and lookup target RFQ from subject, body, or thread references.
  */
 function extractRfqReferenceFromEmail(message) {
@@ -848,6 +876,19 @@ async function processMessage(rawSource, config = resolveConfig()) {
     return {
       status: INGESTION_OUTCOME.SKIPPED_OUTBOUND,
       detail: 'Skipped self-sent or outbound system message',
+      message,
+    };
+  }
+
+  // A bounce/auto-reply is never a real unauthorized sender — see
+  // isBounceOrAutoReplyMessage's own comment for the notification-loop this
+  // prevents. Reported the same way as an outgoing system message: marked
+  // read, no reply sent.
+  if (isBounceOrAutoReplyMessage(message)) {
+    logger.info(`Skipping mail-system bounce/auto-reply from ${message.fromAddress}`, { subject: message.subject }, 'EMAIL_GATEWAY');
+    return {
+      status: INGESTION_OUTCOME.SKIPPED_OUTBOUND,
+      detail: 'Skipped mail-system bounce/auto-reply notice',
       message,
     };
   }
