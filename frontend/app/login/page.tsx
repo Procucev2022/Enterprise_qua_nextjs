@@ -306,12 +306,11 @@ export default function LoginPage() {
       }
 
       setRegStep('dual_otp');
-      setRegEmailOtp(response.demoCode || '');
-      setRegMobileOtp(response.demoCode || '');
+      setRegEmailOtp(response.demoEmailCode || response.demoCode || '');
+      setRegMobileOtp(response.demoMobileCode || response.demoCode || '');
       showToast(
         'Verification Codes Sent',
-        `6-digit OTP has been dispatched to ${email} and mobile +91 ${mobile} via SMS gateway.` +
-        (response.demoCode ? ` (Dev OTP: ${response.demoCode})` : ''),
+        `6-digit OTPs have been dispatched to ${email} (Email OTP) and mobile +91 ${mobile} (SMS OTP).`,
         'success'
       );
     } finally {
@@ -339,14 +338,15 @@ export default function LoginPage() {
         fail(AUTH.registrationFailedTitle, response.error);
         return;
       }
-      if (response.demoCode) {
-        setRegEmailOtp(response.demoCode);
-        setRegMobileOtp(response.demoCode);
+      if (response.demoEmailCode || response.demoCode) {
+        setRegEmailOtp(response.demoEmailCode || response.demoCode || '');
+      }
+      if (response.demoMobileCode || response.demoCode) {
+        setRegMobileOtp(response.demoMobileCode || response.demoCode || '');
       }
       showToast(
-        'OTP Resent',
-        `Fresh 6-digit OTPs sent to ${email} and +91 ${mobile}` +
-        (response.demoCode ? ` (Dev OTP: ${response.demoCode})` : ''),
+        'OTPs Resent',
+        `Fresh separate 6-digit OTPs sent to ${email} and +91 ${mobile}.`,
         'success'
       );
     } finally {
@@ -361,8 +361,8 @@ export default function LoginPage() {
     const emailOtp = regEmailOtp.trim();
     const mobileOtp = regMobileOtp.trim();
 
-    if (emailOtp.length !== OTP_CODE_LENGTH && mobileOtp.length !== OTP_CODE_LENGTH) {
-      showToast('Incomplete OTPs', 'Please enter the 6-digit Email OTP or Mobile OTP.', 'warning');
+    if (emailOtp.length !== OTP_CODE_LENGTH || mobileOtp.length !== OTP_CODE_LENGTH) {
+      showToast('Both OTPs Required', 'Please enter both the 6-digit Email OTP and the 6-digit Mobile SMS OTP.', 'warning');
       return;
     }
 
