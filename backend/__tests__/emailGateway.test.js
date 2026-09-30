@@ -1902,34 +1902,42 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       jest.restoreAllMocks();
     });
 
-    test('extractRfqReferenceFromEmail correctly identifies RFQ reference in subject, body, and headers', () => {
+    test('extractRfqReferenceFromEmail correctly identifies RFQ reference in subject, body, and headers', async () => {
       expect(
-        emailGatewayService.extractRfqReferenceFromEmail({
-          subject: 'Re: Quotation for RFQ-2026-00421 from Apex',
-          textBody: 'Please find our pricing',
-        }).referencedNumber
+        (
+          await emailGatewayService.extractRfqReferenceFromEmail({
+            subject: 'Re: Quotation for RFQ-2026-00421 from Apex',
+            textBody: 'Please find our pricing',
+          })
+        ).referencedNumber
       ).toBe('RFQ-2026-00421');
 
       expect(
-        emailGatewayService.extractRfqReferenceFromEmail({
-          subject: 'Our Official Quotation',
-          textBody: 'In reference to RFQ #RFQ-2026-00421, here is our commercial offer.',
-        }).referencedNumber
+        (
+          await emailGatewayService.extractRfqReferenceFromEmail({
+            subject: 'Our Official Quotation',
+            textBody: 'In reference to RFQ #RFQ-2026-00421, here is our commercial offer.',
+          })
+        ).referencedNumber
       ).toBe('RFQ-2026-00421');
 
       expect(
-        emailGatewayService.extractRfqReferenceFromEmail({
-          subject: 'Quotation',
-          textBody: 'Pricing attached',
-          inReplyTo: '<rfq-2026-00421-dispatch@procucev.com>',
-        }).referencedNumber
+        (
+          await emailGatewayService.extractRfqReferenceFromEmail({
+            subject: 'Quotation',
+            textBody: 'Pricing attached',
+            inReplyTo: '<rfq-2026-00421-dispatch@procucev.com>',
+          })
+        ).referencedNumber
       ).toBe('RFQ-2026-00421');
 
       expect(
-        emailGatewayService.extractRfqReferenceFromEmail({
-          subject: 'General enquiry',
-          textBody: 'Hello, no RFQ mentioned here.',
-        }).referencedNumber
+        (
+          await emailGatewayService.extractRfqReferenceFromEmail({
+            subject: 'General enquiry',
+            textBody: 'Hello, no RFQ mentioned here.',
+          })
+        ).referencedNumber
       ).toBeNull();
     });
 
@@ -2667,8 +2675,8 @@ Hello team, sending catalog.
 
     test('extractRfqReferenceFromEmail and resolveVendorFromEmail additional edge branches', async () => {
       // Null message
-      expect(emailGatewayService.extractRfqReferenceFromEmail(null)).toEqual({ targetRfq: null, referencedNumber: null });
-      expect(emailGatewayService.extractRfqReferenceFromEmail({})).toEqual({ targetRfq: null, referencedNumber: null });
+      expect(await emailGatewayService.extractRfqReferenceFromEmail(null)).toEqual({ targetRfq: null, referencedNumber: null });
+      expect(await emailGatewayService.extractRfqReferenceFromEmail({})).toEqual({ targetRfq: null, referencedNumber: null });
 
       // Vendor matched by corporateEmail in vendor directory
       jest.spyOn(storeService, 'getVendors').mockReturnValue([
