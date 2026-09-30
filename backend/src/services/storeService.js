@@ -953,6 +953,31 @@ class StoreService {
   }
 
   /**
+   * Resolve a buyer account record by email or organization ID.
+   */
+  async getBuyerAccountByEmail(email) {
+    if (!email) return null;
+    const normalized = String(email).trim().toLowerCase();
+    const inMem = Array.isArray(this.buyerAccounts)
+      ? this.buyerAccounts.find(
+          (b) =>
+            String(b.corporateEmail || b.email || '').toLowerCase() === normalized ||
+            String(b.id || '').toLowerCase() === normalized
+        )
+      : null;
+    if (inMem) return inMem;
+    if (pool.hasStorage()) {
+      try {
+        const fromDb = await domainQueries.getBuyerAccountByEmailFromDB(normalized);
+        if (fromDb) return fromDb;
+      } catch {
+        // Ignored
+      }
+    }
+    return null;
+  }
+
+  /**
    * Check whether a vendor is eligible to submit a quotation for an RFQ.
    *
    * Initial allowance: Each vendor starts with 5 free quotation credits.

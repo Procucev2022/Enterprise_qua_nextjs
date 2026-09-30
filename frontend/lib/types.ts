@@ -1915,6 +1915,8 @@ export interface AuthResponse {
   user?: UserSession;
   error?: string;
   demoCode?: string;
+  demoEmailCode?: string;
+  demoMobileCode?: string;
   expiresInSeconds?: number;
 }
 
