@@ -490,7 +490,7 @@ function isBounceOrAutoReplyMessage(message) {
 /**
  * Extract referenced RFQ number and lookup target RFQ from subject, body, or thread references.
  */
-function extractRfqReferenceFromEmail(message) {
+async function extractRfqReferenceFromEmail(message) {
   if (!message) return { targetRfq: null, referencedNumber: null };
   const sources = [
     message.subject || '',
@@ -521,8 +521,14 @@ function extractRfqReferenceFromEmail(message) {
     candidates.push(trimmed.toUpperCase());
   }
 
+  // getRFQByIdAsync, not the plain in-memory getRFQById — the same Workers
+  // isolate-cache-staleness bug fixed in rfqController.addQuote applies here
+  // too: confirmed live, a vendor's quote-reply email referencing a real,
+  // currently-open RFQ number came back INVALID_RFQ ("was not found in the
+  // system") on whichever isolate the cron tick happened to run on, purely
+  // because that isolate hadn't hydrated that particular RFQ.
   for (const cand of candidates) {
-    const foundRfq = storeService.getRFQById(cand);
+    const foundRfq = await storeService.getRFQByIdAsync(cand);
     if (foundRfq) return { targetRfq: foundRfq, referencedNumber: foundRfq.rfqNumber || cand };
   }
   return { targetRfq: null, referencedNumber: (candidates[0] || rawMatches[0].trim()).toUpperCase() };
@@ -910,7 +916,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
   }
 
   // 1. Check if this message is a vendor quotation reply for an existing RFQ
-  const { targetRfq, referencedNumber } = extractRfqReferenceFromEmail(message);
+  const { targetRfq, referencedNumber } = await extractRfqReferenceFromEmail(message);
   const vendorRecord = await resolveVendorFromEmail(message.fromAddress, targetRfq);
 
   if (targetRfq && vendorRecord) {
