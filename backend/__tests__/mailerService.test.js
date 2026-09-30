@@ -1305,6 +1305,119 @@ describe('mailerService', () => {
         expect(createTransport).not.toHaveBeenCalled();
       });
     });
+
+    // A THIRD, separate Gmail identity dedicated to the "vendor quote
+    // received" buyer-facing alert, kept apart from both the buyer inbound-
+    // polling mailbox (GMAIL_REFRESH_TOKEN) and the vendor-outbound mailbox
+    // (VENDOR_GMAIL_REFRESH_TOKEN) so this notification's send volume never
+    // shares a quota bucket with either.
+    describe('quote-alert Gmail API (dedicated "vendor quote received" mailbox)', () => {
+      afterEach(() => {
+        delete process.env.GMAIL_CLIENT_ID;
+        delete process.env.GMAIL_CLIENT_SECRET;
+        delete process.env.QUOTE_ALERT_GMAIL_REFRESH_TOKEN;
+        delete process.env.QUOTE_ALERT_GMAIL_SENDER_EMAIL;
+      });
+
+      test('isQuoteAlertGmailApiConfigured is true only when client id/secret and the quote-alert refresh token are all set', () => {
+        let fresh;
+        jest.isolateModules(() => {
+          fresh = require('../src/services/mailerService');
+        });
+        expect(fresh.isQuoteAlertGmailApiConfigured()).toBe(false);
+
+        jest.isolateModules(() => {
+          process.env.GMAIL_CLIENT_ID = 'client-id';
+          process.env.GMAIL_CLIENT_SECRET = 'client-secret';
+          fresh = require('../src/services/mailerService');
+        });
+        expect(fresh.isQuoteAlertGmailApiConfigured()).toBe(false);
+
+        jest.isolateModules(() => {
+          process.env.GMAIL_CLIENT_ID = 'client-id';
+          process.env.GMAIL_CLIENT_SECRET = 'client-secret';
+          process.env.QUOTE_ALERT_GMAIL_REFRESH_TOKEN = 'quote-alert-refresh-token';
+          fresh = require('../src/services/mailerService');
+        });
+        expect(fresh.isQuoteAlertGmailApiConfigured()).toBe(true);
+      });
+
+      test('sendQuoteReceivedEmail prefers the dedicated quote-alert mailbox and sends from QUOTE_ALERT_GMAIL_SENDER_EMAIL', async () => {
+        let fresh;
+        let sendArgs;
+        jest.isolateModules(() => {
+          process.env.NODE_ENV = 'development';
+          process.env.GMAIL_CLIENT_ID = 'client-id';
+          process.env.GMAIL_CLIENT_SECRET = 'client-secret';
+          process.env.QUOTE_ALERT_GMAIL_REFRESH_TOKEN = 'quote-alert-refresh-token';
+          process.env.QUOTE_ALERT_GMAIL_SENDER_EMAIL = 'manav.procucev@gmail.com';
+          jest.doMock('googleapis', () => ({
+            google: {
+              auth: { OAuth2: jest.fn(() => ({ setCredentials: jest.fn() })) },
+              gmail: jest.fn(() => ({
+                users: {
+                  messages: {
+                    send: jest.fn((args) => {
+                      sendArgs = args;
+                      return Promise.resolve({ data: { id: 'quote-alert-msg-1' } });
+                    }),
+                  },
+                },
+              })),
+            },
+          }));
+          fresh = require('../src/services/mailerService');
+        });
+
+        const res = await fresh.sendQuoteReceivedEmail('buyer@x.com', {
+          rfq: { rfqNumber: 'RFQ-2026-001', title: 'Pumps' },
+          quote: { vendorName: 'Acme Pumps', unitPrice: 100, totalPrice: 1000 },
+          recipientName: 'Buyer One',
+        });
+
+        expect(res.sent).toBe(true);
+        expect(res.messageId).toBe('quote-alert-msg-1');
+        const decodedRaw = Buffer.from(sendArgs.requestBody.raw, 'base64url').toString('utf8');
+        expect(decodedRaw).toContain('manav.procucev@gmail.com');
+      });
+
+      test('sendQuoteReceivedEmail falls back to the buyer Gmail API when the quote-alert mailbox is not configured', async () => {
+        let fresh;
+        let sendArgs;
+        jest.isolateModules(() => {
+          process.env.NODE_ENV = 'development';
+          process.env.GMAIL_CLIENT_ID = 'client-id';
+          process.env.GMAIL_CLIENT_SECRET = 'client-secret';
+          process.env.GMAIL_REFRESH_TOKEN = 'buyer-refresh-token';
+          jest.doMock('googleapis', () => ({
+            google: {
+              auth: { OAuth2: jest.fn(() => ({ setCredentials: jest.fn() })) },
+              gmail: jest.fn(() => ({
+                users: {
+                  messages: {
+                    send: jest.fn((args) => {
+                      sendArgs = args;
+                      return Promise.resolve({ data: { id: 'buyer-fallback-msg-1' } });
+                    }),
+                  },
+                },
+              })),
+            },
+          }));
+          fresh = require('../src/services/mailerService');
+        });
+
+        const res = await fresh.sendQuoteReceivedEmail('buyer@x.com', {
+          rfq: { rfqNumber: 'RFQ-2026-002', title: 'Valves' },
+          quote: { vendorName: 'Beta Valves' },
+        });
+
+        expect(res.sent).toBe(true);
+        expect(res.messageId).toBe('buyer-fallback-msg-1');
+        expect(sendArgs).toBeDefined();
+        delete process.env.GMAIL_REFRESH_TOKEN;
+      });
+    });
   });
 });
 
