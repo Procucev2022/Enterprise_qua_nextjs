@@ -1644,6 +1644,7 @@ class StoreService {
     const idx = this.rfqs.findIndex((r) => r.id === id || r.rfqNumber === id);
     if (idx === -1) return null;
 
+    const oldStatus = this.rfqs[idx].status;
     let quotes = updates.quotes ? evaluateQuotes(updates.quotes) : this.rfqs[idx].quotes;
 
     const updated = {
@@ -1654,6 +1655,16 @@ class StoreService {
     };
     this.rfqs[idx] = updated;
     this._persistRFQ(updated);
+
+    if (updates.status === 'Closed' && oldStatus !== 'Closed') {
+      this.notifyOfRFQClosure(updated);
+    } else if (
+      (updates.status === 'AI Recommended' || updates.status === 'In Evaluation') &&
+      oldStatus !== updates.status &&
+      updated.quotesCount >= 1
+    ) {
+      this.notifyBuyerOfFinalComparison(updated);
+    }
 
     return updated;
   }
@@ -1710,6 +1721,188 @@ class StoreService {
     this.emailQuoteToBuyer(rfq, quote);
 
     return updated;
+  }
+
+  addInquiryToRFQ(rfqId, inquiry) {
+    const rfq = this.getRFQById(rfqId);
+    if (!rfq) return null;
+
+    const existingInquiries = Array.isArray(rfq.inquiries) ? rfq.inquiries : [];
+    const timestamp = inquiry.createdAt || new Date().toISOString();
+    const vendorEmail = inquiry.vendorEmail || null;
+    const vendorName = inquiry.vendorName || 'Vendor Partner';
+    const vendorId = inquiry.vendorId || null;
+
+    const chatMsg = {
+      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      senderRole: 'vendor',
+      senderName: vendorName,
+      senderEmail: vendorEmail,
+      message: inquiry.message || '',
+      timestamp,
+    };
+
+    // Check if there is an existing thread for this vendor
+    const existingIndex = existingInquiries.findIndex(
+      (inq) =>
+        (vendorId && inq.vendorId === vendorId) ||
+        (vendorEmail && inq.vendorEmail && inq.vendorEmail.toLowerCase() === vendorEmail.toLowerCase()) ||
+        (inq.vendorName && inq.vendorName.toLowerCase() === vendorName.toLowerCase())
+    );
+
+    let updatedInquiry;
+    let inquiries;
+
+    if (existingIndex !== -1) {
+      const target = existingInquiries[existingIndex];
+      const prevMsgs = Array.isArray(target.messages) && target.messages.length > 0
+        ? target.messages
+        : [
+            {
+              id: `msg-${target.id}-orig`,
+              senderRole: 'vendor',
+              senderName: target.vendorName,
+              senderEmail: target.vendorEmail,
+              message: target.message,
+              timestamp: target.createdAt,
+            },
+            ...(target.reply
+              ? [
+                  {
+                    id: `msg-${target.id}-reply`,
+                    senderRole: 'buyer',
+                    senderName: target.repliedBy || 'Procurement Team',
+                    message: target.reply,
+                    timestamp: target.repliedAt || target.createdAt,
+                  },
+                ]
+              : []),
+          ];
+
+      updatedInquiry = {
+        ...target,
+        message: inquiry.message || target.message,
+        createdAt: timestamp,
+        status: 'open',
+        messages: [...prevMsgs, chatMsg],
+      };
+      existingInquiries[existingIndex] = updatedInquiry;
+      inquiries = existingInquiries;
+    } else {
+      updatedInquiry = {
+        id: inquiry.id || `inq-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        rfqNumber: rfq.rfqNumber,
+        rfqId: rfq.id,
+        vendorId,
+        vendorName,
+        vendorEmail,
+        message: inquiry.message || '',
+        createdAt: timestamp,
+        status: 'open',
+        messages: [chatMsg],
+      };
+      inquiries = [...existingInquiries, updatedInquiry];
+    }
+
+    rfq.inquiries = inquiries;
+    const updated = this.updateRFQ(rfq.id, { inquiries });
+
+    this.addFeedItem({
+      type: 'system',
+      channel: 'email',
+      title: `Vendor Clarification on ${rfq.rfqNumber}`,
+      message: `${vendorName} asked: "${inquiry.message.slice(0, 120)}"`,
+      recipient: rfq.raisedByEmail || rfq.buyerAccountName,
+      rfqNumber: rfq.rfqNumber,
+    });
+
+    this.addAuditLog({
+      action: `Inquiry / Clarification submitted by ${vendorName} on ${rfq.rfqNumber}: "${inquiry.message.slice(0, 100)}"`,
+      rfqNumber: rfq.rfqNumber,
+      userEmail: vendorEmail || 'system@procucev.ai',
+    });
+
+    // Notify buyer
+    if (rfq.buyerAccountId) {
+      this.notifyBuyerOfInquiry(rfq, updatedInquiry);
+    }
+
+    return { updatedRfq: updated, inquiry: updatedInquiry };
+  }
+
+  replyToRFQInquiry(rfqId, inquiryId, replyData) {
+    const rfq = this.getRFQById(rfqId);
+    if (!rfq) return null;
+
+    const existingInquiries = Array.isArray(rfq.inquiries) ? rfq.inquiries : [];
+    const inqIndex = existingInquiries.findIndex((i) => i.id === inquiryId);
+    if (inqIndex === -1) return null;
+
+    const target = existingInquiries[inqIndex];
+    const timestamp = new Date().toISOString();
+    const repliedBy = replyData.repliedBy || 'Procurement Officer';
+
+    const prevMsgs = Array.isArray(target.messages) && target.messages.length > 0
+      ? target.messages
+      : [
+          {
+            id: `msg-${target.id}-orig`,
+            senderRole: 'vendor',
+            senderName: target.vendorName,
+            senderEmail: target.vendorEmail,
+            message: target.message,
+            timestamp: target.createdAt,
+          },
+          ...(target.reply
+            ? [
+                {
+                  id: `msg-${target.id}-reply`,
+                  senderRole: 'buyer',
+                  senderName: target.repliedBy || 'Procurement Team',
+                  message: target.reply,
+                  timestamp: target.repliedAt || target.createdAt,
+                },
+              ]
+            : []),
+        ];
+
+    const replyMsg = {
+      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      senderRole: 'buyer',
+      senderName: repliedBy,
+      message: replyData.reply || '',
+      timestamp,
+    };
+
+    const updatedInquiry = {
+      ...target,
+      reply: replyData.reply || '',
+      repliedAt: timestamp,
+      repliedBy,
+      status: 'answered',
+      messages: [...prevMsgs, replyMsg],
+    };
+
+    existingInquiries[inqIndex] = updatedInquiry;
+    rfq.inquiries = existingInquiries;
+    const updated = this.updateRFQ(rfq.id, { inquiries: existingInquiries });
+
+    this.addFeedItem({
+      type: 'system',
+      channel: 'email',
+      title: `Clarification Answered on ${rfq.rfqNumber}`,
+      message: `Buyer replied to ${updatedInquiry.vendorName}: "${(replyData.reply || '').slice(0, 120)}"`,
+      recipient: updatedInquiry.vendorEmail || updatedInquiry.vendorName,
+      rfqNumber: rfq.rfqNumber,
+    });
+
+    this.addAuditLog({
+      action: `Buyer replied to vendor inquiry on ${rfq.rfqNumber} for ${updatedInquiry.vendorName}: "${(replyData.reply || '').slice(0, 100)}"`,
+      rfqNumber: rfq.rfqNumber,
+      userEmail: replyData.repliedByEmail || 'system@procucev.ai',
+    });
+
+    return { updatedRfq: updated, inquiry: updatedInquiry };
   }
 
   deleteRFQ(id) {
@@ -2124,6 +2317,26 @@ class StoreService {
     return notification;
   }
 
+  notifyBuyerOfInquiry(rfq, inquiry) {
+    if (!rfq.buyerAccountId) return null;
+    const notification = this._buildNotification({
+      recipientType: 'buyer',
+      recipientId: rfq.buyerAccountId,
+      kind: 'vendor_inquiry',
+      rfq,
+      title: `New vendor clarification on ${rfq.rfqNumber}`,
+      message: `${inquiry.vendorName || 'A vendor'} submitted a question on ${rfq.rfqNumber}: "${(inquiry.message || '').slice(0, 100)}"`,
+      meta: {
+        inquiryId: inquiry.id,
+        vendorName: inquiry.vendorName,
+        vendorEmail: inquiry.vendorEmail,
+      },
+    });
+    this.notifications.unshift(notification);
+    this._persistNotification(notification);
+    return notification;
+  }
+
   notifyBuyer(emailOrId, { kind, title, message, meta } = {}) {
     if (!emailOrId) return null;
     let buyerAccount = this.buyerAccounts.find(
@@ -2141,6 +2354,57 @@ class StoreService {
     this.notifications.unshift(notification);
     this._persistNotification(notification);
     return notification;
+  }
+
+  notifyBuyerOfFinalComparison(rfq) {
+    if (!rfq.buyerAccountId) return null;
+    const notification = this._buildNotification({
+      recipientType: 'buyer',
+      recipientId: rfq.buyerAccountId,
+      kind: 'rfq_final_comparison',
+      rfq,
+      title: `Final Evaluation Matrix Ready: ${rfq.rfqNumber}`,
+      message: `Quotation comparison & AI scoring matrix is ready for ${rfq.rfqNumber} (${rfq.quotesCount || 0} quotes received).`,
+      meta: {
+        rfqNumber: rfq.rfqNumber,
+        quotesCount: rfq.quotesCount || 0,
+      },
+    });
+    this.notifications.unshift(notification);
+    this._persistNotification(notification);
+    return notification;
+  }
+
+  notifyOfRFQClosure(rfq) {
+    if (rfq.buyerAccountId) {
+      const buyerNotif = this._buildNotification({
+        recipientType: 'buyer',
+        recipientId: rfq.buyerAccountId,
+        kind: 'rfq_closed',
+        rfq,
+        title: `RFQ Closed: ${rfq.rfqNumber}`,
+        message: `Sourcing requisition ${rfq.rfqNumber} (${rfq.title}) has been officially closed.`,
+        meta: { rfqNumber: rfq.rfqNumber },
+      });
+      this.notifications.unshift(buyerNotif);
+      this._persistNotification(buyerNotif);
+    }
+    const matches = this.vendors.filter((v) => this.vendorCoversRFQ(v, rfq));
+    if (matches.length > 0) {
+      const vendorNotifs = matches.map((vendor) =>
+        this._buildNotification({
+          recipientType: 'vendor',
+          recipientId: vendor.id,
+          kind: 'rfq_closed',
+          rfq,
+          title: `RFQ Closed: ${rfq.rfqNumber}`,
+          message: `Requisition ${rfq.rfqNumber} has been closed by the buyer. Bidding is now concluded.`,
+          meta: { rfqNumber: rfq.rfqNumber },
+        })
+      );
+      this.notifications.unshift(...vendorNotifs);
+      this._persistNotificationBatch(vendorNotifs);
+    }
   }
 
   // ==========================================
@@ -2997,6 +3261,29 @@ class StoreService {
       action: `Formally approved & sealed Purchase Order ${poNumber} awarded to ${vendorName} ($${Number(totalAmount).toLocaleString()}). Notes: ${approverNotes}`,
       rfqNumber,
     });
+
+    // Notify the buyer of PO generation / award
+    this.notifyBuyer(rfq.buyerAccountId || approverEmail, {
+      kind: 'po_approved',
+      title: `PO Approved — ${rfq.rfqNumber}`,
+      message: `Purchase order ${poNumber} awarded to ${vendorName} (₹${Number(totalAmount).toLocaleString()}).`,
+      meta: { poNumber, rfqNumber: rfq.rfqNumber, vendorId, vendorName, totalAmount },
+    });
+
+    // Notify the awarded vendor
+    if (vendorId) {
+      const vendorNotification = this._buildNotification({
+        recipientType: 'vendor',
+        recipientId: vendorId,
+        kind: 'po_awarded',
+        rfq,
+        title: `Purchase Order Awarded — ${rfq.rfqNumber}`,
+        message: `Congratulations! ${rfq.buyerAccountName || 'The buyer'} has approved and awarded purchase order ${poNumber} to you.`,
+        meta: { poNumber, rfqNumber: rfq.rfqNumber, totalAmount },
+      });
+      this.notifications.unshift(vendorNotification);
+      this._persistNotification(vendorNotification);
+    }
 
     return {
       success: true,

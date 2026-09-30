@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { formatCurrency } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
@@ -36,18 +37,24 @@ interface QuoteMatrixProps {
 
 export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount = false }: QuoteMatrixProps) {
   const { rfqs: allRfqs, selectedRFQForMatrix, setSelectedRFQForMatrix, showToast, openRFQDeepDive, deepDiveModalOpen, setDeepDiveModalOpen, selectedRFQForDeepDive } = useApp();
+  const searchParams = useSearchParams();
+  const rfqParam = searchParams?.get('rfq');
 
-  // GET /api/rfqs is itself scoped server-side by the caller's role now — see
-  // command-center.tsx's matching note — so allRfqs is already exactly right
-  // either way: a buyer's own list on this route, or the full cross-buyer
-  // list on the category manager's. `selectedRFQForMatrix` is app-wide store
-  // state though, so a stale selection left over from a different role's
-  // navigation is still deliberately checked against the current list below
-  // rather than trusted outright.
   const rfqs = allRfqs;
+
+  useEffect(() => {
+    if (rfqParam && rfqs.length > 0) {
+      const match = rfqs.find((r) => r.rfqNumber === rfqParam || r.id === rfqParam);
+      if (match && match.id !== selectedRFQForMatrix?.id) {
+        setSelectedRFQForMatrix(match);
+      }
+    }
+  }, [rfqParam, rfqs, selectedRFQForMatrix?.id, setSelectedRFQForMatrix]);
+
+  const paramMatch = rfqParam ? rfqs.find((r) => r.rfqNumber === rfqParam || r.id === rfqParam) : null;
   const selectionInScope = !scopeToOwnBuyerAccount || (!!selectedRFQForMatrix && rfqs.some((r) => r.id === selectedRFQForMatrix.id));
 
-  const currentRFQ = (selectionInScope ? selectedRFQForMatrix : null) || (rfqs.length > 0 ? rfqs[0] : null);
+  const currentRFQ = paramMatch || (selectionInScope ? selectedRFQForMatrix : null) || (rfqs.length > 0 ? rfqs[0] : null);
 
   const [poModalOpen, setPoModalOpen] = useState(false);
   const [selectedVendorForPO, setSelectedVendorForPO] = useState<QuoteComparison | null>(null);

@@ -7,6 +7,7 @@ import { fetchRFQById } from '@/lib/rfqClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import { useApp } from '@/lib/store';
 import RFQDetails from '@/app/buyer/rfq-details';
+import { authClient } from '@/lib/authClient';
 import type { RFQItem } from '@/lib/types';
 
 const DETAILS = UI_STRINGS.rfqDetails;
@@ -85,7 +86,10 @@ function VendorRFQDetailsView() {
       const email = currentUserSession?.email;
       if (email) {
         try {
-          const res = await fetch(`/api/vendors/${encodeURIComponent(email)}`);
+          const token = authClient.getToken();
+          const res = await fetch(`/api/vendors/${encodeURIComponent(email)}`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+          });
           if (res.ok) {
             const data = await res.json();
             if (data.success && data.data) myVendorId = data.data.id;
@@ -165,7 +169,7 @@ function VendorRFQDetailsView() {
     );
   }
 
-  return <RFQDetails rfq={state.rfq} onBack={onBack} />;
+  return <RFQDetails rfq={state.rfq} onBack={onBack} isVendorView={true} />;
 }
 
 export default function VendorRFQDetailsPage() {

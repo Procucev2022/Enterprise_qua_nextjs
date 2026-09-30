@@ -124,6 +124,8 @@ const RFQ_UPDATABLE_FIELDS = [
   'deliveryPincode',
   'extractedEntities',
   'attachments',
+  'inquiries',
+  'assignedVendors',
 ];
 
 function pickUpdatableRfqFields(body) {
@@ -186,16 +188,15 @@ async function getAllRFQs(req, res, next) {
 }
 
 /**
- * The category-matched vendor pool a category manager can invite from.
+ * The category-matched vendor pool a category manager or buyer can invite from.
  *
- * Grants no access by itself — see storeService.candidateVendorsForRFQ. Route
- * is gated to category_manager/admin.
+ * Grants no access by itself — see storeService.candidateVendorsForRFQ.
  */
-function getVendorCandidates(req, res, next) {
+async function getVendorCandidates(req, res, next) {
   try {
     const { id } = req.params;
-    const rfq = storeService.getRFQById(id);
-    if (!rfq) {
+    const rfq = await storeService.getRFQByIdAsync(id);
+    if (!rfq || !(await canAccessRfq(req, rfq))) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
     const candidates = storeService.candidateVendorsForRFQ(rfq);
@@ -207,11 +208,11 @@ function getVendorCandidates(req, res, next) {
 }
 
 /**
- * A category manager invites specific vendors to an RFQ.
+ * A category manager or buyer invites specific vendors to an RFQ.
  *
  * Only invited vendors (plus any the buyer directly added) can see, be
  * notified about, be emailed about, or quote this RFQ afterward — see
- * storeService.vendorCoversRFQ. Route is gated to category_manager/admin.
+ * storeService.vendorCoversRFQ.
  */
 async function inviteVendors(req, res, next) {
   try {
@@ -220,8 +221,8 @@ async function inviteVendors(req, res, next) {
     if (!Array.isArray(vendorIds) || vendorIds.length === 0) {
       return res.status(400).json({ success: false, error: 'vendorIds must be a non-empty array.' });
     }
-    const rfq = storeService.getRFQById(id);
-    if (!rfq) {
+    const rfq = await storeService.getRFQByIdAsync(id);
+    if (!rfq || !(await canAccessRfq(req, rfq))) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
     const result = await storeService.inviteVendorsToRFQ(id, vendorIds, req.user && req.user.email);
@@ -910,6 +911,67 @@ function approvePO(req, res, next) {
   }
 }
 
+async function addInquiry(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { message, vendorName, vendorEmail } = req.body;
+    if (!message || typeof message !== 'string' || !message.trim()) {
+      return res.status(400).json({ success: false, error: 'Clarification message is required.' });
+    }
+
+    const rfq = await storeService.getRFQByIdAsync(id);
+    if (!rfq) {
+      return res.status(404).json({ success: false, error: 'RFQ not found.' });
+    }
+
+    const result = storeService.addInquiryToRFQ(rfq.id, {
+      message: message.trim(),
+      vendorName: vendorName || (req.user && req.user.name) || 'Vendor Partner',
+      vendorEmail: vendorEmail || (req.user && req.user.email) || null,
+      vendorId: req.user && req.user.role === 'vendor' ? req.user.id : undefined,
+    });
+
+    if (!result) {
+      return res.status(404).json({ success: false, error: 'Failed to add inquiry to RFQ.' });
+    }
+
+    res.status(201).json({ success: true, data: result.inquiry, rfq: result.updatedRfq });
+  } catch (err) {
+    logger.error(`Error adding inquiry for RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
+async function replyInquiry(req, res, next) {
+  try {
+    const { id, inquiryId } = req.params;
+    const { reply } = req.body;
+    if (!reply || typeof reply !== 'string' || !reply.trim()) {
+      return res.status(400).json({ success: false, error: 'Reply message is required.' });
+    }
+
+    const rfq = await storeService.getRFQByIdAsync(id);
+    if (!rfq) {
+      return res.status(404).json({ success: false, error: 'RFQ not found.' });
+    }
+
+    const result = storeService.replyToRFQInquiry(rfq.id, inquiryId, {
+      reply: reply.trim(),
+      repliedBy: (req.user && req.user.name) || 'Procurement Officer',
+      repliedByEmail: req.user && req.user.email,
+    });
+
+    if (!result) {
+      return res.status(404).json({ success: false, error: 'Inquiry not found on this RFQ.' });
+    }
+
+    res.status(200).json({ success: true, data: result.inquiry, rfq: result.updatedRfq });
+  } catch (err) {
+    logger.error(`Error replying to inquiry for RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
 module.exports = {
   getRFQs,
   getAllRFQs,
@@ -930,4 +992,6 @@ module.exports = {
   generateEmailPreview,
   triggerBatchChaser,
   approvePO,
+  addInquiry,
+  replyInquiry,
 };

@@ -642,3 +642,62 @@ export async function deleteRFQ(identifier: string): Promise<RFQDeleteResult> {
   // if the response omitted the echo.
   return { success: true, rfqNumber: body.data?.rfqNumber || identifier };
 }
+
+/**
+ * Submit a vendor clarification / inquiry on an RFQ.
+ */
+export async function submitRFQInquiry(
+  rfqIdOrNumber: string,
+  payload: { message: string; vendorName?: string; vendorEmail?: string | null }
+): Promise<{ success: boolean; data?: any; rfq?: any; error?: string }> {
+  const token = authClient.getToken();
+
+  try {
+    const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqIdOrNumber)}/inquiries`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const body = await res.json();
+    if (!res.ok || !body.success) {
+      return { success: false, error: body.error || 'Failed to submit inquiry.' };
+    }
+    return { success: true, data: body.data, rfq: body.rfq };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error submitting inquiry.' };
+  }
+}
+
+/**
+ * Reply to a vendor inquiry (buyer-side).
+ */
+export async function replyToRFQInquiry(
+  rfqIdOrNumber: string,
+  inquiryId: string,
+  payload: { reply: string; repliedBy?: string }
+): Promise<{ success: boolean; data?: any; rfq?: any; error?: string }> {
+  const token = authClient.getToken();
+
+  try {
+    const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqIdOrNumber)}/inquiries/${encodeURIComponent(inquiryId)}/reply`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const body = await res.json();
+    if (!res.ok || !body.success) {
+      return { success: false, error: body.error || 'Failed to submit reply.' };
+    }
+    return { success: true, data: body.data, rfq: body.rfq };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error submitting reply.' };
+  }
+}

@@ -33,6 +33,8 @@ router.get('/:id', authenticate, rfqController.getRFQById);
 router.put('/:id', authenticate, rfqController.updateRFQ);
 router.delete('/:id', authenticate, rfqController.deleteRFQ);
 router.post('/:id/quotes', authenticate, rfqController.addQuote);
+router.post('/:id/inquiries', authenticate, rfqController.addInquiry);
+router.post('/:id/inquiries/:inquiryId/reply', authenticate, rfqController.replyInquiry);
 router.post('/:id/batch-chaser', authenticate, rfqController.triggerBatchChaser);
 router.post('/:id/approve-po', authenticate, rfqController.approvePO);
 // The preview embeds the RFQ's commercial detail, so it cannot be anonymous.

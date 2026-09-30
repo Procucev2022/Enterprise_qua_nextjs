@@ -312,6 +312,8 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     fireEvent.click(submitBtn);
 
     await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
+    expect(await screen.findByText('RFQ Dispatched Successfully!')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Done/i }));
     expect(onComplete).toHaveBeenCalled();
   });
 
