@@ -66,6 +66,22 @@ class StoreService {
     this.isHydratedFromDB = false;
   }
 
+  reset() {
+    this.buyerAccounts = [];
+    this.activeBuyerAccount = null;
+    this.vendors = [];
+    this.rfqs = [];
+    this.evaluations = [];
+    this.auditLogs = [];
+    this.aiFeed = [];
+    this.notifications = [];
+    this.vendorCatalogue = [];
+    this.paymentLinks = [];
+    this.systemConfig = JSON.parse(JSON.stringify(INITIAL_SYSTEM_CONFIG));
+    this.azureHealth = JSON.parse(JSON.stringify(INITIAL_AZURE_HEALTH));
+    this.isHydratedFromDB = false;
+  }
+
   /**
    * Load every domain collection from Neon.
    *
