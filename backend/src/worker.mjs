@@ -69,7 +69,7 @@ async function scheduled(controller, workerEnv, ctx) {
 
 // Must match the `crons` entries in wrangler.jsonc exactly — Cloudflare
 // passes the matched cron expression string back on `controller.cron`.
-const EMAIL_GATEWAY_CRON = '*/5 * * * *';
+const EMAIL_GATEWAY_CRON = '* * * * *';
 const ZOHO_RECONCILIATION_CRON = '*/10 * * * *';
 
 // Attaching directly rather than spreading httpHandler into a new object:
