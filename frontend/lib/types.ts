@@ -525,6 +525,9 @@ export interface RFQItem {
    */
   assignedVendors?: RFQAssignedVendor[];
   inquiries?: RFQInquiry[];
+  quotesHidden?: boolean;
+  quotesHiddenUntil?: string;
+  quotesHiddenReason?: string;
 }
 
 export interface RFQChatMessage {

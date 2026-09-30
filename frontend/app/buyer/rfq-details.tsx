@@ -1572,7 +1572,21 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           ) : undefined
         }
       >
-        {quotes.length === 0 ? (
+        {activeRfq?.quotesHidden ? (
+          <div className="px-4 pb-10 pt-4 flex flex-col items-center text-center max-w-xl mx-auto space-y-3">
+            <span className="w-16 h-16 rounded-2xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 flex items-center justify-center shadow-inner">
+              <Lock size={26} />
+            </span>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white">Quotes Sealed (48-Hour Bidding Period)</h3>
+            <p className="text-xs text-slate-600 dark:text-gray-300 max-w-md">
+              {activeRfq.quotesHiddenReason || 'Received quotations remain hidden from the buyer for 48 hours after release to preserve bidding integrity.'}
+            </p>
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-amber-800 dark:text-amber-300 bg-amber-100/70 dark:bg-amber-900/40 px-3 py-1 rounded-full border border-amber-200 dark:border-amber-800 shadow-sm">
+              <Clock size={12} />
+              Unseals: {activeRfq.quotesHiddenUntil ? new Date(activeRfq.quotesHiddenUntil).toLocaleString() : 'After 48 hours'} (or when closed)
+            </span>
+          </div>
+        ) : quotes.length === 0 ? (
           <div className="px-4 pb-10 pt-4 flex flex-col items-center text-center max-w-xl mx-auto space-y-3">
             <span className="w-16 h-16 rounded-2xl bg-slate-100 dark:bg-gray-800 flex items-center justify-center">
               <Inbox size={26} className="text-indigo-600 dark:text-indigo-400" />

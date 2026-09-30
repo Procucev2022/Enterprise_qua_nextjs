@@ -750,7 +750,8 @@ async function updateRFQ(req, res, next) {
       logger.warn(`RFQ not found for update: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
-    res.json({ success: true, data: updated });
+    const role = req.user && req.user.role;
+    res.json({ success: true, data: applyQuotesVisibility(updated, role) });
   } catch (err) {
     logger.error(`Error updating RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
     next(err);
