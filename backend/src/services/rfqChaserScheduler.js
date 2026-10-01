@@ -41,6 +41,7 @@ const whatsAppService = require('./whatsAppService');
 const mailerService = require('./mailerService');
 const { logger } = require('./loggerService');
 const domainQueries = require('../db/domainQueries');
+const { getWaitUntil } = require('../db/d1Bridge');
 
 // ── Timer registry ────────────────────────────────────────────────────────────
 // Maps rfqNumber → array of NodeJS.Timeout handles.
@@ -243,23 +244,39 @@ function scheduleVendorChaser(rfq, vendor, creditInfo = {}) {
 
   const { rfqNumber } = rfq;
 
+  const waitUntil = getWaitUntil();
+
   // 1. WhatsApp — immediate (default 0ms)
   const waDelay = CHASER_DELAYS.WHATSAPP_MS;
   const waJobId = _chaserJobId(rfqNumber, vendor.id, 'whatsapp');
-  const waHandle = setTimeout(() => {
-    _dispatchWhatsApp(rfq, vendor, waJobId).catch(() => {/* already logged inside */ });
+  let waPromiseResolve;
+  const waPromise = new Promise((resolve) => { waPromiseResolve = resolve; });
+  const waHandle = setTimeout(async () => {
+    try {
+      await _dispatchWhatsApp(rfq, vendor, waJobId).catch(() => {/* already logged inside */ });
+    } finally {
+      waPromiseResolve();
+    }
   }, waDelay);
   _registerTimer(rfqNumber, waHandle);
   _persistChaserJob(waJobId, rfq, vendor, 'whatsapp', waDelay);
+  if (waitUntil) waitUntil(waPromise);
 
-  // 2. SMS — configurable delay (default 5 min; 0 in dev via env)
+  // 2. SMS — configurable delay (default 0ms in prod; 5 min in test)
   const smsDelay = CHASER_DELAYS.SMS_MS;
   const smsJobId = _chaserJobId(rfqNumber, vendor.id, 'sms');
-  const smsHandle = setTimeout(() => {
-    _dispatchSms(rfq, vendor, smsJobId).catch(() => {/* already logged inside */ });
+  let smsPromiseResolve;
+  const smsPromise = new Promise((resolve) => { smsPromiseResolve = resolve; });
+  const smsHandle = setTimeout(async () => {
+    try {
+      await _dispatchSms(rfq, vendor, smsJobId).catch(() => {/* already logged inside */ });
+    } finally {
+      smsPromiseResolve();
+    }
   }, smsDelay);
   _registerTimer(rfqNumber, smsHandle);
   _persistChaserJob(smsJobId, rfq, vendor, 'sms', smsDelay);
+  if (waitUntil) waitUntil(smsPromise);
 
   // 3. Reminder email — 24 hours
   const emailDelay = CHASER_DELAYS.EMAIL_MS;

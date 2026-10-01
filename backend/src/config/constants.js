@@ -745,7 +745,7 @@ const VENDOR_EMAIL_GATEWAY_CONFIG = {
 // Override via environment variables for testing / ops without a code deploy.
 const CHASER_DELAYS = {
   WHATSAPP_MS:  Number(process.env.CHASER_WHATSAPP_DELAY_MS  ?? 0),
-  SMS_MS:       Number(process.env.CHASER_SMS_DELAY_MS       ?? (process.env.NODE_ENV === 'test' ? 5 * 60 * 1000 : 10000)),
+  SMS_MS:       Number(process.env.CHASER_SMS_DELAY_MS       ?? (process.env.NODE_ENV === 'test' ? 5 * 60 * 1000 : 0)),
   EMAIL_MS:     Number(process.env.CHASER_EMAIL_DELAY_MS     ?? (process.env.NODE_ENV === 'test' ? 24 * 60 * 60 * 1000 : 20000)),
 };
 
