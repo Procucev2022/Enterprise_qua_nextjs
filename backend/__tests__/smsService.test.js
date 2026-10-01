@@ -100,6 +100,51 @@ describe('smsService Unit Tests', () => {
       expect(res.success).toBe(false);
     });
 
+    test('shortenUrl handles empty, valid TinyURL responses, caching, and fallbacks', async () => {
+      smsService.clearShortUrlCache();
+
+      // Empty URL returns as-is
+      expect(await smsService.shortenUrl('')).toBe('');
+      expect(await smsService.shortenUrl(null)).toBe(null);
+
+      // Successful TinyURL shortening
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        text: async () => 'https://tinyurl.com/xyz123\n',
+      });
+      const short = await smsService.shortenUrl('https://example.com/very/long/url/for/rfq/123');
+      expect(short).toBe('https://tinyurl.com/xyz123');
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+
+      // Second call uses in-memory cache
+      const cached = await smsService.shortenUrl('https://example.com/very/long/url/for/rfq/123');
+      expect(cached).toBe('https://tinyurl.com/xyz123');
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+
+      // Clear cache and test fallback on non-tinyurl body
+      smsService.clearShortUrlCache();
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        text: async () => 'Error: Rate limit',
+      });
+      const fallbackBadBody = await smsService.shortenUrl('https://example.com/another');
+      expect(fallbackBadBody).toBe('https://example.com/another');
+
+      // Fallback on network/fetch exception
+      global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
+      const fallbackErr = await smsService.shortenUrl('https://example.com/another2');
+      expect(fallbackErr).toBe('https://example.com/another2');
+
+      // Fallback on HTTP error status
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: async () => 'Server error',
+      });
+      const fallback500 = await smsService.shortenUrl('https://example.com/another3');
+      expect(fallback500).toBe('https://example.com/another3');
+    });
+
     test('sendRFQChaserSms dispatches RFQ chaser SMS and handles validation', async () => {
       const invalid = await smsService.sendRFQChaserSms({ mobile: '123', rfqNumber: 'RFQ-001' });
       expect(invalid.success).toBe(false);
@@ -113,6 +158,62 @@ describe('smsService Unit Tests', () => {
       });
       expect(valid.success).toBe(true);
       expect(valid.messageId).toBeDefined();
+
+      // Test with missing rfqTitle and missing bidLink
+      const validFallback = await smsService.sendRFQChaserSms({
+        mobile: '9157154504',
+        rfqNumber: 'RFQ-002',
+      });
+      expect(validFallback.success).toBe(true);
+    });
+
+    test('sendRFQChaserSms handles production gateway flow, errors, and throttling', async () => {
+      process.env.NODE_ENV = 'production';
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => '{"status":"success","msgid":"CHASER-1"}',
+      });
+
+      const res = await smsService.sendRFQChaserSms({
+        mobile: '9157154504',
+        rfqNumber: 'RFQ-CHASER-01',
+        rfqTitle: 'Pumps',
+        bidLink: 'https://procucev.com/quote/1',
+      });
+      expect(res.success).toBe(true);
+
+      // Rapid call triggers throttle
+      const throttled = await smsService.sendRFQChaserSms({
+        mobile: '9157154504',
+        rfqNumber: 'RFQ-CHASER-01',
+      });
+      expect(throttled.success).toBe(true);
+      expect(throttled.throttled).toBe(true);
+
+      // Gateway failure response
+      smsService.clearSmsThrottleCache();
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        text: async () => 'Bad Gateway',
+      });
+      const failed = await smsService.sendRFQChaserSms({
+        mobile: '9157154504',
+        rfqNumber: 'RFQ-CHASER-02',
+      });
+      expect(failed.success).toBe(false);
+
+      // Gateway exception
+      smsService.clearSmsThrottleCache();
+      global.fetch = jest.fn().mockRejectedValue(new Error('Connection aborted'));
+      const errorRes = await smsService.sendRFQChaserSms({
+        mobile: '9157154504',
+        rfqNumber: 'RFQ-CHASER-03',
+      });
+      expect(errorRes.success).toBe(false);
+      expect(errorRes.error).toBe('Connection aborted');
     });
 
     test('sendBuyerComparisonSms dispatches buyer comparison SMS and validates mobile', async () => {
@@ -128,6 +229,55 @@ describe('smsService Unit Tests', () => {
       });
       expect(valid.success).toBe(true);
       expect(valid.messageId).toBe('mock-test-sms-buyer-comparison');
+    });
+
+    test('sendBuyerComparisonSms handles production gateway flow, errors, and throttling', async () => {
+      process.env.NODE_ENV = 'production';
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => '{"status":"success","msgid":"COMP-1"}',
+      });
+
+      const res = await smsService.sendBuyerComparisonSms({
+        mobile: '9157154504',
+        buyerName: 'Acme Buyer',
+        rfqNumber: 'RFQ-001',
+        quotesCount: 5,
+      });
+      expect(res.success).toBe(true);
+
+      // Throttling
+      const throttled = await smsService.sendBuyerComparisonSms({
+        mobile: '9157154504',
+        buyerName: 'Acme Buyer',
+        rfqNumber: 'RFQ-001',
+      });
+      expect(throttled.success).toBe(true);
+      expect(throttled.throttled).toBe(true);
+
+      // Gateway failure
+      smsService.clearSmsThrottleCache();
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: async () => 'Gateway Error',
+      });
+      const failed = await smsService.sendBuyerComparisonSms({
+        mobile: '9157154504',
+        rfqNumber: 'RFQ-002',
+      });
+      expect(failed.success).toBe(false);
+
+      // Gateway exception
+      smsService.clearSmsThrottleCache();
+      global.fetch = jest.fn().mockRejectedValue(new Error('Timeout'));
+      const errorRes = await smsService.sendBuyerComparisonSms({
+        mobile: '9157154504',
+        rfqNumber: 'RFQ-003',
+      });
+      expect(errorRes.success).toBe(false);
     });
   });
 });

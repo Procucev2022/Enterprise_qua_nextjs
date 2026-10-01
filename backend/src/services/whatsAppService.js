@@ -113,10 +113,27 @@ function _buildRfqTemplatePlaceholders({ vendorName, contactPerson, rfqNumber, r
   const resolvedPortalLink = portalLink || `${defaultFrontend}/vendor/quotation-form?rfq=${encodeURIComponent(rfqNumber || '')}`;
 
   // 6-placeholder template: rfq_reminder_notification_v2
-  // Approved with placeholders: 1, 2, 3, 4, 5, 6
-  // {{1}} Vendor Name  {{2}} Title  {{3}} RFQ No  {{4}} Delivery Date  {{5}} Location  {{6}} Portal link
+  // Approved template body (sendmsg.in dashboard, status: Approved):
+  //   Hello {{1}},
+  //   Reminder: You have a pending RFQ Invitation for {{2}}.
+  //   📋 RFQ Summary:
+  //   • RFQ No: #{{3}}
+  //   • Delivery Date: {{4}}
+  //   • Location: {{5}}
+  //   Please click the link below to review requirements and submit your quotation:
+  //   {{6}}
+  //   Best regards, Team Procucev
+  //
+  // {{1}} = contact person name  (greeting: "Hello <name>")
+  // {{2}} = RFQ title / scope    (what they're being invited for)
+  // {{3}} = RFQ reference number (e.g. RFQ260110013321)
+  // {{4}} = delivery date        (e.g. 2026-10-15)
+  // {{5}} = delivery location    (e.g. Gandhinagar, Gujarat)
+  // {{6}} = 1-click portal link  (actual workers.dev quotation-form URL)
   if (currentTemplate.includes('v2') || currentTemplate.includes('reminder')) {
-    const p1 = String(vendorName || contactPerson || 'Partner');
+    // {{1}} must be the contact person name for the "Hello {{1}}," greeting.
+    // Fall back to vendorName only if no contactPerson is set.
+    const p1 = String(contactPerson || vendorName || 'Supplier Partner');
     const p2 = String(rfqTitle || 'RFQ Requirement');
     const p3 = String(rfqNumber || 'N/A');
     const p4 = deliveryDate ? String(deliveryDate) : 'As per RFQ';

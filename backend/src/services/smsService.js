@@ -1,4 +1,59 @@
 const { logger } = require('./loggerService');
+const { SMS_DLT_TEMPLATES } = require('../config/constants');
+
+// ─────────────────────────────────────────────────────────────────────────────
+// URL Shortener
+//
+// The approved DLT template uses {#var#} for the bid URL (Variable 3).
+// The full workers.dev URL is ~110 chars which pushes the total message to
+// 218 chars (2 SMS units). Indian carriers deliver Promotional 2-unit SMS
+// unreliably. Shortening to a TinyURL (~28 chars) keeps the message to
+// 1 SMS unit (≤160 chars) and improves delivery significantly.
+//
+// TinyURL is used because it requires no API key and has no daily quota limits
+// for standard usage. Falls back to the original URL silently if the request
+// fails so SMS is never blocked by a shortener outage.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// In-memory cache: original URL → shortened URL (avoids re-shortening on retries)
+const _shortUrlCache = new Map();
+
+/**
+ * Shorten a URL via TinyURL's free API (no key required).
+ * Returns the shortened URL, or the original if shortening fails.
+ * @param {string} url
+ * @returns {Promise<string>}
+ */
+async function shortenUrl(url) {
+  if (!url) return url;
+  if (_shortUrlCache.has(url)) return _shortUrlCache.get(url);
+
+  try {
+    const res = await fetch(
+      `https://tinyurl.com/api-create.php?url=${encodeURIComponent(url)}`,
+      { signal: AbortSignal.timeout(5000) }
+    );
+    if (res.ok) {
+      const short = (await res.text()).trim();
+      // Validate it's actually a tinyurl.com link, not an error string
+      if (short.startsWith('https://tinyurl.com/') || short.startsWith('http://tinyurl.com/')) {
+        _shortUrlCache.set(url, short);
+        logger.info(`[SMS_SERVICE] URL shortened: ${url.slice(0, 60)}... → ${short}`, {}, 'SMS_SERVICE');
+        return short;
+      }
+    }
+  } catch (err) {
+    logger.warn(`[SMS_SERVICE] URL shortening failed (using original): ${err.message}`, { url }, 'SMS_SERVICE');
+  }
+  return url; // fallback — never block SMS dispatch
+}
+
+/**
+ * Clear the short URL cache (used in tests).
+ */
+function clearShortUrlCache() {
+  _shortUrlCache.clear();
+}
 
 function getEnv(key, fallback = '') {
   if (process.env[key] !== undefined && process.env[key] !== '') return process.env[key];
@@ -15,7 +70,9 @@ const SMS_GATEWAY_CONFIG = {
   get PASS() { return getEnv('SMS_GATEWAY_PASS', 'TzlzyMcFEZRF'); },
   get SENDER() { return getEnv('SMS_GATEWAY_SENDER', 'PROCUC'); },
   get SMSGID() { return getEnv('SMS_GATEWAY_SMSGID', '1102294821'); },
-  get RFQ_SMSGID() { return getEnv('SMS_GATEWAY_RFQ_SMSGID', getEnv('SMS_GATEWAY_SMSGID', '1777179076323440961')); },
+  // RFQ chaser template — uses SMS_DLT_TEMPLATES.RFQ_CHASER.SMSGID as source of truth,
+  // overridable via SMS_GATEWAY_RFQ_SMSGID env var.
+  get RFQ_SMSGID() { return getEnv('SMS_GATEWAY_RFQ_SMSGID', SMS_DLT_TEMPLATES.RFQ_CHASER.SMSGID); },
 };
 
 // In-memory cooldown throttle cache to prevent infinite / spam loop SMS dispatches to the same phone number
@@ -174,10 +231,28 @@ async function sendRFQChaserSms({ mobile, vendorName, rfqNumber, rfqTitle, bidLi
   }
 
   const defaultFrontend = process.env.PUBLIC_FRONTEND_URL || 'https://procucev-enterprise-frontend.procucev-enterprise.workers.dev';
-  const resolvedBidLink = bidLink || `${defaultFrontend}/vendor/quotation-form?rfq=${encodeURIComponent(rfqNumber)}`;
-  // Exact approved DLT template (smsgid: 1777179076323440961):
+
+  // Build the actual quotation-form URL on the workers.dev frontend.
+  // This is the real vendor quote submission page — vendors land here to submit quotes.
+  const rawBidLink = bidLink || `${defaultFrontend}/vendor/quotation-form?rfq=${encodeURIComponent(rfqNumber)}`;
+
+  // Shorten the actual workers.dev URL via TinyURL so the total message fits in
+  // 1 SMS unit (≤160 chars). The shortened link redirects to the real quotation-form page.
+  // Falls back to the original URL silently if TinyURL is unreachable.
+  const resolvedBidLink = await shortenUrl(rawBidLink);
+
+  // Exact approved DLT template (SMS_DLT_TEMPLATES.RFQ_CHASER.TEMPLATE):
   // RFQ Alert {#var#}. You are invited to bid for {#var#}. Submit quote : {#var#} - Team Procucev.
+  // Variables mapped in order: rfqNumber → rfqTitle → bidUrl (shortened, points to actual quotation-form)
   const message = `RFQ Alert ${rfqNumber}. You are invited to bid for ${rfqTitle || rfqNumber}. Submit quote : ${resolvedBidLink} - Team Procucev.`;
+  const messageChars = message.length;
+  const smsUnits = Math.ceil(messageChars / 160);
+
+  logger.info(
+    `[SMS_SERVICE] RFQ chaser SMS prepared: ${messageChars} chars (${smsUnits} unit${smsUnits > 1 ? 's' : ''})`,
+    { rfqNumber, messageChars, smsUnits, actualUrl: rawBidLink, shortUrl: resolvedBidLink },
+    'SMS_SERVICE'
+  );
 
   const payload = {
     user: SMS_GATEWAY_CONFIG.USER,
@@ -213,13 +288,13 @@ async function sendRFQChaserSms({ mobile, vendorName, rfqNumber, rfqTitle, bidLi
     if (res.ok) {
       logger.info(
         `SMS RFQ chaser dispatched to 91${formattedNumber} for ${rfqNumber}`,
-        { status: res.status, response: responseText, rfqNumber, vendorName },
+        { status: res.status, response: responseText, rfqNumber, vendorName, smsgid: SMS_GATEWAY_CONFIG.RFQ_SMSGID, templateName: SMS_DLT_TEMPLATES.RFQ_CHASER.NAME, templateCategory: SMS_DLT_TEMPLATES.RFQ_CHASER.CATEGORY },
         'SMS_SERVICE'
       );
     } else {
       logger.warn(
         `SMS RFQ chaser gateway error for 91${formattedNumber} — HTTP ${res.status}`,
-        { status: res.status, response: responseText, rfqNumber, vendorName },
+        { status: res.status, response: responseText, rfqNumber, vendorName, smsgid: SMS_GATEWAY_CONFIG.RFQ_SMSGID, templateName: SMS_DLT_TEMPLATES.RFQ_CHASER.NAME },
         'SMS_SERVICE'
       );
     }
@@ -341,6 +416,8 @@ async function sendBuyerComparisonSms({ mobile, buyerName, rfqNumber, quotesCoun
 module.exports = {
   SMS_GATEWAY_CONFIG,
   formatMobileNumber,
+  shortenUrl,
+  clearShortUrlCache,
   sendOtpSms,
   sendRFQChaserSms,
   sendBuyerComparisonSms,

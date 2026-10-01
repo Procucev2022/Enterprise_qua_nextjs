@@ -749,6 +749,44 @@ const CHASER_DELAYS = {
   EMAIL_MS:     Number(process.env.CHASER_EMAIL_DELAY_MS     ?? (process.env.NODE_ENV === 'test' ? 24 * 60 * 60 * 1000 : 20000)),
 };
 
+// ==============================================================================
+// SMS DLT TEMPLATE REGISTRY
+// ==============================================================================
+// Registered templates on sendmsg.in / TRAI DLT portal.
+//
+// Template Name      : RFQ_Notification_Seller
+// SMSGID             : 1777179076323440961
+// DLT Category       : PROMOTIONAL (STPL Active)
+// Approved Text      : RFQ Alert {#var#}. You are invited to bid for {#var#}. Submit quote : {#var#} - Team Procucev.
+// Variables          : {#var#}×3 → rfqNumber, rfqTitle, bidUrl
+//
+// NOTE: The bid URL (Variable 3) points to the actual workers.dev quotation-form
+// URL. TinyURL shortening is applied so the message fits in 1 SMS unit (≤160 chars)
+// and improves Promotional category delivery on Indian carriers.
+// The shortened URL redirects to the real quotation-form page.
+//
+// OTP Template       : DLT ID 1102294821 (TRANSACTIONAL)
+const SMS_DLT_TEMPLATES = {
+  RFQ_CHASER: {
+    NAME:     'RFQ_Notification_Seller',
+    SMSGID:   process.env.SMS_GATEWAY_RFQ_SMSGID || '1777179076323440961',
+    CATEGORY: 'PROMOTIONAL',
+    // Exact approved template text — static parts must match character-for-character.
+    TEMPLATE: 'RFQ Alert {#var#}. You are invited to bid for {#var#}. Submit quote : {#var#} - Team Procucev.',
+    VARIABLES: ['rfqNumber', 'rfqTitle', 'bidUrl'],
+    // bidUrl points to the actual workers.dev quotation-form page.
+    // TinyURL shortening keeps total message ≤160 chars (1 SMS unit).
+    URL_SHORTENING: true,
+  },
+  OTP: {
+    NAME:     'OTP_Procucev_GMT',
+    SMSGID:   process.env.SMS_GATEWAY_SMSGID || '1102294821',
+    CATEGORY: 'TRANSACTIONAL',
+    TEMPLATE: 'OTP for registering your access to Get My quoTe (GMT): {#var#}. Valid for 5 mins. Do not share. - Team Procucev.',
+    VARIABLES: ['otp'],
+  },
+};
+
 /**
  * Mapping between buyer subscription plans and their corresponding RFQ sourcing / version mode.
  * - version_1: mode_1 (Version 1: Client Roster Sourcing Plan)
@@ -1437,6 +1475,7 @@ module.exports = {
   BUYER_SUBSCRIPTION_TO_SOURCING_MODE,
   resolveBuyerSourcingMode,
   CHASER_DELAYS,
+  SMS_DLT_TEMPLATES,
 };
 
 
