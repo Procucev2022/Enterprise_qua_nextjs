@@ -1,4 +1,5 @@
 const { logger } = require('./loggerService');
+const { SMS_DLT_TEMPLATES } = require('../config/constants');
 
 function getEnv(key, fallback = '') {
   if (process.env[key] !== undefined && process.env[key] !== '') return process.env[key];
@@ -15,7 +16,9 @@ const SMS_GATEWAY_CONFIG = {
   get PASS() { return getEnv('SMS_GATEWAY_PASS', 'TzlzyMcFEZRF'); },
   get SENDER() { return getEnv('SMS_GATEWAY_SENDER', 'PROCUC'); },
   get SMSGID() { return getEnv('SMS_GATEWAY_SMSGID', '1102294821'); },
-  get RFQ_SMSGID() { return getEnv('SMS_GATEWAY_RFQ_SMSGID', getEnv('SMS_GATEWAY_SMSGID', '1777179076323440961')); },
+  // RFQ chaser template — uses SMS_DLT_TEMPLATES.RFQ_CHASER.SMSGID as source of truth,
+  // overridable via SMS_GATEWAY_RFQ_SMSGID env var.
+  get RFQ_SMSGID() { return getEnv('SMS_GATEWAY_RFQ_SMSGID', SMS_DLT_TEMPLATES.RFQ_CHASER.SMSGID); },
 };
 
 // In-memory cooldown throttle cache to prevent infinite / spam loop SMS dispatches to the same phone number
@@ -175,8 +178,27 @@ async function sendRFQChaserSms({ mobile, vendorName, rfqNumber, rfqTitle, bidLi
 
   const defaultFrontend = process.env.PUBLIC_FRONTEND_URL || 'https://procucev-enterprise-frontend.procucev-enterprise.workers.dev';
   const resolvedBidLink = bidLink || `${defaultFrontend}/vendor/quotation-form?rfq=${encodeURIComponent(rfqNumber)}`;
-  // Exact approved DLT template (smsgid: 1777179076323440961):
+
+  // ⚠️  DLT TEMPLATE CATEGORY WARNING
+  // Template: SMS_DLT_TEMPLATES.RFQ_CHASER.NAME ('RFQ_Notification_Seller')
+  // Current DLT category: PROMOTIONAL — carriers block this on DND-registered numbers.
+  // Action required: re-register under TRANSACTIONAL on the TRAI DLT portal so
+  // all vendor numbers (including DND-registered ones) receive the message.
+  // Until then, the gateway returns a mid but the SMS will be silently dropped
+  // for any number on India's TRAI DND registry.
+  if (SMS_DLT_TEMPLATES.RFQ_CHASER.CATEGORY !== 'TRANSACTIONAL') {
+    logger.warn(
+      `[SMS_SERVICE] RFQ chaser SMS template '${SMS_DLT_TEMPLATES.RFQ_CHASER.NAME}' is registered as ` +
+      `${SMS_DLT_TEMPLATES.RFQ_CHASER.CATEGORY} on DLT — will be blocked on DND numbers. ` +
+      'Re-register as TRANSACTIONAL on the TRAI DLT portal to ensure delivery.',
+      { smsgid: SMS_GATEWAY_CONFIG.RFQ_SMSGID, templateName: SMS_DLT_TEMPLATES.RFQ_CHASER.NAME, mobile: `91${formattedNumber}`, rfqNumber },
+      'SMS_SERVICE'
+    );
+  }
+
+  // Exact approved DLT template (SMS_DLT_TEMPLATES.RFQ_CHASER.TEMPLATE):
   // RFQ Alert {#var#}. You are invited to bid for {#var#}. Submit quote : {#var#} - Team Procucev.
+  // Variables mapped in order: rfqNumber → rfqTitle → bidUrl
   const message = `RFQ Alert ${rfqNumber}. You are invited to bid for ${rfqTitle || rfqNumber}. Submit quote : ${resolvedBidLink} - Team Procucev.`;
 
   const payload = {
@@ -213,13 +235,13 @@ async function sendRFQChaserSms({ mobile, vendorName, rfqNumber, rfqTitle, bidLi
     if (res.ok) {
       logger.info(
         `SMS RFQ chaser dispatched to 91${formattedNumber} for ${rfqNumber}`,
-        { status: res.status, response: responseText, rfqNumber, vendorName },
+        { status: res.status, response: responseText, rfqNumber, vendorName, smsgid: SMS_GATEWAY_CONFIG.RFQ_SMSGID, templateName: SMS_DLT_TEMPLATES.RFQ_CHASER.NAME, templateCategory: SMS_DLT_TEMPLATES.RFQ_CHASER.CATEGORY },
         'SMS_SERVICE'
       );
     } else {
       logger.warn(
         `SMS RFQ chaser gateway error for 91${formattedNumber} — HTTP ${res.status}`,
-        { status: res.status, response: responseText, rfqNumber, vendorName },
+        { status: res.status, response: responseText, rfqNumber, vendorName, smsgid: SMS_GATEWAY_CONFIG.RFQ_SMSGID, templateName: SMS_DLT_TEMPLATES.RFQ_CHASER.NAME },
         'SMS_SERVICE'
       );
     }

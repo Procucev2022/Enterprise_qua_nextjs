@@ -749,6 +749,48 @@ const CHASER_DELAYS = {
   EMAIL_MS:     Number(process.env.CHASER_EMAIL_DELAY_MS     ?? (process.env.NODE_ENV === 'test' ? 24 * 60 * 60 * 1000 : 20000)),
 };
 
+// ==============================================================================
+// SMS DLT TEMPLATE REGISTRY
+// ==============================================================================
+// Registered templates on sendmsg.in / TRAI DLT portal.
+//
+// ┌────────────────────────────────┬──────────────────────┬─────────────────┬──────────────────────────────────────────────────────────────────────────────────────────┐
+// │ Template Name (DLT)            │ SMSGID               │ DLT Category    │ Approved Template Text                                                                   │
+// ├────────────────────────────────┼──────────────────────┼─────────────────┼──────────────────────────────────────────────────────────────────────────────────────────┤
+// │ RFQ_Notification_Seller        │ 1777179076323440961  │ PROMOTIONAL     │ RFQ Alert {#var#}. You are invited to bid for {#var#}. Submit quote : {#var#} - Team     │
+// │                                │                      │ (STPL Active)   │ Procucev.                                                                                │
+// │                                │                      │ ⚠️ PROMOTIONAL   │ Variables: {#var#}×3 → rfqNumber, rfqTitle, bidUrl                                      │
+// │                                │                      │ templates are   │                                                                                          │
+// │                                │                      │ BLOCKED on DND  │                                                                                          │
+// │                                │                      │ numbers by TRAI │                                                                                          │
+// ├────────────────────────────────┼──────────────────────┼─────────────────┼──────────────────────────────────────────────────────────────────────────────────────────┤
+// │ (OTP template)                 │ 1102294821           │ Transactional   │ OTP for registering your access to Get My quoTe (GMT): {#var#}. Valid for 5 mins. Do    │
+// │                                │                      │                 │ not share. - Team Procucev.                                                               │
+// └────────────────────────────────┴──────────────────────┴─────────────────┴──────────────────────────────────────────────────────────────────────────────────────────┘
+//
+// ACTION REQUIRED: Re-register RFQ_Notification_Seller under TRANSACTIONAL
+// category on the TRAI DLT portal (https://www.trai.gov.in/dlt) so it bypasses
+// DND filtering and reaches all vendor numbers. Until then, vendors on DND will
+// NOT receive the SMS — the gateway accepts and returns a mid but carriers drop it.
+const SMS_DLT_TEMPLATES = {
+  RFQ_CHASER: {
+    NAME:     'RFQ_Notification_Seller',
+    SMSGID:   process.env.SMS_GATEWAY_RFQ_SMSGID || '1777179076323440961',
+    CATEGORY: 'PROMOTIONAL',          // ⚠️ must be changed to TRANSACTIONAL on DLT portal
+    // Exact approved template text — message sent to gateway must match this pattern
+    // precisely (character-for-character on static parts) or carriers will reject it.
+    TEMPLATE: 'RFQ Alert {#var#}. You are invited to bid for {#var#}. Submit quote : {#var#} - Team Procucev.',
+    VARIABLES: ['rfqNumber', 'rfqTitle', 'bidUrl'],
+  },
+  OTP: {
+    NAME:     'OTP_Procucev_GMT',
+    SMSGID:   process.env.SMS_GATEWAY_SMSGID || '1102294821',
+    CATEGORY: 'TRANSACTIONAL',
+    TEMPLATE: 'OTP for registering your access to Get My quoTe (GMT): {#var#}. Valid for 5 mins. Do not share. - Team Procucev.',
+    VARIABLES: ['otp'],
+  },
+};
+
 /**
  * Mapping between buyer subscription plans and their corresponding RFQ sourcing / version mode.
  * - version_1: mode_1 (Version 1: Client Roster Sourcing Plan)
@@ -1437,6 +1479,7 @@ module.exports = {
   BUYER_SUBSCRIPTION_TO_SOURCING_MODE,
   resolveBuyerSourcingMode,
   CHASER_DELAYS,
+  SMS_DLT_TEMPLATES,
 };
 
 

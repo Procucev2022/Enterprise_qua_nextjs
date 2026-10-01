@@ -2165,3 +2165,9 @@ this receved in my whatsapp and vendor dashboard not showing this rfq why
 ```text
 sms why not trigered after 5 minutes ? and testing whatsapp and sms flow this rfq whatsapp and sms not receved check
 ```
+
+## 2026-10-01T06:31:00Z
+
+can you test rfq vendor reminder flow like sms and whatsapp flow use this number 9157154504
+
+---
