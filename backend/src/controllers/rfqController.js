@@ -336,17 +336,25 @@ async function requestVendorCategoryUpdate(req, res, next) {
       buyerEmail,
     });
 
-    storeService.recordAuditEntry({
-      actor: req.user ? req.user.email : 'system',
-      actorType: 'buyer',
-      action: 'vendor_category_update_requested',
-      target: targetEmail,
-      details: {
-        vendorId: vendor ? vendor.id : vendorId,
-        rfqCategory,
-        vendorCurrentCategory: targetCurrentCategory,
-      },
-    });
+    if (typeof storeService.recordAuditEntry === 'function') {
+      storeService.recordAuditEntry({
+        actor: req.user ? req.user.email : 'system',
+        actorType: 'buyer',
+        action: 'vendor_category_update_requested',
+        target: targetEmail,
+        details: {
+          vendorId: vendor ? vendor.id : vendorId,
+          rfqCategory,
+          vendorCurrentCategory: targetCurrentCategory,
+        },
+      });
+    } else if (typeof storeService.addAuditLog === 'function') {
+      storeService.addAuditLog({
+        userEmail: req.user ? req.user.email : 'buyer',
+        action: `Requested category update from vendor ${targetVendorName} (${targetEmail}) for RFQ ${rfqNumber || 'NEW-RFQ'}`,
+        rfqNumber: rfqNumber || undefined,
+      });
+    }
 
     return res.json({
       success: true,
