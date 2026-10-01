@@ -568,6 +568,26 @@ function isOutgoingSystemMessage(message, config = {}) {
 }
 
 /**
+ * Detects whether an email address is an automated robot / system address
+ * (e.g. Google security alerts, mailer-daemon, noreply) that must NEVER be
+ * sent an unauthorized registration notification.
+ */
+function isSystemOrAutomatedSender(email) {
+  if (!email) return false;
+  const lower = String(email).trim().toLowerCase();
+  return (
+    lower.startsWith('no-reply@') ||
+    lower.startsWith('noreply@') ||
+    lower.startsWith('mailer-daemon@') ||
+    lower.startsWith('postmaster@') ||
+    lower.endsWith('@accounts.google.com') ||
+    lower.endsWith('@google.com') ||
+    lower.endsWith('@notifications.google.com') ||
+    lower.endsWith('@googlemail.com')
+  );
+}
+
+/**
  * Resolve vendor record from sender email address or vendor directory.
  * Internal platform / gateway addresses (srinu20252026@gmail.com, rfqprocucev@gmail.com)
  * are NEVER resolved as a vendor.
@@ -1017,7 +1037,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
   // 2. Otherwise process as Inbound Buyer RFQ Requisition
   const authorisation = await resolveSenderAuthorisation(message.fromAddress, config);
   if (!authorisation.allowed) {
-    if (message.fromAddress) {
+    if (message.fromAddress && !isSystemOrAutomatedSender(message.fromAddress)) {
       try {
         await mailerService.sendUnauthorizedBuyerNotificationEmail(message.fromAddress, {
           subject: message.subject,
