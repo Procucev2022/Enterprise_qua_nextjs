@@ -196,7 +196,16 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     const result = await inviteVendorsToRFQ(rfq.id, Array.from(selected));
     setSubmitting(false);
     if (result.success) {
-      showToast(S.successTitle, formatString(S.successMessage, { count: result.invitedCount, rfqNumber: rfq.rfqNumber }), 'success');
+      if (result.invitedCount > 0) {
+        showToast(S.successTitle, formatString(S.successMessage, { count: result.invitedCount, rfqNumber: rfq.rfqNumber }), 'success');
+      }
+      if ((result as any).excludedCount > 0) {
+        showToast(
+          'Category Mismatch Excluded',
+          `${(result as any).excludedCount} vendor(s) were excluded from shortlist due to category mismatch. Profile update emails dispatched.`,
+          'warning'
+        );
+      }
       onInvited?.(result.rfq, result.invitedCount);
       onClose();
     } else {

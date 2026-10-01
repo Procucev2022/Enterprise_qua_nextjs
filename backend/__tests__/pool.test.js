@@ -379,6 +379,92 @@ describe('Database pool (Neon PostgreSQL)', () => {
       });
       jest.useRealTimers();
     });
+    // Regression coverage: checkDatabaseHealth used to call query() with no
+    // { d1: true } option, so on a real Cloudflare Worker (D1 binding
+    // present) it silently fell through to the Neon pg pool below instead —
+    // reporting reachability/counts from an unrelated leftover Neon database
+    // rather than the D1 store vendors/rfqs/user actually live in. These
+    // tests mock d1Bridge directly (the pg pool path can't tell us whether
+    // D1 was actually consulted).
+    describe('when a D1 binding is available (Cloudflare Workers)', () => {
+      afterEach(() => {
+        jest.dontMock('../src/db/d1Bridge');
+        jest.resetModules();
+      });
+
+      test('reports counts from D1, not the Neon pg pool, and never touches pg', async () => {
+        jest.resetModules();
+        const pgQuery = jest.fn();
+        const queryD1 = jest.fn().mockResolvedValue({ rows: [{ user_count: '11', vendor_count: '84', rfq_count: '28' }] });
+        jest.doMock('../src/db/d1Bridge', () => ({
+          getD1Binding: jest.fn().mockReturnValue({ id: 'fake-d1' }),
+          queryD1,
+        }));
+        jest.doMock('pg', () => ({ Pool: jest.fn(() => ({ query: pgQuery, on: jest.fn() })) }));
+        process.env.DATABASE_URL = 'postgres://user:pass@ep.neon.tech/neondb';
+        const freshPool = require('../src/db/pool');
+
+        const health = await freshPool.checkDatabaseHealth();
+
+        expect(health).toMatchObject({
+          isConfigured: true,
+          isConnected: true,
+          provider: 'cloudflare_d1',
+          providerLabel: 'Cloudflare D1',
+          database: 'enterprise-qua-d1',
+          userCount: 11,
+          vendorCount: 84,
+          rfqCount: 28,
+        });
+        expect(queryD1).toHaveBeenCalledWith({ id: 'fake-d1' }, expect.stringContaining('from vendors'));
+        expect(pgQuery).not.toHaveBeenCalled();
+        jest.dontMock('pg');
+      });
+
+      test('reports unreachable when the D1 query itself fails, without falling back to pg', async () => {
+        jest.resetModules();
+        const pgQuery = jest.fn();
+        jest.doMock('../src/db/d1Bridge', () => ({
+          getD1Binding: jest.fn().mockReturnValue({ id: 'fake-d1' }),
+          queryD1: jest.fn().mockRejectedValue(new Error('D1_ERROR: table not found')),
+        }));
+        jest.doMock('pg', () => ({ Pool: jest.fn(() => ({ query: pgQuery, on: jest.fn() })) }));
+        const freshPool = require('../src/db/pool');
+
+        const health = await freshPool.checkDatabaseHealth();
+
+        expect(health).toMatchObject({
+          isConfigured: true,
+          isConnected: false,
+          provider: 'cloudflare_d1',
+          poolStatus: 'UNREACHABLE',
+          errorMessage: 'D1_ERROR: table not found',
+        });
+        expect(pgQuery).not.toHaveBeenCalled();
+        jest.dontMock('pg');
+      });
+
+      test('times out cleanly instead of hanging when the D1 query never resolves', async () => {
+        jest.resetModules();
+        jest.useFakeTimers();
+        jest.doMock('../src/db/d1Bridge', () => ({
+          getD1Binding: jest.fn().mockReturnValue({ id: 'fake-d1' }),
+          queryD1: jest.fn(() => new Promise(() => {})),
+        }));
+        const freshPool = require('../src/db/pool');
+
+        const healthPromise = freshPool.checkDatabaseHealth();
+        jest.advanceTimersByTime(8000);
+        const health = await healthPromise;
+
+        expect(health).toMatchObject({
+          provider: 'cloudflare_d1',
+          isConnected: false,
+          errorMessage: 'Database health check timed out after 8000ms',
+        });
+        jest.useRealTimers();
+      });
+    });
   });
 
   // ── Shutdown ──────────────────────────────────────────────────────────────

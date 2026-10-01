@@ -153,6 +153,10 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
         return <span className="badge badge-purple">PO Generated</span>;
       case 'Parsing':
         return <span className="badge badge-amber">OCR Parsing</span>;
+      case 'Closed':
+        return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-500 border border-slate-200 dark:border-gray-700">Closed</span>;
+      case 'Expired':
+        return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900">Expired</span>;
       default:
         return <span className="badge badge-blue">{status}</span>;
     }

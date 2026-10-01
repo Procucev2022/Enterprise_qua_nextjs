@@ -24,6 +24,8 @@ const STATUS_TONE: Record<RFQItem['status'], string> = {
   'In Evaluation': 'bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300',
   'AI Recommended': 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300',
   'PO Generated': 'bg-purple-100 text-purple-800 dark:bg-purple-950/60 dark:text-purple-300',
+  Closed: 'bg-slate-200 text-slate-800 dark:bg-gray-800 dark:text-slate-300',
+  Expired: 'bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300',
 };
 
 const ALL_STATUSES: RFQItem['status'][] = [
@@ -32,6 +34,8 @@ const ALL_STATUSES: RFQItem['status'][] = [
   'In Evaluation',
   'AI Recommended',
   'PO Generated',
+  'Closed',
+  'Expired',
 ];
 
 /**

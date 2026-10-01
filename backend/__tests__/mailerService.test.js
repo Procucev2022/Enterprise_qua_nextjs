@@ -445,6 +445,62 @@ describe('mailerService', () => {
     });
   });
 
+  describe('buildRfqFinalComparisonEmail / sendRfqFinalComparisonEmail', () => {
+    test('builds final comparison email with quotes matrix and recipient', async () => {
+      const email = mailerService.buildRfqFinalComparisonEmail('buyer@example.com', {
+        rfq: { rfqNumber: 'RFQ260409000900', title: 'Industrial Valves', category: 'Valves' },
+        quotes: [
+          { vendorName: 'Vendor A', unitPrice: 5000, leadTimeDays: 10, warrantyYears: 2, aiMatchScore: 92, complianceStatus: 'Compliant' },
+          { vendorName: 'Vendor B', unitPrice: 4500, leadTimeDays: 12, warrantyYears: 1, aiMatchScore: 88, complianceStatus: 'Compliant' },
+        ],
+        recipientName: 'Acme Buyer',
+      });
+
+      expect(email.to).toBe('buyer@example.com');
+      expect(email.subject).toContain('RFQ260409000900');
+      expect(email.html).toContain('Acme Buyer');
+      expect(email.html).toContain('Vendor B');
+      expect(email.html).toContain('Lowest Bid (L1)');
+      expect(email.html).toContain('₹4,500');
+
+      const res = await mailerService.sendRfqFinalComparisonEmail('buyer@example.com', {
+        rfq: { rfqNumber: 'RFQ260409000900' },
+      });
+      expect(res).toEqual({ sent: false, reason: 'test environment' });
+    });
+
+    test('builds final comparison email with no quotes received fallback', () => {
+      const email = mailerService.buildRfqFinalComparisonEmail('buyer@example.com', {
+        rfq: { rfqNumber: 'RFQ260409000900', title: 'Industrial Valves' },
+        quotes: [],
+      });
+      expect(email.html).toContain('No vendor quotations were submitted');
+    });
+  });
+
+  describe('buildVendorIssueAcknowledgementEmail / sendVendorIssueAcknowledgementEmail', () => {
+    test('builds vendor issue acknowledgment email with buyer in CC and issue details', async () => {
+      const email = mailerService.buildVendorIssueAcknowledgementEmail('vendor@example.com', {
+        rfqNumber: 'RFQ260409000900',
+        rfqTitle: 'Pumps Procurement',
+        vendorName: 'Apex Supplies',
+        issueMessage: 'Drawing missing for Item 2',
+        cc: 'buyer@example.com',
+      });
+
+      expect(email.to).toBe('vendor@example.com');
+      expect(email.cc).toBe('buyer@example.com');
+      expect(email.subject).toContain('RFQ #RFQ260409000900');
+      expect(email.html).toContain('Quotation Creation Failed');
+      expect(email.html).toContain('Drawing missing for Item 2');
+
+      const res = await mailerService.sendVendorIssueAcknowledgementEmail('vendor@example.com', {
+        rfqNumber: 'RFQ260409000900',
+      });
+      expect(res).toEqual({ sent: false, reason: 'test environment' });
+    });
+  });
+
   describe('buildRfqInviteEmail expanded features', () => {
     test('renders technical specifications, budget, and multiple items note', () => {
       const rfqWithSpecs = {
@@ -1173,6 +1229,285 @@ describe('mailerService', () => {
         fresh = require('../src/services/mailerService');
       });
       await expect(fresh.deliverVendor({ to: 'vendor@abc.com' }, 'Vendor Invite')).rejects.toThrow('Vendor SMTP down');
+    });
+
+    // Regression coverage for a real production incident: once VENDOR_SMTP_*
+    // secrets were configured, every vendor onboarding/invite email silently
+    // stopped arriving. Root cause confirmed live via wrangler tail: raw SMTP
+    // (nodemailer) cannot run on Cloudflare Workers at all — its TLS layer
+    // doesn't implement `rejectUnauthorized`, so activeTransporter.sendMail()
+    // always throws "The options.rejectUnauthorized option is not
+    // implemented" the moment a real vendor transporter gets configured.
+    // Before this fix, that error propagated straight to the caller with no
+    // fallback — the Gmail API fallback above only ever ran when no vendor
+    // transporter existed at all, never when one existed but failed to send.
+    test('deliverVendor falls back to the Gmail API when a configured vendor SMTP transporter fails to send (e.g. Workers TLS incompatibility)', async () => {
+      let fresh;
+      jest.isolateModules(() => {
+        process.env.NODE_ENV = 'development';
+        process.env.VENDOR_SMTP_USER = 'srinu20252026@gmail.com';
+        process.env.VENDOR_SMTP_PASSWORD = 'password';
+        process.env.GMAIL_CLIENT_ID = 'client-id';
+        process.env.GMAIL_CLIENT_SECRET = 'client-secret';
+        process.env.GMAIL_REFRESH_TOKEN = 'refresh-token';
+        jest.doMock('nodemailer', () => ({
+          createTransport: jest.fn(() => ({
+            sendMail: jest.fn().mockRejectedValue(new Error('The options.rejectUnauthorized option is not implemented')),
+          })),
+        }));
+        jest.doMock('googleapis', () => ({
+          google: {
+            auth: { OAuth2: jest.fn(() => ({ setCredentials: jest.fn() })) },
+            gmail: jest.fn(() => ({
+              users: {
+                messages: {
+                  send: jest.fn().mockResolvedValue({ data: { id: 'gmail-fallback-msg-1' } }),
+                },
+              },
+            })),
+          },
+        }));
+        fresh = require('../src/services/mailerService');
+      });
+
+      const res = await fresh.deliverVendor({ to: 'vendor@abc.com', subject: 'RFQ Invite' }, 'Vendor Invite');
+
+      expect(res.sent).toBe(true);
+      expect(res.messageId).toBe('gmail-fallback-msg-1');
+
+      delete process.env.GMAIL_CLIENT_ID;
+      delete process.env.GMAIL_CLIENT_SECRET;
+      delete process.env.GMAIL_REFRESH_TOKEN;
+    });
+
+    // A dedicated vendor mailbox Gmail identity — same OAuth2 "app"
+    // (GMAIL_CLIENT_ID/SECRET) as the buyer's, but its own refresh token and
+    // sender address, so vendor mail no longer has to appear to come from
+    // the buyer's account and never touches SMTP (which can't work on
+    // Workers at all) in the first place.
+    describe('vendor Gmail API (dedicated vendor mailbox)', () => {
+      afterEach(() => {
+        delete process.env.GMAIL_CLIENT_ID;
+        delete process.env.GMAIL_CLIENT_SECRET;
+        delete process.env.VENDOR_GMAIL_REFRESH_TOKEN;
+        delete process.env.VENDOR_GMAIL_SENDER_EMAIL;
+        delete process.env.VENDOR_SMTP_USER;
+        delete process.env.VENDOR_SMTP_PASSWORD;
+      });
+
+      test('isVendorGmailApiConfigured is true only when client id/secret and the vendor refresh token are all set', () => {
+        let fresh;
+        jest.isolateModules(() => {
+          fresh = require('../src/services/mailerService');
+        });
+        expect(fresh.isVendorGmailApiConfigured()).toBe(false);
+
+        jest.isolateModules(() => {
+          process.env.GMAIL_CLIENT_ID = 'client-id';
+          process.env.GMAIL_CLIENT_SECRET = 'client-secret';
+          fresh = require('../src/services/mailerService');
+        });
+        expect(fresh.isVendorGmailApiConfigured()).toBe(false);
+
+        jest.isolateModules(() => {
+          process.env.GMAIL_CLIENT_ID = 'client-id';
+          process.env.GMAIL_CLIENT_SECRET = 'client-secret';
+          process.env.VENDOR_GMAIL_REFRESH_TOKEN = 'vendor-refresh-token';
+          fresh = require('../src/services/mailerService');
+        });
+        expect(fresh.isVendorGmailApiConfigured()).toBe(true);
+      });
+
+      test('deliverVendor prefers the dedicated vendor Gmail mailbox over VENDOR_SMTP_*, and sends from VENDOR_GMAIL_SENDER_EMAIL', async () => {
+        let fresh;
+        let sendArgs;
+        let createTransport;
+        jest.isolateModules(() => {
+          process.env.NODE_ENV = 'development';
+          process.env.GMAIL_CLIENT_ID = 'client-id';
+          process.env.GMAIL_CLIENT_SECRET = 'client-secret';
+          process.env.VENDOR_GMAIL_REFRESH_TOKEN = 'vendor-refresh-token';
+          process.env.VENDOR_GMAIL_SENDER_EMAIL = 'srinu20252026@gmail.com';
+          // Present but must never be touched — vendor Gmail API takes
+          // priority, so this transporter should never even be built.
+          process.env.VENDOR_SMTP_USER = 'srinu20252026@gmail.com';
+          process.env.VENDOR_SMTP_PASSWORD = 'password';
+          createTransport = jest.fn();
+          jest.doMock('nodemailer', () => ({ createTransport }));
+          jest.doMock('googleapis', () => ({
+            google: {
+              auth: { OAuth2: jest.fn(() => ({ setCredentials: jest.fn() })) },
+              gmail: jest.fn(() => ({
+                users: {
+                  messages: {
+                    send: jest.fn((args) => {
+                      sendArgs = args;
+                      return Promise.resolve({ data: { id: 'vendor-gmail-msg-1' } });
+                    }),
+                  },
+                },
+              })),
+            },
+          }));
+          fresh = require('../src/services/mailerService');
+        });
+
+        const res = await fresh.deliverVendor({ to: 'vendor@abc.com', subject: 'RFQ Invite', html: '<p>hi</p>' }, 'Vendor Invite');
+
+        expect(res.sent).toBe(true);
+        expect(res.messageId).toBe('vendor-gmail-msg-1');
+        const decodedRaw = Buffer.from(sendArgs.requestBody.raw, 'base64url').toString('utf8');
+        expect(decodedRaw).toContain('srinu20252026@gmail.com');
+        expect(createTransport).not.toHaveBeenCalled();
+      });
+    });
+
+    // A THIRD, separate Gmail identity dedicated to the "vendor quote
+    // received" buyer-facing alert, kept apart from both the buyer inbound-
+    // polling mailbox (GMAIL_REFRESH_TOKEN) and the vendor-outbound mailbox
+    // (VENDOR_GMAIL_REFRESH_TOKEN) so this notification's send volume never
+    // shares a quota bucket with either.
+    describe('quote-alert Gmail API (dedicated "vendor quote received" mailbox)', () => {
+      afterEach(() => {
+        delete process.env.GMAIL_CLIENT_ID;
+        delete process.env.GMAIL_CLIENT_SECRET;
+        delete process.env.QUOTE_ALERT_GMAIL_REFRESH_TOKEN;
+        delete process.env.QUOTE_ALERT_GMAIL_SENDER_EMAIL;
+      });
+
+      test('isQuoteAlertGmailApiConfigured is true only when client id/secret and the quote-alert refresh token are all set', () => {
+        let fresh;
+        jest.isolateModules(() => {
+          fresh = require('../src/services/mailerService');
+        });
+        expect(fresh.isQuoteAlertGmailApiConfigured()).toBe(false);
+
+        jest.isolateModules(() => {
+          process.env.GMAIL_CLIENT_ID = 'client-id';
+          process.env.GMAIL_CLIENT_SECRET = 'client-secret';
+          fresh = require('../src/services/mailerService');
+        });
+        expect(fresh.isQuoteAlertGmailApiConfigured()).toBe(false);
+
+        jest.isolateModules(() => {
+          process.env.GMAIL_CLIENT_ID = 'client-id';
+          process.env.GMAIL_CLIENT_SECRET = 'client-secret';
+          process.env.QUOTE_ALERT_GMAIL_REFRESH_TOKEN = 'quote-alert-refresh-token';
+          fresh = require('../src/services/mailerService');
+        });
+        expect(fresh.isQuoteAlertGmailApiConfigured()).toBe(true);
+      });
+
+      test('sendQuoteReceivedEmail prefers the dedicated quote-alert mailbox and sends from QUOTE_ALERT_GMAIL_SENDER_EMAIL', async () => {
+        let fresh;
+        let sendArgs;
+        jest.isolateModules(() => {
+          process.env.NODE_ENV = 'development';
+          process.env.GMAIL_CLIENT_ID = 'client-id';
+          process.env.GMAIL_CLIENT_SECRET = 'client-secret';
+          process.env.QUOTE_ALERT_GMAIL_REFRESH_TOKEN = 'quote-alert-refresh-token';
+          process.env.QUOTE_ALERT_GMAIL_SENDER_EMAIL = 'manav.procucev@gmail.com';
+          jest.doMock('googleapis', () => ({
+            google: {
+              auth: { OAuth2: jest.fn(() => ({ setCredentials: jest.fn() })) },
+              gmail: jest.fn(() => ({
+                users: {
+                  messages: {
+                    send: jest.fn((args) => {
+                      sendArgs = args;
+                      return Promise.resolve({ data: { id: 'quote-alert-msg-1' } });
+                    }),
+                  },
+                },
+              })),
+            },
+          }));
+          fresh = require('../src/services/mailerService');
+        });
+
+        const res = await fresh.sendQuoteReceivedEmail('buyer@x.com', {
+          rfq: { rfqNumber: 'RFQ-2026-001', title: 'Pumps' },
+          quote: { vendorName: 'Acme Pumps', unitPrice: 100, totalPrice: 1000 },
+          recipientName: 'Buyer One',
+        });
+
+        expect(res.sent).toBe(true);
+        expect(res.messageId).toBe('quote-alert-msg-1');
+        const decodedRaw = Buffer.from(sendArgs.requestBody.raw, 'base64url').toString('utf8');
+        expect(decodedRaw).toContain('manav.procucev@gmail.com');
+      });
+
+      test('sendQuoteReceivedEmail falls back to the buyer Gmail API when the quote-alert mailbox is not configured', async () => {
+        let fresh;
+        let sendArgs;
+        jest.isolateModules(() => {
+          process.env.NODE_ENV = 'development';
+          process.env.GMAIL_CLIENT_ID = 'client-id';
+          process.env.GMAIL_CLIENT_SECRET = 'client-secret';
+          process.env.GMAIL_REFRESH_TOKEN = 'buyer-refresh-token';
+          jest.doMock('googleapis', () => ({
+            google: {
+              auth: { OAuth2: jest.fn(() => ({ setCredentials: jest.fn() })) },
+              gmail: jest.fn(() => ({
+                users: {
+                  messages: {
+                    send: jest.fn((args) => {
+                      sendArgs = args;
+                      return Promise.resolve({ data: { id: 'buyer-fallback-msg-1' } });
+                    }),
+                  },
+                },
+              })),
+            },
+          }));
+          fresh = require('../src/services/mailerService');
+        });
+
+        const res = await fresh.sendQuoteReceivedEmail('buyer@x.com', {
+          rfq: { rfqNumber: 'RFQ-2026-002', title: 'Valves' },
+          quote: { vendorName: 'Beta Valves' },
+        });
+
+        expect(res.sent).toBe(true);
+        expect(res.messageId).toBe('buyer-fallback-msg-1');
+        expect(sendArgs).toBeDefined();
+        delete process.env.GMAIL_REFRESH_TOKEN;
+      });
+    });
+  });
+
+  describe('Vendor Category Mismatch Email', () => {
+    test('buildVendorCategoryMismatchEmail builds a structured notice with category details and link', () => {
+      const email = mailerService.buildVendorCategoryMismatchEmail('vendor@example.com', {
+        rfqNumber: 'RFQ-999',
+        rfqTitle: 'Heavy Machinery Steel Plates',
+        rfqCategory: 'Raw Material',
+        vendorName: 'Apex Industrial',
+        vendorCurrentCategory: 'IT Hardware',
+        buyerAccountName: 'Tata Steel Procurement',
+        buyerEmail: 'buyer@tatasteel.com',
+      });
+
+      expect(email.to).toBe('vendor@example.com');
+      expect(email.cc).toBe('buyer@tatasteel.com');
+      expect(email.subject).toContain('Action Required: Category Mismatch for RFQ #RFQ-999');
+      expect(email.html).toContain('Apex Industrial');
+      expect(email.html).toContain('Heavy Machinery Steel Plates');
+      expect(email.html).toContain('Raw Material');
+      expect(email.html).toContain('IT Hardware');
+      expect(email.html).toContain('your company has not been included in the RFQ vendor shortlist');
+      expect(email.html).toContain('vendor-profile');
+    });
+
+    test('sendVendorCategoryMismatchEmail delivers in test environment', async () => {
+      const res = await mailerService.sendVendorCategoryMismatchEmail('vendor@example.com', {
+        rfqNumber: 'RFQ-888',
+        rfqTitle: 'Bearings',
+        rfqCategory: 'Mechanical',
+        vendorName: 'Delta Bearings',
+      });
+
+      expect(res).toEqual({ sent: false, reason: 'test environment' });
     });
   });
 });

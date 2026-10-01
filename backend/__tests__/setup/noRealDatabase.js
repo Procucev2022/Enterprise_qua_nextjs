@@ -22,8 +22,16 @@
 
 const pool = require('../../src/db/pool');
 const authSessionQueries = require('../../src/db/authSessionQueries');
+const storeService = require('../../src/services/storeService');
+const { resetD1HttpClientCache } = require('../../src/db/d1Bridge');
 
 beforeAll(async () => {
+  storeService.reset();
+  delete process.env.CLOUDFLARE_ACCOUNT_ID;
+  delete process.env.CLOUDFLARE_D1_DATABASE_ID;
+  delete process.env.CLOUDFLARE_API_TOKEN;
+  delete process.env.DATABASE_URL;
+  resetD1HttpClientCache();
   if (pool.pool) {
     // Close it rather than dropping the reference, so no socket is left open and
     // jest does not have to be forced to exit.

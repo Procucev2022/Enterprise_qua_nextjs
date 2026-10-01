@@ -6,5 +6,12 @@ import QuoteMatrix from '@/app/buyer/quote-matrix';
 
 export default function CategoryManagerQuoteMatrixPage() {
   const router = useRouter();
-  return <QuoteMatrix onBackToDashboard={() => router.push('/category-manager/all-rfqs')} />;
+  const handleBack = () => {
+    if (typeof window !== 'undefined' && window.history.length > 1) {
+      router.back();
+    } else {
+      router.push('/category-manager/all-rfqs');
+    }
+  };
+  return <QuoteMatrix onBackToDashboard={handleBack} />;
 }

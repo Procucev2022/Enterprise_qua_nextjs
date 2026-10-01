@@ -925,4 +925,33 @@ describe('RFQ ingestion & summary HTTP routes', () => {
         .averageQuotesPerRFQ).toBe(0.5);
     });
   });
+
+  describe('POST /api/rfqs/:id/validate-vendor-categories', () => {
+    test('validates vendor categories, excludes mismatched vendors, and sends email', async () => {
+      const vMatch = storeService.addVendor({ name: 'Match V', email: 'vmatch@ex.com', majorCategory: 'Mechanical' });
+      const vMismatch = storeService.addVendor({ name: 'Mismatch V', email: 'vmismatch@ex.com', majorCategory: 'Civil Works' });
+      const rfq = storeService.createRFQ({ title: 'Machining', category: 'Mechanical' });
+
+      const res = await request(app)
+        .post(`/api/rfqs/${rfq.id}/validate-vendor-categories`)
+        .set(authHeader('category_manager'))
+        .send({ vendorIds: [vMatch.id, vMismatch.id] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.shortlisted.map((v) => v.id)).toContain(vMatch.id);
+      expect(res.body.excluded.map((v) => v.id)).toContain(vMismatch.id);
+    });
+
+    test('rejects non-array or missing vendorIds', async () => {
+      const rfq = storeService.createRFQ({ title: 'Test RFQ', category: 'Mechanical' });
+      const res = await request(app)
+        .post(`/api/rfqs/${rfq.id}/validate-vendor-categories`)
+        .set(authHeader('category_manager'))
+        .send({});
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+    });
+  });
 });

@@ -171,6 +171,14 @@ async function deliverVendor(message, label) {
     return { sent: false, reason: 'test environment' };
   }
 
+  // The dedicated vendor mailbox, same as buyer-side deliver()'s own
+  // Gmail-API-first behavior — takes priority over VENDOR_SMTP_*, which can
+  // never actually send from Cloudflare Workers (see deliverVendor's own
+  // SMTP-failure fallback below for why).
+  if (isVendorGmailApiConfigured()) {
+    return deliverViaVendorGmailApi(message, label);
+  }
+
   const activeTransporter = getVendorTransporter();
   if (!activeTransporter) {
     if (isGmailApiConfigured()) {
@@ -186,9 +194,32 @@ async function deliverVendor(message, label) {
   }
 
   logger.info(`Dispatching ${label} to ${message.to}`, { subject: message.subject }, 'MAILER_SERVICE');
-  const info = await activeTransporter.sendMail(message);
-  logger.info(`${label} sent successfully to ${message.to}`, { messageId: info.messageId }, 'MAILER_SERVICE');
-  return { sent: true, messageId: info.messageId };
+  try {
+    const info = await activeTransporter.sendMail(message);
+    logger.info(`${label} sent successfully to ${message.to}`, { messageId: info.messageId }, 'MAILER_SERVICE');
+    return { sent: true, messageId: info.messageId };
+  } catch (err) {
+    // Raw SMTP (nodemailer) cannot run on Cloudflare Workers at all — its TLS
+    // socket layer doesn't implement `rejectUnauthorized`, so every send
+    // through a real VENDOR_SMTP_USER/PASSWORD transporter throws "The
+    // options.rejectUnauthorized option is not implemented" the moment one
+    // gets configured (confirmed live: this silently broke every vendor
+    // onboarding/invite email the day VENDOR_SMTP_* secrets were first set,
+    // since before that getVendorTransporter() returned undefined and this
+    // function's own fallback above never got a chance to run). Falling back
+    // to the Gmail API here — the same proven-working path used when no
+    // vendor mailbox is configured at all — rather than letting a transport
+    // this platform can't support take the whole vendor mail path down.
+    if (isGmailApiConfigured()) {
+      logger.warn(
+        `Vendor SMTP send failed for ${label} — falling back to the Gmail API (buyer account)`,
+        { to: message.to, errorMessage: err.message },
+        'MAILER_SERVICE'
+      );
+      return deliverViaGmailApi(message, label);
+    }
+    throw err;
+  }
 }
 
 // ── Autonomous email-gateway: buyer requisition inbound notification ─────────
@@ -334,11 +365,19 @@ function getGmailOAuthClient() {
  * to what the three fields this app ever sends actually need.
  */
 function buildRawMimeMessage({ from, to, subject, html, replyTo }) {
+  // RFC 5322 requires Date and treats Message-ID as strongly recommended.
+  // Gmail's own relay normally injects both when a raw message omits them,
+  // but leaving them out is still a real gap some stricter receiving filters
+  // (spam-sensitive or disposable-inbox providers especially) penalize —
+  // cheap to set explicitly rather than rely on the relay's own fallback.
+  const domain = (from.match(/<([^>]+)>/)?.[1] || from).split('@')[1] || 'procucev.com';
   const headers = [
     `From: ${from}`,
     `To: ${to}`,
     replyTo ? `Reply-To: ${replyTo}` : null,
     `Subject: =?UTF-8?B?${Buffer.from(subject || '', 'utf8').toString('base64')}?=`,
+    `Date: ${new Date().toUTCString()}`,
+    `Message-ID: <${Date.now()}.${Math.random().toString(36).slice(2)}@${domain}>`,
     'MIME-Version: 1.0',
     'Content-Type: text/html; charset=UTF-8',
   ].filter(Boolean);
@@ -359,6 +398,95 @@ async function deliverViaGmailApi(message, label) {
   logger.info(`Dispatching ${label} to ${message.to} via Gmail API`, { subject: message.subject }, 'MAILER_SERVICE');
   const raw = buildRawMimeMessage({
     from: process.env.GMAIL_SENDER_EMAIL ? `"Procucev Enterprise" <${process.env.GMAIL_SENDER_EMAIL}>` : fromAddress(),
+    to: message.to,
+    subject: message.subject,
+    html: message.html,
+    replyTo: message.replyTo,
+  });
+  const res = await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
+  logger.info(`${label} sent successfully to ${message.to}`, { messageId: res.data.id }, 'MAILER_SERVICE');
+  return { sent: true, messageId: res.data.id };
+}
+
+/**
+ * True when a dedicated vendor-mailbox Gmail identity is configured.
+ *
+ * Reuses the same OAuth2 "app" (GMAIL_CLIENT_ID/SECRET — one Google Cloud
+ * client can authorize any number of Google accounts) with its own refresh
+ * token, minted the same way as the buyer one (see
+ * scripts/get-gmail-refresh-token.js), signed in as the dedicated vendor
+ * mailbox instead of the buyer account. This is the real fix for vendor
+ * mail always appearing to come from the buyer's Gmail account: raw SMTP
+ * (the original VENDOR_SMTP_* design) can never work on Cloudflare Workers
+ * at all (confirmed live — its TLS layer doesn't implement
+ * rejectUnauthorized), so a second identity has to go through the Gmail
+ * API too, not through SMTP with different credentials.
+ */
+function isVendorGmailApiConfigured() {
+  return Boolean(process.env.GMAIL_CLIENT_ID) && Boolean(process.env.GMAIL_CLIENT_SECRET) && Boolean(process.env.VENDOR_GMAIL_REFRESH_TOKEN);
+}
+
+let vendorGmailOAuthClient;
+
+function getVendorGmailOAuthClient() {
+  if (vendorGmailOAuthClient) return vendorGmailOAuthClient;
+  if (!isVendorGmailApiConfigured()) return undefined;
+  vendorGmailOAuthClient = new google.auth.OAuth2(process.env.GMAIL_CLIENT_ID, process.env.GMAIL_CLIENT_SECRET);
+  vendorGmailOAuthClient.setCredentials({ refresh_token: process.env.VENDOR_GMAIL_REFRESH_TOKEN });
+  return vendorGmailOAuthClient;
+}
+
+/** Same as deliverViaGmailApi, but signed in as the dedicated vendor mailbox. */
+async function deliverViaVendorGmailApi(message, label) {
+  const auth = getVendorGmailOAuthClient();
+  const gmail = google.gmail({ version: 'v1', auth });
+
+  logger.info(`Dispatching ${label} to ${message.to} via vendor Gmail API`, { subject: message.subject }, 'MAILER_SERVICE');
+  const raw = buildRawMimeMessage({
+    from: process.env.VENDOR_GMAIL_SENDER_EMAIL ? `"Procucev Enterprise" <${process.env.VENDOR_GMAIL_SENDER_EMAIL}>` : vendorFromAddress(),
+    to: message.to,
+    subject: message.subject,
+    html: message.html,
+    replyTo: message.replyTo,
+  });
+  const res = await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
+  logger.info(`${label} sent successfully to ${message.to}`, { messageId: res.data.id }, 'MAILER_SERVICE');
+  return { sent: true, messageId: res.data.id };
+}
+
+/**
+ * True when a dedicated "quote received" alert-mailbox Gmail identity is
+ * configured (manav.procucev@gmail.com). Same reused OAuth "app"
+ * (GMAIL_CLIENT_ID/SECRET) with its own refresh token, minted the same way
+ * as the buyer/vendor identities — kept as a THIRD, separate identity
+ * (rather than reusing VENDOR_GMAIL_REFRESH_TOKEN) so this notification's
+ * send volume/quota never shares a bucket with either the buyer's inbound-
+ * polling mailbox (navin.procucev@gmail.com, GMAIL_REFRESH_TOKEN) or the
+ * existing vendor-outbound mailbox (VENDOR_GMAIL_REFRESH_TOKEN) — changing
+ * this is explicitly meant not to touch either of those.
+ */
+function isQuoteAlertGmailApiConfigured() {
+  return Boolean(process.env.GMAIL_CLIENT_ID) && Boolean(process.env.GMAIL_CLIENT_SECRET) && Boolean(process.env.QUOTE_ALERT_GMAIL_REFRESH_TOKEN);
+}
+
+let quoteAlertGmailOAuthClient;
+
+function getQuoteAlertGmailOAuthClient() {
+  if (quoteAlertGmailOAuthClient) return quoteAlertGmailOAuthClient;
+  if (!isQuoteAlertGmailApiConfigured()) return undefined;
+  quoteAlertGmailOAuthClient = new google.auth.OAuth2(process.env.GMAIL_CLIENT_ID, process.env.GMAIL_CLIENT_SECRET);
+  quoteAlertGmailOAuthClient.setCredentials({ refresh_token: process.env.QUOTE_ALERT_GMAIL_REFRESH_TOKEN });
+  return quoteAlertGmailOAuthClient;
+}
+
+/** Same as deliverViaGmailApi, but signed in as the dedicated quote-alert mailbox. */
+async function deliverViaQuoteAlertGmailApi(message, label) {
+  const auth = getQuoteAlertGmailOAuthClient();
+  const gmail = google.gmail({ version: 'v1', auth });
+
+  logger.info(`Dispatching ${label} to ${message.to} via quote-alert Gmail API`, { subject: message.subject }, 'MAILER_SERVICE');
+  const raw = buildRawMimeMessage({
+    from: process.env.QUOTE_ALERT_GMAIL_SENDER_EMAIL ? `"Procucev Enterprise" <${process.env.QUOTE_ALERT_GMAIL_SENDER_EMAIL}>` : fromAddress(),
     to: message.to,
     subject: message.subject,
     html: message.html,
@@ -781,7 +909,214 @@ function buildQuoteReceivedEmail(to, { rfq, quote, recipientName }) {
 }
 
 async function sendQuoteReceivedEmail(to, context) {
-  return deliver(buildQuoteReceivedEmail(to, context), 'quote-received email');
+  const message = buildQuoteReceivedEmail(to, context);
+  if (process.env.NODE_ENV !== 'test' && isQuoteAlertGmailApiConfigured()) {
+    return deliverViaQuoteAlertGmailApi(message, 'quote-received email');
+  }
+  return deliver(message, 'quote-received email');
+}
+
+// ── RFQ Final Comparison & Closure email → owning buyer ─────────────────────
+
+function buildRfqFinalComparisonEmail(toOrParams, maybeContext) {
+  const { to, context } = normalizeToAndContext(toOrParams, maybeContext);
+  const { rfq = {}, quotes = [], recipientName, comparisonUrl } = context;
+  const rfqNumber = rfq.rfqNumber || 'RFQ';
+  const rfqTitle = rfq.title || 'Procurement Requisition';
+  const quotesList = Array.isArray(quotes) && quotes.length > 0 ? quotes : (Array.isArray(rfq.quotes) ? rfq.quotes : []);
+  const base = process.env.APP_PUBLIC_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
+  const resolvedUrl = comparisonUrl || `${String(base).replace(/\/+$/, '')}/buyer/quote-matrix?rfq=${encodeURIComponent(rfqNumber)}`;
+
+  const sortedQuotes = quotesList.slice().sort((a, b) => (Number(a.unitPrice) || Number(a.totalPrice) || 0) - (Number(b.unitPrice) || Number(b.totalPrice) || 0));
+  const quotesRows = sortedQuotes.map((q, idx) => {
+    const isLowest = idx === 0 && sortedQuotes.length > 1;
+    return `
+      <tr style="border-bottom: 1px solid #e2e8f0; ${isLowest ? 'background: #f0fdf4;' : ''}">
+        <td style="padding: 10px; font-size: 13px; font-weight: 600; color: #0f172a;">
+          ${idx + 1}. ${q.vendorName || 'Vendor'}
+          ${isLowest ? '<span style="background: #16a34a; color: white; font-size: 10px; font-weight: bold; padding: 2px 6px; border-radius: 4px; margin-left: 6px;">Lowest Bid (L1)</span>' : ''}
+        </td>
+        <td style="padding: 10px; font-size: 13px; font-weight: bold; color: #1e293b;">${q.unitPrice != null ? `₹${Number(q.unitPrice).toLocaleString('en-IN')}` : '-'}</td>
+        <td style="padding: 10px; font-size: 13px; color: #334155;">${q.leadTimeDays != null ? `${q.leadTimeDays} days` : '-'}</td>
+        <td style="padding: 10px; font-size: 13px; color: #334155;">${q.warrantyYears != null ? `${q.warrantyYears} yr(s)` : '-'}</td>
+        <td style="padding: 10px; font-size: 13px; color: #334155;">${q.aiMatchScore != null ? `${q.aiMatchScore}%` : '-'}</td>
+        <td style="padding: 10px; font-size: 12px; color: #475569;">${q.complianceStatus || 'Compliant'}</td>
+      </tr>
+    `;
+  }).join('');
+
+  const subject = `Final RFQ Comparison & Closure Summary – RFQ #${rfqNumber}`;
+  const inner = `
+    <p>${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}</p>
+    <p>The bidding window for RFQ <strong>#${rfqNumber}</strong> (${rfqTitle}) has completed, and the sourcing requisition is officially closed.</p>
+    
+    <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 14px; margin: 16px 0;">
+      <table style="width: 100%; border-collapse: collapse;">
+        ${row('RFQ Number', rfqNumber)}
+        ${row('Requirement', rfqTitle)}
+        ${row('Category', rfq.category || '-')}
+        ${row('Delivery Location', rfq.deliveryLocation || '-')}
+        ${row('Status', 'Closed / Ready for Evaluation')}
+        ${row('Total Quotes Received', `${quotesList.length} quote(s)`)}
+      </table>
+    </div>
+
+    ${quotesList.length > 0 ? `
+      <h3 style="font-size: 14px; margin: 20px 0 10px 0; color: #0f172a; text-transform: uppercase;">Quotation Comparison Matrix</h3>
+      <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px;">
+        <thead>
+          <tr style="background: #f1f5f9; text-align: left; font-size: 11px; text-transform: uppercase; color: #475569;">
+            <th style="padding: 10px; border-bottom: 2px solid #cbd5e1;">Vendor</th>
+            <th style="padding: 10px; border-bottom: 2px solid #cbd5e1;">Unit Price</th>
+            <th style="padding: 10px; border-bottom: 2px solid #cbd5e1;">Lead Time</th>
+            <th style="padding: 10px; border-bottom: 2px solid #cbd5e1;">Warranty</th>
+            <th style="padding: 10px; border-bottom: 2px solid #cbd5e1;">AI Match</th>
+            <th style="padding: 10px; border-bottom: 2px solid #cbd5e1;">Compliance</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${quotesRows}
+        </tbody>
+      </table>
+    ` : `
+      <div style="background: #fffbeb; border: 1px solid #fef3c7; color: #92400e; padding: 12px; border-radius: 6px; margin: 16px 0;">
+        No vendor quotations were submitted during the bidding window for this RFQ.
+      </div>
+    `}
+
+    <div style="text-align: center; margin: 24px 0;">
+      <a href="${resolvedUrl}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 14px;">Open Comparison Matrix in Buyer Portal</a>
+    </div>
+    <p style="font-size: 12px; color: #64748b; text-align: center;">Sign in to your Procucev Buyer Portal to view detailed line-item quotes, audit logs, and approve Purchase Orders.</p>
+  `;
+
+  return {
+    from: fromAddress(),
+    to,
+    subject,
+    html: wrapEmail('PROCUCEV ENTERPRISE', 'RFQ Final Comparison & Closure', inner),
+  };
+}
+
+async function sendRfqFinalComparisonEmail(toOrParams, maybeContext) {
+  return deliver(buildRfqFinalComparisonEmail(toOrParams, maybeContext), 'RFQ final comparison email');
+}
+
+// ── Vendor Issue / Query reply notification → vendor (with buyer CC) ─────────
+
+function buildVendorIssueAcknowledgementEmail(toOrParams, maybeContext) {
+  const { to, context } = normalizeToAndContext(toOrParams, maybeContext);
+  const { rfq = {}, rfqNumber, rfqTitle, vendorName, issueMessage, reason, cc } = context;
+  const targetRfqNumber = rfqNumber || rfq.rfqNumber || 'RFQ';
+  const targetTitle = rfqTitle || rfq.title || 'Procurement Requisition';
+  const subject = `Inquiry Logged for RFQ #${targetRfqNumber} – Quotation Not Generated`;
+
+  const inner = `
+    <p>${vendorName ? `Dear <strong>${vendorName}</strong>,` : 'Hello,'}</p>
+    <p>We received your response regarding RFQ <strong>#${targetRfqNumber}</strong> (${targetTitle}).</p>
+    
+    <div style="background: #fef2f2; border: 1px solid #f87171; color: #991b1b; padding: 14px; border-radius: 6px; margin: 16px 0;">
+      <strong>Notice: Quotation Creation Failed / Bid Not Generated</strong><br/>
+      Your submission has been identified as a <strong>clarification query or technical/commercial issue</strong> rather than a complete price quotation. In accordance with enterprise sourcing rules, quotation creation has failed and <strong>no bid has been generated</strong> for this response.
+    </div>
+
+    ${issueMessage ? `
+      <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; margin: 16px 0;">
+        <strong style="color: #0f172a; font-size: 13px;">Logged Query / Issue Detail:</strong>
+        <p style="color: #334155; font-size: 13px; margin: 6px 0 0 0; white-space: pre-wrap;">${issueMessage}</p>
+      </div>
+    ` : ''}
+
+    <p style="font-size: 13px; color: #334155;">
+      ${reason || 'The buyer has been kept in CC on this notification and can review your inquiry directly in the RFQ Clarifications Desk. Once the buyer clarifies the issue, you may submit your formal quotation before the bidding deadline.'}
+    </p>
+
+    <div style="text-align: center; margin: 24px 0;">
+      <a href="${vendorSignInUrl()}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 14px;">Open Vendor Portal</a>
+    </div>
+    <p style="font-size: 12px; color: #64748b; text-align: center;">Sign in to your Procucev vendor account to view technical specifications or submit a commercial quotation.</p>
+  `;
+
+  return {
+    from: vendorFromAddress(),
+    to,
+    replyTo: vendorGatewayAddress(),
+    cc: cc || undefined,
+    subject,
+    html: wrapEmail('PROCUCEV ENTERPRISE', 'Clarification Query Logged', inner),
+  };
+}
+
+async function sendVendorIssueAcknowledgementEmail(toOrParams, maybeContext) {
+  return deliverVendor(buildVendorIssueAcknowledgementEmail(toOrParams, maybeContext), 'vendor issue acknowledgment email');
+}
+
+// ── Vendor Category Mismatch: request update & exclude from shortlist ────────
+
+function buildVendorCategoryMismatchEmail(toOrParams, maybeContext) {
+  const { to, context } = normalizeToAndContext(toOrParams, maybeContext);
+  const {
+    rfq = {},
+    rfqNumber,
+    rfqTitle,
+    rfqCategory,
+    vendorName,
+    vendorCurrentCategory,
+    buyerAccountName,
+    buyerEmail,
+    cc,
+  } = context;
+
+  const targetRfqNumber = rfqNumber || rfq.rfqNumber || 'RFQ';
+  const targetTitle = rfqTitle || rfq.title || 'Procurement Requisition';
+  const targetCategory = rfqCategory || rfq.category || 'Requisition Category';
+  const currentCategory = vendorCurrentCategory || 'Not specified / general';
+  const subject = `Action Required: Category Mismatch for RFQ #${targetRfqNumber} – Please Update Business Profile`;
+
+  const profileUrl = `${vendorSignInUrl()}?redirect=${encodeURIComponent('/vendor/vendor-profile')}`;
+
+  const inner = `
+    <p>${vendorName ? `Dear <strong>${vendorName}</strong>,` : 'Hello,'}</p>
+    <p>You were identified as a potential supplier for RFQ <strong>#${targetRfqNumber}</strong> (${targetTitle})${buyerAccountName ? ` released by <strong>${buyerAccountName}</strong>` : ''}.</p>
+    
+    <div style="background: #fffbeb; border: 1px solid #f59e0b; color: #92400e; padding: 14px; border-radius: 6px; margin: 16px 0;">
+      <strong>⚠️ Category Mismatch Identified – Business Profile Update Required</strong><br/>
+      Our automated sourcing engine identified that your currently registered supplier category details do not cover the requested procurement category for this RFQ:
+      <table style="width: 100%; margin-top: 10px; font-size: 13px; border-collapse: collapse;">
+        <tr>
+          <td style="padding: 4px 8px; font-weight: bold; width: 40%; color: #78350f;">Requested RFQ Category:</td>
+          <td style="padding: 4px 8px; font-weight: bold; color: #1e3a8a;">${targetCategory}</td>
+        </tr>
+        <tr>
+          <td style="padding: 4px 8px; font-weight: bold; color: #78350f;">Your Registered Category:</td>
+          <td style="padding: 4px 8px; color: #b91c1c;">${currentCategory}</td>
+        </tr>
+      </table>
+    </div>
+
+    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 14px; margin: 16px 0; color: #334155; font-size: 13px;">
+      <strong>Shortlist Status:</strong><br/>
+      In accordance with enterprise procurement governance, <strong>your company has not been included in the RFQ vendor shortlist</strong>. To become eligible for this and future sourcing opportunities in this category, please update and verify your business details and category taxonomy profile.
+    </div>
+
+    <div style="text-align: center; margin: 24px 0;">
+      <a href="${profileUrl}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 14px;">Update Business & Category Details</a>
+    </div>
+    <p style="font-size: 12px; color: #64748b; text-align: center;">Once your category details are updated and verified, your profile will immediately become eligible for shortlisting.</p>
+  `;
+
+  return {
+    from: vendorFromAddress(),
+    to,
+    replyTo: vendorGatewayAddress(),
+    cc: cc || (buyerEmail ? buyerEmail : undefined),
+    subject,
+    html: wrapEmail('PROCUCEV ENTERPRISE', 'Vendor Category Update Required', inner),
+  };
+}
+
+async function sendVendorCategoryMismatchEmail(toOrParams, maybeContext) {
+  return deliverVendor(buildVendorCategoryMismatchEmail(toOrParams, maybeContext), 'vendor category mismatch notification email');
 }
 
 /**
@@ -1204,7 +1539,7 @@ function isConfigured() {
 }
 
 function isVendorConfigured() {
-  return Boolean(process.env.VENDOR_SMTP_USER && process.env.VENDOR_SMTP_PASSWORD);
+  return isVendorGmailApiConfigured() || Boolean(process.env.VENDOR_SMTP_USER && process.env.VENDOR_SMTP_PASSWORD);
 }
 
 module.exports = {
@@ -1238,11 +1573,20 @@ module.exports = {
   sendQuoteAcknowledgementEmail,
   buildQuoteFailureEmail,
   sendQuoteFailureEmail,
+  buildRfqFinalComparisonEmail,
+  sendRfqFinalComparisonEmail,
+  buildVendorIssueAcknowledgementEmail,
+  sendVendorIssueAcknowledgementEmail,
+  buildVendorCategoryMismatchEmail,
+  sendVendorCategoryMismatchEmail,
   vendorUpgradeUrl,
   buildVendorCreditsExhaustedEmail,
   sendVendorCreditsExhaustedEmail,
   isConfigured,
   isVendorConfigured,
   isGmailApiConfigured,
+  isVendorGmailApiConfigured,
+  isQuoteAlertGmailApiConfigured,
+  getGmailOAuthClient,
 };
 

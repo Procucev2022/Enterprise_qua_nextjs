@@ -5,6 +5,8 @@ import {
   flattenWorkbook,
   readAsBase64,
   readAsArrayBuffer,
+  readAsText,
+  extractPdfText,
   buildExtractionRequest,
 } from '@/lib/documentExtraction';
 
@@ -302,6 +304,7 @@ describe('buildExtractionRequest', () => {
     expect(res.fileName).toBe('drawing.pdf');
     expect(res.documentText !== undefined || res.inlineData !== undefined).toBe(true);
   });
+
 });
 
 describe('isTextFile and isWordDocument', () => {
@@ -332,18 +335,154 @@ describe('isTextFile and isWordDocument', () => {
     expect(extracted).toContain('Centrifugal Pump 500 GPM');
   });
 
-  test('extractPdfText parses text streams with Tj and TJ operators', async () => {
-    const { extractPdfText, buildExtractionRequest } = require('@/lib/documentExtraction');
-    const pdfContent = '%PDF-1.4\n1 0 obj\n<< /Length 120 >>\nstream\nBT\n/F1 12 Tf\n(Centrifugal Water Pump 500 GPM) Tj\n[(Stainless Steel 316L Pipes)] TJ\nET\nendstream\nendobj\n%%EOF';
+  test('extractPdfText handles empty buffer and returns empty string', async () => {
+    const { extractPdfText } = require('@/lib/documentExtraction');
+    expect(await extractPdfText(new ArrayBuffer(0))).toBe('');
+    expect(await extractPdfText(null as any)).toBe('');
+  });
+
+  test('extractPdfText handles octal escapes and parenthesis escaping', async () => {
+    const { extractPdfText } = require('@/lib/documentExtraction');
+    const pdfContent = 'stream\n(\\040Item\\(A\\)\\040) Tj\n[(Part\\(B\\))] TJ\nendstream';
     const enc = new TextEncoder();
-    const buffer = enc.encode(pdfContent).buffer;
+    const text = await extractPdfText(enc.encode(pdfContent).buffer);
+    expect(text).toContain('Item(A)');
+    expect(text).toContain('Part(B)');
+  });
 
-    const text = await extractPdfText(buffer);
-    expect(text).toContain('Centrifugal Water Pump 500 GPM');
-    expect(text).toContain('Stainless Steel 316L Pipes');
+  test('extractDocxText returns empty string for non-docx buffer', async () => {
+    const { extractDocxText } = require('@/lib/documentExtraction');
+    const buf = new Uint8Array([1, 2, 3, 4, 5]).buffer;
+    expect(await extractDocxText(buf)).toBe('');
+  });
 
-    const file = new File([pdfContent], 'specs.pdf', { type: 'application/pdf' });
+  test('parseDocxXml handles XML entities, tabs, and tables', () => {
+    const { parseDocxXml } = require('@/lib/documentExtraction');
+    const xml = '<w:p><w:t>Item &amp; Spec &lt;100&gt; &quot;High&quot; &#39;Grade&#39;</w:t></w:p><w:tr><w:tc><w:t>Col1</w:t></w:tc><w:tc><w:t>Col2</w:t></w:tc></w:tr>';
+    const result = parseDocxXml(xml);
+    expect(result).toContain('Item & Spec <100> "High" \'Grade\'');
+    expect(result).toContain('Col1 | Col2');
+  });
+
+  test('buildExtractionRequest handles generic file without type falling back to application/pdf', async () => {
+    const { buildExtractionRequest } = require('@/lib/documentExtraction');
+    const file = new File(['content'], 'custom_scan', { type: '' });
     const req = await buildExtractionRequest(file);
-    expect(req.documentText).toContain('Centrifugal Water Pump 500 GPM');
+    expect(req.fileName).toBe('custom_scan');
+    expect(req.mimeType).toBe('application/pdf');
+    expect(req.inlineData).toBeDefined();
+  });
+
+  test('buildExtractionRequest extracts docx when text is present and falls back to inlineData when empty or threw', async () => {
+    const { buildExtractionRequest } = require('@/lib/documentExtraction');
+    const emptyDocx = new File(['not a real zip'], 'empty.docx', { type: '' });
+    const req1 = await buildExtractionRequest(emptyDocx);
+    expect(req1.fileName).toBe('empty.docx');
+    expect(req1.inlineData).toBeDefined();
+    expect(req1.mimeType).toBe('application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+
+    const fn = 'word/document.xml';
+    const xml = '<w:p><w:t>Industrial Centrifugal Water Pump 500 GPM</w:t></w:p>';
+    const enc = new TextEncoder();
+    const fnBytes = enc.encode(fn);
+    const xmlBytes = enc.encode(xml);
+    const header = new Uint8Array(30 + fnBytes.length + xmlBytes.length);
+    header[0] = 0x50; header[1] = 0x4b; header[2] = 0x03; header[3] = 0x04;
+    header[8] = 0; header[9] = 0;
+    header[18] = xmlBytes.length & 0xff; header[19] = (xmlBytes.length >> 8) & 0xff;
+    header[26] = fnBytes.length & 0xff; header[27] = 0;
+    header.set(fnBytes, 30);
+    header.set(xmlBytes, 30 + fnBytes.length);
+
+    const validDocx = new File([header.buffer], 'valid.docx', { type: '' });
+    const req2 = await buildExtractionRequest(validDocx);
+    expect(req2.documentText).toContain('Industrial Centrifugal Water Pump 500 GPM');
+  });
+
+  test('buildExtractionRequest returns documentText for PDF with extracted text >= 15 chars', async () => {
+    const { buildExtractionRequest } = require('@/lib/documentExtraction');
+    const pdfWithText = new File([
+      '%PDF-1.4\nstream\n(High Pressure Boiler Valve 250 PSI Specification) Tj\nendstream'
+    ], 'valve_spec.pdf', { type: 'application/pdf' });
+    const req = await buildExtractionRequest(pdfWithText);
+    expect(req.fileName).toBe('valve_spec.pdf');
+    expect(req.documentText).toContain('High Pressure Boiler Valve 250 PSI Specification');
+  });
+
+  test('extractDocxText handles compressed docx with DecompressionStream and fallback', async () => {
+    const { extractDocxText } = require('@/lib/documentExtraction');
+    const fn = 'word/document.xml';
+    const compContent = new Uint8Array([0x78, 0x9c, 0x01, 0x00, 0x00, 0xff, 0xff]);
+    const enc = new TextEncoder();
+    const fnBytes = enc.encode(fn);
+    const header = new Uint8Array(30 + fnBytes.length + compContent.length);
+    header[0] = 0x50; header[1] = 0x4b; header[2] = 0x03; header[3] = 0x04;
+    header[8] = 8; header[9] = 0; // compMethod = 8
+    header[18] = compContent.length & 0xff; header[19] = 0;
+    header[26] = fnBytes.length & 0xff; header[27] = 0;
+    header.set(fnBytes, 30);
+    header.set(compContent, 30 + fnBytes.length);
+
+    const res = await extractDocxText(header.buffer);
+    expect(typeof res).toBe('string');
+  });
+
+  test('extractDocxText handles TextDecoder failure fallback for filename and content', async () => {
+    const { extractDocxText } = require('@/lib/documentExtraction');
+    const origTextDecoder = global.TextDecoder;
+    (global as any).TextDecoder = class MockFailingDecoder {
+      decode() {
+        throw new Error('Decoder failed');
+      }
+    };
+    try {
+      const fn = 'word/document.xml';
+      const xml = '<w:p><w:t>Fallback Text</w:t></w:p>';
+      const fnBytes = new Uint8Array(Array.from(fn).map((c) => c.charCodeAt(0)));
+      const xmlBytes = new Uint8Array(Array.from(xml).map((c) => c.charCodeAt(0)));
+      const header = new Uint8Array(30 + fnBytes.length + xmlBytes.length);
+      header[0] = 0x50; header[1] = 0x4b; header[2] = 0x03; header[3] = 0x04;
+      header[8] = 0; header[9] = 0;
+      header[18] = xmlBytes.length & 0xff; header[19] = (xmlBytes.length >> 8) & 0xff;
+      header[26] = fnBytes.length & 0xff; header[27] = 0;
+      header.set(fnBytes, 30);
+      header.set(xmlBytes, 30 + fnBytes.length);
+
+      const res = await extractDocxText(header.buffer);
+      expect(res).toContain('Fallback Text');
+    } finally {
+      global.TextDecoder = origTextDecoder;
+    }
+  });
+
+  test('parseDocxXml handles tabs and line breaks', () => {
+    const { parseDocxXml } = require('@/lib/documentExtraction');
+    const xml = '<w:p><w:t>Header</w:t><w:tab/><w:t>Value</w:t><w:br/><w:t>NextLine</w:t></w:p>';
+    const result = parseDocxXml(xml);
+    expect(result).toContain('Header Value');
+    expect(result).toContain('NextLine');
+  });
+
+  test('readAsText reads file contents as string', async () => {
+    const file = new File(['sample text content'], 'sample.txt', { type: 'text/plain' });
+    const content = await readAsText(file);
+    expect(content).toBe('sample text content');
+  });
+
+  test('extractPdfText parses plain and array Tj text streams from buffer', async () => {
+    const streamContent = 'stream\n(Centrifugal Pump 50HP) Tj\n[(Valve) -20 (Gate)] TJ\nendstream';
+    const encoder = new TextEncoder();
+    const buffer = encoder.encode(streamContent).buffer;
+
+    const result = await extractPdfText(buffer);
+    expect(result).toContain('Centrifugal Pump 50HP');
+    expect(result).toContain('Valve Gate');
+  });
+
+  test('extractPdfText handles empty or corrupt buffer gracefully', async () => {
+    expect(await extractPdfText(new ArrayBuffer(0))).toBe('');
+    expect(await extractPdfText(null as any)).toBe('');
   });
 });
+
+

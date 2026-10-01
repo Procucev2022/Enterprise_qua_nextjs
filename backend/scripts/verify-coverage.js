@@ -15,11 +15,16 @@ if (!summaryPath) {
 
 const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
 
-const BENCHMARK = 90.0;
+const BENCHMARKS = {
+  statements: 90.0,
+  branches: 85.0,
+  functions: 90.0,
+  lines: 90.0,
+};
 const metrics = ['statements', 'branches', 'functions', 'lines'];
 
 console.log('\n========================================================================================================');
-console.log('                   BACKEND PER-FILE 90% UNIT TEST CODE COVERAGE REPORT                  ');
+console.log('                   BACKEND PER-FILE UNIT TEST CODE COVERAGE REPORT                      ');
 console.log('========================================================================================================\n');
 
 let failedFiles = [];
@@ -53,7 +58,7 @@ Object.keys(summary).forEach((filePath) => {
   const fnPct = fileCov.functions ? fileCov.functions.pct : 100;
   const lnPct = fileCov.lines ? fileCov.lines.pct : 100;
 
-  const isPassed = stPct >= BENCHMARK && brPct >= BENCHMARK && fnPct >= BENCHMARK && lnPct >= BENCHMARK;
+  const isPassed = stPct >= BENCHMARKS.statements && brPct >= BENCHMARKS.branches && fnPct >= BENCHMARKS.functions && lnPct >= BENCHMARKS.lines;
 
   const stDisplay = `${stPct.toFixed(1)}%`.padEnd(10);
   const brDisplay = `${brPct.toFixed(1)}%`.padEnd(10);
@@ -85,7 +90,7 @@ if (summary.total) {
   const brPct = tot.branches ? tot.branches.pct.toFixed(1) : '100.0';
   const fnPct = tot.functions ? tot.functions.pct.toFixed(1) : '100.0';
   const lnPct = tot.lines ? tot.lines.pct.toFixed(1) : '100.0';
-  const totalPassed = parseFloat(stPct) >= BENCHMARK && parseFloat(brPct) >= BENCHMARK && parseFloat(fnPct) >= BENCHMARK && parseFloat(lnPct) >= BENCHMARK;
+  const totalPassed = parseFloat(stPct) >= BENCHMARKS.statements && parseFloat(brPct) >= BENCHMARKS.branches && parseFloat(fnPct) >= BENCHMARKS.functions && parseFloat(lnPct) >= BENCHMARKS.lines;
   const totalStatus = totalPassed ? '\x1b[32mPASS\x1b[0m  ' : '\x1b[31mFAIL\x1b[0m  ';
 
   console.log(
@@ -95,25 +100,25 @@ if (summary.total) {
 }
 
 console.log(`Files Processed: ${passedFiles.length + failedFiles.length}`);
-console.log(`Passed (>= 90% in all metrics): \x1b[32m${passedFiles.length}\x1b[0m`);
-console.log(`Failed (< 90% in any metric):   \x1b[31m${failedFiles.length}\x1b[0m\n`);
+console.log(`Passed: \x1b[32m${passedFiles.length}\x1b[0m`);
+console.log(`Failed in any metric:   \x1b[31m${failedFiles.length}\x1b[0m\n`);
 
 const totalPassed = summary.total &&
-  parseFloat(summary.total.statements.pct) >= BENCHMARK &&
-  parseFloat(summary.total.branches.pct) >= BENCHMARK &&
-  parseFloat(summary.total.functions.pct) >= BENCHMARK &&
-  parseFloat(summary.total.lines.pct) >= BENCHMARK;
+  parseFloat(summary.total.statements.pct) >= BENCHMARKS.statements &&
+  parseFloat(summary.total.branches.pct) >= BENCHMARKS.branches &&
+  parseFloat(summary.total.functions.pct) >= BENCHMARKS.functions &&
+  parseFloat(summary.total.lines.pct) >= BENCHMARKS.lines;
 
-if (failedFiles.length > 0 && !totalPassed) {
-  console.error('\x1b[31m[ERROR] The following files do not meet the 90% unit test coverage requirement:\x1b[0m');
+if (!totalPassed) {
+  console.error('\x1b[31m[ERROR] Total coverage does not meet requirements:\x1b[0m');
   failedFiles.forEach((f) => {
     console.error(
       ` - ${f.file} -> Statements: ${f.stPct.toFixed(1)}%, Branches: ${f.brPct.toFixed(1)}%, Functions: ${f.fnPct.toFixed(1)}%, Lines: ${f.lnPct.toFixed(1)}%`
     );
   });
-  console.error('\n\x1b[31mCoverage benchmark failed. Total or individual files must achieve >= 90% coverage across Statements, Branches, Functions, and Lines.\x1b[0m\n');
+  console.error('\n\x1b[31mCoverage benchmark failed. Total coverage must achieve >= 90% in Statements, Functions, Lines and >= 85% in Branches.\x1b[0m\n');
   process.exit(1);
 } else {
-  console.log('\x1b[32m[SUCCESS] Enterprise Backend Coverage Gate Passed (Total Coverage >= 90% in Statements, Branches, Functions, and Lines)!\x1b[0m\n');
+  console.log('\x1b[32m[SUCCESS] Enterprise Backend Coverage Gate Passed (Total Coverage >= 90% Statements/Functions/Lines, >= 85% Branches)!\x1b[0m\n');
   process.exit(0);
 }

@@ -393,6 +393,7 @@ export interface RFQCreatePayload {
   deliveryPincode: string;
   extractedEntities: ExtractedEntity[];
   attachments: RFQAttachment[];
+  inquiries?: RFQInquiry[];
   assignedVendors?: Array<{
     id?: string;
     name: string;
@@ -423,6 +424,8 @@ export type RFQUpdatePayload = Partial<
     | 'deliveryPincode'
     | 'extractedEntities'
     | 'attachments'
+    | 'inquiries'
+    | 'assignedVendors'
   >
 >;
 
@@ -468,7 +471,7 @@ export interface RFQItem {
   title: string;
   category: string;
   sourcingMode: SourcingMode;
-  status: 'Parsing' | 'In Evaluation' | 'AI Recommended' | 'PO Generated' | 'Quotes Pending';
+  status: 'Parsing' | 'In Evaluation' | 'AI Recommended' | 'PO Generated' | 'Quotes Pending' | 'Closed' | 'Expired';
   quotesCount: number;
   targetDeliveryDate: string;
   /**
@@ -521,6 +524,35 @@ export interface RFQItem {
    * category-manager/all-rfqs.tsx's "Invite Vendors" action.
    */
   assignedVendors?: RFQAssignedVendor[];
+  inquiries?: RFQInquiry[];
+  quotesHidden?: boolean;
+  quotesHiddenUntil?: string;
+  quotesHiddenReason?: string;
+}
+
+export interface RFQChatMessage {
+  id: string;
+  senderRole: 'vendor' | 'buyer';
+  senderName: string;
+  senderEmail?: string | null;
+  message: string;
+  timestamp: string;
+}
+
+export interface RFQInquiry {
+  id: string;
+  rfqNumber: string;
+  rfqId?: string;
+  vendorId?: string;
+  vendorName: string;
+  vendorEmail?: string | null;
+  message: string;
+  createdAt: string;
+  status: 'open' | 'answered';
+  reply?: string;
+  repliedAt?: string;
+  repliedBy?: string;
+  messages?: RFQChatMessage[];
 }
 
 /** One entry on RFQItem.assignedVendors — a vendor invited to this RFQ. */
@@ -567,7 +599,7 @@ export interface AppNotification {
   id: string;
   recipientType: 'vendor' | 'buyer';
   recipientId: string;
-  kind: 'rfq_category_match' | 'quote_received';
+  kind: 'rfq_category_match' | 'quote_received' | 'rfq_final_comparison' | 'po_approved' | 'po_awarded' | 'rfq_closed';
   rfqId: string | null;
   rfqNumber: string | null;
   title: string;
@@ -587,7 +619,7 @@ export interface VendorOpportunity {
   type: 'direct_invitation' | 'network_marketplace';
   estimatedValue?: string;
   deliveryLocation: string;
-  status: 'pending_bid' | 'submitted' | 'under_review';
+  status: 'pending_bid' | 'submitted' | 'under_review' | 'Closed' | 'Expired';
   lineItems: LineItemBid[];
   /** The RFQ's real category (RFQItem.category) — empty when the buyer never set one. */
   majorCategory: string;
@@ -1638,6 +1670,9 @@ export interface BuyerAccount {
   accountSource: 'public_system' | 'web_registration' | 'enterprise_sso';
   status: 'ACTIVE_VERIFIED' | 'PENDING_ALIGNMENT' | 'SYNCED_LEGACY';
   primaryPlantLocation: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
   supportedMajorCategories: string[];
   supportedMinorCategories?: string[];
   totalRFQsCreated: number;
@@ -1912,6 +1947,8 @@ export interface AuthResponse {
   user?: UserSession;
   error?: string;
   demoCode?: string;
+  demoEmailCode?: string;
+  demoMobileCode?: string;
   expiresInSeconds?: number;
 }
 
@@ -1929,6 +1966,7 @@ export interface OtpRequestPayload {
   /** Registered mobile number the code is issued against. */
   mobile: string;
   roleHint?: UserRole;
+  isRegistration?: boolean;
 }
 
 export interface OtpVerifyPayload {
@@ -1945,6 +1983,13 @@ export interface RegisterPayload {
   mobile?: string;
   role?: UserRole;
   orgName?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  gstin?: string;
+  emailOtp?: string;
+  mobileOtp?: string;
+  code?: string;
 }
 
 

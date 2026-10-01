@@ -24,6 +24,8 @@ router.post('/extract', authenticate, rfqController.extractRFQFromDocument);
 // buyer can pull the mailbox now instead of waiting for the next interval.
 router.get('/email-gateway/status', authenticate, rfqController.getEmailGatewayStatus);
 router.post('/email-gateway/poll', authenticate, rfqController.pollEmailGateway);
+// Buyer-triggered request to email a vendor to update their category
+router.post('/request-vendor-category-update', authenticate, rfqController.requestVendorCategoryUpdate);
 // Registered before '/:id' so 'attachments' is not read as an RFQ identifier.
 // Both require a session: an attachment is commercial-in-confidence, so the
 // download must never be anonymous.
@@ -33,6 +35,8 @@ router.get('/:id', authenticate, rfqController.getRFQById);
 router.put('/:id', authenticate, rfqController.updateRFQ);
 router.delete('/:id', authenticate, rfqController.deleteRFQ);
 router.post('/:id/quotes', authenticate, rfqController.addQuote);
+router.post('/:id/inquiries', authenticate, rfqController.addInquiry);
+router.post('/:id/inquiries/:inquiryId/reply', authenticate, rfqController.replyInquiry);
 router.post('/:id/batch-chaser', authenticate, rfqController.triggerBatchChaser);
 router.post('/:id/approve-po', authenticate, rfqController.approvePO);
 // The preview embeds the RFQ's commercial detail, so it cannot be anonymous.
@@ -52,5 +56,6 @@ router.post(
   requireRole('category_manager', 'admin'),
   rfqController.inviteVendors
 );
+router.post('/:id/validate-vendor-categories', authenticate, rfqController.validateVendorCategories);
 
 module.exports = router;
