@@ -26,7 +26,25 @@
 
 const crypto = require('crypto');
 const pool = require('./pool');
-const { getD1Binding } = require('./d1Bridge');
+const { getD1Binding, getD1HttpClient } = require('./d1Bridge');
+
+// True when D1 is reachable at all — either the real Workers binding, or the
+// REST API client (the only D1 path available to a plain `node scripts/*.js`
+// run outside Workers, e.g. the create-buyer/vendor/staff CLI scripts). The
+// `{ d1: true }` queries inside each branch below already resolve through
+// both paths correctly via pool.query's own binding -> HTTP client -> pg
+// priority order — gating the branch choice on the binding alone, as this
+// used to, sent every one of these scripts down the pg/Aiven fallback branch
+// below instead whenever run from a plain terminal (no Workers binding ever
+// exists there), silently writing a "successfully created" account into a
+// stray leftover Postgres database the live app never reads from, while
+// every READ in the very same script (findUserByEmail, resolveMasterUuid)
+// already went to the real D1 database via { d1: true } — confirmed live: a
+// vendor account insert reported real-looking uuids, then its own
+// read-back verification immediately after reported found=false.
+function hasD1() {
+  return Boolean(getD1Binding() || getD1HttpClient());
+}
 const {
   IDENTITY_ROLE_MAP,
   IDENTITY_MASTER_DATA,
@@ -324,7 +342,7 @@ async function insertBuyerAccount({
   // organisation rows for the same name rather than one being an inconsistent
   // half-write — not data corruption, just a duplicate-org race window that
   // pg's transaction closes and D1's doesn't.
-  if (getD1Binding()) {
+  if (hasD1()) {
     const orgLookup = await pool.query(
       'select uuid from organization where organization_name = $1 and org_type_uuid = $2 limit 1',
       [orgName, orgTypeUuid],
@@ -542,7 +560,7 @@ async function insertStaffAccount({
 
   // See insertBuyerAccount's comment on the D1/pg split — same reasoning,
   // same shape, applies identically here.
-  if (getD1Binding()) {
+  if (hasD1()) {
     const orgLookup = await pool.query(
       'select uuid from organization where organization_name = $1 and org_type_uuid = $2 limit 1',
       [orgName, orgTypeUuid],
@@ -765,7 +783,7 @@ async function insertVendorAccount({
   if (!statusUuid) throw new Error(`Status "${IDENTITY_MASTER_DATA.VENDOR_STATUS}" not found.`);
 
   // See insertBuyerAccount's comment on the D1/pg split — same reasoning here.
-  if (getD1Binding()) {
+  if (hasD1()) {
     const orgLookup = await pool.query(
       'select uuid from organization where organization_name = $1 and org_type_uuid = $2 limit 1',
       [orgName, orgTypeUuid],

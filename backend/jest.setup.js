@@ -28,6 +28,20 @@ process.env.GMAIL_REFRESH_TOKEN = '';
 process.env.VENDOR_GMAIL_REFRESH_TOKEN = '';
 process.env.QUOTE_ALERT_GMAIL_REFRESH_TOKEN = '';
 
+// Same reasoning again for the D1 HTTP client (src/db/d1Bridge.js's
+// getD1HttpClient): CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_D1_DATABASE_ID/
+// CLOUDFLARE_API_TOKEN in backend/.env are real credentials for the live
+// production D1 database. pool.hasStorage() only checks these are truthy,
+// not reachable, so leaving them set here means every `{d1:true}` query a
+// test runs goes out over the network to the REAL database instead of
+// safely no-op'ing — confirmed live: correcting a stale, wrong
+// CLOUDFLARE_D1_DATABASE_ID in .env (it was pointing at an abandoned
+// database) immediately made 27 previously-passing tests fail, because they
+// started reaching the actual production RFQs/vendors instead of nothing.
+process.env.CLOUDFLARE_ACCOUNT_ID = '';
+process.env.CLOUDFLARE_D1_DATABASE_ID = '';
+process.env.CLOUDFLARE_API_TOKEN = '';
+
 // Session-signing key, pinned for the whole test process.
 //
 // authService resolves this once at module load. Without it, a non-production
