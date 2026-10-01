@@ -15,7 +15,7 @@ const SMS_GATEWAY_CONFIG = {
   get PASS() { return getEnv('SMS_GATEWAY_PASS', 'TzlzyMcFEZRF'); },
   get SENDER() { return getEnv('SMS_GATEWAY_SENDER', 'PROCUC'); },
   get SMSGID() { return getEnv('SMS_GATEWAY_SMSGID', '1102294821'); },
-  get RFQ_SMSGID() { return getEnv('SMS_GATEWAY_RFQ_SMSGID', getEnv('SMS_GATEWAY_SMSGID', '1777179075004997492')); },
+  get RFQ_SMSGID() { return getEnv('SMS_GATEWAY_RFQ_SMSGID', getEnv('SMS_GATEWAY_SMSGID', '1777179076323440961')); },
 };
 
 // In-memory cooldown throttle cache to prevent infinite / spam loop SMS dispatches to the same phone number
@@ -175,9 +175,9 @@ async function sendRFQChaserSms({ mobile, vendorName, rfqNumber, rfqTitle, bidLi
 
   const defaultFrontend = process.env.PUBLIC_FRONTEND_URL || 'https://procucev-enterprise-frontend.procucev-enterprise.workers.dev';
   const resolvedBidLink = bidLink || `${defaultFrontend}/vendor/quotation-form?rfq=${encodeURIComponent(rfqNumber)}`;
-  // Exact approved DLT template (smsgid: 1777179075004997492):
-  // RFQ Alert {#var#}: You are invited to bid for {#var#}. Submit quote : {#var#} - Team Procucev.
-  const message = `RFQ Alert ${rfqNumber}: You are invited to bid for ${rfqTitle || rfqNumber}. Submit quote : ${resolvedBidLink} - Team Procucev.`;
+  // Exact approved DLT template (smsgid: 1777179076323440961):
+  // RFQ Alert {#var#}. You are invited to bid for {#var#}. Submit quote : {#var#} - Team Procucev.
+  const message = `RFQ Alert ${rfqNumber}. You are invited to bid for ${rfqTitle || rfqNumber}. Submit quote : ${resolvedBidLink} - Team Procucev.`;
 
   const payload = {
     user: SMS_GATEWAY_CONFIG.USER,
