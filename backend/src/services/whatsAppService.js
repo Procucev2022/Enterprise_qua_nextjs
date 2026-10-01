@@ -129,7 +129,7 @@ function _buildRfqTemplatePlaceholders({ vendorName, contactPerson, rfqNumber, r
   // {{3}} = RFQ reference number (e.g. RFQ260110013321)
   // {{4}} = delivery date        (e.g. 2026-10-15)
   // {{5}} = delivery location    (e.g. Gandhinagar, Gujarat)
-  // {{6}} = 1-click portal link  (URL only — button or inline link)
+  // {{6}} = 1-click portal link  (actual workers.dev quotation-form URL)
   if (currentTemplate.includes('v2') || currentTemplate.includes('reminder')) {
     // {{1}} must be the contact person name for the "Hello {{1}}," greeting.
     // Fall back to vendorName only if no contactPerson is set.

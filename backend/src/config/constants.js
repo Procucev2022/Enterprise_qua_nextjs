@@ -754,24 +754,18 @@ const CHASER_DELAYS = {
 // ==============================================================================
 // Registered templates on sendmsg.in / TRAI DLT portal.
 //
-// ┌────────────────────────────────┬──────────────────────┬─────────────────┬──────────────────────────────────────────────────────────────────────────────────────────┐
-// │ Template Name (DLT)            │ SMSGID               │ DLT Category    │ Approved Template Text                                                                   │
-// ├────────────────────────────────┼──────────────────────┼─────────────────┼──────────────────────────────────────────────────────────────────────────────────────────┤
-// │ RFQ_Notification_Seller        │ 1777179076323440961  │ PROMOTIONAL     │ RFQ Alert {#var#}. You are invited to bid for {#var#}. Submit quote : {#var#} - Team     │
-// │                                │                      │ (STPL Active)   │ Procucev.                                                                                │
-// │                                │                      │ ⚠️ PROMOTIONAL   │ Variables: {#var#}×3 → rfqNumber, rfqTitle, bidUrl                                      │
-// │                                │                      │ templates are   │                                                                                          │
-// │                                │                      │ BLOCKED on DND  │                                                                                          │
-// │                                │                      │ numbers by TRAI │                                                                                          │
-// ├────────────────────────────────┼──────────────────────┼─────────────────┼──────────────────────────────────────────────────────────────────────────────────────────┤
-// │ (OTP template)                 │ 1102294821           │ Transactional   │ OTP for registering your access to Get My quoTe (GMT): {#var#}. Valid for 5 mins. Do    │
-// │                                │                      │                 │ not share. - Team Procucev.                                                               │
-// └────────────────────────────────┴──────────────────────┴─────────────────┴──────────────────────────────────────────────────────────────────────────────────────────┘
+// Template Name      : RFQ_Notification_Seller
+// SMSGID             : 1777179076323440961
+// DLT Category       : PROMOTIONAL (STPL Active)
+// Approved Text      : RFQ Alert {#var#}. You are invited to bid for {#var#}. Submit quote : {#var#} - Team Procucev.
+// Variables          : {#var#}×3 → rfqNumber, rfqTitle, bidUrl
 //
-// ACTION REQUIRED: Re-register RFQ_Notification_Seller under TRANSACTIONAL
-// category on the TRAI DLT portal (https://www.trai.gov.in/dlt) so it bypasses
-// DND filtering and reaches all vendor numbers. Until then, vendors on DND will
-// NOT receive the SMS — the gateway accepts and returns a mid but carriers drop it.
+// NOTE: The bid URL (Variable 3) points to the actual workers.dev quotation-form
+// URL. TinyURL shortening is applied so the message fits in 1 SMS unit (≤160 chars)
+// and improves Promotional category delivery on Indian carriers.
+// The shortened URL redirects to the real quotation-form page.
+//
+// OTP Template       : DLT ID 1102294821 (TRANSACTIONAL)
 const SMS_DLT_TEMPLATES = {
   RFQ_CHASER: {
     NAME:     'RFQ_Notification_Seller',
@@ -780,10 +774,8 @@ const SMS_DLT_TEMPLATES = {
     // Exact approved template text — static parts must match character-for-character.
     TEMPLATE: 'RFQ Alert {#var#}. You are invited to bid for {#var#}. Submit quote : {#var#} - Team Procucev.',
     VARIABLES: ['rfqNumber', 'rfqTitle', 'bidUrl'],
-    // The bid URL (Variable 3) is shortened via TinyURL before dispatch so the
-    // total message length stays ≤160 chars (1 SMS unit). Promotional 1-unit SMS
-    // has significantly better carrier delivery than 2-unit messages.
-    // Raw workers.dev URL (~110 chars) → TinyURL (~28 chars) = ~136 chars total.
+    // bidUrl points to the actual workers.dev quotation-form page.
+    // TinyURL shortening keeps total message ≤160 chars (1 SMS unit).
     URL_SHORTENING: true,
   },
   OTP: {

@@ -231,25 +231,26 @@ async function sendRFQChaserSms({ mobile, vendorName, rfqNumber, rfqTitle, bidLi
   }
 
   const defaultFrontend = process.env.PUBLIC_FRONTEND_URL || 'https://procucev-enterprise-frontend.procucev-enterprise.workers.dev';
+
+  // Build the actual quotation-form URL on the workers.dev frontend.
+  // This is the real vendor quote submission page — vendors land here to submit quotes.
   const rawBidLink = bidLink || `${defaultFrontend}/vendor/quotation-form?rfq=${encodeURIComponent(rfqNumber)}`;
 
-  // Shorten the bid URL so the full message stays within 1 SMS unit (≤160 chars).
-  // The raw workers.dev URL is ~110 chars which pushes the message to 218 chars
-  // (2 SMS units). Promotional category 2-unit SMS is unreliable on Indian carriers.
-  // TinyURL shortens it to ~28 chars → total message ~136 chars (1 unit).
+  // Shorten the actual workers.dev URL via TinyURL so the total message fits in
+  // 1 SMS unit (≤160 chars). The shortened link redirects to the real quotation-form page.
   // Falls back to the original URL silently if TinyURL is unreachable.
   const resolvedBidLink = await shortenUrl(rawBidLink);
 
   // Exact approved DLT template (SMS_DLT_TEMPLATES.RFQ_CHASER.TEMPLATE):
   // RFQ Alert {#var#}. You are invited to bid for {#var#}. Submit quote : {#var#} - Team Procucev.
-  // Variables mapped in order: rfqNumber → rfqTitle → bidUrl (shortened)
+  // Variables mapped in order: rfqNumber → rfqTitle → bidUrl (shortened, points to actual quotation-form)
   const message = `RFQ Alert ${rfqNumber}. You are invited to bid for ${rfqTitle || rfqNumber}. Submit quote : ${resolvedBidLink} - Team Procucev.`;
   const messageChars = message.length;
   const smsUnits = Math.ceil(messageChars / 160);
 
   logger.info(
     `[SMS_SERVICE] RFQ chaser SMS prepared: ${messageChars} chars (${smsUnits} unit${smsUnits > 1 ? 's' : ''})`,
-    { rfqNumber, messageChars, smsUnits, shortUrl: resolvedBidLink },
+    { rfqNumber, messageChars, smsUnits, actualUrl: rawBidLink, shortUrl: resolvedBidLink },
     'SMS_SERVICE'
   );
 
