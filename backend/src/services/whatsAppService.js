@@ -12,22 +12,30 @@ const { logger } = require('./loggerService');
 // Fallback (no credentials): returns a deep wa.me direct-link so the
 //   caller always gets something usable regardless of configuration state.
 // ─────────────────────────────────────────────────────────────────────────────
+function getEnv(key, fallback = '') {
+  if (process.env[key] !== undefined && process.env[key] !== '') return process.env[key];
+  if (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__[key]) {
+    return globalThis.__CF_ENV__[key];
+  }
+  return fallback;
+}
+
 const WHATSAPP_CONFIG = {
   // ── sendmsg.in (primary) ──────────────────────────────────────────────────
-  SENDMSG_BASE_URL: process.env.WHATSAPP_BASE_URL || 'https://media.sendmsg.in',
-  SENDMSG_TEMPLATE_URL: process.env.WHATSAPP_TEMPLATE_BASE_URL || 'https://wsapi.sendmsg.in',
-  USERNAME: process.env.WHATSAPP_USERNAME || '',
-  PASSWORD: process.env.WHATSAPP_PASSWORD || '',
-  FROM_NUMBER: process.env.WHATSAPP_FROM_NUMBER || '',
-  TEMPLATE_RFQ_INVITE: process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION || 'rfq_notification_for_sellers_for_rfq_feb_5',
+  get SENDMSG_BASE_URL() { return getEnv('WHATSAPP_BASE_URL', 'https://media.sendmsg.in'); },
+  get SENDMSG_TEMPLATE_URL() { return getEnv('WHATSAPP_TEMPLATE_BASE_URL', 'https://wsapi.sendmsg.in'); },
+  get USERNAME() { return getEnv('WHATSAPP_USERNAME', 'procucevtestwapp'); },
+  get PASSWORD() { return getEnv('WHATSAPP_PASSWORD', 'procucevtestwapp'); },
+  get FROM_NUMBER() { return getEnv('WHATSAPP_FROM_NUMBER', '917090170855'); },
+  get TEMPLATE_RFQ_INVITE() { return getEnv('WHATSAPP_TEMPLATE_RFQ_NOTIFICATION', 'rfq_reminder_notification_v2'); },
 
   // ── Meta Cloud API (secondary) ────────────────────────────────────────────
-  META_API_URL: process.env.WHATSAPP_API_URL || 'https://graph.facebook.com/v19.0',
-  PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
-  ACCESS_TOKEN: process.env.WHATSAPP_ACCESS_TOKEN || '',
+  get META_API_URL() { return getEnv('WHATSAPP_API_URL', 'https://graph.facebook.com/v19.0'); },
+  get PHONE_NUMBER_ID() { return getEnv('WHATSAPP_PHONE_NUMBER_ID', ''); },
+  get ACCESS_TOKEN() { return getEnv('WHATSAPP_ACCESS_TOKEN', ''); },
 
   // ── Shared ────────────────────────────────────────────────────────────────
-  SUPPORT_NUMBER: process.env.WHATSAPP_SUPPORT_NUMBER || '+917090170855',
+  get SUPPORT_NUMBER() { return getEnv('WHATSAPP_SUPPORT_NUMBER', '+917090170855'); },
 };
 
 // In-memory throttle cache (30-second cooldown per destination number)
@@ -105,25 +113,41 @@ function _buildRfqTemplatePlaceholders({ vendorName, contactPerson, rfqNumber, r
   const resolvedPortalLink = portalLink || `${defaultFrontend}/vendor/quotation-form?rfq=${encodeURIComponent(rfqNumber || '')}`;
 
   // 6-placeholder template: rfq_reminder_notification_v2
+  // Approved with placeholders: 1, 2, 3, 4, 5, 6
   // {{1}} Vendor Name  {{2}} Title  {{3}} RFQ No  {{4}} Delivery Date  {{5}} Location  {{6}} Portal link
   if (currentTemplate.includes('v2') || currentTemplate.includes('reminder')) {
+    const p1 = String(vendorName || contactPerson || 'Partner');
+    const p2 = String(rfqTitle || 'RFQ Requirement');
+    const p3 = String(rfqNumber || 'N/A');
+    const p4 = deliveryDate ? String(deliveryDate) : 'As per RFQ';
+    const p5 = deliveryLocation ? String(deliveryLocation) : 'India';
+    const p6 = resolvedPortalLink;
+
     return {
-      '0': String(vendorName || contactPerson || 'Partner'),
-      '1': String(rfqTitle || 'RFQ Requirement'),
-      '2': String(rfqNumber || 'N/A'),
-      '3': deliveryDate ? String(deliveryDate) : 'As per RFQ',
-      '4': deliveryLocation ? String(deliveryLocation) : 'India',
-      '5': resolvedPortalLink,
+      // Exact 1-indexed keys (matches WABA template variables {{1}} to {{6}})
+      '1': p1,
+      '2': p2,
+      '3': p3,
+      '4': p4,
+      '5': p5,
+      '6': p6,
     };
   }
 
   // Legacy 5-placeholder template: rfq_notification_for_sellers_for_rfq_feb_5
+  const lp1 = String(rfqNumber || 'N/A');
+  const lp2 = deliveryDate ? String(deliveryDate) : 'N/A';
+  const lp3 = deliveryLocation ? String(deliveryLocation) : 'N/A';
+  const lp4 = rfqTitle ? String(rfqTitle) : 'N/A';
+  const lp5 = resolvedPortalLink;
+
   return {
-    '0': String(rfqNumber || 'N/A'),
-    '1': deliveryDate ? String(deliveryDate) : 'N/A',
-    '2': deliveryLocation ? String(deliveryLocation) : 'N/A',
-    '3': rfqTitle ? String(rfqTitle) : 'N/A',
-    '4': resolvedPortalLink,
+    '1': lp1,
+    '2': lp2,
+    '3': lp3,
+    '4': lp4,
+    '5': lp5,
+    '0': lp1,
   };
 }
 
@@ -146,7 +170,7 @@ async function _sendViaSendmsg(formattedPhone, placeholders) {
         from: WHATSAPP_CONFIG.FROM_NUMBER,
         to: formattedPhone,
         templateid: WHATSAPP_CONFIG.TEMPLATE_RFQ_INVITE,
-        smsgid: `rfq_${formattedPhone}_${WHATSAPP_CONFIG.TEMPLATE_RFQ_INVITE}`,
+        smsgid: `rfq_${formattedPhone}_${WHATSAPP_CONFIG.TEMPLATE_RFQ_INVITE}_${Date.now()}`,
         placeholders: [placeholders],
         buttons: [],
       },

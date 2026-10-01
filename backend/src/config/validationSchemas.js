@@ -191,6 +191,7 @@ const VALIDATION_SCHEMAS = {
     targetDeliveryDate: { type: 'string', required: false },
     extractedEntities: { type: 'array', required: false },
     attachments: { type: 'array', required: false },
+    assignedVendors: { type: 'array', required: false },
   },
 
   // Document handed to POST /api/rfqs/extract for Gemini line-item extraction.

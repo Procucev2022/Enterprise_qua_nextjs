@@ -13,6 +13,7 @@ jest.mock('@/lib/rfqClient', () => ({
   classifyLineItems: jest.fn(),
   uploadRFQAttachment: jest.fn(),
   createRFQ: jest.fn(),
+  requestVendorCategoryUpdateEmail: jest.fn().mockResolvedValue({ success: true, message: 'Email sent.' }),
 }));
 
 jest.mock('xlsx', () => ({
@@ -312,6 +313,8 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     fireEvent.click(submitBtn);
 
     await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
+    expect(await screen.findByText('RFQ Dispatched Successfully!')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Done/i }));
     expect(onComplete).toHaveBeenCalled();
   });
 
@@ -897,6 +900,35 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
         phone: '+91 98200 11111',
       },
     ]);
+  });
+
+  it('allows buyer to view category mismatched vendors and send category update email', async () => {
+    serveBootstrap([
+      {
+        id: 'v-mismatch-1',
+        name: 'Delta Bearings',
+        email: 'delta@bearings.com',
+        source: 'historical_purchase_dump',
+        majorCategory: 'Civil Works',
+      },
+    ]);
+    renderWizard();
+
+    fireEvent.click(screen.getByTestId('mode-mode_1'));
+    await waitFor(() => expect(screen.getByText('1 Suppliers Found')).toBeInTheDocument());
+
+    const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
+    const [majorSelect] = within(row).getAllByRole('combobox') as HTMLSelectElement[];
+    fireEvent.change(majorSelect, { target: { value: 'Engineering Spares - Mechanical' } });
+
+    await waitFor(() => expect(screen.getAllByText(/Category Mismatch/i).length).toBeGreaterThan(0));
+
+    const sendEmailBtn = screen.getByRole('button', { name: /Send Email to Update Category/i });
+    expect(sendEmailBtn).toBeInTheDocument();
+
+    fireEvent.click(sendEmailBtn);
+
+    await waitFor(() => expect(screen.getByText(/Update Email Sent ✓/i)).toBeInTheDocument());
   });
 
   it('Mode 2 (default) also assigns the buyer\'s private roster — a category match alone no longer grants vendor visibility, so it must actually be invited', async () => {

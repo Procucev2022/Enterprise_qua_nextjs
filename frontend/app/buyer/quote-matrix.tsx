@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { formatCurrency } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
@@ -21,6 +22,7 @@ import {
   AlertCircle,
   Search,
   Info,
+  Lock,
 } from 'lucide-react';
 
 interface QuoteMatrixProps {
@@ -36,18 +38,24 @@ interface QuoteMatrixProps {
 
 export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount = false }: QuoteMatrixProps) {
   const { rfqs: allRfqs, selectedRFQForMatrix, setSelectedRFQForMatrix, showToast, openRFQDeepDive, deepDiveModalOpen, setDeepDiveModalOpen, selectedRFQForDeepDive } = useApp();
+  const searchParams = useSearchParams();
+  const rfqParam = searchParams?.get('rfq');
 
-  // GET /api/rfqs is itself scoped server-side by the caller's role now — see
-  // command-center.tsx's matching note — so allRfqs is already exactly right
-  // either way: a buyer's own list on this route, or the full cross-buyer
-  // list on the category manager's. `selectedRFQForMatrix` is app-wide store
-  // state though, so a stale selection left over from a different role's
-  // navigation is still deliberately checked against the current list below
-  // rather than trusted outright.
   const rfqs = allRfqs;
+
+  useEffect(() => {
+    if (rfqParam && rfqs.length > 0) {
+      const match = rfqs.find((r) => r.rfqNumber === rfqParam || r.id === rfqParam);
+      if (match && match.id !== selectedRFQForMatrix?.id) {
+        setSelectedRFQForMatrix(match);
+      }
+    }
+  }, [rfqParam, rfqs, selectedRFQForMatrix?.id, setSelectedRFQForMatrix]);
+
+  const paramMatch = rfqParam ? rfqs.find((r) => r.rfqNumber === rfqParam || r.id === rfqParam) : null;
   const selectionInScope = !scopeToOwnBuyerAccount || (!!selectedRFQForMatrix && rfqs.some((r) => r.id === selectedRFQForMatrix.id));
 
-  const currentRFQ = (selectionInScope ? selectedRFQForMatrix : null) || (rfqs.length > 0 ? rfqs[0] : null);
+  const currentRFQ = paramMatch || (selectionInScope ? selectedRFQForMatrix : null) || (rfqs.length > 0 ? rfqs[0] : null);
 
   const [poModalOpen, setPoModalOpen] = useState(false);
   const [selectedVendorForPO, setSelectedVendorForPO] = useState<QuoteComparison | null>(null);
@@ -178,7 +186,26 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
       </div>
 
       {/* Evaluation Matrix Comparison Table */}
-      {quotes.length === 0 ? (
+      {currentRFQ?.quotesHidden ? (
+        <div className="p-12 text-center glass-panel rounded-2xl space-y-4 border border-amber-300 dark:border-amber-700/50 bg-amber-50/50 dark:bg-amber-950/20 shadow-md">
+          <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 flex items-center justify-center shadow-inner">
+            <Lock size={28} />
+          </div>
+          <div className="space-y-1">
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">Quotes Sealed — 48-Hour Bidding Period Active</h3>
+            <p className="text-xs text-slate-600 dark:text-gray-300 max-w-lg mx-auto">
+              {currentRFQ.quotesHiddenReason || 'Received quotations remain hidden from the buyer for 48 hours after release to preserve bidding integrity.'}
+            </p>
+          </div>
+          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold bg-white dark:bg-gray-800 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-700/60 shadow-sm">
+            <Clock size={14} />
+            <span>Unseals on: {currentRFQ.quotesHiddenUntil ? new Date(currentRFQ.quotesHiddenUntil).toLocaleString() : 'After 48 hours'} (or upon RFQ closure)</span>
+          </div>
+          <p className="text-[11px] text-slate-500 dark:text-gray-400 max-w-md mx-auto">
+            📱 An SMS comparison acknowledgment and final evaluation email will automatically be sent to your phone and inbox upon RFQ closure.
+          </p>
+        </div>
+      ) : quotes.length === 0 ? (
         <div className="p-12 text-center glass-panel rounded-2xl space-y-3 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80">
           <AlertCircle size={32} className="mx-auto text-amber-500" />
           <h3 className="text-base font-bold text-slate-900 dark:text-white">Quotes Pending for this RFQ</h3>

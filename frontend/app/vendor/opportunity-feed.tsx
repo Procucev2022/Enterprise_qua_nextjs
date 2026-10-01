@@ -742,16 +742,22 @@ export default function OpportunityFeed({
                         </button>
 
                         {/* Submit Quote Button */}
-                        <button
-                          onClick={() => router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
-                          className="btn btn-primary btn-xs p-1.5 flex items-center justify-center gap-1 font-bold shadow-sm"
-                          title="Submit Detailed Quotation"
-                        >
-                          <Send size={12} />
-                          <span>Submit Quote</span>
-                        </button>
+                        {opp.status === 'Closed' || opp.status === 'Expired' ? (
+                          <span className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-500 dark:text-gray-400 border border-slate-200 dark:border-gray-700">
+                            🔒 Closed
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
+                            className="btn btn-primary btn-xs p-1.5 flex items-center justify-center gap-1 font-bold shadow-sm"
+                            title="Submit Detailed Quotation"
+                          >
+                            <Send size={12} />
+                            <span>Submit Quote</span>
+                          </button>
+                        )}
 
-                        {isLocked && (
+                        {isLocked && opp.status !== 'Closed' && opp.status !== 'Expired' && (
                           <button
                             onClick={openUpgradeModal}
                             className="btn btn-amber btn-xs font-bold flex items-center gap-1 py-1.5 px-3 text-[11px]"
@@ -1096,16 +1102,22 @@ export default function OpportunityFeed({
                         </button>
 
                         {/* Submit Quote Button */}
-                        <button
-                          onClick={() => router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
-                          className="btn btn-primary btn-xs p-1.5 flex items-center justify-center gap-1 font-bold shadow-sm"
-                          title="Submit Detailed Quotation"
-                        >
-                          <Send size={12} />
-                          <span>Submit Quote</span>
-                        </button>
+                        {opp.status === 'Closed' || opp.status === 'Expired' ? (
+                          <span className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-500 dark:text-gray-400 border border-slate-200 dark:border-gray-700">
+                            🔒 Closed
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
+                            className="btn btn-primary btn-xs p-1.5 flex items-center justify-center gap-1 font-bold shadow-sm"
+                            title="Submit Detailed Quotation"
+                          >
+                            <Send size={12} />
+                            <span>Submit Quote</span>
+                          </button>
+                        )}
 
-                        {isLocked && (
+                        {isLocked && opp.status !== 'Closed' && opp.status !== 'Expired' && (
                           <button
                             onClick={openUpgradeModal}
                             className="btn btn-amber btn-xs font-bold flex items-center gap-1 py-1.5 px-3 text-[11px]"

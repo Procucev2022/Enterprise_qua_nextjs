@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import {
   SOURCING_MODES,
@@ -15,6 +16,7 @@ import {
   classifyLineItems,
   uploadRFQAttachment,
   fetchAllVendors,
+  requestVendorCategoryUpdateEmail,
 } from '@/lib/rfqClient';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
 import {
@@ -66,6 +68,10 @@ import {
   ChevronDown,
   Check,
   X,
+  CheckSquare,
+  Square,
+  Search,
+  ExternalLink,
 } from 'lucide-react';
 
 const EXTRACTION = UI_STRINGS.rfqExtraction;
@@ -167,6 +173,38 @@ export default function IngestionWizard({
   const [vendorFormPincode, setVendorFormPincode] = useState('');
   const [vendorFormGstin, setVendorFormGstin] = useState('');
   const [isSubmittingVendor, setIsSubmittingVendor] = useState(false);
+  const [sendingCategoryEmailVendors, setSendingCategoryEmailVendors] = useState<string[]>([]);
+  const [sentCategoryEmailVendors, setSentCategoryEmailVendors] = useState<string[]>([]);
+  const [vendorCategoryFilterTab, setVendorCategoryFilterTab] = useState<'all' | 'matched' | 'mismatched'>('all');
+
+  const handleSendCategoryUpdateEmail = async (vendor: any, rfqCategorySignals: string[]) => {
+    const vendorKey = vendor?.id || vendor?.email;
+    if (!vendorKey) return;
+    setSendingCategoryEmailVendors((prev) => [...prev, vendorKey]);
+    try {
+      const res = await requestVendorCategoryUpdateEmail({
+        vendorId: vendor.id,
+        vendorEmail: vendor.email,
+        vendorName: vendor.name || vendor.contactPerson,
+        rfqCategory: rfqCategorySignals.join(', ') || form.lineItems?.[0]?.majorCategory || 'Requested Category',
+        rfqTitle: form.title || 'Procurement Requisition',
+      });
+      if (res.success) {
+        setSentCategoryEmailVendors((prev) => [...prev, vendorKey]);
+        showToast(
+          'Category Update Email Sent',
+          `An email has been sent to ${vendor.name || vendor.contactPerson || 'Vendor'} (${vendor.email}) requesting them to update their category to match this RFQ.`,
+          'success'
+        );
+      } else {
+        showToast('Email Delivery Issue', res.error || 'Failed to dispatch email.', 'warning');
+      }
+    } catch (err: any) {
+      showToast('Error', err?.message || 'Failed to send update email.', 'warning');
+    } finally {
+      setSendingCategoryEmailVendors((prev) => prev.filter((id) => id !== vendorKey));
+    }
+  };
 
   const resetAddVendorForm = () => {
     setVendorFormName('');
@@ -234,6 +272,15 @@ export default function IngestionWizard({
     }
   };
 
+  let router: any = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    router = useRouter();
+  } catch {
+    router = null;
+  }
+  const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
+  const [confirmationRfq, setConfirmationRfq] = useState<any | null>(null);
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [isDispatching, setIsDispatching] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -692,17 +739,31 @@ export default function IngestionWizard({
       if ((form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2') && Array.isArray(buyerVendors)) {
         const allMyUploadedVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
         const { signals: dispatchSignals } = extractRfqCategorySignals(updatedForm);
-        // No fallback to "every uploaded vendor" when nothing matches this
-        // RFQ's category — that used to send the RFQ to a buyer's entire
-        // private roster regardless of relevance (confirmed live: an IT
-        // vendor got assigned to a Mechanical RFQ because none of the
-        // buyer's vendors happened to be in Mechanical). Only category
-        // signal-free RFQs (nothing to filter against) still list everyone.
-        const myUploadedVendors = dispatchSignals.length > 0
-          ? allMyUploadedVendors.filter((v) => matchVendorAgainstSignals(v, dispatchSignals).isMatch)
+        const candidatePool = selectedVendorIds.length > 0
+          ? allMyUploadedVendors.filter((v) => selectedVendorIds.includes(v.id))
           : allMyUploadedVendors;
-        if (myUploadedVendors.length > 0) {
-          mode1AssignedVendors = myUploadedVendors.map(toAssignedVendorEntry);
+
+        const matchingVendors: typeof candidatePool = [];
+        const mismatchedVendors: typeof candidatePool = [];
+
+        for (const v of candidatePool) {
+          if (dispatchSignals.length === 0 || matchVendorAgainstSignals(v, dispatchSignals).isMatch) {
+            matchingVendors.push(v);
+          } else {
+            mismatchedVendors.push(v);
+          }
+        }
+
+        if (mismatchedVendors.length > 0) {
+          showToast(
+            'Shortlist Adjusted',
+            `${mismatchedVendors.length} vendor(s) have category mismatches and were excluded from RFQ shortlist. Update request email dispatched.`,
+            'info'
+          );
+        }
+
+        if (matchingVendors.length > 0) {
+          mode1AssignedVendors = matchingVendors.map(toAssignedVendorEntry);
         }
       }
 
@@ -731,12 +792,13 @@ export default function IngestionWizard({
       }
 
       adoptCreatedRFQ(result.rfq);
+      setConfirmationRfq(result.rfq);
+      setSubmitAttempted(false);
       showToast(
         'RFQ Dispatched',
         `RFQ ${result.rfq.rfqNumber} has been created and dispatched in ${form.sourcingMode.toUpperCase()} mode.`,
         'success'
       );
-      onComplete();
     } catch (err: any) {
       setSubmitError(err?.message || 'Failed to dispatch RFQ.');
     } finally {
@@ -1484,21 +1546,7 @@ export default function IngestionWizard({
                   <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                     <span>Mode 1: Buyer&apos;s Approved Vendor Roster</span>
                     <span className="badge badge-blue text-[10px] font-bold">
-                      {(() => {
-                        const uploaded = buyerVendors.filter((v) => isBuyerUploaded(v));
-                        const { signals } = extractRfqCategorySignals(form);
-                        const effective = signals.length > 0
-                          ? uploaded.filter((v) => matchVendorAgainstSignals(v, signals).isMatch)
-                          : uploaded;
-                        const filtered = mode1VendorSearch.trim()
-                          ? effective.filter((v) =>
-                              v.name.toLowerCase().includes(mode1VendorSearch.toLowerCase()) ||
-                              v.email?.toLowerCase().includes(mode1VendorSearch.toLowerCase()) ||
-                              v.majorCategory?.toLowerCase().includes(mode1VendorSearch.toLowerCase())
-                            )
-                          : effective;
-                        return filtered.length;
-                      })()} Suppliers Found
+                      {buyerVendors.filter((v) => isBuyerUploaded(v)).length} Suppliers Found
                     </span>
                   </h3>
                   <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
@@ -1533,18 +1581,7 @@ export default function IngestionWizard({
 
             {(() => {
               const allMyVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
-              const { signals: mode1Signals } = extractRfqCategorySignals(form);
-              const effective = mode1Signals.length > 0
-                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, mode1Signals).isMatch)
-                : allMyVendors;
-              const myVendors = mode1VendorSearch.trim()
-                ? effective.filter((v) =>
-                    v.name.toLowerCase().includes(mode1VendorSearch.toLowerCase()) ||
-                    v.email?.toLowerCase().includes(mode1VendorSearch.toLowerCase()) ||
-                    v.majorCategory?.toLowerCase().includes(mode1VendorSearch.toLowerCase())
-                  )
-                : effective;
-              if (myVendors.length === 0) {
+              if (allMyVendors.length === 0) {
                 return (
                   <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-2">
                     <Users size={28} className="mx-auto text-slate-400 opacity-60" />
@@ -1556,91 +1593,275 @@ export default function IngestionWizard({
                 );
               }
 
+              const { signals: mode1Signals } = extractRfqCategorySignals(form);
+              const matchingVendors = mode1Signals.length > 0
+                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, mode1Signals).isMatch)
+                : allMyVendors;
+              const mismatchedVendors = mode1Signals.length > 0
+                ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, mode1Signals).isMatch)
+                : [];
+
+              let pool = allMyVendors;
+              if (vendorCategoryFilterTab === 'matched') {
+                pool = matchingVendors;
+              } else if (vendorCategoryFilterTab === 'mismatched') {
+                pool = mismatchedVendors;
+              }
+
+              const myVendors = mode1VendorSearch.trim()
+                ? pool.filter((v) =>
+                    v.name.toLowerCase().includes(mode1VendorSearch.toLowerCase()) ||
+                    v.email?.toLowerCase().includes(mode1VendorSearch.toLowerCase()) ||
+                    v.majorCategory?.toLowerCase().includes(mode1VendorSearch.toLowerCase())
+                  )
+                : pool;
+
+              const allIds = myVendors.map((v) => v.id);
+              const allSelected = allIds.length > 0 && allIds.every((id) => selectedVendorIds.includes(id));
+
               return (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-72 overflow-y-auto pr-1">
-                  {myVendors.map((vendor, idx) => {
-                    const rawMinor = vendor.minorCategories as string | string[] | undefined;
-                    const minorList: string[] = Array.isArray(rawMinor)
-                      ? rawMinor
-                      : typeof rawMinor === 'string'
-                      ? (rawMinor as string).split(',').map((s: string) => s.trim()).filter(Boolean)
-                      : Array.isArray(vendor.vendorSelectedCategories)
-                      ? vendor.vendorSelectedCategories
-                      : [];
+                <div className="space-y-2.5">
+                  {/* Category Filter Tabs & Toolbar */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200/60 dark:border-gray-800 pb-2">
+                    {mode1Signals.length > 0 && (
+                      <div className="flex items-center gap-1 bg-slate-100 dark:bg-gray-800 p-0.5 rounded-lg text-[10px] font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => setVendorCategoryFilterTab('all')}
+                          className={`px-2.5 py-1 rounded-md transition-all ${
+                            vendorCategoryFilterTab === 'all'
+                              ? 'bg-white dark:bg-gray-900 text-blue-700 dark:text-blue-300 shadow-2xs font-bold'
+                              : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                          }`}
+                        >
+                          All ({allMyVendors.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setVendorCategoryFilterTab('matched')}
+                          className={`px-2.5 py-1 rounded-md transition-all ${
+                            vendorCategoryFilterTab === 'matched'
+                              ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
+                              : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                          }`}
+                        >
+                          Matched ({matchingVendors.length})
+                        </button>
+                        {mismatchedVendors.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setVendorCategoryFilterTab('mismatched')}
+                            className={`px-2.5 py-1 rounded-md transition-all flex items-center gap-1 ${
+                              vendorCategoryFilterTab === 'mismatched'
+                                ? 'bg-white dark:bg-gray-900 text-amber-700 dark:text-amber-300 shadow-2xs font-bold'
+                                : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                            }`}
+                          >
+                            <span>⚠️ Category Mismatch ({mismatchedVendors.length})</span>
+                          </button>
+                        )}
+                      </div>
+                    )}
 
-                    return (
-                      <div
-                        key={vendor.id || idx}
-                        className="rounded-xl border border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 p-3.5 space-y-2 shadow-2xs hover:border-blue-300 dark:hover:border-blue-700 transition-all"
-                      >
-                        <div className="flex items-start justify-between gap-1.5">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 text-xs font-bold font-mono">
-                              {idx + 1}
-                            </span>
-                            <span className="text-xs font-bold text-slate-900 dark:text-white truncate" title={vendor.name}>
-                              {vendor.name}
-                            </span>
-                          </div>
-                          <span className="badge badge-emerald text-[9px] font-bold shrink-0">
-                            Preferred
+                    <div className="flex items-center justify-between sm:justify-end gap-2 flex-1 text-[11px]">
+                      <div className="text-slate-500 dark:text-gray-400">
+                        {selectedVendorIds.length > 0 ? (
+                          <span className="font-semibold text-blue-600 dark:text-blue-400">
+                            {selectedVendorIds.length} of {matchingVendors.length} matched vendor(s) selected
                           </span>
-                        </div>
+                        ) : (
+                          <span>All {matchingVendors.length} category-matched vendors will receive this RFQ</span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const selectableIds = myVendors.filter((v) => {
+                            if (mode1Signals.length === 0) return true;
+                            return matchVendorAgainstSignals(v, mode1Signals).isMatch;
+                          }).map((v) => v.id);
 
-                        <div className="space-y-1 text-[11px] text-slate-600 dark:text-gray-300">
-                          {vendor.contactPerson && (
-                            <div className="flex items-center gap-1.5 text-slate-700 dark:text-gray-300">
-                              <Users size={11} className="text-slate-400 shrink-0" />
-                              <span className="truncate">{vendor.contactPerson}</span>
-                            </div>
-                          )}
-                          {vendor.email && (
-                            <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
-                              <Mail size={11} className="text-blue-500 shrink-0" />
-                              <span className="font-mono text-[10px] truncate">{vendor.email}</span>
-                            </div>
-                          )}
-                          {vendor.phone && (
-                            <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
-                              <Phone size={11} className="text-emerald-500 shrink-0" />
-                              <span className="font-mono text-[10px]">{vendor.phone}</span>
-                            </div>
-                          )}
-                        </div>
+                          if (allSelected) {
+                            setSelectedVendorIds([]);
+                          } else {
+                            setSelectedVendorIds(Array.from(new Set([...selectedVendorIds, ...selectableIds])));
+                          }
+                        }}
+                        className="text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"
+                      >
+                        {allSelected ? <CheckSquare size={13} /> : <Square size={13} />}
+                        <span>{allSelected ? 'Deselect All' : 'Select All Matched'}</span>
+                      </button>
+                    </div>
+                  </div>
 
-                        {/* Category & Rating */}
-                        <div className="pt-2 border-t border-slate-100 dark:border-gray-800 space-y-1.5">
-                          <div className="flex items-center justify-between text-[10px]">
-                            <span className="font-semibold text-blue-700 dark:text-blue-300 truncate max-w-[150px]">
-                              {vendor.majorCategory || 'General Industrial'}
-                            </span>
-                            <span className="text-amber-500 font-bold flex items-center gap-0.5 shrink-0">
-                              <Star size={10} className="fill-amber-400 text-amber-400" />
-                              <span>{vendor.rating || 4.5}</span>
-                            </span>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-72 overflow-y-auto pr-1">
+                    {myVendors.map((vendor, idx) => {
+                      const rawMinor = vendor.minorCategories as string | string[] | undefined;
+                      const minorList: string[] = Array.isArray(rawMinor)
+                        ? rawMinor
+                        : typeof rawMinor === 'string'
+                        ? (rawMinor as string).split(',').map((s: string) => s.trim()).filter(Boolean)
+                        : Array.isArray(vendor.vendorSelectedCategories)
+                        ? vendor.vendorSelectedCategories
+                        : [];
+                      
+                      const matchResult = mode1Signals.length > 0
+                        ? matchVendorAgainstSignals(vendor, mode1Signals)
+                        : { isMatch: true };
+                      const isCategoryMismatch = mode1Signals.length > 0 && !matchResult.isMatch;
+
+                      const isSelected = !isCategoryMismatch && (selectedVendorIds.includes(vendor.id) || selectedVendorIds.length === 0);
+
+                      return (
+                        <div
+                          key={vendor.id || idx}
+                          onClick={() => {
+                            if (isCategoryMismatch) return;
+                            setSelectedVendorIds((prev) => {
+                              if (prev.length === 0) {
+                                return allIds.filter((id) => id !== vendor.id);
+                              }
+                              return prev.includes(vendor.id)
+                                ? prev.filter((id) => id !== vendor.id)
+                                : [...prev, vendor.id];
+                            });
+                          }}
+                          className={`rounded-xl border p-3.5 space-y-2 transition-all ${
+                            isCategoryMismatch
+                              ? 'border-amber-300 dark:border-amber-700/80 bg-amber-50/40 dark:bg-amber-950/20 shadow-2xs'
+                              : isSelected
+                              ? 'cursor-pointer border-blue-500 bg-blue-50/30 dark:bg-blue-950/20 dark:border-blue-600 shadow-xs'
+                              : 'cursor-pointer border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-1.5">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${
+                                isCategoryMismatch
+                                  ? 'bg-amber-500 border-amber-500 text-white opacity-80'
+                                  : isSelected
+                                  ? 'bg-blue-600 border-blue-600 text-white'
+                                  : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800'
+                              }`}>
+                                {isCategoryMismatch ? (
+                                  <AlertCircle size={12} strokeWidth={2.5} />
+                                ) : isSelected ? (
+                                  <Check size={12} strokeWidth={3} />
+                                ) : null}
+                              </span>
+                              <span className="text-xs font-bold text-slate-900 dark:text-white truncate" title={vendor.name}>
+                                {vendor.name}
+                              </span>
+                            </div>
+                            {isCategoryMismatch ? (
+                              <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300 border border-amber-300 dark:border-amber-700 shrink-0">
+                                ⚠️ Category Mismatch
+                              </span>
+                            ) : (
+                              <span className="badge badge-emerald text-[9px] font-bold shrink-0">
+                                Preferred
+                              </span>
+                            )}
                           </div>
-                          {minorList.length > 0 && (
-                            <div className="flex flex-wrap gap-1">
-                              {minorList.slice(0, 2).map((cat: string, ci: number) => (
-                                <span
-                                  key={ci}
-                                  className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-medium bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 border border-slate-200/60 dark:border-gray-700/60 truncate max-w-[120px]"
-                                  title={cat}
-                                >
-                                  {cat}
+
+                          <div className="space-y-1 text-[11px] text-slate-600 dark:text-gray-300">
+                            {vendor.contactPerson && (
+                              <div className="flex items-center gap-1.5 text-slate-700 dark:text-gray-300">
+                                <Users size={11} className="text-slate-400 shrink-0" />
+                                <span className="truncate">{vendor.contactPerson}</span>
+                              </div>
+                            )}
+                            {vendor.email && (
+                              <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
+                                <Mail size={11} className="text-blue-500 shrink-0" />
+                                <span className="font-mono text-[10px] truncate">{vendor.email}</span>
+                              </div>
+                            )}
+                            {vendor.phone && (
+                              <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
+                                <Phone size={11} className="text-emerald-500 shrink-0" />
+                                <span className="font-mono text-[10px]">{vendor.phone}</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Category Mismatch Warning & Update Button */}
+                          {isCategoryMismatch ? (
+                            <div className="pt-2 border-t border-amber-200/60 dark:border-amber-900/40 space-y-1.5">
+                              <div className="text-[10px] text-amber-800 dark:text-amber-300 bg-amber-100/70 dark:bg-amber-950/40 p-2 rounded-lg border border-amber-200 dark:border-amber-900/50 space-y-0.5">
+                                <p className="font-bold flex items-center justify-between">
+                                  <span>Registered Category:</span>
+                                  <span className="text-amber-900 dark:text-amber-200">{vendor.majorCategory || 'None'}</span>
+                                </p>
+                                <p className="text-[9px] text-amber-700 dark:text-amber-400">
+                                  Excluded from RFQ shortlist until details updated & verified.
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleSendCategoryUpdateEmail(vendor, mode1Signals);
+                                }}
+                                disabled={sendingCategoryEmailVendors.includes(vendor.id || vendor.email)}
+                                className="w-full py-1.5 px-2.5 rounded-lg text-[10px] font-bold bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-50"
+                                title="Send email requesting vendor to update their category"
+                              >
+                                {sendingCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
+                                  <>
+                                    <Loader2 size={11} className="animate-spin" />
+                                    <span>Sending Email...</span>
+                                  </>
+                                ) : sentCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
+                                  <>
+                                    <CheckCircle2 size={11} />
+                                    <span>Update Email Sent ✓</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Mail size={11} />
+                                    <span>Send Email to Update Category</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          ) : (
+                            /* Category & Rating */
+                            <div className="pt-2 border-t border-slate-100 dark:border-gray-800 space-y-1.5">
+                              <div className="flex items-center justify-between text-[10px]">
+                                <span className="font-semibold text-blue-700 dark:text-blue-300 truncate max-w-[150px]">
+                                  {vendor.majorCategory || 'General Industrial'}
                                 </span>
-                              ))}
-                              {minorList.length > 2 && (
-                                <span className="text-[8px] font-bold text-slate-400 dark:text-gray-500 self-center">
-                                  +{minorList.length - 2}
+                                <span className="text-amber-500 font-bold flex items-center gap-0.5 shrink-0">
+                                  <Star size={10} className="fill-amber-400 text-amber-400" />
+                                  <span>{vendor.rating || 4.5}</span>
                                 </span>
+                              </div>
+                              {minorList.length > 0 && (
+                                <div className="flex flex-wrap gap-1">
+                                  {minorList.slice(0, 2).map((cat: string, ci: number) => (
+                                    <span
+                                      key={ci}
+                                      className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-medium bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 border border-slate-200/60 dark:border-gray-700/60 truncate max-w-[120px]"
+                                      title={cat}
+                                    >
+                                      {cat}
+                                    </span>
+                                  ))}
+                                  {minorList.length > 2 && (
+                                    <span className="text-[8px] font-bold text-slate-400 dark:text-gray-500 self-center">
+                                      +{minorList.length - 2}
+                                    </span>
+                                  )}
+                                </div>
                               )}
                             </div>
                           )}
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
               );
             })()}
@@ -1736,7 +1957,24 @@ export default function IngestionWizard({
                         <Building2 size={13} className="text-blue-600 dark:text-blue-400" />
                         <span>Buyer Approved Roster ({myVendors.length} Private Vendors)</span>
                       </h4>
-                      <span className="text-[10px] text-blue-600 dark:text-blue-400 font-semibold">Direct Invites</span>
+                      {myVendors.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const allIds = myVendors.map((v) => v.id);
+                            const allSelected = allIds.length > 0 && allIds.every((id) => selectedVendorIds.includes(id));
+                            if (allSelected) {
+                              setSelectedVendorIds([]);
+                            } else {
+                              setSelectedVendorIds(Array.from(new Set([...selectedVendorIds, ...allIds])));
+                            }
+                          }}
+                          className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400 hover:underline inline-flex items-center gap-1"
+                        >
+                          {myVendors.every((v) => selectedVendorIds.includes(v.id)) ? <CheckSquare size={12} /> : <Square size={12} />}
+                          <span>{myVendors.every((v) => selectedVendorIds.includes(v.id)) ? 'Deselect All' : 'Select All'}</span>
+                        </button>
+                      )}
                     </div>
 
                     {myVendors.length === 0 ? (
@@ -1745,18 +1983,46 @@ export default function IngestionWizard({
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-48 overflow-y-auto pr-1">
-                        {myVendors.map((v, i) => (
-                          <div key={v.id || i} className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 space-y-1 shadow-2xs">
-                            <div className="flex items-center justify-between gap-1">
-                              <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{v.name}</span>
-                              <span className="badge badge-blue text-[8px] font-bold shrink-0">Private</span>
+                        {myVendors.map((v, i) => {
+                          const isSelected = selectedVendorIds.includes(v.id) || selectedVendorIds.length === 0;
+                          return (
+                            <div
+                              key={v.id || i}
+                              onClick={() => {
+                                const allIds = myVendors.map((vendor) => vendor.id);
+                                setSelectedVendorIds((prev) => {
+                                  if (prev.length === 0) {
+                                    return allIds.filter((id) => id !== v.id);
+                                  }
+                                  return prev.includes(v.id) ? prev.filter((id) => id !== v.id) : [...prev, v.id];
+                                });
+                              }}
+                              className={`cursor-pointer p-3 rounded-xl border space-y-1 transition-all ${
+                                isSelected
+                                  ? 'border-emerald-500 bg-white dark:bg-gray-900 shadow-2xs'
+                                  : 'border-slate-200/60 dark:border-gray-800 bg-white/60 dark:bg-gray-900/40 opacity-60'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-1">
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                                    isSelected
+                                      ? 'bg-emerald-600 border-emerald-600 text-white'
+                                      : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800'
+                                  }`}>
+                                    {isSelected && <Check size={10} strokeWidth={3} />}
+                                  </span>
+                                  <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{v.name}</span>
+                                </div>
+                                <span className="badge badge-blue text-[8px] font-bold shrink-0">Private</span>
+                              </div>
+                              <div className="text-[10px] text-slate-500 dark:text-gray-400 flex items-center justify-between pl-5.5">
+                                <span className="font-semibold text-slate-700 dark:text-gray-300">{v.majorCategory || 'General Industrial'}</span>
+                                <span>{v.location || v.city || v.state || 'India'}</span>
+                              </div>
                             </div>
-                            <div className="text-[10px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
-                              <span className="font-semibold text-slate-700 dark:text-gray-300">{v.majorCategory || 'General Industrial'}</span>
-                              <span>{v.location || v.city || v.state || 'India'}</span>
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -2175,6 +2441,86 @@ export default function IngestionWizard({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── RFQ Dispatch Confirmation Modal ── */}
+      {confirmationRfq && (
+        <div className="modal-overlay !z-[1200] fixed inset-0 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="w-full max-w-xl p-6 sm:p-8 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-gray-800 space-y-6 text-center animate-in zoom-in-95">
+            <div className="w-16 h-16 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mx-auto shadow-inner">
+              <CheckCircle2 size={36} />
+            </div>
+
+            <div className="space-y-1.5">
+              <h3 className="text-xl font-bold text-slate-900 dark:text-white">RFQ Dispatched Successfully!</h3>
+              <p className="text-sm text-slate-500 dark:text-gray-400 max-w-md mx-auto">
+                RFQ <strong className="text-indigo-600 dark:text-indigo-400 font-mono">{confirmationRfq.rfqNumber}</strong> has been created and invitations have been dispatched to matched vendors.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-left">
+              <div className="p-3 bg-slate-50 dark:bg-gray-800/60 rounded-xl border border-slate-200/60 dark:border-gray-800">
+                <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">RFQ Number</span>
+                <span className="text-xs font-bold text-slate-800 dark:text-gray-200 font-mono">{confirmationRfq.rfqNumber}</span>
+              </div>
+              <div className="p-3 bg-slate-50 dark:bg-gray-800/60 rounded-xl border border-slate-200/60 dark:border-gray-800">
+                <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">Category</span>
+                <span className="text-xs font-bold text-slate-800 dark:text-gray-200 truncate block">{confirmationRfq.category || confirmationRfq.title}</span>
+              </div>
+              <div className="p-3 bg-slate-50 dark:bg-gray-800/60 rounded-xl border border-slate-200/60 dark:border-gray-800">
+                <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">Items / Budget</span>
+                <span className="text-xs font-bold text-slate-800 dark:text-gray-200">
+                  {confirmationRfq.extractedEntities?.length || 1} items {confirmationRfq.budget ? `· ₹${confirmationRfq.budget.toLocaleString()}` : ''}
+                </span>
+              </div>
+              <div className="p-3 bg-slate-50 dark:bg-gray-800/60 rounded-xl border border-slate-200/60 dark:border-gray-800">
+                <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">Mode & Vendors</span>
+                <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 font-mono">
+                  {confirmationRfq.assignedVendors?.length || (confirmationRfq.sourcingMode === 'mode_3' ? 'AI Blind' : '1+ Supplier')}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-center gap-3 pt-4 border-t border-slate-200 dark:border-gray-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmationRfq(null);
+                  handleClearForm();
+                }}
+                className="btn btn-secondary btn-md font-bold cursor-pointer"
+              >
+                Create Another RFQ
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const rfqNum = confirmationRfq.rfqNumber;
+                  setConfirmationRfq(null);
+                  if (onComplete) onComplete();
+                  if (router) {
+                    router.push(`/buyer/quote-matrix?rfq=${encodeURIComponent(rfqNum)}`);
+                  }
+                }}
+                className="btn btn-secondary btn-md font-bold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <span>Compare in Matrix</span>
+                <ExternalLink size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmationRfq(null);
+                  if (onComplete) onComplete();
+                }}
+                className="btn btn-primary btn-md font-bold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <Check size={16} />
+                <span>Done</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

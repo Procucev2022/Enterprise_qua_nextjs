@@ -2097,7 +2097,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       throw new Error(result.error);
     }
 
-    const saved = result.rfq;
+    const saved: RFQItem = {
+      ...result.rfq,
+      assignedVendors:
+        changes.assignedVendors &&
+        Array.isArray(changes.assignedVendors) &&
+        changes.assignedVendors.length >= (result.rfq.assignedVendors?.length || 0)
+          ? (changes.assignedVendors as any)
+          : result.rfq.assignedVendors || (changes.assignedVendors as any) || [],
+    };
     setRfqs((prev) => prev.map((r) => (r.rfqNumber === saved.rfqNumber ? saved : r)));
     setVendorOpportunities((prev) =>
       prev.map((opp) => (opp.rfqNumber === saved.rfqNumber ? buildOpportunityFromRFQ(saved) : opp))

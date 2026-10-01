@@ -114,5 +114,20 @@ describe('smsService Unit Tests', () => {
       expect(valid.success).toBe(true);
       expect(valid.messageId).toBeDefined();
     });
+
+    test('sendBuyerComparisonSms dispatches buyer comparison SMS and validates mobile', async () => {
+      const invalid = await smsService.sendBuyerComparisonSms({ mobile: '123', rfqNumber: 'RFQ-001' });
+      expect(invalid.success).toBe(false);
+
+      const valid = await smsService.sendBuyerComparisonSms({
+        mobile: '9157154504',
+        buyerName: 'Acme Buyer',
+        rfqNumber: 'RFQ-001',
+        quotesCount: 3,
+        matrixLink: 'https://procucev.com/matrix',
+      });
+      expect(valid.success).toBe(true);
+      expect(valid.messageId).toBe('mock-test-sms-buyer-comparison');
+    });
   });
 });

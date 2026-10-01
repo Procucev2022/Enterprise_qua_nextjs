@@ -2,6 +2,7 @@ const request = require('supertest');
 const app = require('../src/app');
 const authService = require('../src/services/authService');
 const authController = require('../src/controllers/authController');
+const authSessionQueries = require('../src/db/authSessionQueries');
 const dbPool = require('../src/db/pool');
 const identityQueries = require('../src/db/identityQueries');
 const mailerService = require('../src/services/mailerService');
@@ -595,6 +596,56 @@ describe('Authentication against the account records (/api/auth)', () => {
       await expect(authService.registerUser(payload)).rejects.toThrow(
         AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED
       );
+    });
+
+    test('verifies dual OTPs with distinct email and mobile codes', async () => {
+      const emailOtp = '804033';
+      const mobileOtp = '459228';
+      const emailKey = authService.buildOtpKey(EMAIL, `${MOBILE}_email`);
+      const mobileKey = authService.buildOtpKey(EMAIL, `${MOBILE}_mobile`);
+      await authSessionQueries.saveOtp(emailKey, emailOtp, Date.now() + 60000);
+      await authSessionQueries.saveOtp(mobileKey, mobileOtp, Date.now() + 60000);
+
+      jest.spyOn(identityQueries, 'insertBuyerAccount').mockResolvedValue({
+        created: true,
+        user: { id: 'new-uuid', email: EMAIL, name: 'Navin Chaudhary', role: 'buyer' },
+      });
+
+      const res = await authService.registerUser(
+        { ...payload, emailOtp, mobileOtp },
+        '::1'
+      );
+      expect(res.success).toBe(true);
+
+      // Verify OTPs were cleared
+      expect(await authSessionQueries.findOtp(emailKey)).toBeNull();
+      expect(await authSessionQueries.findOtp(mobileKey)).toBeNull();
+    });
+
+    test('rejects registration when mobile OTP is incorrect in dual OTP mode', async () => {
+      const emailOtp = '804033';
+      const mobileOtp = '459228';
+      const emailKey = authService.buildOtpKey(EMAIL, `${MOBILE}_email`);
+      const mobileKey = authService.buildOtpKey(EMAIL, `${MOBILE}_mobile`);
+      await authSessionQueries.saveOtp(emailKey, emailOtp, Date.now() + 60000);
+      await authSessionQueries.saveOtp(mobileKey, mobileOtp, Date.now() + 60000);
+
+      await expect(
+        authService.registerUser({ ...payload, emailOtp, mobileOtp: '999999' }, '::1')
+      ).rejects.toThrow('Invalid Mobile SMS OTP entered. Please check the SMS sent to your phone.');
+    });
+
+    test('rejects registration when email OTP is incorrect in dual OTP mode', async () => {
+      const emailOtp = '804033';
+      const mobileOtp = '459228';
+      const emailKey = authService.buildOtpKey(EMAIL, `${MOBILE}_email`);
+      const mobileKey = authService.buildOtpKey(EMAIL, `${MOBILE}_mobile`);
+      await authSessionQueries.saveOtp(emailKey, emailOtp, Date.now() + 60000);
+      await authSessionQueries.saveOtp(mobileKey, mobileOtp, Date.now() + 60000);
+
+      await expect(
+        authService.registerUser({ ...payload, emailOtp: '111111', mobileOtp }, '::1')
+      ).rejects.toThrow('Invalid Email OTP entered. Please check the code sent to your email.');
     });
   });
 

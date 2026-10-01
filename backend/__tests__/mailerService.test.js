@@ -445,6 +445,62 @@ describe('mailerService', () => {
     });
   });
 
+  describe('buildRfqFinalComparisonEmail / sendRfqFinalComparisonEmail', () => {
+    test('builds final comparison email with quotes matrix and recipient', async () => {
+      const email = mailerService.buildRfqFinalComparisonEmail('buyer@example.com', {
+        rfq: { rfqNumber: 'RFQ260409000900', title: 'Industrial Valves', category: 'Valves' },
+        quotes: [
+          { vendorName: 'Vendor A', unitPrice: 5000, leadTimeDays: 10, warrantyYears: 2, aiMatchScore: 92, complianceStatus: 'Compliant' },
+          { vendorName: 'Vendor B', unitPrice: 4500, leadTimeDays: 12, warrantyYears: 1, aiMatchScore: 88, complianceStatus: 'Compliant' },
+        ],
+        recipientName: 'Acme Buyer',
+      });
+
+      expect(email.to).toBe('buyer@example.com');
+      expect(email.subject).toContain('RFQ260409000900');
+      expect(email.html).toContain('Acme Buyer');
+      expect(email.html).toContain('Vendor B');
+      expect(email.html).toContain('Lowest Bid (L1)');
+      expect(email.html).toContain('₹4,500');
+
+      const res = await mailerService.sendRfqFinalComparisonEmail('buyer@example.com', {
+        rfq: { rfqNumber: 'RFQ260409000900' },
+      });
+      expect(res).toEqual({ sent: false, reason: 'test environment' });
+    });
+
+    test('builds final comparison email with no quotes received fallback', () => {
+      const email = mailerService.buildRfqFinalComparisonEmail('buyer@example.com', {
+        rfq: { rfqNumber: 'RFQ260409000900', title: 'Industrial Valves' },
+        quotes: [],
+      });
+      expect(email.html).toContain('No vendor quotations were submitted');
+    });
+  });
+
+  describe('buildVendorIssueAcknowledgementEmail / sendVendorIssueAcknowledgementEmail', () => {
+    test('builds vendor issue acknowledgment email with buyer in CC and issue details', async () => {
+      const email = mailerService.buildVendorIssueAcknowledgementEmail('vendor@example.com', {
+        rfqNumber: 'RFQ260409000900',
+        rfqTitle: 'Pumps Procurement',
+        vendorName: 'Apex Supplies',
+        issueMessage: 'Drawing missing for Item 2',
+        cc: 'buyer@example.com',
+      });
+
+      expect(email.to).toBe('vendor@example.com');
+      expect(email.cc).toBe('buyer@example.com');
+      expect(email.subject).toContain('RFQ #RFQ260409000900');
+      expect(email.html).toContain('Quotation Creation Failed');
+      expect(email.html).toContain('Drawing missing for Item 2');
+
+      const res = await mailerService.sendVendorIssueAcknowledgementEmail('vendor@example.com', {
+        rfqNumber: 'RFQ260409000900',
+      });
+      expect(res).toEqual({ sent: false, reason: 'test environment' });
+    });
+  });
+
   describe('buildRfqInviteEmail expanded features', () => {
     test('renders technical specifications, budget, and multiple items note', () => {
       const rfqWithSpecs = {
@@ -1417,6 +1473,41 @@ describe('mailerService', () => {
         expect(sendArgs).toBeDefined();
         delete process.env.GMAIL_REFRESH_TOKEN;
       });
+    });
+  });
+
+  describe('Vendor Category Mismatch Email', () => {
+    test('buildVendorCategoryMismatchEmail builds a structured notice with category details and link', () => {
+      const email = mailerService.buildVendorCategoryMismatchEmail('vendor@example.com', {
+        rfqNumber: 'RFQ-999',
+        rfqTitle: 'Heavy Machinery Steel Plates',
+        rfqCategory: 'Raw Material',
+        vendorName: 'Apex Industrial',
+        vendorCurrentCategory: 'IT Hardware',
+        buyerAccountName: 'Tata Steel Procurement',
+        buyerEmail: 'buyer@tatasteel.com',
+      });
+
+      expect(email.to).toBe('vendor@example.com');
+      expect(email.cc).toBe('buyer@tatasteel.com');
+      expect(email.subject).toContain('Action Required: Category Mismatch for RFQ #RFQ-999');
+      expect(email.html).toContain('Apex Industrial');
+      expect(email.html).toContain('Heavy Machinery Steel Plates');
+      expect(email.html).toContain('Raw Material');
+      expect(email.html).toContain('IT Hardware');
+      expect(email.html).toContain('your company has not been included in the RFQ vendor shortlist');
+      expect(email.html).toContain('vendor-profile');
+    });
+
+    test('sendVendorCategoryMismatchEmail delivers in test environment', async () => {
+      const res = await mailerService.sendVendorCategoryMismatchEmail('vendor@example.com', {
+        rfqNumber: 'RFQ-888',
+        rfqTitle: 'Bearings',
+        rfqCategory: 'Mechanical',
+        vendorName: 'Delta Bearings',
+      });
+
+      expect(res).toEqual({ sent: false, reason: 'test environment' });
     });
   });
 });

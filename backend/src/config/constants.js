@@ -739,14 +739,14 @@ const VENDOR_EMAIL_GATEWAY_CONFIG = {
 //  Channel      Delay    Rationale
 //  ---------    -----    -----------------------------------------
 //  WhatsApp       0 ms   Immediate — highest open-rate, real-time
-//  SMS          5 min    Short follow-up nudge for vendors who miss WhatsApp
-//  Email         24 h    Formal follow-up with full RFQ details for records
+//  SMS          10 s     Short follow-up nudge for vendors who miss WhatsApp
+//  Email        20 s     Formal follow-up reminder with full RFQ details
 //
 // Override via environment variables for testing / ops without a code deploy.
 const CHASER_DELAYS = {
   WHATSAPP_MS:  Number(process.env.CHASER_WHATSAPP_DELAY_MS  ?? 0),
-  SMS_MS:       Number(process.env.CHASER_SMS_DELAY_MS       ?? 5 * 60 * 1000),   // 5 min
-  EMAIL_MS:     Number(process.env.CHASER_EMAIL_DELAY_MS     ?? 24 * 60 * 60 * 1000), // 24 h
+  SMS_MS:       Number(process.env.CHASER_SMS_DELAY_MS       ?? (process.env.NODE_ENV === 'test' ? 5 * 60 * 1000 : 10000)),
+  EMAIL_MS:     Number(process.env.CHASER_EMAIL_DELAY_MS     ?? (process.env.NODE_ENV === 'test' ? 24 * 60 * 60 * 1000 : 20000)),
 };
 
 /**

@@ -12,6 +12,7 @@ import {
   inviteVendorsToRFQ,
   updateRFQ,
   deleteRFQ,
+  requestVendorCategoryUpdateEmail,
 } from '@/lib/rfqClient';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
@@ -1691,3 +1692,60 @@ describe('rfqClient.deleteRFQ', () => {
     expect(res.success === false && res.error).toBe('Not deleted.');
   });
 });
+
+describe('rfqClient.requestVendorCategoryUpdateEmail', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    authClient.setSession(null, null);
+    jest.restoreAllMocks();
+  });
+
+  test('successfully sends category update email with auth token', async () => {
+    authClient.setSession(
+      { id: 'usr-1', email: 'buyer@procucev.com', name: 'Buyer', role: 'buyer', orgId: 'o1', orgName: 'Org' },
+      'sample-jwt-token'
+    );
+
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true, message: 'Email sent successfully.' }),
+    });
+
+    const res = await requestVendorCategoryUpdateEmail({
+      vendorId: 'v-123',
+      vendorEmail: 'vendor@abc.com',
+      vendorName: 'ABC Corp',
+      rfqCategory: 'Mechanical',
+      rfqTitle: 'Pumps Requisition',
+    });
+
+    expect(res).toEqual({ success: true, message: 'Email sent successfully.' });
+    expect(global.fetch).toHaveBeenCalledWith('/api/rfqs/request-vendor-category-update', expect.objectContaining({
+      method: 'POST',
+      headers: expect.objectContaining({
+        Authorization: 'Bearer sample-jwt-token',
+        'Content-Type': 'application/json',
+      }),
+    }));
+  });
+
+  test('handles server failure response cleanly', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      json: async () => ({ success: false, error: 'Target vendor email or valid vendorId is required.' }),
+    });
+
+    const res = await requestVendorCategoryUpdateEmail({});
+    expect(res).toEqual({ success: false, error: 'Target vendor email or valid vendorId is required.' });
+  });
+
+  test('handles network throw gracefully', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
+
+    const res = await requestVendorCategoryUpdateEmail({ vendorEmail: 'v@abc.com' });
+    expect(res).toEqual({ success: false, error: 'Network offline' });
+  });
+});
+

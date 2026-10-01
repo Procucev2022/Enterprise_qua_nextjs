@@ -1030,7 +1030,7 @@ describe('Store Service & Business Operations', () => {
     test('skips unknown vendor ids and returns invitedCount 0 when nothing new was added', async () => {
       const rfq = storeService.createRFQ({ title: 'Invite Skip RFQ', category: 'Invite-Skip-Cat' , sourcingMode: 'mode_3' });
       const result = await storeService.inviteVendorsToRFQ(rfq.id, ['ghost-vendor-id'], 'cm@ex.com');
-      expect(result).toEqual({ updatedRFQ: expect.objectContaining({ id: rfq.id }), invitedCount: 0 });
+      expect(result).toMatchObject({ updatedRFQ: expect.objectContaining({ id: rfq.id }), invitedCount: 0 });
     });
 
     // this.vendors is a capped in-memory subset (real vendor tables run to
@@ -1158,6 +1158,44 @@ describe('Store Service & Business Operations', () => {
 
       expect(result.invitedCount).toBe(1);
       await new Promise((r) => setImmediate(r)); // let the rejected promise settle
+    });
+
+    test('excludes category mismatched vendors from invite shortlist and sends update request email', async () => {
+      const mismatchEmailSpy = jest.spyOn(mailerService, 'sendVendorCategoryMismatchEmail').mockResolvedValue({ sent: true });
+      const matchedVendor = storeService.addVendor({ name: 'Matching Vendor', email: 'match@ex.com', majorCategory: 'Mechanical' });
+      const mismatchedVendor = storeService.addVendor({ name: 'Mismatched Vendor', email: 'mismatch@ex.com', majorCategory: 'Civil Works' });
+
+      const rfq = storeService.createRFQ({ title: 'Mechanical RFQ', category: 'Mechanical', sourcingMode: 'mode_3' });
+      const result = await storeService.inviteVendorsToRFQ(rfq.id, [matchedVendor.id, mismatchedVendor.id], 'cm@ex.com');
+
+      expect(result.invitedCount).toBe(1);
+      expect(result.excludedCount).toBe(1);
+      expect(result.updatedRFQ.assignedVendors.map((v) => v.id)).toContain(matchedVendor.id);
+      expect(result.updatedRFQ.assignedVendors.map((v) => v.id)).not.toContain(mismatchedVendor.id);
+      expect(mismatchEmailSpy).toHaveBeenCalledWith('mismatch@ex.com', expect.objectContaining({
+        rfqNumber: rfq.rfqNumber,
+        vendorName: 'Mismatched Vendor',
+      }));
+    });
+  });
+
+  describe('validateAndShortlistVendors', () => {
+    test('filters out vendors with category mismatch and dispatches profile update emails', () => {
+      const mismatchEmailSpy = jest.spyOn(mailerService, 'sendVendorCategoryMismatchEmail').mockResolvedValue({ sent: true });
+      const rfq = storeService.createRFQ({ title: 'Electrical Requisition', category: 'Electrical Equipment' });
+
+      const vendorList = [
+        { id: 'v-elec', name: 'Elec Vendor', email: 'elec@ex.com', majorCategory: 'Electrical Equipment' },
+        { id: 'v-mech', name: 'Mech Vendor', email: 'mech@ex.com', majorCategory: 'Mechanical & Automation' },
+      ];
+
+      const res = storeService.validateAndShortlistVendors(rfq, vendorList, 'buyer@company.com');
+      expect(res.shortlisted.map((v) => v.id)).toEqual(['v-elec']);
+      expect(res.excluded.map((v) => v.id)).toEqual(['v-mech']);
+      expect(mismatchEmailSpy).toHaveBeenCalledWith('mech@ex.com', expect.objectContaining({
+        rfqNumber: rfq.rfqNumber,
+        rfqCategory: 'Electrical Equipment',
+      }));
     });
   });
 
