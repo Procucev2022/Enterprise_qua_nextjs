@@ -77,4 +77,119 @@ describe('WhatsApp Service Unit Tests', () => {
       process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION || 'rfq_reminder_notification_v2'
     );
   });
+
+  describe('production dispatch and gateway fallbacks', () => {
+    const origEnv = process.env.NODE_ENV;
+    const origFetch = global.fetch;
+
+    beforeEach(() => {
+      process.env.NODE_ENV = 'production';
+      whatsAppService.clearWhatsAppThrottleCache();
+      whatsAppService.WHATSAPP_CONFIG.USERNAME = 'testuser';
+      whatsAppService.WHATSAPP_CONFIG.PASSWORD = 'testpass';
+      whatsAppService.WHATSAPP_CONFIG.FROM_NUMBER = '919606848835';
+    });
+
+    afterEach(() => {
+      process.env.NODE_ENV = origEnv;
+      global.fetch = origFetch;
+      whatsAppService.clearWhatsAppThrottleCache();
+    });
+
+    test('successfully dispatches via sendmsg.in in production', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ status: 'success', messageId: 'wa-123' }),
+      });
+
+      const res = await whatsAppService.sendRFQInvitationWhatsApp({
+        phone: '9876543210',
+        vendorName: 'Apex',
+        contactPerson: 'Rahul',
+        rfqNumber: 'RFQ-WA-01',
+        rfqTitle: 'Valves',
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.messageId).toContain('sendmsg-');
+    });
+
+    test('throttles rapid duplicate WhatsApp dispatches in production', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ status: 'success' }),
+      });
+
+      const first = await whatsAppService.sendRFQInvitationWhatsApp({
+        phone: '9876543210',
+        rfqNumber: 'RFQ-WA-01',
+      });
+      expect(first.success).toBe(true);
+
+      const second = await whatsAppService.sendRFQInvitationWhatsApp({
+        phone: '9876543210',
+        rfqNumber: 'RFQ-WA-01',
+      });
+      expect(second.success).toBe(true);
+      expect(second.throttled).toBe(true);
+      expect(second.messageId).toBe('wa-throttled');
+    });
+
+    test('handles sendmsg.in gateway failure and falls back to Meta or deep-link', async () => {
+      process.env.WHATSAPP_PHONE_NUMBER_ID = 'meta-phone-1';
+      process.env.WHATSAPP_ACCESS_TOKEN = 'meta-token-1';
+
+      // sendmsg.in fails, Meta succeeds
+      global.fetch = jest
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify([{ status: 'error', message: 'Template not approved' }]),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ messages: [{ id: 'meta-msg-99' }] }),
+        });
+
+      const res = await whatsAppService.sendRFQInvitationWhatsApp({
+        phone: '9876543210',
+        rfqNumber: 'RFQ-WA-02',
+      });
+      expect(res.success).toBe(true);
+      expect(res.messageId).toBe('meta-msg-99');
+
+      delete process.env.WHATSAPP_PHONE_NUMBER_ID;
+      delete process.env.WHATSAPP_ACCESS_TOKEN;
+    });
+
+    test('uses legacy template formatting when template does not include v2 or reminder', async () => {
+      const origTemplate = process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION;
+      process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION = 'legacy_seller_template';
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ status: 'success' }),
+      });
+
+      const res = await whatsAppService.sendRFQInvitationWhatsApp({
+        phone: '9876543210',
+        rfqNumber: 'RFQ-LEGACY-01',
+        deliveryDate: '2026-11-01',
+        deliveryLocation: 'Ahmedabad',
+        rfqTitle: 'Pumps',
+      });
+      expect(res.success).toBe(true);
+
+      if (origTemplate) {
+        process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION = origTemplate;
+      } else {
+        delete process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION;
+      }
+    });
+  });
 });
