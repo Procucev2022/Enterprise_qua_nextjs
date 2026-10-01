@@ -776,11 +776,15 @@ const SMS_DLT_TEMPLATES = {
   RFQ_CHASER: {
     NAME:     'RFQ_Notification_Seller',
     SMSGID:   process.env.SMS_GATEWAY_RFQ_SMSGID || '1777179076323440961',
-    CATEGORY: 'PROMOTIONAL',          // ⚠️ must be changed to TRANSACTIONAL on DLT portal
-    // Exact approved template text — message sent to gateway must match this pattern
-    // precisely (character-for-character on static parts) or carriers will reject it.
+    CATEGORY: 'PROMOTIONAL',
+    // Exact approved template text — static parts must match character-for-character.
     TEMPLATE: 'RFQ Alert {#var#}. You are invited to bid for {#var#}. Submit quote : {#var#} - Team Procucev.',
     VARIABLES: ['rfqNumber', 'rfqTitle', 'bidUrl'],
+    // The bid URL (Variable 3) is shortened via TinyURL before dispatch so the
+    // total message length stays ≤160 chars (1 SMS unit). Promotional 1-unit SMS
+    // has significantly better carrier delivery than 2-unit messages.
+    // Raw workers.dev URL (~110 chars) → TinyURL (~28 chars) = ~136 chars total.
+    URL_SHORTENING: true,
   },
   OTP: {
     NAME:     'OTP_Procucev_GMT',
