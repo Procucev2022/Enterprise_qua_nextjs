@@ -460,9 +460,37 @@ function processLineItemsAndGroups(lineItems, extraction = {}, buyerLocation = {
 }
 
 /**
+ * Detects a mail-system bounce/auto-reply (a delivery-failure notice for
+ * something the gateway itself sent), so it is never mistaken for a genuine
+ * unauthorized sender.
+ *
+ * This matters beyond mislabeling: treating a bounce as an unauthorized
+ * sender makes resolveSenderAuthorisation's rejection path fire another
+ * outbound "unauthorized buyer" notification email BACK to the bounce
+ * address — which bounces again, generating another copy of the same
+ * message. Confirmed live: since SENDER_NOT_ALLOWED is deliberately never
+ * marked read (so a human can review a genuine unauthorized sender), an
+ * unrecognized bounce is never marked read either, so the exact same
+ * handful of bounce messages got reprocessed and re-notified on every
+ * single poll cycle indefinitely — sending far more mail than any real
+ * traffic would, which is what actually rate-limited the Gmail API account
+ * this ran under, blocking every other outbound/poll operation behind it.
+ */
+function isBounceOrAutoReplyMessage(message) {
+  if (!message) return false;
+  const fromAddress = String(message.fromAddress || '').trim().toLowerCase();
+  if (/^(postmaster|mailer-daemon|mail-daemon|bounce[s]?)@/.test(fromAddress)) return true;
+  const subject = String(message.subject || '').trim().toLowerCase();
+  if (/^(undeliverable|delivery status notification|mail delivery failed|returned mail|failure notice)/.test(subject)) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Extract referenced RFQ number and lookup target RFQ from subject, body, or thread references.
  */
-function extractRfqReferenceFromEmail(message) {
+async function extractRfqReferenceFromEmail(message) {
   if (!message) return { targetRfq: null, referencedNumber: null };
   const sources = [
     message.subject || '',
@@ -493,8 +521,14 @@ function extractRfqReferenceFromEmail(message) {
     candidates.push(trimmed.toUpperCase());
   }
 
+  // getRFQByIdAsync, not the plain in-memory getRFQById — the same Workers
+  // isolate-cache-staleness bug fixed in rfqController.addQuote applies here
+  // too: confirmed live, a vendor's quote-reply email referencing a real,
+  // currently-open RFQ number came back INVALID_RFQ ("was not found in the
+  // system") on whichever isolate the cron tick happened to run on, purely
+  // because that isolate hadn't hydrated that particular RFQ.
   for (const cand of candidates) {
-    const foundRfq = storeService.getRFQById(cand);
+    const foundRfq = await storeService.getRFQByIdAsync(cand);
     if (foundRfq) return { targetRfq: foundRfq, referencedNumber: foundRfq.rfqNumber || cand };
   }
   return { targetRfq: null, referencedNumber: (candidates[0] || rawMatches[0].trim()).toUpperCase() };
@@ -916,6 +950,19 @@ async function processMessage(rawSource, config = resolveConfig()) {
     };
   }
 
+  // A bounce/auto-reply is never a real unauthorized sender — see
+  // isBounceOrAutoReplyMessage's own comment for the notification-loop this
+  // prevents. Reported the same way as an outgoing system message: marked
+  // read, no reply sent.
+  if (isBounceOrAutoReplyMessage(message)) {
+    logger.info(`Skipping mail-system bounce/auto-reply from ${message.fromAddress}`, { subject: message.subject }, 'EMAIL_GATEWAY');
+    return {
+      status: INGESTION_OUTCOME.SKIPPED_OUTBOUND,
+      detail: 'Skipped mail-system bounce/auto-reply notice',
+      message,
+    };
+  }
+
   const gatewayOwnAddresses = new Set(
     [config.address, config.user].filter(Boolean).map((a) => String(a).trim().toLowerCase())
   );
@@ -933,7 +980,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
   }
 
   // 1. Check if this message is a vendor quotation reply for an existing RFQ
-  const { targetRfq, referencedNumber } = extractRfqReferenceFromEmail(message);
+  const { targetRfq, referencedNumber } = await extractRfqReferenceFromEmail(message);
   const vendorRecord = await resolveVendorFromEmail(message.fromAddress, targetRfq);
 
   if (targetRfq && vendorRecord) {

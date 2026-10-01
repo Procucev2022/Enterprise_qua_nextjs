@@ -921,7 +921,20 @@ async function addQuote(req, res, next) {
     // A vendor can only quote an RFQ they were actually eligible to see. An
     // enquiry outside their category (and not one they were invited onto)
     // reports the same 404 as an unknown id — they had no way to reach it.
-    const targetRfq = storeService.getRFQById(id);
+    //
+    // getRFQByIdAsync (not the plain in-memory getRFQById) matters here for a
+    // Workers-specific reason: each isolate hydrates its own copy of `rfqs`
+    // once, lazily, on its first request, and nothing re-syncs it afterward
+    // except this async path's own D1 fallback. A vendor quoting an RFQ some
+    // *other* isolate created got a guaranteed, permanent 404 on whichever
+    // isolate served their POST until that isolate happened to restart —
+    // confirmed live: 10/10 attempts against a real RFQ failed with "not
+    // found" even immediately after a full hydrateFromDB() refresh, because
+    // that refresh ran on a different isolate than the one serving the next
+    // request. getRFQByIdAsync's DB fallback also backfills this.rfqs, so
+    // the addQuoteToRFQ call below (which still uses the sync, in-memory
+    // getRFQById) finds it too.
+    const targetRfq = await storeService.getRFQByIdAsync(id);
     if (!targetRfq || !(await canAccessRfq(req, targetRfq))) {
       logger.warn(`RFQ not found or out of scope for quote submission: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });

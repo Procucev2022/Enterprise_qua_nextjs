@@ -276,6 +276,40 @@ describe('emailGatewayService.processMessage', () => {
     expect(createSpy).not.toHaveBeenCalled();
   });
 
+  // Real incident: a bounce ("Undeliverable: ...") for a notification the
+  // gateway itself sent was treated as a genuine unauthorized sender, so the
+  // gateway replied with ANOTHER "unauthorized buyer" notification straight
+  // back to the bounce address — which bounced again, generating another
+  // copy of the same message, reprocessed (and re-notified) on every single
+  // poll cycle forever, since an unauthorized sender is deliberately never
+  // marked read. That eventually rate-limited the Gmail API account this ran
+  // under, blocking every other outbound send and poll.
+  test('skips a mail-system bounce/auto-reply without notifying it, breaking the bounce notification loop', async () => {
+    const bounceEml = [
+      'Return-Path: <>',
+      'Message-ID: <bounce-1@mrd-tw.us-east-1.eo.internal>',
+      'Date: Wed, 30 Sep 2026 17:50:25 +0000',
+      'From: Mail Delivery Subsystem <postmaster@hiredify-com-bounceio-net.bounceio.net>',
+      'To: srinu20252026@gmail.com',
+      'Subject: Undeliverable: Enterprise QUA - Buyer Registration Required',
+      'MIME-Version: 1.0',
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      'Your message could not be delivered.',
+      '',
+    ].join('\r\n');
+
+    const sendAckSpy = jest.spyOn(mailerService, 'sendUnauthorizedBuyerNotificationEmail');
+    const createSpy = jest.spyOn(storeService, 'createRFQ');
+
+    const result = await emailGatewayService.processMessage(Buffer.from(bounceEml, 'utf8'), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.SKIPPED_OUTBOUND);
+    // No reply of any kind — sending one is exactly what re-arms the loop.
+    expect(sendAckSpy).not.toHaveBeenCalled();
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
   test('refuses a message the parser cannot read', async () => {
     const result = await emailGatewayService.processMessage(Buffer.from(''), config());
     expect(result.status).toBe(INGESTION_OUTCOME.UNREADABLE);
@@ -1868,34 +1902,42 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       jest.restoreAllMocks();
     });
 
-    test('extractRfqReferenceFromEmail correctly identifies RFQ reference in subject, body, and headers', () => {
+    test('extractRfqReferenceFromEmail correctly identifies RFQ reference in subject, body, and headers', async () => {
       expect(
-        emailGatewayService.extractRfqReferenceFromEmail({
-          subject: 'Re: Quotation for RFQ-2026-00421 from Apex',
-          textBody: 'Please find our pricing',
-        }).referencedNumber
+        (
+          await emailGatewayService.extractRfqReferenceFromEmail({
+            subject: 'Re: Quotation for RFQ-2026-00421 from Apex',
+            textBody: 'Please find our pricing',
+          })
+        ).referencedNumber
       ).toBe('RFQ-2026-00421');
 
       expect(
-        emailGatewayService.extractRfqReferenceFromEmail({
-          subject: 'Our Official Quotation',
-          textBody: 'In reference to RFQ #RFQ-2026-00421, here is our commercial offer.',
-        }).referencedNumber
+        (
+          await emailGatewayService.extractRfqReferenceFromEmail({
+            subject: 'Our Official Quotation',
+            textBody: 'In reference to RFQ #RFQ-2026-00421, here is our commercial offer.',
+          })
+        ).referencedNumber
       ).toBe('RFQ-2026-00421');
 
       expect(
-        emailGatewayService.extractRfqReferenceFromEmail({
-          subject: 'Quotation',
-          textBody: 'Pricing attached',
-          inReplyTo: '<rfq-2026-00421-dispatch@procucev.com>',
-        }).referencedNumber
+        (
+          await emailGatewayService.extractRfqReferenceFromEmail({
+            subject: 'Quotation',
+            textBody: 'Pricing attached',
+            inReplyTo: '<rfq-2026-00421-dispatch@procucev.com>',
+          })
+        ).referencedNumber
       ).toBe('RFQ-2026-00421');
 
       expect(
-        emailGatewayService.extractRfqReferenceFromEmail({
-          subject: 'General enquiry',
-          textBody: 'Hello, no RFQ mentioned here.',
-        }).referencedNumber
+        (
+          await emailGatewayService.extractRfqReferenceFromEmail({
+            subject: 'General enquiry',
+            textBody: 'Hello, no RFQ mentioned here.',
+          })
+        ).referencedNumber
       ).toBeNull();
     });
 
@@ -2633,8 +2675,8 @@ Hello team, sending catalog.
 
     test('extractRfqReferenceFromEmail and resolveVendorFromEmail additional edge branches', async () => {
       // Null message
-      expect(emailGatewayService.extractRfqReferenceFromEmail(null)).toEqual({ targetRfq: null, referencedNumber: null });
-      expect(emailGatewayService.extractRfqReferenceFromEmail({})).toEqual({ targetRfq: null, referencedNumber: null });
+      expect(await emailGatewayService.extractRfqReferenceFromEmail(null)).toEqual({ targetRfq: null, referencedNumber: null });
+      expect(await emailGatewayService.extractRfqReferenceFromEmail({})).toEqual({ targetRfq: null, referencedNumber: null });
 
       // Vendor matched by corporateEmail in vendor directory
       jest.spyOn(storeService, 'getVendors').mockReturnValue([
