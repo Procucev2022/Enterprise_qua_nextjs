@@ -230,7 +230,11 @@ class StoreService {
       await domainQueries.upsertVendorInDB(vendor);
       return { persisted: true };
     } catch (err) {
-      if (err && err.code === '23505') {
+      const isUniqueConflict =
+        (err && err.code === '23505') ||
+        (err && typeof err.message === 'string' && /unique constraint/i.test(err.message)) ||
+        (err && err.cause && typeof err.cause.message === 'string' && /unique constraint/i.test(err.cause.message));
+      if (isUniqueConflict) {
         this.vendors = this.vendors.filter((v) => v.id !== vendor.id);
         const conflictErr = new Error(`A vendor with the email ${vendor.email} already exists.`);
         conflictErr.statusCode = 409;
@@ -3043,7 +3047,6 @@ class StoreService {
         isCategoryAligned: false,
       };
       this.vendors.push(newVendor);
-      this._persistVendor(newVendor);
       createdThisRun.push({ row: idx + 1, vendor: newVendor });
       importedCount++;
 

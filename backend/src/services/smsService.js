@@ -285,16 +285,21 @@ async function sendRFQChaserSms({ mobile, vendorName, rfqNumber, rfqTitle, bidLi
     const responseText = await res.text();
     const messageId = `sms-${Date.now()}`;
 
-    if (res.ok) {
-      logger.info(
-        `SMS RFQ chaser dispatched to 91${formattedNumber} for ${rfqNumber}`,
-        { status: res.status, response: responseText, rfqNumber, vendorName, smsgid: SMS_GATEWAY_CONFIG.RFQ_SMSGID, templateName: SMS_DLT_TEMPLATES.RFQ_CHASER.NAME, templateCategory: SMS_DLT_TEMPLATES.RFQ_CHASER.CATEGORY },
+    const isGatewayError =
+      !res.ok ||
+      /^(ERR|ERROR|FAIL|INVALID)/i.test(responseText.trim()) ||
+      /"status"\s*:\s*"(?:error|failed)"/i.test(responseText);
+
+    if (isGatewayError) {
+      logger.warn(
+        `SMS RFQ chaser gateway rejected message for 91${formattedNumber} — HTTP ${res.status}: ${responseText}`,
+        { status: res.status, response: responseText, rfqNumber, vendorName, smsgid: SMS_GATEWAY_CONFIG.RFQ_SMSGID, templateName: SMS_DLT_TEMPLATES.RFQ_CHASER.NAME },
         'SMS_SERVICE'
       );
     } else {
-      logger.warn(
-        `SMS RFQ chaser gateway error for 91${formattedNumber} — HTTP ${res.status}`,
-        { status: res.status, response: responseText, rfqNumber, vendorName, smsgid: SMS_GATEWAY_CONFIG.RFQ_SMSGID, templateName: SMS_DLT_TEMPLATES.RFQ_CHASER.NAME },
+      logger.info(
+        `SMS RFQ chaser dispatched to 91${formattedNumber} for ${rfqNumber}`,
+        { status: res.status, response: responseText, rfqNumber, vendorName, smsgid: SMS_GATEWAY_CONFIG.RFQ_SMSGID, templateName: SMS_DLT_TEMPLATES.RFQ_CHASER.NAME, templateCategory: SMS_DLT_TEMPLATES.RFQ_CHASER.CATEGORY },
         'SMS_SERVICE'
       );
     }
