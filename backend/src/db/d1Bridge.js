@@ -107,6 +107,22 @@ function getD1HttpClient() {
     return Promise.all(statements.map(({ sql, params }) => execHttp(sql, params)));
   }
 
+  // The real Workers D1 binding's `.all()` resolves to `{results, success,
+  // meta}` — queryD1()/batchD1() below read exactly that shape. execHttp
+  // returns a different, pg-like `{rows, rowCount}` shape instead (kept as-is
+  // since scripts/test-rfq-sms.js calls `_execHttp` directly and already
+  // depends on that shape) — this adapter translates one into the other, so
+  // the prepare().bind().all() path queryD1() actually calls returns what it
+  // expects. Confirmed live: without this, every `{d1:true}` query run
+  // through the D1 HTTP client (any Node-side script against the real
+  // database, not the Workers binding) silently returned zero rows with no
+  // error — `result.results` was always undefined, so `result.results ||
+  // []` just resolved to an empty array every single time.
+  async function allAsNativeShape(sql, params) {
+    const { rows, rowCount } = await execHttp(sql, params);
+    return { results: rows, success: true, meta: { changes: rowCount } };
+  }
+
   // Build a shim that looks like a Workers D1 binding to queryD1() / batchD1()
   _d1HttpClient = {
     _isHttpClient: true,
@@ -114,9 +130,9 @@ function getD1HttpClient() {
       return {
         _sql: sql,
         bind(...args) {
-          return { _sql: sql, _params: args, all: () => execHttp(sql, args) };
+          return { _sql: sql, _params: args, all: () => allAsNativeShape(sql, args) };
         },
-        all: () => execHttp(sql, []),
+        all: () => allAsNativeShape(sql, []),
       };
     },
     batch: (stmts) => batchHttp(stmts.map((s) => ({ sql: s._sql, params: s._params || [] }))),

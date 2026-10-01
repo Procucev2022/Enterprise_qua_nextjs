@@ -27,6 +27,12 @@ import type { ExtractedEntity, ManualRFQForm, ManualRFQLineItem } from '@/lib/ty
 
 const MANUAL = UI_STRINGS.manualRfq;
 
+// A hardcoded literal here ('2026-09-30') is a time bomb: validation rejects
+// any targetDate earlier than today, so a fixed past-looking date starts
+// failing the instant the real calendar date passes it. Computed once per
+// test run instead, always valid.
+const A_FUTURE_DATE = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
 function completeItem(overrides: Partial<ManualRFQLineItem> = {}): ManualRFQLineItem {
   return {
     ...createEmptyManualRFQLineItem(),
@@ -34,7 +40,7 @@ function completeItem(overrides: Partial<ManualRFQLineItem> = {}): ManualRFQLine
     technicalSpecs: 'SS316 impeller',
     quantity: 12,
     unit: 'Nos',
-    targetDate: '2026-12-31',
+    targetDate: A_FUTURE_DATE,
     majorCategory: 'Engineering Spares - Mechanical',
     minorCategory: 'Pumps & Accessories',
     ...overrides,
@@ -47,7 +53,7 @@ function completeForm(overrides: Partial<ManualRFQForm> = {}): ManualRFQForm {
     title: 'Mechanical Spares Procurement',
     majorCategory: 'Engineering Spares - Mechanical',
     estimatedBudget: 348000,
-    targetDeliveryDate: '2026-12-31',
+    targetDeliveryDate: A_FUTURE_DATE,
     deliveryLocation: 'Navi Mumbai Plant, Gate 3',
     deliveryPincode: '400701',
     lineItems: [completeItem()],
@@ -341,7 +347,7 @@ describe('toRFQCreatePayload', () => {
 
   it('falls back to the leading line item date when no header date was given', () => {
     const payload = toRFQCreatePayload(completeForm({ targetDeliveryDate: '' }));
-    expect(payload.targetDeliveryDate).toBe('2026-12-31');
+    expect(payload.targetDeliveryDate).toBe(A_FUTURE_DATE);
   });
 
   // The column is NOT NULL, and zero renders as "not set" rather than a real
@@ -450,7 +456,7 @@ describe('fromExtractedEntity', () => {
       itemName: 'Industrial Electric Motor, 15 HP',
       quantity: 5,
       unit: 'Nos',
-      targetDate: '2026-12-31',
+      targetDate: A_FUTURE_DATE,
       technicalSpecs: '3-Phase, 415V, IE3 efficiency',
       confidence: 90,
       category: MINOR,
@@ -469,7 +475,7 @@ describe('fromExtractedEntity', () => {
       technicalSpecs: '3-Phase, 415V, IE3 efficiency',
       quantity: 5,
       unit: 'Nos',
-      targetDate: '2026-12-31',
+      targetDate: A_FUTURE_DATE,
       majorCategory: MAJOR,
       minorCategory: MINOR,
     });

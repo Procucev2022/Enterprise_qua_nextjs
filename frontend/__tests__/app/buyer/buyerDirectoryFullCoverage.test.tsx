@@ -19,6 +19,13 @@ jest.mock('@/lib/store', () => ({
   AppProvider: ({ children }: any) => <div>{children}</div>,
 }));
 
+// A hardcoded literal here ('2026-09-30') is a time bomb: the ingestion
+// wizard's own client-side validation rejects a target date earlier than
+// today before ever calling createRFQ, so a fixed past-looking date starts
+// silently blocking submission the instant the real calendar date passes it.
+// Computed once per test run instead, always valid.
+const A_FUTURE_DATE = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
 describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
   const mockOnViewEvaluation = jest.fn();
   const mockOnNavigateToWizard = jest.fn();
@@ -142,7 +149,7 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
       data: {
         title: 'Centrifugal Pump Package',
         category: 'Engineering Spares - Mechanical',
-        targetDeliveryDate: '2026-12-31',
+        targetDeliveryDate: A_FUTURE_DATE,
         estimatedBudget: 850000,
         extractedEntities: [
           {
@@ -150,7 +157,7 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
             itemName: 'Centrifugal Pump 500 GPM',
             quantity: 5,
             unit: 'Sets',
-            targetDate: '2026-12-31',
+            targetDate: A_FUTURE_DATE,
             technicalSpecs: 'SS316 Impeller',
             confidence: 95,
             category: 'Pumps & Accessories',
@@ -197,7 +204,7 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
         status: 'Quotes Pending',
         sourcingMode: 'mode_2',
         quotesCount: 0,
-        targetDeliveryDate: '2026-12-31',
+        targetDeliveryDate: A_FUTURE_DATE,
         budget: 850000,
         deliveryLocation: 'Hazira Complex',
         deliveryPincode: '394270',

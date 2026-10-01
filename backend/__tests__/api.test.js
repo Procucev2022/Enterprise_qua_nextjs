@@ -8,6 +8,14 @@ function customAuthHeader(user) {
   return { Authorization: `Bearer ${authService.generateSessionToken(user)}` };
 }
 
+// A hardcoded literal here ('2026-09-30') is a time bomb: RFQ creation
+// rejects any targetDeliveryDate/deadline earlier than today, so a fixed
+// past-looking date starts failing the instant the real calendar date
+// passes it — confirmed live, every createOwnRFQ-based test in this file
+// started failing the moment the sandbox's clock rolled into 2026-10-01.
+// Computed once per test run instead, always valid.
+const A_FUTURE_DATE = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
 describe('API Route Endpoints', () => {
   // 1. Bootstrap
   describe('GET /api/bootstrap', () => {
@@ -430,8 +438,8 @@ describe('API Route Endpoints', () => {
         title: 'Entitlement Test RFQ',
         category: 'Engineering Spares - Mechanical',
         budget: 100000,
-        targetDeliveryDate: '2026-12-31',
-        deadline: '2026-12-31',
+        targetDeliveryDate: A_FUTURE_DATE,
+        deadline: A_FUTURE_DATE,
         sourcingMode: 'mode_1',
         deliveryLocation: 'Plant A',
         deliveryPincode: '400001',
@@ -573,8 +581,8 @@ describe('API Route Endpoints', () => {
         title: 'Procurement of High Temperature Valves',
         category: 'Engineering Spares - Mechanical',
         budget: 145000,
-        targetDeliveryDate: '2026-12-31',
-        deadline: '2026-12-31',
+        targetDeliveryDate: A_FUTURE_DATE,
+        deadline: A_FUTURE_DATE,
         sourcingMode: 'mode_2',
         deliveryLocation: 'Navi Mumbai Plant, Gate 3',
         deliveryPincode: '400701',
@@ -1225,7 +1233,7 @@ describe('RFQ edit and delete (/api/rfqs/:id)', () => {
         category: 'Engineering Spares - Mechanical',
         sourcingMode: 'mode_2',
         budget: 348000,
-        targetDeliveryDate: '2026-12-31',
+        targetDeliveryDate: A_FUTURE_DATE,
         deliveryLocation: 'Navi Mumbai Plant, Gate 3',
         deliveryPincode: '400701',
         ...overrides,
@@ -1241,7 +1249,7 @@ describe('RFQ edit and delete (/api/rfqs/:id)', () => {
         category: 'Engineering Spares - Mechanical',
         sourcingMode: 'mode_2',
         budget: 348000,
-        targetDeliveryDate: '2026-12-31',
+        targetDeliveryDate: A_FUTURE_DATE,
         deliveryLocation: 'Navi Mumbai Plant, Gate 3',
         deliveryPincode: '400701',
         extractedEntities: [{ id: 'e1', itemName: 'Pump', quantity: 4 }],
