@@ -934,11 +934,11 @@ class StoreService {
   }
 
   deleteVendor(id, actorEmail = null) {
-    const target = this.vendors.find((v) => v.id === id);
+    const target = this.vendors.find((v) => v.id === id || v.email === id);
     const beforeLen = this.vendors.length;
-    this.vendors = this.vendors.filter((v) => v.id !== id);
+    this.vendors = this.vendors.filter((v) => v.id !== id && v.email !== id);
     if (this.vendors.length < beforeLen) {
-      this._removeVendor(id);
+      this._removeVendor(target ? target.id : id);
       // Deletion was the only vendor mutation that wrote no audit entry, so a
       // vendor disappearing from the master left no record of who removed it or
       // when — the addVendor and updateVendor paths both log, and the removal of
