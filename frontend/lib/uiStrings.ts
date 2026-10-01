@@ -244,6 +244,10 @@ export const UI_STRINGS = {
       'Enter the delivery pincode or zipcode. Freight is rated on it, so it cannot be left blank.',
     deliveryPincodeInvalid:
       'Enter a pincode or zipcode of 3 to 10 letters, digits, spaces or hyphens, for example 400701.',
+    deliveryPincodeDummy:
+      'Dummy or sequential PIN codes (e.g. 123456, 111111) are not allowed. Please enter a valid delivery PIN code.',
+    deliveryPincodeNotFound:
+      'PIN code not found in postal directory. Please enter a valid delivery PIN code.',
     budgetNegative: 'An estimated budget cannot be negative. Leave it blank to publish no ceiling.',
     lineItemsRequired: 'Add at least one line item so vendors have something to quote against.',
     targetDateCannotBePast: 'Target date cannot be earlier than today.',
@@ -858,6 +862,8 @@ export const UI_STRINGS = {
     deliveryPincodeRequired: 'PIN / ZIP Code is required so vendors can price freight.',
     deliveryPincodeInvalid:
       'PIN / ZIP Code must be 3 to 10 letters, digits, spaces or hyphens, for example 400701 or SW1A 1AA.',
+    deliveryPincodeDummy:
+      'Dummy or sequential PIN codes (e.g. 123456, 111111) are not allowed. Please enter a valid delivery PIN code.',
     targetDateCannotBePast: 'Target date cannot be earlier than today.',
 
     // Outcomes

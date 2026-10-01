@@ -55,8 +55,8 @@ describe('VendorConsole — pagination over a large vendor roster', () => {
   test('renders only the first page of cards, with a Load More button, and appends the next page on click', async () => {
     render(<VendorConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
 
-    await waitFor(() => expect(screen.getByText('Vendor 0')).toBeInTheDocument());
-    expect(screen.getByText('Vendor 19')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText('Vendor 0').length).toBeGreaterThan(0));
+    expect(screen.getAllByText('Vendor 19').length).toBeGreaterThan(0);
     expect(screen.queryByText('Vendor 20')).not.toBeInTheDocument();
 
     const loadMore = screen.getByTestId('load-more-vendor-cards');
@@ -64,14 +64,14 @@ describe('VendorConsole — pagination over a large vendor roster', () => {
 
     fireEvent.click(loadMore);
 
-    await waitFor(() => expect(screen.getByText('Vendor 20')).toBeInTheDocument());
-    expect(screen.getByText('Vendor 24')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText('Vendor 20').length).toBeGreaterThan(0));
+    expect(screen.getAllByText('Vendor 24').length).toBeGreaterThan(0);
     expect(screen.queryByTestId('load-more-vendor-cards')).not.toBeInTheDocument();
   });
 
   test('re-fetches from page one when the search term changes (server-side search)', async () => {
     render(<VendorConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
-    await waitFor(() => expect(screen.getByText('Vendor 0')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Vendor 0').length).toBeGreaterThan(0));
 
     const search = screen.getByPlaceholderText(/Search Vendor name or category/i);
     fireEvent.change(search, { target: { value: 'Vendor 1' } });
@@ -79,7 +79,7 @@ describe('VendorConsole — pagination over a large vendor roster', () => {
     // Matches "Vendor 1", "Vendor 10".."Vendor 19" (11 rows) — all fit in one
     // page (20), so no Load More button, and unrelated vendors are gone.
     await waitFor(() => expect(screen.queryByText('Vendor 0')).not.toBeInTheDocument());
-    expect(screen.getByText('Vendor 1')).toBeInTheDocument();
+    expect(screen.getAllByText('Vendor 1').length).toBeGreaterThan(0);
     expect(screen.queryByTestId('load-more-vendor-cards')).not.toBeInTheDocument();
   });
 
@@ -98,10 +98,10 @@ describe('VendorConsole — pagination over a large vendor roster', () => {
     mockFetchAllVendors.mockResolvedValueOnce(page([withEmail, withoutEmail], 1, 2));
 
     render(<VendorConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
-    await waitFor(() => expect(screen.getByText('Vendor 0')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Vendor 0').length).toBeGreaterThan(0));
 
-    const emailCard = screen.getByText('Vendor 0').closest('.glass-panel');
-    const noEmailCard = screen.getByText('Vendor 1').closest('.glass-panel');
+    const emailCard = screen.getByTestId('vendor-card-v-0');
+    const noEmailCard = screen.getByTestId('vendor-card-v-1');
     expect(emailCard?.className).toContain('border-emerald-300');
     expect(noEmailCard?.className).toContain('border-rose-300');
   });
@@ -109,7 +109,7 @@ describe('VendorConsole — pagination over a large vendor roster', () => {
   test('surfaces an error and stops the loading-more spinner when a "Load More" fetch fails', async () => {
     mockFetchAllVendors.mockResolvedValueOnce(page(ALL_VENDORS.slice(0, PAGE_SIZE), 1, 25));
     render(<VendorConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
-    await waitFor(() => expect(screen.getByText('Vendor 0')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Vendor 0').length).toBeGreaterThan(0));
 
     mockFetchAllVendors.mockResolvedValueOnce({ success: false, reason: 'SERVER', error: 'Could not load more vendors.' });
     fireEvent.click(screen.getByTestId('load-more-vendor-cards'));
@@ -139,7 +139,7 @@ describe('VendorConsole — pagination over a large vendor roster', () => {
     });
     mockFetchAllVendors.mockResolvedValueOnce(page([makeVendor(0)], 1, 1));
     render(<VendorConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
-    await waitFor(() => expect(screen.getByText('Vendor 0')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Vendor 0').length).toBeGreaterThan(0));
 
     expect(screen.getAllByText((_, el) => el?.textContent === '₹50,000').length).toBeGreaterThan(0);
   });
@@ -147,7 +147,7 @@ describe('VendorConsole — pagination over a large vendor roster', () => {
   test('does not re-fetch on an unrelated re-render when the search term is unchanged', async () => {
     mockFetchAllVendors.mockResolvedValueOnce(page(ALL_VENDORS.slice(0, PAGE_SIZE), 1, 25));
     const { rerender } = render(<VendorConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
-    await waitFor(() => expect(screen.getByText('Vendor 0')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Vendor 0').length).toBeGreaterThan(0));
     expect(mockFetchAllVendors).toHaveBeenCalledTimes(1);
 
     rerender(<VendorConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
@@ -171,7 +171,7 @@ describe('VendorConsole — pagination over a large vendor roster', () => {
     });
     mockFetchAllVendors.mockResolvedValueOnce(page([makeVendor(0)], 1, 1));
     render(<VendorConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
-    await waitFor(() => expect(screen.getByText('Vendor 0')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Vendor 0').length).toBeGreaterThan(0));
 
     expect(screen.getAllByText(/7 days/).length).toBeGreaterThan(0);
     expect(screen.getAllByText('100%').length).toBeGreaterThan(0);
@@ -202,5 +202,21 @@ describe('VendorConsole — pagination over a large vendor roster', () => {
 
     fireEvent.click(screen.getByText(/Review Performance/i));
     expect(screen.getByText('Partially Compliant')).toBeInTheDocument();
+  });
+
+  test('displays all available contact details (Vendor Name, Email, Phone) when a Vendor Company is selected', async () => {
+    mockFetchAllVendors.mockResolvedValueOnce(
+      page([{ ...makeVendor(0), name: 'Acme Corp', contactPerson: 'John Doe', email: 'john@acme.com', phone: '+91 9876543210' }], 1, 1)
+    );
+    render(<VendorConsole onNavigateToMatrix={jest.fn()} onNavigateToEvaluation={jest.fn()} />);
+    await waitFor(() => expect(screen.getAllByText(/Acme Corp/).length).toBeGreaterThan(0));
+
+    const select = screen.getAllByRole('combobox')[0];
+    fireEvent.change(select, { target: { value: 'Acme Corp' } });
+
+    expect(screen.getByTestId('scorecard-vendor-item')).toBeInTheDocument();
+    expect(screen.getAllByText('John Doe').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('john@acme.com').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('+91 9876543210').length).toBeGreaterThan(0);
   });
 });

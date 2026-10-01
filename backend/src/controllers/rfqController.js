@@ -99,12 +99,44 @@ async function canAccessRfq(req, rfq) {
   return !!scope.buyerAccountId && rfq.buyerAccountId === scope.buyerAccountId;
 }
 
+/**
+ * Received quotes shall remain hidden from the buyer for 48 hours after RFQ release.
+ * After 48 hours or upon RFQ closure, quotes become visible.
+ */
+function applyQuotesVisibility(rfq, role) {
+  if (!rfq) return rfq;
+  if (role !== 'buyer') return rfq;
+
+  const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
+  const createdAtMs = rfq.createdAt ? new Date(rfq.createdAt).getTime() : 0;
+  const isWithin48h = createdAtMs > 0 && Date.now() - createdAtMs < FORTY_EIGHT_HOURS_MS;
+  const isClosed = rfq.status === 'Closed';
+
+  if (isWithin48h && !isClosed) {
+    const unhideAt = new Date(createdAtMs + FORTY_EIGHT_HOURS_MS).toISOString();
+    return {
+      ...rfq,
+      quotes: [],
+      quotesCount: 0,
+      quotesHidden: true,
+      quotesHiddenUntil: unhideAt,
+      quotesHiddenReason: 'Received quotes remain hidden from the buyer for 48 hours after release to preserve bidding integrity.',
+    };
+  }
+
+  return {
+    ...rfq,
+    quotesHidden: false,
+  };
+}
+
 /** Apply a read scope to the full RFQ list. */
 function scopedRfqList(scope) {
   const all = storeService.getRFQs();
   if (!scope.restricted) return all;
   if (scope.role === 'vendor') return all.filter((rfq) => storeService.vendorCoversRFQ(scope.vendor, rfq));
-  return all.filter((rfq) => !!scope.buyerAccountId && rfq.buyerAccountId === scope.buyerAccountId);
+  const buyerRfqs = all.filter((rfq) => !!scope.buyerAccountId && rfq.buyerAccountId === scope.buyerAccountId);
+  return buyerRfqs.map((rfq) => applyQuotesVisibility(rfq, scope.role));
 }
 
 // Fields a buyer's own edit may touch. Deliberately a whitelist: id,
@@ -124,6 +156,8 @@ const RFQ_UPDATABLE_FIELDS = [
   'deliveryPincode',
   'extractedEntities',
   'attachments',
+  'inquiries',
+  'assignedVendors',
 ];
 
 function pickUpdatableRfqFields(body) {
@@ -186,16 +220,15 @@ async function getAllRFQs(req, res, next) {
 }
 
 /**
- * The category-matched vendor pool a category manager can invite from.
+ * The category-matched vendor pool a category manager or buyer can invite from.
  *
- * Grants no access by itself — see storeService.candidateVendorsForRFQ. Route
- * is gated to category_manager/admin.
+ * Grants no access by itself — see storeService.candidateVendorsForRFQ.
  */
-function getVendorCandidates(req, res, next) {
+async function getVendorCandidates(req, res, next) {
   try {
     const { id } = req.params;
-    const rfq = storeService.getRFQById(id);
-    if (!rfq) {
+    const rfq = await storeService.getRFQByIdAsync(id);
+    if (!rfq || !(await canAccessRfq(req, rfq))) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
     const candidates = storeService.candidateVendorsForRFQ(rfq);
@@ -207,11 +240,11 @@ function getVendorCandidates(req, res, next) {
 }
 
 /**
- * A category manager invites specific vendors to an RFQ.
+ * A category manager or buyer invites specific vendors to an RFQ.
  *
  * Only invited vendors (plus any the buyer directly added) can see, be
  * notified about, be emailed about, or quote this RFQ afterward — see
- * storeService.vendorCoversRFQ. Route is gated to category_manager/admin.
+ * storeService.vendorCoversRFQ.
  */
 async function inviteVendors(req, res, next) {
   try {
@@ -220,15 +253,115 @@ async function inviteVendors(req, res, next) {
     if (!Array.isArray(vendorIds) || vendorIds.length === 0) {
       return res.status(400).json({ success: false, error: 'vendorIds must be a non-empty array.' });
     }
-    const rfq = storeService.getRFQById(id);
-    if (!rfq) {
+    const rfq = await storeService.getRFQByIdAsync(id);
+    if (!rfq || !(await canAccessRfq(req, rfq))) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
     const result = await storeService.inviteVendorsToRFQ(id, vendorIds, req.user && req.user.email);
-    logger.info(`Invited vendors to RFQ ${id}`, { id, invitedCount: result.invitedCount }, 'RFQ_CONTROLLER');
-    res.json({ success: true, data: result.updatedRFQ, invitedCount: result.invitedCount });
+    res.json({
+      success: true,
+      data: result.updatedRFQ,
+      invitedCount: result.invitedCount,
+      excludedCount: result.excludedCount || 0,
+      excludedVendors: result.excludedVendors || [],
+    });
   } catch (err) {
     logger.error(`Error inviting vendors to RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
+/**
+ * Validate vendor candidates against RFQ category before shortlisting.
+ * Excludes category mismatched vendors and dispatches profile update emails.
+ */
+async function validateVendorCategories(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { vendorIds } = req.body || {};
+    if (!Array.isArray(vendorIds) || vendorIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'vendorIds must be a non-empty array.' });
+    }
+    const rfq = await storeService.getRFQByIdAsync(id);
+    if (!rfq || !(await canAccessRfq(req, rfq))) {
+      return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+    }
+    const resolvedVendors = vendorIds.map((vid) => storeService.getVendorById(vid, 'all') || { id: vid }).filter(Boolean);
+    const result = storeService.validateAndShortlistVendors(rfq, resolvedVendors, req.user && req.user.email);
+    res.json({
+      success: true,
+      shortlisted: result.shortlisted,
+      excluded: result.excluded,
+      message: result.excluded.length > 0
+        ? `${result.excluded.length} vendor(s) have category mismatches and were excluded from shortlist. Profile update emails sent.`
+        : 'All vendors match RFQ category.',
+    });
+  } catch (err) {
+    logger.error(`Error validating vendor categories for RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
+/**
+ * Buyer-triggered email requesting a vendor to update their category details.
+ * Useful during RFQ creation when a vendor's registered category does not match
+ * the required category of the RFQ line items.
+ */
+async function requestVendorCategoryUpdate(req, res, next) {
+  try {
+    const { vendorId, vendorEmail, vendorName, rfqCategory, rfqTitle, rfqNumber } = req.body || {};
+    let vendor = vendorId ? storeService.getVendorById(vendorId, 'all') : null;
+    if (!vendor && vendorEmail) {
+      vendor = typeof storeService.getVendorByEmail === 'function' ? storeService.getVendorByEmail(vendorEmail) : null;
+    }
+    const targetEmail = vendor ? vendor.email : vendorEmail;
+    if (!targetEmail) {
+      return res.status(400).json({ success: false, error: 'Target vendor email or valid vendorId is required.' });
+    }
+
+    const buyerAccount = req.user && req.user.email ? await storeService.getBuyerAccountByEmail(req.user.email) : null;
+    const buyerName = buyerAccount ? (buyerAccount.companyName || buyerAccount.name) : (req.user ? req.user.name : 'Buyer');
+    const buyerEmail = buyerAccount ? buyerAccount.corporateEmail : (req.user ? req.user.email : null);
+
+    const targetVendorName = vendor ? (vendor.name || vendor.contactPerson) : (vendorName || 'Supplier');
+    const targetCurrentCategory = vendor ? (vendor.majorCategory || (Array.isArray(vendor.minorCategories) ? vendor.minorCategories.join(', ') : '')) : 'Not specified';
+
+    await mailerService.sendVendorCategoryMismatchEmail(targetEmail, {
+      rfqNumber: rfqNumber || 'NEW-RFQ',
+      rfqTitle: rfqTitle || 'Procurement Requisition',
+      rfqCategory: rfqCategory || 'Required Procurement Category',
+      vendorName: targetVendorName,
+      vendorCurrentCategory: targetCurrentCategory,
+      buyerAccountName: buyerName,
+      buyerEmail,
+    });
+
+    if (typeof storeService.recordAuditEntry === 'function') {
+      storeService.recordAuditEntry({
+        actor: req.user ? req.user.email : 'system',
+        actorType: 'buyer',
+        action: 'vendor_category_update_requested',
+        target: targetEmail,
+        details: {
+          vendorId: vendor ? vendor.id : vendorId,
+          rfqCategory,
+          vendorCurrentCategory: targetCurrentCategory,
+        },
+      });
+    } else if (typeof storeService.addAuditLog === 'function') {
+      storeService.addAuditLog({
+        userEmail: req.user ? req.user.email : 'buyer',
+        action: `Requested category update from vendor ${targetVendorName} (${targetEmail}) for RFQ ${rfqNumber || 'NEW-RFQ'}`,
+        rfqNumber: rfqNumber || undefined,
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: `Category update email sent to ${targetVendorName} (${targetEmail}).`,
+    });
+  } catch (err) {
+    logger.error('Failed to request vendor category update', err, 'RFQ_CONTROLLER');
     next(err);
   }
 }
@@ -249,7 +382,8 @@ async function getRFQById(req, res, next) {
       logger.warn(`RFQ not found for ID: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
-    res.json({ success: true, data: rfq });
+    const role = req.user && req.user.role;
+    res.json({ success: true, data: applyQuotesVisibility(rfq, role) });
   } catch (err) {
     logger.error(`Error fetching RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
     next(err);
@@ -716,7 +850,8 @@ async function updateRFQ(req, res, next) {
       logger.warn(`RFQ not found for update: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
-    res.json({ success: true, data: updated });
+    const role = req.user && req.user.role;
+    res.json({ success: true, data: applyQuotesVisibility(updated, role) });
   } catch (err) {
     logger.error(`Error updating RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
     next(err);
@@ -794,7 +929,20 @@ async function addQuote(req, res, next) {
     // A vendor can only quote an RFQ they were actually eligible to see. An
     // enquiry outside their category (and not one they were invited onto)
     // reports the same 404 as an unknown id — they had no way to reach it.
-    const targetRfq = storeService.getRFQById(id);
+    //
+    // getRFQByIdAsync (not the plain in-memory getRFQById) matters here for a
+    // Workers-specific reason: each isolate hydrates its own copy of `rfqs`
+    // once, lazily, on its first request, and nothing re-syncs it afterward
+    // except this async path's own D1 fallback. A vendor quoting an RFQ some
+    // *other* isolate created got a guaranteed, permanent 404 on whichever
+    // isolate served their POST until that isolate happened to restart —
+    // confirmed live: 10/10 attempts against a real RFQ failed with "not
+    // found" even immediately after a full hydrateFromDB() refresh, because
+    // that refresh ran on a different isolate than the one serving the next
+    // request. getRFQByIdAsync's DB fallback also backfills this.rfqs, so
+    // the addQuoteToRFQ call below (which still uses the sync, in-memory
+    // getRFQById) finds it too.
+    const targetRfq = await storeService.getRFQByIdAsync(id);
     if (!targetRfq || !(await canAccessRfq(req, targetRfq))) {
       logger.warn(`RFQ not found or out of scope for quote submission: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
@@ -910,6 +1058,83 @@ function approvePO(req, res, next) {
   }
 }
 
+async function addInquiry(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { message, vendorName, vendorEmail } = req.body;
+    if (!message || typeof message !== 'string' || !message.trim()) {
+      return res.status(400).json({ success: false, error: 'Clarification message is required.' });
+    }
+
+    const rfq = await storeService.getRFQByIdAsync(id);
+    if (!rfq) {
+      return res.status(404).json({ success: false, error: 'RFQ not found.' });
+    }
+
+    const result = storeService.addInquiryToRFQ(rfq.id, {
+      message: message.trim(),
+      vendorName: vendorName || (req.user && req.user.name) || 'Vendor Partner',
+      vendorEmail: vendorEmail || (req.user && req.user.email) || null,
+      vendorId: req.user && req.user.role === 'vendor' ? req.user.id : undefined,
+    });
+
+    if (!result) {
+      return res.status(404).json({ success: false, error: 'Failed to add inquiry to RFQ.' });
+    }
+
+    // Dispatch acknowledgment email to vendor with buyer in CC
+    const recipientVendorEmail = vendorEmail || (req.user && req.user.email);
+    const buyerEmail = storeService.resolveBuyerEmailForRFQ(rfq);
+    if (recipientVendorEmail) {
+      mailerService
+        .sendVendorIssueAcknowledgementEmail(recipientVendorEmail, {
+          rfq,
+          rfqNumber: rfq.rfqNumber,
+          rfqTitle: rfq.title,
+          vendorName: vendorName || (req.user && req.user.name) || 'Vendor Partner',
+          issueMessage: message.trim(),
+          cc: buyerEmail || undefined,
+        })
+        .catch((err) => logger.error('Failed to send vendor inquiry acknowledgment email', err, 'RFQ_CONTROLLER'));
+    }
+
+    res.status(201).json({ success: true, data: result.inquiry, rfq: result.updatedRfq });
+  } catch (err) {
+    logger.error(`Error adding inquiry for RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
+async function replyInquiry(req, res, next) {
+  try {
+    const { id, inquiryId } = req.params;
+    const { reply } = req.body;
+    if (!reply || typeof reply !== 'string' || !reply.trim()) {
+      return res.status(400).json({ success: false, error: 'Reply message is required.' });
+    }
+
+    const rfq = await storeService.getRFQByIdAsync(id);
+    if (!rfq) {
+      return res.status(404).json({ success: false, error: 'RFQ not found.' });
+    }
+
+    const result = storeService.replyToRFQInquiry(rfq.id, inquiryId, {
+      reply: reply.trim(),
+      repliedBy: (req.user && req.user.name) || 'Procurement Officer',
+      repliedByEmail: req.user && req.user.email,
+    });
+
+    if (!result) {
+      return res.status(404).json({ success: false, error: 'Inquiry not found on this RFQ.' });
+    }
+
+    res.status(200).json({ success: true, data: result.inquiry, rfq: result.updatedRfq });
+  } catch (err) {
+    logger.error(`Error replying to inquiry for RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
 module.exports = {
   getRFQs,
   getAllRFQs,
@@ -930,4 +1155,8 @@ module.exports = {
   generateEmailPreview,
   triggerBatchChaser,
   approvePO,
+  addInquiry,
+  replyInquiry,
+  validateVendorCategories,
+  requestVendorCategoryUpdate,
 };

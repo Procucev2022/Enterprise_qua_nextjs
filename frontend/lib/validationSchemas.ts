@@ -40,6 +40,26 @@ export const INDIAN_MOBILE_PATTERN = /^(?:\+?91[-\s]?|0)?[6-9]\d{9}$/;
  */
 export const PINCODE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9\s-]{2,9}$/;
 
+export const DUMMY_PINCODES = new Set([
+  '000000', '111111', '222222', '333333', '444444',
+  '555555', '666666', '777777', '888888', '999999',
+  '012345', '123456', '234567', '345678', '456789', '567890',
+  '654321', '765432', '876543', '987654', '098765',
+  '121212', '212121', '123123', '321321', '000001', '100000',
+]);
+
+/**
+ * Checks if a string is a dummy, test, or sequential PIN code
+ */
+export function isDummyPincode(pincode: unknown): boolean {
+  if (!pincode || typeof pincode !== 'string') return false;
+  const clean = pincode.trim().replace(/\s+/g, '');
+  if (!clean) return false;
+  if (DUMMY_PINCODES.has(clean)) return true;
+  if (/^(\d)\1{5,}$/.test(clean)) return true;
+  return false;
+}
+
 /**
  * Statutory identifiers on the buyer organisation profile. Each mirrors the
  * corresponding regex in backend/src/config/validationSchemas.js, which is the
@@ -245,3 +265,89 @@ export function validateFormData(schema: FormSchema, data: Record<string, any>):
     fieldErrors,
   };
 }
+
+export interface PostOfficeDetail {
+  Name: string;
+  Description?: string;
+  BranchType?: string;
+  DeliveryStatus?: string;
+  Circle?: string;
+  District: string;
+  Division?: string;
+  Region?: string;
+  State: string;
+  Country?: string;
+  Pincode?: string;
+}
+
+export interface PincodeValidationResult {
+  isValid: boolean;
+  message?: string;
+  postOffices?: PostOfficeDetail[];
+}
+
+/**
+ * Validates Indian PIN code format and performs live postal verification lookup via Postal PIN Code API
+ */
+export async function validatePincode(
+  pincode: string,
+  isIndianFormat: boolean = true
+): Promise<PincodeValidationResult> {
+  const pin = (pincode || '').trim();
+  if (!pin) {
+    return { isValid: false, message: 'PIN code is required' };
+  }
+
+  // International postal codes allowed if not 6-digit number or explicitly non-Indian
+  if (!isIndianFormat || !/^\d+$/.test(pin)) {
+    if (PINCODE_PATTERN.test(pin)) {
+      return { isValid: true };
+    }
+    return { isValid: false, message: 'Invalid postal code format' };
+  }
+
+  // Format check for Indian 6-digit PIN code
+  if (!INDIAN_PINCODE_PATTERN.test(pin)) {
+    return {
+      isValid: false,
+      message: 'PIN Code must be 6 digits and cannot start with 0',
+    };
+  }
+
+  // Dummy PIN code detection
+  if (isDummyPincode(pin)) {
+    return {
+      isValid: false,
+      message: 'Invalid test or sequential PIN code. Enter a valid postal code.',
+    };
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+    const response = await fetch(`https://api.postalpincode.in/pincode/${pin}`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      return { isValid: true }; // Network fallback
+    }
+
+    const data = await response.json();
+    if (Array.isArray(data) && data.length > 0 && data[0].Status === 'Success') {
+      return {
+        isValid: true,
+        postOffices: data[0].PostOffice || [],
+      };
+    } else {
+      return {
+        isValid: false,
+        message: 'PIN Code is not found or invalid in postal records.',
+      };
+    }
+  } catch (error) {
+    return { isValid: true }; // Network fallback
+  }
+}
+

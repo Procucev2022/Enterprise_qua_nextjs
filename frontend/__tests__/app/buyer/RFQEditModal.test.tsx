@@ -37,6 +37,17 @@ function entity(overrides: Partial<ExtractedEntity> = {}): ExtractedEntity {
   };
 }
 
+// A hardcoded literal here ('2026-09-30') is a time bomb: validateRFQEdit
+// rejects any targetDeliveryDate earlier than today, so a fixed past-looking
+// date starts failing the instant the real calendar date passes it. Computed
+// once per test run instead, always valid.
+const A_FUTURE_DATE = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+// A second, distinct future date for tests that change targetDeliveryDate
+// away from buildRFQ()'s default and assert the new value was sent — offset
+// far enough from A_FUTURE_DATE (60 days vs 30) that the two can never
+// collide and hide a real field change.
+const A_DIFFERENT_FUTURE_DATE = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
 function attachment(overrides: Partial<RFQAttachment> = {}): RFQAttachment {
   return {
     id: 'a1',
@@ -57,7 +68,7 @@ function buildRFQ(overrides: Partial<RFQItem> = {}): RFQItem {
     sourcingMode: 'mode_2',
     status: 'Quotes Pending',
     quotesCount: 0,
-    targetDeliveryDate: '2026-09-30',
+    targetDeliveryDate: A_FUTURE_DATE,
     budget: 348000,
     deliveryLocation: 'Navi Mumbai Plant, Gate 3',
     deliveryPincode: '400701',
@@ -109,7 +120,7 @@ describe('toFormState', () => {
       category: MAJOR,
       status: 'Quotes Pending',
       budget: 348000,
-      targetDeliveryDate: '2026-09-30',
+      targetDeliveryDate: A_FUTURE_DATE,
       deliveryLocation: 'Navi Mumbai Plant, Gate 3',
       deliveryPincode: '400701',
     });
@@ -259,6 +270,7 @@ describe('validateRFQEdit', () => {
     ['short location', { deliveryLocation: 'ab' }, 'deliveryLocation', EDIT.deliveryLocationRequired],
     ['blank pincode', { deliveryPincode: '  ' }, 'deliveryPincode', EDIT.deliveryPincodeRequired],
     ['malformed pincode', { deliveryPincode: '!!' }, 'deliveryPincode', EDIT.deliveryPincodeInvalid],
+    ['dummy pincode', { deliveryPincode: '123456' }, 'deliveryPincode', EDIT.deliveryPincodeDummy],
   ])('rejects a %s', (_case, patch, field, message) => {
     expect(validateRFQEdit({ ...valid(), ...patch })[field as 'title']).toBe(message);
   });
@@ -309,7 +321,7 @@ describe('changedFields', () => {
     ['category', { category: OTHER_MAJOR }, { category: OTHER_MAJOR }],
     ['status', { status: 'In Evaluation' as const }, { status: 'In Evaluation' }],
     ['budget', { budget: 500 }, { budget: 500 }],
-    ['targetDeliveryDate', { targetDeliveryDate: '2026-10-31' }, { targetDeliveryDate: '2026-10-31' }],
+    ['targetDeliveryDate', { targetDeliveryDate: A_DIFFERENT_FUTURE_DATE }, { targetDeliveryDate: A_DIFFERENT_FUTURE_DATE }],
     ['deliveryLocation', { deliveryLocation: ' Pune Plant ' }, { deliveryLocation: 'Pune Plant' }],
     ['deliveryPincode', { deliveryPincode: ' 411001 ' }, { deliveryPincode: '411001' }],
   ])('sends only %s when only that changed', (_case, patch, expected) => {
@@ -553,7 +565,7 @@ describe('RFQEditModal: commercial and delivery', () => {
     fireEvent.change(screen.getByLabelText(EDIT.categoryLabel), { target: { value: OTHER_MAJOR } });
     fireEvent.change(screen.getByLabelText(EDIT.statusLabel), { target: { value: 'In Evaluation' } });
     fireEvent.change(screen.getByLabelText(/Estimated Budget/i), { target: { value: '500000' } });
-    fireEvent.change(screen.getByLabelText(EDIT.targetDateLabel), { target: { value: '2026-10-31' } });
+    fireEvent.change(screen.getByLabelText(EDIT.targetDateLabel), { target: { value: A_DIFFERENT_FUTURE_DATE } });
     fireEvent.change(screen.getByLabelText(EDIT.deliveryLocationLabel), { target: { value: 'Pune Plant Gate 2' } });
     fireEvent.change(screen.getByLabelText(EDIT.deliveryPincodeLabel), { target: { value: '411001' } });
     clickSave();
@@ -564,7 +576,7 @@ describe('RFQEditModal: commercial and delivery', () => {
       category: OTHER_MAJOR,
       status: 'In Evaluation',
       budget: 500000,
-      targetDeliveryDate: '2026-10-31',
+      targetDeliveryDate: A_DIFFERENT_FUTURE_DATE,
       deliveryLocation: 'Pune Plant Gate 2',
       deliveryPincode: '411001',
     });
@@ -1040,5 +1052,14 @@ describe('RFQDeleteDialog', () => {
 
     release();
     await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it('renders field level error badges and messages on invalid delivery location and pincode', async () => {
+    renderEdit(buildRFQ({ deliveryLocation: '', deliveryPincode: '' }));
+    clickSave();
+    await waitFor(() => {
+      expect(screen.getByText(EDIT.deliveryLocationRequired)).toBeInTheDocument();
+      expect(screen.getByText(EDIT.deliveryPincodeRequired)).toBeInTheDocument();
+    });
   });
 });

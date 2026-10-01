@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
-import { rfqAttachmentUrl } from '@/lib/rfqClient';
+import { rfqAttachmentUrl, submitRFQInquiry } from '@/lib/rfqClient';
 import { VendorOpportunity } from '@/lib/types';
 import {
   ArrowLeft,
@@ -23,6 +23,9 @@ import {
   IndianRupee,
   Send,
   Download,
+  AlertCircle,
+  MessageSquare,
+  HelpCircle,
 } from 'lucide-react';
 
 interface QuotationFormProps {
@@ -68,7 +71,7 @@ const BUYER_CONTACTS_MAP: Record<string, Omit<BuyerContactInfo, 'source'>> = {
 
 export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: QuotationFormProps) {
   const router = useRouter();
-  const { rfqs, vendorOpportunities, buyerVendors, showToast, addAuditLog, vendorSubscription, currentUserSession, refreshFromDB } = useApp();
+  const { rfqs, vendorOpportunities, buyerVendors, showToast, addAuditLog, vendorSubscription, currentUserSession, refreshFromDB, adoptCreatedRFQ } = useApp();
   const [selectedBuyerModal, setSelectedBuyerModal] = useState<(BuyerContactInfo & { rfqNumber: string }) | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
@@ -190,6 +193,20 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const [bidPaymentTerms, setBidPaymentTerms] = useState('45 Days Net');
   const [bidRemarks, setBidRemarks] = useState('');
   const [isSubmittingQuote, setIsSubmittingQuote] = useState(false);
+  const [submitModalError, setSubmitModalError] = useState<string | null>(null);
+  const [submitModalSuccess, setSubmitModalSuccess] = useState<{
+    rfqNumber: string;
+    totalPrice: number;
+    unitPrice: number;
+    leadTimeDays: number;
+    buyerRevealed?: BuyerContactInfo | null;
+  } | null>(null);
+
+  // ─── Inquiry / Clarification modal ──────────────────────────────────────
+  const [inquiryModal, setInquiryModal] = useState<VendorOpportunity | null>(null);
+  const [inquiryMessage, setInquiryMessage] = useState('');
+  const [isInquiring, setIsInquiring] = useState(false);
+  const [inquirySuccess, setInquirySuccess] = useState(false);
 
   const openBidForm = (opp: VendorOpportunity) => {
     setBiddingOn(opp);
@@ -198,6 +215,47 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     setBidWarrantyYears('');
     setBidPaymentTerms('45 Days Net');
     setBidRemarks('');
+    setSubmitModalError(null);
+    setSubmitModalSuccess(null);
+  };
+
+  const openInquiryModal = (opp: VendorOpportunity) => {
+    setInquiryModal(opp);
+    setInquiryMessage('');
+    setInquirySuccess(false);
+  };
+
+  const handleSendInquiry = async () => {
+    if (!inquiryModal || !inquiryMessage.trim()) return;
+    setIsInquiring(true);
+    try {
+      const vendorName = myVendorName || currentUserSession?.name || 'Vendor Partner';
+      const vendorEmail = currentUserSession?.email || null;
+
+      const res = await submitRFQInquiry(inquiryModal.id || inquiryModal.rfqNumber, {
+        message: inquiryMessage.trim(),
+        vendorName,
+        vendorEmail,
+      });
+
+      addAuditLog(
+        `Inquiry / Clarification submitted by ${vendorName} on ${inquiryModal.rfqNumber}: "${inquiryMessage.trim().slice(0, 100)}..."`,
+        inquiryModal.rfqNumber,
+        vendorEmail || undefined
+      );
+
+      if (res.success && res.rfq) {
+        adoptCreatedRFQ(res.rfq);
+      }
+
+      setInquiryMessage('');
+      await refreshFromDB();
+      showToast('Clarification Sent', 'Your query has been dispatched to the procurement officer.', 'success');
+    } catch (err: any) {
+      showToast('Inquiry Failed', err?.message || 'Could not dispatch clarification.', 'warning');
+    } finally {
+      setIsInquiring(false);
+    }
   };
 
   // Landing here via "Submit Quote Now" (opportunity-feed's reminder banner)
@@ -235,8 +293,10 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
 
   const handleSubmitQuote = async () => {
     if (!biddingOn) return;
+    setSubmitModalError(null);
     const unitPrice = Number(bidUnitPrice);
     if (!unitPrice || unitPrice <= 0) {
+      setSubmitModalError('Please enter a valid unit price greater than 0.');
       showToast('Validation Error', 'Enter a valid unit price.', 'warning');
       return;
     }
@@ -258,23 +318,43 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
+        const errorMsg = data.error || (data.upgradeRequired ? 'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.' : 'Failed to submit quotation.');
+        setSubmitModalError(errorMsg);
         if (data.upgradeRequired || res.status === 403) {
-          showToast('Quotation Credits Exhausted', data.error || 'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.', 'warning');
-          router.push('/vendor/vendor-subscription');
-          return;
+          showToast('Quotation Credits Exhausted', errorMsg, 'warning');
+        } else {
+          showToast('Submission Failed', errorMsg, 'warning');
         }
-        throw new Error(data.error || 'Failed to submit quote.');
+        return;
       }
+
       addAuditLog(
         `${myVendorName || currentUserSession?.name || 'Vendor'} submitted a quotation for ${biddingOn.rfqNumber} (Unit Price: ${unitPrice})`,
         biddingOn.rfqNumber,
         currentUserSession?.email
       );
       showToast('Quote Submitted', `Your quotation for ${biddingOn.rfqNumber} was submitted successfully.`, 'success');
+      
+      const isDirect = isOwnBuyerRfq(biddingOn.rfqNumber);
+      const targetRfqNum = biddingOn.rfqNumber;
+      const baseBuyer = BUYER_CONTACTS_MAP[biddingOn.rfqNumber] || {
+        companyName: biddingOn.buyer,
+        contactPerson: isDirect ? 'Rajesh Sharma (Lead Procurement)' : 'Strategic Procurement Lead',
+        email: isDirect ? 'client@procucev.com' : `procurement@${(biddingOn.buyer || 'buyer').toLowerCase().replace(/[^a-z]/g, '')}.com`,
+        phone: '+91 98201 44520',
+      };
+      const buyerDetails: BuyerContactInfo = {
+        ...baseBuyer,
+        source: isDirect ? 'buyer_uploaded' : 'quote_submitted',
+      };
       setBiddingOn(null);
+      setSelectedBuyerModal({ ...buyerDetails, rfqNumber: targetRfqNum });
       await refreshFromDB();
+      if (onSubmitSuccess) onSubmitSuccess();
     } catch (err: any) {
-      showToast('Submission Failed', err?.message || 'Could not submit the quote. Please try again.', 'warning');
+      const msg = err?.message || 'Could not submit the quote. Please check your network and try again.';
+      setSubmitModalError(msg);
+      showToast('Submission Failed', msg, 'warning');
     } finally {
       setIsSubmittingQuote(false);
     }
@@ -435,10 +515,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 const parentCompany = getParentCompany(opp.buyer);
                 const isDirectBuyer = isOwnBuyerRfq(opp.rfqNumber);
                 const freeCredits = effectiveFreeCredits;
-                const isLocked = !isDirectBuyer && (
-                  vendorSubscription === 'premium' ||
-                  (vendorSubscription !== 'connect' && vendorSubscription !== 'select' && freeCredits <= 0)
-                );
+                const isLocked = !isDirectBuyer && vendorSubscription !== 'connect' && vendorSubscription !== 'select' && freeCredits <= 0;
                 
                 // Condition: If buyer uploaded this vendor (isOwnBuyerRfq), show even before quote is submitted.
                 // Otherwise, show only after quote is submitted and updated in the system (quote !== undefined || opp.status === 'submitted').
@@ -559,15 +636,29 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                         }`}>
                           {quote.status}
                         </span>
+                      ) : (opp.status === 'Closed' || opp.status === 'Expired') ? (
+                        <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-500 border border-slate-200 dark:border-gray-700">
+                          🔒 RFQ Closed
+                        </span>
                       ) : isLocked ? (
                         <span className="text-amber-500 font-bold text-[10px]">🔒 Premium Locked</span>
                       ) : (
-                        <button
-                          onClick={() => openBidForm(opp)}
-                          className="btn btn-emerald btn-xs py-1 px-2.5 inline-flex items-center gap-1 text-[9px] font-bold"
-                        >
-                          <Send size={10} /> Submit Quote
-                        </button>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            onClick={() => openInquiryModal(opp)}
+                            className="btn btn-secondary btn-xs py-1 px-2 inline-flex items-center gap-1 text-[9px] font-semibold text-slate-600 dark:text-gray-300"
+                            title="Ask a question or raise a clarification with the buyer"
+                          >
+                            <MessageSquare size={10} />
+                            <span>Clarify</span>
+                          </button>
+                          <button
+                            onClick={() => openBidForm(opp)}
+                            className="btn btn-emerald btn-xs py-1 px-2.5 inline-flex items-center gap-1 text-[9px] font-bold"
+                          >
+                            <Send size={10} /> Submit Quote
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -577,6 +668,154 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
           </table>
         </div>
       </div>
+
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {/* INQUIRY / CLARIFICATION MODAL */}
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {inquiryModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4 text-xs text-slate-800 dark:text-gray-200 animate-scale-up">
+            <div className="flex items-start justify-between pb-3 border-b border-slate-100 dark:border-gray-800">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-blue-50 dark:bg-blue-950/70 text-blue-600 dark:text-blue-400">
+                  <MessageSquare size={18} />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm text-slate-900 dark:text-white">Raise Issue / Clarification</h3>
+                  <span className="text-[10px] text-slate-400 mono">{inquiryModal.rfqNumber}</span>
+                </div>
+              </div>
+              <button
+                onClick={() => setInquiryModal(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-white"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {(() => {
+                const rfqRecord = rfqs.find((r) => r.rfqNumber === inquiryModal.rfqNumber || r.id === inquiryModal.id);
+                const rawInquiries = rfqRecord?.inquiries || [];
+                const myInquiries = rawInquiries.filter(
+                  (inq: any) =>
+                    !inq.vendorEmail ||
+                    !currentUserSession?.email ||
+                    inq.vendorEmail.toLowerCase() === currentUserSession?.email.toLowerCase() ||
+                    inq.vendorName === (myVendorName || currentUserSession?.name)
+                );
+
+                const messages = (myInquiries.length > 0 ? myInquiries : rawInquiries).flatMap((inq: any) => {
+                  if (Array.isArray(inq.messages) && inq.messages.length > 0) {
+                    return inq.messages;
+                  }
+                  return [
+                    ...(inq.message
+                      ? [
+                          {
+                            id: `msg-${inq.id}-vendor`,
+                            senderRole: 'vendor' as const,
+                            senderName: inq.vendorName || 'You',
+                            message: inq.message,
+                            timestamp: inq.createdAt || new Date().toISOString(),
+                          },
+                        ]
+                      : []),
+                    ...(inq.reply
+                      ? [
+                          {
+                            id: `msg-${inq.id}-buyer`,
+                            senderRole: 'buyer' as const,
+                            senderName: inq.repliedBy || 'Buyer Procurement Team',
+                            message: inq.reply,
+                            timestamp: inq.repliedAt || inq.createdAt || new Date().toISOString(),
+                          },
+                        ]
+                      : []),
+                  ];
+                }).sort((a: any, b: any) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
+
+                return (
+                  <div className="space-y-3">
+                    <div className="space-y-2.5 max-h-64 overflow-y-auto p-3 rounded-xl bg-slate-50 dark:bg-gray-950/60 border border-slate-200 dark:border-gray-800">
+                      {messages.length === 0 ? (
+                        <div className="text-center py-4 space-y-1 text-slate-400">
+                          <MessageSquare size={20} className="mx-auto opacity-50 text-blue-500" />
+                          <p className="text-xs font-semibold text-slate-700 dark:text-gray-300">No questions asked yet</p>
+                          <p className="text-[10px]">Submit your first clarification below to start the direct thread with the buyer.</p>
+                        </div>
+                      ) : (
+                        messages.map((msg: any, idx: number) => {
+                          const isVendorMsg = msg.senderRole === 'vendor';
+                          return (
+                            <div
+                              key={msg.id || idx}
+                              className={`flex flex-col ${isVendorMsg ? 'items-end' : 'items-start'} space-y-1`}
+                            >
+                              <div className="flex items-center gap-1 text-[9px] text-slate-400 px-1">
+                                <span className="font-bold text-slate-600 dark:text-gray-300">
+                                  {isVendorMsg ? `${msg.senderName} (You)` : `${msg.senderName} (Buyer)`}
+                                </span>
+                                <span>•</span>
+                                <span className="mono">
+                                  {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recently'}
+                                </span>
+                              </div>
+                              <div
+                                className={`p-2.5 rounded-xl text-xs leading-relaxed max-w-[85%] whitespace-pre-wrap break-words shadow-xs ${
+                                  isVendorMsg
+                                    ? 'bg-blue-600 text-white rounded-tr-xs'
+                                    : 'bg-white dark:bg-gray-850 border border-slate-200 dark:border-gray-700 text-slate-900 dark:text-white rounded-tl-xs'
+                                }`}
+                              >
+                                {msg.message}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
+                        Ask Question / Technical Clarification
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={inquiryMessage}
+                        onChange={(e) => setInquiryMessage(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            handleSendInquiry();
+                          }
+                        }}
+                        disabled={isInquiring}
+                        placeholder="Type your question regarding specs, drawings, delivery, or terms... (Enter to send)"
+                        className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-gray-700 text-xs bg-white dark:bg-gray-950 text-slate-900 dark:text-white resize-none focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-gray-800">
+                <button onClick={() => setInquiryModal(null)} className="btn btn-ghost btn-sm">
+                  Close
+                </button>
+                <button
+                  onClick={handleSendInquiry}
+                  disabled={isInquiring || !inquiryMessage.trim()}
+                  className="btn btn-primary btn-sm px-4 font-bold inline-flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  <Send size={12} />
+                  <span>{isInquiring ? 'Sending...' : 'Send Clarification'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* BUYER CONTACT DETAILS MODAL (POPUP) */}
@@ -714,78 +953,118 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
               </button>
             </div>
 
-            <div className="space-y-3">
-              <div>
-                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Unit Price (₹) *</label>
-                <div className="relative">
-                  <IndianRupee size={12} className="absolute left-3 top-2.5 text-slate-400" />
-                  <input
-                    type="number"
-                    min={0}
-                    value={bidUnitPrice}
-                    onChange={(e) => setBidUnitPrice(e.target.value)}
-                    disabled={isSubmittingQuote}
-                    className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
+            {/* Closed RFQ Check */}
+            {(biddingOn.status === 'Closed' || biddingOn.status === 'Expired') && (
+              <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 text-amber-800 dark:text-amber-300 flex items-start gap-2">
+                <AlertCircle size={15} className="mt-0.5 shrink-0" />
                 <div>
-                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Lead Time (Days)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={bidLeadTimeDays}
-                    onChange={(e) => setBidLeadTimeDays(e.target.value)}
-                    disabled={isSubmittingQuote}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Warranty (Years)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={bidWarrantyYears}
-                    onChange={(e) => setBidWarrantyYears(e.target.value)}
-                    disabled={isSubmittingQuote}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
-                  />
+                  <strong className="block text-xs font-bold">RFQ Bidding Concluded</strong>
+                  <span className="text-[11px]">This RFQ has been closed or expired by the buyer. Quotations can no longer be submitted.</span>
                 </div>
               </div>
-              <div>
-                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Payment Terms</label>
-                <input
-                  type="text"
-                  value={bidPaymentTerms}
-                  onChange={(e) => setBidPaymentTerms(e.target.value)}
-                  disabled={isSubmittingQuote}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
-                />
-              </div>
-              <div>
-                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Remarks</label>
-                <textarea
-                  value={bidRemarks}
-                  onChange={(e) => setBidRemarks(e.target.value)}
-                  disabled={isSubmittingQuote}
-                  rows={2}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white resize-none"
-                />
-              </div>
-            </div>
+            )}
 
-            <div className="pt-2 flex justify-end gap-2 border-t border-slate-100 dark:border-gray-800">
-              <button onClick={() => setBiddingOn(null)} disabled={isSubmittingQuote} className="btn btn-ghost btn-sm">
-                Cancel
-              </button>
-              <button onClick={handleSubmitQuote} disabled={isSubmittingQuote} className="btn btn-primary btn-sm px-4 text-xs font-bold">
-                <Send size={13} /> {isSubmittingQuote ? 'Submitting...' : 'Submit Quotation'}
-              </button>
+                {/* Error Banner */}
+                {submitModalError && (
+                  <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-800 dark:text-rose-300 space-y-2">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle size={15} className="mt-0.5 shrink-0 text-rose-600 dark:text-rose-400" />
+                      <span className="text-[11px] font-medium leading-relaxed">{submitModalError}</span>
+                    </div>
+                    {(submitModalError.toLowerCase().includes('credit') || submitModalError.toLowerCase().includes('upgrade')) && (
+                      <div className="pt-1">
+                        <a
+                          href="/vendor/vendor-subscription"
+                          className="btn btn-primary btn-xs font-bold inline-flex items-center gap-1 text-[10px]"
+                        >
+                          Upgrade Plan to Continue Quoting
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Unit Price (₹) *</label>
+                    <div className="relative">
+                      <IndianRupee size={12} className="absolute left-3 top-2.5 text-slate-400" />
+                      <input
+                        type="number"
+                        min={0}
+                        value={bidUnitPrice}
+                        onChange={(e) => setBidUnitPrice(e.target.value)}
+                        disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                        placeholder="e.g. 25000"
+                        className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Lead Time (Days)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={bidLeadTimeDays}
+                        onChange={(e) => setBidLeadTimeDays(e.target.value)}
+                        disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                        placeholder="e.g. 14"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Warranty (Years)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={bidWarrantyYears}
+                        onChange={(e) => setBidWarrantyYears(e.target.value)}
+                        disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                        placeholder="e.g. 1"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Payment Terms</label>
+                    <input
+                      type="text"
+                      value={bidPaymentTerms}
+                      onChange={(e) => setBidPaymentTerms(e.target.value)}
+                      disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                      placeholder="e.g. 45 Days Net, 100% Against Dispatch"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Remarks</label>
+                    <textarea
+                      value={bidRemarks}
+                      onChange={(e) => setBidRemarks(e.target.value)}
+                      disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                      rows={2}
+                      placeholder="Special notes, inclusions, exclusions, or freight details..."
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white resize-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-2 flex justify-end gap-2 border-t border-slate-100 dark:border-gray-800">
+                  <button onClick={() => setBiddingOn(null)} disabled={isSubmittingQuote} className="btn btn-ghost btn-sm">
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSubmitQuote}
+                    disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                    className="btn btn-primary btn-sm px-4 text-xs font-bold disabled:opacity-50"
+                  >
+                    <Send size={13} /> {isSubmittingQuote ? 'Submitting...' : 'Submit Quotation'}
+                  </button>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
+        )}
+      </div>
+    );
+  }

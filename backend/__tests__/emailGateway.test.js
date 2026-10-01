@@ -276,6 +276,40 @@ describe('emailGatewayService.processMessage', () => {
     expect(createSpy).not.toHaveBeenCalled();
   });
 
+  // Real incident: a bounce ("Undeliverable: ...") for a notification the
+  // gateway itself sent was treated as a genuine unauthorized sender, so the
+  // gateway replied with ANOTHER "unauthorized buyer" notification straight
+  // back to the bounce address — which bounced again, generating another
+  // copy of the same message, reprocessed (and re-notified) on every single
+  // poll cycle forever, since an unauthorized sender is deliberately never
+  // marked read. That eventually rate-limited the Gmail API account this ran
+  // under, blocking every other outbound send and poll.
+  test('skips a mail-system bounce/auto-reply without notifying it, breaking the bounce notification loop', async () => {
+    const bounceEml = [
+      'Return-Path: <>',
+      'Message-ID: <bounce-1@mrd-tw.us-east-1.eo.internal>',
+      'Date: Wed, 30 Sep 2026 17:50:25 +0000',
+      'From: Mail Delivery Subsystem <postmaster@hiredify-com-bounceio-net.bounceio.net>',
+      'To: srinu20252026@gmail.com',
+      'Subject: Undeliverable: Enterprise QUA - Buyer Registration Required',
+      'MIME-Version: 1.0',
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      'Your message could not be delivered.',
+      '',
+    ].join('\r\n');
+
+    const sendAckSpy = jest.spyOn(mailerService, 'sendUnauthorizedBuyerNotificationEmail');
+    const createSpy = jest.spyOn(storeService, 'createRFQ');
+
+    const result = await emailGatewayService.processMessage(Buffer.from(bounceEml, 'utf8'), config());
+
+    expect(result.status).toBe(INGESTION_OUTCOME.SKIPPED_OUTBOUND);
+    // No reply of any kind — sending one is exactly what re-arms the loop.
+    expect(sendAckSpy).not.toHaveBeenCalled();
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
   test('refuses a message the parser cannot read', async () => {
     const result = await emailGatewayService.processMessage(Buffer.from(''), config());
     expect(result.status).toBe(INGESTION_OUTCOME.UNREADABLE);
@@ -566,6 +600,210 @@ describe('emailGatewayService.pollOnce', () => {
     expect(emailGatewayQueries.recordProcessed).toHaveBeenCalledWith(
       expect.objectContaining({ rfqNumber: 'RFQ-1, RFQ-2' })
     );
+  });
+});
+
+// Rebuilt from scratch (2026-09-29): inbound RFQ email ingestion via the
+// Gmail REST API instead of IMAP, which cannot hold a reliable socket open
+// from Cloudflare Workers at all (confirmed live all session: every
+// scheduled IMAP poll failed with "Unexpected close"/"NoConnection"). Same
+// processMessage()/emailGatewayQueries ledger as the IMAP describe block
+// above — only the transport differs.
+describe('emailGatewayService.pollViaGmailApi', () => {
+  const googleapis = require('googleapis');
+
+  beforeEach(() => {
+    rfqIngestionService.primeTaxonomyIndex(taxonomyFixture.CATEGORY_TAXONOMY_FIXTURE);
+    jest.spyOn(storeService, 'getBuyerAccountByEmail').mockReturnValue(buyerAccount());
+    jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-1', rfqNumber: 'RFQ-2026-0001' });
+    jest.spyOn(emailGatewayQueries, 'hasProcessed').mockResolvedValue(false);
+    jest.spyOn(emailGatewayQueries, 'recordProcessed').mockResolvedValue(true);
+    jest.spyOn(geminiService, 'extractLineItems').mockResolvedValue({
+      status: geminiService.EXTRACTION_STATUS.SUCCESS,
+      model: 'gemini-test',
+      lineItems: [{ itemName: 'Centrifugal Pump 150 m3/hr', quantity: 4, unit: 'Nos' }],
+    });
+  });
+
+  afterEach(() => {
+    emailGatewayService.runtime.isPolling = false;
+    jest.restoreAllMocks();
+    rfqIngestionService.resetTaxonomyIndex();
+  });
+
+  function gmailApi({ messages = [{ id: 'm1' }], raw = fixtures.PLAIN_REQUISITION_EML, resultSizeEstimate } = {}) {
+    const list = jest.fn().mockResolvedValue({ data: { messages, resultSizeEstimate } });
+    const get = jest.fn().mockResolvedValue({
+      data: raw ? { raw: Buffer.from(raw, 'utf8').toString('base64url') } : {},
+    });
+    const modify = jest.fn().mockResolvedValue({});
+    return { users: { messages: { list, get, modify } } };
+  }
+
+  test('skipped when the Gmail API buyer identity is not configured', async () => {
+    jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue(null);
+    const result = await emailGatewayService.pollViaGmailApi();
+    expect(result.skipped).toBe(true);
+    expect(result.reason).toBe(EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED);
+  });
+
+  test('refuses to overlap with a run already in progress', async () => {
+    emailGatewayService.runtime.isPolling = true;
+    jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
+    const result = await emailGatewayService.pollViaGmailApi();
+    expect(result.skipped).toBe(true);
+    expect(result.reason).toBe(EMAIL_GATEWAY_MESSAGES.POLL_ALREADY_RUNNING);
+  });
+
+  test('ingests an unread message and clears the UNREAD label afterwards', async () => {
+    jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
+    const api = gmailApi();
+    jest.spyOn(googleapis.google, 'gmail').mockReturnValue(api);
+
+    const result = await emailGatewayService.pollViaGmailApi(emailGatewayService.resolveConfig(FULL_ENV));
+
+    expect(result.ingested).toBe(1);
+    expect(result.considered).toBe(1);
+    expect(emailGatewayQueries.recordProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({ status: INGESTION_OUTCOME.INGESTED, rfqNumber: 'RFQ-2026-0001' })
+    );
+    // Flagged only after the ledger write, same ordering the IMAP path uses.
+    expect(api.users.messages.modify).toHaveBeenCalledWith({
+      userId: 'me',
+      id: 'm1',
+      requestBody: { removeLabelIds: ['UNREAD'] },
+    });
+  });
+
+  // Regression coverage for a real production bug: the query used to bound
+  // itself with `after:<runtime.watchingSince>`, an in-memory value that
+  // resets to "now" on every fresh Workers isolate. Confirmed live: a test
+  // email sent minutes earlier was never found because the isolate serving
+  // the poll request had `watchingSince` set later than the email's own
+  // timestamp. The query must never depend on that ephemeral value.
+  test('lists unread mail without an after: date bound, since runtime.watchingSince cannot be relied on across Workers isolates', async () => {
+    jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
+    const api = gmailApi();
+    jest.spyOn(googleapis.google, 'gmail').mockReturnValue(api);
+    emailGatewayService.runtime.watchingSince = new Date(Date.now() + 60_000).toISOString(); // even a "future" isolate reset must not exclude mail
+
+    await emailGatewayService.pollViaGmailApi(emailGatewayService.resolveConfig(FULL_ENV));
+
+    expect(api.users.messages.list).toHaveBeenCalledWith(
+      expect.objectContaining({ q: 'is:unread' })
+    );
+  });
+
+  test('skips a message already in the ledger without re-ingesting it', async () => {
+    jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
+    jest.spyOn(emailGatewayQueries, 'hasProcessed').mockResolvedValue(true);
+    const api = gmailApi();
+    jest.spyOn(googleapis.google, 'gmail').mockReturnValue(api);
+
+    const result = await emailGatewayService.pollViaGmailApi(emailGatewayService.resolveConfig(FULL_ENV));
+
+    expect(result.ingested).toBe(0);
+    expect(storeService.createRFQ).not.toHaveBeenCalled();
+    expect(api.users.messages.modify).toHaveBeenCalledWith({
+      userId: 'me',
+      id: 'm1',
+      requestBody: { removeLabelIds: ['UNREAD'] },
+    });
+  });
+
+  test('records a message whose raw body could not be fetched', async () => {
+    jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
+    const api = gmailApi({ raw: null });
+    jest.spyOn(googleapis.google, 'gmail').mockReturnValue(api);
+
+    const result = await emailGatewayService.pollViaGmailApi(emailGatewayService.resolveConfig(FULL_ENV));
+
+    expect(result.outcomes[0].status).toBe(INGESTION_OUTCOME.UNREADABLE);
+    expect(result.ingested).toBe(0);
+  });
+
+  test('tolerates a mailbox with nothing unread', async () => {
+    jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
+    const api = gmailApi({ messages: [] });
+    jest.spyOn(googleapis.google, 'gmail').mockReturnValue(api);
+
+    const result = await emailGatewayService.pollViaGmailApi(emailGatewayService.resolveConfig(FULL_ENV));
+
+    expect(result.considered).toBe(0);
+    expect(result.ingested).toBe(0);
+  });
+
+  test('reports a list/auth failure through the result rather than throwing (e.g. an insufficiently-scoped token)', async () => {
+    jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
+    jest.spyOn(googleapis.google, 'gmail').mockReturnValue({
+      users: { messages: { list: jest.fn().mockRejectedValue(new Error('Insufficient Permission')) } },
+    });
+
+    const result = await emailGatewayService.pollViaGmailApi(emailGatewayService.resolveConfig(FULL_ENV));
+
+    expect(result.error).toBe('Insufficient Permission');
+    expect(emailGatewayService.runtime.lastError).toBe('Insufficient Permission');
+  });
+
+  test('one unusable message does not abort the batch', async () => {
+    jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
+    const list = jest.fn().mockResolvedValue({ data: { messages: [{ id: 'bad' }, { id: 'good' }] } });
+    const get = jest.fn(async ({ id }) => {
+      if (id === 'bad') throw new Error('fetch exploded');
+      return { data: { raw: Buffer.from(fixtures.PLAIN_REQUISITION_EML, 'utf8').toString('base64url') } };
+    });
+    const modify = jest.fn().mockResolvedValue({});
+    jest.spyOn(googleapis.google, 'gmail').mockReturnValue({ users: { messages: { list, get, modify } } });
+
+    const result = await emailGatewayService.pollViaGmailApi(emailGatewayService.resolveConfig(FULL_ENV));
+
+    expect(result.considered).toBe(2);
+    expect(result.ingested).toBe(1);
+    expect(result.outcomes.some((o) => o.status === INGESTION_OUTCOME.FAILED)).toBe(true);
+  });
+
+  test('records multiple comma-separated rfqNumbers when processMessage returns multiple RFQs', async () => {
+    jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
+    jest.spyOn(emailGatewayService, 'processMessage').mockResolvedValueOnce({
+      status: INGESTION_OUTCOME.INGESTED,
+      rfqs: [{ id: 'rfq-1', rfqNumber: 'RFQ-1' }, { id: 'rfq-2', rfqNumber: 'RFQ-2' }],
+      rfq: { id: 'rfq-1', rfqNumber: 'RFQ-1' },
+      message: { messageId: '<multi-rfq@corp.com>', fromAddress: 'buyer@corp.com' },
+    });
+    const api = gmailApi({ messages: [{ id: 'm-multi' }] });
+    jest.spyOn(googleapis.google, 'gmail').mockReturnValue(api);
+
+    const result = await emailGatewayService.pollViaGmailApi(emailGatewayService.resolveConfig(FULL_ENV));
+    expect(result.ingested).toBe(1);
+    expect(emailGatewayQueries.recordProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({ rfqNumber: 'RFQ-1, RFQ-2' })
+    );
+  });
+
+  test('pollOnce delegates to pollViaGmailApi when the Gmail API buyer identity is configured', async () => {
+    jest.spyOn(mailerService, 'isGmailApiConfigured').mockReturnValue(true);
+    const delegateSpy = jest
+      .spyOn(emailGatewayService, 'pollViaGmailApi')
+      .mockResolvedValue({ skipped: false, ingested: 3 });
+
+    const result = await emailGatewayService.pollOnce(emailGatewayService.resolveConfig(FULL_ENV));
+
+    expect(delegateSpy).toHaveBeenCalled();
+    expect(result.ingested).toBe(3);
+  });
+
+  test('isConfigured/describeConfigurationFault treat the buyer Gmail API and IMAP-based vendor gateway independently', () => {
+    jest.spyOn(mailerService, 'isGmailApiConfigured').mockReturnValue(true);
+    jest.spyOn(mailerService, 'isVendorGmailApiConfigured').mockReturnValue(false);
+
+    const buyerConfig = emailGatewayService.resolveConfig({});
+    const vendorConfig = emailGatewayService.resolveVendorConfig({});
+
+    expect(emailGatewayService.isConfigured(buyerConfig)).toBe(true);
+    expect(emailGatewayService.describeConfigurationFault(buyerConfig)).toBeNull();
+    // The vendor mailbox's own Gmail API identity is unconfigured, and it
+    // must not be reported as configured just because the buyer's is.
+    expect(emailGatewayService.isConfigured(vendorConfig)).toBe(false);
   });
 });
 
@@ -1664,34 +1902,42 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       jest.restoreAllMocks();
     });
 
-    test('extractRfqReferenceFromEmail correctly identifies RFQ reference in subject, body, and headers', () => {
+    test('extractRfqReferenceFromEmail correctly identifies RFQ reference in subject, body, and headers', async () => {
       expect(
-        emailGatewayService.extractRfqReferenceFromEmail({
-          subject: 'Re: Quotation for RFQ-2026-00421 from Apex',
-          textBody: 'Please find our pricing',
-        }).referencedNumber
+        (
+          await emailGatewayService.extractRfqReferenceFromEmail({
+            subject: 'Re: Quotation for RFQ-2026-00421 from Apex',
+            textBody: 'Please find our pricing',
+          })
+        ).referencedNumber
       ).toBe('RFQ-2026-00421');
 
       expect(
-        emailGatewayService.extractRfqReferenceFromEmail({
-          subject: 'Our Official Quotation',
-          textBody: 'In reference to RFQ #RFQ-2026-00421, here is our commercial offer.',
-        }).referencedNumber
+        (
+          await emailGatewayService.extractRfqReferenceFromEmail({
+            subject: 'Our Official Quotation',
+            textBody: 'In reference to RFQ #RFQ-2026-00421, here is our commercial offer.',
+          })
+        ).referencedNumber
       ).toBe('RFQ-2026-00421');
 
       expect(
-        emailGatewayService.extractRfqReferenceFromEmail({
-          subject: 'Quotation',
-          textBody: 'Pricing attached',
-          inReplyTo: '<rfq-2026-00421-dispatch@procucev.com>',
-        }).referencedNumber
+        (
+          await emailGatewayService.extractRfqReferenceFromEmail({
+            subject: 'Quotation',
+            textBody: 'Pricing attached',
+            inReplyTo: '<rfq-2026-00421-dispatch@procucev.com>',
+          })
+        ).referencedNumber
       ).toBe('RFQ-2026-00421');
 
       expect(
-        emailGatewayService.extractRfqReferenceFromEmail({
-          subject: 'General enquiry',
-          textBody: 'Hello, no RFQ mentioned here.',
-        }).referencedNumber
+        (
+          await emailGatewayService.extractRfqReferenceFromEmail({
+            subject: 'General enquiry',
+            textBody: 'Hello, no RFQ mentioned here.',
+          })
+        ).referencedNumber
       ).toBeNull();
     });
 
@@ -2429,8 +2675,8 @@ Hello team, sending catalog.
 
     test('extractRfqReferenceFromEmail and resolveVendorFromEmail additional edge branches', async () => {
       // Null message
-      expect(emailGatewayService.extractRfqReferenceFromEmail(null)).toEqual({ targetRfq: null, referencedNumber: null });
-      expect(emailGatewayService.extractRfqReferenceFromEmail({})).toEqual({ targetRfq: null, referencedNumber: null });
+      expect(await emailGatewayService.extractRfqReferenceFromEmail(null)).toEqual({ targetRfq: null, referencedNumber: null });
+      expect(await emailGatewayService.extractRfqReferenceFromEmail({})).toEqual({ targetRfq: null, referencedNumber: null });
 
       // Vendor matched by corporateEmail in vendor directory
       jest.spyOn(storeService, 'getVendors').mockReturnValue([

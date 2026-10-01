@@ -145,4 +145,74 @@ describe('d1Bridge', () => {
       expect(result).toEqual({ rows: [], rowCount: 1 });
     });
   });
+
+  describe('getD1HttpClient', () => {
+    const originalFetch = global.fetch;
+    const originalEnv = { ...process.env };
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+      process.env = { ...originalEnv };
+    });
+
+    it('returns null when CLOUDFLARE_ACCOUNT_ID/D1_DATABASE_ID/API_TOKEN are not all set', () => {
+      delete process.env.CLOUDFLARE_ACCOUNT_ID;
+      delete process.env.CLOUDFLARE_D1_DATABASE_ID;
+      delete process.env.CLOUDFLARE_API_TOKEN;
+      const { getD1HttpClient } = require('../src/db/d1Bridge');
+      expect(getD1HttpClient()).toBeNull();
+    });
+
+    // Real bug, found live: execHttp (the raw REST call) returns a pg-like
+    // {rows, rowCount} shape, kept as-is since scripts/test-rfq-sms.js calls
+    // it directly and depends on that shape — but queryD1() (used for both
+    // the native Workers binding and this HTTP shim) reads the native D1
+    // binding's real {results, meta} shape. Without translating between the
+    // two inside prepare().bind().all(), every `{d1:true}` query run through
+    // this client silently returned zero rows with no error, since
+    // `result.results` was always undefined on the {rows, rowCount} shape.
+    it('queryD1 against the HTTP client shim returns real rows, not an empty array', async () => {
+      process.env.CLOUDFLARE_ACCOUNT_ID = 'acct-1';
+      process.env.CLOUDFLARE_D1_DATABASE_ID = 'db-1';
+      process.env.CLOUDFLARE_API_TOKEN = 'token-1';
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              success: true,
+              result: [{ results: [{ email: 'a@b.com' }], success: true, meta: { changes: 0 } }],
+            })
+          ),
+      });
+
+      const { getD1HttpClient, queryD1 } = require('../src/db/d1Bridge');
+      const client = getD1HttpClient();
+      const result = await queryD1(client, 'select email from "user" where a = $1', ['x']);
+
+      expect(result).toEqual({ rows: [{ email: 'a@b.com' }], rowCount: 0 });
+    });
+
+    it('_execHttp (used directly by scripts/test-rfq-sms.js) still returns its own {rows, rowCount} shape', async () => {
+      process.env.CLOUDFLARE_ACCOUNT_ID = 'acct-1';
+      process.env.CLOUDFLARE_D1_DATABASE_ID = 'db-1';
+      process.env.CLOUDFLARE_API_TOKEN = 'token-1';
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              success: true,
+              result: [{ results: [{ id: 'rfq-1' }], success: true, meta: { changes: 0 } }],
+            })
+          ),
+      });
+
+      const { getD1HttpClient } = require('../src/db/d1Bridge');
+      const client = getD1HttpClient();
+      const result = await client._execHttp('select id from rfqs where rfq_number = ?', ['RFQ-1']);
+
+      expect(result).toEqual({ rows: [{ id: 'rfq-1' }], rowCount: 0 });
+    });
+  });
 });

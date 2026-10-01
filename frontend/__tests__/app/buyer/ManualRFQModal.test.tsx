@@ -24,7 +24,18 @@ jest.mock('@/lib/rfqClient', () => ({
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(() => ({
     buyerVendors: [
-      { id: 'v-default-1', name: 'Default Enterprise Vendor', email: 'vendor@test.com', source: 'buyer_uploaded' },
+      {
+        id: 'v-default-1',
+        name: 'Default Enterprise Vendor',
+        email: 'vendor@test.com',
+        source: 'buyer_uploaded',
+        // Matches categoriesData[0], which fillRow() always sets as the RFQ's
+        // category — Mode 1 assignment is now category-scoped (see the
+        // ManualRFQModal source), so a vendor with no category at all would
+        // never match any RFQ's category and every generic save test in this
+        // file (not specifically testing category-matching) would break.
+        majorCategory: require('../../../test-fixtures/categoryTaxonomy').CATEGORY_TAXONOMY_FIXTURE[0].majorCategory,
+      },
     ],
   })),
 }));
@@ -169,7 +180,16 @@ beforeEach(() => {
   setCategoryTaxonomy(categoriesData);
   (useApp as jest.Mock).mockReturnValue({
     buyerVendors: [
-      { id: 'v-default-1', name: 'Default Enterprise Vendor', email: 'vendor@test.com', source: 'buyer_uploaded' },
+      {
+        id: 'v-default-1',
+        name: 'Default Enterprise Vendor',
+        email: 'vendor@test.com',
+        source: 'buyer_uploaded',
+        // Matches categoriesData[0], the category fillRow()/extractionResult()
+        // always set — Mode 1 assignment is category-scoped now, so a vendor
+        // with no category would never match any RFQ's category here.
+        majorCategory: categoriesData[0].majorCategory,
+      },
     ],
   });
   rfqClient.createRFQ.mockResolvedValue({ success: true, rfq: savedRFQ() });
@@ -558,7 +578,7 @@ describe('ManualRFQModal: sourcing mode', () => {
 
   it('locks Mode 2 and Mode 3 for a version_1 buyer and blocks selecting them', async () => {
     (useApp as jest.Mock).mockReturnValue({
-      buyerVendors: [{ id: 'v-1', name: 'Vendor 1', source: 'buyer_uploaded' }],
+      buyerVendors: [{ id: 'v-1', name: 'Vendor 1', source: 'buyer_uploaded', majorCategory: categoriesData[0].majorCategory }],
       activeBuyerAccount: { subscriptionPlan: 'version_1' },
     });
     renderModal();
@@ -847,11 +867,12 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
           email: 'rajesh@apex.in',
           phone: '+91 98200 11111',
           source: 'historical_purchase_dump',
+          majorCategory: categoriesData[0].majorCategory,
         },
         // No name/email/phone/contactPerson: exercises every fallback.
-        { id: 'v-hist-2', source: 'historical_purchase_dump' },
+        { id: 'v-hist-2', source: 'historical_purchase_dump', majorCategory: categoriesData[0].majorCategory },
         // Not buyer-uploaded: must be excluded from both the preview and the payload.
-        { id: 'v-cm-1', name: 'Category Manager Vendor', source: 'category_manager_upload' },
+        { id: 'v-cm-1', name: 'Category Manager Vendor', source: 'category_manager_upload', majorCategory: categoriesData[0].majorCategory },
       ],
     });
     renderModal();
@@ -903,6 +924,38 @@ describe('ManualRFQModal: Mode 1 private vendor roster preview', () => {
 
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
     expect(rfqClient.createRFQ.mock.calls[0][0].assignedVendors).toEqual([]);
+  });
+
+  // Regression coverage for a real production bug: a buyer's IT-category
+  // vendor was assigned to a Mechanical RFQ because this modal never
+  // category-filtered assignedVendors at all — every uploaded vendor was
+  // unconditionally dispatched every Mode 1 RFQ regardless of relevance.
+  it('excludes an uploaded vendor whose category does not match the RFQ, rather than dispatching to it anyway', async () => {
+    (useApp as jest.Mock).mockReturnValue({
+      buyerVendors: [
+        {
+          id: 'v-it-1',
+          name: 'IT Vendor Co',
+          email: 'it@vendor.com',
+          source: 'historical_purchase_dump',
+          majorCategory: 'IT',
+          minorCategories: ['IT'],
+        },
+      ],
+    });
+    renderModal();
+
+    // fillRow() sets the RFQ's category to categoriesData[0] ('Civil Works'),
+    // which the IT vendor above does not cover at all.
+    fillRow();
+    fillDelivery();
+    clickSave();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Version 1 \(Client Sourcing\) requires at least one private vendor/i)).toBeInTheDocument();
+    });
+    // Must NOT have silently fallen back to dispatching to the mismatched vendor.
+    expect(rfqClient.createRFQ).not.toHaveBeenCalled();
   });
 
   describe('Mode 2 and Mode 3 category-matched vendor previews', () => {

@@ -1741,7 +1741,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const triggerChannelChaser = (
     rfqNumber: string,
     channel: 'call' | 'whatsapp' | 'sms' | 'email',
-    vendorName = 'Apex Supplies Ltd.',
+    vendorName = 'Vendor',
     customNote?: string,
     suppressToast = false
   ) => {
@@ -1846,10 +1846,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                 ],
           };
 
+          const targetName = String(vendorName || '').trim().toLowerCase();
+
           const updatedVendors = baseFollowUp.vendors.map((v) => {
-            if (v.vendorName.toLowerCase().includes(vendorName.toLowerCase()) || vendorName.toLowerCase().includes(v.vendorName.toLowerCase()) || vendorName === 'All Pending Suppliers') {
+            const vName = String(v?.vendorName || (v as any)?.name || (v as any)?.companyName || 'Supplier').trim().toLowerCase();
+            const isMatch =
+              targetName === 'all pending suppliers' ||
+              !targetName ||
+              (vName && targetName && (vName.includes(targetName) || targetName.includes(vName)));
+
+            if (isMatch) {
               return {
                 ...v,
+                vendorName: v?.vendorName || (v as any)?.name || (v as any)?.companyName || 'Supplier',
                 attemptsCount: (v.attemptsCount || 0) + 1,
                 lastInteraction: timeNow,
                 overallStatus: 'Follow-up Active' as const,
@@ -1935,7 +1944,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const triggerWhatsAppChaser = (rfqNumber: string, vendorName = 'Apex Supplies Ltd.') => {
+  const triggerWhatsAppChaser = (rfqNumber: string, vendorName = 'Vendor') => {
     triggerChannelChaser(rfqNumber, 'whatsapp', vendorName);
   };
 
@@ -2069,6 +2078,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const adoptCreatedRFQ = (rfq: RFQItem) => {
     setRfqs((prev) => [rfq, ...prev.filter((r) => r.rfqNumber !== rfq.rfqNumber)]);
     addAuditLog(`Created ${rfq.rfqNumber} (${rfq.title})`, rfq.rfqNumber);
+    void refreshAIFeed();
   };
 
   /**
@@ -2087,7 +2097,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       throw new Error(result.error);
     }
 
-    const saved = result.rfq;
+    const saved: RFQItem = {
+      ...result.rfq,
+      assignedVendors:
+        changes.assignedVendors &&
+        Array.isArray(changes.assignedVendors) &&
+        changes.assignedVendors.length >= (result.rfq.assignedVendors?.length || 0)
+          ? (changes.assignedVendors as any)
+          : result.rfq.assignedVendors || (changes.assignedVendors as any) || [],
+    };
     setRfqs((prev) => prev.map((r) => (r.rfqNumber === saved.rfqNumber ? saved : r)));
     setVendorOpportunities((prev) =>
       prev.map((opp) => (opp.rfqNumber === saved.rfqNumber ? buildOpportunityFromRFQ(saved) : opp))

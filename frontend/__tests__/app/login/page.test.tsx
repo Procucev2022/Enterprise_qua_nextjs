@@ -91,6 +91,25 @@ describe('LoginPage', () => {
     fireEvent.submit(submitButton(name).closest('form') as HTMLFormElement);
   };
 
+  const openRegister = () => {
+    const tab = screen
+      .getAllByRole('button', { name: /Create Account/i })
+      .find((button) => button.getAttribute('type') === 'button');
+    fireEvent.click(tab as HTMLElement);
+  };
+
+  const fillValidForm = () => {
+    typeInto(/Full Name/i, 'Navin Chaudhary');
+    typeInto(/Company Name/i, 'Larsen & Toubro Procurement');
+    typeInto(/GSTIN/i, '27AAAAA0000A1Z5');
+    typeInto(/City/i, 'Pune');
+    typeInto(/State/i, 'Maharashtra');
+    typeInto(/Pincode/i, '411001');
+    typeInto(/Corporate Email ID/i, BUYER_SESSION.email);
+    typeInto(/Mobile Number/i, '9157154504');
+    typeInto(/^Password$/i, 'Pass@1234');
+  };
+
   describe('no demo credentials are exposed', () => {
     it('renders empty email and password fields', () => {
       render(<LoginPage />);
@@ -425,19 +444,6 @@ describe('LoginPage', () => {
   });
 
   describe('registration', () => {
-    const openRegister = () => {
-      const tab = screen
-        .getAllByRole('button', { name: /Create Account/i })
-        .find((button) => button.getAttribute('type') === 'button');
-      fireEvent.click(tab as HTMLElement);
-    };
-
-    const fillValidForm = () => {
-      typeInto(/Full Name/i, 'Navin Chaudhary');
-      typeInto(/Corporate Email ID/i, BUYER_SESSION.email);
-      typeInto(/Mobile Number/i, '9157154504');
-      typeInto(/^Password$/i, 'Pass@1234');
-    };
 
     const completeDualOtp = (emailOtp = '123456', mobileOtp = '123456') => {
       fireEvent.change(screen.getByLabelText(/Email OTP/i), { target: { value: emailOtp } });
@@ -446,6 +452,9 @@ describe('LoginPage', () => {
     };
 
     it('creates a real account and signs the new user in after dual OTP verification', async () => {
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({
+        success: true,
+      });
       (authClient.register as jest.Mock).mockResolvedValue({
         success: true,
         user: BUYER_SESSION,
@@ -457,7 +466,9 @@ describe('LoginPage', () => {
       fillValidForm();
       fireEvent.click(submitButton(/Create Account/i));
 
-      expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      });
       completeDualOtp('123456', '654321');
 
       await waitFor(() => {
@@ -483,6 +494,9 @@ describe('LoginPage', () => {
         role: 'vendor' as const,
         vendorId: 'vnd-1',
       };
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({
+        success: true,
+      });
       (authClient.register as jest.Mock).mockResolvedValue({
         success: true,
         user: vendorUser,
@@ -494,12 +508,19 @@ describe('LoginPage', () => {
       fireEvent.click(screen.getByRole('button', { name: /Vendor Partner/i }));
 
       typeInto(/Authorized Representative Name/i, 'Rajesh Kumar');
+      typeInto(/Vendor Enterprise/i, 'Precision Works');
+      typeInto(/GSTIN/i, '27AAAAA0000A1Z5');
+      typeInto(/City/i, 'Pune');
+      typeInto(/State/i, 'Maharashtra');
+      typeInto(/Pincode/i, '411001');
       typeInto(/Corporate Email ID/i, 'vendor@supplier.com');
       typeInto(/Mobile Number/i, '9811223344');
       typeInto(/^Password$/i, 'Pass@1234');
 
       fireEvent.click(submitButton(/Create Account/i));
-      expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      });
       completeDualOtp();
 
       await waitFor(() => {
@@ -516,7 +537,10 @@ describe('LoginPage', () => {
       expect(mockReplace).toHaveBeenCalledWith(ROLE_LANDING_ROUTE.vendor);
     });
 
-    it('never fabricates a GSTIN for the new buyer record', async () => {
+    it('propagates the registered GSTIN and plant location to the new buyer record', async () => {
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({
+        success: true,
+      });
       (authClient.register as jest.Mock).mockResolvedValue({
         success: true,
         user: BUYER_SESSION,
@@ -527,18 +551,22 @@ describe('LoginPage', () => {
       openRegister();
       fillValidForm();
       fireEvent.click(submitButton(/Create Account/i));
+      await waitFor(() => {
+        expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      });
       completeDualOtp();
 
       await waitFor(() => expect(addBuyerAccount).toHaveBeenCalled());
-      expect(addBuyerAccount.mock.calls[0][0]).toMatchObject({ gstin: '', primaryPlantLocation: '' });
+      expect(addBuyerAccount.mock.calls[0][0]).toMatchObject({
+        gstin: '27AAAAA0000A1Z5',
+        primaryPlantLocation: 'Pune, Maharashtra (411001)',
+      });
     });
 
     it('rejects a short password before calling the API', () => {
       render(<LoginPage />);
       openRegister();
-      typeInto(/Full Name/i, 'Navin');
-      typeInto(/Corporate Email ID/i, BUYER_SESSION.email);
-      typeInto(/Mobile Number/i, '9157154504');
+      fillValidForm();
       typeInto(/^Password$/i, 'short');
 
       submitForm(/Create Account/i);
@@ -550,10 +578,8 @@ describe('LoginPage', () => {
     it('rejects an invalid mobile number before calling the API', () => {
       render(<LoginPage />);
       openRegister();
-      typeInto(/Full Name/i, 'Navin');
-      typeInto(/Corporate Email ID/i, BUYER_SESSION.email);
+      fillValidForm();
       typeInto(/Mobile Number/i, '12345');
-      typeInto(/^Password$/i, 'Pass@1234');
 
       submitForm(/Create Account/i);
 
@@ -569,12 +595,15 @@ describe('LoginPage', () => {
 
       expect(showToast).toHaveBeenCalledWith(
         AUTH.missingFieldsTitle,
-        AUTH.registrationFieldsRequired,
+        'Please fill in all mandatory fields including Company Name, GSTIN, City, State, and Pincode.',
         'warning'
       );
     });
 
     it('reports a duplicate account from the server', async () => {
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({
+        success: true,
+      });
       (authClient.register as jest.Mock).mockResolvedValue({
         success: false,
         error: 'An account already exists for this email address.',
@@ -584,6 +613,9 @@ describe('LoginPage', () => {
       openRegister();
       fillValidForm();
       fireEvent.click(submitButton(/Create Account/i));
+      await waitFor(() => {
+        expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      });
       completeDualOtp();
 
       await waitFor(() => {
@@ -597,29 +629,39 @@ describe('LoginPage', () => {
     });
 
     it('rejects incomplete OTP inputs during dual OTP verification', async () => {
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({
+        success: true,
+      });
       render(<LoginPage />);
       openRegister();
       fillValidForm();
       fireEvent.click(submitButton(/Create Account/i));
 
-      expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      });
       completeDualOtp('123', '456');
 
       expect(showToast).toHaveBeenCalledWith(
-        'Incomplete OTPs',
-        'Please enter both the 6-digit Email OTP and 6-digit Mobile OTP.',
+        'Both OTPs Required',
+        'Please enter both the 6-digit Email OTP and the 6-digit Mobile SMS OTP.',
         'warning'
       );
       expect(authClient.register).not.toHaveBeenCalled();
     });
 
-    it('navigates back to the registration form when clicking Back on dual OTP step', () => {
+    it('navigates back to the registration form when clicking Back on dual OTP step', async () => {
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({
+        success: true,
+      });
       render(<LoginPage />);
       openRegister();
       fillValidForm();
       fireEvent.click(submitButton(/Create Account/i));
 
-      expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      });
       fireEvent.click(screen.getByRole('button', { name: /Back/i }));
       expect(screen.getByLabelText(/Full Name/i)).toBeInTheDocument();
       expect(screen.queryByText(/Dual OTP Identity Verification/i)).not.toBeInTheDocument();
@@ -704,5 +746,131 @@ describe('LoginPage', () => {
       fireEvent.click(passwordModeBtn);
       expect(screen.getByLabelText(/^Password$/i)).toBeInTheDocument();
     });
+
+    it('resends OTP during login verification', async () => {
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({
+        success: true,
+        message: 'OTP sent',
+        email: 'navinchaudhary.dev@gmail.com',
+        demoCode: '123456',
+      });
+
+      render(<LoginPage />);
+      fireEvent.click(screen.getByRole('button', { name: /Email OTP/i }));
+      typeInto(/Registered Email ID/i, 'navinchaudhary.dev@gmail.com');
+      typeInto(/Registered Mobile Number/i, '9157154504');
+      submitForm(/Request Login OTP/i);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Resend OTP/i })).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Resend OTP/i }));
+      await waitFor(() => {
+        expect(authClient.requestOtp).toHaveBeenCalledTimes(2);
+      });
+    });
+
+    it('handles resend OTP error during login', async () => {
+      (authClient.requestOtp as jest.Mock)
+        .mockResolvedValueOnce({
+          success: true,
+          message: 'OTP sent',
+        })
+        .mockResolvedValueOnce({
+          success: false,
+          error: 'Rate limit exceeded',
+        });
+
+      render(<LoginPage />);
+      fireEvent.click(screen.getByRole('button', { name: /Email OTP/i }));
+      typeInto(/Registered Email ID/i, 'navinchaudhary.dev@gmail.com');
+      typeInto(/Registered Mobile Number/i, '9157154504');
+      submitForm(/Request Login OTP/i);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Resend OTP/i })).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Resend OTP/i }));
+      await waitFor(() => {
+        expect(showToast).toHaveBeenCalledWith('OTP Request Failed', 'Rate limit exceeded', 'warning');
+      });
+    });
+
+    it('resends verification codes during dual OTP registration', async () => {
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({
+        success: true,
+        message: 'Verification OTP dispatched',
+        demoCode: '654321',
+      });
+
+      render(<LoginPage />);
+      openRegister();
+      fillValidForm();
+      submitForm(/Create Account/i);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Resend Verification Codes/i })).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Resend Verification Codes/i }));
+      await waitFor(() => {
+        expect(authClient.requestOtp).toHaveBeenCalledTimes(2);
+      });
+    });
+
+    it('handles error when resending verification codes during registration', async () => {
+      (authClient.requestOtp as jest.Mock)
+        .mockResolvedValueOnce({
+          success: true,
+          message: 'Verification OTP dispatched',
+        })
+        .mockResolvedValueOnce({
+          success: false,
+          error: 'Rate limit reached for SMS gateway',
+        });
+
+      render(<LoginPage />);
+      openRegister();
+      fillValidForm();
+      submitForm(/Create Account/i);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Resend Verification Codes/i })).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Resend Verification Codes/i }));
+      await waitFor(() => {
+        expect(showToast).toHaveBeenCalledWith(
+          AUTH.registrationFailedTitle,
+          'Rate limit reached for SMS gateway',
+          'warning'
+        );
+      });
+    });
+
+    it('handles requestOtp failure during initial registration submit', async () => {
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({
+        success: false,
+        error: 'Registration OTP service temporarily unavailable',
+      });
+
+      render(<LoginPage />);
+      openRegister();
+      fillValidForm();
+      submitForm(/Create Account/i);
+
+      await waitFor(() => {
+        expect(showToast).toHaveBeenCalledWith(
+          AUTH.registrationFailedTitle,
+          'Registration OTP service temporarily unavailable',
+          'warning'
+        );
+      });
+    });
   });
 });
+
+
+

@@ -263,9 +263,6 @@ async function createVendor(req, res, next) {
     } else if (req.user.role === 'admin') {
       buyerId = (req.query && req.query.buyerId) || null;
     } else if (req.user.role === 'buyer') {
-      // Whitelisted: a buyer may only set contact/profile fields for a vendor
-      // they deal with directly, never identity/ownership fields — those come
-      // from their own authenticated account, not the request body.
       const buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
       if (!buyerAccount) {
         return res.status(403).json({

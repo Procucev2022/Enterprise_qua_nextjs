@@ -1,10 +1,25 @@
 'use client';
 
-import React from 'react';
+import React, { Suspense } from 'react';
 import { useRouter } from 'next/navigation';
 import QuoteMatrix from '@/app/buyer/quote-matrix';
 
-export default function BuyerQuoteMatrixPage() {
+function BuyerQuoteMatrixView() {
   const router = useRouter();
-  return <QuoteMatrix onBackToDashboard={() => router.push('/buyer/dashboard')} scopeToOwnBuyerAccount />;
+  const handleBack = () => {
+    if (typeof window !== 'undefined' && window.history.length > 1) {
+      router.back();
+    } else {
+      router.push('/buyer/dashboard');
+    }
+  };
+  return <QuoteMatrix onBackToDashboard={handleBack} scopeToOwnBuyerAccount />;
+}
+
+export default function BuyerQuoteMatrixPage() {
+  return (
+    <Suspense fallback={null}>
+      <BuyerQuoteMatrixView />
+    </Suspense>
+  );
 }

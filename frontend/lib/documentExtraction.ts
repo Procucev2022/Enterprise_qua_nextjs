@@ -172,11 +172,13 @@ export function readAsArrayBuffer(file: File): Promise<ArrayBuffer> {
  */
 export async function extractPdfText(buffer: ArrayBuffer): Promise<string> {
   try {
+    if (!buffer || buffer.byteLength === 0) return '';
     const bytes = new Uint8Array(buffer);
     let binary = '';
-    const chunk = 8192;
+    const chunk = 16384;
     for (let i = 0; i < bytes.length; i += chunk) {
-      binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
+      const slice = bytes.subarray(i, i + chunk);
+      binary += String.fromCharCode.apply(null, Array.from(slice));
     }
 
     const lines: string[] = [];
@@ -216,6 +218,7 @@ export async function extractPdfText(buffer: ArrayBuffer): Promise<string> {
 
     while ((sm = streamMarker.exec(binary)) !== null) {
       const rawStream = sm[1];
+      if (rawStream.length > 1024 * 1024) continue; // Skip huge binary image streams
       parseStreamText(rawStream);
 
       if (typeof DecompressionStream !== 'undefined') {
@@ -240,6 +243,8 @@ export async function extractPdfText(buffer: ArrayBuffer): Promise<string> {
           }
         }
       }
+
+      if (lines.length >= 500) break; // Ample extracted lines for BOQ line items
     }
 
     const uniqueLines = lines.filter((l, idx) => l && lines.indexOf(l) === idx);

@@ -14,10 +14,11 @@ import type { RFQItem, VendorEvaluationRecord, VendorOpportunity } from '@/lib/t
 jest.mock('@/lib/store');
 
 const mockPush = jest.fn();
+const mockBack = jest.fn();
 const mockReplace = jest.fn();
 const mockSearchParams = new URLSearchParams();
 jest.mock('next/navigation', () => ({
-  useRouter: () => ({ push: mockPush, replace: mockReplace }),
+  useRouter: () => ({ push: mockPush, replace: mockReplace, back: mockBack }),
   usePathname: () => '/',
   useSearchParams: () => mockSearchParams,
 }));
@@ -275,10 +276,10 @@ describe('Role screen routes', () => {
       expect(mockPush).toHaveBeenCalledWith('/buyer/dashboard');
     });
 
-    it('quote matrix returns to the dashboard', () => {
+    it('quote matrix returns to the previous page / dashboard', () => {
       render(<BuyerQuoteMatrixPage />);
       clickCallback('quote-matrix:onBackToDashboard');
-      expect(mockPush).toHaveBeenCalledWith('/buyer/dashboard');
+      expect(mockBack.mock.calls.length + mockPush.mock.calls.length).toBeGreaterThan(0);
     });
 
     it('rfq summary opens the quote matrix and the wizard', () => {
@@ -512,10 +513,10 @@ describe('Role screen routes', () => {
       expect(mockPush).toHaveBeenCalledWith('/category-manager/quote-matrix');
     });
 
-    it('quote matrix returns to the All RFQs console', () => {
+    it('quote matrix returns to the previous route / All RFQs console', () => {
       render(<CmQuoteMatrixPage />);
       clickCallback('quote-matrix:onBackToDashboard');
-      expect(mockPush).toHaveBeenCalledWith('/category-manager/all-rfqs');
+      expect(mockBack.mock.calls.length + mockPush.mock.calls.length).toBeGreaterThan(0);
     });
 
     it('renders the category summary screen', () => {

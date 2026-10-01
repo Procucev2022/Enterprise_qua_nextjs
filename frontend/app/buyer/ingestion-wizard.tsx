@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import {
   SOURCING_MODES,
@@ -15,6 +16,7 @@ import {
   classifyLineItems,
   uploadRFQAttachment,
   fetchAllVendors,
+  requestVendorCategoryUpdateEmail,
 } from '@/lib/rfqClient';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
 import {
@@ -26,6 +28,7 @@ import {
   updateManualRFQLineItem,
   validateManualRFQForm,
 } from '@/lib/manualRfqModel';
+import { PINCODE_PATTERN, isDummyPincode, validatePincode, PostOfficeDetail } from '@/lib/validationSchemas';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import { extractRfqCategorySignals, matchVendorAgainstSignals } from '@/lib/vendorMatching';
@@ -64,6 +67,11 @@ import {
   Info,
   ChevronDown,
   Check,
+  X,
+  CheckSquare,
+  Square,
+  Search,
+  ExternalLink,
 } from 'lucide-react';
 
 const EXTRACTION = UI_STRINGS.rfqExtraction;
@@ -113,6 +121,8 @@ export default function IngestionWizard({
     showToast,
     activeSubscription: storeSubscription,
     buyerVendors,
+    addBuyerVendor,
+    categoryTaxonomy,
     remainingFreeRFQs: storeRemaining,
     activeBuyerAccount,
   } = useApp();
@@ -130,6 +140,147 @@ export default function IngestionWizard({
     sourcingMode: currentMode || 'mode_2',
   }));
 
+  // Auto-prefill delivery location and pincode from active buyer profile
+  useEffect(() => {
+    if (activeBuyerAccount) {
+      const defaultLoc = activeBuyerAccount.city && activeBuyerAccount.state
+        ? `${activeBuyerAccount.city}, ${activeBuyerAccount.state}`
+        : (activeBuyerAccount.primaryPlantLocation || '');
+      const defaultPin = activeBuyerAccount.pincode || '';
+      setForm((prev) => {
+        if (!prev.deliveryLocation && !prev.deliveryPincode && (defaultLoc || defaultPin)) {
+          return {
+            ...prev,
+            deliveryLocation: prev.deliveryLocation || defaultLoc,
+            deliveryPincode: prev.deliveryPincode || defaultPin,
+          };
+        }
+        return prev;
+      });
+    }
+  }, [activeBuyerAccount]);
+
+  const [mode1VendorSearch, setMode1VendorSearch] = useState('');
+  const [isAddVendorModalOpen, setIsAddVendorModalOpen] = useState(false);
+  const [vendorFormName, setVendorFormName] = useState('');
+  const [vendorFormContactPerson, setVendorFormContactPerson] = useState('');
+  const [vendorFormPhone, setVendorFormPhone] = useState('');
+  const [vendorFormEmail, setVendorFormEmail] = useState('');
+  const [vendorFormMajorCategory, setVendorFormMajorCategory] = useState('');
+  const [vendorFormMinorCategories, setVendorFormMinorCategories] = useState<string[]>([]);
+  const [vendorFormCity, setVendorFormCity] = useState('');
+  const [vendorFormState, setVendorFormState] = useState('');
+  const [vendorFormPincode, setVendorFormPincode] = useState('');
+  const [vendorFormGstin, setVendorFormGstin] = useState('');
+  const [isSubmittingVendor, setIsSubmittingVendor] = useState(false);
+  const [sendingCategoryEmailVendors, setSendingCategoryEmailVendors] = useState<string[]>([]);
+  const [sentCategoryEmailVendors, setSentCategoryEmailVendors] = useState<string[]>([]);
+  const [vendorCategoryFilterTab, setVendorCategoryFilterTab] = useState<'all' | 'matched' | 'mismatched'>('all');
+
+  const handleSendCategoryUpdateEmail = async (vendor: any, rfqCategorySignals: string[]) => {
+    const vendorKey = vendor?.id || vendor?.email;
+    if (!vendorKey) return;
+    setSendingCategoryEmailVendors((prev) => [...prev, vendorKey]);
+    try {
+      const res = await requestVendorCategoryUpdateEmail({
+        vendorId: vendor.id,
+        vendorEmail: vendor.email,
+        vendorName: vendor.name || vendor.contactPerson,
+        rfqCategory: rfqCategorySignals.join(', ') || form.lineItems?.[0]?.majorCategory || 'Requested Category',
+        rfqTitle: form.title || 'Procurement Requisition',
+      });
+      if (res.success) {
+        setSentCategoryEmailVendors((prev) => [...prev, vendorKey]);
+        showToast(
+          'Category Update Email Sent',
+          `An email has been sent to ${vendor.name || vendor.contactPerson || 'Vendor'} (${vendor.email}) requesting them to update their category to match this RFQ.`,
+          'success'
+        );
+      } else {
+        showToast('Email Delivery Issue', res.error || 'Failed to dispatch email.', 'warning');
+      }
+    } catch (err: any) {
+      showToast('Error', err?.message || 'Failed to send update email.', 'warning');
+    } finally {
+      setSendingCategoryEmailVendors((prev) => prev.filter((id) => id !== vendorKey));
+    }
+  };
+
+  const resetAddVendorForm = () => {
+    setVendorFormName('');
+    setVendorFormContactPerson('');
+    setVendorFormPhone('');
+    setVendorFormEmail('');
+    setVendorFormMajorCategory(taxonomyMajors()[0] || 'IT');
+    setVendorFormMinorCategories([]);
+    setVendorFormCity('');
+    setVendorFormState('');
+    setVendorFormPincode('');
+    setVendorFormGstin('');
+  };
+
+  const handleAddVendorSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (
+      !vendorFormName.trim() ||
+      !vendorFormContactPerson.trim() ||
+      !vendorFormPhone.trim() ||
+      !vendorFormEmail.trim() ||
+      !vendorFormMajorCategory ||
+      !vendorFormCity.trim() ||
+      !vendorFormState.trim() ||
+      !vendorFormPincode.trim() ||
+      !vendorFormGstin.trim()
+    ) {
+      showToast('Missing Details', 'Please fill in all mandatory fields including City, State, Pincode, and GSTIN.', 'warning');
+      return;
+    }
+
+    if (!/^[1-9][0-9]{5}$/.test(vendorFormPincode.trim())) {
+      showToast('Invalid Pincode', 'Please enter a valid 6-digit PIN code.', 'warning');
+      return;
+    }
+
+    setIsSubmittingVendor(true);
+    try {
+      await addBuyerVendor({
+        name: vendorFormName.trim(),
+        contactPerson: vendorFormContactPerson.trim(),
+        phone: vendorFormPhone.trim(),
+        email: vendorFormEmail.trim().toLowerCase(),
+        majorCategory: vendorFormMajorCategory,
+        minorCategories: vendorFormMinorCategories,
+        city: vendorFormCity.trim(),
+        state: vendorFormState.trim(),
+        pincode: vendorFormPincode.trim(),
+        gst: vendorFormGstin.trim().toUpperCase(),
+        location: `${vendorFormCity.trim()}, ${vendorFormState.trim()}`,
+        status: 'PREFERRED ENTERPRISE SUPPLIER',
+        rating: 4.5,
+        score: 90,
+        source: 'buyer_uploaded',
+        addedByBuyerCompany: activeBuyerAccount?.organizationName || 'My Organization',
+        annualTurnover: '₹1 Cr - ₹10 Cr',
+      });
+      showToast('Vendor Added', `${vendorFormName.trim()} was successfully added to your approved vendor roster.`, 'success');
+      setIsAddVendorModalOpen(false);
+      resetAddVendorForm();
+    } catch (err: any) {
+      showToast('Failed to Add Vendor', err?.message || 'Could not save vendor.', 'warning');
+    } finally {
+      setIsSubmittingVendor(false);
+    }
+  };
+
+  let router: any = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    router = useRouter();
+  } catch {
+    router = null;
+  }
+  const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
+  const [confirmationRfq, setConfirmationRfq] = useState<any | null>(null);
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [isDispatching, setIsDispatching] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -300,6 +451,11 @@ export default function IngestionWizard({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [pincodeError, setPincodeError] = useState<string | null>(null);
+  const [pincodeValidating, setPincodeValidating] = useState(false);
+  const [pincodePostOffices, setPincodePostOffices] = useState<PostOfficeDetail[]>([]);
+  const pincodeDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
   const validation = useMemo(() => validateManualRFQForm(form), [form]);
   const formErrors = submitAttempted ? validation.formErrors : {};
   const lineItemErrors = submitAttempted ? validation.lineItemErrors : {};
@@ -307,6 +463,57 @@ export default function IngestionWizard({
   const patchForm = useCallback(<K extends keyof ManualRFQForm>(key: K, value: ManualRFQForm[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
   }, []);
+
+  useEffect(() => {
+    const raw = form.deliveryPincode.trim();
+    if (pincodeDebounceRef.current) {
+      clearTimeout(pincodeDebounceRef.current);
+    }
+    if (!raw) {
+      setPincodeError(null);
+      setPincodeValidating(false);
+      setPincodePostOffices([]);
+      return;
+    }
+
+    if (isDummyPincode(raw)) {
+      setPincodeError(UI_STRINGS.manualRfq.deliveryPincodeDummy);
+      setPincodeValidating(false);
+      setPincodePostOffices([]);
+      return;
+    }
+
+    if (raw.length >= 3 && !PINCODE_PATTERN.test(raw)) {
+      setPincodeError(UI_STRINGS.manualRfq.deliveryPincodeInvalid);
+      setPincodeValidating(false);
+      setPincodePostOffices([]);
+      return;
+    }
+
+    if (/^\d{6}$/.test(raw)) {
+      setPincodeValidating(true);
+      pincodeDebounceRef.current = setTimeout(async () => {
+        try {
+          const res = await validatePincode(raw);
+          if (!res.isValid) {
+            setPincodeError(res.message || UI_STRINGS.manualRfq.deliveryPincodeInvalid);
+            setPincodePostOffices([]);
+          } else {
+            setPincodeError(null);
+            setPincodePostOffices(res.postOffices || []);
+          }
+        } catch {
+          setPincodeError(null);
+        } finally {
+          setPincodeValidating(false);
+        }
+      }, 350);
+    } else {
+      setPincodeError(null);
+      setPincodeValidating(false);
+      setPincodePostOffices([]);
+    }
+  }, [form.deliveryPincode]);
 
   const patchItem = useCallback((id: string, patch: Partial<ManualRFQLineItem>) => {
     setForm((prev) => updateManualRFQLineItem(prev, id, patch));
@@ -532,13 +739,38 @@ export default function IngestionWizard({
       if ((form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2') && Array.isArray(buyerVendors)) {
         const allMyUploadedVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
         const { signals: dispatchSignals } = extractRfqCategorySignals(updatedForm);
-        const matched = dispatchSignals.length > 0
-          ? allMyUploadedVendors.filter((v) => matchVendorAgainstSignals(v, dispatchSignals).isMatch)
-          : [];
-        const myUploadedVendors = matched.length > 0 ? matched : allMyUploadedVendors;
-        if (myUploadedVendors.length > 0) {
-          mode1AssignedVendors = myUploadedVendors.map(toAssignedVendorEntry);
+        const candidatePool = selectedVendorIds.length > 0
+          ? allMyUploadedVendors.filter((v) => selectedVendorIds.includes(v.id))
+          : allMyUploadedVendors;
+
+        const matchingVendors: typeof candidatePool = [];
+        const mismatchedVendors: typeof candidatePool = [];
+
+        for (const v of candidatePool) {
+          if (dispatchSignals.length === 0 || matchVendorAgainstSignals(v, dispatchSignals).isMatch) {
+            matchingVendors.push(v);
+          } else {
+            mismatchedVendors.push(v);
+          }
         }
+
+        if (mismatchedVendors.length > 0) {
+          showToast(
+            'Shortlist Adjusted',
+            `${mismatchedVendors.length} vendor(s) have category mismatches and were excluded from RFQ shortlist. Update request email dispatched.`,
+            'info'
+          );
+        }
+
+        if (matchingVendors.length > 0) {
+          mode1AssignedVendors = matchingVendors.map(toAssignedVendorEntry);
+        }
+      }
+
+      if (form.sourcingMode === 'mode_1' && (!mode1AssignedVendors || mode1AssignedVendors.length === 0)) {
+        setSubmitError('Version 1 (Client Sourcing) requires at least one private vendor to be added/selected before creating the RFQ.');
+        showToast('Private Vendor Required', 'Version 1 requires at least one private vendor in your roster before dispatching.', 'warning');
+        return;
       }
 
       if (form.sourcingMode === 'mode_1' && (!mode1AssignedVendors || mode1AssignedVendors.length === 0)) {
@@ -566,12 +798,13 @@ export default function IngestionWizard({
       }
 
       adoptCreatedRFQ(result.rfq);
+      setConfirmationRfq(result.rfq);
+      setSubmitAttempted(false);
       showToast(
         'RFQ Dispatched',
         `RFQ ${result.rfq.rfqNumber} has been created and dispatched in ${form.sourcingMode.toUpperCase()} mode.`,
         'success'
       );
-      onComplete();
     } catch (err: any) {
       setSubmitError(err?.message || 'Failed to dispatch RFQ.');
     } finally {
@@ -844,6 +1077,44 @@ export default function IngestionWizard({
             <FieldError message={formErrors.estimatedBudget} />
           </div>
 
+          {/* Delivery Pincode */}
+          <div>
+            <label htmlFor="rfq-pincode" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+              {MODAL.deliveryPincodeLabel}
+              <span className="text-rose-600 dark:text-rose-400 font-bold ml-0.5">*</span>
+            </label>
+            <div className="relative">
+              <input
+                id="rfq-pincode"
+                type="text"
+                required
+                value={form.deliveryPincode}
+                onChange={(e) => patchForm('deliveryPincode', e.target.value)}
+                placeholder={MODAL.deliveryPincodePlaceholder}
+                maxLength={10}
+                className="w-full px-3 py-2 pr-20 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white mono font-semibold focus:ring-2 focus:ring-indigo-500"
+              />
+              <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1 pointer-events-none">
+                {pincodeValidating && (
+                  <span className="text-indigo-500 flex items-center gap-1 text-xs">
+                    <Loader2 size={14} className="animate-spin" />
+                  </span>
+                )}
+                {!pincodeValidating && pincodePostOffices.length > 0 && !pincodeError && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800 shadow-xs">
+                    <CheckCircle2 size={11} className="shrink-0 text-emerald-600 dark:text-emerald-400" /> Valid
+                  </span>
+                )}
+                {!pincodeValidating && pincodeError && form.deliveryPincode.trim().length >= 6 && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800 shadow-xs">
+                    <AlertCircle size={11} className="shrink-0 text-rose-600 dark:text-rose-400" /> Invalid
+                  </span>
+                )}
+              </div>
+            </div>
+            <FieldError message={formErrors.deliveryPincode} />
+          </div>
+
           {/* Delivery Location */}
           <div>
             <label htmlFor="rfq-location" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
@@ -861,25 +1132,6 @@ export default function IngestionWizard({
               className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-indigo-500"
             />
             <FieldError message={formErrors.deliveryLocation} />
-          </div>
-
-          {/* Delivery Pincode */}
-          <div>
-            <label htmlFor="rfq-pincode" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-              {MODAL.deliveryPincodeLabel}
-              <span className="text-rose-600 dark:text-rose-400 font-bold ml-0.5">*</span>
-            </label>
-            <input
-              id="rfq-pincode"
-              type="text"
-              required
-              value={form.deliveryPincode}
-              onChange={(e) => patchForm('deliveryPincode', e.target.value)}
-              placeholder={MODAL.deliveryPincodePlaceholder}
-              maxLength={10}
-              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white mono font-semibold focus:ring-2 focus:ring-indigo-500"
-            />
-            <FieldError message={formErrors.deliveryPincode} />
           </div>
 
           {/* Target Delivery Date */}
@@ -1291,7 +1543,7 @@ export default function IngestionWizard({
         {/* ── Mode 1: Private Approved Vendor Roster Preview ── */}
         {form.sourcingMode === 'mode_1' && (
           <div className="mt-5 rounded-2xl border border-blue-200 dark:border-blue-900/60 bg-blue-50/40 dark:bg-blue-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-blue-100 dark:border-blue-900/40 pb-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-blue-100 dark:border-blue-900/40 pb-3">
               <div className="flex items-center gap-2">
                 <div className="p-1.5 rounded-lg bg-blue-600 text-white shadow-xs">
                   <Building2 size={16} />
@@ -1300,15 +1552,7 @@ export default function IngestionWizard({
                   <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                     <span>Mode 1: Buyer&apos;s Approved Vendor Roster</span>
                     <span className="badge badge-blue text-[10px] font-bold">
-                      {(() => {
-                        const uploaded = buyerVendors.filter((v) => isBuyerUploaded(v));
-                        const { signals } = extractRfqCategorySignals(form);
-                        const matched = signals.length > 0
-                          ? uploaded.filter((v) => matchVendorAgainstSignals(v, signals).isMatch)
-                          : [];
-                        const effective = matched.length > 0 ? matched : uploaded;
-                        return effective.length;
-                      })()} Suppliers Found
+                      {buyerVendors.filter((v) => isBuyerUploaded(v)).length} Suppliers Found
                     </span>
                   </h3>
                   <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
@@ -1316,19 +1560,34 @@ export default function IngestionWizard({
                   </p>
                 </div>
               </div>
-              <span className="text-[10px] font-bold text-blue-700 dark:text-blue-300 bg-blue-100/70 dark:bg-blue-900/50 px-2.5 py-1 rounded-full border border-blue-200 dark:border-blue-800 shrink-0">
-                🔒 Private Roster Only
-              </span>
+              <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap shrink-0">
+                <input
+                  type="text"
+                  placeholder="Filter vendors..."
+                  value={mode1VendorSearch}
+                  onChange={(e) => setMode1VendorSearch(e.target.value)}
+                  className="text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-800 dark:text-gray-200 w-36 sm:w-44 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetAddVendorForm();
+                    setIsAddVendorModalOpen(true);
+                  }}
+                  className="btn btn-primary btn-xs py-1.5 px-3 font-bold flex items-center gap-1 shrink-0 cursor-pointer shadow-xs"
+                >
+                  <Plus size={13} />
+                  <span>Add Vendor</span>
+                </button>
+                <span className="text-[10px] font-bold text-blue-700 dark:text-blue-300 bg-blue-100/70 dark:bg-blue-900/50 px-2.5 py-1.5 rounded-full border border-blue-200 dark:border-blue-800 shrink-0">
+                  🔒 Private Roster Only
+                </span>
+              </div>
             </div>
 
             {(() => {
               const allMyVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
-              const { signals: mode1Signals } = extractRfqCategorySignals(form);
-              const matched = mode1Signals.length > 0
-                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, mode1Signals).isMatch)
-                : [];
-              const myVendors = matched.length > 0 ? matched : allMyVendors;
-              if (myVendors.length === 0) {
+              if (allMyVendors.length === 0) {
                 return (
                   <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-2">
                     <Users size={28} className="mx-auto text-slate-400 opacity-60" />
@@ -1340,91 +1599,275 @@ export default function IngestionWizard({
                 );
               }
 
+              const { signals: mode1Signals } = extractRfqCategorySignals(form);
+              const matchingVendors = mode1Signals.length > 0
+                ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, mode1Signals).isMatch)
+                : allMyVendors;
+              const mismatchedVendors = mode1Signals.length > 0
+                ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, mode1Signals).isMatch)
+                : [];
+
+              let pool = allMyVendors;
+              if (vendorCategoryFilterTab === 'matched') {
+                pool = matchingVendors;
+              } else if (vendorCategoryFilterTab === 'mismatched') {
+                pool = mismatchedVendors;
+              }
+
+              const myVendors = mode1VendorSearch.trim()
+                ? pool.filter((v) =>
+                    v.name.toLowerCase().includes(mode1VendorSearch.toLowerCase()) ||
+                    v.email?.toLowerCase().includes(mode1VendorSearch.toLowerCase()) ||
+                    v.majorCategory?.toLowerCase().includes(mode1VendorSearch.toLowerCase())
+                  )
+                : pool;
+
+              const allIds = myVendors.map((v) => v.id);
+              const allSelected = allIds.length > 0 && allIds.every((id) => selectedVendorIds.includes(id));
+
               return (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-72 overflow-y-auto pr-1">
-                  {myVendors.map((vendor, idx) => {
-                    const rawMinor = vendor.minorCategories as string | string[] | undefined;
-                    const minorList: string[] = Array.isArray(rawMinor)
-                      ? rawMinor
-                      : typeof rawMinor === 'string'
-                      ? (rawMinor as string).split(',').map((s: string) => s.trim()).filter(Boolean)
-                      : Array.isArray(vendor.vendorSelectedCategories)
-                      ? vendor.vendorSelectedCategories
-                      : [];
+                <div className="space-y-2.5">
+                  {/* Category Filter Tabs & Toolbar */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200/60 dark:border-gray-800 pb-2">
+                    {mode1Signals.length > 0 && (
+                      <div className="flex items-center gap-1 bg-slate-100 dark:bg-gray-800 p-0.5 rounded-lg text-[10px] font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => setVendorCategoryFilterTab('all')}
+                          className={`px-2.5 py-1 rounded-md transition-all ${
+                            vendorCategoryFilterTab === 'all'
+                              ? 'bg-white dark:bg-gray-900 text-blue-700 dark:text-blue-300 shadow-2xs font-bold'
+                              : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                          }`}
+                        >
+                          All ({allMyVendors.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setVendorCategoryFilterTab('matched')}
+                          className={`px-2.5 py-1 rounded-md transition-all ${
+                            vendorCategoryFilterTab === 'matched'
+                              ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
+                              : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                          }`}
+                        >
+                          Matched ({matchingVendors.length})
+                        </button>
+                        {mismatchedVendors.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setVendorCategoryFilterTab('mismatched')}
+                            className={`px-2.5 py-1 rounded-md transition-all flex items-center gap-1 ${
+                              vendorCategoryFilterTab === 'mismatched'
+                                ? 'bg-white dark:bg-gray-900 text-amber-700 dark:text-amber-300 shadow-2xs font-bold'
+                                : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                            }`}
+                          >
+                            <span>⚠️ Category Mismatch ({mismatchedVendors.length})</span>
+                          </button>
+                        )}
+                      </div>
+                    )}
 
-                    return (
-                      <div
-                        key={vendor.id || idx}
-                        className="rounded-xl border border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 p-3.5 space-y-2 shadow-2xs hover:border-blue-300 dark:hover:border-blue-700 transition-all"
-                      >
-                        <div className="flex items-start justify-between gap-1.5">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 text-xs font-bold font-mono">
-                              {idx + 1}
-                            </span>
-                            <span className="text-xs font-bold text-slate-900 dark:text-white truncate" title={vendor.name}>
-                              {vendor.name}
-                            </span>
-                          </div>
-                          <span className="badge badge-emerald text-[9px] font-bold shrink-0">
-                            Preferred
+                    <div className="flex items-center justify-between sm:justify-end gap-2 flex-1 text-[11px]">
+                      <div className="text-slate-500 dark:text-gray-400">
+                        {selectedVendorIds.length > 0 ? (
+                          <span className="font-semibold text-blue-600 dark:text-blue-400">
+                            {selectedVendorIds.length} of {matchingVendors.length} matched vendor(s) selected
                           </span>
-                        </div>
+                        ) : (
+                          <span>All {matchingVendors.length} category-matched vendors will receive this RFQ</span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const selectableIds = myVendors.filter((v) => {
+                            if (mode1Signals.length === 0) return true;
+                            return matchVendorAgainstSignals(v, mode1Signals).isMatch;
+                          }).map((v) => v.id);
 
-                        <div className="space-y-1 text-[11px] text-slate-600 dark:text-gray-300">
-                          {vendor.contactPerson && (
-                            <div className="flex items-center gap-1.5 text-slate-700 dark:text-gray-300">
-                              <Users size={11} className="text-slate-400 shrink-0" />
-                              <span className="truncate">{vendor.contactPerson}</span>
-                            </div>
-                          )}
-                          {vendor.email && (
-                            <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
-                              <Mail size={11} className="text-blue-500 shrink-0" />
-                              <span className="font-mono text-[10px] truncate">{vendor.email}</span>
-                            </div>
-                          )}
-                          {vendor.phone && (
-                            <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
-                              <Phone size={11} className="text-emerald-500 shrink-0" />
-                              <span className="font-mono text-[10px]">{vendor.phone}</span>
-                            </div>
-                          )}
-                        </div>
+                          if (allSelected) {
+                            setSelectedVendorIds([]);
+                          } else {
+                            setSelectedVendorIds(Array.from(new Set([...selectedVendorIds, ...selectableIds])));
+                          }
+                        }}
+                        className="text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"
+                      >
+                        {allSelected ? <CheckSquare size={13} /> : <Square size={13} />}
+                        <span>{allSelected ? 'Deselect All' : 'Select All Matched'}</span>
+                      </button>
+                    </div>
+                  </div>
 
-                        {/* Category & Rating */}
-                        <div className="pt-2 border-t border-slate-100 dark:border-gray-800 space-y-1.5">
-                          <div className="flex items-center justify-between text-[10px]">
-                            <span className="font-semibold text-blue-700 dark:text-blue-300 truncate max-w-[150px]">
-                              {vendor.majorCategory || 'General Industrial'}
-                            </span>
-                            <span className="text-amber-500 font-bold flex items-center gap-0.5 shrink-0">
-                              <Star size={10} className="fill-amber-400 text-amber-400" />
-                              <span>{vendor.rating || 4.5}</span>
-                            </span>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-72 overflow-y-auto pr-1">
+                    {myVendors.map((vendor, idx) => {
+                      const rawMinor = vendor.minorCategories as string | string[] | undefined;
+                      const minorList: string[] = Array.isArray(rawMinor)
+                        ? rawMinor
+                        : typeof rawMinor === 'string'
+                        ? (rawMinor as string).split(',').map((s: string) => s.trim()).filter(Boolean)
+                        : Array.isArray(vendor.vendorSelectedCategories)
+                        ? vendor.vendorSelectedCategories
+                        : [];
+                      
+                      const matchResult = mode1Signals.length > 0
+                        ? matchVendorAgainstSignals(vendor, mode1Signals)
+                        : { isMatch: true };
+                      const isCategoryMismatch = mode1Signals.length > 0 && !matchResult.isMatch;
+
+                      const isSelected = !isCategoryMismatch && (selectedVendorIds.includes(vendor.id) || selectedVendorIds.length === 0);
+
+                      return (
+                        <div
+                          key={vendor.id || idx}
+                          onClick={() => {
+                            if (isCategoryMismatch) return;
+                            setSelectedVendorIds((prev) => {
+                              if (prev.length === 0) {
+                                return allIds.filter((id) => id !== vendor.id);
+                              }
+                              return prev.includes(vendor.id)
+                                ? prev.filter((id) => id !== vendor.id)
+                                : [...prev, vendor.id];
+                            });
+                          }}
+                          className={`rounded-xl border p-3.5 space-y-2 transition-all ${
+                            isCategoryMismatch
+                              ? 'border-amber-300 dark:border-amber-700/80 bg-amber-50/40 dark:bg-amber-950/20 shadow-2xs'
+                              : isSelected
+                              ? 'cursor-pointer border-blue-500 bg-blue-50/30 dark:bg-blue-950/20 dark:border-blue-600 shadow-xs'
+                              : 'cursor-pointer border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-1.5">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${
+                                isCategoryMismatch
+                                  ? 'bg-amber-500 border-amber-500 text-white opacity-80'
+                                  : isSelected
+                                  ? 'bg-blue-600 border-blue-600 text-white'
+                                  : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800'
+                              }`}>
+                                {isCategoryMismatch ? (
+                                  <AlertCircle size={12} strokeWidth={2.5} />
+                                ) : isSelected ? (
+                                  <Check size={12} strokeWidth={3} />
+                                ) : null}
+                              </span>
+                              <span className="text-xs font-bold text-slate-900 dark:text-white truncate" title={vendor.name}>
+                                {vendor.name}
+                              </span>
+                            </div>
+                            {isCategoryMismatch ? (
+                              <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300 border border-amber-300 dark:border-amber-700 shrink-0">
+                                ⚠️ Category Mismatch
+                              </span>
+                            ) : (
+                              <span className="badge badge-emerald text-[9px] font-bold shrink-0">
+                                Preferred
+                              </span>
+                            )}
                           </div>
-                          {minorList.length > 0 && (
-                            <div className="flex flex-wrap gap-1">
-                              {minorList.slice(0, 2).map((cat: string, ci: number) => (
-                                <span
-                                  key={ci}
-                                  className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-medium bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 border border-slate-200/60 dark:border-gray-700/60 truncate max-w-[120px]"
-                                  title={cat}
-                                >
-                                  {cat}
+
+                          <div className="space-y-1 text-[11px] text-slate-600 dark:text-gray-300">
+                            {vendor.contactPerson && (
+                              <div className="flex items-center gap-1.5 text-slate-700 dark:text-gray-300">
+                                <Users size={11} className="text-slate-400 shrink-0" />
+                                <span className="truncate">{vendor.contactPerson}</span>
+                              </div>
+                            )}
+                            {vendor.email && (
+                              <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
+                                <Mail size={11} className="text-blue-500 shrink-0" />
+                                <span className="font-mono text-[10px] truncate">{vendor.email}</span>
+                              </div>
+                            )}
+                            {vendor.phone && (
+                              <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
+                                <Phone size={11} className="text-emerald-500 shrink-0" />
+                                <span className="font-mono text-[10px]">{vendor.phone}</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Category Mismatch Warning & Update Button */}
+                          {isCategoryMismatch ? (
+                            <div className="pt-2 border-t border-amber-200/60 dark:border-amber-900/40 space-y-1.5">
+                              <div className="text-[10px] text-amber-800 dark:text-amber-300 bg-amber-100/70 dark:bg-amber-950/40 p-2 rounded-lg border border-amber-200 dark:border-amber-900/50 space-y-0.5">
+                                <p className="font-bold flex items-center justify-between">
+                                  <span>Registered Category:</span>
+                                  <span className="text-amber-900 dark:text-amber-200">{vendor.majorCategory || 'None'}</span>
+                                </p>
+                                <p className="text-[9px] text-amber-700 dark:text-amber-400">
+                                  Excluded from RFQ shortlist until details updated & verified.
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleSendCategoryUpdateEmail(vendor, mode1Signals);
+                                }}
+                                disabled={sendingCategoryEmailVendors.includes(vendor.id || vendor.email)}
+                                className="w-full py-1.5 px-2.5 rounded-lg text-[10px] font-bold bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-50"
+                                title="Send email requesting vendor to update their category"
+                              >
+                                {sendingCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
+                                  <>
+                                    <Loader2 size={11} className="animate-spin" />
+                                    <span>Sending Email...</span>
+                                  </>
+                                ) : sentCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
+                                  <>
+                                    <CheckCircle2 size={11} />
+                                    <span>Update Email Sent ✓</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Mail size={11} />
+                                    <span>Send Email to Update Category</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          ) : (
+                            /* Category & Rating */
+                            <div className="pt-2 border-t border-slate-100 dark:border-gray-800 space-y-1.5">
+                              <div className="flex items-center justify-between text-[10px]">
+                                <span className="font-semibold text-blue-700 dark:text-blue-300 truncate max-w-[150px]">
+                                  {vendor.majorCategory || 'General Industrial'}
                                 </span>
-                              ))}
-                              {minorList.length > 2 && (
-                                <span className="text-[8px] font-bold text-slate-400 dark:text-gray-500 self-center">
-                                  +{minorList.length - 2}
+                                <span className="text-amber-500 font-bold flex items-center gap-0.5 shrink-0">
+                                  <Star size={10} className="fill-amber-400 text-amber-400" />
+                                  <span>{vendor.rating || 4.5}</span>
                                 </span>
+                              </div>
+                              {minorList.length > 0 && (
+                                <div className="flex flex-wrap gap-1">
+                                  {minorList.slice(0, 2).map((cat: string, ci: number) => (
+                                    <span
+                                      key={ci}
+                                      className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-medium bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 border border-slate-200/60 dark:border-gray-700/60 truncate max-w-[120px]"
+                                      title={cat}
+                                    >
+                                      {cat}
+                                    </span>
+                                  ))}
+                                  {minorList.length > 2 && (
+                                    <span className="text-[8px] font-bold text-slate-400 dark:text-gray-500 self-center">
+                                      +{minorList.length - 2}
+                                    </span>
+                                  )}
+                                </div>
                               )}
                             </div>
                           )}
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
               );
             })()}
@@ -1520,7 +1963,24 @@ export default function IngestionWizard({
                         <Building2 size={13} className="text-blue-600 dark:text-blue-400" />
                         <span>Buyer Approved Roster ({myVendors.length} Private Vendors)</span>
                       </h4>
-                      <span className="text-[10px] text-blue-600 dark:text-blue-400 font-semibold">Direct Invites</span>
+                      {myVendors.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const allIds = myVendors.map((v) => v.id);
+                            const allSelected = allIds.length > 0 && allIds.every((id) => selectedVendorIds.includes(id));
+                            if (allSelected) {
+                              setSelectedVendorIds([]);
+                            } else {
+                              setSelectedVendorIds(Array.from(new Set([...selectedVendorIds, ...allIds])));
+                            }
+                          }}
+                          className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400 hover:underline inline-flex items-center gap-1"
+                        >
+                          {myVendors.every((v) => selectedVendorIds.includes(v.id)) ? <CheckSquare size={12} /> : <Square size={12} />}
+                          <span>{myVendors.every((v) => selectedVendorIds.includes(v.id)) ? 'Deselect All' : 'Select All'}</span>
+                        </button>
+                      )}
                     </div>
 
                     {myVendors.length === 0 ? (
@@ -1529,18 +1989,46 @@ export default function IngestionWizard({
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-48 overflow-y-auto pr-1">
-                        {myVendors.map((v, i) => (
-                          <div key={v.id || i} className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 space-y-1 shadow-2xs">
-                            <div className="flex items-center justify-between gap-1">
-                              <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{v.name}</span>
-                              <span className="badge badge-blue text-[8px] font-bold shrink-0">Private</span>
+                        {myVendors.map((v, i) => {
+                          const isSelected = selectedVendorIds.includes(v.id) || selectedVendorIds.length === 0;
+                          return (
+                            <div
+                              key={v.id || i}
+                              onClick={() => {
+                                const allIds = myVendors.map((vendor) => vendor.id);
+                                setSelectedVendorIds((prev) => {
+                                  if (prev.length === 0) {
+                                    return allIds.filter((id) => id !== v.id);
+                                  }
+                                  return prev.includes(v.id) ? prev.filter((id) => id !== v.id) : [...prev, v.id];
+                                });
+                              }}
+                              className={`cursor-pointer p-3 rounded-xl border space-y-1 transition-all ${
+                                isSelected
+                                  ? 'border-emerald-500 bg-white dark:bg-gray-900 shadow-2xs'
+                                  : 'border-slate-200/60 dark:border-gray-800 bg-white/60 dark:bg-gray-900/40 opacity-60'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-1">
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                                    isSelected
+                                      ? 'bg-emerald-600 border-emerald-600 text-white'
+                                      : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800'
+                                  }`}>
+                                    {isSelected && <Check size={10} strokeWidth={3} />}
+                                  </span>
+                                  <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{v.name}</span>
+                                </div>
+                                <span className="badge badge-blue text-[8px] font-bold shrink-0">Private</span>
+                              </div>
+                              <div className="text-[10px] text-slate-500 dark:text-gray-400 flex items-center justify-between pl-5.5">
+                                <span className="font-semibold text-slate-700 dark:text-gray-300">{v.majorCategory || 'General Industrial'}</span>
+                                <span>{v.location || v.city || v.state || 'India'}</span>
+                              </div>
                             </div>
-                            <div className="text-[10px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
-                              <span className="font-semibold text-slate-700 dark:text-gray-300">{v.majorCategory || 'General Industrial'}</span>
-                              <span>{v.location || v.city || v.state || 'India'}</span>
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -1752,6 +2240,296 @@ export default function IngestionWizard({
           </button>
         )}
       </div>
+
+      {/* ── Inline Add Vendor Modal for Mode 1 Roster ── */}
+      {isAddVendorModalOpen && (
+        <div className="modal-overlay !z-[1100]">
+          <div className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-gray-800 animate-fade-in flex flex-col max-h-[90vh]">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-gray-800">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400">
+                  <Plus size={18} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">Add Approved Vendor</h3>
+                  <p className="text-[11px] text-slate-500 dark:text-gray-400">
+                    Add a vendor you deal with directly — added to your private vendor roster.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAddVendorModalOpen(false)}
+                disabled={isSubmittingVendor}
+                className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 disabled:opacity-40 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddVendorSubmit} className="overflow-y-auto my-3 space-y-3 pr-1 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                  Company Name <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Ashok Industries"
+                  value={vendorFormName}
+                  onChange={(e) => setVendorFormName(e.target.value)}
+                  className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    Contact Person Name <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. John Doe"
+                    value={vendorFormContactPerson}
+                    onChange={(e) => setVendorFormContactPerson(e.target.value)}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    Phone <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="tel"
+                    required
+                    placeholder="e.g. 9000000001"
+                    value={vendorFormPhone}
+                    onChange={(e) => setVendorFormPhone(e.target.value)}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                  Email <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="email"
+                  required
+                  placeholder="e.g. contact@example.com"
+                  value={vendorFormEmail}
+                  onChange={(e) => setVendorFormEmail(e.target.value)}
+                  className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                  Major Category <span className="text-rose-500">*</span>
+                </label>
+                <select
+                  required
+                  value={vendorFormMajorCategory}
+                  onChange={(e) => {
+                    setVendorFormMajorCategory(e.target.value);
+                    setVendorFormMinorCategories([]);
+                  }}
+                  className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
+                >
+                  <option value="">Select Major Category...</option>
+                  {taxonomyMajors().map((cat) => (
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {vendorFormMajorCategory && minorsFor(vendorFormMajorCategory).length > 0 && (
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    Minor Category
+                  </label>
+                  <select
+                    value={vendorFormMinorCategories[0] || ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setVendorFormMinorCategories(val ? [val] : []);
+                    }}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
+                  >
+                    <option value="">Select Minor Category...</option>
+                    {minorsFor(vendorFormMajorCategory).map((minor) => (
+                      <option key={minor} value={minor}>
+                        {minor}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    City <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Pune"
+                    value={vendorFormCity}
+                    onChange={(e) => setVendorFormCity(e.target.value)}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    State <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Maharashtra"
+                    value={vendorFormState}
+                    onChange={(e) => setVendorFormState(e.target.value)}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                    Pincode <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={6}
+                    placeholder="e.g. 411001"
+                    value={vendorFormPincode}
+                    onChange={(e) => setVendorFormPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                  GSTIN / GST Number <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  maxLength={15}
+                  placeholder="e.g. 27AAAAA0000A1Z5"
+                  value={vendorFormGstin}
+                  onChange={(e) => setVendorFormGstin(e.target.value.toUpperCase())}
+                  className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white font-mono uppercase"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200 dark:border-gray-800">
+                <button
+                  type="button"
+                  onClick={() => setIsAddVendorModalOpen(false)}
+                  disabled={isSubmittingVendor}
+                  className="btn btn-ghost btn-sm cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingVendor}
+                  className="btn btn-primary btn-sm font-bold flex items-center gap-1.5 shadow-md cursor-pointer"
+                >
+                  {isSubmittingVendor ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
+                  <span>Add Vendor</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── RFQ Dispatch Confirmation Modal ── */}
+      {confirmationRfq && (
+        <div className="modal-overlay !z-[1200] fixed inset-0 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="w-full max-w-xl p-6 sm:p-8 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-gray-800 space-y-6 text-center animate-in zoom-in-95">
+            <div className="w-16 h-16 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mx-auto shadow-inner">
+              <CheckCircle2 size={36} />
+            </div>
+
+            <div className="space-y-1.5">
+              <h3 className="text-xl font-bold text-slate-900 dark:text-white">RFQ Dispatched Successfully!</h3>
+              <p className="text-sm text-slate-500 dark:text-gray-400 max-w-md mx-auto">
+                RFQ <strong className="text-indigo-600 dark:text-indigo-400 font-mono">{confirmationRfq.rfqNumber}</strong> has been created and invitations have been dispatched to matched vendors.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-left">
+              <div className="p-3 bg-slate-50 dark:bg-gray-800/60 rounded-xl border border-slate-200/60 dark:border-gray-800">
+                <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">RFQ Number</span>
+                <span className="text-xs font-bold text-slate-800 dark:text-gray-200 font-mono">{confirmationRfq.rfqNumber}</span>
+              </div>
+              <div className="p-3 bg-slate-50 dark:bg-gray-800/60 rounded-xl border border-slate-200/60 dark:border-gray-800">
+                <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">Category</span>
+                <span className="text-xs font-bold text-slate-800 dark:text-gray-200 truncate block">{confirmationRfq.category || confirmationRfq.title}</span>
+              </div>
+              <div className="p-3 bg-slate-50 dark:bg-gray-800/60 rounded-xl border border-slate-200/60 dark:border-gray-800">
+                <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">Items / Budget</span>
+                <span className="text-xs font-bold text-slate-800 dark:text-gray-200">
+                  {confirmationRfq.extractedEntities?.length || 1} items {confirmationRfq.budget ? `· ₹${confirmationRfq.budget.toLocaleString()}` : ''}
+                </span>
+              </div>
+              <div className="p-3 bg-slate-50 dark:bg-gray-800/60 rounded-xl border border-slate-200/60 dark:border-gray-800">
+                <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">Mode & Vendors</span>
+                <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 font-mono">
+                  {confirmationRfq.assignedVendors?.length || (confirmationRfq.sourcingMode === 'mode_3' ? 'AI Blind' : '1+ Supplier')}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-center gap-3 pt-4 border-t border-slate-200 dark:border-gray-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmationRfq(null);
+                  handleClearForm();
+                }}
+                className="btn btn-secondary btn-md font-bold cursor-pointer"
+              >
+                Create Another RFQ
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const rfqNum = confirmationRfq.rfqNumber;
+                  setConfirmationRfq(null);
+                  if (onComplete) onComplete();
+                  if (router) {
+                    router.push(`/buyer/quote-matrix?rfq=${encodeURIComponent(rfqNum)}`);
+                  }
+                }}
+                className="btn btn-secondary btn-md font-bold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <span>Compare in Matrix</span>
+                <ExternalLink size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmationRfq(null);
+                  if (onComplete) onComplete();
+                }}
+                className="btn btn-primary btn-md font-bold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <Check size={16} />
+                <span>Done</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

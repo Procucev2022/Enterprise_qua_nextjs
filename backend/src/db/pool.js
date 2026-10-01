@@ -11,7 +11,7 @@
 // ==============================================================================
 
 const { Pool } = require('pg');
-const { getD1Binding, queryD1 } = require('./d1Bridge');
+const { getD1Binding, getD1HttpClient, queryD1 } = require('./d1Bridge');
 
 const DEFAULT_POOL_MAX = 10;
 const DEFAULT_CONNECT_TIMEOUT_MS = 5000;
@@ -110,18 +110,19 @@ const poolModule = {
 const NOT_CONFIGURED_MESSAGE = 'The database is not configured. Set DATABASE_URL so records can be read and written.';
 
 /**
- * Whether *some* backing store is reachable — pg pool or D1 binding.
+ * Whether *some* backing store is reachable — pg pool, Workers D1 binding,
+ * or D1 HTTP REST API (Node dev / Render).
  *
  * domainQueries.js/vendorIngestionQueries.js/identityQueries.js guard every
  * ported function with `if (!pool.hasStorage()) return <empty>;` before
  * calling query()/rows(). On Cloudflare there is no DATABASE_URL and
  * `poolModule.pool` is always null, so a guard that only checked `pool.pool`
  * would short-circuit every D1-ported call before it ever reached the D1
- * branch inside query(). This checks both so the guard only fires when
- * neither store is configured.
+ * branch inside query(). This checks all three so the guard only fires when
+ * nothing at all is configured.
  */
 function hasStorage() {
-  return !!poolModule.pool || !!getD1Binding();
+  return !!poolModule.pool || !!getD1Binding() || !!getD1HttpClient();
 }
 
 /**
@@ -149,8 +150,13 @@ function hasStorage() {
  */
 async function query(text, params = [], options = {}) {
   if (options.d1) {
+    // Priority 1: Workers D1 binding (production on Cloudflare Workers)
     const db = getD1Binding();
     if (db) return queryD1(db, options.d1Text || text, options.d1Params || params);
+
+    // Priority 2: D1 HTTP REST API (Node dev / Render / any non-Workers host)
+    const httpClient = getD1HttpClient();
+    if (httpClient) return queryD1(httpClient, options.d1Text || text, options.d1Params || params);
   }
   if (!poolModule.pool) {
     throw new Error(NOT_CONFIGURED_MESSAGE);
@@ -205,9 +211,85 @@ async function withTransaction(fn) {
  * connection now, so a single reachability answer covers login and the
  * dashboards together rather than reporting two independent datastores.
  */
+const HEALTH_CHECK_SQL = `select (select count(*) from "user" where is_active = true) as user_count,
+    (select count(*) from vendors) as vendor_count,
+    (select count(*) from rfqs) as rfq_count`;
+
+/**
+ * Runs the health-check count query, bounded with a hard timeout —
+ * confirmed live via `wrangler tail` that an unbounded query occasionally
+ * hangs indefinitely (Neon compute cold-starting, or a stalled TCP socket
+ * the `pg` driver's own connectionTimeoutMillis doesn't cover, since that
+ * only bounds acquiring a connection, not a query already in flight on
+ * one). Cloudflare's runtime then hard-kills the whole request with an
+ * opaque "Worker hung" error instead of a clean isConnected:false response.
+ * Shared by both the D1 and pg paths below so the timeout guard isn't
+ * duplicated.
+ */
+async function runHealthCheckQuery(queryFn) {
+  let timeoutHandle;
+  const timeout = new Promise((_, reject) => {
+    timeoutHandle = setTimeout(() => reject(new Error('Database health check timed out after 8000ms')), 8000);
+  });
+  try {
+    return await Promise.race([queryFn(), timeout]);
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
 async function checkDatabaseHealth() {
-  const config = resolveConfig();
   const timestamp = new Date().toISOString();
+
+  // Cloudflare Workers deployments carry a D1 binding — vendors/rfqs/user
+  // are all served from there (see domainQueries.js/identityQueries.js's
+  // { d1: true } calls), so this is the real, authoritative store to check
+  // there. This used to call query() with no { d1: true } option, which
+  // always fell through to the Neon pg pool below even on Workers (D1 was
+  // never consulted at all) — confirmed live: a deployed Worker with a
+  // leftover DATABASE_URL secret reported reachability/row-counts against
+  // an unrelated personal Neon database instead of the D1 store the app
+  // actually reads and writes.
+  const d1 = getD1Binding();
+  if (d1) {
+    const startedAt = Date.now();
+    try {
+      const result = await runHealthCheckQuery(() => queryD1(d1, HEALTH_CHECK_SQL));
+      const row = (result.rows && result.rows[0]) || {};
+      return {
+        isConfigured: true,
+        isConnected: true,
+        provider: 'cloudflare_d1',
+        providerLabel: 'Cloudflare D1',
+        poolStatus: 'ACTIVE (D1 binding)',
+        database: 'enterprise-qua-d1',
+        latencyMs: Date.now() - startedAt,
+        userCount: Number(row.user_count || 0),
+        vendorCount: Number(row.vendor_count || 0),
+        rfqCount: Number(row.rfq_count || 0),
+        timestamp,
+      };
+    } catch (err) {
+      return {
+        isConfigured: true,
+        isConnected: false,
+        provider: 'cloudflare_d1',
+        providerLabel: 'Cloudflare D1',
+        poolStatus: 'UNREACHABLE',
+        database: 'enterprise-qua-d1',
+        latencyMs: Date.now() - startedAt,
+        userCount: 0,
+        vendorCount: 0,
+        rfqCount: 0,
+        errorMessage: err.message || 'D1 query failed.',
+        timestamp,
+      };
+    }
+  }
+
+  // No D1 binding — Node/Render deployment, or local dev. Falls back to the
+  // Neon/pg pool exactly as before.
+  const config = resolveConfig();
 
   if (!poolModule.pool || !config) {
     return {
@@ -233,32 +315,7 @@ async function checkDatabaseHealth() {
     // One round trip rather than three: the health check runs on every admin
     // page load and on boot, and three separate counts meant three billable
     // queries for one answer.
-    //
-    // Bounded with a hard timeout — confirmed live via `wrangler tail` that
-    // this occasionally hangs indefinitely (Neon compute cold-starting, or a
-    // stalled TCP socket the `pg` driver's own connectionTimeoutMillis
-    // doesn't cover, since that only bounds acquiring a connection, not a
-    // query already in flight on one). Cloudflare's runtime then hard-kills
-    // the whole request with an opaque "Worker hung" error instead of this
-    // catch block's normal isConnected:false response. A timeout here turns
-    // that into the same clean error response every other failure gets.
-    let timeoutHandle;
-    const timeout = new Promise((_, reject) => {
-      timeoutHandle = setTimeout(() => reject(new Error('Database health check timed out after 8000ms')), 8000);
-    });
-    let result;
-    try {
-      result = await Promise.race([
-        query(
-          `select (select count(*) from "user" where is_active = true) as user_count,
-              (select count(*) from vendors) as vendor_count,
-              (select count(*) from rfqs) as rfq_count`
-        ),
-        timeout,
-      ]);
-    } finally {
-      clearTimeout(timeoutHandle);
-    }
+    const result = await runHealthCheckQuery(() => query(HEALTH_CHECK_SQL));
     const row = (result.rows && result.rows[0]) || {};
     return {
       isConfigured: true,

@@ -368,6 +368,21 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
       await contextValue.refreshFromDB();
     });
 
+    // Call refreshFromDB with live azureHealth array
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        success: true,
+        data: {
+          azureHealth: [{ service: 'Database Live', status: 'Healthy' }],
+        },
+      }),
+    });
+    await act(async () => {
+      await contextValue.refreshFromDB();
+    });
+    expect(contextValue.azureHealth[0].service).toBe('Database Live');
+
     // Call refreshFromDB when data is empty object (takes all fallback branches)
     mockFetch.mockResolvedValueOnce({
       ok: true,
@@ -408,6 +423,84 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     await act(async () => {
       await contextValue.refreshFromDB();
     });
+
+    // Vendor subscription and payment links with vendor session
+    authClient.setSession(
+      { id: 'u-vendor-1', email: 'rajesh@apexindustrial.in', name: 'Rajesh Nair', role: 'vendor', orgId: 'org-v-1', orgName: 'Apex Industrial' },
+      'vendor-token'
+    );
+
+    // updateVendorSubscription network error
+    mockFetch.mockRejectedValueOnce(new Error('Sub network error'));
+    await act(async () => {
+      const netErrSub = await contextValue.updateVendorSubscription('connect');
+      expect(netErrSub).toBe(false);
+    });
+
+    // updateVendorSubscription failed response with error message
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      json: async () => ({ success: false, error: 'Cannot upgrade' }),
+    });
+    await act(async () => {
+      const failSub = await contextValue.updateVendorSubscription('connect');
+      expect(failSub).toBe(false);
+    });
+
+    // updateVendorSubscription failed response with no error message (fallback)
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      json: async () => ({ success: false }),
+    });
+    await act(async () => {
+      const failSubNoErr = await contextValue.updateVendorSubscription('connect');
+      expect(failSubNoErr).toBe(false);
+    });
+
+    // updateVendorSubscription successful response
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ success: true, data: { subscriptionPlan: 'select', rfqDownloadsUsed: 2 } }),
+    });
+    await act(async () => {
+      const okSub = await contextValue.updateVendorSubscription('select');
+      expect(okSub).toBe(true);
+    });
+
+    // createVendorPaymentLink failure
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      json: async () => ({ success: false, error: 'Gateway unavailable' }),
+    });
+    let failPayLink: string | null = null;
+    await act(async () => {
+      failPayLink = await contextValue.createVendorPaymentLink('select');
+    });
+    expect(failPayLink).toBeNull();
+
+    // createVendorPaymentLink success
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ success: true, data: { paymentUrl: 'https://pay.vendor.example.com' } }),
+    });
+    let okPayLink: string | null = null;
+    await act(async () => {
+      okPayLink = await contextValue.createVendorPaymentLink('select');
+    });
+    expect(okPayLink).toBe('https://pay.vendor.example.com');
+
+    // checkVendorPaymentLinkStatus
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ success: true, data: [{ id: 'v-link-1', status: 'PAID' }] }),
+    });
+    const vLinkStatus = await contextValue.checkVendorPaymentLinkStatus('v-link-1');
+    expect(vLinkStatus).toBe('PAID');
+
+    authClient.setSession(
+      { id: 'usr-buyer-001', email: 'buyer@procucev.com', name: 'Test Buyer', role: 'buyer', orgId: 'org-buyer-01', orgName: 'Test Buyer Org' },
+      'test-session-token'
+    );
   });
 
   it('handles role switching and tab defaults', async () => {
@@ -2407,6 +2500,10 @@ describe('lib/store.tsx - channel chasers and bids', () => {
     it('exercises payment link methods for buyer and vendor', async () => {
       const ctx = await mountStore();
 
+      // updateVendorSubscription when myVendor is missing
+      const noVendorSubRes = await ctx().updateVendorSubscription('connect');
+      expect(noVendorSubRes).toBe(false);
+
       // checkBuyerPaymentLinkStatus when activeBuyerAccount is null / present
       const nullBuyerLinkStatus = await ctx().checkBuyerPaymentLinkStatus('link-1');
       expect(nullBuyerLinkStatus).toBeNull();
@@ -2416,8 +2513,102 @@ describe('lib/store.tsx - channel chasers and bids', () => {
       expect(nullVendorLinkStatus).toBeNull();
 
       // createBuyerPaymentLink when activeBuyerAccount is missing
-      const noBuyerPayResult = await ctx().createBuyerPaymentLink('annual_pro');
+      let noBuyerPayResult: string | null = null;
+      await act(async () => {
+        noBuyerPayResult = await ctx().createBuyerPaymentLink('annual_pro');
+      });
       expect(noBuyerPayResult).toBeNull();
+
+      // Add a buyer account and test checkBuyerPaymentLinkStatus with active account
+      let acc: any;
+      act(() => {
+        acc = ctx().addBuyerAccount({
+          organizationName: 'Status Buyer',
+          corporateEmail: 'status@buyer.com',
+          industry: 'Industrial',
+          contactPerson: 'Status Person',
+          phone: '+91 9111111111',
+          sourcingMode: 'mode_1',
+          subscriptionPlan: 'version_1',
+          remainingFreeRFQs: 5,
+        });
+      });
+      act(() => {
+        ctx().alignActiveBuyerAccount(acc.id);
+      });
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ success: true, data: [{ id: 'link-1', status: 'PAID' }] }),
+      });
+      const activeBuyerLinkStatus = await ctx().checkBuyerPaymentLinkStatus('link-1');
+      expect(activeBuyerLinkStatus).toBe('PAID');
+
+      // Toggle theme between dark and light
+      act(() => {
+        ctx().toggleTheme();
+      });
+      expect(ctx().theme).toBe('dark');
+      act(() => {
+        ctx().toggleTheme();
+      });
+      expect(ctx().theme).toBe('light');
+    });
+
+    it('handles successful and failed createBuyerPaymentLink requests when buyer account exists', async () => {
+      const ctx = await mountStore();
+      let acc: any;
+      act(() => {
+        acc = ctx().addBuyerAccount({
+          organizationName: 'Buyer Corp',
+          corporateEmail: 'buyer@example.com',
+          industry: 'Tech',
+          contactPerson: 'Buyer Person',
+          phone: '+91 9999999999',
+          sourcingMode: 'mode_1',
+          subscriptionPlan: 'version_1',
+          remainingFreeRFQs: 5,
+        });
+      });
+      act(() => {
+        ctx().alignActiveBuyerAccount(acc.id);
+      });
+
+      mockFetch.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
+        const urlStr = String(url);
+        if (urlStr.includes('/subscription-payment')) {
+          const body = JSON.parse(init?.body || '{}');
+          if (body.plan === 'version_2') {
+            return Promise.resolve({
+              ok: false,
+              status: 400,
+              json: async () => ({ success: false, error: 'Payment gateway offline' }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({ success: true, data: { paymentUrl: 'https://pay.example.com/checkout' } }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true, data: {} }),
+        });
+      });
+
+      let payUrl: string | null = null;
+      await act(async () => {
+        payUrl = await ctx().createBuyerPaymentLink('version_1');
+      });
+      expect(payUrl).toBe('https://pay.example.com/checkout');
+
+      let failedPayUrl: string | null = null;
+      await act(async () => {
+        failedPayUrl = await ctx().createBuyerPaymentLink('version_2');
+      });
+      expect(failedPayUrl).toBeNull();
     });
   });
 });

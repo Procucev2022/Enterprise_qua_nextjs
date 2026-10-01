@@ -178,6 +178,14 @@ function resolveVendorConfig(env = process.env) {
 
 /** True when enough is configured to attempt a connection. */
 function isConfigured(config = resolveConfig()) {
+  // Each mailbox has its own Gmail API identity (buyer: GMAIL_*, vendor:
+  // VENDOR_GMAIL_*) — checking the wrong one would report the vendor
+  // gateway as configured just because the buyer's Gmail API happens to be
+  // set up, or vice versa.
+  const gmailApiConfigured = config.isVendorMailbox
+    ? mailerService.isVendorGmailApiConfigured()
+    : mailerService.isGmailApiConfigured();
+  if (gmailApiConfigured) return true;
   return !!(config.host && config.user && config.password);
 }
 
@@ -191,6 +199,12 @@ function isConfigured(config = resolveConfig()) {
  * Returns a message, or null when the combination looks sane.
  */
 function describeConfigurationFault(config = resolveConfig()) {
+  // The Gmail API path never opens an IMAP socket at all, so none of the
+  // IMAP-specific misconfiguration checks below apply to it.
+  const gmailApiConfigured = config.isVendorMailbox
+    ? mailerService.isVendorGmailApiConfigured()
+    : mailerService.isGmailApiConfigured();
+  if (gmailApiConfigured) return null;
   if (/^smtp\./i.test(config.host)) {
     return EMAIL_GATEWAY_MESSAGES.SMTP_HOST_CONFIGURED.replace('{host}', config.host);
   }
@@ -446,9 +460,37 @@ function processLineItemsAndGroups(lineItems, extraction = {}, buyerLocation = {
 }
 
 /**
+ * Detects a mail-system bounce/auto-reply (a delivery-failure notice for
+ * something the gateway itself sent), so it is never mistaken for a genuine
+ * unauthorized sender.
+ *
+ * This matters beyond mislabeling: treating a bounce as an unauthorized
+ * sender makes resolveSenderAuthorisation's rejection path fire another
+ * outbound "unauthorized buyer" notification email BACK to the bounce
+ * address — which bounces again, generating another copy of the same
+ * message. Confirmed live: since SENDER_NOT_ALLOWED is deliberately never
+ * marked read (so a human can review a genuine unauthorized sender), an
+ * unrecognized bounce is never marked read either, so the exact same
+ * handful of bounce messages got reprocessed and re-notified on every
+ * single poll cycle indefinitely — sending far more mail than any real
+ * traffic would, which is what actually rate-limited the Gmail API account
+ * this ran under, blocking every other outbound/poll operation behind it.
+ */
+function isBounceOrAutoReplyMessage(message) {
+  if (!message) return false;
+  const fromAddress = String(message.fromAddress || '').trim().toLowerCase();
+  if (/^(postmaster|mailer-daemon|mail-daemon|bounce[s]?)@/.test(fromAddress)) return true;
+  const subject = String(message.subject || '').trim().toLowerCase();
+  if (/^(undeliverable|delivery status notification|mail delivery failed|returned mail|failure notice)/.test(subject)) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Extract referenced RFQ number and lookup target RFQ from subject, body, or thread references.
  */
-function extractRfqReferenceFromEmail(message) {
+async function extractRfqReferenceFromEmail(message) {
   if (!message) return { targetRfq: null, referencedNumber: null };
   const sources = [
     message.subject || '',
@@ -479,8 +521,14 @@ function extractRfqReferenceFromEmail(message) {
     candidates.push(trimmed.toUpperCase());
   }
 
+  // getRFQByIdAsync, not the plain in-memory getRFQById — the same Workers
+  // isolate-cache-staleness bug fixed in rfqController.addQuote applies here
+  // too: confirmed live, a vendor's quote-reply email referencing a real,
+  // currently-open RFQ number came back INVALID_RFQ ("was not found in the
+  // system") on whichever isolate the cron tick happened to run on, purely
+  // because that isolate hadn't hydrated that particular RFQ.
   for (const cand of candidates) {
-    const foundRfq = storeService.getRFQById(cand);
+    const foundRfq = await storeService.getRFQByIdAsync(cand);
     if (foundRfq) return { targetRfq: foundRfq, referencedNumber: foundRfq.rfqNumber || cand };
   }
   return { targetRfq: null, referencedNumber: (candidates[0] || rawMatches[0].trim()).toUpperCase() };
@@ -504,11 +552,16 @@ function isOutgoingSystemMessage(message, config = {}) {
     process.env.SMTP_USER ||
     'rfqprocucev@gmail.com'
   ).trim().toLowerCase();
+  // The Gmail API buyer identity (used both to send and, now, to poll) is a
+  // separate credential from EMAIL_GATEWAY_USER/SMTP_USER — read from its
+  // own var rather than assuming it matches either.
+  const gmailApiUser = String(process.env.GMAIL_SENDER_EMAIL || '').trim().toLowerCase();
 
   return (
     senderEmail === mailboxUser ||
     senderEmail === vendorUser ||
     senderEmail === buyerUser ||
+    (gmailApiUser && senderEmail === gmailApiUser) ||
     senderEmail === 'srinu20252026@gmail.com' ||
     senderEmail === 'rfqprocucev@gmail.com'
   );
@@ -525,11 +578,13 @@ async function resolveVendorFromEmail(fromAddress, targetRfq = null) {
 
   const vendorGatewayAddr = (process.env.VENDOR_EMAIL_GATEWAY_ADDRESS || process.env.VENDOR_EMAIL_GATEWAY_USER || 'srinu20252026@gmail.com').toLowerCase();
   const buyerGatewayAddr = (process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || 'rfqprocucev@gmail.com').toLowerCase();
+  const gmailApiAddr = String(process.env.GMAIL_SENDER_EMAIL || '').trim().toLowerCase();
 
   // Internal gateway accounts can NEVER be a vendor
   if (
     email === vendorGatewayAddr ||
     email === buyerGatewayAddr ||
+    (gmailApiAddr && email === gmailApiAddr) ||
     email === 'srinu20252026@gmail.com' ||
     email === 'rfqprocucev@gmail.com'
   ) {
@@ -575,6 +630,18 @@ async function resolveVendorFromEmail(fromAddress, targetRfq = null) {
   }
 
   return null;
+}
+
+function isVendorIssueOrQueryMessage(message) {
+  if (!message) return false;
+  const text = [message.bodyText, message.textBody, message.text, message.subject].filter(Boolean).join('\n').toLowerCase();
+  const issueKeywords = [
+    /\b(issue|query|clarification|doubt|question|enquiry|inquiry|concern|problem)\b/i,
+    /\b(unable to quote|cannot quote|cannot provide|drawing missing|specification unclear|datasheet missing|specs missing)\b/i,
+    /\b(please clarify|could you explain|please confirm|request for clarification|need more info|more details required)\b/i,
+    /\b(delivery location unclear|payment terms query|not able to bid|technical question)\b/i,
+  ];
+  return issueKeywords.some((pattern) => pattern.test(text));
 }
 
 /**
@@ -641,6 +708,58 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
 
   const rfqItems = targetRfq.extractedEntities || targetRfq.lineItems || [];
   const rfqQty = rfqItems.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0) || 1;
+
+  const emailText = [message.bodyText, message.textBody, message.text, message.subject].filter(Boolean).join('\n');
+  const isIssueOrQuery = isVendorIssueOrQueryMessage(message) || Boolean(extraction && (extraction.isQuery || extraction.hasIssue || extraction.isInquiry));
+
+  if (isIssueOrQuery) {
+    logger.warn(
+      `Vendor reply from ${vendorRecord.name} for RFQ ${targetRfq.rfqNumber} identified as an issue/query. Failing quotation creation and withholding bid generation.`,
+      { rfqNumber: targetRfq.rfqNumber, vendorId: vendorRecord.id, fromAddress: message.fromAddress },
+      'EMAIL_GATEWAY'
+    );
+
+    storeService.addAuditLog({
+      userEmail: message.fromAddress || SYSTEM_ACTOR_EMAIL,
+      action: `Quotation creation failed for ${targetRfq.rfqNumber} from ${vendorRecord.name}: Reply identified as vendor issue/query. Bid not generated.`,
+      rfqNumber: targetRfq.rfqNumber,
+    });
+
+    if (typeof storeService.addInquiryToRFQ === 'function') {
+      try {
+        storeService.addInquiryToRFQ(targetRfq.id, {
+          message: emailText,
+          vendorName: vendorRecord.name,
+          vendorEmail: message.fromAddress,
+          vendorId: vendorRecord.id,
+        });
+      } catch (inqErr) {
+        logger.error('Failed to log vendor inquiry to RFQ', inqErr, 'EMAIL_GATEWAY');
+      }
+    }
+
+    try {
+      await mailerService.sendVendorIssueAcknowledgementEmail(message.fromAddress, {
+        rfq: targetRfq,
+        rfqNumber: targetRfq.rfqNumber,
+        rfqTitle: targetRfq.title,
+        vendorName: vendorRecord.name,
+        issueMessage: emailText.slice(0, 500),
+        reason: 'Quotation creation has failed and no bid was generated because your email contains an issue or clarification query regarding the RFQ.',
+        cc: ccList.length > 0 ? ccList.join(', ') : undefined,
+      });
+    } catch (mailErr) {
+      logger.error('Failed to send vendor issue acknowledgment email', mailErr, 'EMAIL_GATEWAY');
+    }
+
+    return {
+      status: INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED,
+      detail: `Quotation creation failed for RFQ ${targetRfq.rfqNumber} from ${vendorRecord.name}: Vendor replied with an issue or query. Quotation has not been generated and buyer has been notified in CC.`,
+      message,
+      rfq: targetRfq,
+      isIssueOrQuery: true,
+    };
+  }
 
   let unitPriceNum = Number(extraction.unitPrice);
   if ((!extraction.unitPrice || isNaN(unitPriceNum) || unitPriceNum <= 0) && Number(extraction.totalPrice) > 0) {
@@ -831,6 +950,19 @@ async function processMessage(rawSource, config = resolveConfig()) {
     };
   }
 
+  // A bounce/auto-reply is never a real unauthorized sender — see
+  // isBounceOrAutoReplyMessage's own comment for the notification-loop this
+  // prevents. Reported the same way as an outgoing system message: marked
+  // read, no reply sent.
+  if (isBounceOrAutoReplyMessage(message)) {
+    logger.info(`Skipping mail-system bounce/auto-reply from ${message.fromAddress}`, { subject: message.subject }, 'EMAIL_GATEWAY');
+    return {
+      status: INGESTION_OUTCOME.SKIPPED_OUTBOUND,
+      detail: 'Skipped mail-system bounce/auto-reply notice',
+      message,
+    };
+  }
+
   const gatewayOwnAddresses = new Set(
     [config.address, config.user].filter(Boolean).map((a) => String(a).trim().toLowerCase())
   );
@@ -848,7 +980,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
   }
 
   // 1. Check if this message is a vendor quotation reply for an existing RFQ
-  const { targetRfq, referencedNumber } = extractRfqReferenceFromEmail(message);
+  const { targetRfq, referencedNumber } = await extractRfqReferenceFromEmail(message);
   const vendorRecord = await resolveVendorFromEmail(message.fromAddress, targetRfq);
 
   if (targetRfq && vendorRecord) {
@@ -1038,6 +1170,151 @@ async function processMessage(rawSource, config = resolveConfig()) {
 }
 
 /**
+ * Read the buyer intake mailbox once via the Gmail REST API instead of IMAP.
+ *
+ * IMAP cannot hold a reliable socket open from Cloudflare Workers at all —
+ * confirmed live: every scheduled poll here failed with "Unexpected close" /
+ * "NoConnection", the same category of TLS-socket limitation that made raw
+ * SMTP unusable for outbound mail (see mailerService.deliverVendor's own
+ * Gmail-API fallback for that story). The Gmail API is plain HTTPS, so it
+ * works from Workers the same way any other fetch call does.
+ *
+ * Shares the exact same processMessage()/emailGatewayQueries ledger as the
+ * IMAP path below — this is only a different transport for fetching
+ * messages, not a second parsing pipeline. Uses navin.procucev@gmail.com
+ * (whatever GMAIL_SENDER_EMAIL/GMAIL_REFRESH_TOKEN actually point to — no
+ * address is hardcoded here) via the same Gmail OAuth client outbound mail
+ * already uses, so the refresh token needs the gmail.readonly and
+ * gmail.modify scopes in addition to gmail.send (re-authorize via
+ * scripts/get-gmail-refresh-token.js if the existing token predates this).
+ */
+async function pollViaGmailApi(config = resolveConfig()) {
+  if (runtime.isPolling) {
+    return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.POLL_ALREADY_RUNNING };
+  }
+  const auth = mailerService.getGmailOAuthClient();
+  if (!auth) {
+    return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
+  }
+
+  const { google } = require('googleapis');
+  const gmail = google.gmail({ version: 'v1', auth });
+
+  runtime.isPolling = true;
+  runtime.consideredThisRun = 0;
+  runtime.ingestedThisRun = 0;
+  const startedAt = Date.now();
+  const outcomes = [];
+
+  try {
+    // Deliberately NOT bounded by runtime.watchingSince the way the IMAP
+    // path below is — confirmed live this genuinely breaks on Workers:
+    // `runtime` is plain in-memory module state, and Cloudflare spins up a
+    // fresh isolate (resetting it to "now") far more often than a Node
+    // process restarts, so `after:<watchingSince>` silently excluded mail
+    // sent just seconds earlier in the *previous* isolate — every poll
+    // reported considered:0 for a message that was genuinely sitting
+    // unread. `is:unread` + maxPerPoll + our own ledger dedupe
+    // (emailGatewayQueries.hasProcessed, checked per message below) are
+    // sufficient for correctness without a time bound that can't be kept
+    // reliably on this platform; a pre-existing backlog is handled by
+    // marking it read once out of band, not by a bound in this query.
+    const listRes = await gmail.users.messages.list({
+      userId: 'me',
+      q: 'is:unread',
+      maxResults: config.maxPerPoll,
+    });
+    runtime.lastConnectedAt = new Date().toISOString();
+
+    const messages = listRes.data.messages || [];
+    for (const ref of messages) {
+      runtime.consideredThisRun += 1;
+      // Gmail's own message id is already a stable per-message identifier —
+      // no envelope Message-ID header to fall back to parsing here first,
+      // unlike the IMAP path.
+      const dedupeKey = `gmail-${ref.id}`;
+      try {
+        // Ours is the authoritative dedupe check; see emailGatewayQueries.
+        if (await emailGatewayQueries.hasProcessed(dedupeKey)) {
+          await gmail.users.messages
+            .modify({ userId: 'me', id: ref.id, requestBody: { removeLabelIds: ['UNREAD'] } })
+            .catch(() => {});
+          outcomes.push({ uid: ref.id, messageId: dedupeKey, status: EMAIL_GATEWAY_MESSAGES.ALREADY_PROCESSED });
+          continue;
+        }
+
+        const full = await gmail.users.messages.get({ userId: 'me', id: ref.id, format: 'raw' });
+        if (!full.data || !full.data.raw) {
+          outcomes.push({ uid: ref.id, status: INGESTION_OUTCOME.UNREADABLE });
+          continue;
+        }
+        const rawSource = Buffer.from(full.data.raw, 'base64url');
+
+        const result = await emailGateway.processMessage(rawSource, config);
+        const resolvedMessageId = (result.message && result.message.messageId) || dedupeKey;
+
+        await emailGatewayQueries.recordProcessed({
+          messageId: resolvedMessageId,
+          status: result.status,
+          detail: result.detail,
+          fromAddress: result.message ? result.message.fromAddress : null,
+          subject: result.message ? result.message.subject : null,
+          rfqId: result.rfq ? result.rfq.id : null,
+          rfqNumber:
+            result.rfqs && result.rfqs.length > 1
+              ? result.rfqs.map((r) => r.rfqNumber).join(', ')
+              : result.rfq
+              ? result.rfq.rfqNumber
+              : null,
+        });
+
+        if (
+          result.status === INGESTION_OUTCOME.INGESTED ||
+          result.status === INGESTION_OUTCOME.QUOTE_INGESTED ||
+          result.status === INGESTION_OUTCOME.CREDITS_EXHAUSTED ||
+          result.status === INGESTION_OUTCOME.SKIPPED_OUTBOUND
+        ) {
+          if (result.status !== INGESTION_OUTCOME.SKIPPED_OUTBOUND && result.status !== INGESTION_OUTCOME.CREDITS_EXHAUSTED) {
+            runtime.ingestedThisRun += 1;
+          }
+          // Marked read only for a message we actually acted on, and only after
+          // the ledger write, so a failed write leaves it to be retried — same
+          // ordering the IMAP path uses and for the same reason.
+          await gmail.users.messages.modify({ userId: 'me', id: ref.id, requestBody: { removeLabelIds: ['UNREAD'] } });
+        }
+        outcomes.push({ uid: ref.id, messageId: resolvedMessageId, status: result.status });
+      } catch (err) {
+        logger.error('Inbound message could not be processed (Gmail API)', err, 'EMAIL_GATEWAY');
+        await emailGatewayQueries
+          .recordProcessed({ messageId: dedupeKey, status: INGESTION_OUTCOME.FAILED, detail: err.message })
+          .catch(() => {});
+        outcomes.push({ uid: ref.id, messageId: dedupeKey, status: INGESTION_OUTCOME.FAILED });
+      }
+    }
+
+    runtime.lastError = null;
+    return {
+      skipped: false,
+      considered: runtime.consideredThisRun,
+      ingested: runtime.ingestedThisRun,
+      pending: Math.max((listRes.data.resultSizeEstimate || messages.length) - messages.length, 0),
+      outcomes,
+    };
+  } catch (err) {
+    // An API or auth failure (e.g. an insufficiently-scoped refresh token).
+    // Reported through status rather than thrown, same convention as the
+    // IMAP path, so the panel can explain it and the interval keeps trying.
+    runtime.lastError = err.message;
+    logger.error(`Email gateway poll failed (Gmail API): ${err.message}`, err, 'EMAIL_GATEWAY');
+    return { skipped: false, error: err.message, considered: runtime.consideredThisRun, outcomes };
+  } finally {
+    runtime.isPolling = false;
+    runtime.lastPollAt = new Date().toISOString();
+    runtime.lastPollDurationMs = Date.now() - startedAt;
+  }
+}
+
+/**
  * Read the mailbox once and ingest whatever is new.
  *
  * Only unseen messages are fetched, and only up to `maxPerPoll` per run so a
@@ -1053,6 +1330,13 @@ async function processMessage(rawSource, config = resolveConfig()) {
 async function pollOnce(config = resolveConfig()) {
   if (runtime.isPolling) {
     return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.POLL_ALREADY_RUNNING };
+  }
+  // Prefer the Gmail API whenever it's configured — see pollViaGmailApi's
+  // own comment for why IMAP can't be relied on from Workers at all. IMAP
+  // stays as the fallback for a non-Workers deployment (local dev / Render)
+  // with no Gmail API credentials set up.
+  if (mailerService.isGmailApiConfigured()) {
+    return emailGateway.pollViaGmailApi(config);
   }
   if (!isConfigured(config)) {
     return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
@@ -1586,6 +1870,7 @@ const emailGateway = {
   processVendorQuoteMessage,
   processMessage,
   pollOnce,
+  pollViaGmailApi,
   pollVendorOnce,
   pollBothInboxesOnce,
   startPolling,

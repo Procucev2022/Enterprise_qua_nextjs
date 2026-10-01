@@ -13,11 +13,19 @@ const identityQueries = require('../db/identityQueries');
 const { getWaitUntil } = require('../db/d1Bridge');
 const { createAuditEntry, verifyAuditTrail } = require('./auditService');
 const { evaluateQuotes, calculate360Evaluation, calculateRevisedRating } = require('./evaluationService');
-const { simulateChaserOutreach } = require('./aiChaserService');
+const { simulateChaserOutreach, generateAIFeedItem } = require('./aiChaserService');
 // Called through the namespace so tests can stub the senders without rewiring
 // storeService; every send is fire-and-forget and no-ops under test / when SMTP
 // is unconfigured.
 const mailerService = require('./mailerService');
+// Real multi-channel outreach services — both are fire-and-forget and
+// no-op under test (NODE_ENV === 'test') or when credentials are not
+// configured, matching the same pattern mailerService uses above.
+const whatsAppService = require('./whatsAppService');
+const smsService = require('./smsService');
+// Timed chaser scheduler — schedules WhatsApp (immediate), SMS (+5 min),
+// and reminder email (+24 h) for every vendor on an RFQ.
+const rfqChaserScheduler = require('./rfqChaserScheduler');
 const { logger } = require('./loggerService');
 
 // Bound on the vendors table read at boot hydration (see hydrateFromDB) —
@@ -43,6 +51,22 @@ class StoreService {
     //
     // An empty collection now means exactly that — no rows — and is reported as
     // such rather than back-filled.
+    this.buyerAccounts = [];
+    this.activeBuyerAccount = null;
+    this.vendors = [];
+    this.rfqs = [];
+    this.evaluations = [];
+    this.auditLogs = [];
+    this.aiFeed = [];
+    this.notifications = [];
+    this.vendorCatalogue = [];
+    this.paymentLinks = [];
+    this.systemConfig = JSON.parse(JSON.stringify(INITIAL_SYSTEM_CONFIG));
+    this.azureHealth = JSON.parse(JSON.stringify(INITIAL_AZURE_HEALTH));
+    this.isHydratedFromDB = false;
+  }
+
+  reset() {
     this.buyerAccounts = [];
     this.activeBuyerAccount = null;
     this.vendors = [];
@@ -910,11 +934,11 @@ class StoreService {
   }
 
   deleteVendor(id, actorEmail = null) {
-    const target = this.vendors.find((v) => v.id === id);
+    const target = this.vendors.find((v) => v.id === id || v.email === id);
     const beforeLen = this.vendors.length;
-    this.vendors = this.vendors.filter((v) => v.id !== id);
+    this.vendors = this.vendors.filter((v) => v.id !== id && v.email !== id);
     if (this.vendors.length < beforeLen) {
-      this._removeVendor(id);
+      this._removeVendor(target ? target.id : id);
       // Deletion was the only vendor mutation that wrote no audit entry, so a
       // vendor disappearing from the master left no record of who removed it or
       // when — the addVendor and updateVendor paths both log, and the removal of
@@ -927,6 +951,8 @@ class StoreService {
     }
     return false;
   }
+
+
 
   /**
    * Check whether a vendor is eligible to submit a quotation for an RFQ.
@@ -1292,7 +1318,38 @@ class StoreService {
   // ==========================================
   // 3. RFQS
   // ==========================================
+  /**
+   * Checks all open RFQs that have reached 48 hours after release and officially closes them,
+   * triggering final comparison evaluation email and SMS acknowledgment to the buyer.
+   */
+  checkAndClose48HourRFQs() {
+    const now = Date.now();
+    const fortyEightHoursMs = 48 * 60 * 60 * 1000;
+    const closedList = [];
+
+    for (let i = 0; i < this.rfqs.length; i++) {
+      const rfq = this.rfqs[i];
+      if (rfq && rfq.status !== 'Closed') {
+        const createdMs = rfq.createdAt ? new Date(rfq.createdAt).getTime() : 0;
+        if (createdMs > 0 && now - createdMs >= fortyEightHoursMs) {
+          const updated = {
+            ...rfq,
+            status: 'Closed',
+            closedAt: new Date(now).toISOString(),
+            closedReason: 'Official closure 48 hours after release',
+          };
+          this.rfqs[i] = updated;
+          this._persistRFQ(updated);
+          this.notifyOfRFQClosure(updated);
+          closedList.push(updated);
+        }
+      }
+    }
+    return closedList;
+  }
+
   getRFQs() {
+    this.checkAndClose48HourRFQs();
     return this.rfqs.map((r) => (r.quotes ? { ...r, quotes: evaluateQuotes(r.quotes) } : r));
   }
 
@@ -1459,18 +1516,80 @@ class StoreService {
         whatsappStats: { total: 0, delivered: 0, read: 0, replied: 0 },
         smsStats: { total: 0, delivered: 0, clicked: 0 },
         autoChasingEnabled: true,
-        vendors: Array.isArray(rfqData.assignedVendors) ? rfqData.assignedVendors : [],
       },
     };
 
-    // Category-based vendor invite for Version 1 (mode_1) and Version 2
-    // (mode_2): every vendor whose major/minor category matches this RFQ is
-    // merged into assignedVendors, in addition to whatever the client
-    // already supplied (e.g. the buyer's own private roster). Reuses
+    // Verify each vendor in assignedVendors against the RFQ's category signals.
+    // If a vendor does not match the category:
+    // 1. Exclude the vendor from the RFQ vendor shortlist (assignedVendors).
+    // 2. Dispatch an email to the vendor requesting them to update their category/business details.
+    // 3. Record an audit log.
+    const rfqCategorySignals = this._rfqCategorySignals(newRFQ);
+    const buyerEmail = requestingBuyerAccount ? requestingBuyerAccount.corporateEmail : rfqData.raisedByEmail || null;
+    if (rfqCategorySignals.length > 0 && Array.isArray(newRFQ.assignedVendors) && newRFQ.assignedVendors.length > 0) {
+      const shortlisted = [];
+      const mismatched = [];
+
+      for (const v of newRFQ.assignedVendors) {
+        const resolved = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
+        const hasCategory = resolved.majorCategory || (Array.isArray(resolved.minorCategories) && resolved.minorCategories.length > 0);
+        const isMatch = !hasCategory || rfqCategorySignals.some((sig) => this.vendorCoversCategory(resolved, sig));
+        if (isMatch) {
+          shortlisted.push(v);
+        } else {
+          mismatched.push(resolved);
+        }
+      }
+
+      newRFQ.assignedVendors = shortlisted;
+      if (newRFQ.followUpData) {
+        newRFQ.followUpData.totalInvited = shortlisted.length;
+        newRFQ.followUpData.vendors = shortlisted;
+      }
+
+      for (const vendor of mismatched) {
+        const vendorEmail = vendor.email || (vendor.id && vendor.id.includes('@') ? vendor.id : null);
+        if (vendorEmail) {
+          this._background(
+            mailerService.sendVendorCategoryMismatchEmail(vendorEmail, {
+              rfq: newRFQ,
+              rfqNumber,
+              rfqTitle: newRFQ.title,
+              rfqCategory: newRFQ.category || rfqCategorySignals[0] || 'Procurement Category',
+              vendorName: vendor.contactPerson || vendor.name,
+              vendorCurrentCategory: vendor.majorCategory || (Array.isArray(vendor.minorCategories) ? vendor.minorCategories.join(', ') : 'Not specified'),
+              buyerAccountName: newRFQ.buyerAccountName,
+              buyerEmail,
+              cc: buyerEmail || undefined,
+            }),
+            'Failed to email category mismatch notice to vendor'
+          );
+        }
+        this.addAuditLog({
+          userEmail: buyerEmail || SYSTEM_ACTOR_EMAIL,
+          action: `Vendor ${vendor.name || vendor.id} excluded from RFQ shortlist due to category mismatch. Category update request sent.`,
+          rfqNumber,
+        });
+      }
+    }
+
+    // Category-based network-wide vendor invite — Version 2 (mode_2, "Hybrid
+    // Sourcing Pool: Private Roster + AI Routing") ONLY. Every vendor whose
+    // major/minor category matches this RFQ is merged into assignedVendors,
+    // in addition to whatever the client already supplied. Reuses
     // candidateVendorsForRFQ (same category-match rule the CM's invite
-    // picker uses) — this bypasses the invite-only requirement deliberately
-    // for these two modes only.
-    if (newRFQ.sourcingMode === 'mode_1' || newRFQ.sourcingMode === 'mode_2') {
+    // picker uses) — this bypasses the invite-only requirement deliberately,
+    // but only for mode_2, which is explicitly advertised to buyers as
+    // hybrid. Version 1 (mode_1) is advertised as "🔒 Private Roster Only" /
+    // "strictly dispatched to your private, pre-approved supplier network"
+    // (see ingestion-wizard.tsx) — this used to also run for mode_1, quietly
+    // pulling in network-wide vendors having nothing to do with the buyer's
+    // own roster and breaking that explicit promise (confirmed live: a
+    // vendor never added to a buyer's private roster received a mode_1 RFQ
+    // meant to stay strictly private). mode_1 now only ever gets whatever
+    // the client-supplied assignedVendors already contains (the buyer's own
+    // roster, category-filtered on the frontend).
+    if (newRFQ.sourcingMode === 'mode_2') {
       // Capped: a bulk-imported category can match thousands of vendors (seen
       // live: 3000+ on a single RFQ, a 787KB payload) — embedding all of them
       // in assignedVendors on every future read of this RFQ is exactly the
@@ -1486,7 +1605,7 @@ class StoreService {
         (a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0)
       );
 
-      if (newRFQ.sourcingMode === 'mode_2' && newRFQ.deliveryPincode) {
+      if (newRFQ.deliveryPincode) {
         const MAX_MODE2_PINCODE_INVITES = 100;
         const targetPincode = String(newRFQ.deliveryPincode).trim();
         const pincodeMatches = categoryMatches.filter(
@@ -1543,10 +1662,41 @@ class StoreService {
       });
     }
 
+    // System event for RFQ creation
+    this.addAIFeedItem(
+      generateAIFeedItem({
+        type: 'ingestion',
+        title: `Autonomous Sourcing Engine Initialized: ${rfqNumber}`,
+        message: `RFQ ${rfqNumber} created with ${(newRFQ.extractedEntities || []).length} line items. Multi-channel AI chasers dispatched across ${(newRFQ.assignedVendors || []).length} vendor(s).`,
+        recipient: 'Procurement AI Orchestrator',
+        rfqNumber,
+        buyerAccountId: newRFQ.buyerAccountId,
+      })
+    );
+
     // In-app alert to every vendor whose category covers this RFQ, and an email
     // to the top matched vendors (same category, ranked by pincode + tier).
     this.notifyVendorsOfNewRFQ(newRFQ);
     this.emailRFQToMatchedVendors(newRFQ);
+
+    // Timed multi-channel chaser sequence for every assigned vendor:
+    //   • WhatsApp — immediate
+    //   • SMS      — +5 minutes
+    //   • Email    — +24 hours (reminder alongside the upfront invite above)
+    // Only fires for mode_1 and mode_2 (mode_3 has no auto-assigned vendors
+    // at creation time; inviteVendorsToRFQ schedules chasers when they are
+    // manually added later).
+    if (
+      (newRFQ.sourcingMode === 'mode_1' || newRFQ.sourcingMode === 'mode_2') &&
+      Array.isArray(newRFQ.assignedVendors) &&
+      newRFQ.assignedVendors.length > 0
+    ) {
+      rfqChaserScheduler.scheduleRFQChasers(
+        newRFQ,
+        newRFQ.assignedVendors,
+        (vendor) => this.checkVendorQuotationEligibility(vendor)
+      );
+    }
 
     return newRFQ;
   }
@@ -1555,6 +1705,7 @@ class StoreService {
     const idx = this.rfqs.findIndex((r) => r.id === id || r.rfqNumber === id);
     if (idx === -1) return null;
 
+    const oldStatus = this.rfqs[idx].status;
     let quotes = updates.quotes ? evaluateQuotes(updates.quotes) : this.rfqs[idx].quotes;
 
     const updated = {
@@ -1565,6 +1716,16 @@ class StoreService {
     };
     this.rfqs[idx] = updated;
     this._persistRFQ(updated);
+
+    if (updates.status === 'Closed' && oldStatus !== 'Closed') {
+      this.notifyOfRFQClosure(updated);
+    } else if (
+      (updates.status === 'AI Recommended' || updates.status === 'In Evaluation') &&
+      oldStatus !== updates.status &&
+      updated.quotesCount >= 1
+    ) {
+      this.notifyBuyerOfFinalComparison(updated);
+    }
 
     return updated;
   }
@@ -1623,11 +1784,198 @@ class StoreService {
     return updated;
   }
 
+  addInquiryToRFQ(rfqId, inquiry) {
+    const rfq = this.getRFQById(rfqId);
+    if (!rfq) return null;
+
+    const existingInquiries = Array.isArray(rfq.inquiries) ? rfq.inquiries : [];
+    const timestamp = inquiry.createdAt || new Date().toISOString();
+    const vendorEmail = inquiry.vendorEmail || null;
+    const vendorName = inquiry.vendorName || 'Vendor Partner';
+    const vendorId = inquiry.vendorId || null;
+
+    const chatMsg = {
+      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      senderRole: 'vendor',
+      senderName: vendorName,
+      senderEmail: vendorEmail,
+      message: inquiry.message || '',
+      timestamp,
+    };
+
+    // Check if there is an existing thread for this vendor
+    const existingIndex = existingInquiries.findIndex(
+      (inq) =>
+        (vendorId && inq.vendorId === vendorId) ||
+        (vendorEmail && inq.vendorEmail && inq.vendorEmail.toLowerCase() === vendorEmail.toLowerCase()) ||
+        (inq.vendorName && inq.vendorName.toLowerCase() === vendorName.toLowerCase())
+    );
+
+    let updatedInquiry;
+    let inquiries;
+
+    if (existingIndex !== -1) {
+      const target = existingInquiries[existingIndex];
+      const prevMsgs = Array.isArray(target.messages) && target.messages.length > 0
+        ? target.messages
+        : [
+            {
+              id: `msg-${target.id}-orig`,
+              senderRole: 'vendor',
+              senderName: target.vendorName,
+              senderEmail: target.vendorEmail,
+              message: target.message,
+              timestamp: target.createdAt,
+            },
+            ...(target.reply
+              ? [
+                  {
+                    id: `msg-${target.id}-reply`,
+                    senderRole: 'buyer',
+                    senderName: target.repliedBy || 'Procurement Team',
+                    message: target.reply,
+                    timestamp: target.repliedAt || target.createdAt,
+                  },
+                ]
+              : []),
+          ];
+
+      updatedInquiry = {
+        ...target,
+        message: inquiry.message || target.message,
+        createdAt: timestamp,
+        status: 'open',
+        messages: [...prevMsgs, chatMsg],
+      };
+      existingInquiries[existingIndex] = updatedInquiry;
+      inquiries = existingInquiries;
+    } else {
+      updatedInquiry = {
+        id: inquiry.id || `inq-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        rfqNumber: rfq.rfqNumber,
+        rfqId: rfq.id,
+        vendorId,
+        vendorName,
+        vendorEmail,
+        message: inquiry.message || '',
+        createdAt: timestamp,
+        status: 'open',
+        messages: [chatMsg],
+      };
+      inquiries = [...existingInquiries, updatedInquiry];
+    }
+
+    rfq.inquiries = inquiries;
+    const updated = this.updateRFQ(rfq.id, { inquiries });
+
+    this.addFeedItem({
+      type: 'system',
+      channel: 'email',
+      title: `Vendor Clarification on ${rfq.rfqNumber}`,
+      message: `${vendorName} asked: "${inquiry.message.slice(0, 120)}"`,
+      recipient: rfq.raisedByEmail || rfq.buyerAccountName,
+      rfqNumber: rfq.rfqNumber,
+    });
+
+    this.addAuditLog({
+      action: `Inquiry / Clarification submitted by ${vendorName} on ${rfq.rfqNumber}: "${inquiry.message.slice(0, 100)}"`,
+      rfqNumber: rfq.rfqNumber,
+      userEmail: vendorEmail || 'system@procucev.ai',
+    });
+
+    // Notify buyer
+    if (rfq.buyerAccountId) {
+      this.notifyBuyerOfInquiry(rfq, updatedInquiry);
+    }
+
+    return { updatedRfq: updated, inquiry: updatedInquiry };
+  }
+
+  replyToRFQInquiry(rfqId, inquiryId, replyData) {
+    const rfq = this.getRFQById(rfqId);
+    if (!rfq) return null;
+
+    const existingInquiries = Array.isArray(rfq.inquiries) ? rfq.inquiries : [];
+    const inqIndex = existingInquiries.findIndex((i) => i.id === inquiryId);
+    if (inqIndex === -1) return null;
+
+    const target = existingInquiries[inqIndex];
+    const timestamp = new Date().toISOString();
+    const repliedBy = replyData.repliedBy || 'Procurement Officer';
+
+    const prevMsgs = Array.isArray(target.messages) && target.messages.length > 0
+      ? target.messages
+      : [
+          {
+            id: `msg-${target.id}-orig`,
+            senderRole: 'vendor',
+            senderName: target.vendorName,
+            senderEmail: target.vendorEmail,
+            message: target.message,
+            timestamp: target.createdAt,
+          },
+          ...(target.reply
+            ? [
+                {
+                  id: `msg-${target.id}-reply`,
+                  senderRole: 'buyer',
+                  senderName: target.repliedBy || 'Procurement Team',
+                  message: target.reply,
+                  timestamp: target.repliedAt || target.createdAt,
+                },
+              ]
+            : []),
+        ];
+
+    const replyMsg = {
+      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      senderRole: 'buyer',
+      senderName: repliedBy,
+      message: replyData.reply || '',
+      timestamp,
+    };
+
+    const updatedInquiry = {
+      ...target,
+      reply: replyData.reply || '',
+      repliedAt: timestamp,
+      repliedBy,
+      status: 'answered',
+      messages: [...prevMsgs, replyMsg],
+    };
+
+    existingInquiries[inqIndex] = updatedInquiry;
+    rfq.inquiries = existingInquiries;
+    const updated = this.updateRFQ(rfq.id, { inquiries: existingInquiries });
+
+    this.addFeedItem({
+      type: 'system',
+      channel: 'email',
+      title: `Clarification Answered on ${rfq.rfqNumber}`,
+      message: `Buyer replied to ${updatedInquiry.vendorName}: "${(replyData.reply || '').slice(0, 120)}"`,
+      recipient: updatedInquiry.vendorEmail || updatedInquiry.vendorName,
+      rfqNumber: rfq.rfqNumber,
+    });
+
+    this.addAuditLog({
+      action: `Buyer replied to vendor inquiry on ${rfq.rfqNumber} for ${updatedInquiry.vendorName}: "${(replyData.reply || '').slice(0, 100)}"`,
+      rfqNumber: rfq.rfqNumber,
+      userEmail: replyData.repliedByEmail || 'system@procucev.ai',
+    });
+
+    return { updatedRfq: updated, inquiry: updatedInquiry };
+  }
+
   deleteRFQ(id) {
     const beforeLen = this.rfqs.length;
     this.rfqs = this.rfqs.filter((r) => r.id !== id && r.rfqNumber !== id);
     const removed = this.rfqs.length < beforeLen;
-    if (removed) this._removeRFQ(id);
+    if (removed) {
+      this._removeRFQ(id);
+      // Cancel any pending WhatsApp/SMS/email chaser timers so deleted RFQs
+      // don't trigger ghost dispatches minutes or hours later.
+      rfqChaserScheduler.clearScheduledChasers(id);
+    }
     return removed;
   }
 
@@ -1828,6 +2176,9 @@ class StoreService {
 
     const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
     const newlyInvited = [];
+    const mismatchedVendors = [];
+    const signals = this._rfqCategorySignals(rfq);
+
     for (const id of Array.isArray(vendorIds) ? vendorIds : []) {
       let vendor = this.getVendorById(id);
       if (!vendor) {
@@ -1844,16 +2195,57 @@ class StoreService {
       }
       if (!vendor) continue;
       if (this._isInvitedVendor(vendor, rfq)) continue;
+
+      const hasCategory = vendor.majorCategory || (Array.isArray(vendor.minorCategories) && vendor.minorCategories.length > 0);
+      const isMatch = signals.length === 0 || !hasCategory || signals.some((c) => this.vendorCoversCategory(vendor, c));
+
+      if (!isMatch) {
+        mismatchedVendors.push(vendor);
+        continue;
+      }
+
       newlyInvited.push(vendor);
     }
-    if (newlyInvited.length === 0) return { updatedRFQ: rfq, invitedCount: 0 };
+
+    // For any mismatched vendor: dispatch update email to vendor (with buyer cc)
+    for (const vendor of mismatchedVendors) {
+      if (vendor.email) {
+        const buyerEmail = this.resolveBuyerEmailForRFQ(rfq);
+        this._background(
+          mailerService.sendVendorCategoryMismatchEmail(vendor.email, {
+            rfq,
+            rfqNumber: rfq.rfqNumber,
+            rfqTitle: rfq.title,
+            rfqCategory: rfq.category || signals[0] || 'Procurement Category',
+            vendorName: vendor.contactPerson || vendor.name,
+            vendorCurrentCategory: vendor.majorCategory || (Array.isArray(vendor.minorCategories) ? vendor.minorCategories.join(', ') : 'Not specified'),
+            buyerAccountName: rfq.buyerAccountName,
+            buyerEmail,
+            cc: buyerEmail || undefined,
+          }),
+          'Failed to email category mismatch notice to vendor'
+        );
+      }
+      this.addAuditLog({
+        userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
+        action: `Vendor ${vendor.name} (${vendor.id}) excluded from RFQ shortlist due to category mismatch. Profile update email sent.`,
+        rfqNumber: rfq.rfqNumber,
+      });
+    }
+
+    if (newlyInvited.length === 0) {
+      if (mismatchedVendors.length === 0) {
+        return { updatedRFQ: rfq, invitedCount: 0 };
+      }
+      return { updatedRFQ: rfq, invitedCount: 0, excludedCount: mismatchedVendors.length, excludedVendors: mismatchedVendors };
+    }
 
     const entries = newlyInvited.map((v) => ({
       id: v.id,
       name: v.name,
       email: v.email || null,
       contactPerson: v.contactPerson || null,
-      phone: v.phone || null,
+      phone: v.phone || v.mobile || v.mobileNumber || null,
     }));
     const updatedRFQ = this.updateRFQ(rfq.id, { assignedVendors: [...existing, ...entries] });
 
@@ -1904,9 +2296,119 @@ class StoreService {
           'Failed to email RFQ invite to vendor'
         );
       }
+
+      // Real WhatsApp dispatch — fire-and-forget alongside the simulation.
+      // No-ops when WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_ACCESS_TOKEN are unset
+      // (falls back to wa.me deep-link logging), and skips entirely in test env.
+      const vendorPhone = vendor.phone || vendor.mobile || vendor.mobileNumber;
+      if (vendorPhone) {
+        const bidUrl = whatsAppService.generateOneClickBidUrl(updatedRFQ.rfqNumber, vendor.email);
+        this._background(
+          whatsAppService.sendRFQInvitationWhatsApp({
+            phone: vendorPhone,
+            vendorName: vendor.name,
+            contactPerson: vendor.contactPerson,
+            rfqNumber: updatedRFQ.rfqNumber,
+            rfqTitle: updatedRFQ.title,
+            vendorEmail: vendor.email,
+          }).then((result) => {
+            logger.info(
+              `WhatsApp RFQ invite to ${vendor.name} (${vendorPhone}): ${result.success ? `sent (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
+              { vendorId: vendor.id, rfqNumber: updatedRFQ.rfqNumber, success: result.success },
+              'STORE_SERVICE'
+            );
+          }),
+          'Failed to dispatch WhatsApp RFQ invite'
+        );
+
+        // Real SMS chaser — fire-and-forget. Uses the same DLT gateway as OTP.
+        this._background(
+          smsService.sendRFQChaserSms({
+            mobile: vendorPhone,
+            vendorName: vendor.name,
+            rfqNumber: updatedRFQ.rfqNumber,
+            rfqTitle: updatedRFQ.title,
+            bidLink: bidUrl,
+          }).then((result) => {
+            logger.info(
+              `SMS RFQ invite to ${vendor.name} (${vendorPhone}): ${result.success ? `sent (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
+              { vendorId: vendor.id, rfqNumber: updatedRFQ.rfqNumber, success: result.success },
+              'STORE_SERVICE'
+            );
+          }),
+          'Failed to dispatch SMS RFQ invite'
+        );
+      }
+
+      // Timed multi-channel chaser — same 3-channel sequence as createRFQ.
+      // scheduleVendorChaser is idempotent-safe: it creates new timers each
+      // call, so a vendor invited twice simply queues a second sequence (which
+      // is guarded upstream by the _isInvitedVendor duplicate check anyway).
+      rfqChaserScheduler.scheduleVendorChaser(
+        updatedRFQ,
+        vendor,
+        this.checkVendorQuotationEligibility(vendor)
+      );
+
     }
 
-    return { updatedRFQ, invitedCount: newlyInvited.length };
+    return {
+      updatedRFQ,
+      invitedCount: newlyInvited.length,
+      excludedCount: mismatchedVendors.length,
+      excludedVendors: mismatchedVendors,
+    };
+  }
+
+  /**
+   * Validates vendor candidates against RFQ category signals.
+   * Shortlists vendors matching the category, and excludes mismatched vendors
+   * while dispatching profile update request emails to them.
+   */
+  validateAndShortlistVendors(rfq, vendorList, buyerEmail) {
+    if (!rfq || !Array.isArray(vendorList)) return { shortlisted: [], excluded: [] };
+    const signals = this._rfqCategorySignals(rfq);
+    const shortlisted = [];
+    const excluded = [];
+
+    for (const v of vendorList) {
+      const vendorRecord = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
+      const hasCategory = vendorRecord.majorCategory || (Array.isArray(vendorRecord.minorCategories) && vendorRecord.minorCategories.length > 0);
+      const isMatch = signals.length === 0 || !hasCategory || signals.some((sig) => this.vendorCoversCategory(vendorRecord, sig));
+
+      if (isMatch) {
+        shortlisted.push(v);
+      } else {
+        excluded.push(vendorRecord);
+      }
+    }
+
+    for (const vendor of excluded) {
+      const vendorEmail = vendor.email || (vendor.id && vendor.id.includes('@') ? vendor.id : null);
+      if (vendorEmail) {
+        this._background(
+          mailerService.sendVendorCategoryMismatchEmail(vendorEmail, {
+            rfq,
+            rfqNumber: rfq.rfqNumber,
+            rfqTitle: rfq.title,
+            rfqCategory: rfq.category || signals[0] || 'Procurement Category',
+            vendorName: vendor.contactPerson || vendor.name,
+            vendorCurrentCategory: vendor.majorCategory || (Array.isArray(vendor.minorCategories) ? vendor.minorCategories.join(', ') : 'Not specified'),
+            buyerAccountName: rfq.buyerAccountName,
+            buyerEmail,
+            cc: buyerEmail || undefined,
+          }),
+          'Failed to email category mismatch notice to vendor'
+        );
+      }
+      this.addAuditLog({
+        userEmail: buyerEmail || SYSTEM_ACTOR_EMAIL,
+        action: `Vendor ${vendor.name || vendor.id} excluded from RFQ shortlist due to category mismatch. Category update request sent.`,
+        rfqNumber: rfq.rfqNumber,
+      });
+    }
+
+    return { shortlisted, excluded };
   }
 
   /** The RFQs one vendor may see, in the store's current (newest-first) order. */
@@ -1977,6 +2479,26 @@ class StoreService {
     return notification;
   }
 
+  notifyBuyerOfInquiry(rfq, inquiry) {
+    if (!rfq.buyerAccountId) return null;
+    const notification = this._buildNotification({
+      recipientType: 'buyer',
+      recipientId: rfq.buyerAccountId,
+      kind: 'vendor_inquiry',
+      rfq,
+      title: `New vendor clarification on ${rfq.rfqNumber}`,
+      message: `${inquiry.vendorName || 'A vendor'} submitted a question on ${rfq.rfqNumber}: "${(inquiry.message || '').slice(0, 100)}"`,
+      meta: {
+        inquiryId: inquiry.id,
+        vendorName: inquiry.vendorName,
+        vendorEmail: inquiry.vendorEmail,
+      },
+    });
+    this.notifications.unshift(notification);
+    this._persistNotification(notification);
+    return notification;
+  }
+
   notifyBuyer(emailOrId, { kind, title, message, meta } = {}) {
     if (!emailOrId) return null;
     let buyerAccount = this.buyerAccounts.find(
@@ -1994,6 +2516,114 @@ class StoreService {
     this.notifications.unshift(notification);
     this._persistNotification(notification);
     return notification;
+  }
+
+  notifyBuyerOfFinalComparison(rfq) {
+    if (!rfq.buyerAccountId) return null;
+    const notification = this._buildNotification({
+      recipientType: 'buyer',
+      recipientId: rfq.buyerAccountId,
+      kind: 'rfq_final_comparison',
+      rfq,
+      title: `Final Evaluation Matrix Ready: ${rfq.rfqNumber}`,
+      message: `Quotation comparison & AI scoring matrix is ready for ${rfq.rfqNumber} (${rfq.quotesCount || 0} quotes received).`,
+      meta: {
+        rfqNumber: rfq.rfqNumber,
+        quotesCount: rfq.quotesCount || 0,
+      },
+    });
+    this.notifications.unshift(notification);
+    this._persistNotification(notification);
+
+    // Dispatches final comparison email to the buyer
+    const buyerEmail = this.resolveBuyerEmailForRFQ(rfq);
+    if (buyerEmail) {
+      mailerService
+        .sendRfqFinalComparisonEmail(buyerEmail, {
+          rfq,
+          quotes: rfq.quotes || [],
+          recipientName: rfq.buyerAccountName || rfq.buyerName,
+        })
+        .catch((err) => logger.error(`Failed to send RFQ final comparison email for ${rfq.rfqNumber}`, err, 'STORE_SERVICE'));
+    }
+
+    return notification;
+  }
+
+  notifyOfRFQClosure(rfq) {
+    if (rfq.buyerAccountId) {
+      const buyerNotif = this._buildNotification({
+        recipientType: 'buyer',
+        recipientId: rfq.buyerAccountId,
+        kind: 'rfq_closed',
+        rfq,
+        title: `RFQ Closed: ${rfq.rfqNumber}`,
+        message: `Sourcing requisition ${rfq.rfqNumber} (${rfq.title}) has been officially closed.`,
+        meta: { rfqNumber: rfq.rfqNumber },
+      });
+      this.notifications.unshift(buyerNotif);
+      this._persistNotification(buyerNotif);
+
+      // Dispatches final comparison & closure result email to the buyer
+      const buyerEmail = this.resolveBuyerEmailForRFQ(rfq);
+      if (buyerEmail) {
+        mailerService
+          .sendRfqFinalComparisonEmail(buyerEmail, {
+            rfq,
+            quotes: rfq.quotes || [],
+            recipientName: rfq.buyerAccountName || rfq.buyerName,
+          })
+          .catch((err) => logger.error(`Failed to send RFQ final closure comparison email for ${rfq.rfqNumber}`, err, 'STORE_SERVICE'));
+      }
+
+      // Dispatches SMS acknowledgment regarding quotation comparison to the buyer within 10 minutes
+      this.scheduleBuyerComparisonSms(rfq, 0);
+    }
+    const matches = this.vendors.filter((v) => this.vendorCoversRFQ(v, rfq));
+    if (matches.length > 0) {
+      const vendorNotifs = matches.map((vendor) =>
+        this._buildNotification({
+          recipientType: 'vendor',
+          recipientId: vendor.id,
+          kind: 'rfq_closed',
+          rfq,
+          title: `RFQ Closed: ${rfq.rfqNumber}`,
+          message: `Requisition ${rfq.rfqNumber} has been closed by the buyer. Bidding is now concluded.`,
+          meta: { rfqNumber: rfq.rfqNumber },
+        })
+      );
+      this.notifications.unshift(...vendorNotifs);
+      this._persistNotificationBatch(vendorNotifs);
+    }
+  }
+
+  /**
+   * Schedules an SMS acknowledgment to the buyer regarding quotation comparison upon RFQ closure within 10 minutes.
+   */
+  async scheduleBuyerComparisonSms(rfq, delayMs = 0) {
+    const effectiveDelay = Math.min(Math.max(0, delayMs), 10 * 60 * 1000);
+    const trigger = async () => {
+      try {
+        const buyer = rfq.buyerEmail ? await this.getBuyerAccountByEmail(rfq.buyerEmail) : null;
+        const mobile = rfq.buyerPhone || (buyer && (buyer.phone || buyer.mobile || buyer.contactPhone));
+        if (mobile) {
+          await smsService.sendBuyerComparisonSms({
+            mobile,
+            buyerName: rfq.buyerAccountName || rfq.buyerName,
+            rfqNumber: rfq.rfqNumber,
+            quotesCount: rfq.quotesCount || (rfq.quotes ? rfq.quotes.length : 0),
+          });
+        }
+      } catch (err) {
+        logger.error(`Error sending buyer comparison SMS for ${rfq.rfqNumber}`, err, 'STORE_SERVICE');
+      }
+    };
+
+    if (effectiveDelay > 0 && process.env.NODE_ENV !== 'test') {
+      setTimeout(trigger, effectiveDelay);
+    } else {
+      await trigger();
+    }
   }
 
   // ==========================================
@@ -2771,6 +3401,52 @@ class StoreService {
     vendors.forEach((vendor) => {
       const logs = simulateChaserOutreach(rfq, vendor);
       outreachLogs.push(...logs);
+
+      // Real multi-channel outreach — fire-and-forget alongside simulation.
+      // Both services no-op in test env or when credentials are unset.
+      const vendorPhone = vendor.phone || vendor.mobile || vendor.mobileNumber;
+      if (vendorPhone) {
+        const bidUrl = whatsAppService.generateOneClickBidUrl(rfq.rfqNumber, vendor.email);
+
+        if (channels.includes('whatsapp')) {
+          this._background(
+            whatsAppService.sendRFQInvitationWhatsApp({
+              phone: vendorPhone,
+              vendorName: vendor.name,
+              contactPerson: vendor.contactPerson,
+              rfqNumber: rfq.rfqNumber,
+              rfqTitle: rfq.title,
+              vendorEmail: vendor.email,
+            }).then((result) => {
+              logger.info(
+                `[CHASER] WhatsApp to ${vendor.name} (${vendorPhone}): ${result.success ? `delivered (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
+                { vendorId: vendor.id, rfqNumber: rfq.rfqNumber, success: result.success },
+                'STORE_SERVICE'
+              );
+            }),
+            'Failed to dispatch chaser WhatsApp'
+          );
+        }
+
+        if (channels.includes('sms')) {
+          this._background(
+            smsService.sendRFQChaserSms({
+              mobile: vendorPhone,
+              vendorName: vendor.name,
+              rfqNumber: rfq.rfqNumber,
+              rfqTitle: rfq.title,
+              bidLink: bidUrl,
+            }).then((result) => {
+              logger.info(
+                `[CHASER] SMS to ${vendor.name} (${vendorPhone}): ${result.success ? `sent (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
+                { vendorId: vendor.id, rfqNumber: rfq.rfqNumber, success: result.success },
+                'STORE_SERVICE'
+              );
+            }),
+            'Failed to dispatch chaser SMS'
+          );
+        }
+      }
     });
 
     this.aiFeed.unshift(...outreachLogs);
@@ -2805,6 +3481,29 @@ class StoreService {
       action: `Formally approved & sealed Purchase Order ${poNumber} awarded to ${vendorName} ($${Number(totalAmount).toLocaleString()}). Notes: ${approverNotes}`,
       rfqNumber,
     });
+
+    // Notify the buyer of PO generation / award
+    this.notifyBuyer(rfq.buyerAccountId || approverEmail, {
+      kind: 'po_approved',
+      title: `PO Approved — ${rfq.rfqNumber}`,
+      message: `Purchase order ${poNumber} awarded to ${vendorName} (₹${Number(totalAmount).toLocaleString()}).`,
+      meta: { poNumber, rfqNumber: rfq.rfqNumber, vendorId, vendorName, totalAmount },
+    });
+
+    // Notify the awarded vendor
+    if (vendorId) {
+      const vendorNotification = this._buildNotification({
+        recipientType: 'vendor',
+        recipientId: vendorId,
+        kind: 'po_awarded',
+        rfq,
+        title: `Purchase Order Awarded — ${rfq.rfqNumber}`,
+        message: `Congratulations! ${rfq.buyerAccountName || 'The buyer'} has approved and awarded purchase order ${poNumber} to you.`,
+        meta: { poNumber, rfqNumber: rfq.rfqNumber, totalAmount },
+      });
+      this.notifications.unshift(vendorNotification);
+      this._persistNotification(vendorNotification);
+    }
 
     return {
       success: true,

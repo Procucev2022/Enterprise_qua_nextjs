@@ -17,6 +17,8 @@ import {
   Layers,
   ChevronDown,
   Upload,
+  Mail,
+  Phone,
 } from 'lucide-react';
 import CompanyHoverTooltip from '@/app/components/CompanyHoverTooltip';
 import VendorUploadModal from './VendorUploadModal';
@@ -41,6 +43,13 @@ function avatarStyleFor(name: string) {
   let hash = 0;
   for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
   return AVATAR_PALETTE[hash % AVATAR_PALETTE.length];
+}
+
+function getInitials(name: string): string {
+  if (!name || !name.trim()) return '?';
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 1) return words[0].substring(0, 2).toUpperCase();
+  return (words[0][0] + (words[1] ? words[1][0] : '')).toUpperCase();
 }
 
 // Fetched a page at a time straight from the real vendor directory (which
@@ -169,7 +178,9 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
       return {
         id: vendor.id,
         name: vendor.contactPerson || vendor.name || 'Unnamed Vendor',
-        email: vendor.email,
+        contactPerson: vendor.contactPerson || vendor.name || 'Unnamed Vendor',
+        email: vendor.email || '',
+        phone: vendor.phone || '',
         company: vendor.name || 'Unnamed Vendor',
         logoLetter: (vendor.name || '?').charAt(0).toUpperCase(),
         logoBg: style.bg,
@@ -222,6 +233,20 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
   const dropdownDrivenVendorId = selectedContactFilterId !== 'all' ? selectedContactFilterId : null;
   const activeVendorId = drillDownDismissed ? null : dropdownDrivenVendorId ?? selectedVendorId;
   const selectedVendor = compiledVendors.find((v) => v.id === activeVendorId);
+
+  const selectedCompanyVendors = useMemo(() => {
+    return selectedCompany !== 'all'
+      ? compiledVendors.filter((v) => v.company === selectedCompany)
+      : [];
+  }, [compiledVendors, selectedCompany]);
+
+  const activeCompanyVendor = useMemo(() => {
+    if (selectedCompanyVendors.length === 0) return null;
+    if (selectedContactFilterId !== 'all') {
+      return selectedCompanyVendors.find((v) => v.id === selectedContactFilterId) || selectedCompanyVendors[0];
+    }
+    return selectedCompanyVendors[0];
+  }, [selectedCompanyVendors, selectedContactFilterId]);
 
   return (
     <div className="space-y-6 animate-fade-in pb-10">
@@ -352,16 +377,50 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
             )}
             {filteredByDropdownVendors.map((v) => {
               return (
-                <div key={v.id} className="text-xs">
-                  <div className="flex justify-between items-center text-slate-700 dark:text-gray-300 font-semibold mb-1">
+                <div key={v.id} data-testid="scorecard-vendor-item" className="text-xs p-3 rounded-xl bg-slate-50/70 dark:bg-gray-950/60 border border-slate-200/60 dark:border-gray-800 space-y-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-slate-700 dark:text-gray-300 font-semibold">
                     <span className="flex items-center gap-1.5">
-                      <span className={`w-5 h-5 rounded-md ${v.logoBg} font-mono font-bold text-[9px] flex items-center justify-center`}>
+                      <span className={`w-5 h-5 rounded-md ${v.logoBg} font-mono font-bold text-[9px] flex items-center justify-center shrink-0`}>
                         {v.logoLetter}
                       </span>
-                      <span>{v.company} ({v.name})</span>
+                      <span className="font-bold text-slate-900 dark:text-white">{v.company}</span>
+                      <span className="text-slate-500 font-normal">({v.name})</span>
                     </span>
                     <span className="mono font-bold text-slate-900 dark:text-white text-[11px]">
                       Compliance: {v.complianceRate === null ? '—' : `${v.complianceRate}%`} · Lead: {v.leadTimeDays === null ? '—' : `${v.leadTimeDays}d`} · Rating: ⭐ {v.rating}
+                    </span>
+                  </div>
+
+                  {/* Vendor Contact Details (Vendor Name, Email Address, Phone Number) */}
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-600 dark:text-gray-300 bg-white dark:bg-gray-900 px-3 py-1.5 rounded-lg border border-slate-200/60 dark:border-gray-800 font-medium">
+                    <span className="flex items-center gap-1">
+                      <Users size={12} className="text-indigo-500 shrink-0" />
+                      <span className="text-slate-400 dark:text-gray-500 uppercase text-[9px] font-bold">Vendor Name:</span>
+                      <strong className="text-slate-800 dark:text-gray-200">{v.name}</strong>
+                    </span>
+                    <span className="text-slate-300 dark:text-gray-700">•</span>
+                    <span className="flex items-center gap-1">
+                      <Mail size={12} className="text-indigo-500 shrink-0" />
+                      <span className="text-slate-400 dark:text-gray-500 uppercase text-[9px] font-bold">Email:</span>
+                      {v.email ? (
+                        <a href={`mailto:${v.email}`} className="text-indigo-600 dark:text-indigo-400 hover:underline">
+                          {v.email}
+                        </a>
+                      ) : (
+                        <span className="text-slate-400 dark:text-gray-500 italic">N/A</span>
+                      )}
+                    </span>
+                    <span className="text-slate-300 dark:text-gray-700">•</span>
+                    <span className="flex items-center gap-1">
+                      <Phone size={12} className="text-indigo-500 shrink-0" />
+                      <span className="text-slate-400 dark:text-gray-500 uppercase text-[9px] font-bold">Phone:</span>
+                      {v.phone ? (
+                        <a href={`tel:${v.phone}`} className="text-indigo-600 dark:text-indigo-400 hover:underline">
+                          {v.phone}
+                        </a>
+                      ) : (
+                        <span className="text-slate-400 dark:text-gray-500 italic">N/A</span>
+                      )}
                     </span>
                   </div>
 
@@ -439,6 +498,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
             return (
               <div
                 key={v.id}
+                data-testid={`vendor-card-${v.id}`}
                 className={`glass-panel p-5 rounded-2xl border-2 transition-all flex flex-col justify-between space-y-4 ${
                   isSelected
                     ? 'border-emerald-650 dark:border-emerald-500 bg-emerald-50/10 dark:bg-emerald-950/10 shadow-md'
@@ -449,19 +509,38 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
               >
                 {/* Upper Block: Profile */}
                 <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-10 h-10 rounded-full ${v.avatarColor} font-bold text-xs flex items-center justify-center shrink-0`}>
-                      {v.name.split(' ').map((n) => n[0]).join('')}
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <div className={`w-10 h-10 rounded-full ${v.avatarColor} font-bold text-xs flex items-center justify-center shrink-0 overflow-hidden select-none`}>
+                      {getInitials(v.company || v.name)}
                     </div>
-                    <div>
-                      <h4 className="font-bold text-slate-900 dark:text-white text-xs">
+                    <div className="min-w-0 flex-1">
+                      <h4 className="font-bold text-slate-900 dark:text-white text-xs line-clamp-1" title={v.company}>
                         <CompanyHoverTooltip
                           name={v.company}
                           type="vendor"
                           contact={{ contactPerson: v.name, email: v.email, location: v.location }}
                         />
                       </h4>
-                      <p className="text-[10px] text-slate-400 dark:text-gray-500">{v.name} · {v.email}</p>
+                      <div className="text-[10px] text-slate-500 dark:text-gray-400 space-y-0.5 mt-0.5 font-medium">
+                        {v.name && v.name !== v.company && (
+                          <div className="flex items-center gap-1 font-semibold text-slate-700 dark:text-gray-300 truncate">
+                            <span>👤 {v.name}</span>
+                          </div>
+                        )}
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-slate-500 dark:text-gray-400">
+                          <span className="flex items-center gap-0.5 truncate max-w-[200px]" title={v.email || undefined}>
+                            <Mail size={10} className="text-indigo-500 shrink-0" /> {v.email || 'No Email'}
+                          </span>
+                          {v.phone ? (
+                            <>
+                              <span>·</span>
+                              <span className="flex items-center gap-0.5 shrink-0">
+                                <Phone size={10} className="text-indigo-500 shrink-0" /> {v.phone}
+                              </span>
+                            </>
+                          ) : null}
+                        </div>
+                      </div>
 
                       <div className="flex items-center gap-1.5 mt-1.5">
                         <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 text-[9px] font-semibold border border-slate-200 dark:border-gray-700">
@@ -471,7 +550,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                     </div>
                   </div>
 
-                  <span className="px-2 py-0.5 rounded text-[9px] font-extrabold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200/30 flex items-center gap-0.5">
+                  <span className="px-2 py-0.5 rounded text-[9px] font-extrabold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200/30 flex items-center gap-0.5 shrink-0">
                     ⭐ {v.rating} Rating
                   </span>
                 </div>
@@ -551,6 +630,21 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
             <span className="text-[11px] mono text-emerald-700 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-950 px-2 py-0.5 rounded border border-emerald-200/20">
               {selectedVendor.rfqsList.length} total bids submitted
             </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 text-xs">
+            <div className="flex items-center gap-2">
+              <Users size={14} className="text-indigo-500 shrink-0" />
+              <span>Vendor Name: <strong className="text-slate-900 dark:text-white">{selectedVendor.name}</strong></span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Mail size={14} className="text-indigo-500 shrink-0" />
+              <span>Email Address: <strong className="text-slate-900 dark:text-white">{selectedVendor.email || 'N/A'}</strong></span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Phone size={14} className="text-indigo-500 shrink-0" />
+              <span>Phone Number: <strong className="text-slate-900 dark:text-white">{selectedVendor.phone || 'N/A'}</strong></span>
+            </div>
           </div>
 
           {selectedVendor.rfqsList.length === 0 ? (

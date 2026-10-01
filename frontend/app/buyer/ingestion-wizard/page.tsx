@@ -8,5 +8,10 @@ export default function BuyerIngestionWizardPage() {
   const router = useRouter();
   const backToDashboard = () => router.push('/buyer/dashboard');
 
-  return <IngestionWizard onComplete={backToDashboard} onCancel={backToDashboard} />;
+  return (
+    <IngestionWizard
+      onComplete={backToDashboard}
+      onCancel={backToDashboard}
+    />
+  );
 }

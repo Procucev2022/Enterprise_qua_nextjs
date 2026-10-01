@@ -10,7 +10,7 @@ import {
   markAllNotificationsRead as apiMarkAllRead,
 } from '@/lib/notificationClient';
 import type { AppNotification } from '@/lib/types';
-import { Bell, CheckCheck, FileText, Package, Sparkles } from 'lucide-react';
+import { Bell, CheckCheck, FileText, Package, Sparkles, ShieldCheck } from 'lucide-react';
 
 const N = UI_STRINGS.notifications;
 
@@ -98,8 +98,20 @@ export default function NotificationBell() {
   };
 
   const routeFor = (n: AppNotification): string | null => {
+    if (n.kind === 'po_approved' && n.rfqNumber) {
+      return `/buyer/quote-matrix?rfq=${encodeURIComponent(n.rfqNumber)}`;
+    }
+    if (n.kind === 'rfq_final_comparison' && n.rfqNumber) {
+      return `/buyer/quote-matrix?rfq=${encodeURIComponent(n.rfqNumber)}`;
+    }
     if (n.kind === 'quote_received' && n.rfqNumber) {
       return `/buyer/rfq-details?rfq=${encodeURIComponent(n.rfqNumber)}`;
+    }
+    if (n.kind === 'po_awarded' && n.rfqNumber) {
+      return `/vendor/quotation-form?rfq=${encodeURIComponent(n.rfqNumber)}`;
+    }
+    if (n.kind === 'rfq_closed' && n.rfqNumber) {
+      return `/vendor/quotation-form?rfq=${encodeURIComponent(n.rfqNumber)}`;
     }
     if (n.kind === 'rfq_category_match') {
       return '/vendor/opportunity-feed';
@@ -118,12 +130,15 @@ export default function NotificationBell() {
     if (dest) router.push(dest);
   };
 
-  const iconFor = (kind: AppNotification['kind']) =>
-    kind === 'quote_received' ? (
-      <Package size={13} className="text-emerald-600 dark:text-emerald-400" />
-    ) : (
-      <FileText size={13} className="text-indigo-600 dark:text-indigo-400" />
-    );
+  const iconFor = (kind: AppNotification['kind']) => {
+    if (kind === 'quote_received' || kind === 'po_awarded') {
+      return <Package size={13} className="text-emerald-600 dark:text-emerald-400" />;
+    }
+    if (kind === 'po_approved' || kind === 'rfq_final_comparison') {
+      return <ShieldCheck size={13} className="text-indigo-600 dark:text-indigo-400" />;
+    }
+    return <FileText size={13} className="text-indigo-600 dark:text-indigo-400" />;
+  };
 
   return (
     <div className="relative" ref={containerRef}>

@@ -224,14 +224,14 @@ async function upsertVendorInDB(vendor) {
     {
       d1: true,
       d1Text: `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
      ON CONFLICT (id) DO UPDATE SET
        email = EXCLUDED.email,
        major_category = EXCLUDED.major_category,
        status = EXCLUDED.status,
        source = EXCLUDED.source,
        raw = EXCLUDED.raw,
-       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+       updated_at = CURRENT_TIMESTAMP
      RETURNING raw`,
     }
   );
@@ -278,7 +278,7 @@ async function bulkInsertVendorsInDB(vendors) {
   if (d1) {
     const statements = vendors.map((vendor) => ({
       text: `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+       VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
        ON CONFLICT (email) DO NOTHING
        RETURNING email`,
       params: [
@@ -369,7 +369,7 @@ async function incrementBulkImportSessionInDB(id, delta) {
        duplicate_count = duplicate_count + $5,
        invalid_count = invalid_count + $6,
        status = CASE WHEN processed_count + $2 >= total_rows_declared THEN 'COMPLETED' ELSE status END,
-       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+       updated_at = CURRENT_TIMESTAMP
      WHERE id = $1
      RETURNING id, status, total_rows_declared, processed_count, imported_count,
                missing_email_count, duplicate_count, invalid_count`,
@@ -419,7 +419,7 @@ async function upsertRFQInDB(rfq) {
     {
       d1: true,
       d1Text: `INSERT INTO rfqs (id, rfq_number, category, status, sourcing_mode, budget, raw, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
      ON CONFLICT (id) DO UPDATE SET
        rfq_number = EXCLUDED.rfq_number,
        category = EXCLUDED.category,
@@ -427,7 +427,7 @@ async function upsertRFQInDB(rfq) {
        sourcing_mode = EXCLUDED.sourcing_mode,
        budget = EXCLUDED.budget,
        raw = EXCLUDED.raw,
-       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+       updated_at = CURRENT_TIMESTAMP
      RETURNING raw`,
     }
   );
@@ -478,12 +478,12 @@ async function upsertEvaluationInDB(evaluation) {
     {
       d1: true,
       d1Text: `INSERT INTO evaluations (id, vendor_id, status, raw, updated_at)
-     VALUES ($1, $2, $3, $4, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
      ON CONFLICT (id) DO UPDATE SET
        vendor_id = EXCLUDED.vendor_id,
        status = EXCLUDED.status,
        raw = EXCLUDED.raw,
-       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+       updated_at = CURRENT_TIMESTAMP
      RETURNING raw`,
     }
   );
@@ -523,13 +523,13 @@ async function upsertCatalogueProductInDB(product) {
     {
       d1: true,
       d1Text: `INSERT INTO vendor_catalogue (id, vendor_id, sku, category, raw, updated_at)
-     VALUES ($1, $2, $3, $4, $5, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
      ON CONFLICT (id) DO UPDATE SET
        vendor_id = EXCLUDED.vendor_id,
        sku = EXCLUDED.sku,
        category = EXCLUDED.category,
        raw = EXCLUDED.raw,
-       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+       updated_at = CURRENT_TIMESTAMP
      RETURNING raw`,
     }
   );
@@ -598,12 +598,12 @@ async function upsertBuyerAccountInDB(account) {
     {
       d1: true,
       d1Text: `INSERT INTO buyer_accounts (id, corporate_email, status, raw, updated_at)
-     VALUES ($1, $2, $3, $4, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
      ON CONFLICT (id) DO UPDATE SET
        corporate_email = EXCLUDED.corporate_email,
        status = EXCLUDED.status,
        raw = EXCLUDED.raw,
-       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+       updated_at = CURRENT_TIMESTAMP
      RETURNING raw`,
     }
   );
@@ -887,6 +887,81 @@ async function upsertPaymentLinkInDB(link) {
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
+// ── Chaser Queue ─────────────────────────────────────────────────────────────
+// Persists pending chaser dispatches so they survive process restarts.
+
+/**
+ * Write a new pending chaser job.
+ * @param {object} job  { id, rfqNumber, rfqId, vendorId, vendorName, vendorPhone, vendorEmail,
+ *                        vendorContactPerson, rfqTitle, channel, fireAt (ISO string) }
+ */
+async function insertChaserJobInDB(job) {
+  if (!pool.hasStorage()) return null;
+  const {
+    id, rfqNumber, rfqId, vendorId, vendorName,
+    vendorPhone, vendorEmail, vendorContactPerson,
+    rfqTitle, channel, fireAt,
+  } = job;
+  await pool.query(
+    `INSERT INTO chaser_queue
+       (id, rfq_number, rfq_id, vendor_id, vendor_name, vendor_phone, vendor_email,
+        vendor_contact_person, rfq_title, channel, status, fire_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11)
+     ON CONFLICT (id) DO NOTHING`,
+    [id, rfqNumber, rfqId, vendorId, vendorName,
+     vendorPhone || null, vendorEmail || null, vendorContactPerson || null,
+     rfqTitle || null, channel, fireAt],
+    { d1: true }
+  );
+  return job;
+}
+
+/** Mark a chaser job as fired. */
+async function markChaserJobFiredInDB(id) {
+  if (!pool.hasStorage()) return;
+  await pool.query(
+    `UPDATE chaser_queue SET status='fired', fired_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=$1`,
+    [id],
+    { d1: true }
+  );
+}
+
+/** Mark a chaser job as failed with an error message. */
+async function markChaserJobFailedInDB(id, errorMessage) {
+  if (!pool.hasStorage()) return;
+  await pool.query(
+    `UPDATE chaser_queue SET status='failed', error=$2, fired_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=$1`,
+    [id, errorMessage || 'unknown'],
+    { d1: true }
+  );
+}
+
+/** Cancel all pending chaser jobs for an RFQ (called on RFQ delete/close). */
+async function cancelChaserJobsForRFQInDB(rfqNumber) {
+  if (!pool.hasStorage()) return;
+  await pool.query(
+    `UPDATE chaser_queue SET status='cancelled', updated_at=CURRENT_TIMESTAMP WHERE rfq_number=$1 AND status='pending'`,
+    [rfqNumber],
+    { d1: true }
+  );
+}
+
+/**
+ * Fetch all pending chaser jobs — called on server boot to re-schedule.
+ * Returns rows with all fields needed to reconstruct a vendor/rfq stub.
+ */
+async function getPendingChaserJobsFromDB() {
+  if (!pool.hasStorage()) return [];
+  const result = await pool.query(
+    `SELECT id, rfq_number, rfq_id, vendor_id, vendor_name, vendor_phone,
+            vendor_email, vendor_contact_person, rfq_title, channel, fire_at
+     FROM chaser_queue WHERE status='pending' ORDER BY fire_at ASC`,
+    [],
+    { d1: true }
+  );
+  return result.rows || [];
+}
+
 module.exports = {
   getVendorsFromDB,
   getVendorsPageFromDB,
@@ -926,4 +1001,9 @@ module.exports = {
   getPaymentLinksFromDB,
   getPaymentLinkByZohoIdFromDB,
   upsertPaymentLinkInDB,
+  insertChaserJobInDB,
+  markChaserJobFiredInDB,
+  markChaserJobFailedInDB,
+  cancelChaserJobsForRFQInDB,
+  getPendingChaserJobsFromDB,
 };

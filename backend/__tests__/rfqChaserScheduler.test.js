@@ -1,0 +1,351 @@
+/**
+ * rfqChaserScheduler unit tests
+ *
+ * All real outbound calls (WhatsApp, SMS, mailer) are mocked so no network
+ * traffic is generated.  Jest fake timers let us advance time precisely to
+ * verify each channel fires at the right delay.
+ *
+ * Coverage targets:
+ *   • scheduleVendorChaser  — registers 3 timers, fires at correct delays
+ *   • scheduleRFQChasers    — fans out across multiple vendors
+ *   • clearScheduledChasers — cancels pending timers, handles unknown rfq
+ *   • _dispatchWhatsApp     — success / skip-no-phone / error paths
+ *   • _dispatchSms          — success / skip-no-phone / error paths
+ *   • _dispatchReminderEmail — success / skip-no-email / error paths
+ *   • NODE_ENV=test short-circuit on all dispatch helpers
+ *   • pendingTimers Map state management
+ */
+
+const whatsAppService = require('../src/services/whatsAppService');
+const smsService = require('../src/services/smsService');
+const mailerService = require('../src/services/mailerService');
+const scheduler = require('../src/services/rfqChaserScheduler');
+
+// ── Fixtures ──────────────────────────────────────────────────────────────────
+
+const RFQ = {
+  rfqNumber: 'RFQ-TEST-001',
+  title: 'Test RFQ',
+  sourcingMode: 'mode_1',
+  buyerAccountId: 'ba-001',
+};
+
+const VENDOR = {
+  id: 'v-001',
+  name: 'Apex Supplies',
+  email: 'apex@supplier.com',
+  phone: '9876543210',
+  contactPerson: 'Rajesh Kumar',
+};
+
+const VENDOR_NO_PHONE = { id: 'v-002', name: 'No Phone Co', email: 'nophone@co.com' };
+const VENDOR_NO_EMAIL = { id: 'v-003', name: 'No Email Co', phone: '9000000001' };
+
+// ── Setup / teardown ─────────────────────────────────────────────────────────
+
+beforeEach(() => {
+  // Use fake timers so setTimeout never actually waits
+  jest.useFakeTimers();
+  // Clear timer registry between tests
+  scheduler.pendingTimers.clear();
+  // Reset throttle caches so tests don't interfere with each other
+  whatsAppService.clearWhatsAppThrottleCache();
+  smsService.clearSmsThrottleCache();
+  jest.clearAllMocks();
+});
+
+afterEach(() => {
+  jest.useRealTimers();
+  jest.restoreAllMocks();
+  // Cancel any timers left in the registry so they don't leak into other suites
+  scheduler.pendingTimers.forEach((_, rfqNumber) => scheduler.clearScheduledChasers(rfqNumber));
+  scheduler.pendingTimers.clear();
+});
+
+// ── scheduleVendorChaser ─────────────────────────────────────────────────────
+
+describe('scheduleVendorChaser', () => {
+  test('registers exactly 3 timer handles in pendingTimers', () => {
+    scheduler.scheduleVendorChaser(RFQ, VENDOR, {});
+    expect(scheduler.pendingTimers.get(RFQ.rfqNumber)).toHaveLength(3);
+  });
+
+  test('fires WhatsApp immediately (delay 0 or CHASER_DELAYS.WHATSAPP_MS)', async () => {
+    const waSpy = jest.spyOn(whatsAppService, 'sendRFQInvitationWhatsApp').mockResolvedValue({ success: true, messageId: 'wa-1' });
+    // Temporarily leave test env to test real dispatch path
+    const origEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+
+    scheduler.scheduleVendorChaser(RFQ, VENDOR, {});
+    // WhatsApp fires at delay 0 — advance all pending timers
+    jest.runAllTimers();
+    await Promise.resolve(); // flush microtasks
+
+    expect(waSpy).toHaveBeenCalledWith(expect.objectContaining({
+      phone: VENDOR.phone,
+      rfqNumber: RFQ.rfqNumber,
+      rfqTitle: RFQ.title,
+      vendorName: VENDOR.name,
+    }));
+    process.env.NODE_ENV = origEnv;
+  });
+
+  test('fires SMS after SMS delay and not before', async () => {
+    const smsSpy = jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: true, messageId: 'sms-1' });
+    const origEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+
+    scheduler.scheduleVendorChaser(RFQ, VENDOR, {});
+
+    // Before SMS delay — SMS not yet called
+    jest.advanceTimersByTime(4 * 60 * 1000); // 4 min
+    await Promise.resolve();
+    expect(smsSpy).not.toHaveBeenCalled();
+
+    // After SMS delay (5 min)
+    jest.advanceTimersByTime(60 * 1000 + 100); // push past 5 min
+    await Promise.resolve();
+    expect(smsSpy).toHaveBeenCalledWith(expect.objectContaining({
+      mobile: VENDOR.phone,
+      rfqNumber: RFQ.rfqNumber,
+    }));
+    process.env.NODE_ENV = origEnv;
+  });
+
+  test('fires reminder email after 24h delay', async () => {
+    const emailSpy = jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: true });
+    const origEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+
+    scheduler.scheduleVendorChaser(RFQ, VENDOR, { freeCreditsRemaining: 3, isSubscribed: false });
+
+    // 23h 59m — email not yet fired
+    jest.advanceTimersByTime(23 * 60 * 60 * 1000 + 59 * 60 * 1000);
+    await Promise.resolve();
+    expect(emailSpy).not.toHaveBeenCalled();
+
+    // Cross the 24h mark
+    jest.advanceTimersByTime(2 * 60 * 1000);
+    await Promise.resolve();
+    expect(emailSpy).toHaveBeenCalledWith(
+      VENDOR.email,
+      expect.objectContaining({ rfq: RFQ, isReminder: true })
+    );
+    process.env.NODE_ENV = origEnv;
+  });
+
+  test('does nothing when rfq is null', () => {
+    expect(() => scheduler.scheduleVendorChaser(null, VENDOR)).not.toThrow();
+    expect(scheduler.pendingTimers.size).toBe(0);
+  });
+
+  test('does nothing when vendor is null', () => {
+    expect(() => scheduler.scheduleVendorChaser(RFQ, null)).not.toThrow();
+    expect(scheduler.pendingTimers.size).toBe(0);
+  });
+});
+
+// ── scheduleRFQChasers ────────────────────────────────────────────────────────
+
+describe('scheduleRFQChasers', () => {
+  test('creates 3 timers per vendor (2 vendors → 6 timers)', () => {
+    const vendors = [VENDOR, { ...VENDOR, id: 'v-999', name: 'Beta Supplies' }];
+    scheduler.scheduleRFQChasers(RFQ, vendors);
+    expect(scheduler.pendingTimers.get(RFQ.rfqNumber)).toHaveLength(6);
+  });
+
+  test('calls getCreditInfo for each vendor', () => {
+    const getCreditInfo = jest.fn().mockReturnValue({ freeCreditsRemaining: 5, isSubscribed: true });
+    scheduler.scheduleRFQChasers(RFQ, [VENDOR], getCreditInfo);
+    expect(getCreditInfo).toHaveBeenCalledWith(VENDOR);
+  });
+
+  test('does nothing for an empty vendor list', () => {
+    scheduler.scheduleRFQChasers(RFQ, []);
+    expect(scheduler.pendingTimers.size).toBe(0);
+  });
+
+  test('does nothing when rfq is null', () => {
+    scheduler.scheduleRFQChasers(null, [VENDOR]);
+    expect(scheduler.pendingTimers.size).toBe(0);
+  });
+
+  test('does nothing when vendors is not an array', () => {
+    scheduler.scheduleRFQChasers(RFQ, null);
+    expect(scheduler.pendingTimers.size).toBe(0);
+  });
+});
+
+// ── clearScheduledChasers ─────────────────────────────────────────────────────
+
+describe('clearScheduledChasers', () => {
+  test('cancels all timers for an rfqNumber and removes from map', () => {
+    scheduler.scheduleVendorChaser(RFQ, VENDOR);
+    expect(scheduler.pendingTimers.has(RFQ.rfqNumber)).toBe(true);
+
+    scheduler.clearScheduledChasers(RFQ.rfqNumber);
+    expect(scheduler.pendingTimers.has(RFQ.rfqNumber)).toBe(false);
+  });
+
+  test('does not throw for an unknown rfqNumber', () => {
+    expect(() => scheduler.clearScheduledChasers('RFQ-DOES-NOT-EXIST')).not.toThrow();
+  });
+
+  test('cleared timers do not fire after being cancelled', async () => {
+    const smsSpy = jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: true });
+    const origEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+
+    scheduler.scheduleVendorChaser(RFQ, VENDOR);
+    scheduler.clearScheduledChasers(RFQ.rfqNumber);
+
+    jest.runAllTimers();
+    await Promise.resolve();
+    expect(smsSpy).not.toHaveBeenCalled();
+    process.env.NODE_ENV = origEnv;
+  });
+});
+
+// ── _dispatchWhatsApp ─────────────────────────────────────────────────────────
+
+describe('_dispatchWhatsApp', () => {
+  const origEnv = process.env.NODE_ENV;
+
+  beforeEach(() => { process.env.NODE_ENV = 'production'; });
+  afterEach(() => { process.env.NODE_ENV = origEnv; });
+
+  test('returns skipped:true in test environment', async () => {
+    process.env.NODE_ENV = 'test';
+    const result = await scheduler._dispatchWhatsApp(RFQ, VENDOR);
+    expect(result.skipped).toBe(true);
+  });
+
+  test('returns skipped:true when vendor has no phone', async () => {
+    const result = await scheduler._dispatchWhatsApp(RFQ, VENDOR_NO_PHONE);
+    expect(result.skipped).toBe(true);
+  });
+
+  test('returns success:true on a successful API call', async () => {
+    jest.spyOn(whatsAppService, 'sendRFQInvitationWhatsApp').mockResolvedValue({ success: true, messageId: 'wa-ok' });
+    const result = await scheduler._dispatchWhatsApp(RFQ, VENDOR);
+    expect(result.success).toBe(true);
+  });
+
+  test('returns success:false when API returns failure', async () => {
+    jest.spyOn(whatsAppService, 'sendRFQInvitationWhatsApp').mockResolvedValue({ success: false, error: 'bad creds' });
+    const result = await scheduler._dispatchWhatsApp(RFQ, VENDOR);
+    expect(result.success).toBe(false);
+  });
+
+  test('catches thrown errors and returns success:false', async () => {
+    jest.spyOn(whatsAppService, 'sendRFQInvitationWhatsApp').mockRejectedValue(new Error('network down'));
+    const result = await scheduler._dispatchWhatsApp(RFQ, VENDOR);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('network down');
+  });
+});
+
+// ── _dispatchSms ──────────────────────────────────────────────────────────────
+
+describe('_dispatchSms', () => {
+  const origEnv = process.env.NODE_ENV;
+
+  beforeEach(() => { process.env.NODE_ENV = 'production'; });
+  afterEach(() => { process.env.NODE_ENV = origEnv; });
+
+  test('returns skipped:true in test environment', async () => {
+    process.env.NODE_ENV = 'test';
+    const result = await scheduler._dispatchSms(RFQ, VENDOR);
+    expect(result.skipped).toBe(true);
+  });
+
+  test('returns skipped:true when vendor has no phone', async () => {
+    const result = await scheduler._dispatchSms(RFQ, VENDOR_NO_PHONE);
+    expect(result.skipped).toBe(true);
+  });
+
+  test('returns success:true on a successful gateway call', async () => {
+    jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: true, messageId: 'sms-ok' });
+    const result = await scheduler._dispatchSms(RFQ, VENDOR);
+    expect(result.success).toBe(true);
+  });
+
+  test('passes rfqNumber and mobile to sendRFQChaserSms', async () => {
+    const spy = jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: true, messageId: 'sms-ok' });
+    await scheduler._dispatchSms(RFQ, VENDOR);
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({
+      mobile: VENDOR.phone,
+      rfqNumber: RFQ.rfqNumber,
+    }));
+  });
+
+  test('returns success:false when gateway returns failure', async () => {
+    jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: false, error: 'quota exceeded' });
+    const result = await scheduler._dispatchSms(RFQ, VENDOR);
+    expect(result.success).toBe(false);
+  });
+
+  test('catches thrown errors and returns success:false', async () => {
+    jest.spyOn(smsService, 'sendRFQChaserSms').mockRejectedValue(new Error('timeout'));
+    const result = await scheduler._dispatchSms(RFQ, VENDOR);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('timeout');
+  });
+});
+
+// ── _dispatchReminderEmail ────────────────────────────────────────────────────
+
+describe('_dispatchReminderEmail', () => {
+  const origEnv = process.env.NODE_ENV;
+
+  beforeEach(() => { process.env.NODE_ENV = 'production'; });
+  afterEach(() => { process.env.NODE_ENV = origEnv; });
+
+  test('returns skipped:true in test environment', async () => {
+    process.env.NODE_ENV = 'test';
+    const result = await scheduler._dispatchReminderEmail(RFQ, VENDOR);
+    expect(result.skipped).toBe(true);
+  });
+
+  test('returns skipped:true when vendor has no email', async () => {
+    const result = await scheduler._dispatchReminderEmail(RFQ, VENDOR_NO_EMAIL);
+    expect(result.skipped).toBe(true);
+  });
+
+  test('returns sent:true on successful delivery', async () => {
+    jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: true });
+    const result = await scheduler._dispatchReminderEmail(RFQ, VENDOR, { freeCreditsRemaining: 2, isSubscribed: false });
+    expect(result.sent).toBe(true);
+  });
+
+  test('passes isReminder:true to sendRfqInviteEmail', async () => {
+    const spy = jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: true });
+    await scheduler._dispatchReminderEmail(RFQ, VENDOR, {});
+    expect(spy).toHaveBeenCalledWith(
+      VENDOR.email,
+      expect.objectContaining({ isReminder: true, rfq: RFQ })
+    );
+  });
+
+  test('returns sent:false when mailer returns sent:false', async () => {
+    jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: false, reason: 'SMTP not configured' });
+    const result = await scheduler._dispatchReminderEmail(RFQ, VENDOR);
+    expect(result.sent).toBe(false);
+  });
+
+  test('catches thrown errors and returns sent:false', async () => {
+    jest.spyOn(mailerService, 'sendRfqInviteEmail').mockRejectedValue(new Error('auth failed'));
+    const result = await scheduler._dispatchReminderEmail(RFQ, VENDOR);
+    expect(result.sent).toBe(false);
+    expect(result.error).toBe('auth failed');
+  });
+
+  test('uses null defaults for missing creditInfo fields', async () => {
+    const spy = jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: true });
+    await scheduler._dispatchReminderEmail(RFQ, VENDOR); // no creditInfo
+    expect(spy).toHaveBeenCalledWith(
+      VENDOR.email,
+      expect.objectContaining({ freeCreditsRemaining: null, isSubscribed: false })
+    );
+  });
+});

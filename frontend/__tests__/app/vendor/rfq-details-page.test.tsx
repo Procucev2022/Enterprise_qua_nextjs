@@ -98,6 +98,24 @@ describe('Vendor RFQ Details page', () => {
     expect(screen.queryByText('19000')).not.toBeInTheDocument();
   });
 
+  test('does not show Assigned & Invited Suppliers section or Invite Suppliers affordance to vendors', async () => {
+    mockedFetchRFQById.mockResolvedValue({
+      success: true,
+      rfq: {
+        ...BASE_RFQ,
+        assignedVendors: [{ id: 'v-me', name: 'My Vendor Co' }, { id: 'v-comp', name: 'Competitor' }],
+      },
+    });
+
+    render(<VendorRFQDetailsPage />);
+
+    await waitFor(() =>
+      expect(screen.getByText('Steel Bottle RFQ Requirement')).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/Assigned & Invited Suppliers/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Invite Suppliers/i })).not.toBeInTheDocument();
+  });
+
   test('shows zero quotes when this vendor has no record resolved', async () => {
     mockedFetchRFQById.mockResolvedValue({ success: true, rfq: BASE_RFQ });
     global.fetch = jest.fn().mockResolvedValue({ ok: false }) as any;

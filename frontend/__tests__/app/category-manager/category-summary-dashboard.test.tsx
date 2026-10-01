@@ -5,6 +5,13 @@ import CategorySummaryDashboard, {
   rfqsInWindow,
   growthPercentFor,
   demandStatusFor,
+  GrowthBadge,
+  extractQuotesFromRfqs,
+  doesBuyerMatchRfq,
+  formatLocation,
+  formatContactInfo,
+  formatRating,
+  formatContactPerson,
 } from '@/app/category-manager/category-summary-dashboard';
 import * as storeModule from '@/lib/store';
 import { RFQItem, VendorEntry, BuyerAccount } from '@/lib/types';
@@ -165,6 +172,165 @@ describe('category-summary-dashboard pure helpers', () => {
       expect(demandStatusFor(50)).toBe('High Demand');
     });
   });
+
+  describe('GrowthBadge', () => {
+    it('renders New for null value', () => {
+      const { container } = render(<GrowthBadge value={null} />);
+      expect(container).toHaveTextContent('New');
+    });
+
+    it('renders Flat for 0 value', () => {
+      const { container } = render(<GrowthBadge value={0} />);
+      expect(container).toHaveTextContent('Flat');
+    });
+
+    it('renders positive growth with plus sign', () => {
+      const { container } = render(<GrowthBadge value={25.5} />);
+      expect(container).toHaveTextContent('+25.5%');
+    });
+
+    it('renders negative growth without plus sign', () => {
+      const { container } = render(<GrowthBadge value={-12.3} />);
+      expect(container).toHaveTextContent('-12.3%');
+    });
+  });
+
+  describe('extractQuotesFromRfqs', () => {
+    it('extracts real quotes when quotes array is populated', () => {
+      const rfq = makeRfq({
+        category: 'Civil Works',
+        createdAt: '2026-06-01',
+        quotes: [
+          {
+            vendorId: 'v-1',
+            vendorName: 'Apex Infra',
+            vendorCategory: 'Procucev Network',
+            unitPrice: 50000,
+            totalPrice: 50000,
+            leadTimeDays: 7,
+            aiMatchScore: 90,
+            warrantyYears: 1,
+            complianceStatus: 'Fully Compliant',
+            paymentTerms: 'Net 30',
+            remarks: 'Bid details',
+          },
+        ],
+      });
+      const result = extractQuotesFromRfqs([rfq], []);
+      expect(result).toHaveLength(1);
+      expect(result[0].quote.vendorName).toBe('Apex Infra');
+      expect(result[0].quote.unitPrice).toBe(50000);
+    });
+
+    it('synthesizes quotes when quotesCount is set but quotes array is empty', () => {
+      const rfq = makeRfq({
+        category: 'Civil Works',
+        createdAt: '2026-06-01',
+        quotesCount: 2,
+        assignedVendors: [{ id: 'v-10', name: 'Vendor Ten' }],
+        budget: 100000,
+      });
+      const vendor: VendorEntry = makeVendor({
+        id: 'v-20',
+        name: 'Vendor Twenty',
+        majorCategory: 'Civil Works',
+        minorCategories: [],
+        rating: 4.5,
+      });
+      const result = extractQuotesFromRfqs([rfq], [vendor]);
+      expect(result).toHaveLength(2);
+      expect(result[0].quote.vendorName).toBe('Vendor Ten');
+    });
+  });
+
+  describe('doesBuyerMatchRfq', () => {
+    const account: BuyerAccount = makeBuyerAccount({
+      id: 'acc-1',
+      organizationName: 'Acme Corp',
+      contactPerson: 'Jane Doe',
+      corporateEmail: 'jane@acme.com',
+      accountSource: 'public_system',
+      sourcingMode: 'mode_1',
+      status: 'ACTIVE_VERIFIED',
+    });
+
+    it('matches by buyerAccountId', () => {
+      const rfq = makeRfq({ category: 'IT', createdAt: '2026-06-01', buyerAccountId: 'acc-1' });
+      expect(doesBuyerMatchRfq(account, rfq)).toBe(true);
+    });
+
+    it('matches by organizationName', () => {
+      const rfq = makeRfq({ category: 'IT', createdAt: '2026-06-01', buyerAccountName: 'Acme Corp' });
+      expect(doesBuyerMatchRfq(account, rfq)).toBe(true);
+    });
+
+    it('matches by contactPerson', () => {
+      const rfq = makeRfq({ category: 'IT', createdAt: '2026-06-01', buyerAccountName: 'Jane Doe' });
+      expect(doesBuyerMatchRfq(account, rfq)).toBe(true);
+    });
+
+    it('matches by corporateEmail', () => {
+      const rfq = makeRfq({ category: 'IT', createdAt: '2026-06-01', raisedByEmail: 'jane@acme.com' });
+      expect(doesBuyerMatchRfq(account, rfq)).toBe(true);
+    });
+
+    it('returns false when no fields match', () => {
+      const rfq = makeRfq({
+        category: 'IT',
+        createdAt: '2026-06-01',
+        buyerAccountId: 'diff-id',
+        buyerAccountName: 'Different Corp',
+        raisedByEmail: 'diff@other.com',
+      });
+      expect(doesBuyerMatchRfq(account, rfq)).toBe(false);
+    });
+
+    it('synthesizes quotes with default vendor and pricing when budget and vendors are absent', () => {
+      const rfq = makeRfq({
+        category: 'Civil Works',
+        createdAt: '2026-06-01',
+        quotesCount: 1,
+        budget: undefined,
+      });
+      const result = extractQuotesFromRfqs([rfq], []);
+      expect(result).toHaveLength(1);
+      expect(result[0].quote.vendorName).toBe('Supplier Response #1');
+      expect(result[0].quote.unitPrice).toBe(50000);
+    });
+
+    it('returns false for unrelated rfq', () => {
+      const rfq = makeRfq({ category: 'IT', createdAt: '2026-06-01', buyerAccountId: 'acc-999' });
+      expect(doesBuyerMatchRfq(account, rfq)).toBe(false);
+    });
+  });
+
+  describe('formatLocation', () => {
+    it('returns National when city is empty', () => {
+      expect(formatLocation(undefined, undefined)).toBe('National');
+    });
+
+    it('returns city, state when both are given', () => {
+      expect(formatLocation('Mumbai', 'Maharashtra')).toBe('Mumbai, Maharashtra');
+    });
+
+    it('returns city when state is not given', () => {
+      expect(formatLocation('Mumbai', undefined)).toBe('Mumbai');
+    });
+  });
+
+  describe('formatContactInfo', () => {
+    it('returns phone when available', () => {
+      expect(formatContactInfo('+91 99999', 'test@example.com')).toBe('+91 99999');
+    });
+
+    it('returns email when phone is missing', () => {
+      expect(formatContactInfo(undefined, 'test@example.com')).toBe('test@example.com');
+    });
+
+    it('returns dash when both are missing', () => {
+      expect(formatContactInfo(undefined, undefined)).toBe('—');
+    });
+  });
 });
 
 // ── Component wiring — real derived data rendered correctly ────────────────
@@ -316,8 +482,9 @@ describe('CategorySummaryDashboard', () => {
     expect(screen.getByText(/No categories match this search/i)).toBeInTheDocument();
   });
 
-  it('logs an audit entry and shows a toast when Details is clicked', () => {
-    mockApp([], [], []);
+  it('logs an audit entry, shows a toast, and opens category details modal when Details is clicked and closes via X button', () => {
+    const rfqs = [makeRfq({ category: 'Civil Works', createdAt: '2026-06-01' })];
+    mockApp(rfqs, [], []);
     render(<CategorySummaryDashboard />);
 
     const detailsBtns = screen.getAllByRole('button', { name: /Details/i });
@@ -325,6 +492,77 @@ describe('CategorySummaryDashboard', () => {
 
     expect(mockAddAuditLog).toHaveBeenCalledWith(expect.stringContaining('inspected deep analytics'));
     expect(mockShowToast).toHaveBeenCalledWith('Category Telemetry', expect.any(String), 'info');
+    expect(screen.getByText(/Relevant RFQs/i)).toBeInTheDocument();
+
+    // Close using X button
+    const closeBtns = screen.getAllByRole('button');
+    const xBtn = closeBtns.find((b) => b.querySelector('svg.lucide-x'));
+    if (xBtn) fireEvent.click(xBtn);
+    expect(screen.queryByText(/Relevant RFQs/i)).not.toBeInTheDocument();
+  });
+
+  it('opens and closes KPI drilldown modals when KPI cards are clicked', () => {
+    const mockVendor1: VendorEntry = makeVendor({
+      id: 'v-1',
+      name: 'Alpha Supplies',
+      majorCategory: 'Civil Works',
+      minorCategories: ['Concrete'],
+      rating: 4.8,
+      city: 'Delhi',
+      state: 'DL',
+      email: 'alpha@supplies.com',
+      phone: '+91 99999 88888',
+    });
+
+    const mockVendor2: VendorEntry = makeVendor({
+      id: 'v-2',
+      name: 'Beta Supplies',
+      majorCategory: 'Civil Works',
+      minorCategories: ['Concrete'],
+    });
+
+    const mockAccount: BuyerAccount = makeBuyerAccount({
+      id: 'b-1',
+      organizationName: 'Tata Projects',
+      contactPerson: 'Sunil Verma',
+      corporateEmail: 'sunil@tataprojects.com',
+      accountSource: 'public_system',
+      sourcingMode: 'mode_1',
+      status: 'ACTIVE_VERIFIED',
+    });
+
+    const rfqs = [makeRfq({ category: 'Civil Works', createdAt: '2026-06-01', buyerAccountId: 'b-1', quotesCount: 1 })];
+    mockApp(rfqs, [mockVendor1, mockVendor2], [mockAccount]);
+    render(<CategorySummaryDashboard />);
+
+    // Click Active Categories KPI card
+    fireEvent.click(screen.getAllByText(/Active Categories/i)[0]);
+    expect(screen.getByRole('heading', { name: /Active Categories Breakdown/i })).toBeInTheDocument();
+    const xBtn = screen.getAllByRole('button').find((b) => b.querySelector('svg.lucide-x'));
+    if (xBtn) fireEvent.click(xBtn);
+    expect(screen.queryByRole('heading', { name: /Active Categories Breakdown/i })).not.toBeInTheDocument();
+
+    // Click RFQs Raised KPI card
+    fireEvent.click(screen.getAllByText(/RFQs Raised \(30D\)/i)[0]);
+    expect(screen.getByRole('heading', { name: /RFQs Raised Breakdown/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Close Breakdown/i));
+
+    // Click Quotes Received KPI card
+    fireEvent.click(screen.getAllByText(/Quotes Received/i)[0]);
+    expect(screen.getByRole('heading', { name: /Quotes Received Breakdown/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Close Breakdown/i));
+
+    // Click Active Buyers KPI card
+    fireEvent.click(screen.getAllByText(/Active Buyers/i)[0]);
+    expect(screen.getByRole('heading', { name: /Active Enterprise Buyers/i })).toBeInTheDocument();
+    expect(screen.getByText('Sunil Verma')).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Close Breakdown/i));
+
+    // Click Available Vendors KPI card
+    fireEvent.click(screen.getAllByText(/Available Vendors/i)[0]);
+    expect(screen.getByRole('heading', { name: /Available Supplier Network/i })).toBeInTheDocument();
+    expect(screen.getAllByText('Alpha Supplies').length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(screen.getByText(/Close Breakdown/i));
   });
 
   it('switches timeframes and recomputes the displayed RFQ count', () => {
@@ -340,5 +578,346 @@ describe('CategorySummaryDashboard', () => {
     fireEvent.click(screen.getByRole('button', { name: '7 Days' }));
     expect(screen.getAllByText('RFQs Raised (7D)').length).toBeGreaterThan(0);
     expect(screen.getAllByText('0 RFQs').length).toBeGreaterThan(0);
+  });
+
+  it('renders quotes in Quotes Received breakdown modal when quotes exist', () => {
+    const rfqs = [
+      makeRfq({
+        category: 'Civil Works',
+        createdAt: '2026-06-01',
+        quotesCount: 2,
+        quotes: [
+          {
+            vendorId: 'v-1',
+            vendorName: 'Apex Infra Solutions',
+            vendorCategory: 'Procucev Network',
+            unitPrice: 45000,
+            totalPrice: 45000,
+            leadTimeDays: 5,
+            aiMatchScore: 92,
+            warrantyYears: 2,
+            complianceStatus: 'Fully Compliant',
+            paymentTerms: 'Net 30',
+            remarks: 'Best value bid',
+          },
+        ],
+      }),
+    ];
+    mockApp(rfqs, [], []);
+    render(<CategorySummaryDashboard />);
+
+    // Open Quotes Received modal
+    fireEvent.click(screen.getAllByText(/Quotes Received/i)[0]);
+    expect(screen.getByRole('heading', { name: /Quotes Received Breakdown/i })).toBeInTheDocument();
+    expect(screen.getByText('Apex Infra Solutions')).toBeInTheDocument();
+    expect(screen.getAllByText('₹45,000').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('5 Days')).toBeInTheDocument();
+    expect(screen.queryByText(/No quotation responses recorded in this timeframe/i)).not.toBeInTheDocument();
+  });
+
+  it('switches between tabs in Category Details modal and handles explore action from categories KPI modal', () => {
+    const mockVendor: VendorEntry = makeVendor({
+      id: 'v-1',
+      name: 'Apex Concrete Ltd',
+      majorCategory: 'Civil Works',
+      minorCategories: ['Concrete'],
+      rating: 4.8,
+      city: 'Mumbai',
+      state: 'Maharashtra',
+      email: 'sales@apexconcrete.com',
+      contactPerson: 'Ramesh Patel',
+      phone: '+91 9876543210',
+      pan: 'ABCDE1234F',
+      gstin: '27ABCDE1234F1Z5',
+      msme: 'Medium',
+    });
+
+    const mockAccount: BuyerAccount = makeBuyerAccount({
+      id: 'b-1',
+      organizationName: 'Tata Projects',
+      contactPerson: 'Sunil Verma',
+      corporateEmail: 'sunil@tataprojects.com',
+      accountSource: 'public_system',
+      sourcingMode: 'mode_1',
+      status: 'ACTIVE_VERIFIED',
+    });
+
+    const rfqs = [
+      makeRfq({
+        category: 'Civil Works',
+        createdAt: '2026-06-01',
+        buyerAccountId: 'b-1',
+        buyerAccountName: 'Tata Projects',
+        quotesCount: 1,
+        quotes: [
+          {
+            vendorId: 'v-1',
+            vendorName: 'Apex Concrete Ltd',
+            vendorCategory: 'Procucev Network',
+            unitPrice: 50000,
+            totalPrice: 50000,
+            leadTimeDays: 7,
+            aiMatchScore: 90,
+            warrantyYears: 1,
+            complianceStatus: 'Fully Compliant',
+            paymentTerms: 'Net 30',
+            remarks: 'Standard rate',
+          },
+        ],
+      }),
+    ];
+
+    mockApp(rfqs, [mockVendor], [mockAccount]);
+    render(<CategorySummaryDashboard />);
+
+    // Click Active Categories KPI card -> Explore Scope & Details
+    fireEvent.click(screen.getAllByText(/Active Categories/i)[0]);
+    const exploreBtn = screen.getAllByRole('button', { name: /Explore Scope & Details/i })[0];
+    fireEvent.click(exploreBtn);
+
+    // Should open Category Details Modal
+    expect(screen.getByRole('heading', { name: 'Civil Works' })).toBeInTheDocument();
+
+    // Tab 2: Quotes & Pricing
+    fireEvent.click(screen.getByRole('button', { name: /Quotes & Pricing/i }));
+    expect(screen.getAllByText('Apex Concrete Ltd').length).toBeGreaterThanOrEqual(1);
+
+    // Tab 3: Enterprise Buyers
+    fireEvent.click(screen.getByRole('button', { name: /Enterprise Buyers/i }));
+    expect(screen.getAllByText('Tata Projects').length).toBeGreaterThanOrEqual(1);
+
+    // Tab 4: Available Suppliers
+    fireEvent.click(screen.getByRole('button', { name: /Available Suppliers/i }));
+    expect(screen.getByText('Ramesh Patel')).toBeInTheDocument();
+
+    // Tab 5: Minor Categories
+    fireEvent.click(screen.getByRole('button', { name: /Minor Categories \(/i }));
+    expect(screen.getByText('Excavation')).toBeInTheDocument();
+
+    // Back to Relevant RFQs tab
+    fireEvent.click(screen.getByRole('button', { name: /Relevant RFQs \(/i }));
+    expect(screen.getAllByText('Tata Projects').length).toBeGreaterThanOrEqual(1);
+
+    // Close Details Modal
+    fireEvent.click(screen.getByText('Close Details'));
+    expect(screen.queryByRole('heading', { name: 'Civil Works' })).not.toBeInTheDocument();
+  });
+
+  it('handles empty states in all KPI modals and details tabs', () => {
+    mockApp([], [], []);
+    render(<CategorySummaryDashboard />);
+
+    // RFQs KPI Modal with 0 RFQs
+    fireEvent.click(screen.getAllByText(/RFQs Raised/i)[0]);
+    expect(screen.getByText(/No RFQs created in this timeframe/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Close Breakdown/i));
+
+    // Quotes KPI Modal with 0 Quotes
+    fireEvent.click(screen.getAllByText(/Quotes Received/i)[0]);
+    expect(screen.getByText(/No quotation responses recorded in this timeframe/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Close Breakdown/i));
+
+    // Buyers KPI Modal with 0 Buyers
+    fireEvent.click(screen.getAllByText(/Active Buyers/i)[0]);
+    expect(screen.getByText(/No registered enterprise buyer accounts found/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Close Breakdown/i));
+
+    // Vendors KPI Modal with 0 Vendors
+    fireEvent.click(screen.getAllByText(/Available Vendors/i)[0]);
+    expect(screen.getByText(/No suppliers found in directory/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Close Breakdown/i));
+
+    // Open Details for first category with empty data
+    const detailsBtns = screen.getAllByRole('button', { name: /Details/i });
+    fireEvent.click(detailsBtns[0]);
+
+    // Quotes tab empty state
+    fireEvent.click(screen.getByRole('button', { name: /Quotes & Pricing/i }));
+    expect(screen.getByText(/No supplier quotations received for this category yet/i)).toBeInTheDocument();
+
+    // Buyers tab empty state
+    fireEvent.click(screen.getByRole('button', { name: /Enterprise Buyers/i }));
+    expect(screen.getByText(/No active buyers have issued RFQs for this category yet/i)).toBeInTheDocument();
+
+    // Vendors tab empty state
+    fireEvent.click(screen.getByRole('button', { name: /Available Suppliers/i }));
+    expect(screen.getByText(/No suppliers mapped to/i)).toBeInTheDocument();
+
+    // Close
+    fireEvent.click(screen.getByText('Close Details'));
+
+    // Switch remaining timeframe filters (90d, 180d, 1y)
+    fireEvent.click(screen.getByRole('button', { name: '90 Days' }));
+    expect(screen.getAllByText('RFQs Raised (90D)').length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: '180 Days' }));
+    expect(screen.getAllByText('RFQs Raised (180D)').length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: '1 Year' }));
+    expect(screen.getAllByText('RFQs Raised (1Y)').length).toBeGreaterThan(0);
+  });
+
+  it('renders populated data across all tabs in Category Details Modal', () => {
+    const mockVendor: VendorEntry = makeVendor({
+      id: 'v-1',
+      name: 'Alpha Infra',
+      majorCategory: 'Civil Works',
+      minorCategories: ['Bricks'],
+      rating: 4.9,
+      contactPerson: 'Rajesh Sharma',
+      city: 'Mumbai',
+      state: 'Maharashtra',
+      email: 'rajesh@alphainfra.com',
+      phone: '+91 9876543210',
+    });
+
+    const mockAccount: BuyerAccount = makeBuyerAccount({
+      id: 'b-1',
+      organizationName: 'L&T Construction',
+      contactPerson: 'Amit Patel',
+      corporateEmail: 'amit@lntecc.com',
+      accountSource: 'public_system',
+      sourcingMode: 'mode_1',
+      status: 'ACTIVE_VERIFIED',
+    });
+
+    const mockRfq = makeRfq({
+      id: 'rfq-101',
+      rfqNumber: 'RFQ-CIVIL-101',
+      title: 'Structural Steel and Brick Work',
+      category: 'Civil Works',
+      createdAt: '2026-06-01',
+      buyerAccountId: 'b-1',
+      buyerAccountName: 'L&T Construction',
+      quotesCount: 2,
+      extractedEntities: [
+        {
+          id: 'ee-1',
+          itemName: 'Bricks',
+          quantity: 5000,
+          unit: 'pcs',
+          targetDate: '2026-07-01',
+          technicalSpecs: '',
+          confidence: 0.9,
+          category: 'Civil Works',
+          majorCategory: 'Civil Works',
+          minorCategory: 'Bricks',
+        },
+      ],
+      quotes: [
+        {
+          vendorId: 'v-1',
+          vendorName: 'Alpha Infra',
+          vendorCategory: 'Client List',
+          unitPrice: 150000,
+          totalPrice: 150000,
+          leadTimeDays: 30,
+          aiMatchScore: 90,
+          warrantyYears: 1,
+          complianceStatus: 'Fully Compliant',
+          paymentTerms: 'Immediate delivery',
+          remarks: '',
+        },
+      ],
+    });
+
+    mockApp([mockRfq], [mockVendor], [mockAccount]);
+    render(<CategorySummaryDashboard />);
+
+    // Open Details for Civil Works
+    const detailsBtns = screen.getAllByRole('button', { name: /Details/i });
+    fireEvent.click(detailsBtns[0]);
+
+    // Tab 1: Relevant RFQs
+    expect(screen.getByText(/Relevant RFQs/i)).toBeInTheDocument();
+    expect(screen.getByText('RFQ-CIVIL-101')).toBeInTheDocument();
+    expect(screen.getByText('Structural Steel and Brick Work')).toBeInTheDocument();
+
+    // Tab 2: Quotes & Pricing
+    fireEvent.click(screen.getByRole('button', { name: /Quotes & Pricing/i }));
+    expect(screen.getAllByText('Alpha Infra').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('₹1,50,000').length).toBeGreaterThanOrEqual(1);
+
+    // Tab 3: Enterprise Buyers
+    fireEvent.click(screen.getByRole('button', { name: /Enterprise Buyers/i }));
+    expect(screen.getAllByText('L&T Construction').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/Category RFQs:/i)).toBeInTheDocument();
+
+    // Tab 4: Available Suppliers
+    fireEvent.click(screen.getByRole('button', { name: /Available Suppliers/i }));
+    expect(screen.getByText('Rajesh Sharma')).toBeInTheDocument();
+    expect(screen.getByText('Mumbai, Maharashtra')).toBeInTheDocument();
+
+    // Tab 5: Minor Categories
+    fireEvent.click(screen.getByRole('button', { name: /^Minor Categories/i }));
+    expect(screen.getByText(/Bricks/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/1 RFQs/i).length).toBeGreaterThanOrEqual(1);
+
+    // Close Details Modal
+    fireEvent.click(screen.getByText('Close Details'));
+  });
+
+  describe('formatRating and formatContactPerson helpers', () => {
+    it('formats rating correctly with fallback', () => {
+      expect(formatRating(4.8)).toBe('4.8');
+      expect(formatRating(0)).toBe('0');
+      expect(formatRating(undefined)).toBe('4.5');
+      expect(formatRating(NaN)).toBe('4.5');
+    });
+
+    it('formats contact person correctly with fallback', () => {
+      expect(formatContactPerson('John Doe')).toBe('John Doe');
+      expect(formatContactPerson('   ')).toBe('Sales Coordinator');
+      expect(formatContactPerson('')).toBe('Sales Coordinator');
+      expect(formatContactPerson(undefined)).toBe('Sales Coordinator');
+    });
+
+    it('formats location correctly with city and state combinations', () => {
+      expect(formatLocation('Mumbai', 'Maharashtra')).toBe('Mumbai, Maharashtra');
+      expect(formatLocation('Delhi', '')).toBe('Delhi');
+      expect(formatLocation('', 'Karnataka')).toBe('National');
+      expect(formatLocation('', '')).toBe('National');
+      expect(formatLocation(undefined, undefined)).toBe('National');
+    });
+
+    it('formats contact info with phone and email combinations', () => {
+      expect(formatContactInfo('+91 99999 88888', 'a@b.com')).toBe('+91 99999 88888');
+      expect(formatContactInfo('', 'a@b.com')).toBe('a@b.com');
+      expect(formatContactInfo('', '')).toBe('—');
+      expect(formatContactInfo(undefined, undefined)).toBe('—');
+    });
+
+    it('calculates parseTimestamp, growthPercentFor, and demandStatusFor accurately', () => {
+      expect(parseTimestamp('invalid-date')).toBe(0);
+      expect(parseTimestamp('2026-06-01T00:00:00Z')).toBeGreaterThan(0);
+
+      const now = Date.now();
+      const currentRfq = makeRfq({ category: 'Civil Works', createdAt: new Date(now - 86400000).toISOString() });
+      const priorRfq = makeRfq({ category: 'Civil Works', createdAt: new Date(now - 10 * 86400000).toISOString() });
+
+      expect(growthPercentFor([currentRfq, priorRfq], 7)).toBe(0);
+      expect(growthPercentFor([currentRfq], 7)).toBe(null);
+      expect(growthPercentFor([], 7)).toBe(0);
+
+      expect(demandStatusFor(15)).toBe('High Demand');
+      expect(demandStatusFor(7)).toBe('Optimal');
+      expect(demandStatusFor(3)).toBe('Growing');
+      expect(demandStatusFor(1)).toBe('Emerging');
+      expect(demandStatusFor(0)).toBe('No Activity');
+    });
+
+    it('renders GrowthBadge with various values', () => {
+      const { container: positive } = render(<GrowthBadge value={25} />);
+      expect(positive.textContent).toContain('+25%');
+
+      const { container: negative } = render(<GrowthBadge value={-15} />);
+      expect(negative.textContent).toContain('-15%');
+
+      const { container: flat } = render(<GrowthBadge value={0} />);
+      expect(flat.textContent).toContain('Flat');
+
+      const { container: newBadge } = render(<GrowthBadge value={null} />);
+      expect(newBadge.textContent).toContain('New');
+    });
   });
 });
