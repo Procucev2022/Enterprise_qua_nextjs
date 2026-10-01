@@ -21,6 +21,15 @@ import zohoReconciliationService from './services/zohoReconciliationService.js';
 // on globalThis here, once, lets d1Bridge.js read it synchronously without
 // its own require/import of the virtual module.
 globalThis.__CF_ENV__ = env;
+if (env && typeof env === 'object') {
+  try {
+    for (const [k, v] of Object.entries(env)) {
+      if (typeof v === 'string' && !process.env[k]) {
+        process.env[k] = v;
+      }
+    }
+  } catch {}
+}
 
 // storeService.js's persistence writes are all fire-and-forget: `promise
 // .catch(err => logger.error(...))`, never awaited by the caller, so the

@@ -454,7 +454,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
             name: v.name || 'Enterprise Vendor',
             email: v.email || null,
             contactPerson: v.contactPerson || v.name || null,
-            phone: v.phone || null,
+            phone: v.phone || (v as any).mobile || (v as any).mobileNumber || null,
           }));
         }
       }

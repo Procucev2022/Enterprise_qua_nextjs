@@ -79,7 +79,8 @@ function clearScheduledChasers(rfqNumber) {
  */
 async function _dispatchWhatsApp(rfq, vendor, jobId) {
   if (process.env.NODE_ENV === 'test') return { channel: 'whatsapp', skipped: true };
-  if (!vendor.phone) {
+  const phone = vendor.phone || vendor.mobile || vendor.mobileNumber;
+  if (!phone) {
     logger.debug(`[CHASER] WhatsApp skipped for ${vendor.name} — no phone`, {}, 'RFQ_CHASER');
     if (jobId) domainQueries.markChaserJobFiredInDB(jobId).catch(() => { });
     return { channel: 'whatsapp', skipped: true };
@@ -89,10 +90,10 @@ async function _dispatchWhatsApp(rfq, vendor, jobId) {
     // of whether an immediate invite was sent within the last 30s.  The
     // immediate send in inviteVendorsToRFQ and this scheduled chaser are two
     // deliberately separate sends — throttle must not suppress either one.
-    whatsAppService.clearWhatsAppThrottleForPhone(vendor.phone);
+    whatsAppService.clearWhatsAppThrottleForPhone(phone);
 
     const result = await whatsAppService.sendRFQInvitationWhatsApp({
-      phone: vendor.phone,
+      phone,
       vendorName: vendor.name,
       contactPerson: vendor.contactPerson,
       rfqNumber: rfq.rfqNumber,
@@ -100,7 +101,7 @@ async function _dispatchWhatsApp(rfq, vendor, jobId) {
       vendorEmail: vendor.email,
     });
     logger.info(
-      `[CHASER] WhatsApp → ${vendor.name} (${vendor.phone}) for ${rfq.rfqNumber}: ${result.success ? `ok (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
+      `[CHASER] WhatsApp → ${vendor.name} (${phone}) for ${rfq.rfqNumber}: ${result.success ? `ok (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
       { rfqNumber: rfq.rfqNumber, vendorId: vendor.id, success: result.success },
       'RFQ_CHASER'
     );
@@ -121,25 +122,26 @@ async function _dispatchWhatsApp(rfq, vendor, jobId) {
  */
 async function _dispatchSms(rfq, vendor, jobId) {
   if (process.env.NODE_ENV === 'test') return { channel: 'sms', skipped: true };
-  if (!vendor.phone) {
+  const phone = vendor.phone || vendor.mobile || vendor.mobileNumber;
+  if (!phone) {
     logger.debug(`[CHASER] SMS skipped for ${vendor.name} — no phone`, {}, 'RFQ_CHASER');
     if (jobId) domainQueries.markChaserJobFiredInDB(jobId).catch(() => { });
     return { channel: 'sms', skipped: true };
   }
   try {
     // Same throttle-bypass rationale as _dispatchWhatsApp above.
-    smsService.clearSmsThrottleForPhone(vendor.phone);
+    smsService.clearSmsThrottleForPhone(phone);
 
     const bidUrl = whatsAppService.generateOneClickBidUrl(rfq.rfqNumber, vendor.email);
     const result = await smsService.sendRFQChaserSms({
-      mobile: vendor.phone,
+      mobile: phone,
       vendorName: vendor.name,
       rfqNumber: rfq.rfqNumber,
       rfqTitle: rfq.title,
       bidLink: bidUrl,
     });
     logger.info(
-      `[CHASER] SMS → ${vendor.name} (${vendor.phone}) for ${rfq.rfqNumber}: ${result.success ? `ok (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
+      `[CHASER] SMS → ${vendor.name} (${phone}) for ${rfq.rfqNumber}: ${result.success ? `ok (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
       { rfqNumber: rfq.rfqNumber, vendorId: vendor.id, success: result.success },
       'RFQ_CHASER'
     );

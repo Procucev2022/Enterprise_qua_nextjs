@@ -57,7 +57,7 @@ function buildRFQ(overrides: Partial<RFQItem> = {}): RFQItem {
     sourcingMode: 'mode_2',
     status: 'Quotes Pending',
     quotesCount: 0,
-    targetDeliveryDate: '2026-09-30',
+    targetDeliveryDate: '2026-12-31',
     budget: 348000,
     deliveryLocation: 'Navi Mumbai Plant, Gate 3',
     deliveryPincode: '400701',
@@ -109,7 +109,7 @@ describe('toFormState', () => {
       category: MAJOR,
       status: 'Quotes Pending',
       budget: 348000,
-      targetDeliveryDate: '2026-09-30',
+      targetDeliveryDate: '2026-12-31',
       deliveryLocation: 'Navi Mumbai Plant, Gate 3',
       deliveryPincode: '400701',
     });

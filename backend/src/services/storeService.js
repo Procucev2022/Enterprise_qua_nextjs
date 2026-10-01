@@ -2245,7 +2245,7 @@ class StoreService {
       name: v.name,
       email: v.email || null,
       contactPerson: v.contactPerson || null,
-      phone: v.phone || null,
+      phone: v.phone || v.mobile || v.mobileNumber || null,
     }));
     const updatedRFQ = this.updateRFQ(rfq.id, { assignedVendors: [...existing, ...entries] });
 
@@ -2300,11 +2300,12 @@ class StoreService {
       // Real WhatsApp dispatch — fire-and-forget alongside the simulation.
       // No-ops when WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_ACCESS_TOKEN are unset
       // (falls back to wa.me deep-link logging), and skips entirely in test env.
-      if (vendor.phone) {
+      const vendorPhone = vendor.phone || vendor.mobile || vendor.mobileNumber;
+      if (vendorPhone) {
         const bidUrl = whatsAppService.generateOneClickBidUrl(updatedRFQ.rfqNumber, vendor.email);
         this._background(
           whatsAppService.sendRFQInvitationWhatsApp({
-            phone: vendor.phone,
+            phone: vendorPhone,
             vendorName: vendor.name,
             contactPerson: vendor.contactPerson,
             rfqNumber: updatedRFQ.rfqNumber,
@@ -2312,7 +2313,7 @@ class StoreService {
             vendorEmail: vendor.email,
           }).then((result) => {
             logger.info(
-              `WhatsApp RFQ invite to ${vendor.name} (${vendor.phone}): ${result.success ? `sent (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
+              `WhatsApp RFQ invite to ${vendor.name} (${vendorPhone}): ${result.success ? `sent (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
               { vendorId: vendor.id, rfqNumber: updatedRFQ.rfqNumber, success: result.success },
               'STORE_SERVICE'
             );
@@ -2323,14 +2324,14 @@ class StoreService {
         // Real SMS chaser — fire-and-forget. Uses the same DLT gateway as OTP.
         this._background(
           smsService.sendRFQChaserSms({
-            mobile: vendor.phone,
+            mobile: vendorPhone,
             vendorName: vendor.name,
             rfqNumber: updatedRFQ.rfqNumber,
             rfqTitle: updatedRFQ.title,
             bidLink: bidUrl,
           }).then((result) => {
             logger.info(
-              `SMS RFQ invite to ${vendor.name} (${vendor.phone}): ${result.success ? `sent (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
+              `SMS RFQ invite to ${vendor.name} (${vendorPhone}): ${result.success ? `sent (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
               { vendorId: vendor.id, rfqNumber: updatedRFQ.rfqNumber, success: result.success },
               'STORE_SERVICE'
             );
@@ -3403,13 +3404,14 @@ class StoreService {
 
       // Real multi-channel outreach — fire-and-forget alongside simulation.
       // Both services no-op in test env or when credentials are unset.
-      if (vendor.phone) {
+      const vendorPhone = vendor.phone || vendor.mobile || vendor.mobileNumber;
+      if (vendorPhone) {
         const bidUrl = whatsAppService.generateOneClickBidUrl(rfq.rfqNumber, vendor.email);
 
         if (channels.includes('whatsapp')) {
           this._background(
             whatsAppService.sendRFQInvitationWhatsApp({
-              phone: vendor.phone,
+              phone: vendorPhone,
               vendorName: vendor.name,
               contactPerson: vendor.contactPerson,
               rfqNumber: rfq.rfqNumber,
@@ -3417,7 +3419,7 @@ class StoreService {
               vendorEmail: vendor.email,
             }).then((result) => {
               logger.info(
-                `[CHASER] WhatsApp to ${vendor.name} (${vendor.phone}): ${result.success ? `delivered (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
+                `[CHASER] WhatsApp to ${vendor.name} (${vendorPhone}): ${result.success ? `delivered (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
                 { vendorId: vendor.id, rfqNumber: rfq.rfqNumber, success: result.success },
                 'STORE_SERVICE'
               );
@@ -3429,14 +3431,14 @@ class StoreService {
         if (channels.includes('sms')) {
           this._background(
             smsService.sendRFQChaserSms({
-              mobile: vendor.phone,
+              mobile: vendorPhone,
               vendorName: vendor.name,
               rfqNumber: rfq.rfqNumber,
               rfqTitle: rfq.title,
               bidLink: bidUrl,
             }).then((result) => {
               logger.info(
-                `[CHASER] SMS to ${vendor.name} (${vendor.phone}): ${result.success ? `sent (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
+                `[CHASER] SMS to ${vendor.name} (${vendorPhone}): ${result.success ? `sent (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
                 { vendorId: vendor.id, rfqNumber: rfq.rfqNumber, success: result.success },
                 'STORE_SERVICE'
               );

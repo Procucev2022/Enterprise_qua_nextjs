@@ -142,7 +142,7 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
       data: {
         title: 'Centrifugal Pump Package',
         category: 'Engineering Spares - Mechanical',
-        targetDeliveryDate: '2026-09-30',
+        targetDeliveryDate: '2026-12-31',
         estimatedBudget: 850000,
         extractedEntities: [
           {
@@ -150,7 +150,7 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
             itemName: 'Centrifugal Pump 500 GPM',
             quantity: 5,
             unit: 'Sets',
-            targetDate: '2026-09-30',
+            targetDate: '2026-12-31',
             technicalSpecs: 'SS316 Impeller',
             confidence: 95,
             category: 'Pumps & Accessories',
@@ -197,7 +197,7 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
         status: 'Quotes Pending',
         sourcingMode: 'mode_2',
         quotesCount: 0,
-        targetDeliveryDate: '2026-09-30',
+        targetDeliveryDate: '2026-12-31',
         budget: 850000,
         deliveryLocation: 'Hazira Complex',
         deliveryPincode: '394270',

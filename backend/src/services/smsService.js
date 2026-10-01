@@ -1,13 +1,21 @@
 const { logger } = require('./loggerService');
 
+function getEnv(key, fallback = '') {
+  if (process.env[key] !== undefined && process.env[key] !== '') return process.env[key];
+  if (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__[key]) {
+    return globalThis.__CF_ENV__[key];
+  }
+  return fallback;
+}
+
 // SMS Gateway configuration loaded from environment with defaults
 const SMS_GATEWAY_CONFIG = {
-  URL: process.env.SMS_GATEWAY_URL || 'https://sms.sendmsg.in/datasend',
-  USER: process.env.SMS_GATEWAY_USER || 'Procucev_OTP',
-  PASS: process.env.SMS_GATEWAY_PASS || 'TzlzyMcFEZRF',
-  SENDER: process.env.SMS_GATEWAY_SENDER || 'PROCUC',
-  SMSGID: process.env.SMS_GATEWAY_SMSGID || 'TEST',
-  RFQ_SMSGID: process.env.SMS_GATEWAY_RFQ_SMSGID || process.env.SMS_GATEWAY_SMSGID || 'TEST',
+  get URL() { return getEnv('SMS_GATEWAY_URL', 'https://sms.sendmsg.in/datasend'); },
+  get USER() { return getEnv('SMS_GATEWAY_USER', 'Procucev_OTP'); },
+  get PASS() { return getEnv('SMS_GATEWAY_PASS', 'TzlzyMcFEZRF'); },
+  get SENDER() { return getEnv('SMS_GATEWAY_SENDER', 'PROCUC'); },
+  get SMSGID() { return getEnv('SMS_GATEWAY_SMSGID', '1102294821'); },
+  get RFQ_SMSGID() { return getEnv('SMS_GATEWAY_RFQ_SMSGID', getEnv('SMS_GATEWAY_SMSGID', '1777179075004997492')); },
 };
 
 // In-memory cooldown throttle cache to prevent infinite / spam loop SMS dispatches to the same phone number
@@ -167,7 +175,9 @@ async function sendRFQChaserSms({ mobile, vendorName, rfqNumber, rfqTitle, bidLi
 
   const defaultFrontend = process.env.PUBLIC_FRONTEND_URL || 'https://procucev-enterprise-frontend.procucev-enterprise.workers.dev';
   const resolvedBidLink = bidLink || `${defaultFrontend}/vendor/quotation-form?rfq=${encodeURIComponent(rfqNumber)}`;
-  const message = `[PRCU-RFQ] RFQ Alert ${rfqNumber}: You are invited to bid for ${rfqTitle || rfqNumber}. Submit quote: ${resolvedBidLink} - Team Procucev.`;
+  // Exact approved DLT template (smsgid: 1777179075004997492):
+  // RFQ Alert {#var#}: You are invited to bid for {#var#}. Submit quote : {#var#} - Team Procucev.
+  const message = `RFQ Alert ${rfqNumber}: You are invited to bid for ${rfqTitle || rfqNumber}. Submit quote : ${resolvedBidLink} - Team Procucev.`;
 
   const payload = {
     user: SMS_GATEWAY_CONFIG.USER,

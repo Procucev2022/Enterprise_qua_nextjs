@@ -74,7 +74,7 @@ describe('WhatsApp Service Unit Tests', () => {
     expect(whatsAppService.WHATSAPP_CONFIG).toHaveProperty('FROM_NUMBER');
     expect(whatsAppService.WHATSAPP_CONFIG).toHaveProperty('TEMPLATE_RFQ_INVITE');
     expect(whatsAppService.WHATSAPP_CONFIG.TEMPLATE_RFQ_INVITE).toBe(
-      process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION || 'rfq_notification_for_sellers_for_rfq_feb_5'
+      process.env.WHATSAPP_TEMPLATE_RFQ_NOTIFICATION || 'rfq_reminder_notification_v2'
     );
   });
 });
