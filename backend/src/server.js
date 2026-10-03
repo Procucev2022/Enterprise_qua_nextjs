@@ -5,7 +5,7 @@ const emailGatewayService = require('./services/emailGatewayService');
 const zohoReconciliationService = require('./services/zohoReconciliationService');
 const rfqChaserScheduler = require('./services/rfqChaserScheduler');
 const { logger } = require('./services/loggerService');
-
+// Chaser schedule: 5m SMS -> 6h Call (telephony deferred) -> 12h WhatsApp -> 24h Email
 const PORT = process.env.PORT || 4000;
 
 /**
@@ -118,3 +118,4 @@ if (process.env.NODE_ENV !== 'test' && (process.env.AUTO_START_SERVER === 'true'
 }
 
 module.exports = { app, bootstrapServer, start, reportDatabaseHealth, installCrashHandlers };
+

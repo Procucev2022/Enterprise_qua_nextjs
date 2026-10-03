@@ -932,7 +932,51 @@ async function sendVendorCreditsExhaustedEmail(toOrParams, maybeContext) {
 
 // ── Vendor quote → owning buyer ─────────────────────────────────────────────
 
-function buildQuoteReceivedEmail(to, { rfq, quote, recipientName }) {
+function buildQuoteReceivedEmail(to, { rfq = {}, quote = {}, recipientName }) {
+  const isEmailSource = rfq.source === 'email' || rfq.source === 'email_gateway' || rfq.source === 'inbound_email';
+  const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
+  const createdAtMs = rfq.createdAt ? new Date(rfq.createdAt).getTime() : 0;
+  const isWithin48h = !isEmailSource && ((createdAtMs > 0 && Date.now() - createdAtMs < FORTY_EIGHT_HOURS_MS) || Boolean(rfq.quotesHidden));
+  const isClosed = rfq.status === 'Closed';
+  const isSealed = isWithin48h && !isClosed;
+
+  if (isSealed) {
+    const unsealDateStr = createdAtMs > 0
+      ? new Date(createdAtMs + FORTY_EIGHT_HOURS_MS).toLocaleString('en-IN')
+      : 'in 48 hours';
+
+    const inner = `
+      <p>${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}</p>
+      <p>${quote.vendorName ? `<strong>${quote.vendorName}</strong> has` : 'A vendor has'} submitted a quotation against your RFQ.</p>
+      <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 14px 16px; margin: 16px 0;">
+        <p style="margin: 0 0 6px 0; color: #92400e; font-weight: bold; font-size: 13px;">
+          🔒 Commercial Bid Details Sealed (48-Hour Bidding Period Active)
+        </p>
+        <p style="margin: 0 0 6px 0; font-size: 12px; color: #78350f; line-height: 1.5;">
+          In accordance with Enterprise QUA procurement policies, commercial bid details (pricing, payment terms, and delivery specifications) remain strictly sealed and hidden from the buyer side for <strong>48 hours</strong> after RFQ release to preserve bidding integrity.
+        </p>
+        <p style="margin: 0; font-size: 11px; color: #b45309; font-weight: 600;">
+          ⏰ Unseals on: ${unsealDateStr} (or upon official RFQ closure)
+        </p>
+      </div>
+      <table style="width: 100%; border-collapse: collapse; margin: 16px 0; background: #f8fafc;">
+        ${row('RFQ Number', rfq.rfqNumber)}
+        ${row('Requirement', rfq.title)}
+        ${row('Vendor', quote.vendorName)}
+        ${row('Submission Status', 'Quotation Received & Sealed')}
+        ${row('Commercial Details', 'Hidden for 48 hours (bidding integrity window)')}
+      </table>
+      <p style="font-size: 13px; color: #64748b;">Sign in to your Procucev account to track the status of this RFQ. Full quotation details will become visible after the 48-hour period concludes.</p>
+    `;
+
+    return {
+      from: fromAddress(),
+      to,
+      subject: `New quote on ${rfq.rfqNumber}${quote.vendorName ? ` from ${quote.vendorName}` : ''} (Sealed for 48h)`,
+      html: wrapEmail('PROCUCEV ENTERPRISE', 'Quotation Received (Sealed)', inner),
+    };
+  }
+
   const inner = `
     <p>${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}</p>
     <p>${quote.vendorName ? `<strong>${quote.vendorName}</strong> has` : 'A vendor has'} submitted a quotation against your RFQ.</p>

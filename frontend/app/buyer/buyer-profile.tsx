@@ -11,7 +11,7 @@ import {
 } from '@/lib/buyerProfileClient';
 import { BUYER_PROFILE_LIMITS, ORGANIZATION_TYPE_OPTIONS } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { FORM_SCHEMAS, validateFormData } from '@/lib/validationSchemas';
+import { FORM_SCHEMAS, validateFormData, validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
 import { logger } from '@/lib/logger';
 import AccountSecurityPanel from '@/app/components/AccountSecurityPanel';
 import type { BuyerProfileUpdatePayload, MajorMinorCategory, OrganizationType } from '@/lib/types';
@@ -19,6 +19,8 @@ import {
   Building2,
   ShieldCheck,
   CheckCircle2,
+  AlertCircle,
+  Loader2,
   KeyRound,
   MapPin,
   User,
@@ -64,6 +66,56 @@ export default function BuyerProfilePage() {
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
   const [pincode, setPincode] = useState('');
+  const [pincodeError, setPincodeError] = useState<string | null>(null);
+  const [pincodeValidating, setPincodeValidating] = useState(false);
+  const [pincodePostOffices, setPincodePostOffices] = useState<PostOfficeDetail[]>([]);
+  const pincodeDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    const raw = pincode.trim();
+    if (pincodeDebounceRef.current) clearTimeout(pincodeDebounceRef.current);
+    if (!raw) {
+      setPincodeError(null);
+      setPincodeValidating(false);
+      setPincodePostOffices([]);
+      return;
+    }
+    if (isDummyPincode(raw)) {
+      setPincodeError('Invalid or dummy PIN code');
+      setPincodeValidating(false);
+      setPincodePostOffices([]);
+      return;
+    }
+    if (raw.length >= 3 && !PINCODE_PATTERN.test(raw)) {
+      setPincodeError('Invalid PIN code format');
+      setPincodeValidating(false);
+      setPincodePostOffices([]);
+      return;
+    }
+    if (/^\d{6}$/.test(raw)) {
+      setPincodeValidating(true);
+      pincodeDebounceRef.current = setTimeout(async () => {
+        try {
+          const res = await validatePincode(raw);
+          if (!res.isValid) {
+            setPincodeError(res.message || 'Invalid PIN code');
+            setPincodePostOffices([]);
+          } else {
+            setPincodeError(null);
+            setPincodePostOffices(res.postOffices || []);
+          }
+        } catch {
+          setPincodeError(null);
+        } finally {
+          setPincodeValidating(false);
+        }
+      }, 350);
+    } else {
+      setPincodeError(null);
+      setPincodeValidating(false);
+      setPincodePostOffices([]);
+    }
+  }, [pincode]);
   const [country, setCountry] = useState('');
 
   // Contact Person State. Email and mobile belong to the signed-in account's
@@ -381,6 +433,11 @@ export default function BuyerProfilePage() {
       return;
     }
 
+    if (pincode.trim() && pincodeError) {
+      showToast(UI_STRINGS.buyerProfile.validationErrorTitle, pincodeError, 'warning');
+      return;
+    }
+
     const categories = flattenCategorySelection(selectedMajor, selectedMinor);
     if (categories.length === 0) {
       showToast(
@@ -653,13 +710,36 @@ export default function BuyerProfilePage() {
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">PIN Code</label>
+                  <div className="flex items-center justify-between mb-0.5">
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">PIN Code</label>
+                    {pincodeValidating && (
+                      <span className="text-[10px] text-indigo-500 font-bold flex items-center gap-1">
+                        <Loader2 size={10} className="animate-spin" /> Checking
+                      </span>
+                    )}
+                    {!pincodeValidating && pincodePostOffices.length > 0 && !pincodeError && (
+                      <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-0.5">
+                        <CheckCircle2 size={10} /> Valid
+                      </span>
+                    )}
+                    {!pincodeValidating && pincodeError && pincode.trim().length >= 6 && (
+                      <span className="text-[10px] font-bold text-rose-500 flex items-center gap-0.5">
+                        <AlertCircle size={10} /> Invalid
+                      </span>
+                    )}
+                  </div>
                   <input
                     type="text"
                     value={pincode}
-                    onChange={(e) => setPincode(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
+                    maxLength={6}
+                    onChange={(e) => setPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    className={`w-full px-3 py-2 rounded-xl border text-xs font-mono font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white ${
+                      pincodeError ? 'border-rose-400 dark:border-rose-700' : 'border-slate-200 dark:border-gray-800'
+                    }`}
                   />
+                  {pincodeError && pincode.trim().length >= 6 && (
+                    <p className="text-[10px] text-rose-500 mt-0.5 font-medium">{pincodeError}</p>
+                  )}
                 </div>
                 <div>
                   <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Country</label>

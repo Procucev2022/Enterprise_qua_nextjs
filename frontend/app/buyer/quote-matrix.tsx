@@ -37,7 +37,7 @@ interface QuoteMatrixProps {
 }
 
 export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount = false }: QuoteMatrixProps) {
-  const { rfqs: allRfqs, selectedRFQForMatrix, setSelectedRFQForMatrix, showToast, openRFQDeepDive, deepDiveModalOpen, setDeepDiveModalOpen, selectedRFQForDeepDive } = useApp();
+  const { currentRole, rfqs: allRfqs, selectedRFQForMatrix, setSelectedRFQForMatrix, showToast, openRFQDeepDive, deepDiveModalOpen, setDeepDiveModalOpen, selectedRFQForDeepDive } = useApp();
   const searchParams = useSearchParams();
   const rfqParam = searchParams?.get('rfq');
 
@@ -186,7 +186,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
       </div>
 
       {/* Evaluation Matrix Comparison Table */}
-      {currentRFQ?.quotesHidden ? (
+      {currentRole === 'buyer' && currentRFQ?.quotesHidden ? (
         <div className="p-12 text-center glass-panel rounded-2xl space-y-4 border border-amber-300 dark:border-amber-700/50 bg-amber-50/50 dark:bg-amber-950/20 shadow-md">
           <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 flex items-center justify-center shadow-inner">
             <Lock size={28} />
