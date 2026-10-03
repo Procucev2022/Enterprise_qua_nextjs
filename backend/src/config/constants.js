@@ -772,7 +772,7 @@ const SMS_DLT_TEMPLATES = {
     SMSGID:   process.env.SMS_GATEWAY_RFQ_SMSGID || '1777179100456823380',
     CATEGORY: 'SERVICE_IMPLICIT',
     // Exact approved template text — static parts must match character-for-character.
-    TEMPLATE: 'RFQ Alert {#alp#}: You are invited to bid for {#alp#}. Submit quote : {#urg#} - Team Procucev.',
+    TEMPLATE: 'RFQ Alert: You are invited to bid for RFQ {#var#}, Item: {#var#}. Submit quote: {#var#} - Team Procucev.',
     VARIABLES: ['rfqNumber', 'rfqTitle', 'bidUrl'],
     // bidUrl points to the registered workers.dev quotation-form page.
     // Public URL shorteners are forbidden under TRAI DLT unless whitelisted.

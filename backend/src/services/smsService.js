@@ -354,11 +354,11 @@ async function sendRFQChaserSms({
     )}`;
 
   // Exact approved DLT template (SMS_DLT_TEMPLATES.RFQ_CHASER.TEMPLATE):
-  // RFQ Alert {#alp#}: You are invited to bid for {#alp#}. Submit quote : {#urg#} - Team Procucev.
+  // RFQ Alert: You are invited to bid for RFQ {#var#}, Item: {#var#}. Submit quote: {#var#} - Team Procucev.
   // Variables mapped in order: rfqNumber → rfqTitle → bidUrl
-  const message = `RFQ Alert ${rfqNumber}: You are invited to bid for ${
+  const message = `RFQ Alert: You are invited to bid for RFQ ${rfqNumber}, Item: ${
     rfqTitle || rfqNumber
-  }. Submit quote : ${resolvedBidLink} - Team Procucev.`;
+  }. Submit quote: ${resolvedBidLink} - Team Procucev.`;
 
   const messageChars = message.length;
   const smsUnits = Math.ceil(messageChars / 160);
