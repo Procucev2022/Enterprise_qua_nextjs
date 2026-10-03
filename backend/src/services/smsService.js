@@ -33,18 +33,32 @@ async function shortenUrl(url) {
       `https://tinyurl.com/api-create.php?url=${encodeURIComponent(url)}`,
       { signal: AbortSignal.timeout(5000) }
     );
+
     if (res.ok) {
       const short = (await res.text()).trim();
+
       // Validate it's actually a tinyurl.com link, not an error string
-      if (short.startsWith('https://tinyurl.com/') || short.startsWith('http://tinyurl.com/')) {
+      if (
+        short.startsWith('https://tinyurl.com/') ||
+        short.startsWith('http://tinyurl.com/')
+      ) {
         _shortUrlCache.set(url, short);
-        logger.info(`[SMS_SERVICE] URL shortened: ${url.slice(0, 60)}... → ${short}`, {}, 'SMS_SERVICE');
+        logger.info(
+          `[SMS_SERVICE] URL shortened: ${url.slice(0, 60)}... → ${short}`,
+          {},
+          'SMS_SERVICE'
+        );
         return short;
       }
     }
   } catch (err) {
-    logger.warn(`[SMS_SERVICE] URL shortening failed (using original): ${err.message}`, { url }, 'SMS_SERVICE');
+    logger.warn(
+      `[SMS_SERVICE] URL shortening failed (using original): ${err.message}`,
+      { url },
+      'SMS_SERVICE'
+    );
   }
+
   return url; // fallback — never block SMS dispatch
 }
 
@@ -56,26 +70,55 @@ function clearShortUrlCache() {
 }
 
 function getEnv(key, fallback = '') {
-  if (process.env[key] !== undefined && process.env[key] !== '') return process.env[key];
-  if (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__[key]) {
+  if (process.env[key] !== undefined && process.env[key] !== '') {
+    return process.env[key];
+  }
+
+  if (
+    typeof globalThis !== 'undefined' &&
+    globalThis.__CF_ENV__ &&
+    globalThis.__CF_ENV__[key]
+  ) {
     return globalThis.__CF_ENV__[key];
   }
+
   return fallback;
 }
 
 // SMS Gateway configuration loaded from environment with defaults
 const SMS_GATEWAY_CONFIG = {
-  get URL() { return getEnv('SMS_GATEWAY_URL', 'https://sms.sendmsg.in/datasend'); },
-  get USER() { return getEnv('SMS_GATEWAY_USER', 'Procucev_OTP'); },
-  get PASS() { return getEnv('SMS_GATEWAY_PASS', 'TzlzyMcFEZRF'); },
-  get SENDER() { return getEnv('SMS_GATEWAY_SENDER', 'PROCUC'); },
-  get SMSGID() { return getEnv('SMS_GATEWAY_SMSGID', '1102294821'); },
+  get URL() {
+    return getEnv('SMS_GATEWAY_URL', 'https://sms.sendmsg.in/datasend');
+  },
+
+  get USER() {
+    return getEnv('SMS_GATEWAY_USER', 'Procucev_OTP');
+  },
+
+  get PASS() {
+    return getEnv('SMS_GATEWAY_PASS', 'TzlzyMcFEZRF');
+  },
+
+  get SENDER() {
+    return getEnv('SMS_GATEWAY_SENDER', 'PROCUC');
+  },
+
+  get SMSGID() {
+    return getEnv('SMS_GATEWAY_SMSGID', '1102294821');
+  },
+
   // RFQ chaser template — uses SMS_DLT_TEMPLATES.RFQ_CHASER.SMSGID as source of truth,
   // overridable via SMS_GATEWAY_RFQ_SMSGID env var.
-  get RFQ_SMSGID() { return getEnv('SMS_GATEWAY_RFQ_SMSGID', SMS_DLT_TEMPLATES.RFQ_CHASER.SMSGID); },
+  get RFQ_SMSGID() {
+    return getEnv(
+      'SMS_GATEWAY_RFQ_SMSGID',
+      SMS_DLT_TEMPLATES.RFQ_CHASER.SMSGID
+    );
+  },
 };
 
-// In-memory cooldown throttle cache to prevent infinite / spam loop SMS dispatches to the same phone number
+// In-memory cooldown throttle cache to prevent infinite / spam loop SMS dispatches
+// to the same phone number
 const recentSmsDispatches = new Map();
 const SMS_THROTTLE_WINDOW_MS = 30000; // 30-second throttle cooldown per destination number
 
@@ -91,7 +134,10 @@ function clearSmsThrottleCache() {
  */
 function clearSmsThrottleForPhone(mobile) {
   const formatted = formatMobileNumber(mobile);
-  if (formatted) recentSmsDispatches.delete(formatted);
+
+  if (formatted) {
+    recentSmsDispatches.delete(formatted);
+  }
 }
 
 /**
@@ -101,13 +147,17 @@ function clearSmsThrottleForPhone(mobile) {
  */
 function formatMobileNumber(mobile) {
   if (!mobile) return '';
+
   const digits = String(mobile).replace(/\D/g, '');
+
   if (digits.length === 12 && digits.startsWith('91')) {
     return digits.slice(2);
   }
+
   if (digits.length === 11 && digits.startsWith('0')) {
     return digits.slice(1);
   }
+
   return digits;
 }
 
@@ -120,15 +170,33 @@ function formatMobileNumber(mobile) {
  */
 async function sendOtpSms(mobile, code, expiresInSeconds = 900) {
   const formattedNumber = formatMobileNumber(mobile);
+
   if (!formattedNumber || formattedNumber.length !== 10) {
-    logger.warn('SMS dispatch skipped: Invalid mobile number format', { mobile }, 'SMS_SERVICE');
-    return { success: false, error: 'Invalid mobile number format' };
+    logger.warn(
+      'SMS dispatch skipped: Invalid mobile number format',
+      { mobile },
+      'SMS_SERVICE'
+    );
+
+    return {
+      success: false,
+      error: 'Invalid mobile number format',
+    };
   }
 
   const now = Date.now();
   const lastSent = recentSmsDispatches.get(formattedNumber) || 0;
-  if (process.env.NODE_ENV !== 'test' && now - lastSent < SMS_THROTTLE_WINDOW_MS) {
-    logger.warn(`SMS dispatch throttled: ${formattedNumber} requested within ${SMS_THROTTLE_WINDOW_MS / 1000}s cooldown`, {}, 'SMS_SERVICE');
+
+  if (
+    process.env.NODE_ENV !== 'test' &&
+    now - lastSent < SMS_THROTTLE_WINDOW_MS
+  ) {
+    logger.warn(
+      `SMS dispatch throttled: ${formattedNumber} requested within ${SMS_THROTTLE_WINDOW_MS / 1000}s cooldown`,
+      {},
+      'SMS_SERVICE'
+    );
+
     return {
       success: true,
       throttled: true,
@@ -136,11 +204,17 @@ async function sendOtpSms(mobile, code, expiresInSeconds = 900) {
       response: 'OK (Throttled)',
     };
   }
+
   recentSmsDispatches.set(formattedNumber, now);
 
   // In test environment, skip live HTTP dispatch to avoid spamming recipient with test OTPs
   if (process.env.NODE_ENV === 'test') {
-    logger.info(`[TEST MODE] Mock SMS OTP dispatched to 91${formattedNumber} (Code: ${code})`, {}, 'SMS_SERVICE');
+    logger.info(
+      `[TEST MODE] Mock SMS OTP dispatched to 91${formattedNumber} (Code: ${code})`,
+      {},
+      'SMS_SERVICE'
+    );
+
     return {
       success: true,
       messageId: 'mock-test-sms-id',
@@ -148,7 +222,9 @@ async function sendOtpSms(mobile, code, expiresInSeconds = 900) {
     };
   }
 
-  // DLT Approved Template: "OTP for registering your access to Get My quoTe (GMT): <OTP>. Valid for 5 mins. Do not share. - Team Procucev."
+  // DLT Approved Template:
+  // "OTP for registering your access to Get My quoTe (GMT): <OTP>.
+  // Valid for 5 mins. Do not share. - Team Procucev."
   const message = `OTP for registering your access to Get My quoTe (GMT): ${code}. Valid for 5 mins. Do not share. - Team Procucev.`;
 
   const payload = {
@@ -172,22 +248,36 @@ async function sendOtpSms(mobile, code, expiresInSeconds = 900) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Accept': 'application/json, text/plain, */*',
+        Accept: 'application/json, text/plain, */*',
       },
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
+
     clearTimeout(timeout);
 
     const responseText = await res.text();
-    logger.info(`SMS OTP dispatched to 91${formattedNumber}`, { status: res.status, response: responseText }, 'SMS_SERVICE');
+
+    logger.info(
+      `SMS OTP dispatched to 91${formattedNumber}`,
+      {
+        status: res.status,
+        response: responseText,
+      },
+      'SMS_SERVICE'
+    );
 
     return {
       success: res.ok,
       response: responseText,
     };
   } catch (err) {
-    logger.error('Failed to dispatch SMS OTP via gateway', err, 'SMS_SERVICE');
+    logger.error(
+      'Failed to dispatch SMS OTP via gateway',
+      err,
+      'SMS_SERVICE'
+    );
+
     return {
       success: false,
       error: err.message,
@@ -205,22 +295,42 @@ async function sendOtpSms(mobile, code, expiresInSeconds = 900) {
  * @param {string} [params.bidLink]
  * @returns {Promise<{ success: boolean, messageId?: string, throttled?: boolean, error?: string }>}
  */
-async function sendRFQChaserSms({ mobile, vendorName, rfqNumber, rfqTitle, bidLink }) {
+async function sendRFQChaserSms({
+  mobile,
+  vendorName,
+  rfqNumber,
+  rfqTitle,
+  bidLink,
+}) {
   const formattedNumber = formatMobileNumber(mobile);
+
   if (!formattedNumber || formattedNumber.length !== 10) {
-    logger.warn('SMS dispatch skipped: Invalid mobile number format', { mobile }, 'SMS_SERVICE');
-    return { success: false, error: 'Invalid mobile number format' };
+    logger.warn(
+      'SMS dispatch skipped: Invalid mobile number format',
+      { mobile },
+      'SMS_SERVICE'
+    );
+
+    return {
+      success: false,
+      error: 'Invalid mobile number format',
+    };
   }
 
   const now = Date.now();
   const lastSent = recentSmsDispatches.get(formattedNumber) || 0;
-  if (process.env.NODE_ENV !== 'test' && now - lastSent < SMS_THROTTLE_WINDOW_MS) {
+
+  if (
+    process.env.NODE_ENV !== 'test' &&
+    now - lastSent < SMS_THROTTLE_WINDOW_MS
+  ) {
     return {
       success: true,
       throttled: true,
       messageId: 'sms-throttled',
     };
   }
+
   recentSmsDispatches.set(formattedNumber, now);
 
   if (process.env.NODE_ENV === 'test') {
@@ -230,11 +340,17 @@ async function sendRFQChaserSms({ mobile, vendorName, rfqNumber, rfqTitle, bidLi
     };
   }
 
-  const defaultFrontend = process.env.PUBLIC_FRONTEND_URL || 'https://procucev-enterprise-frontend.procucev-enterprise.workers.dev';
+  const defaultFrontend =
+    process.env.PUBLIC_FRONTEND_URL ||
+    'https://procucev-enterprise-frontend.procucev-enterprise.workers.dev';
 
   // Build the actual quotation-form URL on the workers.dev frontend.
   // This is the real vendor quote submission page — vendors land here to submit quotes.
-  const rawBidLink = bidLink || `${defaultFrontend}/vendor/quotation-form?rfq=${encodeURIComponent(rfqNumber)}`;
+  const rawBidLink =
+    bidLink ||
+    `${defaultFrontend}/vendor/quotation-form?rfq=${encodeURIComponent(
+      rfqNumber
+    )}`;
 
   // Shorten the actual workers.dev URL via TinyURL so the total message fits in
   // 1 SMS unit (≤160 chars). The shortened link redirects to the real quotation-form page.
@@ -244,13 +360,24 @@ async function sendRFQChaserSms({ mobile, vendorName, rfqNumber, rfqTitle, bidLi
   // Exact approved DLT template (SMS_DLT_TEMPLATES.RFQ_CHASER.TEMPLATE):
   // RFQ Alert {#var#}. You are invited to bid for {#var#}. Submit quote : {#var#} - Team Procucev.
   // Variables mapped in order: rfqNumber → rfqTitle → bidUrl (shortened, points to actual quotation-form)
-  const message = `RFQ Alert ${rfqNumber}. You are invited to bid for ${rfqTitle || rfqNumber}. Submit quote : ${resolvedBidLink} - Team Procucev.`;
+  const message = `RFQ Alert ${rfqNumber}. You are invited to bid for ${
+    rfqTitle || rfqNumber
+  }. Submit quote : ${resolvedBidLink} - Team Procucev.`;
+
   const messageChars = message.length;
   const smsUnits = Math.ceil(messageChars / 160);
 
   logger.info(
-    `[SMS_SERVICE] RFQ chaser SMS prepared: ${messageChars} chars (${smsUnits} unit${smsUnits > 1 ? 's' : ''})`,
-    { rfqNumber, messageChars, smsUnits, actualUrl: rawBidLink, shortUrl: resolvedBidLink },
+    `[SMS_SERVICE] RFQ chaser SMS prepared: ${messageChars} chars (${smsUnits} unit${
+      smsUnits > 1 ? 's' : ''
+    })`,
+    {
+      rfqNumber,
+      messageChars,
+      smsUnits,
+      actualUrl: rawBidLink,
+      shortUrl: resolvedBidLink,
+    },
     'SMS_SERVICE'
   );
 
@@ -275,26 +402,50 @@ async function sendRFQChaserSms({ mobile, vendorName, rfqNumber, rfqTitle, bidLi
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Accept': 'application/json, text/plain, */*',
+        Accept: 'application/json, text/plain, */*',
       },
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
+
     clearTimeout(timeout);
 
     const responseText = await res.text();
     const messageId = `sms-${Date.now()}`;
 
-    if (res.ok) {
-      logger.info(
-        `SMS RFQ chaser dispatched to 91${formattedNumber} for ${rfqNumber}`,
-        { status: res.status, response: responseText, rfqNumber, vendorName, smsgid: SMS_GATEWAY_CONFIG.RFQ_SMSGID, templateName: SMS_DLT_TEMPLATES.RFQ_CHASER.NAME, templateCategory: SMS_DLT_TEMPLATES.RFQ_CHASER.CATEGORY },
+    // ─────────────────────────────────────────────────────────────────────
+    // qua-bug branch implementation kept
+    // ─────────────────────────────────────────────────────────────────────
+    const isGatewayError =
+      !res.ok ||
+      /^(ERR|ERROR|FAIL|INVALID)/i.test(responseText.trim()) ||
+      /"status"\s*:\s*"(?:error|failed)"/i.test(responseText);
+
+    if (isGatewayError) {
+      logger.warn(
+        `SMS RFQ chaser gateway rejected message for 91${formattedNumber} — HTTP ${res.status}: ${responseText}`,
+        {
+          status: res.status,
+          response: responseText,
+          rfqNumber,
+          vendorName,
+          smsgid: SMS_GATEWAY_CONFIG.RFQ_SMSGID,
+          templateName: SMS_DLT_TEMPLATES.RFQ_CHASER.NAME,
+        },
         'SMS_SERVICE'
       );
     } else {
-      logger.warn(
-        `SMS RFQ chaser gateway error for 91${formattedNumber} — HTTP ${res.status}`,
-        { status: res.status, response: responseText, rfqNumber, vendorName, smsgid: SMS_GATEWAY_CONFIG.RFQ_SMSGID, templateName: SMS_DLT_TEMPLATES.RFQ_CHASER.NAME },
+      logger.info(
+        `SMS RFQ chaser dispatched to 91${formattedNumber} for ${rfqNumber}`,
+        {
+          status: res.status,
+          response: responseText,
+          rfqNumber,
+          vendorName,
+          smsgid: SMS_GATEWAY_CONFIG.RFQ_SMSGID,
+          templateName: SMS_DLT_TEMPLATES.RFQ_CHASER.NAME,
+          templateCategory: SMS_DLT_TEMPLATES.RFQ_CHASER.CATEGORY,
+        },
         'SMS_SERVICE'
       );
     }
@@ -310,7 +461,11 @@ async function sendRFQChaserSms({ mobile, vendorName, rfqNumber, rfqTitle, bidLi
       err,
       'SMS_SERVICE'
     );
-    return { success: false, error: err.message };
+
+    return {
+      success: false,
+      error: err.message,
+    };
   }
 }
 
@@ -324,22 +479,42 @@ async function sendRFQChaserSms({ mobile, vendorName, rfqNumber, rfqTitle, bidLi
  * @param {string} [params.matrixLink]
  * @returns {Promise<{ success: boolean, messageId?: string, throttled?: boolean, error?: string }>}
  */
-async function sendBuyerComparisonSms({ mobile, buyerName, rfqNumber, quotesCount = 0, matrixLink }) {
+async function sendBuyerComparisonSms({
+  mobile,
+  buyerName,
+  rfqNumber,
+  quotesCount = 0,
+  matrixLink,
+}) {
   const formattedNumber = formatMobileNumber(mobile);
+
   if (!formattedNumber || formattedNumber.length !== 10) {
-    logger.warn('SMS dispatch skipped: Invalid buyer mobile number format', { mobile }, 'SMS_SERVICE');
-    return { success: false, error: 'Invalid mobile number format' };
+    logger.warn(
+      'SMS dispatch skipped: Invalid buyer mobile number format',
+      { mobile },
+      'SMS_SERVICE'
+    );
+
+    return {
+      success: false,
+      error: 'Invalid mobile number format',
+    };
   }
 
   const now = Date.now();
   const lastSent = recentSmsDispatches.get(formattedNumber) || 0;
-  if (process.env.NODE_ENV !== 'test' && now - lastSent < SMS_THROTTLE_WINDOW_MS) {
+
+  if (
+    process.env.NODE_ENV !== 'test' &&
+    now - lastSent < SMS_THROTTLE_WINDOW_MS
+  ) {
     return {
       success: true,
       throttled: true,
       messageId: 'sms-throttled',
     };
   }
+
   recentSmsDispatches.set(formattedNumber, now);
 
   if (process.env.NODE_ENV === 'test') {
@@ -349,8 +524,16 @@ async function sendBuyerComparisonSms({ mobile, buyerName, rfqNumber, quotesCoun
     };
   }
 
-  const defaultFrontend = process.env.PUBLIC_FRONTEND_URL || 'https://procucev-enterprise-frontend.procucev-enterprise.workers.dev';
-  const resolvedLink = matrixLink || `${defaultFrontend}/buyer/quote-matrix?rfq=${encodeURIComponent(rfqNumber)}`;
+  const defaultFrontend =
+    process.env.PUBLIC_FRONTEND_URL ||
+    'https://procucev-enterprise-frontend.procucev-enterprise.workers.dev';
+
+  const resolvedLink =
+    matrixLink ||
+    `${defaultFrontend}/buyer/quote-matrix?rfq=${encodeURIComponent(
+      rfqNumber
+    )}`;
+
   const message = `[PRCU-RFQ] RFQ ${rfqNumber} closed. Quotation comparison matrix is ready (${quotesCount} quotes). Review: ${resolvedLink} - Team Procucev.`;
 
   const payload = {
@@ -374,11 +557,12 @@ async function sendBuyerComparisonSms({ mobile, buyerName, rfqNumber, quotesCoun
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Accept': 'application/json, text/plain, */*',
+        Accept: 'application/json, text/plain, */*',
       },
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
+
     clearTimeout(timeout);
 
     const responseText = await res.text();
@@ -387,13 +571,21 @@ async function sendBuyerComparisonSms({ mobile, buyerName, rfqNumber, quotesCoun
     if (res.ok) {
       logger.info(
         `Buyer quotation comparison SMS dispatched to 91${formattedNumber} for ${rfqNumber}`,
-        { status: res.status, response: responseText, rfqNumber },
+        {
+          status: res.status,
+          response: responseText,
+          rfqNumber,
+        },
         'SMS_SERVICE'
       );
     } else {
       logger.warn(
         `Buyer quotation comparison SMS gateway error for 91${formattedNumber} — HTTP ${res.status}`,
-        { status: res.status, response: responseText, rfqNumber },
+        {
+          status: res.status,
+          response: responseText,
+          rfqNumber,
+        },
         'SMS_SERVICE'
       );
     }
@@ -409,7 +601,11 @@ async function sendBuyerComparisonSms({ mobile, buyerName, rfqNumber, quotesCoun
       err,
       'SMS_SERVICE'
     );
-    return { success: false, error: err.message };
+
+    return {
+      success: false,
+      error: err.message,
+    };
   }
 }
 

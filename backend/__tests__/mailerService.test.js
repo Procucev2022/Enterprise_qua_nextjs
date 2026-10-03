@@ -917,11 +917,43 @@ describe('mailerService', () => {
     test('buyerPortalUrl returns configured or fallback login URL', () => {
       delete process.env.APP_PUBLIC_URL;
       delete process.env.FRONTEND_URL;
+      delete process.env.PUBLIC_FRONTEND_URL;
       expect(mailerService.buyerPortalUrl()).toBe('http://localhost:3000/login');
+
+      process.env.PUBLIC_FRONTEND_URL = 'https://procucev-enterprise-frontend.procucev-enterprise.workers.dev';
+      expect(mailerService.buyerPortalUrl()).toBe('https://procucev-enterprise-frontend.procucev-enterprise.workers.dev/login');
+      delete process.env.PUBLIC_FRONTEND_URL;
 
       process.env.APP_PUBLIC_URL = 'https://app.procucev.com/';
       expect(mailerService.buyerPortalUrl()).toBe('https://app.procucev.com/login');
       delete process.env.APP_PUBLIC_URL;
+    });
+
+    test('getPublicFrontendUrl and getLogoUrl resolve dynamic URLs and production logo asset', () => {
+      delete process.env.APP_PUBLIC_URL;
+      delete process.env.FRONTEND_URL;
+      delete process.env.PUBLIC_FRONTEND_URL;
+
+      expect(mailerService.getPublicFrontendUrl()).toBe('http://localhost:3000');
+      // Localhost environment falls back to public workers.dev asset for external email clients
+      expect(mailerService.getLogoUrl()).toBe('https://procucev-enterprise-frontend.procucev-enterprise.workers.dev/procucev-logo.png');
+
+      process.env.PUBLIC_FRONTEND_URL = 'https://enterprise.procucev.com/';
+      expect(mailerService.getPublicFrontendUrl()).toBe('https://enterprise.procucev.com');
+      expect(mailerService.getLogoUrl()).toBe('https://enterprise.procucev.com/procucev-logo.png');
+      delete process.env.PUBLIC_FRONTEND_URL;
+
+      // Cloudflare worker global context
+      globalThis.__CF_ENV__ = { PUBLIC_FRONTEND_URL: 'https://cf-worker-frontend.dev' };
+      expect(mailerService.getPublicFrontendUrl()).toBe('https://cf-worker-frontend.dev');
+      delete globalThis.__CF_ENV__;
+    });
+
+    test('email templates render real procucev-logo image asset', () => {
+      const otpMsg = mailerService.sendOtpEmail('user@test.com', '123456');
+      const reqEmail = mailerService.buildRequisitionEmail('buyer@test.com', { rfqNumber: 'RFQ-LOGO-TEST', title: 'Logo Test' });
+      expect(reqEmail.html).toContain('procucev-logo.png');
+      expect(reqEmail.html).toContain('alt="Procucev Enterprise"');
     });
 
     test('buildUnauthorizedBuyerEmail builds expected email template', () => {

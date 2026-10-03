@@ -23,6 +23,7 @@ function mockRes() {
 
 // RFQ handlers resolve ownership from verified session claims, so a request with
 // no `user` is rejected before reaching the code path under test.
+const A_FUTURE_DATE = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 function buyerReq(overrides = {}) {
   return {
     user: { sub: 'usr-buyer-001', orgId: 'org-buyer-01', email: 'buyer@procucev.com', role: 'buyer' },
@@ -285,7 +286,7 @@ describe('Controllers Comprehensive Catch Blocks & Missing Branches', () => {
           title: 'RFQ Title',
           category: 'Mechanical',
           budget: 1000,
-          targetDeliveryDate: '2026-10-01',
+          targetDeliveryDate: A_FUTURE_DATE,
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '400701',
         },

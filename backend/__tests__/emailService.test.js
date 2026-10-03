@@ -1,6 +1,8 @@
 const {
   generateStandardRFQEmail,
   generateVendorOnboardingEmail,
+  getPublicFrontendUrl,
+  getLogoUrl,
 } = require('../src/services/emailService');
 
 describe('Email Template Generation Service', () => {
@@ -126,5 +128,37 @@ describe('Email Template Generation Service', () => {
     expect(payload.htmlBody).toContain('>Partner<');
     expect(payload.tempPassword).toBe('Procucev#2026!Vendor');
     expect(payload.htmlBody).toContain('Procucev#2026!Vendor');
+  });
+
+  test('generateStandardRFQEmail and generateVendorOnboardingEmail render real procucev logo and dynamic URLs', () => {
+    process.env.PUBLIC_FRONTEND_URL = 'https://procucev-enterprise-frontend.procucev-enterprise.workers.dev';
+
+    const rfq = { rfqNumber: 'RFQ-TEST-DYNAMIC-99', title: 'Test Dynamic RFQ' };
+    const vendor = { name: 'Acme Test', email: 'acme@test.com' };
+
+    const rfqPayload = generateStandardRFQEmail(rfq, vendor);
+    expect(rfqPayload.htmlBody).toContain('procucev-logo.png');
+    expect(rfqPayload.htmlBody).toContain('alt="Procucev Enterprise"');
+    expect(rfqPayload.htmlBody).toContain('https://procucev-enterprise-frontend.procucev-enterprise.workers.dev/vendor/quotation-form?rfq=RFQ-TEST-DYNAMIC-99');
+
+    const onboardPayload = generateVendorOnboardingEmail(vendor);
+    expect(onboardPayload.htmlBody).toContain('procucev-logo.png');
+    expect(onboardPayload.htmlBody).toContain('https://procucev-enterprise-frontend.procucev-enterprise.workers.dev/login');
+
+    delete process.env.PUBLIC_FRONTEND_URL;
+  });
+
+  test('getPublicFrontendUrl and getLogoUrl handle fallbacks and Cloudflare environment', () => {
+    delete process.env.APP_PUBLIC_URL;
+    delete process.env.FRONTEND_URL;
+    delete process.env.PUBLIC_FRONTEND_URL;
+
+    expect(getPublicFrontendUrl()).toBe('http://localhost:3000');
+    expect(getLogoUrl()).toBe('https://procucev-enterprise-frontend.procucev-enterprise.workers.dev/procucev-logo.png');
+
+    globalThis.__CF_ENV__ = { PUBLIC_FRONTEND_URL: 'https://cf-test-frontend.workers.dev/' };
+    expect(getPublicFrontendUrl()).toBe('https://cf-test-frontend.workers.dev');
+    expect(getLogoUrl()).toBe('https://cf-test-frontend.workers.dev/procucev-logo.png');
+    delete globalThis.__CF_ENV__;
   });
 });

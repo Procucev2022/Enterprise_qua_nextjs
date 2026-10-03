@@ -82,6 +82,36 @@ function fromAddress() {
 }
 
 /**
+ * Resolves the public frontend URL across all deployment environments
+ * (Cloudflare Workers, Vercel, Node, Docker). Configurable via
+ * PUBLIC_FRONTEND_URL, APP_PUBLIC_URL, FRONTEND_URL, or globalThis.__CF_ENV__.
+ */
+function getPublicFrontendUrl() {
+  const envVal =
+    process.env.PUBLIC_FRONTEND_URL ||
+    process.env.APP_PUBLIC_URL ||
+    process.env.FRONTEND_URL ||
+    (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.PUBLIC_FRONTEND_URL);
+  if (envVal && typeof envVal === 'string' && envVal.trim()) {
+    return envVal.trim().replace(/\/+$/, '');
+  }
+  return 'http://localhost:3000';
+}
+
+/**
+ * Returns the hosted Procucev logo URL.
+ * Email clients cannot fetch images from localhost/127.0.0.1, so in local
+ * dev or test environments, it falls back to the public Cloudflare Workers asset.
+ */
+function getLogoUrl() {
+  const base = getPublicFrontendUrl();
+  if (!base || base.includes('localhost') || base.includes('127.0.0.1')) {
+    return 'https://procucev-enterprise-frontend.procucev-enterprise.workers.dev/procucev-logo.png';
+  }
+  return `${base}/procucev-logo.png`;
+}
+
+/**
  * Lazily builds a Gmail / SMTP transporter for vendor notifications and invites
  * from VENDOR_SMTP_USER/VENDOR_SMTP_PASSWORD (defaults strictly to srinu20252026@gmail.com).
  * Vendor communications NEVER fall back to buyer SMTP (rfqprocucev@gmail.com).
@@ -241,6 +271,10 @@ function buildRequisitionEmail(to, rfq = {}, fromEmail = '') {
       `).join('')
     : `<tr><td colspan="3" style="padding: 10px; color: #64748b;">No specific line items itemized.</td></tr>`;
 
+  const frontendUrl = getPublicFrontendUrl();
+  const logoUrl = getLogoUrl();
+  const reviewUrl = `${frontendUrl}/buyer/rfqs?rfq=${encodeURIComponent(safeRfq.rfqNumber || '')}`;
+
   return {
     from: fromAddress(),
     to: to || 'navinchaudhary.dev@gmail.com',
@@ -249,6 +283,11 @@ function buildRequisitionEmail(to, rfq = {}, fromEmail = '') {
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #1e293b; line-height: 1.6;">
         <div style="background: #0f172a; padding: 20px; border-radius: 8px 8px 0 0; color: white;">
+          <div style="margin-bottom: 12px;">
+            <a href="${frontendUrl}" target="_blank" style="text-decoration: none; display: inline-block;">
+              <img src="${logoUrl}" alt="Procucev Enterprise" height="36" style="height: 36px; max-height: 40px; width: auto; display: block; border: 0; background: #ffffff; padding: 4px 8px; border-radius: 4px;" />
+            </a>
+          </div>
           <h2 style="margin: 0; font-size: 18px; letter-spacing: 0.5px;">PROCUCEV ENTERPRISE</h2>
           <p style="margin: 4px 0 0 0; opacity: 0.8; font-size: 13px;">Autonomous Requisition Ingestion Notification</p>
         </div>
@@ -276,6 +315,10 @@ function buildRequisitionEmail(to, rfq = {}, fromEmail = '') {
 
           <div style="padding: 12px; background: #eff6ff; border-radius: 6px; font-size: 12px; color: #1e40af;">
             ⚡ <strong>Status: Parsing / Held for Category Manager Review.</strong> No vendors have been released yet.
+          </div>
+
+          <div style="text-align: center; margin: 20px 0 8px 0;">
+            <a href="${reviewUrl}" style="background: #0284c7; color: #ffffff; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 13px;">Review Requisition in Buyer Portal</a>
           </div>
         </div>
       </div>
@@ -532,14 +575,18 @@ async function deliver(message, label) {
 
 /** Shared frame so every Procucev email reads consistently. No invented data. */
 function wrapEmail(headline, subline, innerHtml) {
+  const frontendUrl = getPublicFrontendUrl();
+  const logoUrl = getLogoUrl();
   return `
     <div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; color: #1e293b; line-height: 1.6;">
       <div style="background: #ffffff; padding: 24px; border-radius: 8px 8px 0 0; border-bottom: 3px solid #0284c7;">
         <table style="width: 100%; border-collapse: collapse;">
           <tr>
             <td style="vertical-align: middle;">
-              <div style="font-size: 24px; font-weight: bold; color: #0284c7;">PROCUCEV</div>
-              <div style="font-size: 12px; color: #64748b; margin-top: 4px;">ENTERPRISE</div>
+              <a href="${frontendUrl}" target="_blank" style="text-decoration: none; display: inline-block;">
+                <img src="${logoUrl}" alt="Procucev Enterprise" height="38" style="height: 38px; max-height: 42px; width: auto; display: block; border: 0;" />
+              </a>
+              <div style="font-size: 11px; font-weight: 600; color: #64748b; letter-spacing: 0.5px; margin-top: 4px;">ENTERPRISE PROCUREMENT</div>
             </td>
             <td style="text-align: right; vertical-align: middle;">
               <div style="font-size: 14px; font-weight: 600; color: #0f172a;">${headline}</div>
@@ -670,7 +717,7 @@ function buildRfqInviteEmail(to, context = {}) {
       }
       <h4 style="margin: 0 0 10px 0; color: #1e40af; font-size: 15px; font-weight: 700;">How to Submit Your Quotation</h4>
       <p style="margin: 0 0 10px 0; font-size: 13px; color: #1e293b; line-height: 1.5;">
-        You can submit your bid either by <strong>replying directly to this email at <a href="mailto:${gatewayEmail}" style="color: #0284c7; font-weight: bold;">${gatewayEmail}</a></strong> (keep the subject line intact with RFQ number <strong>#${rfq.rfqNumber}</strong>${buyerCc ? ` and keep buyer CC'd: <strong>${buyerCc}</strong>` : ''}), or online via the Procucev Vendor Portal.
+        You can submit your bid either by <strong>replying directly to this email at <a href="mailto:${gatewayEmail}" style="color: #0284c7; font-weight: bold;">${gatewayEmail}</a></strong> (keep the subject line intact with RFQ number <strong>#${rfq.rfqNumber}</strong>${buyerCc ? ` and keep buyer CC'd: <strong>${buyerCc}</strong>` : ''}), or online via the <a href="${getPublicFrontendUrl()}/vendor/quotation-form?rfq=${encodeURIComponent(rfq.rfqNumber || '')}" style="color: #0284c7; font-weight: bold;">Procucev Quotation Portal</a>.
       </p>
 
       <p style="margin: 12px 0 6px 0; font-size: 13px; font-weight: 700; color: #1e293b;">Mandatory Quotation Information Required:</p>
@@ -688,7 +735,9 @@ function buildRfqInviteEmail(to, context = {}) {
       ${items.length > 1 ? '<p style="margin: 8px 0 0 0; font-size: 12px; color: #475569;"><em>For multi-item RFQs, please quote unit price per item in your reply.</em></p>' : ''}
     </div>
     <div style="text-align: center; margin: 24px 0;">
-      <a href="${vendorSignInUrl()}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 14px;">Open in Vendor Web Portal</a>
+      <a href="${getPublicFrontendUrl()}/vendor/quotation-form?rfq=${encodeURIComponent(rfq.rfqNumber || '')}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 14px; margin-bottom: 10px;">Submit Quotation in 1-Click</a>
+      <br />
+      <a href="${vendorSignInUrl()}" style="color: #0284c7; text-decoration: underline; font-weight: 600; font-size: 13px;">Open in Vendor Web Portal</a>
     </div>
     <p style="font-size: 13px; color: #64748b; text-align: center;">Sign in to your Procucev vendor account to review the full enquiry and submit a quotation.</p>
   `;
@@ -924,8 +973,8 @@ function buildRfqFinalComparisonEmail(toOrParams, maybeContext) {
   const rfqNumber = rfq.rfqNumber || 'RFQ';
   const rfqTitle = rfq.title || 'Procurement Requisition';
   const quotesList = Array.isArray(quotes) && quotes.length > 0 ? quotes : (Array.isArray(rfq.quotes) ? rfq.quotes : []);
-  const base = process.env.APP_PUBLIC_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
-  const resolvedUrl = comparisonUrl || `${String(base).replace(/\/+$/, '')}/buyer/quote-matrix?rfq=${encodeURIComponent(rfqNumber)}`;
+  const base = getPublicFrontendUrl();
+  const resolvedUrl = comparisonUrl || `${base}/buyer/quote-matrix?rfq=${encodeURIComponent(rfqNumber)}`;
 
   const sortedQuotes = quotesList.slice().sort((a, b) => (Number(a.unitPrice) || Number(a.totalPrice) || 0) - (Number(b.unitPrice) || Number(b.totalPrice) || 0));
   const quotesRows = sortedQuotes.map((q, idx) => {
@@ -1141,20 +1190,20 @@ async function sendRequisitionNotificationEmail(to, rfq, fromEmail) {
 
 /** Where a supplier signs in. Configurable because it differs per deployment. */
 function vendorSignInUrl() {
-  const base = process.env.APP_PUBLIC_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
-  return `${String(base).replace(/\/+$/, '')}/login`;
+  const base = getPublicFrontendUrl();
+  return `${base}/login`;
 }
 
 /** Where a supplier upgrades their subscription plan. */
 function vendorUpgradeUrl() {
-  const base = process.env.APP_PUBLIC_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
-  return `${String(base).replace(/\/+$/, '')}/vendor/vendor-subscription`;
+  const base = getPublicFrontendUrl();
+  return `${base}/vendor/vendor-subscription`;
 }
 
 /** Where a buyer registers or signs in. Configurable because it differs per deployment. */
 function buyerPortalUrl() {
-  const base = process.env.APP_PUBLIC_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
-  return `${String(base).replace(/\/+$/, '')}/login`;
+  const base = getPublicFrontendUrl();
+  return `${base}/login`;
 }
 
 /**
@@ -1588,5 +1637,7 @@ module.exports = {
   isVendorGmailApiConfigured,
   isQuoteAlertGmailApiConfigured,
   getGmailOAuthClient,
+  getPublicFrontendUrl,
+  getLogoUrl,
 };
 
