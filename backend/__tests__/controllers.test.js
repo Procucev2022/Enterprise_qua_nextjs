@@ -24,6 +24,7 @@ function mockRes() {
 // object is now rejected before it reaches any store. `sub` rather than `id` is
 // deliberate: that is the claim generateSessionToken actually writes.
 const TEST_ORG_ID = 'org-buyer-01';
+const A_FUTURE_DATE = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 function buyerReq(overrides = {}) {
   return {
     user: { sub: 'usr-buyer-001', orgId: TEST_ORG_ID, email: 'buyer@procucev.com', role: 'buyer' },
@@ -308,7 +309,7 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     const seededRfq = storeService.createRFQ({
       title: 'Seeded RFQ',
       category: 'Mechanical',
-      targetDeliveryDate: '2026-10-01',
+      targetDeliveryDate: A_FUTURE_DATE,
     });
 
     await rfqController.getRFQs(buyerReq(), res, next);
@@ -334,7 +335,7 @@ describe('Controllers Error & Edge-Case Coverage', () => {
           title: 'New RFQ',
           category: 'Mechanical',
           budget: 50000,
-          targetDeliveryDate: '2026-10-01',
+          targetDeliveryDate: A_FUTURE_DATE,
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '400701',
         },
@@ -358,7 +359,7 @@ describe('Controllers Error & Edge-Case Coverage', () => {
       title: 'Line item shapes',
       category: 'Mechanical',
       budget: 1,
-      targetDeliveryDate: '2026-10-01',
+      targetDeliveryDate: A_FUTURE_DATE,
       deliveryLocation: 'Navi Mumbai Plant, Gate 3',
       deliveryPincode: '400701',
     };
@@ -409,7 +410,7 @@ describe('Controllers Error & Edge-Case Coverage', () => {
         body: {
           title: 'Attributed RFQ',
           category: 'Raw Material',
-          targetDeliveryDate: '2026-10-01',
+          targetDeliveryDate: A_FUTURE_DATE,
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '400701',
         },
@@ -949,7 +950,7 @@ describe('rfqController scope and fallback branches', () => {
           title: 'Extracted entities path',
           category: 'Mechanical',
           budget: 10,
-          targetDeliveryDate: '2026-10-01',
+          targetDeliveryDate: A_FUTURE_DATE,
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '400701',
           extractedEntities: [
