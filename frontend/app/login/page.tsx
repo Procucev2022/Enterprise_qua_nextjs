@@ -1,12 +1,20 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 import { OTP_CODE_LENGTH, OTP_EXPIRY_MINUTES, ROLE_LANDING_ROUTE } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { FORM_SCHEMAS, INDIAN_MOBILE_PATTERN, validateFormData } from '@/lib/validationSchemas';
+import {
+  FORM_SCHEMAS,
+  INDIAN_MOBILE_PATTERN,
+  validateFormData,
+  validatePincode,
+  PostOfficeDetail,
+  PINCODE_PATTERN,
+  isDummyPincode,
+} from '@/lib/validationSchemas';
 import PasswordInput from '@/app/components/PasswordInput';
 import type { UserRole, UserSession } from '@/lib/types';
 import {
@@ -26,6 +34,9 @@ import {
   RotateCcw,
   MapPin,
   FileText,
+  CheckCircle2,
+  AlertCircle,
+  Loader2,
 } from 'lucide-react';
 
 const AUTH = UI_STRINGS.auth;
@@ -76,6 +87,56 @@ export default function LoginPage() {
   const [regCity, setRegCity] = useState('');
   const [regState, setRegState] = useState('');
   const [regPincode, setRegPincode] = useState('');
+  const [regPincodeError, setRegPincodeError] = useState<string | null>(null);
+  const [regPincodeValidating, setRegPincodeValidating] = useState(false);
+  const [regPincodePostOffices, setRegPincodePostOffices] = useState<PostOfficeDetail[]>([]);
+  const regPincodeDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    const raw = regPincode.trim();
+    if (regPincodeDebounceRef.current) clearTimeout(regPincodeDebounceRef.current);
+    if (!raw) {
+      setRegPincodeError(null);
+      setRegPincodeValidating(false);
+      setRegPincodePostOffices([]);
+      return;
+    }
+    if (isDummyPincode(raw)) {
+      setRegPincodeError('Invalid or dummy PIN code');
+      setRegPincodeValidating(false);
+      setRegPincodePostOffices([]);
+      return;
+    }
+    if (raw.length >= 3 && !PINCODE_PATTERN.test(raw)) {
+      setRegPincodeError('Invalid PIN code format');
+      setRegPincodeValidating(false);
+      setRegPincodePostOffices([]);
+      return;
+    }
+    if (/^\d{6}$/.test(raw)) {
+      setRegPincodeValidating(true);
+      regPincodeDebounceRef.current = setTimeout(async () => {
+        try {
+          const res = await validatePincode(raw);
+          if (!res.isValid) {
+            setRegPincodeError(res.message || 'Invalid PIN code');
+            setRegPincodePostOffices([]);
+          } else {
+            setRegPincodeError(null);
+            setRegPincodePostOffices(res.postOffices || []);
+          }
+        } catch {
+          setRegPincodeError(null);
+        } finally {
+          setRegPincodeValidating(false);
+        }
+      }, 350);
+    } else {
+      setRegPincodeError(null);
+      setRegPincodeValidating(false);
+      setRegPincodePostOffices([]);
+    }
+  }, [regPincode]);
   const [selectedRegRole, setSelectedRegRole] = useState<'buyer' | 'vendor'>('buyer');
   const [regStep, setRegStep] = useState<'form' | 'dual_otp'>('form');
   const [regEmailOtp, setRegEmailOtp] = useState('');
@@ -287,6 +348,10 @@ export default function LoginPage() {
     }
     if (!/^[1-9][0-9]{5}$/.test(regPincode.trim())) {
       showToast(AUTH.registrationFailedTitle, 'PIN Code must be 6 digits and cannot start with 0.', 'warning');
+      return;
+    }
+    if (regPincodeError) {
+      showToast(AUTH.registrationFailedTitle, regPincodeError, 'warning');
       return;
     }
 
@@ -895,19 +960,41 @@ export default function LoginPage() {
                         />
                       </div>
                       <div className="space-y-1">
-                        <label htmlFor="reg-pincode" className={fieldLabel}>
-                          Pincode <span className="text-red-500">*</span>
-                        </label>
+                        <div className="flex items-center justify-between">
+                          <label htmlFor="reg-pincode" className={fieldLabel}>
+                            Pincode <span className="text-red-500">*</span>
+                          </label>
+                          {regPincodeValidating && (
+                            <span className="text-[10px] text-indigo-500 font-bold flex items-center gap-1">
+                              <Loader2 size={10} className="animate-spin" /> Checking
+                            </span>
+                          )}
+                          {!regPincodeValidating && regPincodePostOffices.length > 0 && !regPincodeError && (
+                            <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-0.5">
+                              <CheckCircle2 size={10} /> Valid
+                            </span>
+                          )}
+                          {!regPincodeValidating && regPincodeError && regPincode.trim().length >= 6 && (
+                            <span className="text-[10px] font-bold text-rose-500 flex items-center gap-0.5">
+                              <AlertCircle size={10} /> Invalid
+                            </span>
+                          )}
+                        </div>
                         <input
                           id="reg-pincode"
                           type="text"
                           placeholder="e.g. 411001"
                           value={regPincode}
                           onChange={(e) => setRegPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                          className={`${plainInput} font-mono`}
+                          className={`${plainInput} font-mono ${
+                            regPincodeError ? 'border-red-400 dark:border-red-700' : ''
+                          }`}
                           maxLength={6}
                           required
                         />
+                        {regPincodeError && regPincode.trim().length >= 6 && (
+                          <p className="text-[10px] text-rose-500 font-medium">{regPincodeError}</p>
+                        )}
                       </div>
                     </div>
 

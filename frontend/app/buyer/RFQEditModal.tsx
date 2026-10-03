@@ -18,7 +18,7 @@
 // nobody touched.
 // ==============================================================================
 
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AlertCircle, CheckCircle2, Loader2, Paperclip, Plus, Save, Trash2, X } from 'lucide-react';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { CURRENCY, RFQ_STATUSES, formatFileSize, formatIndianDateTime } from '@/lib/constants';
@@ -170,7 +170,7 @@ export function toFormState(rfq: RFQItem | any): RFQEditFormState {
  * Validate the edit against the same rules creation uses, so an edit cannot
  * introduce a value that could not have been created in the first place.
  */
-export function validateRFQEdit(form: RFQEditFormState): RFQEditFormErrors {
+export function validateRFQEdit(form: RFQEditFormState, apiPincodeError?: string | null): RFQEditFormErrors {
   const errors: RFQEditFormErrors = {};
 
   if (form.title.trim().length < 3) errors.title = EDIT.titleRequired;
@@ -188,6 +188,8 @@ export function validateRFQEdit(form: RFQEditFormState): RFQEditFormErrors {
     errors.deliveryPincode = EDIT.deliveryPincodeInvalid;
   } else if (isDummyPincode(pincode)) {
     errors.deliveryPincode = EDIT.deliveryPincodeDummy;
+  } else if (apiPincodeError) {
+    errors.deliveryPincode = apiPincodeError;
   }
 
   // An RFQ with no line items has nothing for a vendor to quote against.
@@ -308,6 +310,63 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
   const [attachError, setAttachError] = useState<string | null>(null);
   const attachInputRef = useRef<HTMLInputElement>(null);
 
+  const [pincodeError, setPincodeError] = useState<string | null>(null);
+  const [pincodeValidating, setPincodeValidating] = useState(false);
+  const [pincodePostOffices, setPincodePostOffices] = useState<PostOfficeDetail[]>([]);
+  const pincodeDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (!form?.deliveryPincode) {
+      setPincodeError(null);
+      setPincodeValidating(false);
+      setPincodePostOffices([]);
+      return;
+    }
+    const raw = form.deliveryPincode.trim();
+    if (pincodeDebounceRef.current) clearTimeout(pincodeDebounceRef.current);
+    if (!raw) {
+      setPincodeError(null);
+      setPincodeValidating(false);
+      setPincodePostOffices([]);
+      return;
+    }
+    if (isDummyPincode(raw)) {
+      setPincodeError(EDIT.deliveryPincodeDummy);
+      setPincodeValidating(false);
+      setPincodePostOffices([]);
+      return;
+    }
+    if (raw.length >= 3 && !PINCODE_PATTERN.test(raw)) {
+      setPincodeError(EDIT.deliveryPincodeInvalid);
+      setPincodeValidating(false);
+      setPincodePostOffices([]);
+      return;
+    }
+    if (/^\d{6}$/.test(raw)) {
+      setPincodeValidating(true);
+      pincodeDebounceRef.current = setTimeout(async () => {
+        try {
+          const res = await validatePincode(raw);
+          if (!res.isValid) {
+            setPincodeError(res.message || EDIT.deliveryPincodeInvalid);
+            setPincodePostOffices([]);
+          } else {
+            setPincodeError(null);
+            setPincodePostOffices(res.postOffices || []);
+          }
+        } catch {
+          setPincodeError(null);
+        } finally {
+          setPincodeValidating(false);
+        }
+      }, 350);
+    } else {
+      setPincodeError(null);
+      setPincodeValidating(false);
+      setPincodePostOffices([]);
+    }
+  }, [form?.deliveryPincode]);
+
   // Reseeded whenever an RFQ is opened or changed, derived from the prop rather than
   // an effect so the form and the record cannot be a render out of step.
   const [seededFor, setSeededFor] = useState<string | null>(null);
@@ -326,7 +385,7 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
 
   if (!rfq || !form) return null;
 
-  const errors = submitAttempted ? validateRFQEdit(form) : {};
+  const errors = submitAttempted ? validateRFQEdit(form, pincodeError) : {};
   const pending = changedFields(rfq, form);
   const hasChanges = Object.keys(pending).length > 0;
 
@@ -390,7 +449,7 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
     setSubmitAttempted(true);
     setSaveError(null);
 
-    if (Object.keys(validateRFQEdit(form)).length > 0) return;
+    if (Object.keys(validateRFQEdit(form, pincodeError)).length > 0 || pincodeError) return;
     if (!hasChanges) {
       setSaveError(EDIT.noChanges);
       return;
@@ -560,10 +619,27 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                     type="text"
                     value={form.deliveryPincode}
                     onChange={(e) => patch('deliveryPincode', e.target.value)}
-                    aria-invalid={!!errors.deliveryPincode}
+                    aria-invalid={!!errors.deliveryPincode || !!pincodeError}
                     maxLength={10}
                     className="mono font-semibold pr-20"
                   />
+                  <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1 pointer-events-none">
+                    {pincodeValidating && (
+                      <span className="text-indigo-500 flex items-center gap-1 text-xs">
+                        <Loader2 size={14} className="animate-spin" />
+                      </span>
+                    )}
+                    {!pincodeValidating && pincodePostOffices.length > 0 && !pincodeError && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800 shadow-xs">
+                        <CheckCircle2 size={11} className="shrink-0 text-emerald-600 dark:text-emerald-400" /> Valid
+                      </span>
+                    )}
+                    {!pincodeValidating && pincodeError && form.deliveryPincode.trim().length >= 6 && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800 shadow-xs">
+                        <AlertCircle size={11} className="shrink-0 text-rose-600 dark:text-rose-400" /> Invalid
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <FieldError message={errors.deliveryPincode} />
               </div>

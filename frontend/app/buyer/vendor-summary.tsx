@@ -36,7 +36,9 @@ import {
   DollarSign,
   Tag,
   Check,
+  Loader2,
 } from 'lucide-react';
+import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
 
 interface VendorSummaryProps {
   onViewEvaluation: (record: VendorEvaluationRecord) => void;
@@ -162,6 +164,56 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [formState, setFormState] = useState('');
   const [formCountry, setFormCountry] = useState('India');
   const [formPincode, setFormPincode] = useState('');
+  const [formPincodeError, setFormPincodeError] = useState<string | null>(null);
+  const [formPincodeValidating, setFormPincodeValidating] = useState(false);
+  const [formPincodePostOffices, setFormPincodePostOffices] = useState<PostOfficeDetail[]>([]);
+  const formPincodeDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    const raw = formPincode.trim();
+    if (formPincodeDebounceRef.current) clearTimeout(formPincodeDebounceRef.current);
+    if (!raw) {
+      setFormPincodeError(null);
+      setFormPincodeValidating(false);
+      setFormPincodePostOffices([]);
+      return;
+    }
+    if (isDummyPincode(raw)) {
+      setFormPincodeError('Invalid or dummy PIN code');
+      setFormPincodeValidating(false);
+      setFormPincodePostOffices([]);
+      return;
+    }
+    if (raw.length >= 3 && !PINCODE_PATTERN.test(raw)) {
+      setFormPincodeError('Invalid PIN code format');
+      setFormPincodeValidating(false);
+      setFormPincodePostOffices([]);
+      return;
+    }
+    if (/^\d{6}$/.test(raw)) {
+      setFormPincodeValidating(true);
+      formPincodeDebounceRef.current = setTimeout(async () => {
+        try {
+          const res = await validatePincode(raw);
+          if (!res.isValid) {
+            setFormPincodeError(res.message || 'Invalid PIN code');
+            setFormPincodePostOffices([]);
+          } else {
+            setFormPincodeError(null);
+            setFormPincodePostOffices(res.postOffices || []);
+          }
+        } catch {
+          setFormPincodeError(null);
+        } finally {
+          setFormPincodeValidating(false);
+        }
+      }, 350);
+    } else {
+      setFormPincodeError(null);
+      setFormPincodeValidating(false);
+      setFormPincodePostOffices([]);
+    }
+  }, [formPincode]);
   const [formGst, setFormGst] = useState('');
   const [formPan, setFormPan] = useState('');
   const [formMsme, setFormMsme] = useState('');
@@ -235,6 +287,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       !formGst.trim()
     ) {
       showToast('Validation Error', 'Please complete all required fields including City, State, Pincode and GSTIN.', 'warning');
+      return;
+    }
+
+    if (formPincodeError) {
+      showToast('Invalid Pincode', formPincodeError, 'warning');
       return;
     }
 
@@ -330,6 +387,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     if (!selectedVendorForCrud) return;
     if (!formName.trim() || !formMajorCategory || !formEmail.trim() || !formContactPerson.trim() || !formPhone.trim()) {
       showToast('Validation Error', 'Please complete all required fields.', 'warning');
+      return;
+    }
+
+    if (formPincode.trim() && formPincodeError) {
+      showToast('Invalid Pincode', formPincodeError, 'warning');
       return;
     }
 
@@ -1383,9 +1445,26 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   />
                 </div>
                 <div>
-                  <label htmlFor="add-vendor-pincode" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                    Pincode <span className="text-rose-500">*</span>
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label htmlFor="add-vendor-pincode" className="block font-semibold text-slate-700 dark:text-gray-300">
+                      Pincode <span className="text-rose-500">*</span>
+                    </label>
+                    {formPincodeValidating && (
+                      <span className="text-[10px] text-indigo-500 font-bold flex items-center gap-1">
+                        <Loader2 size={10} className="animate-spin" /> Checking
+                      </span>
+                    )}
+                    {!formPincodeValidating && formPincodePostOffices.length > 0 && !formPincodeError && (
+                      <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-0.5">
+                        <CheckCircle2 size={10} /> Valid
+                      </span>
+                    )}
+                    {!formPincodeValidating && formPincodeError && formPincode.trim().length >= 6 && (
+                      <span className="text-[10px] font-bold text-rose-500 flex items-center gap-0.5">
+                        <AlertCircle size={10} /> Invalid
+                      </span>
+                    )}
+                  </div>
                   <input
                     id="add-vendor-pincode"
                     type="text"
@@ -1394,8 +1473,13 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     maxLength={6}
                     value={formPincode}
                     onChange={(e) => setFormPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 font-mono"
+                    className={`w-full text-xs p-2 rounded-lg border font-mono ${
+                      formPincodeError ? 'border-rose-400 dark:border-rose-700' : 'border-slate-200 dark:border-gray-700'
+                    } bg-white dark:bg-gray-900`}
                   />
+                  {formPincodeError && formPincode.trim().length >= 6 && (
+                    <p className="text-[10px] text-rose-500 mt-0.5 font-medium">{formPincodeError}</p>
+                  )}
                 </div>
               </div>
 
@@ -1697,13 +1781,36 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     />
                   </div>
                   <div>
-                    <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">Pincode</label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block font-semibold text-slate-700 dark:text-gray-300">Pincode</label>
+                      {formPincodeValidating && (
+                        <span className="text-[10px] text-indigo-500 font-bold flex items-center gap-1">
+                          <Loader2 size={10} className="animate-spin" /> Checking
+                        </span>
+                      )}
+                      {!formPincodeValidating && formPincodePostOffices.length > 0 && !formPincodeError && (
+                        <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-0.5">
+                          <CheckCircle2 size={10} /> Valid
+                        </span>
+                      )}
+                      {!formPincodeValidating && formPincodeError && formPincode.trim().length >= 6 && (
+                        <span className="text-[10px] font-bold text-rose-500 flex items-center gap-0.5">
+                          <AlertCircle size={10} /> Invalid
+                        </span>
+                      )}
+                    </div>
                     <input
                       type="text"
+                      maxLength={6}
                       value={formPincode}
-                      onChange={(e) => setFormPincode(e.target.value)}
-                      className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                      onChange={(e) => setFormPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      className={`w-full text-xs p-2 rounded-lg border font-mono ${
+                        formPincodeError ? 'border-rose-400 dark:border-rose-700' : 'border-slate-200 dark:border-gray-700'
+                      } bg-white dark:bg-gray-900`}
                     />
+                    {formPincodeError && formPincode.trim().length >= 6 && (
+                      <p className="text-[10px] text-rose-500 mt-0.5 font-medium">{formPincodeError}</p>
+                    )}
                   </div>
                   <div>
                     <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">Country</label>

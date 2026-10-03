@@ -732,21 +732,41 @@ const VENDOR_EMAIL_GATEWAY_CONFIG = {
 // ==============================================================================
 // RFQ MULTI-CHANNEL CHASER TIMING (Version 1 / mode_1 flow)
 // ==============================================================================
+// RFQ MULTI-CHANNEL CHASER TIMING
+// ==============================================================================
 // Controls when each channel fires after an RFQ is created or a vendor is
 // invited. Stored here so tests and the scheduler share a single source of truth
 // and the delays can be tuned without touching service logic.
 //
 //  Channel      Delay    Rationale
 //  ---------    -----    -----------------------------------------
-//  WhatsApp       0 ms   Immediate — highest open-rate, real-time
-//  SMS          10 s     Short follow-up nudge for vendors who miss WhatsApp
-//  Email        20 s     Formal follow-up reminder with full RFQ details
+//  SMS          5 min    Within 5 minutes of RFQ creation
+//  Call         6 h      After 6 hours — voice reminder (logic preserved, telephony deferred)
+//  WhatsApp     12 h     After another 6 hours (12h total) — WhatsApp interactive reminder
+//  Email        24 h     After 24 hours — formal email reminder with full RFQ details
 //
-// Override via environment variables for testing / ops without a code deploy.
+const FIVE_MINUTES_MS = 5 * 60 * 1000;
+const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
+const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+
+function resolveChaserDelay(envVal, defaultMs) {
+  if (process.env.NODE_ENV === 'test') {
+    return Number(envVal ?? defaultMs);
+  }
+  // In dev and production, never allow zero or negative delay so reminders cannot fire immediately on RFQ creation
+  const val = Number(envVal);
+  if (!isNaN(val) && val >= defaultMs) {
+    return val;
+  }
+  return defaultMs;
+}
+
 const CHASER_DELAYS = {
-  WHATSAPP_MS:  Number(process.env.CHASER_WHATSAPP_DELAY_MS  ?? 0),
-  SMS_MS:       Number(process.env.CHASER_SMS_DELAY_MS       ?? (process.env.NODE_ENV === 'test' ? 5 * 60 * 1000 : 0)),
-  EMAIL_MS:     Number(process.env.CHASER_EMAIL_DELAY_MS     ?? (process.env.NODE_ENV === 'test' ? 24 * 60 * 60 * 1000 : 20000)),
+  SMS_MS:       resolveChaserDelay(process.env.CHASER_SMS_DELAY_MS, FIVE_MINUTES_MS),
+  CALL_MS:      resolveChaserDelay(process.env.CHASER_CALL_DELAY_MS, SIX_HOURS_MS),
+  WHATSAPP_MS:  resolveChaserDelay(process.env.CHASER_WHATSAPP_DELAY_MS, TWELVE_HOURS_MS),
+  EMAIL_MS:     resolveChaserDelay(process.env.CHASER_EMAIL_DELAY_MS, TWENTY_FOUR_HOURS_MS),
 };
 
 // ==============================================================================

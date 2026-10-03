@@ -1390,6 +1390,7 @@ class StoreService {
   }
 
   getRFQById(id) {
+    this.checkAndClose48HourRFQs();
     const rfq = this.rfqs.find((r) => r.id === id || r.rfqNumber === id);
     if (!rfq) return undefined;
     return rfq.quotes
@@ -1684,9 +1685,10 @@ class StoreService {
     this.emailRFQToMatchedVendors(newRFQ);
 
     // Timed multi-channel chaser sequence for every assigned vendor:
-    //   • WhatsApp — immediate
-    //   • SMS      — +5 minutes
-    //   • Email    — +24 hours (reminder alongside the upfront invite above)
+    //   • Within 5 minutes → SMS reminder
+    //   • After 6 hours   → Call reminder (logic kept, telephony deferred)
+    //   • After 12 hours  → WhatsApp reminder
+    //   • After 24 hours  → Email reminder
     // Only fires for mode_1 and mode_2 (mode_3 has no auto-assigned vendors
     // at creation time; inviteVendorsToRFQ schedules chasers when they are
     // manually added later).
@@ -1979,6 +1981,11 @@ class StoreService {
       // Cancel any pending WhatsApp/SMS/email chaser timers so deleted RFQs
       // don't trigger ghost dispatches minutes or hours later.
       rfqChaserScheduler.clearScheduledChasers(id);
+      if (this._delayedQuoteTimers && this._delayedQuoteTimers.has(id)) {
+        const handles = this._delayedQuoteTimers.get(id) || [];
+        handles.forEach((h) => clearTimeout(h));
+        this._delayedQuoteTimers.delete(id);
+      }
     }
     return removed;
   }
@@ -2301,53 +2308,12 @@ class StoreService {
         );
       }
 
-      // Real WhatsApp dispatch — fire-and-forget alongside the simulation.
-      // No-ops when WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_ACCESS_TOKEN are unset
-      // (falls back to wa.me deep-link logging), and skips entirely in test env.
-      const vendorPhone = vendor.phone || vendor.mobile || vendor.mobileNumber;
-      if (vendorPhone) {
-        const bidUrl = whatsAppService.generateOneClickBidUrl(updatedRFQ.rfqNumber, vendor.email);
-        this._background(
-          whatsAppService.sendRFQInvitationWhatsApp({
-            phone: vendorPhone,
-            vendorName: vendor.name,
-            contactPerson: vendor.contactPerson,
-            rfqNumber: updatedRFQ.rfqNumber,
-            rfqTitle: updatedRFQ.title,
-            vendorEmail: vendor.email,
-          }).then((result) => {
-            logger.info(
-              `WhatsApp RFQ invite to ${vendor.name} (${vendorPhone}): ${result.success ? `sent (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
-              { vendorId: vendor.id, rfqNumber: updatedRFQ.rfqNumber, success: result.success },
-              'STORE_SERVICE'
-            );
-          }),
-          'Failed to dispatch WhatsApp RFQ invite'
-        );
-
-        // Real SMS chaser — fire-and-forget. Uses the same DLT gateway as OTP.
-        this._background(
-          smsService.sendRFQChaserSms({
-            mobile: vendorPhone,
-            vendorName: vendor.name,
-            rfqNumber: updatedRFQ.rfqNumber,
-            rfqTitle: updatedRFQ.title,
-            bidLink: bidUrl,
-          }).then((result) => {
-            logger.info(
-              `SMS RFQ invite to ${vendor.name} (${vendorPhone}): ${result.success ? `sent (${result.messageId})` : `failed — ${result.error || 'unknown'}`}`,
-              { vendorId: vendor.id, rfqNumber: updatedRFQ.rfqNumber, success: result.success },
-              'STORE_SERVICE'
-            );
-          }),
-          'Failed to dispatch SMS RFQ invite'
-        );
-      }
-
-      // Timed multi-channel chaser — same 3-channel sequence as createRFQ.
-      // scheduleVendorChaser is idempotent-safe: it creates new timers each
-      // call, so a vendor invited twice simply queues a second sequence (which
-      // is guarded upstream by the _isInvitedVendor duplicate check anyway).
+      // Multi-channel reminder sequence:
+      //   • Within 5 minutes → SMS reminder
+      //   • After 6 hours   → Call reminder (logic kept, telephony deferred)
+      //   • After 12 hours  → WhatsApp reminder
+      //   • After 24 hours  → Email reminder
+      // Dispatches are scheduled via rfqChaserScheduler, not sent immediately.
       rfqChaserScheduler.scheduleVendorChaser(
         updatedRFQ,
         vendor,
@@ -2464,18 +2430,22 @@ class StoreService {
     // Only reached from addQuoteToRFQ, which has already resolved a real RFQ and
     // built the quote — the one thing that can be missing is an owning buyer.
     if (!rfq.buyerAccountId) return null;
+    const isHidden = this.isPortalRFQ(rfq) && this.isWithin48HourWindow(rfq);
+
     const notification = this._buildNotification({
       recipientType: 'buyer',
       recipientId: rfq.buyerAccountId,
       kind: 'quote_received',
       rfq,
-      title: `New quote on ${rfq.rfqNumber}`,
-      message: `${quote.vendorName || 'A vendor'} submitted a quote on ${rfq.rfqNumber} — ${rfq.title}.`,
+      title: isHidden ? `New quote on ${rfq.rfqNumber} (Sealed)` : `New quote on ${rfq.rfqNumber}`,
+      message: isHidden
+        ? `${quote.vendorName || 'A vendor'} submitted a quotation on ${rfq.rfqNumber} — ${rfq.title}. (Commercial bid details sealed under 48-hour bidding integrity rule).`
+        : `${quote.vendorName || 'A vendor'} submitted a quote on ${rfq.rfqNumber} — ${rfq.title}.`,
       meta: {
         vendorId: quote.vendorId || null,
         vendorName: quote.vendorName || null,
-        totalPrice: quote.totalPrice ?? null,
-        unitPrice: quote.unitPrice ?? null,
+        totalPrice: quote.totalPrice,
+        bidSealed: isHidden,
       },
     });
     this.notifications.unshift(notification);
@@ -2523,7 +2493,22 @@ class StoreService {
   }
 
   notifyBuyerOfFinalComparison(rfq) {
-    if (!rfq.buyerAccountId) return null;
+    if (!rfq || !rfq.buyerAccountId) return null;
+
+    const isPortal = this.isPortalRFQ(rfq);
+    const in48hWindow = this.isWithin48HourWindow(rfq);
+
+    // During the 48-hour bidding integrity window on portal RFQs, commercial comparisons
+    // must NOT be emailed to the buyer.
+    if (isPortal && in48hWindow) {
+      logger.info(
+        `[48H_BID_RULE] Portal RFQ ${rfq.rfqNumber}: suppressed final comparison email to buyer during 48-hour sealed window.`,
+        { rfqNumber: rfq.rfqNumber },
+        'STORE_SERVICE'
+      );
+      return null;
+    }
+
     const notification = this._buildNotification({
       recipientType: 'buyer',
       recipientId: rfq.buyerAccountId,
@@ -2582,6 +2567,13 @@ class StoreService {
 
       // Dispatches SMS acknowledgment regarding quotation comparison to the buyer within 10 minutes
       this.scheduleBuyerComparisonSms(rfq, 0);
+
+      // Clear any pending delayed quote email timers since final closure email was sent
+      if (this._delayedQuoteTimers && this._delayedQuoteTimers.has(rfq.id)) {
+        const handles = this._delayedQuoteTimers.get(rfq.id) || [];
+        handles.forEach((h) => clearTimeout(h));
+        this._delayedQuoteTimers.delete(rfq.id);
+      }
     }
     const matches = this.vendors.filter((v) => this.vendorCoversRFQ(v, rfq));
     if (matches.length > 0) {
@@ -2740,11 +2732,123 @@ class StoreService {
     return allEmails.size;
   }
 
-  /** Email a submitted quote to the RFQ's owning buyer. Fired from addQuoteToRFQ. */
+  /**
+   * Whether an RFQ originated from the web portal (vs inbound email gateway).
+   */
+  isPortalRFQ(rfq) {
+    if (!rfq) return false;
+    const src = String(rfq.source || '').toLowerCase().trim();
+    return src !== 'email' && src !== 'email_gateway' && src !== 'inbound_email';
+  }
+
+  /**
+   * Whether an RFQ is currently within its 48-hour bidding integrity window.
+   */
+  isWithin48HourWindow(rfq) {
+    if (!rfq || rfq.status === 'Closed') return false;
+    if (rfq.quotesHidden) return true;
+    const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
+    let createdAtMs = 0;
+    if (rfq.createdAt) {
+      const parsed = Date.parse(rfq.createdAt);
+      if (!isNaN(parsed) && parsed > 0) {
+        createdAtMs = parsed;
+      }
+    }
+    if (createdAtMs <= 0) return true;
+    return Date.now() - createdAtMs < FORTY_EIGHT_HOURS_MS;
+  }
+
+  /**
+   * Calculates the remaining milliseconds in the 48-hour bidding window.
+   */
+  getRemaining48HourMs(rfq) {
+    const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
+    let createdAtMs = 0;
+    if (rfq && rfq.createdAt) {
+      const parsed = Date.parse(rfq.createdAt);
+      if (!isNaN(parsed) && parsed > 0) {
+        createdAtMs = parsed;
+      }
+    }
+    if (createdAtMs <= 0) return FORTY_EIGHT_HOURS_MS;
+    const elapsed = Date.now() - createdAtMs;
+    return Math.max(0, FORTY_EIGHT_HOURS_MS - elapsed);
+  }
+
+  /**
+   * Schedules a delayed quotation notification email to the buyer after the 48-hour window expires.
+   */
+  scheduleDelayedBuyerQuoteEmail(rfq, quote, buyer, delayMs) {
+    const timer = setTimeout(() => {
+      try {
+        const currentRfq = this.getRFQById(rfq.id) || rfq;
+        if (!currentRfq) return;
+        logger.info(
+          `[48H_BID_RULE] 48-hour sealed window expired for portal RFQ ${currentRfq.rfqNumber}. Dispatching quote email to buyer (${buyer.corporateEmail}).`,
+          { rfqNumber: currentRfq.rfqNumber, quoteVendor: quote.vendorName, buyerEmail: buyer.corporateEmail },
+          'STORE_SERVICE'
+        );
+        this._background(
+          mailerService.sendQuoteReceivedEmail(buyer.corporateEmail, {
+            rfq: currentRfq,
+            quote,
+            recipientName: buyer.organizationName,
+          }),
+          'Failed to dispatch delayed 48-hour quote email to buyer'
+        );
+      } catch (err) {
+        logger.error(`Error in delayed quote email dispatch for ${rfq.rfqNumber}`, err, 'STORE_SERVICE');
+      }
+    }, delayMs);
+
+    if (timer && timer.unref) {
+      timer.unref();
+    }
+
+    if (!this._delayedQuoteTimers) {
+      this._delayedQuoteTimers = new Map();
+    }
+    const list = this._delayedQuoteTimers.get(rfq.id) || [];
+    list.push(timer);
+    this._delayedQuoteTimers.set(rfq.id, list);
+  }
+
+  /**
+   * Email a submitted quote to the RFQ's owning buyer. Fired from addQuoteToRFQ.
+   *
+   * For Portal RFQ flow:
+   *   Stops the buyer from receiving the quote email for 48 hours.
+   *   Schedules dispatch after the 48-hour bidding integrity window elapses.
+   *
+   * For Email RFQ flow (or once 48 hours have elapsed / RFQ is closed):
+   *   Dispatches the quote email immediately.
+   */
   emailQuoteToBuyer(rfq, quote) {
-    if (!rfq.buyerAccountId) return false;
-    const buyer = this.buyerAccounts.find((a) => a.id === rfq.buyerAccountId);
-    if (!buyer || !buyer.corporateEmail) return false;
+    if (!rfq) return false;
+    const buyerEmail = this.resolveBuyerEmailForRFQ(rfq);
+    if (!buyerEmail) return false;
+
+    const buyer = (rfq.buyerAccountId && this.buyerAccounts.find((a) => a.id === rfq.buyerAccountId)) || {
+      id: rfq.buyerAccountId || null,
+      corporateEmail: buyerEmail,
+      organizationName: rfq.buyerAccountName || rfq.buyerName || 'Buyer',
+    };
+
+    const isPortal = this.isPortalRFQ(rfq);
+    const in48hWindow = this.isWithin48HourWindow(rfq);
+
+    if (isPortal && in48hWindow) {
+      const delayMs = this.getRemaining48HourMs(rfq);
+      logger.info(
+        `[48H_BID_RULE] Portal RFQ ${rfq.rfqNumber}: stopped quote email to buyer (${buyerEmail}) for 48 hours. Scheduled dispatch in ${Math.round(delayMs / 1000 / 60)} minutes.`,
+        { rfqNumber: rfq.rfqNumber, quoteVendor: quote.vendorName, buyerEmail, delayMs },
+        'STORE_SERVICE'
+      );
+      this.scheduleDelayedBuyerQuoteEmail(rfq, quote, buyer, delayMs);
+      return { delayed: true, delayMs, sent: false };
+    }
+
     this._background(
       mailerService.sendQuoteReceivedEmail(buyer.corporateEmail, { rfq, quote, recipientName: buyer.organizationName }),
       'Failed to email quote to buyer'

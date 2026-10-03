@@ -2171,3 +2171,194 @@ sms why not trigered after 5 minutes ? and testing whatsapp and sms flow this rf
 can you test rfq vendor reminder flow like sms and whatsapp flow use this number 9157154504
 
 ---
+
+## 2026-10-03T16:30:00Z
+
+```text
+@[Enterprise_qua_nextjs]
+
+For the Category Updates flow, the current implementation is working only for Version 1. Please extend the same flow to Version 2 as well, specifically for the Buyer’s Own Vendor flow.
+
+* Vendor submits a bid.
+* The bid must not be visible on the Buyer side for 48 hours.
+* Currently, the UI correctly hides the bid for 48 hours, but the email received by the Buyer is showing the bid details immediately.
+* Fix this so the 48-hour visibility rule is applied consistently everywhere, including Buyer emails.
+* After the 48-hour period, the bid should become visible to the Buyer.
+
+### Category Manager
+
+* Ensure bids are displayed correctly on the Category Manager side.
+* Verify the complete bid flow for both Version 1 and Version 2.
+
+### Pincode Validation
+
+* Wherever a Pincode field is present, add proper Pincode validation using the API.
+* Use the existing RFQ form implementation for reference.
+* Check how it is handled in the RFQ form and apply the same logic to all other Pincode fields.
+* Add proper debouncing and loading state.
+* Make sure the user cannot enter random numbers without proper validation.
+
+### RFQ Reminder Flow
+
+Reminder sequence:
+* Within 5 minutes of RFQ → SMS reminder
+* After 6 hours → Call reminder (keep this in the logic/flow, but do not implement the actual telephony calling for now)
+* After another 6 hours (total 12 hours) → WhatsApp reminder
+* After 24 hours → Email reminder
+```
+
+---
+
+## 2026-10-03T16:35:00Z
+
+```text
+version 1 rfq form vendor card layout used in version 2 also
+```
+
+---
+
+## 2026-10-03T17:03:56Z
+
+```text
+Unhandled Runtime Error
+
+ReferenceError: useRef is not defined
+Source
+
+app\login\page.tsx (93:33) @ useRef
+
+  91 |   const [regPincodeValidating, setRegPincodeValidating] = useState(false);
+  92 |   const [regPincodePostOffices, setRegPincodePostOffices] = useState<PostOfficeDetail[]>([]);
+> 93 |   const regPincodeDebounceRef = useRef<NodeJS.Timeout | null>(null);
+     |                                 ^
+  94 |
+  95 |   useEffect(() => {
+  96 |     const raw = regPincode.trim();
+```
+
+## 2026-10-03T17:09:54Z
+
+```text
+why immediatly received whatsapp rfq alert check flow i asked what i need flow bro
+```
+
+---
+
+## 2026-10-03T17:16:03Z
+
+```text
+i have rfq 2 flow one in rfq create by email and two is rfq flow in portal 
+
+for portal when vendor submit bid then stop buyer received quate email for 48 hours after buyer make recived quate email 
+```
+
+---
+
+## 2026-10-03T17:27:32Z
+
+```text
+when buyer submit rfq then why vendor received immediate this message i am provided time for when whatsapp alert trigerd
+
+Hello navin chaudhary,
+
+Reminder: You have a pending RFQ Invitation for 17:25 rfqs.
+
+📋 RFQ Summary:
+* RFQ No: #RFQ260310555891
+* Delivery Date: As per RFQ
+* Location: India
+
+Please click the link below to review requirements and submit your quotation:
+mm7.in/MDNwklQEpqwE
+
+Best regards,
+Team Procucev
+```
+
+---
+
+## 2026-10-03T17:31:02Z
+
+```text
+when vendor submit quate in portal then why buyer received quate why for portal rfq flow
+```
+
+---
+
+## 2026-10-03T17:39:53Z
+
+```text
+why received rfq reminder immediatly update env if need
+
+and why received same alert 3
+
+[5:38 pm, 03/10/2026] Procucev: Hello egwhfdb,
+
+Reminder: You have a pending RFQ Invitation for 2rtrh.
+
+📋 RFQ Summary:
+* RFQ No: #RFQ260310537876
+* Delivery Date: As per RFQ
+* Location: India
+
+Please click the link below to review requirements and submit your quotation:
+mm7.in/MDMEWtfv6z8E
+
+Best regards,
+Team Procucev
+[5:38 pm, 03/10/2026] Procucev: Hello navin chaudhary,
+
+Reminder: You have a pending RFQ Invitation for 2rtrh.
+
+📋 RFQ Summary:
+* RFQ No: #RFQ260310537876
+* Delivery Date: As per RFQ
+* Location: India
+
+Please click the link below to review requirements and submit your quotation:
+mm7.in/MDPWrcNu0dEE
+
+Best regards,
+Team Procucev
+[5:38 pm, 03/10/2026] Procucev: Hello dwcs,
+
+Reminder: You have a pending RFQ Invitation for 2rtrh.
+
+📋 RFQ Summary:
+* RFQ No: #RFQ260310537876
+* Delivery Date: As per RFQ
+* Location: India
+
+Please click the link below to review requirements and submit your quotation:
+mm7.in/MDNjxIp4BDkE
+
+Best regards,
+Team Procucev
+```
+
+---
+
+## 2026-10-03T17:43:54Z
+
+```text
+vendor submit quate then why received buyer this email if vendor submit qaute from portal then buyer side dont quate email triger for 48 hours and i  am used cloudflare database directly
+```
+
+---
+
+## 2026-10-03T18:13:54Z
+
+```text
+in this section if procucev vendor hoy to add badge 
+
+Vendor Inquiries & Clarifications
+```
+
+---
+
+## 2026-10-03T18:15:56Z
+
+```text
+push code in github and pass all coverage and give me proper pr title and description properly
+```
+

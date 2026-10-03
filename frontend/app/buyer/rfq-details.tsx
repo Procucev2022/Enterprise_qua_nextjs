@@ -1,5 +1,5 @@
 'use client';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
@@ -12,7 +12,7 @@ import {
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { rfqAttachmentUrl, updateRFQ, replyToRFQInquiry, submitRFQInquiry } from '@/lib/rfqClient';
-import { isBuyerUploaded } from './vendor-summary';
+import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import type { ExtractedEntity, QuoteComparison, RFQAttachment, RFQInquiry, RFQItem, RFQSource } from '@/lib/types';
 import {
   ArrowLeft,
@@ -99,6 +99,7 @@ export interface VendorChatChannel {
   };
   contactPerson?: string | null;
   phone?: string | null;
+  isProcucev?: boolean;
 }
 
 export interface RFQDetailsProps {
@@ -380,7 +381,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
   } catch {
     router = null;
   }
-  const { showToast, refreshFromDB, buyerVendors, currentUserSession } = useApp();
+  const { currentRole, showToast, refreshFromDB, buyerVendors, currentUserSession } = useApp();
   const isVendor = Boolean(isVendorView || currentUserSession?.role === 'vendor');
   const [localRfq, setLocalRfq] = useState<RFQItem | null>(rfq);
   const [isClosing, setIsClosing] = useState(false);
@@ -435,6 +436,86 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
   const [replyModalInquiry, setReplyModalInquiry] = useState<RFQInquiry | null>(null);
   const [replyMessage, setReplyMessage] = useState('');
   const [isSubmittingReply, setIsSubmittingReply] = useState(false);
+
+  const checkIsProcucevVendor = useCallback(
+    (
+      vendorId?: string | null,
+      vendorName?: string | null,
+      vendorEmail?: string | null,
+      extra?: any
+    ): boolean => {
+      // 1. Direct explicit category checks on provided object
+      const category = extra?.vendorCategory || extra?.category;
+      if (category === 'Procucev Network' || category === 'Procucev - AI Rec') return true;
+      if (category === 'Client List') return false;
+
+      // 2. Check activeRfq.quotes for explicit vendorCategory
+      if (activeRfq && Array.isArray(activeRfq.quotes)) {
+        const matchedQuote = activeRfq.quotes.find((q: any) =>
+          (vendorId && q.vendorId && String(q.vendorId).toLowerCase() === String(vendorId).toLowerCase()) ||
+          (vendorName && q.vendorName && String(q.vendorName).toLowerCase().trim() === String(vendorName).toLowerCase().trim())
+        );
+        if (matchedQuote) {
+          if (matchedQuote.vendorCategory === 'Procucev Network' || matchedQuote.vendorCategory === 'Procucev - AI Rec') {
+            return true;
+          }
+          if (matchedQuote.vendorCategory === 'Client List') {
+            return false;
+          }
+        }
+      }
+
+      // 3. Check activeRfq.assignedVendors
+      if (activeRfq && Array.isArray(activeRfq.assignedVendors)) {
+        const matchedAssigned = activeRfq.assignedVendors.find((v: any) => {
+          if (typeof v === 'string') {
+            return (vendorId && v === vendorId) || (vendorName && v === vendorName);
+          }
+          return (
+            (vendorId && v.id && String(v.id).toLowerCase() === String(vendorId).toLowerCase()) ||
+            (vendorEmail && v.email && String(v.email).toLowerCase() === String(vendorEmail).toLowerCase()) ||
+            (vendorName && v.name && String(v.name).toLowerCase().trim() === String(vendorName).toLowerCase().trim())
+          );
+        });
+        if (matchedAssigned && typeof matchedAssigned === 'object') {
+          const vCat = (matchedAssigned as any).vendorCategory;
+          if (vCat === 'Procucev Network' || vCat === 'Procucev - AI Rec') {
+            return true;
+          }
+          if (vCat === 'Client List') {
+            return false;
+          }
+          if (isBuyerUploaded(matchedAssigned)) {
+            return false;
+          }
+        }
+      }
+
+      // 4. Check buyerVendors list from useApp()
+      if (Array.isArray(buyerVendors)) {
+        const matchedBuyer = buyerVendors.find((bv: any) =>
+          (vendorId && bv.id && String(bv.id).toLowerCase() === String(vendorId).toLowerCase()) ||
+          (vendorEmail && bv.email && String(bv.email).toLowerCase() === String(vendorEmail).toLowerCase()) ||
+          (vendorName && bv.name && String(bv.name).toLowerCase().trim() === String(vendorName).toLowerCase().trim())
+        );
+        if (matchedBuyer) {
+          if (isBuyerUploaded(matchedBuyer)) return false;
+          return isProcucevVendor(matchedBuyer);
+        }
+      }
+
+      // 5. Check if the provided object or ID qualifies as buyer uploaded
+      if (extra && isBuyerUploaded(extra)) return false;
+      if (vendorId && isBuyerUploaded({ id: vendorId })) return false;
+
+      // 6. If extra explicitly passes isProcucevVendor
+      if (extra && isProcucevVendor(extra)) return true;
+
+      // Fallback: check if id / name / email qualifies as buyer uploaded
+      return !isBuyerUploaded({ id: vendorId, name: vendorName, email: vendorEmail });
+    },
+    [activeRfq, buyerVendors]
+  );
 
   const vendorChannels = useMemo<VendorChatChannel[]>(() => {
     if (!activeRfq) return [];
@@ -492,6 +573,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
 
       const latestInq = matchedInqs.length > 0 ? matchedInqs[matchedInqs.length - 1] : inquiries[0];
       const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : undefined;
+      const isProc = checkIsProcucevVendor(vId || latestInq?.vendorId, vName, vEmail, latestInq || currentUserSession);
 
       return [
         {
@@ -506,6 +588,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           lastMessage: lastMsg
             ? { message: lastMsg.message, timestamp: lastMsg.timestamp, senderRole: lastMsg.senderRole }
             : undefined,
+          isProcucev: isProc,
         },
       ];
     }
@@ -546,6 +629,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           ];
 
       const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : undefined;
+      const isProc = checkIsProcucevVendor(inq.vendorId, inq.vendorName, inq.vendorEmail, inq);
 
       map.set(key, {
         key,
@@ -559,6 +643,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         lastMessage: lastMsg
           ? { message: lastMsg.message, timestamp: lastMsg.timestamp, senderRole: lastMsg.senderRole }
           : undefined,
+        isProcucev: isProc,
       });
     });
 
@@ -576,6 +661,13 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         (c) => (vEmail && c.vendorEmail === vEmail) || c.vendorName === vName || (vId && c.vendorId === vId)
       );
 
+      const isProc = checkIsProcucevVendor(
+        typeof v === 'string' ? v : v.id,
+        vName,
+        vEmail,
+        typeof v === 'object' ? v : undefined
+      );
+
       if (!existing) {
         map.set(key, {
           key,
@@ -586,10 +678,12 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           status: 'no_messages',
           contactPerson: vContact,
           phone: vPhone,
+          isProcucev: isProc,
         });
       } else {
         if (!existing.contactPerson && vContact) existing.contactPerson = vContact;
         if (!existing.phone && vPhone) existing.phone = vPhone;
+        if (existing.isProcucev === undefined) existing.isProcucev = isProc;
       }
     });
 
@@ -602,6 +696,8 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         (c) => c.vendorName === q.vendorName || (q.vendorId && c.vendorId === q.vendorId)
       );
 
+      const isProc = checkIsProcucevVendor(q.vendorId, q.vendorName, q.vendorEmail, q);
+
       if (!existing) {
         map.set(key, {
           key,
@@ -609,7 +705,10 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           vendorName: q.vendorName || 'Quoting Vendor',
           messages: [],
           status: 'no_messages',
+          isProcucev: isProc,
         });
+      } else if (existing.isProcucev === undefined) {
+        existing.isProcucev = isProc;
       }
     });
 
@@ -620,7 +719,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       if (b.messages.length > 0 && a.messages.length === 0) return 1;
       return 0;
     });
-  }, [activeRfq, isVendor, currentUserSession]);
+  }, [activeRfq, isVendor, currentUserSession, checkIsProcucevVendor]);
 
   // Set default selected vendor
   useEffect(() => {
@@ -1572,7 +1671,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           ) : undefined
         }
       >
-        {activeRfq?.quotesHidden ? (
+        {currentRole === 'buyer' && activeRfq?.quotesHidden ? (
           <div className="px-4 pb-10 pt-4 flex flex-col items-center text-center max-w-xl mx-auto space-y-3">
             <span className="w-16 h-16 rounded-2xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 flex items-center justify-center shadow-inner">
               <Lock size={26} />
@@ -1760,8 +1859,14 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                         className={`flex flex-col ${isMyMessage ? 'items-end' : 'items-start'} space-y-1`}
                       >
                         <div className="flex items-center gap-1.5 text-[10px] text-slate-400 px-1">
-                          <span className="font-bold text-slate-600 dark:text-gray-300">
+                          <span className="font-bold text-slate-600 dark:text-gray-300 inline-flex items-center gap-1">
                             {isMyMessage ? `${msg.senderName || 'You'} (Supplier)` : `${msg.senderName || activeRfq.buyerAccountName || 'Buyer Procurement Team'} (Buyer)`}
+                            {isMyMessage && activeChannel?.isProcucev && (
+                              <span className="px-1.5 py-0.2 rounded-full text-[8px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 inline-flex items-center gap-0.5 shadow-xs">
+                                <ShieldCheck size={9} className="text-emerald-600 dark:text-emerald-400" />
+                                Procucev Vendor
+                              </span>
+                            )}
                           </span>
                           <span>•</span>
                           <span className="mono">
@@ -1931,13 +2036,21 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
 
                         <div className="min-w-0 flex-1 space-y-1">
                           <div className="flex items-center justify-between gap-1">
-                            <span
-                              className={`text-xs font-bold truncate block ${
-                                isSelected ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-900 dark:text-white'
-                              }`}
-                            >
-                              {channel.vendorName}
-                            </span>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span
+                                className={`text-xs font-bold truncate block ${
+                                  isSelected ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-900 dark:text-white'
+                                }`}
+                              >
+                                {channel.vendorName}
+                              </span>
+                              {channel.isProcucev && (
+                                <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 inline-flex items-center gap-0.5 shadow-xs">
+                                  <ShieldCheck size={10} className="text-emerald-600 dark:text-emerald-400" />
+                                  Procucev Vendor
+                                </span>
+                              )}
+                            </div>
                             {channel.lastMessage && (
                               <span className="text-[9px] text-slate-400 mono shrink-0">
                                 {new Date(channel.lastMessage.timestamp).toLocaleTimeString([], {
@@ -1993,10 +2106,16 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                         {(activeChannel.vendorName || 'V').charAt(0).toUpperCase()}
                       </div>
                       <div className="min-w-0">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <h3 className="text-xs font-bold text-slate-900 dark:text-white truncate">
                             {activeChannel.vendorName}
                           </h3>
+                          {activeChannel.isProcucev && (
+                            <span className="shrink-0 px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 inline-flex items-center gap-1 shadow-xs">
+                              <ShieldCheck size={10} className="text-emerald-600 dark:text-emerald-400" />
+                              Procucev Vendor
+                            </span>
+                          )}
                           {activeChannel.status === 'open' ? (
                             <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
                               Requires Response
@@ -2056,8 +2175,14 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                               className={`flex flex-col ${isBuyer ? 'items-end' : 'items-start'} space-y-1`}
                             >
                               <div className="flex items-center gap-1.5 text-[10px] text-slate-400 px-1">
-                                <span className="font-bold text-slate-600 dark:text-gray-300">
+                                <span className="font-bold text-slate-600 dark:text-gray-300 inline-flex items-center gap-1">
                                   {isBuyer ? `${msg.senderName} (You)` : `${msg.senderName} (Supplier)`}
+                                  {!isBuyer && activeChannel?.isProcucev && (
+                                    <span className="px-1.5 py-0.2 rounded-full text-[8px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 inline-flex items-center gap-0.5 shadow-xs">
+                                      <ShieldCheck size={9} className="text-emerald-600 dark:text-emerald-400" />
+                                      Procucev Vendor
+                                    </span>
+                                  )}
                                 </span>
                                 <span>•</span>
                                 <span className="mono">
@@ -2139,9 +2264,18 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                 </div>
                 <div>
                   <h3 className="font-extrabold text-sm text-slate-900 dark:text-white">Answer Vendor Clarification</h3>
-                  <p className="text-[10px] text-slate-400">
-                    Replying to <span className="font-bold text-slate-700 dark:text-gray-300">{replyModalInquiry.vendorName}</span> on <span className="font-mono">{activeRfq.rfqNumber}</span>
-                  </p>
+                  <div className="text-[10px] text-slate-400 flex items-center gap-1.5 flex-wrap">
+                    <span>
+                      Replying to <span className="font-bold text-slate-700 dark:text-gray-300">{replyModalInquiry.vendorName}</span>
+                    </span>
+                    {checkIsProcucevVendor(replyModalInquiry.vendorId, replyModalInquiry.vendorName, replyModalInquiry.vendorEmail, replyModalInquiry) && (
+                      <span className="px-1.5 py-0.2 rounded-full text-[8px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 inline-flex items-center gap-0.5 shadow-xs">
+                        <ShieldCheck size={9} className="text-emerald-600 dark:text-emerald-400" />
+                        Procucev Vendor
+                      </span>
+                    )}
+                    <span>on <span className="font-mono">{activeRfq.rfqNumber}</span></span>
+                  </div>
                 </div>
               </div>
               <button

@@ -1406,7 +1406,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
             {form.sourcingMode === 'mode_2' && (
               <div className="mt-4 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-4 space-y-3 animate-fade-in shadow-2xs">
                 {(() => {
-                  const myVendors = buyerVendors.filter(isBuyerUploaded);
+                  const allMyVendors = buyerVendors.filter(isBuyerUploaded);
 
                   return (
                     <>
@@ -1419,11 +1419,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                             <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
                               <span>Mode 2: Hybrid Sourcing Pool</span>
                               <span className="badge badge-emerald text-[9px] font-bold">
-                                {myVendors.length} Private Suppliers Matched
+                                {allMyVendors.length} Private Suppliers
                               </span>
                             </h4>
                             <p className="text-[10px] text-slate-500 dark:text-gray-400">
-                              Dispatches to your approved roster ({myVendors.length}) with automated AI qualification and follow-ups.
+                              Dispatches to your approved roster ({allMyVendors.length}) with automated AI qualification and follow-ups.
                             </p>
                           </div>
                         </div>
@@ -1480,32 +1480,216 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                         </div>
                       )}
 
-                      {myVendors.length === 0 ? (
+                      {allMyVendors.length === 0 ? (
                         <div className="p-3 text-center rounded-lg bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[10px] text-slate-500 space-y-1">
                           <p className="font-semibold text-slate-600 dark:text-gray-400">No private vendors uploaded yet.</p>
                           <p className="text-[9px] text-slate-400">Please ingest your approved vendor directory or PO history to dispatch in Mode 2.</p>
                         </div>
-                      ) : (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-56 overflow-y-auto pr-1">
-                          {myVendors.map((vendor, idx) => (
-                            <div
-                              key={vendor.id || idx}
-                              className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-emerald-200/70 dark:border-emerald-900/50 space-y-1.5 shadow-2xs"
-                            >
-                              <div className="flex items-center justify-between gap-1">
-                                <span className="text-[11px] font-bold text-slate-900 dark:text-white truncate" title={vendor.name}>{vendor.name}</span>
-                                <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200/40 shrink-0">
-                                  Approved
+                      ) : (() => {
+                        const term = vendorSearchQuery.trim().toLowerCase();
+                        const myVendors = allMyVendors.filter((v) => {
+                          if (!term) return true;
+                          return (
+                            (v.name || '').toLowerCase().includes(term) ||
+                            (v.email || '').toLowerCase().includes(term) ||
+                            (v.majorCategory || '').toLowerCase().includes(term) ||
+                            (v.contactPerson || '').toLowerCase().includes(term)
+                          );
+                        });
+
+                        const isAllSelected = myVendors.length > 0 && myVendors.every((v) => selectedVendorIds.includes(v.id));
+
+                        return (
+                          <div className="space-y-2.5">
+                            {/* Search & Bulk Select Toolbar */}
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px]">
+                              <div className="relative flex-1">
+                                <Search size={12} className="absolute left-2.5 top-2 text-slate-400" />
+                                <input
+                                  type="search"
+                                  value={vendorSearchQuery}
+                                  onChange={(e) => setVendorSearchQuery(e.target.value)}
+                                  placeholder="Search suppliers by name, category, or email..."
+                                  className="w-full text-xs pl-7 pr-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
+                                />
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (isAllSelected) {
+                                      setSelectedVendorIds((prev) => prev.filter((id) => !myVendors.some((v) => v.id === id)));
+                                    } else {
+                                      const newIds = Array.from(new Set([...selectedVendorIds, ...myVendors.map((v) => v.id)]));
+                                      setSelectedVendorIds(newIds);
+                                    }
+                                  }}
+                                  className="btn btn-secondary btn-xs text-[10px] font-bold inline-flex items-center gap-1"
+                                >
+                                  {isAllSelected ? <Square size={11} /> : <CheckSquare size={11} />}
+                                  <span>{isAllSelected ? 'Deselect All' : 'Select All'}</span>
+                                </button>
+                                <span className="text-[10px] text-slate-500 font-semibold mono">
+                                  {selectedVendorIds.length > 0 ? selectedVendorIds.length : allMyVendors.length} / {allMyVendors.length} selected
                                 </span>
                               </div>
-                              <div className="text-[9px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
-                                <span className="truncate font-semibold text-emerald-700 dark:text-emerald-300">{vendor.majorCategory || 'General Industrial'}</span>
-                                <span className="truncate">{vendor.city || vendor.state || vendor.location || 'India'}</span>
-                              </div>
                             </div>
-                          ))}
-                        </div>
-                      )}
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-56 overflow-y-auto pr-1">
+                              {myVendors.map((vendor, idx) => {
+                                const isSelected = selectedVendorIds.length === 0 || selectedVendorIds.includes(vendor.id);
+                                const rawMinor = vendor.minorCategories as string | string[] | undefined;
+                                const minorList: string[] = Array.isArray(rawMinor)
+                                  ? rawMinor
+                                  : typeof rawMinor === 'string'
+                                  ? (rawMinor as string).split(',').map((s: string) => s.trim()).filter(Boolean)
+                                  : Array.isArray(vendor.vendorSelectedCategories)
+                                  ? vendor.vendorSelectedCategories
+                                  : [];
+
+                                const matchResult = categoryFetchSignals.length > 0
+                                  ? matchVendorAgainstSignals(vendor, categoryFetchSignals)
+                                  : { isMatch: true };
+                                const isCategoryMismatch = categoryFetchSignals.length > 0 && !matchResult.isMatch;
+
+                                return (
+                                  <div
+                                    key={vendor.id || idx}
+                                    onClick={() => {
+                                      setSelectedVendorIds((prev) => {
+                                        const currentlySelected = prev.length === 0 ? allMyVendors.map((v) => v.id) : prev;
+                                        if (currentlySelected.includes(vendor.id)) {
+                                          return currentlySelected.filter((id) => id !== vendor.id);
+                                        } else {
+                                          return [...currentlySelected, vendor.id];
+                                        }
+                                      });
+                                    }}
+                                    className={`rounded-lg border p-2.5 space-y-1.5 shadow-2xs cursor-pointer transition-all ${
+                                      isSelected
+                                        ? isCategoryMismatch
+                                          ? 'border-amber-400 dark:border-amber-600 bg-amber-50/30 dark:bg-amber-950/20 ring-1 ring-amber-400/40'
+                                          : 'border-emerald-400 dark:border-emerald-600 bg-emerald-50/30 dark:bg-emerald-950/20 ring-1 ring-emerald-400/40'
+                                        : 'border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60'
+                                    }`}
+                                  >
+                                    <div className="flex items-start justify-between gap-1">
+                                      <div className="flex items-center gap-1.5 min-w-0">
+                                        <div className={`w-3.5 h-3.5 rounded flex items-center justify-center shrink-0 border text-[9px] ${
+                                          isSelected
+                                            ? isCategoryMismatch
+                                              ? 'bg-amber-600 border-amber-600 text-white'
+                                              : 'bg-emerald-600 border-emerald-600 text-white'
+                                            : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800'
+                                        }`}>
+                                          {isSelected && <Check size={10} />}
+                                        </div>
+                                        <span className="text-[11px] font-bold text-slate-900 dark:text-white truncate" title={vendor.name}>
+                                          <span className="mr-1">{idx + 1}.</span>
+                                          <span>{vendor.name}</span>
+                                        </span>
+                                      </div>
+                                      {isCategoryMismatch ? (
+                                        <span
+                                          data-testid="category-mismatch-badge"
+                                          className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border border-amber-300 dark:border-amber-700 shrink-0"
+                                          title="Category mismatch with RFQ. Excluded from shortlist until updated."
+                                        >
+                                          ⚠️ Mismatch
+                                        </span>
+                                      ) : (
+                                        <span className="badge badge-emerald text-[8px] font-bold shrink-0">
+                                          Preferred
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    <div className="space-y-0.5 text-[10px] text-slate-500 dark:text-gray-400 pl-5">
+                                      {vendor.contactPerson && (
+                                        <div className="flex items-center gap-1 text-slate-700 dark:text-gray-300">
+                                          <Users size={10} className="text-slate-400 shrink-0" />
+                                          <span className="truncate">{vendor.contactPerson}</span>
+                                        </div>
+                                      )}
+                                      {vendor.email && (
+                                        <div className="flex items-center gap-1">
+                                          <Mail size={10} className="text-blue-500 shrink-0" />
+                                          <span className="font-mono truncate">{vendor.email}</span>
+                                        </div>
+                                      )}
+                                      {vendor.phone && (
+                                        <div className="flex items-center gap-1">
+                                          <Phone size={10} className="text-emerald-500 shrink-0" />
+                                          <span className="font-mono">{vendor.phone}</span>
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    {/* Category Badges */}
+                                    <div className="pt-1.5 border-t border-slate-100 dark:border-gray-800 space-y-1">
+                                      <div className="flex items-center justify-between text-[9px] text-slate-500 dark:text-gray-400">
+                                        <span className="font-semibold text-blue-700 dark:text-blue-300 truncate">
+                                          {vendor.majorCategory || 'General Industrial'}
+                                        </span>
+                                        <span className="truncate">{vendor.city || vendor.state || vendor.location || 'India'}</span>
+                                      </div>
+                                      {minorList.length > 0 && (
+                                        <div className="flex flex-wrap gap-1">
+                                          {minorList.slice(0, 2).map((cat: string, ci: number) => (
+                                            <span
+                                              key={ci}
+                                              className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-medium bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 border border-slate-200/60 dark:border-gray-700/60 truncate max-w-[120px]"
+                                              title={cat}
+                                            >
+                                              {cat}
+                                            </span>
+                                          ))}
+                                          {minorList.length > 2 && (
+                                            <span className="text-[8px] font-bold text-slate-400 dark:text-gray-500 self-center">
+                                              +{minorList.length - 2}
+                                            </span>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+                                    {isCategoryMismatch && (
+                                      <div className="pt-1.5 border-t border-amber-200/60 dark:border-amber-900/40">
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleSendCategoryUpdateEmail(vendor, categoryFetchSignals);
+                                          }}
+                                          disabled={sendingCategoryEmailVendors.includes(vendor.id || vendor.email)}
+                                          className="w-full py-1 px-2 rounded-md text-[9px] font-bold bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white flex items-center justify-center gap-1 transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+                                          title="Send email requesting vendor to update category"
+                                        >
+                                          {sendingCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
+                                            <>
+                                              <Loader2 size={10} className="animate-spin" />
+                                              <span>Sending Email...</span>
+                                            </>
+                                          ) : sentCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
+                                            <>
+                                              <CheckCircle2 size={10} />
+                                              <span>Update Email Sent ✓</span>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <Mail size={10} />
+                                              <span>Send Email to Update Category</span>
+                                            </>
+                                          )}
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </>
                   );
                 })()}
