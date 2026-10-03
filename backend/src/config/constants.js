@@ -768,15 +768,15 @@ const CHASER_DELAYS = {
 // OTP Template       : DLT ID 1102294821 (TRANSACTIONAL)
 const SMS_DLT_TEMPLATES = {
   RFQ_CHASER: {
-    NAME:     'RFQ_Notification_Seller',
-    SMSGID:   process.env.SMS_GATEWAY_RFQ_SMSGID || '1777179076323440961',
-    CATEGORY: 'PROMOTIONAL',
+    NAME:     'RFQ_Notification_Seller_Service',
+    SMSGID:   process.env.SMS_GATEWAY_RFQ_SMSGID || '1777179100456823380',
+    CATEGORY: 'SERVICE_IMPLICIT',
     // Exact approved template text — static parts must match character-for-character.
-    TEMPLATE: 'RFQ Alert {#var#}. You are invited to bid for {#var#}. Submit quote : {#var#} - Team Procucev.',
+    TEMPLATE: 'RFQ Alert {#alp#}: You are invited to bid for {#alp#}. Submit quote : {#urg#} - Team Procucev.',
     VARIABLES: ['rfqNumber', 'rfqTitle', 'bidUrl'],
-    // bidUrl points to the actual workers.dev quotation-form page.
-    // TinyURL shortening keeps total message ≤160 chars (1 SMS unit).
-    URL_SHORTENING: true,
+    // bidUrl points to the registered workers.dev quotation-form page.
+    // Public URL shorteners are forbidden under TRAI DLT unless whitelisted.
+    URL_SHORTENING: false,
   },
   OTP: {
     NAME:     'OTP_Procucev_GMT',

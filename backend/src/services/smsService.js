@@ -344,23 +344,19 @@ async function sendRFQChaserSms({
     process.env.PUBLIC_FRONTEND_URL ||
     'https://procucev-enterprise-frontend.procucev-enterprise.workers.dev';
 
-  // Build the actual quotation-form URL on the workers.dev frontend.
-  // This is the real vendor quote submission page — vendors land here to submit quotes.
-  const rawBidLink =
+  // Build the quotation-form URL on the workers.dev frontend.
+  // Note: We use the approved workers.dev domain directly as registered under TRAI DLT {#urg#}.
+  // Public shorteners (e.g. tinyurl.com) are rejected by Indian carrier DLT scrubbers.
+  const resolvedBidLink =
     bidLink ||
     `${defaultFrontend}/vendor/quotation-form?rfq=${encodeURIComponent(
       rfqNumber
     )}`;
 
-  // Shorten the actual workers.dev URL via TinyURL so the total message fits in
-  // 1 SMS unit (≤160 chars). The shortened link redirects to the real quotation-form page.
-  // Falls back to the original URL silently if TinyURL is unreachable.
-  const resolvedBidLink = await shortenUrl(rawBidLink);
-
   // Exact approved DLT template (SMS_DLT_TEMPLATES.RFQ_CHASER.TEMPLATE):
-  // RFQ Alert {#var#}. You are invited to bid for {#var#}. Submit quote : {#var#} - Team Procucev.
-  // Variables mapped in order: rfqNumber → rfqTitle → bidUrl (shortened, points to actual quotation-form)
-  const message = `RFQ Alert ${rfqNumber}. You are invited to bid for ${
+  // RFQ Alert {#alp#}: You are invited to bid for {#alp#}. Submit quote : {#urg#} - Team Procucev.
+  // Variables mapped in order: rfqNumber → rfqTitle → bidUrl
+  const message = `RFQ Alert ${rfqNumber}: You are invited to bid for ${
     rfqTitle || rfqNumber
   }. Submit quote : ${resolvedBidLink} - Team Procucev.`;
 
@@ -375,8 +371,7 @@ async function sendRFQChaserSms({
       rfqNumber,
       messageChars,
       smsUnits,
-      actualUrl: rawBidLink,
-      shortUrl: resolvedBidLink,
+      bidUrl: resolvedBidLink,
     },
     'SMS_SERVICE'
   );
