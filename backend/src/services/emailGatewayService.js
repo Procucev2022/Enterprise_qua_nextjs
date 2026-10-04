@@ -16,10 +16,8 @@
 //      buyerAccountId, so a requisition from an unknown address has no owner and
 //      would appear on nobody's dashboard. Without this check, anyone who learns
 //      the intake address could inject RFQs and reach the vendor panel.
-//   2. An ingested RFQ lands in 'Parsing', not 'Quotes Pending'. Nothing has
-//      reviewed it, and the category manager kanban already has a Parsing column
-//      standing empty. Auto-circulating unreviewed inbound mail to vendors is not
-//      something that should happen by default.
+//   2. An ingested RFQ lands in 'Parsing' and is circulated to category-matched
+//      vendors immediately, the same as a web-created RFQ.
 //   3. Idempotence comes from our own ledger, not from the IMAP \Seen flag. See
 //      db/emailGatewayQueries.js for why the flag alone is not enough.
 // ==============================================================================
