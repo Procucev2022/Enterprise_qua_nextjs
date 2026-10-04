@@ -53,6 +53,8 @@ describe('Frontend GraphQLClient Unit Tests', () => {
     );
     global.fetch = mockFetch;
 
+    let now = 1_000_000;
+    const nowSpy = jest.spyOn(Date, "now").mockImplementation(() => now);
     const client = new GraphQLClient('/api/graphql', 20);
     const queryStr = 'query { activeBuyerAccount { id organizationName } }';
 
@@ -66,8 +68,8 @@ describe('Frontend GraphQLClient Unit Tests', () => {
     expect(res2.data).toEqual(mockData);
     expect(mockFetch).toHaveBeenCalledTimes(1);
 
-    // Wait for TTL expiration
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    // Advance past the 20ms TTL deterministically (real timers made this flaky under load)
+    now += 30;
 
     // Third call after expiry (cache miss again)
     const res3 = await client.query(queryStr, {}, { useCache: true });
@@ -83,6 +85,8 @@ describe('Frontend GraphQLClient Unit Tests', () => {
     );
     const resErr = await client.query('query { broken }', {}, { useCache: true });
     expect(resErr.errors).toBeDefined();
+
+    nowSpy.mockRestore();
   });
 
   test('executes mutation with and without variables, clearing client cache', async () => {

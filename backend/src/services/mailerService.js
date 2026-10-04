@@ -314,7 +314,7 @@ function buildRequisitionEmail(to, rfq = {}, fromEmail = '') {
           </table>
 
           <div style="padding: 12px; background: #eff6ff; border-radius: 6px; font-size: 12px; color: #1e40af;">
-            ⚡ <strong>Status: Parsing / Held for Category Manager Review.</strong> No vendors have been released yet.
+            ⚡ <strong>Status: Parsing.</strong> Matching vendors have been notified.
           </div>
 
           <div style="text-align: center; margin: 20px 0 8px 0;">

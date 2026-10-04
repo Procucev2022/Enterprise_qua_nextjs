@@ -984,6 +984,38 @@ describe('Store Service & Business Operations', () => {
       expect((mode2RFQ.assignedVendors || []).map((v) => v.id)).toContain(networkVendor.id);
     });
 
+    test('createRFQ auto-invites category and sub-category matched vendors for an email-sourced RFQ in any sourcing mode', () => {
+      const subCatVendor = storeService.addVendor({
+        name: 'Email Sub-Category Vendor',
+        email: 'email-subcat@ex.com',
+        majorCategory: 'Email-Scope-Major',
+        minorCategories: ['Email-Scope-Minor'],
+      });
+      const emailRFQ = storeService.createRFQ({
+        id: 'rfq-email-autoinvite-test',
+        title: 'Emailed sub-category enquiry',
+        category: 'Email-Scope-Major',
+        sourcingMode: 'mode_1',
+        source: 'email_gateway',
+        status: 'Parsing',
+        extractedEntities: [{ majorCategory: 'Email-Scope-Major', minorCategory: 'Email-Scope-Minor' }],
+      });
+
+      expect((emailRFQ.assignedVendors || []).map((v) => v.id)).toContain(subCatVendor.id);
+    });
+
+    test('emailRFQToMatchedVendors still emails vendors on a Parsing RFQ, but not on a Draft one', () => {
+      const vendor = storeService.addVendor({
+        name: 'Parsing Email Vendor',
+        email: 'parsing-email@ex.com',
+        majorCategory: 'Parsing-Email-Cat',
+      });
+      const base = { category: 'Parsing-Email-Cat', extractedEntities: [], rfqNumber: 'RFQ-P', title: 'T', assignedVendors: [{ id: vendor.id, email: vendor.email }] };
+
+      expect(storeService.emailRFQToMatchedVendors({ ...base, status: 'Parsing' })).toBeGreaterThan(0);
+      expect(storeService.emailRFQToMatchedVendors({ ...base, status: 'Draft' })).toBe(0);
+    });
+
     test('notifyVendorsOfNewRFQ only fires for a rostered vendor whose own category also matches the RFQ', () => {
       const rostered = storeService.addVendor({
         name: 'Notify Rostered',

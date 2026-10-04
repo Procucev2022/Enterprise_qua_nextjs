@@ -1593,7 +1593,7 @@ class StoreService {
     // meant to stay strictly private). mode_1 now only ever gets whatever
     // the client-supplied assignedVendors already contains (the buyer's own
     // roster, category-filtered on the frontend).
-    if (newRFQ.sourcingMode === 'mode_2') {
+    if (newRFQ.sourcingMode === 'mode_2' || newRFQ.source === 'email_gateway') {
       // Capped: a bulk-imported category can match thousands of vendors (seen
       // live: 3000+ on a single RFQ, a 787KB payload) — embedding all of them
       // in assignedVendors on every future read of this RFQ is exactly the
@@ -1691,7 +1691,7 @@ class StoreService {
     // at creation time; inviteVendorsToRFQ schedules chasers when they are
     // manually added later).
     if (
-      (newRFQ.sourcingMode === 'mode_1' || newRFQ.sourcingMode === 'mode_2') &&
+      (newRFQ.sourcingMode === 'mode_1' || newRFQ.sourcingMode === 'mode_2' || newRFQ.source === 'email_gateway') &&
       Array.isArray(newRFQ.assignedVendors) &&
       newRFQ.assignedVendors.length > 0
     ) {
@@ -2697,7 +2697,7 @@ class StoreService {
 
   /** Email a newly-created RFQ to its top matched vendors and assigned vendors. Fired from createRFQ. */
   emailRFQToMatchedVendors(rfq) {
-    if (!rfq || rfq.status === 'Parsing' || rfq.status === 'Draft') {
+    if (!rfq || rfq.status === 'Draft') {
       return 0;
     }
     const recipients = this.selectVendorsForRFQEmail(rfq);
