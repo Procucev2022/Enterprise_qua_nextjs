@@ -359,26 +359,18 @@ export default function BuyerAccountTable() {
   };
 
   return (
-    <div className="space-y-6 animate-fade-in pb-12">
+    <div className="space-y-3.5 animate-fade-in pb-6">
       {/* ── Top Header ── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
-            Integrated Buyer Directory & Public System Database
-          </h1>
-        </div>
-
-        <div className="flex items-center gap-2 flex-wrap">
-          <button onClick={handleOpenAddModal} className="btn btn-primary btn-sm font-bold shadow-sm flex items-center gap-1.5">
-            <Plus size={14} /> Add Existing Public Buyer
-          </button>
-          <button onClick={() => setSyncModalOpen(true)} className="btn btn-secondary btn-sm flex items-center gap-1.5 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800/60">
-            <RefreshCw size={13} /> Sync Public DB
-          </button>
-          <button onClick={handleExportCSV} className="btn btn-secondary btn-sm flex items-center gap-1">
-            <Download size={13} /> Export Master
-          </button>
-        </div>
+      <div className="flex items-center justify-end gap-2 flex-wrap">
+        <button onClick={handleOpenAddModal} className="btn btn-primary btn-sm font-bold shadow-sm flex items-center gap-1.5">
+          <Plus size={14} /> Add Existing Public Buyer
+        </button>
+        <button onClick={() => setSyncModalOpen(true)} className="btn btn-secondary btn-sm flex items-center gap-1.5 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800/60">
+          <RefreshCw size={13} /> Sync Public DB
+        </button>
+        <button onClick={handleExportCSV} className="btn btn-secondary btn-sm flex items-center gap-1">
+          <Download size={13} /> Export Master
+        </button>
       </div>
 
       {/* ── Gateway Health & Sync Banner ── */}

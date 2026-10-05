@@ -419,22 +419,15 @@ export default function VendorEvaluationSummary({
     : questions.filter((q) => q.pillarId === selectedPillarFilter);
 
   return (
-    <div className="space-y-6 animate-fade-in pb-12">
+    <div className="space-y-3.5 animate-fade-in pb-6">
       {/* Top Bar Navigation */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+        <div className="flex items-center gap-2.5">
           {onBack && (
             <button onClick={onBack} className="btn btn-secondary btn-sm">
               <ArrowLeft size={14} /> Back
             </button>
           )}
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
-                Mode 3 360-Degree Vendor Evaluation Summary Report
-              </h1>
-            </div>
-          </div>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">

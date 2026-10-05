@@ -1114,7 +1114,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
   };
 
   return (
-    <div className="max-w-7xl mx-auto space-y-4 px-3 sm:px-4 lg:px-0 animate-fade-in pb-10">
+    <div className="max-w-7xl mx-auto space-y-3 px-1 sm:px-2 lg:px-0 animate-fade-in pb-6">
       {/* Provenance strip */}
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
         <button

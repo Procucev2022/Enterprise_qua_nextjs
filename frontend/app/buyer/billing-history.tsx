@@ -104,15 +104,6 @@ export default function BuyerBillingHistory() {
 
   return (
     <div className="max-w-4xl mx-auto p-4 sm:p-6 space-y-4">
-      <div className="flex items-center gap-2.5">
-        <div className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/30">
-          <Receipt size={18} />
-        </div>
-        <div>
-          <h1 className="text-base font-bold text-slate-900 dark:text-white">Billing History</h1>
-          <p className="text-xs text-slate-500 dark:text-gray-400">Every subscription payment on your account, with a downloadable receipt</p>
-        </div>
-      </div>
 
       {loading && (
         <div className="flex items-center justify-center gap-2 py-10 text-sm text-slate-500 dark:text-gray-400">

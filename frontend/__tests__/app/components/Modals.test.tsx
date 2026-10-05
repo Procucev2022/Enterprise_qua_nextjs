@@ -850,7 +850,7 @@ describe('Modals.tsx', () => {
       expect(screen.getByText('High Pressure Titanium Valves')).toBeInTheDocument();
 
       // Click tab buttons
-      const emailTab = screen.getByRole('button', { name: /Email Gateway \(/i });
+      const emailTab = screen.getByRole('button', { name: /via Email Upload \(/i });
       fireEvent.click(emailTab);
 
       const webTab = screen.getByRole('button', { name: /AI RFQ Create \(/i });

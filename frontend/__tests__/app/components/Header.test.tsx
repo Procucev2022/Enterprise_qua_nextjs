@@ -133,6 +133,33 @@ describe('Header', () => {
     expect(screen.queryByTitle('Vendor Subscription Access Model')).not.toBeInTheDocument();
   });
 
+  it('renders sourcing credit card for buyer on free trial showing Total, Used, and Remaining', () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      ...(storeModule.useApp as jest.Mock)(),
+      currentRole: 'buyer',
+      activeSubscription: 'free_trial',
+      remainingFreeRFQs: 5,
+    });
+    render(<Header />);
+    expect(screen.getByText('Sourcing Credits:')).toBeInTheDocument();
+    expect(screen.getByText('Total: 5')).toBeInTheDocument();
+    expect(screen.getByText('Used: 0')).toBeInTheDocument();
+    expect(screen.getByText('Remaining: 5')).toBeInTheDocument();
+  });
+
+  it('renders active plan badge when buyer is subscribed to a paid plan', () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      ...(storeModule.useApp as jest.Mock)(),
+      currentRole: 'buyer',
+      activeSubscription: 'version_1',
+      remainingFreeRFQs: 0,
+    });
+    render(<Header />);
+    expect(screen.queryByText('Sourcing Credits:')).not.toBeInTheDocument();
+    expect(screen.getByText('Active Plan:')).toBeInTheDocument();
+    expect(screen.getByText('Version 1')).toBeInTheDocument();
+  });
+
   it('renders the notification bell, opening the buyer notification inbox', async () => {
     render(<Header />);
 

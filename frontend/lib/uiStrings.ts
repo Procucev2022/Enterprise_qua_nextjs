@@ -419,7 +419,7 @@ export const UI_STRINGS = {
         number: 1,
         label: 'STEP 1: INGESTION',
         tag: 'Portal / Email',
-        hint: 'BOQ file or Email Gateway',
+        hint: 'BOQ file or via Email Upload',
       },
       {
         number: 2,
@@ -519,7 +519,7 @@ export const UI_STRINGS = {
     submittedHeading: 'Submission Detail',
     sourceLabel: 'Intake Source',
     sourceWebPortal: 'Web Portal Upload',
-    sourceEmailGateway: 'Email Gateway',
+    sourceEmailGateway: 'via Email Upload',
     sourceEmailUpload: 'Emailed Document',
     sourceManualEntry: 'Manual Entry',
     sourceFileLabel: 'Source Document',
@@ -624,7 +624,7 @@ export const UI_STRINGS = {
     resultCount: 'Showing {shown} of {total} RFQs',
 
     // Intake source badges
-    sourceEmailGateway: 'Email Gateway',
+    sourceEmailGateway: 'via Email Upload',
     sourceEmailUpload: 'Email File Upload',
     sourceManualEntry: 'Manual Web Entry',
     sourceWebPortal: 'Web App Portal',
@@ -1025,7 +1025,7 @@ export const UI_STRINGS = {
     reviewAction: 'Open & Review Categories',
     needsCategoryReview: '{count} need category',
     sourceLabels: {
-      email_gateway: 'Email Gateway (Autonomous)',
+      email_gateway: 'via Email Upload',
       email_upload: 'Email File Upload',
       web_portal: 'Web Portal',
       manual_entry: 'Manual Entry',

@@ -262,13 +262,10 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
   ];
 
   return (
-    <div className="space-y-6 animate-fade-in pb-10">
-      {/* ── Header ── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">{SCREEN.title}</h1>
-        </div>
-        <button onClick={onCreateRFQ} className="btn btn-primary btn-sm font-bold flex items-center gap-1.5 shrink-0">
+    <div className="space-y-3.5 animate-fade-in pb-8">
+      {/* ── Top Action Bar ── */}
+      <div className="flex items-center justify-end">
+        <button onClick={onCreateRFQ} className="btn btn-primary btn-sm font-bold flex items-center gap-1.5 shrink-0 shadow-sm">
           <Plus size={14} /> {RFQ.createRFQAction}
         </button>
       </div>
@@ -278,42 +275,40 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
         {kpiCards.map((card) => (
           <div
             key={card.key}
-            className="glass-panel p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80"
+            className="glass-panel p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80"
           >
             <div className="flex items-center justify-between">
               <span className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450">{card.label}</span>
               <div className={`p-1.5 rounded-lg ${card.tone}`}>{card.icon}</div>
             </div>
             <div className="text-2xl font-black text-slate-900 dark:text-white mt-1.5 mono">{card.value}</div>
-            <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">{card.hint}</p>
           </div>
         ))}
       </div>
 
       {/* ── Sourcing mode distribution ── */}
-      <div className="glass-panel p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-3">
+      <div className="glass-panel p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-2.5">
         <h2 className="text-xs font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1.5">
           <Layers size={14} className="text-indigo-600 dark:text-indigo-400" />
           {RFQ.modeDistributionTitle}
         </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
           {SOURCING_MODES.map((mode) => {
             const count = summary.bySourcingMode[mode.id] || 0;
             const share = summary.totalRFQs === 0 ? 0 : Math.round((count / summary.totalRFQs) * 100);
             return (
               <div
                 key={mode.id}
-                className="p-3 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 space-y-1.5"
+                className="p-2.5 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 space-y-1.5"
               >
                 <div className="flex items-center justify-between">
                   {modeBadge(mode.id)}
                   <span className="mono font-bold text-slate-800 dark:text-white">{count}</span>
                 </div>
-                <div className="font-semibold text-slate-700 dark:text-gray-300 text-[11px]">{mode.shortLabel}</div>
                 <div
                   className="w-full bg-slate-200 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden"
                   role="progressbar"
-                  aria-label={formatString(RFQ.modeSharePercent, { modeCode: mode.code, share })}
+                  aria-label={`${mode.code}: ${share}%`}
                   aria-valuenow={share}
                   aria-valuemin={0}
                   aria-valuemax={100}
@@ -321,7 +316,7 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
                   <div className="h-full bg-indigo-600" style={{ width: `${share}%` }} />
                 </div>
                 <span className="text-[10px] text-slate-400">
-                  {formatString(RFQ.modeSharePercent, { modeCode: mode.code, share })}
+                  {share}% of portfolio
                 </span>
               </div>
             );

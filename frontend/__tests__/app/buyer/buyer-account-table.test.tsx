@@ -110,7 +110,6 @@ describe('app/buyer/buyer-account-table.tsx', () => {
 
   it('renders table headers, search input, and buyer account rows', () => {
     render(<BuyerAccountTable />);
-    expect(screen.getByText('Integrated Buyer Directory & Public System Database')).toBeInTheDocument();
     const table = screen.getByRole('table');
     expect(within(table).getByText('Larsen & Toubro Limited')).toBeInTheDocument();
     expect(within(table).getByText('Tata Steel Limited')).toBeInTheDocument();

@@ -97,23 +97,20 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   const getSourceBadge = (source?: string, autoCirculated?: boolean) => {
     if (source === 'email_gateway') {
       return (
-        <span className="px-2 py-0.5 rounded-md text-[9px] font-bold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 flex items-center gap-1 shrink-0">
-          <Mail size={10} className="text-amber-600 dark:text-amber-400" />
-          <span>Email Gateway (Autonomous)</span>
+        <span className="px-2 py-0.5 rounded-md text-[9px] font-bold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 shrink-0">
+          <span>via Email Upload</span>
         </span>
       );
     }
     if (source === 'manual_entry') {
       return (
-        <span className="px-2 py-0.5 rounded-md text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1 shrink-0">
-          <FileSpreadsheet size={10} className="text-emerald-600 dark:text-emerald-400" />
+        <span className="px-2 py-0.5 rounded-md text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 shrink-0">
           <span>Manual RFQ</span>
         </span>
       );
     }
     return (
-      <span className="px-2 py-0.5 rounded-md text-[9px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 flex items-center gap-1 shrink-0">
-        <UploadCloud size={10} className="text-indigo-600 dark:text-indigo-400" />
+      <span className="px-2 py-0.5 rounded-md text-[9px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 shrink-0">
         <span>AI RFQ Create</span>
       </span>
     );
@@ -192,73 +189,26 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   ];
 
   return (
-    <div className="space-y-5 animate-fade-in pb-10">
+    <div className="space-y-3.5 animate-fade-in pb-6">
 
-      {/* ── Header ── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-extrabold tracking-tight text-slate-900 dark:text-white flex items-center gap-2 flex-wrap">
-            <span>Enterprise Sourcing Dashboard</span>
-          </h1>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <button
-            onClick={() => setInitialSetupModalOpen(true)}
-            className={`btn btn-sm font-bold flex items-center gap-1.5 shadow-sm transition-all ${
-              initialSetupCompleted
-                ? 'btn-secondary text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700 bg-emerald-50/50 dark:bg-emerald-950/30'
-                : 'btn-secondary text-indigo-700 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700 bg-indigo-50/70 dark:bg-indigo-950/40 animate-pulse'
-            }`}
-            title="Upload 1-3 Year Purchase Orders to extract approved vendors, contact details & categorize into 1st/2nd sets"
-          >
-            <FileSpreadsheet size={13} className={initialSetupCompleted ? 'text-emerald-600' : 'text-indigo-600'} />
-            <span>{initialSetupCompleted ? '✓ PO History Ingested' : '⚡ 1-3 Yr Purchase Setup'}</span>
-          </button>
+      {/* ── Action Header Bar ── */}
+      <div className="flex items-center justify-end gap-2 flex-wrap">
+        <button
+          onClick={() => setInitialSetupModalOpen(true)}
+          className={`btn btn-sm font-bold flex items-center gap-1.5 shadow-sm transition-all ${
+            initialSetupCompleted
+              ? 'btn-secondary text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700 bg-emerald-50/50 dark:bg-emerald-950/30'
+              : 'btn-secondary text-indigo-700 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700 bg-indigo-50/70 dark:bg-indigo-950/40 animate-pulse'
+          }`}
+          title="Upload 1-3 Year Purchase Orders to extract approved vendors, contact details & categorize into 1st/2nd sets"
+        >
+          <FileSpreadsheet size={13} className={initialSetupCompleted ? 'text-emerald-600' : 'text-indigo-600'} />
+          <span>{initialSetupCompleted ? '✓ PO History Ingested' : '⚡ 1-3 Yr Purchase Setup'}</span>
+        </button>
 
-          <button onClick={onNavigateToWizard} className="btn btn-primary btn-sm font-bold shadow-md">
-            <Plus size={14} /> AI RFQ Generator
-          </button>
-        </div>
-      </div>
-
-      {/* Subscription Quota Banner */}
-      <div className="glass-panel p-4 rounded-2xl border border-indigo-200/40 dark:border-indigo-950/40 bg-gradient-to-r from-indigo-50/50 via-purple-50/40 to-amber-50/50 dark:from-indigo-950/20 dark:via-purple-950/20 dark:to-amber-950/20 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-indigo-600/10 dark:bg-indigo-400/10 flex items-center justify-center text-indigo-600 dark:text-indigo-400 shrink-0">
-            <Sparkles size={20} />
-          </div>
-          <div>
-            <div className="text-xs font-bold text-slate-800 dark:text-gray-200 flex items-center gap-2 flex-wrap">
-              <span>Sourcing Plan: {activeSubscription === 'free_trial' ? 'Free Starter Account (All Versions Unlocked)' : activeSubscription === 'version_1' ? 'Version 1 (Client Roster Plan)' : activeSubscription === 'version_2' ? 'Version 2 (Hybrid Sourcing Plan)' : 'Version 3 (AI Autonomous Sourcing Plan)'}</span>
-              {activeSubscription === 'free_trial' && (
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300 border border-indigo-300">
-                    Total: 5
-                  </span>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300">
-                    Used: {Math.max(0, 5 - remainingFreeRFQs)}
-                  </span>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300">
-                    Remaining: {remainingFreeRFQs}
-                  </span>
-                </div>
-              )}
-            </div>
-            <p className="text-[10px] text-slate-500 dark:text-gray-400 mt-0.5">
-              {activeSubscription === 'free_trial' 
-                ? 'Your Free Account includes 5 Free RFQs in total, shared across Version 1 (Client Roster), Version 2 (Hybrid), and Version 3 (Autonomous AI).' 
-                : 'Your premium sourcing plan is active. All dispatch features for this mode are fully unlocked.'}
-            </p>
-          </div>
-        </div>
-        {onNavigateToSubscription && (
-          <button
-            onClick={onNavigateToSubscription}
-            className="btn btn-primary btn-xs flex items-center gap-1 shrink-0 font-bold"
-          >
-            Manage Subscription <ChevronRight size={10} />
-          </button>
-        )}
+        <button onClick={onNavigateToWizard} className="btn btn-primary btn-sm font-bold shadow-md">
+          <Plus size={14} /> AI RFQ Generator
+        </button>
       </div>
 
       {/* ── KPI Cards (4 Column Grid with RFQ Intake Source Breakdown) ── */}
@@ -266,7 +216,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
         {/* Active RFQs */}
         <div
           onClick={() => setActivePipelineModalOpen(true)}
-          className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 relative overflow-hidden hover:border-indigo-400 dark:hover:border-indigo-500 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[124px] group"
+          className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 relative overflow-hidden hover:border-indigo-400 dark:hover:border-indigo-500 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[110px] group"
           title="Click to view Active Pipeline details"
         >
           <div className="flex items-center justify-between">
@@ -284,45 +234,41 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
               </span>
             </div>
           </div>
-          <span className="text-[10px] text-slate-400">Total live requisitions across modes</span>
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-indigo-500 to-cyan-500" />
         </div>
 
         {/* Requisitions by Intake Source */}
         <div
           onClick={() => setIntakeSourcesModalOpen(true)}
-          className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-amber-200 dark:border-amber-900/50 relative overflow-hidden hover:border-amber-400 dark:hover:border-amber-500 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[124px] group"
+          className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-amber-200 dark:border-amber-900/50 relative overflow-hidden hover:border-amber-400 dark:hover:border-amber-500 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[110px] group"
           title="Click to view Intake Sources breakdown"
         >
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">Intake Sources</span>
             <div className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400 font-bold">
-              <div className="p-1 rounded bg-amber-50 dark:bg-amber-950 text-amber-600 dark:text-amber-400">
-                <Mail size={14} />
-              </div>
               <ChevronRight size={11} className="opacity-0 group-hover:opacity-100 transition-opacity" />
             </div>
           </div>
-          <div className="space-y-1 my-1">
+          <div className="space-y-1.5 my-1">
             <div className="flex items-center justify-between text-[11px]">
-              <span className="text-slate-600 dark:text-gray-400 flex items-center gap-1 font-medium">
-                <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" /> 📧 Email Gateway:
+              <span className="text-slate-600 dark:text-gray-400 font-medium">
+                via Email Upload:
               </span>
               <span className="font-bold text-amber-700 dark:text-amber-300 font-mono">
                 {emailGatewayRFQs.length} ({totalActiveRFQs > 0 ? Math.round((emailGatewayRFQs.length / totalActiveRFQs) * 100) : 0}%)
               </span>
             </div>
             <div className="flex items-center justify-between text-[11px]">
-              <span className="text-slate-600 dark:text-gray-400 flex items-center gap-1 font-medium">
-                <span className="w-2 h-2 rounded-full bg-indigo-500 inline-block" /> 🌐 AI RFQ Create:
+              <span className="text-slate-600 dark:text-gray-400 font-medium">
+                AI RFQ Create:
               </span>
               <span className="font-bold text-indigo-700 dark:text-indigo-300 font-mono">
                 {webPortalRFQs.length} ({totalActiveRFQs > 0 ? Math.round((webPortalRFQs.length / totalActiveRFQs) * 100) : 0}%)
               </span>
             </div>
             <div className="flex items-center justify-between text-[11px]">
-              <span className="text-slate-600 dark:text-gray-400 flex items-center gap-1 font-medium">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> ✏️ Manual RFQ:
+              <span className="text-slate-600 dark:text-gray-400 font-medium">
+                Manual RFQ:
               </span>
               <span className="font-bold text-emerald-700 dark:text-emerald-300 font-mono">
                 {manualRFQs.length} ({totalActiveRFQs > 0 ? Math.round((manualRFQs.length / totalActiveRFQs) * 100) : 0}%)
@@ -335,7 +281,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
         {/* Pending Quotes */}
         <div
           onClick={() => setSupplierQuotesModalOpen(true)}
-          className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 relative overflow-hidden hover:border-sky-400 dark:hover:border-sky-500 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[124px] group"
+          className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 relative overflow-hidden hover:border-sky-400 dark:hover:border-sky-500 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[110px] group"
           title="Click to view Supplier Quotes"
         >
           <div className="flex items-center justify-between">
@@ -353,7 +299,6 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
               </span>
             </div>
           </div>
-          <span className="text-[10px] text-slate-400">Total quotes received across active RFQs</span>
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-sky-500 to-blue-500" />
         </div>
 
@@ -366,7 +311,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
               showToast('No Active RFQs', 'Create or ingest an RFQ to view multi-channel follow-up telemetry.', 'info');
             }
           }}
-          className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-emerald-200 dark:border-emerald-500/30 relative overflow-hidden hover:border-emerald-400 dark:hover:border-emerald-400 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[124px]"
+          className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-emerald-200 dark:border-emerald-500/30 relative overflow-hidden hover:border-emerald-400 dark:hover:border-emerald-400 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[110px]"
           title="Click to open multi-channel deep dive"
         >
           <div className="flex items-center justify-between">
@@ -393,7 +338,6 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
               </span>
             </div>
           </div>
-          <span className="text-[10px] text-slate-400">Automated multi-channel outreach</span>
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-purple-500 via-emerald-500 to-amber-500" />
         </div>
       </div>
@@ -427,33 +371,33 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
               </button>
               <button
                 onClick={() => setRfqSourceFilter('email_gateway')}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all shrink-0 flex items-center gap-1 ${
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all shrink-0 ${
                   rfqSourceFilter === 'email_gateway'
                     ? 'bg-amber-600 text-white shadow-xs'
                     : 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-900/40 hover:bg-amber-100'
                 }`}
               >
-                <Mail size={11} /> 📧 Email Gateway ({emailGatewayRFQs.length})
+                via Email Upload ({emailGatewayRFQs.length})
               </button>
               <button
                 onClick={() => setRfqSourceFilter('web_portal')}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all shrink-0 flex items-center gap-1 ${
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all shrink-0 ${
                   rfqSourceFilter === 'web_portal'
                     ? 'bg-indigo-600 text-white shadow-xs'
                     : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-900/40 hover:bg-indigo-100'
                 }`}
               >
-                <UploadCloud size={11} /> 🌐 AI RFQ Create ({webPortalRFQs.length})
+                AI RFQ Create ({webPortalRFQs.length})
               </button>
               <button
                 onClick={() => setRfqSourceFilter('manual_entry')}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all shrink-0 flex items-center gap-1 ${
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all shrink-0 ${
                   rfqSourceFilter === 'manual_entry'
                     ? 'bg-emerald-600 text-white shadow-xs'
                     : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/40 hover:bg-emerald-100'
                 }`}
               >
-                <FileSpreadsheet size={11} /> ✏️ Manual RFQ ({manualRFQs.length})
+                Manual RFQ ({manualRFQs.length})
               </button>
             </div>
           </div>
@@ -518,7 +462,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
                       <span>•</span>
                       {rfq.source === 'email_gateway' ? (
                         <span className="text-amber-600 dark:text-amber-400 font-mono">
-                          Origin: {rfq.sourceEmail || activeBuyerAccount?.corporateEmail || 'Email Gateway'} (Auto-Circulated)
+                          Origin: {rfq.sourceEmail || activeBuyerAccount?.corporateEmail || 'via Email Upload'} (Auto-Circulated)
                         </span>
                       ) : rfq.source === 'email_upload' ? (
                         <span className="text-purple-600 dark:text-purple-400 font-mono">

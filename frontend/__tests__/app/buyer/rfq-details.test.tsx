@@ -283,7 +283,7 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
   describe('submission detail card', () => {
     it.each([
       ['web_portal', 'Web Portal Upload'],
-      ['email_gateway', 'Email Gateway'],
+      ['email_gateway', 'via Email Upload'],
       ['email_upload', 'Emailed Document'],
       ['manual_entry', 'Manual Entry'],
     ])('labels a %s intake as %s', (source, label) => {

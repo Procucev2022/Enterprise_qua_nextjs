@@ -41,7 +41,6 @@ describe('app/buyer/subscription-center.tsx', () => {
   it('renders free trial header, quota progress bar, and all 3 subscription plans', () => {
     render(<SubscriptionCenter />);
 
-    expect(screen.getByText('Procurement Sourcing Mode Subscriptions')).toBeInTheDocument();
     expect(screen.getByText(/Free Starter Account — 5 Free RFQs Included/i)).toBeInTheDocument();
     expect(screen.getByText(/Remaining: 4 \/ 5/i)).toBeInTheDocument();
     expect(screen.getByText(/Used: 1 \/ 5/i)).toBeInTheDocument();
