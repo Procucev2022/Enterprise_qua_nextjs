@@ -1232,7 +1232,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
  */
 async function pollViaGmailApi(config = resolveConfig()) {
   if (pollInFlight(runtime)) {
-    logger.warn('Email gateway poll skipped: previous buyer poll still in flight', {}, 'EMAIL_GATEWAY');
+    logger.warn('Email gateway poll skipped: previous buyer poll still in flight', { isPolling: runtime.isPolling, startedAt: runtime.pollStartedAt, ageMs: Date.now() - runtime.pollStartedAt, now: Date.now() }, 'EMAIL_GATEWAY');
     return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.POLL_ALREADY_RUNNING };
   }
   const auth = mailerService.getGmailOAuthClient();
@@ -1245,6 +1245,7 @@ async function pollViaGmailApi(config = resolveConfig()) {
 
   runtime.isPolling = true;
   runtime.pollStartedAt = Date.now();
+  logger.info('Buyer poll lock SET', { site: 'pollViaGmailApi', startedAt: runtime.pollStartedAt }, 'EMAIL_GATEWAY');
   runtime.consideredThisRun = 0;
   runtime.ingestedThisRun = 0;
   const startedAt = Date.now();
@@ -1291,7 +1292,11 @@ async function pollViaGmailApi(config = resolveConfig()) {
           continue;
         }
 
-        const full = await gmail.users.messages.get({ userId: 'me', id: ref.id, format: 'raw' });
+        const full = await withTimeout(
+          gmail.users.messages.get({ userId: 'me', id: ref.id, format: 'raw' }),
+          POLL_CALL_TIMEOUT_MS,
+          'Gmail message fetch'
+        );
         if (!full.data || !full.data.raw) {
           outcomes.push({ uid: ref.id, status: INGESTION_OUTCOME.UNREADABLE });
           continue;
@@ -1377,7 +1382,7 @@ async function pollViaGmailApi(config = resolveConfig()) {
  */
 async function pollOnce(config = resolveConfig()) {
   if (pollInFlight(runtime)) {
-    logger.warn('Email gateway poll skipped: previous buyer poll still in flight', {}, 'EMAIL_GATEWAY');
+    logger.warn('Email gateway poll skipped: previous buyer poll still in flight', { isPolling: runtime.isPolling, startedAt: runtime.pollStartedAt, ageMs: Date.now() - runtime.pollStartedAt, now: Date.now() }, 'EMAIL_GATEWAY');
     return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.POLL_ALREADY_RUNNING };
   }
   // Prefer the Gmail API whenever it's configured — see pollViaGmailApi's
@@ -1406,6 +1411,7 @@ async function pollOnce(config = resolveConfig()) {
 
   runtime.isPolling = true;
   runtime.pollStartedAt = Date.now();
+  logger.info('Buyer poll lock SET', { site: 'pollOnce', startedAt: runtime.pollStartedAt }, 'EMAIL_GATEWAY');
   runtime.consideredThisRun = 0;
   runtime.ingestedThisRun = 0;
   const startedAt = Date.now();
@@ -1554,7 +1560,7 @@ async function pollOnce(config = resolveConfig()) {
  */
 async function pollVendorOnce(config = resolveVendorConfig()) {
   if (pollInFlight(vendorRuntime)) {
-    logger.warn('Vendor email gateway poll skipped: previous poll still in flight', {}, 'EMAIL_GATEWAY');
+    logger.warn('Vendor email gateway poll skipped: previous poll still in flight', { isPolling: vendorRuntime.isPolling, startedAt: vendorRuntime.pollStartedAt, ageMs: Date.now() - vendorRuntime.pollStartedAt, now: Date.now() }, 'EMAIL_GATEWAY');
     return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.POLL_ALREADY_RUNNING };
   }
   if (!isConfigured(config)) {
@@ -1574,6 +1580,7 @@ async function pollVendorOnce(config = resolveVendorConfig()) {
 
   vendorRuntime.isPolling = true;
   vendorRuntime.pollStartedAt = Date.now();
+  logger.info('Vendor poll lock SET', { site: 'pollVendorOnce', startedAt: vendorRuntime.pollStartedAt }, 'EMAIL_GATEWAY');
   vendorRuntime.consideredThisRun = 0;
   vendorRuntime.ingestedThisRun = 0;
   const startedAt = Date.now();
