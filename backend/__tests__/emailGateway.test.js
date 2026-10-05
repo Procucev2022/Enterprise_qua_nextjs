@@ -462,6 +462,7 @@ describe('emailGatewayService.pollOnce', () => {
   // A slow extraction must not let two passes fetch the same unseen message.
   test('refuses to overlap with a run already in progress', async () => {
     emailGatewayService.runtime.isPolling = true;
+    emailGatewayService.runtime.pollStartedAt = Date.now();
     const result = await emailGatewayService.pollOnce(emailGatewayService.resolveConfig(FULL_ENV));
     expect(result.skipped).toBe(true);
     expect(result.reason).toBe(EMAIL_GATEWAY_MESSAGES.POLL_ALREADY_RUNNING);
@@ -649,10 +650,43 @@ describe('emailGatewayService.pollViaGmailApi', () => {
 
   test('refuses to overlap with a run already in progress', async () => {
     emailGatewayService.runtime.isPolling = true;
+    emailGatewayService.runtime.pollStartedAt = Date.now();
     jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
     const result = await emailGatewayService.pollViaGmailApi();
     expect(result.skipped).toBe(true);
     expect(result.reason).toBe(EMAIL_GATEWAY_MESSAGES.POLL_ALREADY_RUNNING);
+  });
+
+  test('a stale in-flight flag from a hung run does not block later polls', async () => {
+    emailGatewayService.runtime.isPolling = true;
+    emailGatewayService.runtime.pollStartedAt = Date.now();
+    emailGatewayService.runtime.pollStartedAt = Date.now() - 5 * 60 * 1000;
+    jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
+    jest.spyOn(googleapis.google, 'gmail').mockReturnValue(gmailApi());
+
+    const result = await emailGatewayService.pollViaGmailApi(emailGatewayService.resolveConfig(FULL_ENV));
+
+    expect(result.reason).not.toBe(EMAIL_GATEWAY_MESSAGES.POLL_ALREADY_RUNNING);
+    expect(result.ingested).toBe(1);
+  });
+
+  test('a Gmail call that never answers is abandoned after the timeout and releases the poll flag', async () => {
+    jest.useFakeTimers();
+    try {
+      jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
+      const api = gmailApi();
+      api.users.messages.list.mockReturnValue(new Promise(() => {}));
+      jest.spyOn(googleapis.google, 'gmail').mockReturnValue(api);
+
+      const poll = emailGatewayService.pollViaGmailApi(emailGatewayService.resolveConfig(FULL_ENV));
+      await jest.advanceTimersByTimeAsync(60_000);
+      const result = await poll;
+
+      expect(result.error).toMatch(/Gmail inbox list timed out/);
+      expect(emailGatewayService.runtime.isPolling).toBe(false);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test('ingests an unread message and clears the UNREAD label afterwards', async () => {
@@ -2396,6 +2430,7 @@ Price INR 5000
       expect(resUnconf.reason).toBe(EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED);
 
       emailGatewayService.vendorRuntime.isPolling = true;
+      emailGatewayService.vendorRuntime.pollStartedAt = Date.now();
       const resRunning = await emailGatewayService.pollVendorOnce(emailGatewayService.resolveVendorConfig(VENDOR_ENV));
       expect(resRunning.skipped).toBe(true);
       expect(resRunning.reason).toBe(EMAIL_GATEWAY_MESSAGES.POLL_ALREADY_RUNNING);
