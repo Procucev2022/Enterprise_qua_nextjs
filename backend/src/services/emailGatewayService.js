@@ -47,10 +47,29 @@ const {
 
 const { INGESTION_OUTCOME } = emailGatewayQueries;
 
+// A poll that never clears its flag (a Gmail or Gemini call that hangs) must not
+// block every later run on a warm Worker isolate. The flag only counts as held
+// for this long; each external call is also bounded so a hang ends the poll.
+const POLL_STALE_AFTER_MS = 2 * 60 * 1000;
+const POLL_CALL_TIMEOUT_MS = 60 * 1000;
+
+function pollInFlight(state) {
+  return state.isPolling && Date.now() - state.pollStartedAt < POLL_STALE_AFTER_MS;
+}
+
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 /** Live state, reported by getStatus and mutated only by the poll loop. */
 const runtime = {
   pollTimer: null,
   isPolling: false,
+  pollStartedAt: 0,
   // Mail older than this is never considered. Set when watching begins so an
   // existing backlog is left alone; see the search call in pollOnce.
   watchingSince: new Date().toISOString(),
@@ -66,6 +85,7 @@ const runtime = {
 const vendorRuntime = {
   pollTimer: null,
   isPolling: false,
+  pollStartedAt: 0,
   watchingSince: new Date().toISOString(),
   lastPollAt: null,
   lastPollDurationMs: null,
@@ -1048,7 +1068,11 @@ async function processMessage(rawSource, config = resolveConfig()) {
     return { status: INGESTION_OUTCOME.SENDER_NOT_ALLOWED, detail: authorisation.reason, message };
   }
 
-  const extraction = await geminiService.extractLineItems(prepared.extractionInput);
+  const extraction = await withTimeout(
+    geminiService.extractLineItems(prepared.extractionInput),
+    POLL_CALL_TIMEOUT_MS,
+    'Gemini line-item extraction'
+  );
   if (extraction.status !== geminiService.EXTRACTION_STATUS.SUCCESS) {
     return {
       status: INGESTION_OUTCOME.NO_LINE_ITEMS,
@@ -1207,7 +1231,8 @@ async function processMessage(rawSource, config = resolveConfig()) {
  * scripts/get-gmail-refresh-token.js if the existing token predates this).
  */
 async function pollViaGmailApi(config = resolveConfig()) {
-  if (runtime.isPolling) {
+  if (pollInFlight(runtime)) {
+    logger.warn('Email gateway poll skipped: previous buyer poll still in flight', {}, 'EMAIL_GATEWAY');
     return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.POLL_ALREADY_RUNNING };
   }
   const auth = mailerService.getGmailOAuthClient();
@@ -1219,6 +1244,7 @@ async function pollViaGmailApi(config = resolveConfig()) {
   const gmail = google.gmail({ version: 'v1', auth });
 
   runtime.isPolling = true;
+  runtime.pollStartedAt = Date.now();
   runtime.consideredThisRun = 0;
   runtime.ingestedThisRun = 0;
   const startedAt = Date.now();
@@ -1237,11 +1263,15 @@ async function pollViaGmailApi(config = resolveConfig()) {
     // sufficient for correctness without a time bound that can't be kept
     // reliably on this platform; a pre-existing backlog is handled by
     // marking it read once out of band, not by a bound in this query.
-    const listRes = await gmail.users.messages.list({
-      userId: 'me',
-      q: 'is:unread',
-      maxResults: config.maxPerPoll,
-    });
+    const listRes = await withTimeout(
+      gmail.users.messages.list({
+        userId: 'me',
+        q: 'is:unread',
+        maxResults: config.maxPerPoll,
+      }),
+      POLL_CALL_TIMEOUT_MS,
+      'Gmail inbox list'
+    );
     runtime.lastConnectedAt = new Date().toISOString();
 
     const messages = listRes.data.messages || [];
@@ -1346,7 +1376,8 @@ async function pollViaGmailApi(config = resolveConfig()) {
  * cause two passes to fetch the same unseen message concurrently.
  */
 async function pollOnce(config = resolveConfig()) {
-  if (runtime.isPolling) {
+  if (pollInFlight(runtime)) {
+    logger.warn('Email gateway poll skipped: previous buyer poll still in flight', {}, 'EMAIL_GATEWAY');
     return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.POLL_ALREADY_RUNNING };
   }
   // Prefer the Gmail API whenever it's configured — see pollViaGmailApi's
@@ -1374,6 +1405,7 @@ async function pollOnce(config = resolveConfig()) {
   }
 
   runtime.isPolling = true;
+  runtime.pollStartedAt = Date.now();
   runtime.consideredThisRun = 0;
   runtime.ingestedThisRun = 0;
   const startedAt = Date.now();
@@ -1521,7 +1553,8 @@ async function pollOnce(config = resolveConfig()) {
  * Read the vendor mailbox (srinu20252026@gmail.com) once and ingest vendor quote replies.
  */
 async function pollVendorOnce(config = resolveVendorConfig()) {
-  if (vendorRuntime.isPolling) {
+  if (pollInFlight(vendorRuntime)) {
+    logger.warn('Vendor email gateway poll skipped: previous poll still in flight', {}, 'EMAIL_GATEWAY');
     return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.POLL_ALREADY_RUNNING };
   }
   if (!isConfigured(config)) {
@@ -1540,6 +1573,7 @@ async function pollVendorOnce(config = resolveVendorConfig()) {
   }
 
   vendorRuntime.isPolling = true;
+  vendorRuntime.pollStartedAt = Date.now();
   vendorRuntime.consideredThisRun = 0;
   vendorRuntime.ingestedThisRun = 0;
   const startedAt = Date.now();
