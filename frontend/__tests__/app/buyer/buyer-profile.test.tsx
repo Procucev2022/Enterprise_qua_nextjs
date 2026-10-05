@@ -99,11 +99,14 @@ let rerenderCurrent: () => void = () => undefined;
  *
  * Queried by class rather than by text because the label is assembled from two
  * JSX expressions, which a text matcher only sees as separate nodes. The
- * `text-xs` class distinguishes it from the "Enterprise Buyer" badge in the
- * header, which shares the other classes.
+ * badge uses `font-mono` which distinguishes it from other badges in the
+ * header. Supports both `text-xs` and `text-[11px]` class names.
  */
 function selectionSummary(): string {
-  const badge = document.querySelector('.badge.badge-purple.font-mono.text-xs');
+  // Support both text-xs (legacy) and text-[11px] (compact UI variant)
+  const badge =
+    document.querySelector('.badge.badge-purple.font-mono.text-xs') ??
+    document.querySelector('.badge.badge-purple.font-mono');
   return (badge?.textContent || '').replace(/\s+/g, ' ').trim();
 }
 
@@ -116,7 +119,11 @@ function categoryActionButtons(label: 'Select All' | 'Clear'): HTMLButtonElement
 
 /** The accordion panel for one major category. */
 function majorPanel(name: string): HTMLElement {
-  return screen.getByText(name).closest('div.rounded-2xl') as HTMLElement;
+  // Support both rounded-2xl (legacy) and rounded-xl (compact UI variant)
+  return (
+    screen.getByText(name).closest('div.rounded-2xl') ??
+    screen.getByText(name).closest('div.rounded-xl')
+  ) as HTMLElement;
 }
 
 /** Expand a collapsed major by clicking its chevron. */
