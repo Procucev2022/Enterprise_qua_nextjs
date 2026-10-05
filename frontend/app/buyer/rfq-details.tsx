@@ -213,17 +213,17 @@ function Card({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm flex flex-col">
-      <header className="flex items-center justify-between gap-2 px-4 py-3 rounded-t-2xl bg-slate-50 dark:bg-gray-950/60 border-b border-slate-200 dark:border-gray-800">
-        <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+    <section className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm flex flex-col">
+      <header className="flex items-center justify-between gap-2 px-3.5 py-2 rounded-t-xl bg-slate-50 dark:bg-gray-950/60 border-b border-slate-200 dark:border-gray-800">
+        <h2 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
           {icon}
           {title}
         </h2>
         {meta && <span className="shrink-0 truncate max-w-[40%]">{meta}</span>}
       </header>
-      <div className="p-4 space-y-3 text-xs flex-1">{children}</div>
+      <div className="p-3 space-y-2 text-xs flex-1">{children}</div>
       {footer && (
-        <footer className="px-4 py-2.5 border-t border-slate-100 dark:border-gray-800 flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-gray-400">
+        <footer className="px-3.5 py-2 border-t border-slate-100 dark:border-gray-800 flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-gray-400">
           {footer}
         </footer>
       )}
@@ -249,10 +249,10 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm overflow-hidden">
-      <header className="p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+    <section className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm overflow-hidden">
+      <header className="px-3.5 py-2.5 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
         <div className="flex items-center gap-2 flex-wrap">
-          <h2 className="text-base font-bold text-slate-900 dark:text-white">{title}</h2>
+          <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">{title}</h2>
           {count !== undefined && (
             <span className="px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 text-[11px] mono font-bold">
               {count}
@@ -264,7 +264,7 @@ function Panel({
       </header>
       {children}
       {footer && (
-        <footer className="px-4 py-3 bg-slate-50 dark:bg-gray-950/60 border-t border-slate-200 dark:border-gray-800 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-gray-400 text-center sm:text-left">
+        <footer className="px-3.5 py-2 bg-slate-50 dark:bg-gray-950/60 border-t border-slate-200 dark:border-gray-800 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-gray-400 text-center sm:text-left">
           {footer}
         </footer>
       )}
@@ -1114,9 +1114,9 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
   };
 
   return (
-    <div className="max-w-7xl mx-auto space-y-3 px-1 sm:px-2 lg:px-0 animate-fade-in pb-6">
+    <div className="max-w-7xl mx-auto space-y-2.5 px-1 sm:px-2 lg:px-0 animate-fade-in pb-4">
       {/* Provenance strip */}
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
         <button
           onClick={onBack}
           className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:text-indigo-900 dark:hover:text-indigo-100 transition-colors"
@@ -1134,7 +1134,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       </div>
 
       {/* Header bar */}
-      <header className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm p-4 sm:p-5 space-y-2">
+      <header className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm p-3.5 sm:p-4 space-y-2">
         <div className="flex flex-wrap items-center gap-2">
           <span className="px-2.5 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 text-[10px] font-bold uppercase tracking-wider">
             {DETAILS.documentTypeBadge}
@@ -1148,7 +1148,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             {activeRfq.status}
           </span>
         </div>
-        <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-2.5">
           <div className="flex flex-wrap items-baseline gap-2 sm:gap-3 min-w-0">
             <h1 className="text-lg sm:text-xl lg:text-2xl font-black text-slate-900 dark:text-white mono tracking-tight break-all">
               {activeRfq.rfqNumber}
@@ -1189,7 +1189,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       </header>
 
       {/* Overview cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <Card
           title={DETAILS.submittedHeading}
           icon={<ClipboardList size={15} className="text-indigo-600 dark:text-indigo-400" />}
@@ -1374,7 +1374,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                 <table className="w-full text-left text-xs min-w-[640px]">
                   <thead className="sticky top-0 z-10 bg-slate-50 dark:bg-gray-950/95 text-slate-600 dark:text-gray-400 text-[10px] uppercase tracking-wider font-bold">
                     <tr>
-                      <th scope="col" className="w-10 px-3 py-2.5 text-right font-bold">
+                      <th scope="col" className="w-10 px-2.5 py-2 text-right font-bold">
                         {DETAILS.colIndex}
                       </th>
                       <SortableHeader
@@ -1406,7 +1406,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                         direction={sortDirection}
                         onSort={toggleSort}
                       />
-                      <th scope="col" className="px-4 py-2.5 text-center font-bold">
+                      <th scope="col" className="px-3 py-2 text-center font-bold">
                         {DETAILS.colConfidence}
                       </th>
                     </tr>
@@ -1417,10 +1417,10 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                         key={item.id || `item-${index}`}
                         className="align-top border-t border-slate-100 dark:border-gray-800/70 hover:bg-indigo-50/40 dark:hover:bg-indigo-950/20 transition-colors"
                       >
-                        <td className="px-3 py-3 text-right mono text-[10px] text-slate-400 dark:text-gray-600 tabular-nums">
+                        <td className="px-2.5 py-2 text-right mono text-[10px] text-slate-400 dark:text-gray-600 tabular-nums">
                           {index + 1}
                         </td>
-                        <td className="px-4 py-3 max-w-md">
+                        <td className="px-3 py-2 max-w-md">
                           <span className="block font-semibold text-slate-900 dark:text-white leading-snug">
                             {item.itemName}
                           </span>
@@ -1431,7 +1431,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                             </span>
                           )}
                         </td>
-                        <td className="px-4 py-3">
+                        <td className="px-3 py-2">
                           <span className="inline-flex items-center px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 text-[10px] font-bold whitespace-nowrap">
                             {item.minorCategory}
                           </span>
@@ -1439,14 +1439,14 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                             {item.majorCategory}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-right whitespace-nowrap">
+                        <td className="px-3 py-2 text-right whitespace-nowrap">
                           <span className="mono font-bold text-slate-900 dark:text-white tabular-nums">
                             {item.quantity}
                           </span>
                           <span className="block text-[10px] text-slate-500 dark:text-gray-400">{item.unit}</span>
                         </td>
-                        <td className="px-4 py-3 mono whitespace-nowrap tabular-nums">{orUnset(formatIndianDate(item.targetDate))}</td>
-                        <td className="px-4 py-3 text-center">
+                        <td className="px-3 py-2 mono whitespace-nowrap tabular-nums">{orUnset(formatIndianDate(item.targetDate))}</td>
+                        <td className="px-3 py-2 text-center">
                           <ConfidenceBadge confidence={item.confidence} />
                         </td>
                       </tr>

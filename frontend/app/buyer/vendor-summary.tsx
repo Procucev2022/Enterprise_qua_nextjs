@@ -725,13 +725,13 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       <div
         key={vendor.id}
         className={
-          'glass-panel p-5 rounded-2xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 ' +
+          'glass-panel p-3 sm:p-3.5 rounded-xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-3 ' +
           (isSelected
             ? 'border-indigo-500 bg-indigo-50/20 dark:bg-indigo-950/20 ring-1 ring-indigo-500/30'
             : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm hover:border-indigo-500/40 dark:hover:border-indigo-400/40')
         }
       >
-        <div className="flex items-start md:items-center gap-3.5 flex-1">
+        <div className="flex items-start md:items-center gap-3 flex-1">
           <input
             type="checkbox"
             checked={isSelected}
@@ -742,7 +742,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           />
 
           {/* Left: Vendor Brand & Info */}
-          <div className="space-y-2 flex-1">
+          <div className="space-y-1.5 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-300 border border-indigo-200/40">
               {vendor.id}
@@ -1067,7 +1067,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   };
 
   return (
-    <div className="space-y-3.5 animate-fade-in pb-6">
+    <div className="space-y-2.5 animate-fade-in pb-4">
       {/* Top Action Bar */}
       <div className="flex items-center justify-end gap-2 flex-wrap">
         <button
@@ -1091,45 +1091,45 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       </div>
 
       {/* Stats Counter Bar */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+        <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
           <div className="text-[10px] uppercase font-bold text-slate-400">Total Empanelled</div>
-          <div className="text-2xl font-black text-indigo-600 dark:text-indigo-400 mt-1">
+          <div className="text-xl sm:text-2xl font-black text-indigo-600 dark:text-indigo-400 mt-0.5">
             {buyerFilteredVendors.length}
           </div>
         </div>
-        <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
+        <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
           <div className="text-[10px] uppercase font-bold text-slate-400">OCR &amp; 360° Evaluated</div>
-          <div className="text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-1">
+          <div className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
             {buyerFilteredVendors.filter((v) => v.evaluated).length}
           </div>
         </div>
-        <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
+        <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
           <div className="text-[10px] uppercase font-bold text-slate-400">Preferred Status</div>
-          <div className="text-2xl font-black text-indigo-700 dark:text-indigo-300 mt-1">
+          <div className="text-xl sm:text-2xl font-black text-indigo-700 dark:text-indigo-300 mt-0.5">
             {buyerFilteredVendors.filter(
               (v) => v.status === 'PREFERRED ENTERPRISE SUPPLIER'
             ).length}
           </div>
         </div>
-        <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
+        <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
           <div className="text-[10px] uppercase font-bold text-slate-400">Selected Suppliers</div>
-          <div className="text-2xl font-black text-purple-600 dark:text-purple-400 mt-1">
+          <div className="text-xl sm:text-2xl font-black text-purple-600 dark:text-purple-400 mt-0.5">
             {selectedVendorIds.length}
           </div>
         </div>
       </div>
 
       {/* Filter and Search Controls */}
-      <div className="glass-panel p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm flex flex-col md:flex-row gap-3">
+      <div className="glass-panel p-2.5 sm:p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm flex flex-col md:flex-row gap-2.5">
         <div className="relative flex-1">
-          <Search size={16} className="absolute left-3 top-3 text-slate-400" />
+          <Search size={15} className="absolute left-3 top-2.5 text-slate-400" />
           <input
             type="text"
             placeholder="Search vendors by name, contact, category..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="has-leading-icon text-xs"
+            className="has-leading-icon text-xs py-1.5"
           />
         </div>
 
@@ -1138,7 +1138,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           <select
             value={selectedCategory}
             onChange={(e) => setSelectedCategory(e.target.value)}
-            className="select-field text-xs"
+            className="select-field text-xs py-1.5"
           >
             {categories.map((c) => (
               <option key={c} value={c}>
@@ -1153,7 +1153,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           <select
             value={selectedStatus}
             onChange={(e) => setSelectedStatus(e.target.value)}
-            className="select-field text-xs"
+            className="select-field text-xs py-1.5"
           >
             <option value="ALL">All Statuses</option>
             <option value="EVALUATED">Evaluated Only</option>
@@ -1165,8 +1165,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       </div>
 
       {/* Multi-Selection Controls Bar */}
-      <div className="flex items-center justify-between gap-3 flex-wrap bg-slate-50 dark:bg-gray-900/60 p-3 rounded-xl border border-slate-200 dark:border-gray-800">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between gap-2.5 flex-wrap bg-slate-50 dark:bg-gray-900/60 p-2 sm:p-2.5 rounded-xl border border-slate-200 dark:border-gray-800">
+        <div className="flex items-center gap-2.5">
           <label className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-gray-300 cursor-pointer">
             <input
               type="checkbox"
@@ -1204,7 +1204,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       </div>
 
       {/* Vendors Display List */}
-      <div className="space-y-3">
+      <div className="space-y-2.5">
         {buyerFilteredVendors.map(renderVendorCard)}
         {buyerFilteredVendors.length === 0 && (
           <div className="p-8 text-center text-slate-500 border border-dashed border-slate-200 dark:border-gray-800 rounded-2xl bg-slate-50/50 dark:bg-gray-950/40 space-y-3">

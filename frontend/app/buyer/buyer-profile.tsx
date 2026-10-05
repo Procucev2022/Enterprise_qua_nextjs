@@ -500,35 +500,35 @@ export default function BuyerProfilePage() {
   };
 
   return (
-    <div className="space-y-3.5 animate-fade-in pb-4">
+    <div className="space-y-2.5 animate-fade-in pb-4">
       {/* Top Action Bar */}
       <div className="flex items-center justify-end">
         <button
           onClick={handleSaveProfile}
           disabled={isLoading || isSaving}
           aria-busy={isSaving}
-          className="btn btn-primary btn-md shadow-lg shadow-indigo-600/20 font-bold flex items-center gap-2"
+          className="btn btn-primary btn-sm shadow-sm font-bold flex items-center gap-1.5"
         >
-          <Save size={16} /> Save Organization Profile
+          <Save size={14} /> Save Organization Profile
         </button>
       </div>
 
-      <form onSubmit={handleSaveProfile} className="space-y-3.5">
+      <form onSubmit={handleSaveProfile} className="space-y-2.5">
         {/* Section 1: Legal Entity & Tax Compliance */}
-        <div className="glass-panel p-4 sm:p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3.5">
-          <div className="flex items-center justify-between border-b border-slate-100 dark:border-gray-800 pb-3">
-            <h2 className="text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
-              <ShieldCheck className="text-indigo-600 dark:text-indigo-400" size={18} /> Section 1: Organization & Tax Registration
+        <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
+          <div className="flex items-center justify-between border-b border-slate-100 dark:border-gray-800 pb-2.5">
+            <h2 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
+              <ShieldCheck className="text-indigo-600 dark:text-indigo-400" size={16} /> Section 1: Organization & Tax Registration
             </h2>
             <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
               <CheckCircle2 size={12} /> Tax Verified
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 sm:gap-3">
             {/* Company Name */}
             <div>
-              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 block mb-1">
+              <label className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 block mb-1">
                 Legal Entity Name *
               </label>
               <input
@@ -536,32 +536,32 @@ export default function BuyerProfilePage() {
                 value={companyName}
                 onChange={(e) => setCompanyName(e.target.value)}
                 required
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-semibold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-semibold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
               />
             </div>
 
             {/* Brand / Division */}
             <div>
-              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 block mb-1">
+              <label className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 block mb-1">
                 Brand / Procurement Division
               </label>
               <input
                 type="text"
                 value={brandName}
                 onChange={(e) => setBrandName(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-semibold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-semibold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
               />
             </div>
 
             {/* Org Type */}
             <div>
-              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 block mb-1">
+              <label className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 block mb-1">
                 Organization Constitution *
               </label>
               <select
                 value={orgType}
                 onChange={(e) => setOrgType(e.target.value as OrganizationType)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-semibold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-semibold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
               >
                 <option value="Public Limited">Public Limited Company</option>
                 <option value="Private Limited">Private Limited Company</option>
@@ -574,7 +574,7 @@ export default function BuyerProfilePage() {
             {/* PAN Number */}
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400">
+                <label className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400">
                   PAN Number *
                 </label>
                 {isPanValid(panNumber) ? (
@@ -589,14 +589,14 @@ export default function BuyerProfilePage() {
                 onChange={(e) => setPanNumber(e.target.value.toUpperCase())}
                 maxLength={10}
                 required
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white uppercase tracking-widest"
+                className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white uppercase tracking-widest"
               />
             </div>
 
             {/* GST Number */}
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400">
+                <label className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400">
                   GSTIN / GST Number *
                 </label>
                 {isGstValid(gstNumber) ? (
@@ -611,69 +611,69 @@ export default function BuyerProfilePage() {
                 onChange={(e) => setGstNumber(e.target.value.toUpperCase())}
                 maxLength={15}
                 required
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white uppercase tracking-widest"
+                className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white uppercase tracking-widest"
               />
             </div>
 
             {/* CIN Number */}
             <div>
-              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 block mb-1">
+              <label className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 block mb-1">
                 CIN (Corporate ID Number)
               </label>
               <input
                 type="text"
                 value={cinNumber}
                 onChange={(e) => setCinNumber(e.target.value.toUpperCase())}
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-semibold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white uppercase"
+                className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-mono font-semibold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white uppercase"
               />
             </div>
 
             {/* Website */}
             <div>
-              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 block mb-1">
+              <label className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 block mb-1">
                 Corporate Website
               </label>
               <div className="relative">
-                <Globe size={14} className="absolute left-3 top-2.5 text-slate-400" />
+                <Globe size={14} className="absolute left-3 top-2 text-slate-400" />
                 <input
                   type="url"
                   value={website}
                   onChange={(e) => setWebsite(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                  className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
                 />
               </div>
             </div>
 
             {/* Annual Turnover */}
             <div>
-              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 block mb-1">
+              <label className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 block mb-1">
                 Annual Procurement Volume
               </label>
               <input
                 type="text"
                 value={annualTurnover}
                 onChange={(e) => setAnnualTurnover(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-semibold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-semibold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
               />
             </div>
           </div>
         </div>
 
         {/* Section 2: Address & Primary Contact */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
           {/* Registered Address */}
-          <div className="glass-panel p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-4">
-            <h2 className="text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 dark:border-gray-800 pb-3">
-              <MapPin className="text-indigo-600 dark:text-indigo-400" size={18} /> Registered Corporate Address
+          <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
+            <h2 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 dark:border-gray-800 pb-2.5">
+              <MapPin className="text-indigo-600 dark:text-indigo-400" size={16} /> Registered Corporate Address
             </h2>
-            <div className="space-y-3">
+            <div className="space-y-2.5">
               <div>
                 <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Street Address</label>
                 <input
                   type="text"
                   value={street}
                   onChange={(e) => setStreet(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
+                  className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
                 />
               </div>
               <div className="grid grid-cols-2 gap-2">
@@ -683,7 +683,7 @@ export default function BuyerProfilePage() {
                     type="text"
                     value={city}
                     onChange={(e) => setCity(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
+                    className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
                   />
                 </div>
                 <div>
@@ -692,7 +692,7 @@ export default function BuyerProfilePage() {
                     type="text"
                     value={state}
                     onChange={(e) => setState(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
+                    className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
                   />
                 </div>
               </div>
@@ -721,7 +721,7 @@ export default function BuyerProfilePage() {
                     value={pincode}
                     maxLength={6}
                     onChange={(e) => setPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    className={`w-full px-3 py-2 rounded-xl border text-xs font-mono font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white ${
+                    className={`w-full px-3 py-1.5 rounded-lg border text-xs font-mono font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white ${
                       pincodeError ? 'border-rose-400 dark:border-rose-700' : 'border-slate-200 dark:border-gray-800'
                     }`}
                   />
@@ -735,7 +735,7 @@ export default function BuyerProfilePage() {
                     type="text"
                     value={country}
                     onChange={(e) => setCountry(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
+                    className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
                   />
                 </div>
               </div>
@@ -743,18 +743,18 @@ export default function BuyerProfilePage() {
           </div>
 
           {/* Primary Contact Person */}
-          <div className="glass-panel p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-4">
-            <h2 className="text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 dark:border-gray-800 pb-3">
-              <User className="text-indigo-600 dark:text-indigo-400" size={18} /> Key Procurement Contact Person
+          <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
+            <h2 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 dark:border-gray-800 pb-2.5">
+              <User className="text-indigo-600 dark:text-indigo-400" size={16} /> Key Procurement Contact Person
             </h2>
-            <div className="space-y-3">
+            <div className="space-y-2.5">
               <div>
                 <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Full Name</label>
                 <input
                   type="text"
                   value={contactName}
                   onChange={(e) => setContactName(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-semibold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
+                  className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-semibold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
                 />
               </div>
               <div>
@@ -763,7 +763,7 @@ export default function BuyerProfilePage() {
                   type="text"
                   value={contactDesignation}
                   onChange={(e) => setContactDesignation(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-semibold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
+                  className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-semibold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
                 />
               </div>
               <div className="grid grid-cols-2 gap-2">
@@ -773,7 +773,7 @@ export default function BuyerProfilePage() {
                     type="email"
                     value={contactEmail}
                     onChange={(e) => setContactEmail(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
+                    className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
                   />
                 </div>
                 <div>
@@ -782,7 +782,7 @@ export default function BuyerProfilePage() {
                     type="text"
                     value={contactPhone}
                     onChange={(e) => setContactPhone(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
+                    className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-mono font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white mt-0.5"
                   />
                 </div>
               </div>
@@ -791,19 +791,19 @@ export default function BuyerProfilePage() {
         </div>
 
         {/* Section 3: Consolidated Major & Minor Categories Selector */}
-        <div className="glass-panel p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-gray-800 pb-3">
+        <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border-b border-slate-100 dark:border-gray-800 pb-2.5">
             <div>
-              <h2 className="text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
-                <Sliders className="text-indigo-600 dark:text-indigo-400" size={18} /> Section 3: Relevant Procurement Categories (13 Major & 120+ Minor)
+              <h2 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
+                <Sliders className="text-indigo-600 dark:text-indigo-400" size={16} /> Section 3: Relevant Procurement Categories (13 Major & 120+ Minor)
               </h2>
-              <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+              <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
                 Select your organization&apos;s active procurement scopes. This governs automated AI vendor matching &amp; RFQ distribution.
               </p>
             </div>
 
             <div className="flex items-center gap-2">
-              <span className="badge badge-purple font-mono text-xs">
+              <span className="badge badge-purple font-mono text-[11px]">
                 {selectedMajor.length} Major • {totalSelectedMinorCount} Minor Selected
               </span>
             </div>
@@ -811,18 +811,18 @@ export default function BuyerProfilePage() {
 
           {/* Search Bar */}
           <div className="relative">
-            <Search size={16} className="absolute left-3.5 top-3 text-slate-400" />
+            <Search size={15} className="absolute left-3 top-2.5 text-slate-400" />
             <input
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               placeholder="Search across all 13 Major and 120+ Minor categories (e.g. Cables, Valves, Pumps, IT, Logistics)..."
-              className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+              className="w-full pl-9 pr-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
             />
           </div>
 
           {/* Categories Accordion / Selector Grid */}
-          <div className="space-y-3 pt-1">
+          <div className="space-y-2 pt-0.5">
             {filteredCategories.map((cat) => {
               const isMajorSelected = selectedMajor.includes(cat.majorCategory);
               const selectedMinorsInCat = selectedMinor[cat.majorCategory] || [];
@@ -831,17 +831,17 @@ export default function BuyerProfilePage() {
               return (
                 <div
                   key={cat.majorCategory}
-                  className={`rounded-2xl border transition-all ${
+                  className={`rounded-xl border transition-all ${
                     isMajorSelected
                       ? 'border-indigo-300 dark:border-indigo-500/40 bg-indigo-50/30 dark:bg-indigo-950/20'
                       : 'border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900/60'
                   }`}
                 >
                   {/* Major Category Bar */}
-                  <div className="p-3.5 flex items-center justify-between gap-3 cursor-pointer">
-                    <div className="flex items-center gap-3 flex-1" onClick={() => toggleMajorCategory(cat.majorCategory)}>
+                  <div className="p-2.5 sm:p-3 flex items-center justify-between gap-3 cursor-pointer">
+                    <div className="flex items-center gap-2.5 flex-1" onClick={() => toggleMajorCategory(cat.majorCategory)}>
                       <button type="button" className="text-indigo-600 dark:text-indigo-400">
-                        {isMajorSelected ? <CheckSquare size={18} /> : <Square size={18} className="text-slate-400" />}
+                        {isMajorSelected ? <CheckSquare size={16} /> : <Square size={16} className="text-slate-400" />}
                       </button>
                       <div>
                         <h3 className="text-xs font-bold text-slate-900 dark:text-white">
@@ -854,7 +854,7 @@ export default function BuyerProfilePage() {
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-300 mono bg-white dark:bg-gray-900 px-2 py-0.5 rounded-md border border-indigo-200 dark:border-indigo-800">
+                      <span className="text-[10px] sm:text-[11px] font-bold text-indigo-600 dark:text-indigo-300 mono bg-white dark:bg-gray-900 px-2 py-0.5 rounded-md border border-indigo-200 dark:border-indigo-800">
                         {selectedMinorsInCat.length} / {cat.minorCategories.length} Selected
                       </span>
                       <button
@@ -864,16 +864,16 @@ export default function BuyerProfilePage() {
                         }
                         className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-gray-200"
                       >
-                        {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                        {isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
                       </button>
                     </div>
                   </div>
 
                   {/* Minor Categories Grid */}
                   {isExpanded && (
-                    <div className="p-3.5 pt-0 border-t border-slate-200/60 dark:border-gray-800/80 space-y-2.5">
-                      <div className="flex items-center justify-between text-[11px] pt-2">
-                        <span className="font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wider">
+                    <div className="p-3 pt-0 border-t border-slate-200/60 dark:border-gray-800/80 space-y-2">
+                      <div className="flex items-center justify-between text-[11px] pt-1.5">
+                        <span className="font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wider text-[10px]">
                           Minor Procurement Categories
                         </span>
                         <div className="flex items-center gap-2">
@@ -895,13 +895,13 @@ export default function BuyerProfilePage() {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-1.5">
                         {cat.minorCategories.map((minor) => {
                           const isMinorChecked = selectedMinorsInCat.includes(minor);
                           return (
                             <label
                               key={minor}
-                              className={`p-2 rounded-xl border text-[11px] font-medium flex items-center gap-2 cursor-pointer transition-colors ${
+                              className={`p-1.5 sm:p-2 rounded-lg border text-[11px] font-medium flex items-center gap-2 cursor-pointer transition-colors ${
                                 isMinorChecked
                                   ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
                                   : 'bg-slate-50 dark:bg-gray-950 text-slate-700 dark:text-gray-300 border-slate-200 dark:border-gray-800 hover:border-slate-300 dark:hover:border-gray-700'
@@ -930,14 +930,14 @@ export default function BuyerProfilePage() {
         </div>
 
         {/* Submit */}
-        <div className="flex justify-end pt-2">
+        <div className="flex justify-end pt-1">
           <button
             type="submit"
             disabled={isLoading || isSaving}
             aria-busy={isSaving}
-            className="btn btn-primary btn-lg shadow-xl shadow-indigo-600/20 font-bold flex items-center gap-2 px-8"
+            className="btn btn-primary btn-md shadow-lg shadow-indigo-600/20 font-bold flex items-center gap-2 px-6"
           >
-            <Save size={18} /> Save Buyer Organization Profile
+            <Save size={16} /> Save Buyer Organization Profile
           </button>
         </div>
       </form>
@@ -949,14 +949,14 @@ export default function BuyerProfilePage() {
       {/* own submit handlers, and nesting a <form> inside another is invalid     */}
       {/* HTML — the inner one is dropped during parsing, which would wire the    */}
       {/* password button up to the profile save instead.                        */}
-      <div className="glass-panel p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-gray-800 pb-3">
+      <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border-b border-slate-100 dark:border-gray-800 pb-2.5">
           <div>
-            <h2 className="text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
-              <KeyRound className="text-indigo-600 dark:text-indigo-400" size={18} />{' '}
+            <h2 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
+              <KeyRound className="text-indigo-600 dark:text-indigo-400" size={16} />{' '}
               {UI_STRINGS.accountSecurity.sectionTitle}
             </h2>
-            <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+            <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
               {UI_STRINGS.accountSecurity.sectionDescription}
             </p>
           </div>
