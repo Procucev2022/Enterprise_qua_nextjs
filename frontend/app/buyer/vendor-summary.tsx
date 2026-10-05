@@ -1067,35 +1067,27 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   };
 
   return (
-    <div className="space-y-6 animate-fade-in pb-10">
-      {/* Title Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white flex items-center gap-2">
-            <Building2 className="text-indigo-600 dark:text-indigo-400" size={24} />
-            Vendor Directory &amp; Management
-          </h1>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
+    <div className="space-y-3.5 animate-fade-in pb-6">
+      {/* Top Action Bar */}
+      <div className="flex items-center justify-end gap-2 flex-wrap">
+        <button
+          type="button"
+          data-testid="open-add-vendor-modal"
+          onClick={handleOpenAddModal}
+          className="btn btn-primary btn-sm flex items-center gap-1.5 shadow-sm"
+        >
+          <Plus size={14} /> Add Vendor
+        </button>
+        {/* Upload Vendor Wizard Button */}
+        {onNavigateToWizard && (
           <button
             type="button"
-            data-testid="open-add-vendor-modal"
-            onClick={handleOpenAddModal}
-            className="btn btn-primary btn-sm flex items-center gap-1.5 shadow-sm"
+            onClick={onNavigateToWizard}
+            className="btn btn-secondary btn-sm flex items-center gap-1.5 shadow-sm"
           >
-            <Plus size={14} /> Add Vendor
+            <UploadCloud size={14} /> Upload Vendor
           </button>
-          {/* Upload Vendor Wizard Button */}
-          {onNavigateToWizard && (
-            <button
-              type="button"
-              onClick={onNavigateToWizard}
-              className="btn btn-secondary btn-sm flex items-center gap-1.5 shadow-sm"
-            >
-              <UploadCloud size={14} /> Upload Vendor
-            </button>
-          )}
-        </div>
+        )}
       </div>
 
       {/* Stats Counter Bar */}

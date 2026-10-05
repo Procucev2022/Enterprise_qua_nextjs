@@ -128,9 +128,8 @@ describe('QuoteMatrix Component Tests', () => {
     });
   });
 
-  test('renders QuoteMatrix with title, RFQ switcher, and vendors comparison matrix', () => {
+  test('renders QuoteMatrix with RFQ switcher, and vendors comparison matrix', () => {
     render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
-    expect(screen.getByText(/Comparative Quote Evaluation Matrix/i)).toBeInTheDocument();
     expect(screen.getByText(/Apex Supplies Ltd./i)).toBeInTheDocument();
     expect(screen.getByText(/Kiran Valve Industries/i)).toBeInTheDocument();
     expect(screen.getByText(formatCurrency(85000))).toBeInTheDocument();

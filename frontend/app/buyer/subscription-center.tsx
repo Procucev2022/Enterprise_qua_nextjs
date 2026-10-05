@@ -169,17 +169,9 @@ export default function SubscriptionCenter() {
   ];
 
   return (
-    <div className="space-y-6 animate-fade-in pb-10">
-      {/* Title Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
-            Procurement Sourcing Mode Subscriptions
-          </h1>
-          <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-            Compare subscription models, check free starter account quotas, and activate Version 1, 2, or 3 features.
-          </p>
-        </div>
+    <div className="space-y-3.5 animate-fade-in pb-6">
+      {/* Top Action Bar */}
+      <div className="flex items-center justify-end">
         <button
           onClick={handleResetTrial}
           className="btn btn-secondary btn-sm flex items-center gap-1 shrink-0"

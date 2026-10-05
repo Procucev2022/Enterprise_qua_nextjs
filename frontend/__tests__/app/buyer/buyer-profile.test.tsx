@@ -159,7 +159,6 @@ describe('app/buyer/buyer-profile.tsx', () => {
   // ── Structure ─────────────────────────────────────────────────────────────
   it('renders the organization, address, contact, and category sections', async () => {
     await renderLoaded();
-    expect(screen.getByText('Buyer Organization Profile')).toBeInTheDocument();
     expect(screen.getByText(/Section 1: Organization & Tax Registration/i)).toBeInTheDocument();
     expect(screen.getByText(/Registered Corporate Address/i)).toBeInTheDocument();
     expect(screen.getByText(/Key Procurement Contact Person/i)).toBeInTheDocument();

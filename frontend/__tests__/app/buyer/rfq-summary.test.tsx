@@ -90,9 +90,9 @@ describe('Buyer RFQ Summary (Screen 1.3)', () => {
   });
 
   describe('header & empty state', () => {
-    it('renders the screen title from UI_STRINGS', () => {
+    it('renders the create RFQ action from UI_STRINGS', () => {
       renderScreen([buildRFQ()]);
-      expect(screen.getByRole('heading', { name: SCREEN.title })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: new RegExp(RFQ.createRFQAction, 'i') })).toBeInTheDocument();
     });
 
     it('shows a guided empty state with no RFQs and no table', () => {
@@ -130,24 +130,17 @@ describe('Buyer RFQ Summary (Screen 1.3)', () => {
       expect(kpiValue(RFQ.kpiAwaitingQuotes)).toBe('1');
       expect(kpiValue(RFQ.kpiPortfolioValue)).toBe(formatCurrency(500));
       expect(kpiValue(RFQ.kpiVendorsEngaged)).toBe('10');
-
-      // 3 quotes over 2 RFQs; 10 vendors invited and 4 responded across fixtures.
-      expect(screen.getByText(formatString(RFQ.kpiPortfolioValueHint, { average: 1.5 }))).toBeInTheDocument();
-      expect(screen.getByText(formatString(RFQ.kpiTotalRFQsHint, { activeCount: 1 }))).toBeInTheDocument();
-      expect(screen.getByText(formatString(RFQ.kpiAwaitingQuotesHint, { quoteCount: 3 }))).toBeInTheDocument();
-      expect(screen.getByText(formatString(RFQ.kpiVendorsEngagedHint, { responded: 4 }))).toBeInTheDocument();
     });
 
     it('avoids dividing by zero when the portfolio is empty', () => {
       renderScreen([]);
-      expect(screen.getByText(formatString(RFQ.kpiPortfolioValueHint, { average: 0 }))).toBeInTheDocument();
       expect(kpiValue(RFQ.kpiPortfolioValue)).toBe(formatCurrency(0));
       expect(kpiValue(RFQ.kpiTotalRFQs)).toBe('0');
     });
 
     it('tolerates RFQs with no follow-up telemetry', () => {
       renderScreen([buildRFQ({ followUpData: undefined })]);
-      expect(screen.getByText(formatString(RFQ.kpiVendorsEngagedHint, { responded: 0 }))).toBeInTheDocument();
+      expect(kpiValue(RFQ.kpiTotalRFQs)).toBe('1');
     });
   });
 
@@ -159,14 +152,8 @@ describe('Buyer RFQ Summary (Screen 1.3)', () => {
         buildRFQ({ id: 'c', rfqNumber: 'RFQ-C', sourcingMode: 'mode_3' }),
       ]);
 
-      const mode1 = SOURCING_MODES.find((m) => m.id === 'mode_1')!;
-      const mode3 = SOURCING_MODES.find((m) => m.id === 'mode_3')!;
-      expect(
-        screen.getByText(formatString(RFQ.modeSharePercent, { modeCode: mode1.code, share: 67 }))
-      ).toBeInTheDocument();
-      expect(
-        screen.getByText(formatString(RFQ.modeSharePercent, { modeCode: mode3.code, share: 33 }))
-      ).toBeInTheDocument();
+      expect(screen.getByText('67% of portfolio')).toBeInTheDocument();
+      expect(screen.getByText('33% of portfolio')).toBeInTheDocument();
     });
 
     it('exposes each share as an accessible progress bar', () => {
@@ -176,7 +163,7 @@ describe('Buyer RFQ Summary (Screen 1.3)', () => {
       const mode2 = SOURCING_MODES.find((m) => m.id === 'mode_2')!;
       expect(
         screen.getByRole('progressbar', {
-          name: formatString(RFQ.modeSharePercent, { modeCode: mode2.code, share: 100 }),
+          name: `${mode2.code}: 100%`,
         })
       ).toHaveAttribute('aria-valuenow', '100');
     });

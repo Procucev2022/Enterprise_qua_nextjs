@@ -1384,23 +1384,20 @@ export function ActivePipelineModal({
   const getSourceBadge = (source?: string) => {
     if (source === 'email_gateway') {
       return (
-        <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 flex items-center gap-1.5 shrink-0">
-          <Mail size={11} className="text-amber-600 dark:text-amber-400" />
-          <span>Email Gateway (Autonomous)</span>
+        <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 shrink-0">
+          <span>via Email Upload</span>
         </span>
       );
     }
     if (source === 'manual_entry') {
       return (
-        <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1.5 shrink-0">
-          <FileSpreadsheet size={11} className="text-emerald-600 dark:text-emerald-400" />
+        <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 shrink-0">
           <span>Manual RFQ Form</span>
         </span>
       );
     }
     return (
-      <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 flex items-center gap-1.5 shrink-0">
-        <UploadCloud size={11} className="text-indigo-600 dark:text-indigo-400" />
+      <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 shrink-0">
         <span>AI RFQ Ingestion</span>
       </span>
     );
@@ -1673,7 +1670,7 @@ export function IntakeSourcesModal({
                 </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
-                Channel-by-channel origin verification across Autonomous Email Gateway, Web Portal AI OCR, and Manual Entry.
+                Channel-by-channel origin verification across Autonomous via Email Upload, Web Portal AI OCR, and Manual Entry.
               </p>
             </div>
           </div>
@@ -1687,7 +1684,7 @@ export function IntakeSourcesModal({
 
         {/* 3 Source Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 my-4 shrink-0">
-          {/* Email Gateway */}
+          {/* via Email Upload */}
           <div
             onClick={() => setSelectedSourceTab('email_gateway')}
             className={`p-4 rounded-xl border transition-all cursor-pointer shadow-xs ${
@@ -1697,9 +1694,7 @@ export function IntakeSourcesModal({
             }`}
           >
             <div className="flex items-center justify-between text-xs font-bold text-amber-700 dark:text-amber-400">
-              <span className="flex items-center gap-1.5">
-                <Mail size={15} /> 📧 Email Gateway
-              </span>
+              <span>via Email Upload</span>
               <span className="mono text-xs font-black">
                 {totalActiveRFQs > 0 ? Math.round((emailGatewayRFQs.length / totalActiveRFQs) * 100) : 0}%
               </span>
@@ -1722,9 +1717,7 @@ export function IntakeSourcesModal({
             }`}
           >
             <div className="flex items-center justify-between text-xs font-bold text-indigo-700 dark:text-indigo-400">
-              <span className="flex items-center gap-1.5">
-                <UploadCloud size={15} /> 🌐 AI RFQ Create
-              </span>
+              <span>AI RFQ Create</span>
               <span className="mono text-xs font-black">
                 {totalActiveRFQs > 0 ? Math.round((webPortalRFQs.length / totalActiveRFQs) * 100) : 0}%
               </span>
@@ -1747,9 +1740,7 @@ export function IntakeSourcesModal({
             }`}
           >
             <div className="flex items-center justify-between text-xs font-bold text-emerald-700 dark:text-emerald-400">
-              <span className="flex items-center gap-1.5">
-                <FileSpreadsheet size={15} /> ✏️ Manual RFQ
-              </span>
+              <span>Manual RFQ</span>
               <span className="mono text-xs font-black">
                 {totalActiveRFQs > 0 ? Math.round((manualRFQs.length / totalActiveRFQs) * 100) : 0}%
               </span>
@@ -1778,33 +1769,33 @@ export function IntakeSourcesModal({
             </button>
             <button
               onClick={() => setSelectedSourceTab('email_gateway')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 ${
                 selectedSourceTab === 'email_gateway'
                   ? 'bg-amber-600 text-white shadow-xs'
                   : 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-900/40'
               }`}
             >
-              <Mail size={13} /> Email Gateway ({emailGatewayRFQs.length})
+              via Email Upload ({emailGatewayRFQs.length})
             </button>
             <button
               onClick={() => setSelectedSourceTab('web_portal')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 ${
                 selectedSourceTab === 'web_portal'
                   ? 'bg-indigo-600 text-white shadow-xs'
                   : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-900/40'
               }`}
             >
-              <UploadCloud size={13} /> AI RFQ Create ({webPortalRFQs.length})
+              AI RFQ Create ({webPortalRFQs.length})
             </button>
             <button
               onClick={() => setSelectedSourceTab('manual_entry')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 ${
                 selectedSourceTab === 'manual_entry'
                   ? 'bg-emerald-600 text-white shadow-xs'
                   : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/40'
               }`}
             >
-              <FileSpreadsheet size={13} /> Manual RFQ ({manualRFQs.length})
+              Manual RFQ ({manualRFQs.length})
             </button>
           </div>
 
@@ -1839,17 +1830,17 @@ export function IntakeSourcesModal({
                     <span className="text-sm font-black mono text-indigo-600 dark:text-indigo-400">{rfq.rfqNumber}</span>
                     {rfq.source === 'email_gateway' && (
                       <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800 flex items-center gap-1.5">
-                        <Mail size={12} /> Origin: {rfq.sourceEmail || 'Autonomous Corporate Email Gateway'}
+                        Origin: {rfq.sourceEmail || 'Autonomous Corporate via Email Upload'}
                       </span>
                     )}
                     {rfq.source === 'manual_entry' && (
                       <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 flex items-center gap-1.5">
-                        <FileSpreadsheet size={12} /> Direct Keyed Requisition
+                        Direct Keyed Requisition
                       </span>
                     )}
                     {(rfq.source === 'web_portal' || !rfq.source) && (
                       <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800 flex items-center gap-1.5">
-                        <UploadCloud size={12} /> Document: {rfq.sourceFileName || 'Uploaded BOQ Document'}
+                        Document: {rfq.sourceFileName || 'Uploaded BOQ Document'}
                       </span>
                     )}
                     <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-slate-200 dark:bg-gray-700 text-slate-800 dark:text-gray-200">

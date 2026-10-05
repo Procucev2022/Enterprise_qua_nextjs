@@ -87,6 +87,12 @@ const ALL_CATEGORIES_OPTION = 'All Categories';
 const ALL_VENDORS_PAGE_SIZE = 100;
 const ALL_VENDORS_SEARCH_DEBOUNCE_MS = 350;
 
+const SOURCING_VERSION_LABELS: Record<string, string> = {
+  mode_1: 'V1(Internal Vendors)',
+  mode_2: 'V2(Internal + Procucev Vetted Vendors)',
+  mode_3: 'V3(Autonomous AI + 360 Qualification)',
+};
+
 function taxonomyMajors(): string[] {
   return getMajorCategories();
 }
@@ -878,34 +884,12 @@ export default function IngestionWizard({
   };
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6 animate-fade-in pb-12">
-      {/* Header */}
-      <div className="flex items-center justify-between pb-4 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
-            AI RFQ Ingestion & Multi-Mode Sourcing Dispatch
-          </h1>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleClearForm}
-            type="button"
-            className="btn btn-secondary btn-sm font-semibold inline-flex items-center gap-1.5 text-slate-600 hover:text-rose-600 dark:text-gray-300 dark:hover:text-rose-400 cursor-pointer"
-          >
-            <RotateCcw size={13} />
-            <span>Clear Form</span>
-          </button>
-          <button onClick={onCancel} className="btn btn-secondary btn-sm font-semibold cursor-pointer">
-            Exit Wizard
-          </button>
-        </div>
-      </div>
-
+    <div className="max-w-7xl mx-auto space-y-3.5 animate-fade-in pb-8">
       {/* Quota Exhausted Banner */}
       {isQuotaExhausted && (
         <div
           data-testid="ingestion-wizard-quota-exhausted-banner"
-          className="p-5 rounded-2xl bg-amber-500/10 border border-amber-500/30 dark:bg-amber-950/40 dark:border-amber-700/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm"
+          className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 dark:bg-amber-950/40 dark:border-amber-700/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm"
         >
           <div className="flex items-start gap-3">
             <div className="p-2 rounded-xl bg-amber-500/20 text-amber-600 dark:text-amber-400 shrink-0">
@@ -933,16 +917,13 @@ export default function IngestionWizard({
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* TOP: DOCUMENT & REQUISITION EMAIL UPLOAD & AI EXTRACTION      */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="glass-panel p-6 rounded-2xl space-y-4 border border-indigo-100 dark:border-indigo-950 bg-gradient-to-br from-indigo-50/50 via-white to-sky-50/30 dark:from-gray-900/90 dark:via-gray-900/80 dark:to-indigo-950/20 shadow-sm">
+      <section className="glass-panel p-4 sm:p-5 rounded-2xl space-y-3.5 border border-indigo-100 dark:border-indigo-950 bg-gradient-to-br from-indigo-50/50 via-white to-sky-50/30 dark:from-gray-900/90 dark:via-gray-900/80 dark:to-indigo-950/20 shadow-sm">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-100/60 dark:border-gray-800 pb-3">
           <div>
             <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
               <UploadCloud size={18} className="text-indigo-600 dark:text-indigo-400" />
               Upload Source Documents & Forwarded Emails
             </h2>
-            <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-              Upload BOQ files (<span className="font-semibold text-slate-700 dark:text-slate-300">.xlsx, .xls, .csv, .pdf, .docx, .txt</span>) or Forwarded Requisition Emails (<span className="font-semibold text-indigo-600 dark:text-indigo-400">.eml, .msg</span>) — <span className="inline-flex items-center font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-1.5 py-0.5 rounded text-[11px]">Max 15 MB per file</span>
-            </p>
           </div>
 
           <div className="flex items-center gap-2">
@@ -1007,9 +988,6 @@ export default function IngestionWizard({
           <h3 className="text-xs font-bold text-slate-800 dark:text-white mt-2">
             {isExtracting ? 'Gemini AI is parsing document contents...' : 'Drag and drop BOQ spreadsheets or .eml / .msg emails here'}
           </h3>
-          <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-            Supports Excel (.xlsx, .xls), CSV, PDF specs, Word (.docx), Plain Text (.txt), and Outlook/MIME Email (.eml, .msg) — <span className="font-semibold text-slate-700 dark:text-slate-300">Max 15 MB</span>.
-          </p>
         </div>
 
         {/* Uploaded Files List */}
@@ -1078,17 +1056,22 @@ export default function IngestionWizard({
       </section>
 
       {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* SECTION 1: RFQ DETAILS & DELIVERY SPECIFICATIONS              */}
+      {/* MERGED SECTIONS 1, 2 & 3: RFQ DETAILS, LINE ITEMS & SOURCING  */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="glass-panel p-6 rounded-2xl space-y-5 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs">
-        <div className="border-b border-slate-100 dark:border-gray-800 pb-3">
+      <section className="glass-panel p-4 sm:p-5 rounded-2xl space-y-4 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-gray-800 pb-3">
           <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
             <FileText size={18} className="text-indigo-600 dark:text-indigo-400" />
             1. RFQ Details & Delivery Terms
           </h2>
-          <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-            Specify the procurement title, target location, and financial parameters for this requirement.
-          </p>
+          <button
+            onClick={handleClearForm}
+            type="button"
+            className="btn btn-secondary btn-sm font-semibold inline-flex items-center gap-1.5 text-slate-600 hover:text-rose-600 dark:text-gray-300 dark:hover:text-rose-400 cursor-pointer self-end sm:self-auto"
+          >
+            <RotateCcw size={13} />
+            <span>Clear Form</span>
+          </button>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 text-xs">
@@ -1200,22 +1183,16 @@ export default function IngestionWizard({
             <FieldError message={formErrors.targetDeliveryDate} />
           </div>
         </div>
-      </section>
 
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* SECTION 2: LINE ITEMS & TAXONOMY CATEGORIZATION TABLE         */}
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="glass-panel p-6 rounded-2xl space-y-4 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-gray-800 pb-3">
-          <div>
-            <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <Sparkles size={18} className="text-indigo-600 dark:text-indigo-400" />
-              2. Line Items Specification ({form.lineItems.length})
-            </h2>
-            <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-              Classify each item into its standardized <strong>Major Category</strong> and <strong>Minor Category</strong> from the verified taxonomy.
-            </p>
-          </div>
+        {/* ── Section 2: Line Items & Taxonomy ── */}
+        <div className="pt-6 border-t border-slate-200 dark:border-slate-800 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-gray-800 pb-3">
+            <div>
+              <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Sparkles size={18} className="text-indigo-600 dark:text-indigo-400" />
+                2. Line Items Specification ({form.lineItems.length})
+              </h2>
+            </div>
 
           <div className="flex items-center gap-2">
             <button
@@ -1379,166 +1356,97 @@ export default function IngestionWizard({
             </table>
           </div>
         )}
-      </section>
+      </div>
 
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* SECTION 3: SOURCING MODE SELECTION (DROPDOWN)                 */}
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="glass-panel p-6 rounded-2xl space-y-4 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs">
-        <div className="border-b border-slate-100 dark:border-gray-800 pb-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        {/* ── Section 3: Sourcing Mode Selection ── */}
+        <div className="pt-6 border-t border-slate-200 dark:border-slate-800 space-y-4">
+          <div className="border-b border-slate-100 dark:border-gray-800 pb-3">
             <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
               <CheckCircle2 size={18} className="text-indigo-600 dark:text-indigo-400" />
               3. Select Sourcing Mode
             </h2>
-            <span className="text-xs font-semibold text-slate-500 dark:text-gray-400">
-              Choose how suppliers are matched and invited
-            </span>
           </div>
-        </div>
 
-        <div className="space-y-3" ref={sourcingDropdownRef}>
-          <label htmlFor="sourcing-mode-select" className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300">
-            Select Sourcing Version
-          </label>
+          <div className="space-y-3" ref={sourcingDropdownRef}>
+            <label htmlFor="sourcing-mode-select" className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300">
+              Select Sourcing Version
+            </label>
 
-          {/* Accessible Native Select for Screen Readers / Automated Test Querying */}
-          <select
-            id="sourcing-mode-select"
-            data-testid="sourcing-mode-select"
-            aria-label="Sourcing Mode"
-            value={form.sourcingMode}
-            onChange={(e) => patchForm('sourcingMode', e.target.value as SourcingMode)}
-            className="sr-only"
-            tabIndex={-1}
-          >
-            {SOURCING_MODES.map((mode) => (
-              <option
-                key={mode.id}
-                value={mode.id}
-                data-testid={`mode-option-${mode.id}`}
-              >
-                {mode.shortLabel}: {mode.description} • [{mode.featureSummary}]
-              </option>
-            ))}
-          </select>
+            {/* Accessible Native Select for Screen Readers / Automated Test Querying */}
+            <select
+              id="sourcing-mode-select"
+              data-testid="sourcing-mode-select"
+              aria-label="Sourcing Mode"
+              value={form.sourcingMode}
+              onChange={(e) => patchForm('sourcingMode', e.target.value as SourcingMode)}
+              className="sr-only"
+              tabIndex={-1}
+            >
+              {SOURCING_MODES.map((mode) => (
+                <option
+                  key={mode.id}
+                  value={mode.id}
+                  data-testid={`mode-option-${mode.id}`}
+                >
+                  {SOURCING_VERSION_LABELS[mode.id] || mode.shortLabel}
+                </option>
+              ))}
+            </select>
 
-          {/* Custom Rich Dropdown Selector */}
-          <div className="relative">
-            {(() => {
-              const activeMode = SOURCING_MODES.find((m) => m.id === form.sourcingMode) || SOURCING_MODES[0];
-              const badgeConfigs: Record<string, { icon: string; badge: string; badgeStyle: string }> = {
-                mode_1: {
-                  icon: '🎯',
-                  badge: 'STARTER',
-                  badgeStyle: 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-300 border-blue-200 dark:border-blue-800',
-                },
-                mode_2: {
-                  icon: '⚡',
-                  badge: 'RECOMMENDED',
-                  badgeStyle: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800',
-                },
-                mode_3: {
-                  icon: '🚀',
-                  badge: 'FULL REACH',
-                  badgeStyle: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800',
-                },
-              };
-              const activeConfig = badgeConfigs[activeMode.id] || badgeConfigs.mode_1;
+            {/* Custom Clean Dropdown Selector */}
+            <div className="relative">
+              {(() => {
+                const activeMode = SOURCING_MODES.find((m) => m.id === form.sourcingMode) || SOURCING_MODES[0];
 
-              return (
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => setIsSourcingDropdownOpen((prev) => !prev)}
-                    aria-expanded={isSourcingDropdownOpen}
-                    className="w-full text-left rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800/90 p-3.5 hover:border-indigo-400 dark:hover:border-indigo-500 focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 transition-all flex items-center justify-between gap-4 shadow-2xs cursor-pointer group"
-                  >
-                    <div className="flex items-start sm:items-center gap-3.5 min-w-0">
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-100 dark:border-indigo-900/50 text-lg shadow-2xs group-hover:scale-105 transition-transform">
-                        {activeConfig.icon}
+                return (
+                  <div>
+                    <button
+                      type="button"
+                      data-testid="sourcing-mode-trigger"
+                      onClick={() => setIsSourcingDropdownOpen((prev) => !prev)}
+                      aria-expanded={isSourcingDropdownOpen}
+                      className="w-full text-left rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800/90 p-3.5 hover:border-indigo-400 dark:hover:border-indigo-500 focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 transition-all flex items-center justify-between gap-4 shadow-2xs cursor-pointer group"
+                    >
+                      <div className="flex items-center gap-3.5 min-w-0">
+                        <span className="text-sm font-bold text-slate-900 dark:text-white">
+                          {SOURCING_VERSION_LABELS[activeMode.id] || activeMode.shortLabel}
+                        </span>
                       </div>
-                      <div className="min-w-0 space-y-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-black text-slate-900 dark:text-white">
-                            {activeMode.shortLabel}
-                          </span>
-                          <span className={`rounded-full px-2.5 py-0.5 text-[9px] font-extrabold uppercase tracking-wider border ${activeConfig.badgeStyle}`}>
-                            {activeConfig.badge}
-                          </span>
-                          <span className="text-xs text-slate-500 dark:text-gray-400 truncate hidden lg:inline">
-                            — {activeMode.description}
-                          </span>
-                        </div>
-                        {/* Selected Mode Feature Badge Pill */}
-                        <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-slate-50 dark:bg-gray-900/90 border border-slate-200/80 dark:border-gray-700/80 text-[11px] font-semibold text-slate-700 dark:text-gray-300">
-                          <CheckCircle2 size={12} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
-                          <span>{activeMode.featureSummary}</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hidden sm:inline">
-                        Change
-                      </span>
-                      <div className="p-1 rounded-lg bg-slate-100 dark:bg-gray-700/60 text-slate-500 dark:text-gray-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-300 transition-colors">
-                        <ChevronDown
-                          size={16}
-                          className={`transition-transform duration-200 ${
-                            isSourcingDropdownOpen ? 'rotate-180 text-indigo-600 dark:text-indigo-400' : ''
-                          }`}
-                        />
-                      </div>
-                    </div>
-                  </button>
-
-                  {/* Dropdown Menu Popover */}
-                  {isSourcingDropdownOpen && (
-                    <div className="absolute z-50 mt-2 w-full rounded-2xl border border-slate-200/90 dark:border-gray-700/80 bg-white/95 dark:bg-gray-900/95 backdrop-blur-xl shadow-2xl shadow-slate-900/10 dark:shadow-black/60 p-2 space-y-2 animate-fade-in">
-                      {SOURCING_MODES.map((mode, index) => {
-                        const isSelected = form.sourcingMode === mode.id;
-                        const config = [
-                          {
-                            icon: '🎯',
-                            badge: 'STARTER',
-                            badgeStyle: 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-300 border-blue-200 dark:border-blue-800',
-                          },
-                          {
-                            icon: '⚡',
-                            badge: 'RECOMMENDED',
-                            badgeStyle: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800',
-                          },
-                          {
-                            icon: '🚀',
-                            badge: 'FULL REACH',
-                            badgeStyle: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800',
-                          },
-                        ][index];
-
-                        return (
-                          <div
-                            key={mode.id}
-                            data-testid={`custom-mode-option-${mode.id}`}
-                            onClick={() => {
-                              patchForm('sourcingMode', mode.id as SourcingMode);
-                              setIsSourcingDropdownOpen(false);
-                            }}
-                            className={`p-3.5 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 ${
-                              isSelected
-                                ? 'bg-indigo-50/80 dark:bg-indigo-950/40 border-indigo-300 dark:border-indigo-700/80 shadow-xs'
-                                : 'bg-slate-50/50 dark:bg-gray-800/30 border-slate-100 dark:border-gray-800 hover:border-slate-300 dark:hover:border-gray-700 hover:bg-white dark:hover:bg-gray-800/80'
+                      <div className="flex items-center gap-2 shrink-0">
+                        <div className="p-1 rounded-lg bg-slate-100 dark:bg-gray-700/60 text-slate-500 dark:text-gray-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-300 transition-colors">
+                          <ChevronDown
+                            size={16}
+                            className={`transition-transform duration-200 ${
+                              isSourcingDropdownOpen ? 'rotate-180 text-indigo-600 dark:text-indigo-400' : ''
                             }`}
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="flex items-center gap-2.5">
-                                <span className="text-lg shrink-0" aria-hidden="true">{config.icon}</span>
-                                <h4 className={`text-sm font-bold ${isSelected ? 'text-indigo-950 dark:text-indigo-200' : 'text-slate-900 dark:text-white'}`}>
-                                  {mode.shortLabel}
-                                </h4>
-                                <span className={`rounded-full px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wider border ${config.badgeStyle}`}>
-                                  {config.badge}
-                                </span>
-                              </div>
+                          />
+                        </div>
+                      </div>
+                    </button>
+
+                    {/* Dropdown Menu Popover */}
+                    {isSourcingDropdownOpen && (
+                      <div className="absolute z-50 mt-2 w-full rounded-2xl border border-slate-200/90 dark:border-gray-700/80 bg-white/95 dark:bg-gray-900/95 backdrop-blur-xl shadow-2xl shadow-slate-900/10 dark:shadow-black/60 p-2 space-y-1.5 animate-fade-in">
+                        {SOURCING_MODES.map((mode) => {
+                          const isSelected = form.sourcingMode === mode.id;
+
+                          return (
+                            <div
+                              key={mode.id}
+                              data-testid={`custom-mode-option-${mode.id}`}
+                              onClick={() => {
+                                patchForm('sourcingMode', mode.id as SourcingMode);
+                                setIsSourcingDropdownOpen(false);
+                              }}
+                              className={`px-4 py-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 ${
+                                isSelected
+                                  ? 'bg-indigo-50/80 dark:bg-indigo-950/40 border-indigo-300 dark:border-indigo-700/80 shadow-xs'
+                                  : 'bg-slate-50/50 dark:bg-gray-800/30 border-slate-100 dark:border-gray-800 hover:border-slate-300 dark:hover:border-gray-700 hover:bg-white dark:hover:bg-gray-800/80'
+                              }`}
+                            >
+                              <h4 className={`text-sm font-bold ${isSelected ? 'text-indigo-950 dark:text-indigo-200' : 'text-slate-900 dark:text-white'}`}>
+                                {SOURCING_VERSION_LABELS[mode.id] || mode.shortLabel}
+                              </h4>
 
                               <div className="flex items-center gap-1.5">
                                 {isSelected ? (
@@ -1552,43 +1460,29 @@ export default function IngestionWizard({
                                 )}
                               </div>
                             </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
 
-                            {/* Description */}
-                            <p className="text-xs text-slate-600 dark:text-gray-300 leading-relaxed pl-7">
-                              {mode.description}
-                            </p>
-
-                            {/* Feature Badge Pill */}
-                            <div className="pl-7 pt-0.5">
-                              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/90 dark:bg-gray-950/60 border border-slate-200/90 dark:border-gray-700/80 text-[11px] font-semibold text-slate-700 dark:text-gray-300 shadow-2xs">
-                                <CheckCircle2 size={12} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
-                                <span>{mode.featureSummary}</span>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
+            {/* Test & Quick Selector Target */}
+            <div className="hidden" aria-hidden="true">
+              {SOURCING_MODES.map((mode) => (
+                <button
+                  key={mode.id}
+                  type="button"
+                  data-testid={`mode-${mode.id}`}
+                  onClick={() => patchForm('sourcingMode', mode.id as SourcingMode)}
+                >
+                  {SOURCING_VERSION_LABELS[mode.id] || mode.shortLabel}
+                </button>
+              ))}
+            </div>
           </div>
-
-          {/* Test & Quick Selector Target */}
-          <div className="hidden" aria-hidden="true">
-            {SOURCING_MODES.map((mode) => (
-              <button
-                key={mode.id}
-                type="button"
-                data-testid={`mode-${mode.id}`}
-                onClick={() => patchForm('sourcingMode', mode.id as SourcingMode)}
-              >
-                {mode.shortLabel}
-              </button>
-            ))}
-          </div>
-        </div>
 
         {/* ── Mode 1: Private Approved Vendor Roster Preview ── */}
         {form.sourcingMode === 'mode_1' && (
@@ -2438,6 +2332,7 @@ export default function IngestionWizard({
             })()}
           </div>
         )}
+        </div>
       </section>
 
       {/* ═══════════════════════════════════════════════════════════════ */}

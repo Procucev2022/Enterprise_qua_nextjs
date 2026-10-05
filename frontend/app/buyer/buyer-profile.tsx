@@ -500,21 +500,9 @@ export default function BuyerProfilePage() {
   };
 
   return (
-    <div className="space-y-6 animate-fade-in pb-4">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white flex items-center gap-2">
-              <Building2 className="text-indigo-600 dark:text-indigo-400" /> Buyer Organization Profile
-            </h1>
-            <span className="badge badge-purple font-mono">Enterprise Buyer</span>
-          </div>
-          <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
-            Manage organization legal governance, GSTIN/PAN tax compliance, and multi-tier procurement categories.
-          </p>
-        </div>
-
+    <div className="space-y-3.5 animate-fade-in pb-4">
+      {/* Top Action Bar */}
+      <div className="flex items-center justify-end">
         <button
           onClick={handleSaveProfile}
           disabled={isLoading || isSaving}
@@ -525,9 +513,9 @@ export default function BuyerProfilePage() {
         </button>
       </div>
 
-      <form onSubmit={handleSaveProfile} className="space-y-6">
+      <form onSubmit={handleSaveProfile} className="space-y-3.5">
         {/* Section 1: Legal Entity & Tax Compliance */}
-        <div className="glass-panel p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-4">
+        <div className="glass-panel p-4 sm:p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3.5">
           <div className="flex items-center justify-between border-b border-slate-100 dark:border-gray-800 pb-3">
             <h2 className="text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
               <ShieldCheck className="text-indigo-600 dark:text-indigo-400" size={18} /> Section 1: Organization & Tax Registration
