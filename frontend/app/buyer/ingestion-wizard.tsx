@@ -884,31 +884,31 @@ export default function IngestionWizard({
   };
 
   return (
-    <div className="max-w-7xl mx-auto space-y-3.5 animate-fade-in pb-8">
+    <div className="max-w-7xl mx-auto space-y-2.5 animate-fade-in pb-4">
       {/* Quota Exhausted Banner */}
       {isQuotaExhausted && (
         <div
           data-testid="ingestion-wizard-quota-exhausted-banner"
-          className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 dark:bg-amber-950/40 dark:border-amber-700/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm"
+          className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 dark:bg-amber-950/40 dark:border-amber-700/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 shadow-sm"
         >
-          <div className="flex items-start gap-3">
-            <div className="p-2 rounded-xl bg-amber-500/20 text-amber-600 dark:text-amber-400 shrink-0">
-              <AlertCircle size={22} />
+          <div className="flex items-start gap-2.5">
+            <div className="p-1.5 rounded-lg bg-amber-500/20 text-amber-600 dark:text-amber-400 shrink-0">
+              <AlertCircle size={20} />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-amber-950 dark:text-amber-200">
+              <h3 className="text-xs sm:text-sm font-bold text-amber-950 dark:text-amber-200">
                 {EXTRACTION.quotaExhaustedTitle}
               </h3>
-              <p className="text-xs text-amber-800 dark:text-amber-300 mt-1">
+              <p className="text-[11px] text-amber-800 dark:text-amber-300 mt-0.5">
                 {EXTRACTION.quotaExhaustedMessage}
               </p>
             </div>
           </div>
           <a
             href="/buyer/subscription-center"
-            className="btn btn-primary font-bold shrink-0 inline-flex items-center gap-2 px-4 py-2 text-xs shadow-md hover:shadow-lg"
+            className="btn btn-primary font-bold shrink-0 inline-flex items-center gap-2 px-3 py-1.5 text-xs shadow-md hover:shadow-lg"
           >
-            <Sparkles size={14} />
+            <Sparkles size={13} />
             <span>{EXTRACTION.upgradePlanAction}</span>
           </a>
         </div>
@@ -917,11 +917,11 @@ export default function IngestionWizard({
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* TOP: DOCUMENT & REQUISITION EMAIL UPLOAD & AI EXTRACTION      */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="glass-panel p-4 sm:p-5 rounded-2xl space-y-3.5 border border-indigo-100 dark:border-indigo-950 bg-gradient-to-br from-indigo-50/50 via-white to-sky-50/30 dark:from-gray-900/90 dark:via-gray-900/80 dark:to-indigo-950/20 shadow-sm">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-100/60 dark:border-gray-800 pb-3">
+      <section className="glass-panel p-3 sm:p-3.5 rounded-xl space-y-2.5 border border-indigo-100 dark:border-indigo-950 bg-gradient-to-br from-indigo-50/50 via-white to-sky-50/30 dark:from-gray-900/90 dark:via-gray-900/80 dark:to-indigo-950/20 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-100/60 dark:border-gray-800 pb-2.5">
           <div>
-            <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <UploadCloud size={18} className="text-indigo-600 dark:text-indigo-400" />
+            <h2 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <UploadCloud size={16} className="text-indigo-600 dark:text-indigo-400" />
               Upload Source Documents & Forwarded Emails
             </h2>
           </div>
@@ -971,21 +971,21 @@ export default function IngestionWizard({
             setIsDraggingDoc(false);
             if (e.dataTransfer.files) handleFilesSelected(e.dataTransfer.files);
           }}
-          className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all cursor-pointer group ${
+          className={`border-2 border-dashed rounded-xl p-4 text-center transition-all cursor-pointer group ${
             isDraggingDoc
               ? 'border-indigo-600 bg-indigo-100/70 dark:bg-indigo-900/50 scale-[1.01]'
               : 'border-indigo-300/80 dark:border-indigo-500/30 hover:border-indigo-500 bg-white/70 dark:bg-gray-900/40 hover:bg-indigo-50/50'
           }`}
         >
           <div className="flex items-center justify-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-200 dark:border-indigo-500/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
-              <FileSpreadsheet size={20} />
+            <div className="w-9 h-9 rounded-lg bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-200 dark:border-indigo-500/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
+              <FileSpreadsheet size={18} />
             </div>
-            <div className="w-10 h-10 rounded-xl bg-sky-100 dark:bg-sky-600/20 border border-sky-200 dark:border-sky-500/30 flex items-center justify-center text-sky-600 dark:text-sky-400 group-hover:scale-110 transition-transform">
-              <Mail size={20} />
+            <div className="w-9 h-9 rounded-lg bg-sky-100 dark:bg-sky-600/20 border border-sky-200 dark:border-sky-500/30 flex items-center justify-center text-sky-600 dark:text-sky-400 group-hover:scale-110 transition-transform">
+              <Mail size={18} />
             </div>
           </div>
-          <h3 className="text-xs font-bold text-slate-800 dark:text-white mt-2">
+          <h3 className="text-xs font-bold text-slate-800 dark:text-white mt-1.5">
             {isExtracting ? 'Gemini AI is parsing document contents...' : 'Drag and drop BOQ spreadsheets or .eml / .msg emails here'}
           </h3>
         </div>
@@ -1032,7 +1032,7 @@ export default function IngestionWizard({
 
         {/* AI Extraction Outcome Banners */}
         {extractionSummary && (
-          <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 text-xs">
+          <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 text-xs">
             <div className="font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
               <Sparkles size={14} /> Extraction Complete
             </div>
@@ -1043,7 +1043,7 @@ export default function IngestionWizard({
         )}
 
         {extractionError && (
-          <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-700/60 text-xs space-y-1">
+          <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-700/60 text-xs space-y-1">
             <div className="font-bold text-amber-900 dark:text-amber-300 flex items-center gap-1.5">
               <AlertCircle size={14} /> Document Parsing Notice
             </div>
@@ -1058,10 +1058,10 @@ export default function IngestionWizard({
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* MERGED SECTIONS 1, 2 & 3: RFQ DETAILS, LINE ITEMS & SOURCING  */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="glass-panel p-4 sm:p-5 rounded-2xl space-y-4 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-gray-800 pb-3">
-          <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-            <FileText size={18} className="text-indigo-600 dark:text-indigo-400" />
+      <section className="glass-panel p-3.5 sm:p-4 rounded-xl space-y-3 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-gray-800 pb-2.5">
+          <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <FileText size={16} className="text-indigo-600 dark:text-indigo-400" />
             1. RFQ Details & Delivery Terms
           </h2>
           <button

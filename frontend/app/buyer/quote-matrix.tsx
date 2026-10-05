@@ -80,9 +80,9 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
   };
 
   return (
-    <div className="space-y-3.5 animate-fade-in pb-6">
+    <div className="space-y-2.5 animate-fade-in pb-4">
       {/* Top Bar with Back Link and RFQ Selector */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
         <div>
           <button
             onClick={onBackToDashboard}
@@ -101,7 +101,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
               const found = rfqs.find((r) => r.id === e.target.value);
               if (found) setSelectedRFQForMatrix(found);
             }}
-            className="text-xs font-semibold mono bg-white dark:bg-gray-900 border border-slate-300 dark:border-gray-700 rounded-lg px-3 py-1.5 shadow-sm"
+            className="text-xs font-semibold mono bg-white dark:bg-gray-900 border border-slate-300 dark:border-gray-700 rounded-lg px-2.5 py-1.5 shadow-sm"
           >
             {rfqs.map((r) => (
               <option key={r.id} value={r.id}>
@@ -113,11 +113,11 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
       </div>
 
       {/* RFQ Context Strip with Multi-Channel Follow-Up Badges */}
-      <div className="p-4 rounded-xl glass-panel space-y-3 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-indigo-50 dark:bg-indigo-600/20 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/30">
-              <Layers size={20} />
+      <div className="p-3 sm:p-3.5 rounded-xl glass-panel space-y-2.5 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-600/20 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/30">
+              <Layers size={18} />
             </div>
             <div>
               <div className="flex items-center gap-2">
@@ -133,7 +133,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
             </div>
           </div>
 
-          <div className="flex items-center gap-6 text-slate-700 dark:text-gray-300 text-xs">
+          <div className="flex items-center gap-4 text-slate-700 dark:text-gray-300 text-xs">
             <div>
               <span className="text-[10px] text-slate-400 dark:text-gray-400 block uppercase">Target Delivery</span>
               <span className="font-bold text-slate-900 dark:text-white mono">{currentRFQ.targetDeliveryDate}</span>
@@ -153,18 +153,18 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
 
         {/* Multi-Channel Follow-Up Status Strip */}
         {currentRFQ.followUpData && (
-          <div className="pt-2.5 border-t border-slate-100 dark:border-gray-800/80 flex flex-wrap items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[11px] font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wider">
+          <div className="pt-2 border-t border-slate-100 dark:border-gray-800/80 flex flex-wrap items-center justify-between gap-2.5 text-xs">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[10px] font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wider">
                 AI FOLLOW-UP STATUS:
               </span>
-              <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
                 📞 Calls: {currentRFQ.followUpData.callStats.connected}/{currentRFQ.followUpData.callStats.total} Connected (Avg {currentRFQ.followUpData.callStats.avgDuration})
               </span>
-              <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
                 💬 WhatsApp: {currentRFQ.followUpData.whatsappStats.read}/{currentRFQ.followUpData.whatsappStats.total} Read ({currentRFQ.followUpData.whatsappStats.replied} Bids In)
               </span>
-              <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-sky-50 dark:bg-cyan-950/60 text-sky-700 dark:text-cyan-300 border border-sky-200 dark:border-cyan-800">
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-50 dark:bg-cyan-950/60 text-sky-700 dark:text-cyan-300 border border-sky-200 dark:border-cyan-800">
                 📱 SMS: {currentRFQ.followUpData.smsStats.delivered}/{currentRFQ.followUpData.smsStats.total} Delivered
               </span>
             </div>
@@ -182,18 +182,18 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
 
       {/* Evaluation Matrix Comparison Table */}
       {currentRole === 'buyer' && currentRFQ?.quotesHidden ? (
-        <div className="p-12 text-center glass-panel rounded-2xl space-y-4 border border-amber-300 dark:border-amber-700/50 bg-amber-50/50 dark:bg-amber-950/20 shadow-md">
-          <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 flex items-center justify-center shadow-inner">
-            <Lock size={28} />
+        <div className="p-8 text-center glass-panel rounded-xl space-y-3 border border-amber-300 dark:border-amber-700/50 bg-amber-50/50 dark:bg-amber-950/20 shadow-md">
+          <div className="w-12 h-12 mx-auto rounded-xl bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 flex items-center justify-center shadow-inner">
+            <Lock size={24} />
           </div>
           <div className="space-y-1">
-            <h3 className="text-base font-bold text-slate-900 dark:text-white">Quotes Sealed — 48-Hour Bidding Period Active</h3>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white">Quotes Sealed — 48-Hour Bidding Period Active</h3>
             <p className="text-xs text-slate-600 dark:text-gray-300 max-w-lg mx-auto">
               {currentRFQ.quotesHiddenReason || 'Received quotations remain hidden from the buyer for 48 hours after release to preserve bidding integrity.'}
             </p>
           </div>
-          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold bg-white dark:bg-gray-800 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-700/60 shadow-sm">
-            <Clock size={14} />
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-white dark:bg-gray-800 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-700/60 shadow-sm">
+            <Clock size={13} />
             <span>Unseals on: {currentRFQ.quotesHiddenUntil ? new Date(currentRFQ.quotesHiddenUntil).toLocaleString() : 'After 48 hours'} (or upon RFQ closure)</span>
           </div>
           <p className="text-[11px] text-slate-500 dark:text-gray-400 max-w-md mx-auto">
@@ -201,26 +201,26 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
           </p>
         </div>
       ) : quotes.length === 0 ? (
-        <div className="p-12 text-center glass-panel rounded-2xl space-y-3 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80">
-          <AlertCircle size={32} className="mx-auto text-amber-500" />
-          <h3 className="text-base font-bold text-slate-900 dark:text-white">Quotes Pending for this RFQ</h3>
+        <div className="p-8 text-center glass-panel rounded-xl space-y-3 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80">
+          <AlertCircle size={30} className="mx-auto text-amber-500" />
+          <h3 className="text-sm font-bold text-slate-900 dark:text-white">Quotes Pending for this RFQ</h3>
           <p className="text-xs text-slate-500 dark:text-gray-400 max-w-md mx-auto">
             Suppliers have been invited and autonomous AI quote chasing is currently active. Switch to RFQ-2026-00421 to view the full comparative evaluation matrix.
           </p>
         </div>
       ) : (
-        <div className="glass-panel rounded-2xl overflow-hidden border border-slate-200 dark:border-gray-800 shadow-xl bg-white dark:bg-gray-900/80">
+        <div className="glass-panel rounded-xl overflow-hidden border border-slate-200 dark:border-gray-800 shadow-xl bg-white dark:bg-gray-900/80">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
                 <tr className="bg-slate-50 dark:bg-gray-900/90 text-slate-700 dark:text-gray-300 border-b border-slate-200 dark:border-gray-800">
-                  <th className="p-4 w-60 text-[11px] uppercase font-bold text-slate-500 dark:text-gray-400">
+                  <th className="px-3.5 py-3 w-60 text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400">
                     Evaluation Parameter
                   </th>
                   {quotes.map((quote) => (
                     <th
                       key={quote.vendorId}
-                      className={`p-4 min-w-[240px] text-left transition-all ${
+                      className={`px-3.5 py-3 min-w-[240px] text-left transition-all ${
                         quote.isPreferred
                           ? 'bg-indigo-50/70 dark:bg-indigo-950/40 border-x-2 border-indigo-600 dark:border-indigo-500 text-slate-900 dark:text-white'
                           : 'text-slate-800 dark:text-gray-200'

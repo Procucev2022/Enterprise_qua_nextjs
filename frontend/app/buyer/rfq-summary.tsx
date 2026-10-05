@@ -262,7 +262,7 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
   ];
 
   return (
-    <div className="space-y-3.5 animate-fade-in pb-8">
+    <div className="space-y-2.5 animate-fade-in pb-4">
       {/* ── Top Action Bar ── */}
       <div className="flex items-center justify-end">
         <button onClick={onCreateRFQ} className="btn btn-primary btn-sm font-bold flex items-center gap-1.5 shrink-0 shadow-sm">
@@ -271,35 +271,35 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
       </div>
 
       {/* ── KPI strip ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
         {kpiCards.map((card) => (
           <div
             key={card.key}
-            className="glass-panel p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80"
+            className="glass-panel p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80"
           >
             <div className="flex items-center justify-between">
               <span className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450">{card.label}</span>
               <div className={`p-1.5 rounded-lg ${card.tone}`}>{card.icon}</div>
             </div>
-            <div className="text-2xl font-black text-slate-900 dark:text-white mt-1.5 mono">{card.value}</div>
+            <div className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-1 mono">{card.value}</div>
           </div>
         ))}
       </div>
 
       {/* ── Sourcing mode distribution ── */}
-      <div className="glass-panel p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-2.5">
+      <div className="glass-panel p-2.5 sm:p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-2">
         <h2 className="text-xs font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1.5">
           <Layers size={14} className="text-indigo-600 dark:text-indigo-400" />
           {RFQ.modeDistributionTitle}
         </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
           {SOURCING_MODES.map((mode) => {
             const count = summary.bySourcingMode[mode.id] || 0;
             const share = summary.totalRFQs === 0 ? 0 : Math.round((count / summary.totalRFQs) * 100);
             return (
               <div
                 key={mode.id}
-                className="p-2.5 rounded-xl bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 space-y-1.5"
+                className="p-2 rounded-lg bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 space-y-1"
               >
                 <div className="flex items-center justify-between">
                   {modeBadge(mode.id)}
@@ -325,8 +325,8 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
       </div>
 
       {/* ── Filters ── */}
-      <div className="glass-panel p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-3">
-        <div className="flex flex-col lg:flex-row lg:items-end gap-3">
+      <div className="glass-panel p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-2.5">
+        <div className="flex flex-col lg:flex-row lg:items-end gap-2.5">
           <div className="flex-1 space-y-1">
             <label htmlFor="rfq-search" className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450">
               {RFQ.searchLabel}
@@ -424,8 +424,8 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
 
       {/* ── Portfolio table ── */}
       {rfqs.length === 0 ? (
-        <div className="glass-panel p-10 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 text-center space-y-3">
-          <ClipboardList size={32} className="mx-auto text-slate-300 dark:text-gray-700" />
+        <div className="glass-panel p-8 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 text-center space-y-3">
+          <ClipboardList size={30} className="mx-auto text-slate-300 dark:text-gray-700" />
           <h2 className="text-sm font-bold text-slate-800 dark:text-white">{RFQ.emptyPortfolioTitle}</h2>
           <p className="text-xs text-slate-500 dark:text-gray-400 max-w-md mx-auto">{RFQ.emptyPortfolioMessage}</p>
           <button onClick={onCreateRFQ} className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5">
@@ -433,7 +433,7 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
           </button>
         </div>
       ) : (
-        <div className="glass-panel rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 overflow-hidden">
+        <div className="glass-panel rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 overflow-hidden">
           {/* Six columns instead of nine. RFQ number and title were two columns
               describing the same thing, as were items and quotes; folding each
               pair into one cell with a sub-line drops the minimum width from
@@ -444,12 +444,12 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
               <caption className="sr-only">{RFQ.tableCaption}</caption>
               <thead className="sticky top-0 z-10 bg-slate-100 dark:bg-gray-950 text-slate-700 dark:text-gray-300 text-[10px] uppercase tracking-wider font-bold border-b border-slate-200 dark:border-gray-800">
                 <tr>
-                  <th scope="col" className="p-3">{RFQ.colRfqNumber}</th>
-                  <th scope="col" className="p-3">{RFQ.colStatus}</th>
-                  <th scope="col" className="p-3 text-center">{RFQ.colItems}</th>
-                  <th scope="col" className="p-3 text-right">{RFQ.colBudget}</th>
-                  <th scope="col" className="p-3">{RFQ.colDelivery}</th>
-                  <th scope="col" className="p-3 text-right">{RFQ.colActions}</th>
+                  <th scope="col" className="px-3 py-2">{RFQ.colRfqNumber}</th>
+                  <th scope="col" className="px-3 py-2">{RFQ.colStatus}</th>
+                  <th scope="col" className="px-3 py-2 text-center">{RFQ.colItems}</th>
+                  <th scope="col" className="px-3 py-2 text-right">{RFQ.colBudget}</th>
+                  <th scope="col" className="px-3 py-2">{RFQ.colDelivery}</th>
+                  <th scope="col" className="px-3 py-2 text-right">{RFQ.colActions}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-gray-800 text-slate-800 dark:text-gray-200">
@@ -457,7 +457,7 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
                   <tr key={rfq.id} className="hover:bg-indigo-50/40 dark:hover:bg-indigo-950/20 transition-colors">
                     {/* Number, title and category in one cell: they identify the
                         same record, and the title now has the width not to truncate. */}
-                    <td className="p-3 align-top">
+                    <td className="px-3 py-2.5 align-top">
                       <span className="mono font-bold text-indigo-700 dark:text-indigo-300">{rfq.rfqNumber}</span>
                       <span className="block font-bold text-slate-900 dark:text-white mt-0.5 leading-snug">
                         {rfq.title}
@@ -468,7 +468,7 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
                         <span className="text-[10px] text-slate-500 dark:text-gray-400">{rfq.category}</span>
                       </span>
                     </td>
-                    <td className="p-3 align-top">
+                    <td className="px-3 py-2.5 align-top">
                       {statusBadge(rfq.status)}
                       {rfq.chasingActive && (
                         <span className="block text-[10px] text-amber-600 dark:text-amber-400 font-semibold mt-1">
@@ -478,7 +478,7 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
                     </td>
                     {/* Line items and quotations received, stacked: both count what
                         is on the RFQ, and quotes are only meaningful against items. */}
-                    <td className="p-3 align-top text-center whitespace-nowrap">
+                    <td className="px-3 py-2.5 align-top text-center whitespace-nowrap">
                       <span className="mono font-bold text-slate-900 dark:text-white tabular-nums">
                         {(rfq.extractedEntities || []).length}
                       </span>
@@ -488,17 +488,17 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
                     </td>
                     {/* A zero budget means none was stated, so it reads as unset
                         rather than as a real ceiling of nil. */}
-                    <td className="p-3 align-top text-right mono font-semibold tabular-nums whitespace-nowrap">
+                    <td className="px-3 py-2.5 align-top text-right mono font-semibold tabular-nums whitespace-nowrap">
                       {rfq.budget > 0 ? (
                         formatCurrency(rfq.budget)
                       ) : (
                         <span className="text-slate-400 dark:text-gray-500 font-normal">{RFQ.budgetUnset}</span>
                       )}
                     </td>
-                    <td className="p-3 align-top mono tabular-nums whitespace-nowrap">
+                    <td className="px-3 py-2.5 align-top mono tabular-nums whitespace-nowrap">
                       {formatIndianDate(rfq.targetDeliveryDate) || RFQ.deliveryDateUnset}
                     </td>
-                    <td className="p-3 align-top">
+                    <td className="px-3 py-2.5 align-top">
                       <div className="flex items-center justify-end gap-1">
                         <button
                           type="button"

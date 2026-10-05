@@ -189,10 +189,10 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   ];
 
   return (
-    <div className="space-y-3.5 animate-fade-in pb-6">
+    <div className="space-y-2.5 animate-fade-in pb-4">
 
       {/* ── Action Header Bar ── */}
-      <div className="flex items-center justify-end gap-2 flex-wrap">
+      <div className="flex items-center justify-end gap-1.5 flex-wrap">
         <button
           onClick={() => setInitialSetupModalOpen(true)}
           className={`btn btn-sm font-bold flex items-center gap-1.5 shadow-sm transition-all ${
@@ -212,21 +212,21 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
       </div>
 
       {/* ── KPI Cards (4 Column Grid with RFQ Intake Source Breakdown) ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
         {/* Active RFQs */}
         <div
           onClick={() => setActivePipelineModalOpen(true)}
-          className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 relative overflow-hidden hover:border-indigo-400 dark:hover:border-indigo-500 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[110px] group"
+          className="rounded-xl p-3 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 relative overflow-hidden hover:border-indigo-400 dark:hover:border-indigo-500 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[92px] group"
           title="Click to view Active Pipeline details"
         >
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">Active Pipeline</span>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">Active Pipeline</span>
             <div className="flex items-center gap-1 text-[10px] text-indigo-600 dark:text-indigo-400 font-bold">
-              <FileText size={16} />
+              <FileText size={15} />
               <ChevronRight size={11} className="opacity-0 group-hover:opacity-100 transition-opacity" />
             </div>
           </div>
-          <div className="flex items-baseline justify-between mt-2">
+          <div className="flex items-baseline justify-between mt-1.5">
             <div className="flex items-baseline gap-2">
               <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mono">{totalActiveRFQs}</span>
               <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-950/60 px-1.5 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
@@ -240,16 +240,16 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
         {/* Requisitions by Intake Source */}
         <div
           onClick={() => setIntakeSourcesModalOpen(true)}
-          className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-amber-200 dark:border-amber-900/50 relative overflow-hidden hover:border-amber-400 dark:hover:border-amber-500 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[110px] group"
+          className="rounded-xl p-3 bg-white dark:bg-gray-900/80 border border-amber-200 dark:border-amber-900/50 relative overflow-hidden hover:border-amber-400 dark:hover:border-amber-500 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[92px] group"
           title="Click to view Intake Sources breakdown"
         >
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">Intake Sources</span>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">Intake Sources</span>
             <div className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400 font-bold">
               <ChevronRight size={11} className="opacity-0 group-hover:opacity-100 transition-opacity" />
             </div>
           </div>
-          <div className="space-y-1.5 my-1">
+          <div className="space-y-1 my-1">
             <div className="flex items-center justify-between text-[11px]">
               <span className="text-slate-600 dark:text-gray-400 font-medium">
                 via Email Upload:
@@ -281,17 +281,17 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
         {/* Pending Quotes */}
         <div
           onClick={() => setSupplierQuotesModalOpen(true)}
-          className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 relative overflow-hidden hover:border-sky-400 dark:hover:border-sky-500 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[110px] group"
+          className="rounded-xl p-3 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 relative overflow-hidden hover:border-sky-400 dark:hover:border-sky-500 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[92px] group"
           title="Click to view Supplier Quotes"
         >
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 group-hover:text-sky-600 dark:group-hover:text-cyan-400 transition-colors">Supplier Quotes</span>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 group-hover:text-sky-600 dark:group-hover:text-cyan-400 transition-colors">Supplier Quotes</span>
             <div className="flex items-center gap-1 text-[10px] text-sky-600 dark:text-cyan-400 font-bold">
-              <Clock size={16} />
+              <Clock size={15} />
               <ChevronRight size={11} className="opacity-0 group-hover:opacity-100 transition-opacity" />
             </div>
           </div>
-          <div className="flex items-baseline justify-between mt-2">
+          <div className="flex items-baseline justify-between mt-1.5">
             <div className="flex items-baseline gap-2">
               <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mono">{totalPendingQuotes}</span>
               <span className="text-[10px] text-sky-600 dark:text-cyan-400 font-bold bg-sky-50 dark:bg-cyan-950/60 px-1.5 py-0.5 rounded-full border border-sky-200 dark:border-cyan-800">
@@ -311,12 +311,12 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
               showToast('No Active RFQs', 'Create or ingest an RFQ to view multi-channel follow-up telemetry.', 'info');
             }
           }}
-          className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-emerald-200 dark:border-emerald-500/30 relative overflow-hidden hover:border-emerald-400 dark:hover:border-emerald-400 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[110px]"
+          className="rounded-xl p-3 bg-white dark:bg-gray-900/80 border border-emerald-200 dark:border-emerald-500/30 relative overflow-hidden hover:border-emerald-400 dark:hover:border-emerald-400 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[92px]"
           title="Click to open multi-channel deep dive"
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">Live Outreach</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">Live Outreach</span>
               <span className="live-dot" style={{ width: 6, height: 6 }} />
             </div>
             <div className="flex items-center gap-1 text-[10px] text-indigo-600 dark:text-indigo-400 font-bold hover:underline">
@@ -324,7 +324,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
               <ChevronRight size={11} />
             </div>
           </div>
-          <div className="flex items-center justify-between mt-2">
+          <div className="flex items-center justify-between mt-1.5">
             <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mono">{totalFollowupsToday}</span>
             <div className="flex items-center gap-1 flex-wrap">
               <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
@@ -343,16 +343,16 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
       </div>
 
       {/* ── Main Grid: Pipeline + Vendor Follow Up Status ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
 
         {/* ── Left: Pipeline Table (3 cols) ── */}
-        <div className="lg:col-span-3 rounded-2xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col">
+        <div className="lg:col-span-3 rounded-xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col">
           {/* Table Header & Intake Source Filter Tabs */}
-          <div className="p-4 border-b border-slate-100 dark:border-gray-800 space-y-3">
+          <div className="px-3.5 py-2.5 border-b border-slate-100 dark:border-gray-800 space-y-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Layers size={16} className="text-indigo-600 dark:text-indigo-400" />
-                <h2 className="text-sm font-bold text-slate-800 dark:text-gray-200">Active Procurement Pipeline</h2>
+                <Layers size={15} className="text-indigo-600 dark:text-indigo-400" />
+                <h2 className="text-xs sm:text-sm font-bold text-slate-800 dark:text-gray-200">Active Procurement Pipeline</h2>
               </div>
               <span className="text-[10px] font-mono text-slate-400 dark:text-gray-500">{filteredRFQs.length} shown</span>
             </div>
@@ -405,8 +405,8 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
           {/* Pipeline Cards */}
           <div className="divide-y divide-slate-100 dark:divide-gray-800/60 overflow-y-auto max-h-[520px]">
             {filteredRFQs.length === 0 ? (
-              <div className="p-10 text-center text-slate-400 dark:text-gray-500">
-                <FileText size={32} className="mx-auto mb-2 opacity-40 text-indigo-500" />
+              <div className="p-8 text-center text-slate-400 dark:text-gray-500">
+                <FileText size={30} className="mx-auto mb-2 opacity-40 text-indigo-500" />
                 <p className="text-xs font-semibold text-slate-600 dark:text-gray-400">No active requisitions found</p>
                 <p className="text-[11px] mt-1 text-slate-400">Click &quot;Create / Ingest RFQ&quot; or upload a BOQ to start your procurement pipeline.</p>
               </div>
@@ -414,7 +414,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
               filteredRFQs.map((rfq) => (
                 <div
                   key={rfq.id}
-                  className="p-4 hover:bg-slate-50/80 dark:hover:bg-gray-800/30 transition-colors cursor-pointer group space-y-2"
+                  className="px-3.5 py-2.5 hover:bg-slate-50/80 dark:hover:bg-gray-800/30 transition-colors cursor-pointer group space-y-1.5"
                   onClick={() => openRFQDeepDive(rfq)}
                 >
                   {/* Row 1: RFQ Number + Source Badge + Status + Actions */}
@@ -509,12 +509,12 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
         </div>
 
         {/* ── Right: Vendor Follow Up Status (2 cols) ── */}
-        <div className="lg:col-span-2 rounded-2xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col overflow-hidden">
+        <div className="lg:col-span-2 rounded-xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col overflow-hidden">
           {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 dark:border-gray-800">
+          <div className="flex items-center justify-between px-3.5 py-2 border-b border-slate-100 dark:border-gray-800">
             <div className="flex items-center gap-2">
               <span className="live-dot" style={{ width: 6, height: 6 }} />
-              <h2 className="text-sm font-bold text-slate-800 dark:text-gray-200">
+              <h2 className="text-xs sm:text-sm font-bold text-slate-800 dark:text-gray-200">
                 Vendor Follow Up Status
               </h2>
             </div>
@@ -524,7 +524,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
           </div>
 
           {/* Channel Filters */}
-          <div className="flex items-center gap-1 px-4 py-2.5 border-b border-slate-50 dark:border-gray-800/60 overflow-x-auto">
+          <div className="flex items-center gap-1 px-3 py-1.5 border-b border-slate-50 dark:border-gray-800/60 overflow-x-auto">
             {channelFilterTabs.map((tab) => (
               <button
                 key={tab.key}
@@ -542,10 +542,10 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
           </div>
 
           {/* Feed Stream */}
-          <div className="flex-1 overflow-y-auto max-h-[480px] px-3 py-2 space-y-2">
+          <div className="flex-1 overflow-y-auto max-h-[480px] px-2.5 py-2 space-y-1.5">
             {filteredFeed.length === 0 ? (
-              <div className="p-8 text-center text-slate-400 dark:text-gray-500">
-                <Bot size={28} className="mx-auto mb-2 opacity-40 text-indigo-500" />
+              <div className="p-6 text-center text-slate-400 dark:text-gray-500">
+                <Bot size={26} className="mx-auto mb-2 opacity-40 text-indigo-500" />
                 <p className="text-xs font-semibold text-slate-600 dark:text-gray-400">No outreach events yet</p>
                 <p className="text-[10px] mt-1 text-slate-400">Live multi-channel telemetry (calls, WhatsApp, SMS) will stream here once an RFQ is dispatched.</p>
               </div>
@@ -553,7 +553,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
               filteredFeed.map((item) => (
                 <div
                   key={item.id}
-                  className="p-3 rounded-lg bg-slate-50/80 dark:bg-gray-900/60 border border-slate-100 dark:border-gray-800 hover:border-slate-200 dark:hover:border-gray-700 transition-all group"
+                  className="p-2.5 rounded-lg bg-slate-50/80 dark:bg-gray-900/60 border border-slate-100 dark:border-gray-800 hover:border-slate-200 dark:hover:border-gray-700 transition-all group"
                 >
                   {/* Title + Timestamp */}
                   <div className="flex items-start justify-between gap-2 mb-1">
