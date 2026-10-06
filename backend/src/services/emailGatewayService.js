@@ -1284,10 +1284,17 @@ async function pollViaGmailApi(config = resolveConfig()) {
       const dedupeKey = `gmail-${ref.id}`;
       try {
         // Ours is the authoritative dedupe check; see emailGatewayQueries.
-        if (await emailGatewayQueries.hasProcessed(dedupeKey)) {
-          await gmail.users.messages
-            .modify({ userId: 'me', id: ref.id, requestBody: { removeLabelIds: ['UNREAD'] } })
-            .catch(() => {});
+        // Read-only check and label change, so a timeout is safe: the message is
+        // retried on a later poll. The ledger writes below are not bounded, since a
+        // timed-out write could let the same message be ingested twice.
+        if (await withTimeout(emailGatewayQueries.hasProcessed(dedupeKey), POLL_CALL_TIMEOUT_MS, 'Ledger check')) {
+          await withTimeout(
+            gmail.users.messages
+              .modify({ userId: 'me', id: ref.id, requestBody: { removeLabelIds: ['UNREAD'] } })
+              .catch(() => {}),
+            POLL_CALL_TIMEOUT_MS,
+            'Gmail mark-read'
+          );
           outcomes.push({ uid: ref.id, messageId: dedupeKey, status: EMAIL_GATEWAY_MESSAGES.ALREADY_PROCESSED });
           continue;
         }
