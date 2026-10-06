@@ -1391,9 +1391,9 @@ describe('Store Service & Business Operations', () => {
       await new Promise((r) => setImmediate(r)); // let the rejected promise settle
     });
 
-    test('addQuoteToRFQ emails the owning buyer with the quote', () => {
+    test('addQuoteToRFQ emails the owning buyer immediately for email flow RFQ', () => {
       const buyer = storeService.addBuyerAccount({ organizationName: 'Quote Email Buyer', corporateEmail: 'qeb@ex.com' });
-      const rfq = storeService.createRFQ({ title: 'Quote Email RFQ', category: 'Raw Material' }, buyer);
+      const rfq = storeService.createRFQ({ title: 'Quote Email RFQ', category: 'Raw Material', source: 'email' }, buyer);
 
       storeService.addQuoteToRFQ(rfq.id, { vendorId: 'v-1', vendorName: 'Bidder', unitPrice: 10, totalPrice: 100 });
 
@@ -1401,6 +1401,32 @@ describe('Store Service & Business Operations', () => {
         'qeb@ex.com',
         expect.objectContaining({ quote: expect.objectContaining({ vendorName: 'Bidder' }), recipientName: 'Quote Email Buyer' })
       );
+    });
+
+    test('addQuoteToRFQ stops buyer quote email for 48 hours on portal RFQ and schedules delayed dispatch', () => {
+      jest.useFakeTimers();
+      try {
+        const buyer = storeService.addBuyerAccount({ organizationName: 'Portal Buyer', corporateEmail: 'portalbuyer@ex.com' });
+        const rfq = storeService.createRFQ({ title: 'Portal RFQ 48h Hold', category: 'Raw Material', source: 'web_portal' }, buyer);
+
+        quoteSpy.mockClear();
+        const res = storeService.addQuoteToRFQ(rfq.id, { vendorId: 'v-2', vendorName: 'Portal Bidder', unitPrice: 20, totalPrice: 200 });
+        expect(res).not.toBeNull();
+
+        // During 48-hour window, immediate email is stopped
+        expect(quoteSpy).not.toHaveBeenCalled();
+
+        // Advance timers by 48 hours
+        jest.advanceTimersByTime(48 * 60 * 60 * 1000);
+
+        // After 48 hours, buyer receives quote email
+        expect(quoteSpy).toHaveBeenCalledWith(
+          'portalbuyer@ex.com',
+          expect.objectContaining({ quote: expect.objectContaining({ vendorName: 'Portal Bidder' }), recipientName: 'Portal Buyer' })
+        );
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     test('emailQuoteToBuyer no-ops without an owning buyer, an unknown buyer, or a buyer with no email', () => {
@@ -1416,8 +1442,19 @@ describe('Store Service & Business Operations', () => {
     test('emailQuoteToBuyer logs (does not throw) when the send rejects', async () => {
       quoteSpy.mockRejectedValueOnce(new Error('smtp down'));
       const buyer = storeService.addBuyerAccount({ organizationName: 'Reject Email Buyer', corporateEmail: 'reb@ex.com' });
-      expect(storeService.emailQuoteToBuyer({ buyerAccountId: buyer.id, rfqNumber: 'RFQ-Y', title: 'T' }, { unitPrice: 1 })).toBe(true);
+      expect(storeService.emailQuoteToBuyer({ buyerAccountId: buyer.id, rfqNumber: 'RFQ-Y', title: 'T', source: 'email' }, { unitPrice: 1 })).toBe(true);
       await new Promise((r) => setImmediate(r));
+    });
+
+    test('notifyBuyerOfFinalComparison suppresses final comparison email for portal RFQ within 48h', () => {
+      const finalEmailSpy = jest.spyOn(mailerService, 'sendRfqFinalComparisonEmail').mockResolvedValue({ sent: true });
+      const buyer = storeService.addBuyerAccount({ organizationName: 'Portal Buyer 2', corporateEmail: 'pb2@ex.com' });
+      const rfq = storeService.createRFQ({ title: 'Portal RFQ 48h Compare', category: 'Raw Material', source: 'portal' }, buyer);
+
+      const result = storeService.notifyBuyerOfFinalComparison(rfq);
+      expect(result).toBeNull();
+      expect(finalEmailSpy).not.toHaveBeenCalled();
+      finalEmailSpy.mockRestore();
     });
   });
 

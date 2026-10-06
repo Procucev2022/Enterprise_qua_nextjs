@@ -143,7 +143,6 @@ describe('app/buyer/vendor-evaluation-summary.tsx', () => {
   it('renders evaluation report with executive metrics, 6 pillars, questions table, and document list', () => {
     render(<VendorEvaluationSummary evaluationRecord={mockEvaluationRecord} onBack={mockOnBack} />);
 
-    expect(screen.getByText('Mode 3 360-Degree Vendor Evaluation Summary Report')).toBeInTheDocument();
     expect(screen.getAllByText('Apex Supplies Ltd.').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('PREFERRED ENTERPRISE SUPPLIER')).toBeInTheDocument();
     expect(screen.getByText('94%')).toBeInTheDocument();

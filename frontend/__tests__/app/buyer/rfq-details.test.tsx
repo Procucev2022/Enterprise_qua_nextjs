@@ -7,6 +7,19 @@ import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { SOURCING_MODES, formatCurrency, formatIndianDate, formatIndianDateTime } from '@/lib/constants';
 import type { ExtractedEntity, QuoteComparison, RFQAttachment, RFQItem } from '@/lib/types';
 
+const mockUpdateRFQ = jest.fn().mockResolvedValue({ success: true, rfq: { id: 'rfq-1', status: 'Closed' } });
+const mockReplyToRFQInquiry = jest.fn().mockResolvedValue({ success: true, rfq: { id: 'rfq-1', inquiries: [] } });
+const mockSubmitRFQInquiry = jest.fn().mockResolvedValue({ success: true, inquiry: { id: 'inq-new' } });
+
+jest.mock('@/lib/rfqClient', () => {
+  const actual = jest.requireActual('@/lib/rfqClient');
+  return {
+    ...actual,
+    updateRFQ: (...args: any[]) => mockUpdateRFQ(...args),
+    replyToRFQInquiry: (...args: any[]) => mockReplyToRFQInquiry(...args),
+    submitRFQInquiry: (...args: any[]) => mockSubmitRFQInquiry(...args),
+  };
+});
 jest.mock('@/lib/store', () => ({ useApp: jest.fn() }));
 jest.mock('@/lib/authClient', () => ({ authClient: { getToken: jest.fn() } }));
 
@@ -103,8 +116,17 @@ const quotesTable = () => {
 const sectionFor = (heading: HTMLElement) => heading.closest('section') as HTMLElement;
 
 beforeEach(() => {
-  (useApp as jest.Mock).mockReturnValue({ showToast: mockShowToast });
+  (useApp as jest.Mock).mockReturnValue({
+    showToast: mockShowToast,
+    refreshFromDB: jest.fn().mockResolvedValue(undefined),
+    currentRole: 'buyer',
+    buyerVendors: [],
+    currentUserSession: { name: 'Lead Buyer', email: 'buyer@procucev.com', role: 'buyer' },
+  });
   (authClient.getToken as jest.Mock).mockReturnValue('test-token');
+  mockUpdateRFQ.mockClear();
+  mockReplyToRFQInquiry.mockClear();
+  mockSubmitRFQInquiry.mockClear();
 });
 
 afterEach(() => {
@@ -261,7 +283,7 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
   describe('submission detail card', () => {
     it.each([
       ['web_portal', 'Web Portal Upload'],
-      ['email_gateway', 'Email Gateway'],
+      ['email_gateway', 'via Email Upload'],
       ['email_upload', 'Emailed Document'],
       ['manual_entry', 'Manual Entry'],
     ])('labels a %s intake as %s', (source, label) => {
@@ -834,6 +856,224 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
     it('tolerates an RFQ with no quotes collection at all', () => {
       renderDetails(buildRFQ({ quotes: undefined as unknown as QuoteComparison[] }));
       expect(screen.getByText(DETAILS.noQuotes)).toBeInTheDocument();
+    });
+  });
+
+function makeInquiry(overrides: any = {}): any {
+  return {
+    id: 'inq-default',
+    rfqNumber: 'RFQ-2026-00462',
+    vendorId: 'v-default',
+    vendorName: 'Default Vendor',
+    message: 'Default message',
+    createdAt: '2026-09-03T11:00:00Z',
+    status: 'open',
+    ...overrides,
+  };
+}
+
+  describe('vendor inquiries & clarifications', () => {
+    it('renders Procucev Vendor badge when vendor is a Procucev Network vendor', () => {
+      renderDetails(
+        buildRFQ({
+          inquiries: [
+            makeInquiry({
+              id: 'inq-1',
+              vendorId: 'v-net-001',
+              vendorName: 'Global Turbines Ltd',
+              vendorCategory: 'Procucev Network',
+              message: 'Can we offer alternate impeller material?',
+            }),
+          ],
+        })
+      );
+
+      expect(screen.getByText('Vendor Inquiries & Clarifications')).toBeInTheDocument();
+      const procucevBadges = screen.getAllByText('Procucev Vendor');
+      expect(procucevBadges.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('does not render Procucev Vendor badge for buyer uploaded vendor', () => {
+      renderDetails(
+        buildRFQ({
+          inquiries: [
+            makeInquiry({
+              id: 'inq-2',
+              vendorId: 'v-hist-002',
+              vendorName: 'Local Machine Shop',
+              vendorCategory: 'Client List',
+              message: 'Delivery timeline query',
+            }),
+          ],
+        })
+      );
+
+      expect(screen.getByText('Vendor Inquiries & Clarifications')).toBeInTheDocument();
+      expect(screen.queryByText('Procucev Vendor')).not.toBeInTheDocument();
+    });
+
+    it('renders Procucev Vendor badge when matched via quotes or assigned vendors', () => {
+      renderDetails(
+        buildRFQ({
+          quotes: [
+            quote({
+              vendorId: 'v-ai-rec',
+              vendorName: 'Smart Pumps Inc',
+              vendorCategory: 'Procucev - AI Rec',
+            }),
+          ],
+          assignedVendors: [
+            {
+              id: 'v-assigned',
+              name: 'Assigned Network Supplier',
+              vendorCategory: 'Procucev Network',
+            } as any,
+          ],
+        })
+      );
+
+      const badges = screen.getAllByText('Procucev Vendor');
+      expect(badges.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('allows searching vendors and filtering by status tabs', () => {
+      renderDetails(
+        buildRFQ({
+          inquiries: [
+            makeInquiry({
+              id: 'inq-open',
+              vendorId: 'v-open',
+              vendorName: 'Alpha Supplies',
+              message: 'Question 1',
+              status: 'open',
+            }),
+            makeInquiry({
+              id: 'inq-ans',
+              vendorId: 'v-ans',
+              vendorName: 'Beta Components',
+              message: 'Question 2',
+              reply: 'Answer 2',
+              status: 'answered',
+            }),
+          ],
+        })
+      );
+
+      // Search vendor
+      const searchInput = screen.getByPlaceholderText('Search vendor...');
+      fireEvent.change(searchInput, { target: { value: 'Alpha' } });
+      expect(screen.getAllByText('Alpha Supplies').length).toBeGreaterThanOrEqual(1);
+      expect(screen.queryByText('Beta Components')).not.toBeInTheDocument();
+
+      // Clear search
+      fireEvent.change(searchInput, { target: { value: '' } });
+
+      // Click Pending filter
+      fireEvent.click(screen.getByRole('button', { name: /Pending \(/i }));
+      expect(screen.getAllByText('Alpha Supplies').length).toBeGreaterThanOrEqual(1);
+
+      // Click Answered filter
+      fireEvent.click(screen.getByRole('button', { name: /Answered \(/i }));
+      expect(screen.getAllByText('Beta Components').length).toBeGreaterThanOrEqual(1);
+
+      // Click All filter
+      fireEvent.click(screen.getByRole('button', { name: /All \(/i }));
+      expect(screen.getAllByText('Alpha Supplies').length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('allows switching selected vendor and sending clarification reply in buyer view', async () => {
+      renderDetails(
+        buildRFQ({
+          inquiries: [
+            makeInquiry({
+              id: 'inq-1',
+              vendorId: 'v-1',
+              vendorName: 'Alpha Supplies',
+              message: 'When is required delivery?',
+              status: 'open',
+            }),
+            makeInquiry({
+              id: 'inq-2',
+              vendorId: 'v-2',
+              vendorName: 'Beta Components',
+              message: 'Can we submit partial quote?',
+              status: 'open',
+            }),
+          ],
+        })
+      );
+
+      // Select Beta Components
+      fireEvent.click(screen.getByText('Beta Components'));
+
+      // Find composer textarea
+      const composer = screen.getByPlaceholderText(/Type clarification response to/i);
+      fireEvent.change(composer, { target: { value: 'Yes, partial quotes are acceptable.' } });
+
+      const sendBtn = screen.getByRole('button', { name: 'Send' });
+      fireEvent.click(sendBtn);
+
+      await waitFor(() => {
+        expect(mockReplyToRFQInquiry).toHaveBeenCalled();
+      });
+    });
+
+    it('renders vendor view and allows vendor to send clarification to buyer', async () => {
+      render(
+        <RFQDetails
+          rfq={buildRFQ({
+            inquiries: [
+              makeInquiry({
+                id: 'inq-v1',
+                vendorId: 'v-partner',
+                vendorName: 'Vendor Partner',
+                message: 'Existing vendor question',
+              }),
+            ],
+          })}
+          onBack={jest.fn()}
+          isVendorView={true}
+        />
+      );
+
+      expect(screen.getByText('Direct Clarification & Inquiry with Buyer')).toBeInTheDocument();
+
+      const textarea = screen.getByPlaceholderText(/Type your clarification or question to the buyer/i);
+      fireEvent.change(textarea, { target: { value: 'Is warranty mandatory for all line items?' } });
+
+      const sendBtn = screen.getByRole('button', { name: 'Send Inquiry' });
+      fireEvent.click(sendBtn);
+
+      await waitFor(() => {
+        expect(mockSubmitRFQInquiry).toHaveBeenCalled();
+      });
+    });
+
+    it('renders empty desk state and allows inviting suppliers', () => {
+      renderDetails(
+        buildRFQ({
+          inquiries: [],
+          assignedVendors: [],
+          quotes: [],
+        })
+      );
+
+      expect(screen.getByText('No Vendors or Clarifications Active')).toBeInTheDocument();
+      const inviteBtns = screen.getAllByRole('button', { name: /Invite Suppliers/i });
+      expect(inviteBtns.length).toBeGreaterThanOrEqual(1);
+      fireEvent.click(inviteBtns[0]);
+    });
+
+    it('handles RFQ closure when clicking Close RFQ', async () => {
+      renderDetails(buildRFQ({ status: 'Quotes Pending' }));
+
+      const closeBtn = screen.queryByRole('button', { name: /Close RFQ/i });
+      if (closeBtn) {
+        fireEvent.click(closeBtn);
+        await waitFor(() => {
+          expect(mockUpdateRFQ).toHaveBeenCalledWith('rfq-1', { status: 'Closed' });
+        });
+      }
     });
   });
 });

@@ -419,22 +419,15 @@ export default function VendorEvaluationSummary({
     : questions.filter((q) => q.pillarId === selectedPillarFilter);
 
   return (
-    <div className="space-y-6 animate-fade-in pb-12">
+    <div className="space-y-2.5 animate-fade-in pb-4">
       {/* Top Bar Navigation */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
           {onBack && (
             <button onClick={onBack} className="btn btn-secondary btn-sm">
               <ArrowLeft size={14} /> Back
             </button>
           )}
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
-                Mode 3 360-Degree Vendor Evaluation Summary Report
-              </h1>
-            </div>
-          </div>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
@@ -457,10 +450,10 @@ export default function VendorEvaluationSummary({
       </div>
 
       {/* Interactive Company / Supplier Selection Dropdown Bar */}
-      <div className="glass-panel p-3.5 rounded-xl border border-indigo-200/80 dark:border-indigo-900/50 bg-gradient-to-r from-indigo-50/70 via-white to-sky-50/70 dark:from-indigo-950/30 dark:via-gray-900/90 dark:to-sky-950/30 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3 relative z-30">
+      <div className="glass-panel p-2.5 sm:p-3 rounded-xl border border-indigo-200/80 dark:border-indigo-900/50 bg-gradient-to-r from-indigo-50/70 via-white to-sky-50/70 dark:from-indigo-950/30 dark:via-gray-900/90 dark:to-sky-950/30 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-2.5 relative z-30">
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-sm">
-            <Building2 size={16} />
+          <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+            <Building2 size={15} />
           </div>
           <div>
             <div className="text-[10px] uppercase font-bold text-indigo-700 dark:text-indigo-400 tracking-wider">
@@ -600,10 +593,10 @@ export default function VendorEvaluationSummary({
       </div>
 
       {/* Main Vendor Executive Header Card */}
-      <div className="glass-panel p-6 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-md relative z-10 overflow-hidden">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+      <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-md relative z-10 overflow-hidden">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 sm:gap-6">
           {/* Vendor Info */}
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <div className="flex items-center gap-2 text-xs">
               <span className="font-mono text-indigo-600 dark:text-indigo-400 font-bold bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">
                 {record.vendorId}
@@ -614,7 +607,7 @@ export default function VendorEvaluationSummary({
               </span>
             </div>
 
-            <h2 className="text-2xl font-black text-slate-900 dark:text-white flex items-center gap-2">
+            <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white flex items-center gap-2">
               <CompanyHoverTooltip
                 name={record.vendorName}
                 type="vendor"
@@ -625,10 +618,10 @@ export default function VendorEvaluationSummary({
                   verified: record.status === 'PREFERRED ENTERPRISE SUPPLIER',
                 }}
               />
-              <ShieldCheck className="text-emerald-500" size={24} />
+              <ShieldCheck className="text-emerald-500" size={22} />
             </h2>
 
-            <div className="flex items-center gap-4 text-xs text-slate-500 dark:text-gray-400 flex-wrap">
+            <div className="flex items-center gap-3 sm:gap-4 text-xs text-slate-500 dark:text-gray-400 flex-wrap">
               <span className="flex items-center gap-1"><Building2 size={13} /> Contact: <strong className="text-slate-700 dark:text-gray-200">{record.contactPerson}</strong></span>
               <span className="flex items-center gap-1"><Mail size={13} /> {record.email}</span>
               <span className="flex items-center gap-1"><Phone size={13} /> {record.phone}</span>
@@ -637,12 +630,12 @@ export default function VendorEvaluationSummary({
           </div>
 
           {/* Computed Rating Gauge */}
-          <div className="flex items-center gap-5 p-4 rounded-xl bg-slate-900 text-white shadow-lg shrink-0 border border-slate-800">
+          <div className="flex items-center gap-4 p-3 sm:p-3.5 rounded-xl bg-slate-900 text-white shadow-lg shrink-0 border border-slate-800">
             <div className="text-center">
               <div className="text-[10px] uppercase font-bold text-indigo-300 tracking-wider">
                 360° AI Rating Score
               </div>
-              <div className="text-4xl font-black mono text-emerald-400 mt-1">
+              <div className="text-3xl sm:text-4xl font-black mono text-emerald-400 mt-0.5">
                 {effectiveScore}%
               </div>
               {overrideScore !== null && (
@@ -652,7 +645,7 @@ export default function VendorEvaluationSummary({
               )}
             </div>
 
-            <div className="space-y-1.5 border-l border-slate-800 pl-4">
+            <div className="space-y-1 border-l border-slate-800 pl-3.5">
               {getStatusBadge(record.status, effectiveScore)}
               <div className="text-[10px] text-indigo-300">
                 Gate Pass Status: <span className="font-bold text-emerald-400">≥ 80% Unlocked</span>
@@ -662,9 +655,9 @@ export default function VendorEvaluationSummary({
         </div>
 
         {/* Automated System Execution Action Banner */}
-        <div className="mt-5 p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-500/30 flex items-center justify-between text-xs flex-wrap gap-2">
+        <div className="mt-3.5 p-2.5 sm:p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-500/30 flex items-center justify-between text-xs flex-wrap gap-2">
           <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-300 font-semibold">
-            <Zap size={15} className="text-emerald-600 dark:text-emerald-400 animate-pulse" />
+            <Zap size={14} className="text-emerald-600 dark:text-emerald-400 animate-pulse" />
             <span>Automated Execution:</span>
             <span className="font-normal text-emerald-900 dark:text-emerald-200">{record.systemAction}</span>
           </div>
@@ -674,18 +667,18 @@ export default function VendorEvaluationSummary({
 
       {/* 6 Subtotal Pillar Summary Cards */}
       <div>
-        <h3 className="text-sm font-bold uppercase tracking-wider text-slate-800 dark:text-gray-200 mb-3 flex items-center gap-2">
-          <Sparkles size={16} className="text-indigo-600 dark:text-indigo-400" />
+        <h3 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-slate-800 dark:text-gray-200 mb-2.5 flex items-center gap-2">
+          <Sparkles size={15} className="text-indigo-600 dark:text-indigo-400" />
           6-Pillar Subtotal Summary & Auditor Remarks
         </h3>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 sm:gap-3">
           {/* Module 1: Commercial (25%) */}
-          <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-3 flex flex-col justify-between">
-            <div className="space-y-3">
+          <div className="glass-panel p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-2.5 flex flex-col justify-between">
+            <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <span className="w-6 h-6 rounded-md bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-bold text-xs flex items-center justify-center">
+                  <span className="w-5 h-5 rounded-md bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-bold text-xs flex items-center justify-center">
                     M1
                   </span>
                   <span className="font-bold text-xs text-slate-800 dark:text-gray-200">Commercial Terms</span>
@@ -694,29 +687,29 @@ export default function VendorEvaluationSummary({
                   {moduleScores.commercial.weightedScore} / 25 pts
                 </span>
               </div>
-              <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
+              <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden">
                 <div
                   className="bg-indigo-600 h-full rounded-full"
                   style={{ width: `${(moduleScores.commercial.weightedScore / 25) * 100}%` }}
                 />
               </div>
-              <div className="text-[11px] text-slate-500 flex items-center justify-between">
+              <div className="text-[10px] text-slate-500 flex items-center justify-between">
                 <span>4/4 Mandatory Attachments</span>
                 <span className="text-emerald-600 font-bold">100% OCR Passed</span>
               </div>
             </div>
-            <div className="p-2.5 rounded-lg bg-indigo-50/70 dark:bg-indigo-950/50 border border-indigo-100 dark:border-indigo-800/60 text-[10px] text-indigo-900 dark:text-indigo-200">
+            <div className="p-2 rounded-lg bg-indigo-50/70 dark:bg-indigo-950/50 border border-indigo-100 dark:border-indigo-800/60 text-[10px] text-indigo-900 dark:text-indigo-200">
               <div className="font-bold text-indigo-700 dark:text-indigo-300 mb-0.5">💬 Pillar 1 Auditor Remarks:</div>
               {moduleScores.commercial.remarks}
             </div>
           </div>
 
           {/* Module 2: Technical (15%) */}
-          <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-3 flex flex-col justify-between">
-            <div className="space-y-3">
+          <div className="glass-panel p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-2.5 flex flex-col justify-between">
+            <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <span className="w-6 h-6 rounded-md bg-sky-100 dark:bg-cyan-950 text-sky-700 dark:text-cyan-300 font-bold text-xs flex items-center justify-center">
+                  <span className="w-5 h-5 rounded-md bg-sky-100 dark:bg-cyan-950 text-sky-700 dark:text-cyan-300 font-bold text-xs flex items-center justify-center">
                     M2
                   </span>
                   <span className="font-bold text-xs text-slate-800 dark:text-gray-200">Technical Capabilities</span>
@@ -725,29 +718,29 @@ export default function VendorEvaluationSummary({
                   {moduleScores.technical.weightedScore} / 15 pts
                 </span>
               </div>
-              <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
+              <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden">
                 <div
                   className="bg-sky-600 h-full rounded-full"
                   style={{ width: `${(moduleScores.technical.weightedScore / 15) * 100}%` }}
                 />
               </div>
-              <div className="text-[11px] text-slate-500 flex items-center justify-between">
+              <div className="text-[10px] text-slate-500 flex items-center justify-between">
                 <span>4/4 Mandatory Attachments</span>
                 <span className="text-emerald-600 font-bold">100% OCR Passed</span>
               </div>
             </div>
-            <div className="p-2.5 rounded-lg bg-sky-50/70 dark:bg-cyan-950/50 border border-sky-100 dark:border-cyan-800/60 text-[10px] text-sky-900 dark:text-cyan-200">
+            <div className="p-2 rounded-lg bg-sky-50/70 dark:bg-cyan-950/50 border border-sky-100 dark:border-cyan-800/60 text-[10px] text-sky-900 dark:text-cyan-200">
               <div className="font-bold text-sky-700 dark:text-cyan-300 mb-0.5">💬 Pillar 2 Auditor Remarks:</div>
               {moduleScores.technical.remarks}
             </div>
           </div>
 
           {/* Module 3: Quality (20%) */}
-          <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-3 flex flex-col justify-between">
-            <div className="space-y-3">
+          <div className="glass-panel p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-2.5 flex flex-col justify-between">
+            <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <span className="w-6 h-6 rounded-md bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-bold text-xs flex items-center justify-center">
+                  <span className="w-5 h-5 rounded-md bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-bold text-xs flex items-center justify-center">
                     M3
                   </span>
                   <span className="font-bold text-xs text-slate-800 dark:text-gray-200">Quality & Warranty</span>
@@ -756,29 +749,29 @@ export default function VendorEvaluationSummary({
                   {moduleScores.quality.weightedScore} / 20 pts
                 </span>
               </div>
-              <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
+              <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden">
                 <div
                   className="bg-emerald-600 h-full rounded-full"
                   style={{ width: `${(moduleScores.quality.weightedScore / 20) * 100}%` }}
                 />
               </div>
-              <div className="text-[11px] text-slate-500 flex items-center justify-between">
+              <div className="text-[10px] text-slate-500 flex items-center justify-between">
                 <span>4/4 Mandatory Attachments</span>
                 <span className="text-emerald-600 font-bold">100% OCR Passed</span>
               </div>
             </div>
-            <div className="p-2.5 rounded-lg bg-emerald-50/70 dark:bg-emerald-950/50 border border-emerald-100 dark:border-emerald-800/60 text-[10px] text-emerald-900 dark:text-emerald-200">
+            <div className="p-2 rounded-lg bg-emerald-50/70 dark:bg-emerald-950/50 border border-emerald-100 dark:border-emerald-800/60 text-[10px] text-emerald-900 dark:text-emerald-200">
               <div className="font-bold text-emerald-700 dark:text-emerald-300 mb-0.5">💬 Pillar 3 Auditor Remarks:</div>
               {moduleScores.quality.remarks}
             </div>
           </div>
 
           {/* Module 4: Delivery (20%) */}
-          <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-3 flex flex-col justify-between">
-            <div className="space-y-3">
+          <div className="glass-panel p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-2.5 flex flex-col justify-between">
+            <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <span className="w-6 h-6 rounded-md bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 font-bold text-xs flex items-center justify-center">
+                  <span className="w-5 h-5 rounded-md bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 font-bold text-xs flex items-center justify-center">
                     M4
                   </span>
                   <span className="font-bold text-xs text-slate-800 dark:text-gray-200">Operational Delivery</span>
@@ -787,29 +780,29 @@ export default function VendorEvaluationSummary({
                   {moduleScores.delivery.weightedScore} / 20 pts
                 </span>
               </div>
-              <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
+              <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden">
                 <div
                   className="bg-purple-600 h-full rounded-full"
                   style={{ width: `${(moduleScores.delivery.weightedScore / 20) * 100}%` }}
                 />
               </div>
-              <div className="text-[11px] text-slate-500 flex items-center justify-between">
+              <div className="text-[10px] text-slate-500 flex items-center justify-between">
                 <span>4/4 Mandatory Attachments</span>
                 <span className="text-emerald-600 font-bold">100% OCR Passed</span>
               </div>
             </div>
-            <div className="p-2.5 rounded-lg bg-purple-50/70 dark:bg-purple-950/50 border border-purple-100 dark:border-purple-800/60 text-[10px] text-purple-900 dark:text-purple-200">
+            <div className="p-2 rounded-lg bg-purple-50/70 dark:bg-purple-950/50 border border-purple-100 dark:border-purple-800/60 text-[10px] text-purple-900 dark:text-purple-200">
               <div className="font-bold text-purple-700 dark:text-purple-300 mb-0.5">💬 Pillar 4 Auditor Remarks:</div>
               {moduleScores.delivery.remarks}
             </div>
           </div>
 
           {/* Module 5: Financial (10%) */}
-          <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-3 flex flex-col justify-between">
-            <div className="space-y-3">
+          <div className="glass-panel p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-2.5 flex flex-col justify-between">
+            <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <span className="w-6 h-6 rounded-md bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 font-bold text-xs flex items-center justify-center">
+                  <span className="w-5 h-5 rounded-md bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 font-bold text-xs flex items-center justify-center">
                     M5
                   </span>
                   <span className="font-bold text-xs text-slate-800 dark:text-gray-200">Financial Stability</span>
@@ -818,29 +811,29 @@ export default function VendorEvaluationSummary({
                   {moduleScores.financial.weightedScore} / 10 pts
                 </span>
               </div>
-              <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
+              <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden">
                 <div
                   className="bg-amber-600 h-full rounded-full"
                   style={{ width: `${(moduleScores.financial.weightedScore / 10) * 100}%` }}
                 />
               </div>
-              <div className="text-[11px] text-slate-500 flex items-center justify-between">
+              <div className="text-[10px] text-slate-500 flex items-center justify-between">
                 <span>4/4 Mandatory Attachments</span>
                 <span className="text-emerald-600 font-bold">100% OCR Passed</span>
               </div>
             </div>
-            <div className="p-2.5 rounded-lg bg-amber-50/70 dark:bg-amber-950/50 border border-amber-100 dark:border-amber-800/60 text-[10px] text-amber-900 dark:text-amber-200">
+            <div className="p-2 rounded-lg bg-amber-50/70 dark:bg-amber-950/50 border border-amber-100 dark:border-amber-800/60 text-[10px] text-amber-900 dark:text-amber-200">
               <div className="font-bold text-amber-700 dark:text-amber-300 mb-0.5">💬 Pillar 5 Auditor Remarks:</div>
               {moduleScores.financial.remarks}
             </div>
           </div>
 
           {/* Module 6: ESG & Compliance (10%) */}
-          <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-3 flex flex-col justify-between">
-            <div className="space-y-3">
+          <div className="glass-panel p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-2.5 flex flex-col justify-between">
+            <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <span className="w-6 h-6 rounded-md bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 font-bold text-xs flex items-center justify-center">
+                  <span className="w-5 h-5 rounded-md bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 font-bold text-xs flex items-center justify-center">
                     M6
                   </span>
                   <span className="font-bold text-xs text-slate-800 dark:text-gray-200">Governance & ESG</span>
@@ -849,18 +842,18 @@ export default function VendorEvaluationSummary({
                   {moduleScores.governance.weightedScore} / 10 pts
                 </span>
               </div>
-              <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
+              <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden">
                 <div
                   className="bg-rose-600 h-full rounded-full"
                   style={{ width: `${(moduleScores.governance.weightedScore / 10) * 100}%` }}
                 />
               </div>
-              <div className="text-[11px] text-slate-500 flex items-center justify-between">
+              <div className="text-[10px] text-slate-500 flex items-center justify-between">
                 <span>4/4 Mandatory Attachments</span>
                 <span className="text-emerald-600 font-bold">100% OCR Passed</span>
               </div>
             </div>
-            <div className="p-2.5 rounded-lg bg-rose-50/70 dark:bg-rose-950/50 border border-rose-100 dark:border-rose-800/60 text-[10px] text-rose-900 dark:text-rose-200">
+            <div className="p-2 rounded-lg bg-rose-50/70 dark:bg-rose-950/50 border border-rose-100 dark:border-rose-800/60 text-[10px] text-rose-900 dark:text-rose-200">
               <div className="font-bold text-rose-700 dark:text-rose-300 mb-0.5">💬 Pillar 6 Auditor Remarks:</div>
               {moduleScores.governance.remarks}
             </div>
@@ -869,14 +862,14 @@ export default function VendorEvaluationSummary({
       </div>
 
       {/* 24-Criteria Granular Evaluation Breakdown Table */}
-      <div className="glass-panel p-6 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-4 shadow-sm">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-slate-100 dark:border-gray-800">
+      <div className="glass-panel p-3 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-3 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2 border-b border-slate-100 dark:border-gray-800">
           <div>
-            <h3 className="text-sm font-bold uppercase tracking-wider text-slate-800 dark:text-gray-200 flex items-center gap-2">
-              <FileText size={16} className="text-indigo-600 dark:text-indigo-400" />
+            <h3 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-slate-800 dark:text-gray-200 flex items-center gap-2">
+              <FileText size={15} className="text-indigo-600 dark:text-indigo-400" />
               24-Criteria 360-Degree Evaluation Matrix ({questions.length} Items)
             </h3>
-            <p className="text-xs text-slate-500 dark:text-gray-400">
+            <p className="text-[11px] text-slate-500 dark:text-gray-400">
               Individual question scores, mandatory verified attachments, and AI auditor justification remarks.
             </p>
           </div>
@@ -903,26 +896,26 @@ export default function VendorEvaluationSummary({
           <table className="w-full text-left text-xs border-collapse">
             <thead>
               <tr className="border-b border-slate-200 dark:border-gray-800 text-slate-400 dark:text-gray-500 uppercase tracking-wider text-[10px] bg-slate-50/50 dark:bg-gray-950/50">
-                <th className="py-2.5 px-3">Ref ID</th>
-                <th className="py-2.5 px-3">Evaluation Criteria</th>
-                <th className="py-2.5 px-3">Required Mandatory Attachment</th>
-                <th className="py-2.5 px-3 text-center">Score (1-5)</th>
-                <th className="py-2.5 px-3 text-right">Weighted %</th>
-                <th className="py-2.5 px-3">AI / Auditor Justification Remarks</th>
+                <th className="py-2 px-2.5">Ref ID</th>
+                <th className="py-2 px-2.5">Evaluation Criteria</th>
+                <th className="py-2 px-2.5">Required Mandatory Attachment</th>
+                <th className="py-2 px-2.5 text-center">Score (1-5)</th>
+                <th className="py-2 px-2.5 text-right">Weighted %</th>
+                <th className="py-2 px-2.5">AI / Auditor Justification Remarks</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-gray-800/80">
               {filteredQuestions.map((q, idx) => (
                 <tr key={q.refId ? `${q.refId}-${idx}` : `q-${idx}`} className="hover:bg-slate-50/80 dark:hover:bg-gray-800/40 transition-colors">
-                  <td className="py-3 px-3">
-                    <span className="font-mono font-bold text-[11px] px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                  <td className="py-2 px-2.5">
+                    <span className="font-mono font-bold text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
                       {q.refId}
                     </span>
                   </td>
-                  <td className="py-3 px-3 font-semibold text-slate-800 dark:text-gray-200 max-w-xs">
+                  <td className="py-2 px-2.5 font-semibold text-slate-800 dark:text-gray-200 max-w-xs">
                     {q.criteria}
                   </td>
-                  <td className="py-3 px-3">
+                  <td className="py-2 px-2.5">
                     <div className="flex items-center gap-1.5 font-mono text-[11px] text-indigo-600 dark:text-indigo-400 font-medium">
                       <Paperclip size={12} className="shrink-0" />
                       <span className="truncate max-w-[160px]" title={q.attachmentName}>{q.attachmentName}</span>
@@ -931,13 +924,13 @@ export default function VendorEvaluationSummary({
                       </span>
                     </div>
                   </td>
-                  <td className="py-3 px-3 text-center font-bold text-slate-800 dark:text-gray-200 mono">
+                  <td className="py-2 px-2.5 text-center font-bold text-slate-800 dark:text-gray-200 mono">
                     {(q.score ?? 0).toFixed(1)} / 5.0
                   </td>
-                  <td className="py-3 px-3 text-right font-bold text-indigo-600 dark:text-indigo-400 mono">
+                  <td className="py-2 px-2.5 text-right font-bold text-indigo-600 dark:text-indigo-400 mono">
                     +{(q.weightedScore ?? 0).toFixed(2)}%
                   </td>
-                  <td className="py-3 px-3 text-[11px] text-slate-600 dark:text-gray-300 italic max-w-md">
+                  <td className="py-2 px-2.5 text-[11px] text-slate-600 dark:text-gray-300 italic max-w-md">
                     &quot;{q.remarks}&quot;
                   </td>
                 </tr>
@@ -948,10 +941,10 @@ export default function VendorEvaluationSummary({
       </div>
 
       {/* 24 Verified Mandatory Attachments Overview Card */}
-      <div className="glass-panel p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-3">
+      <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-2.5">
         <div className="flex items-center justify-between">
           <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-gray-200 flex items-center gap-2">
-            <Paperclip size={16} className="text-indigo-600 dark:text-indigo-400" />
+            <Paperclip size={15} className="text-indigo-600 dark:text-indigo-400" />
             24 Mandatory PDF/Excel File Attachments Audit Status ({documents.length} Files)
           </h3>
           <span className="badge badge-emerald">24/24 OCR Verification 100%</span>
@@ -961,28 +954,28 @@ export default function VendorEvaluationSummary({
           <table className="w-full text-left text-xs">
             <thead>
               <tr className="border-b border-slate-200 dark:border-gray-800 text-slate-400 dark:text-gray-500 uppercase tracking-wider text-[10px]">
-                <th className="py-2">Document File Title</th>
-                <th className="py-2">Criteria Type</th>
-                <th className="py-2">Uploaded On</th>
-                <th className="py-2">OCR Audit Status</th>
-                <th className="py-2 text-right">Action</th>
+                <th className="py-2 px-2">Document File Title</th>
+                <th className="py-2 px-2">Criteria Type</th>
+                <th className="py-2 px-2">Uploaded On</th>
+                <th className="py-2 px-2">OCR Audit Status</th>
+                <th className="py-2 px-2 text-right">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
               {documents.slice(0, 12).map((doc) => (
                 <tr key={doc.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/40">
-                  <td className="py-2.5 font-semibold text-slate-800 dark:text-gray-200 flex items-center gap-2">
+                  <td className="py-2 px-2 font-semibold text-slate-800 dark:text-gray-200 flex items-center gap-2">
                     <FileText size={14} className="text-indigo-500 shrink-0" />
                     <span>{doc.name}</span>
                   </td>
-                  <td className="py-2.5 text-slate-600 dark:text-gray-400">{doc.type}</td>
-                  <td className="py-2.5 text-slate-400 dark:text-gray-500 mono">{doc.uploadDate}</td>
-                  <td className="py-2.5">
+                  <td className="py-2 px-2 text-slate-600 dark:text-gray-400">{doc.type}</td>
+                  <td className="py-2 px-2 text-slate-400 dark:text-gray-500 mono">{doc.uploadDate}</td>
+                  <td className="py-2 px-2">
                     <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/30">
                       ✓ {doc.status}
                     </span>
                   </td>
-                  <td className="py-2.5 text-right">
+                  <td className="py-2 px-2 text-right">
                     <button
                       onClick={() => showToast('Document Opened', `Viewing ${doc.name} in secure Azure Blob viewer.`, 'info')}
                       className="btn btn-ghost btn-sm text-[11px] text-indigo-600 dark:text-indigo-400"

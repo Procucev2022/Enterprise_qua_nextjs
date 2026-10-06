@@ -223,7 +223,6 @@ describe('app/buyer/vendor-summary.tsx', () => {
       />
     );
 
-    expect(screen.getByText('Vendor Directory & Management')).toBeInTheDocument();
     expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
     expect(screen.getByText('Global Valves Ltd')).toBeInTheDocument();
   });
@@ -269,7 +268,6 @@ describe('app/buyer/vendor-summary.tsx', () => {
       />
     );
 
-    expect(screen.getByText('Vendor Directory & Management')).toBeInTheDocument();
     expect(screen.getByText('Total Empanelled')).toBeInTheDocument();
     expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
     expect(screen.getByText('Global Valves Ltd')).toBeInTheDocument();

@@ -328,6 +328,8 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       group: NAV_GROUPS.buyerAccount,
       route: '/buyer/profile',
     },
+    // Temporarily hidden: Buyer Billing History
+    /*
     {
       id: 'buyer_billing_history',
       screenTag: 'Screen 1.9',
@@ -337,6 +339,7 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       group: NAV_GROUPS.buyerAccount,
       route: '/buyer/billing-history',
     },
+    */
     // Temporarily hidden: Buyer DB Sync
     /*
     {

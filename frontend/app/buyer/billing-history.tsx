@@ -103,54 +103,45 @@ export default function BuyerBillingHistory() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto p-4 sm:p-6 space-y-4">
-      <div className="flex items-center gap-2.5">
-        <div className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/30">
-          <Receipt size={18} />
-        </div>
-        <div>
-          <h1 className="text-base font-bold text-slate-900 dark:text-white">Billing History</h1>
-          <p className="text-xs text-slate-500 dark:text-gray-400">Every subscription payment on your account, with a downloadable receipt</p>
-        </div>
-      </div>
+    <div className="max-w-4xl mx-auto p-2 sm:p-3 space-y-2.5 animate-fade-in pb-4">
 
       {loading && (
-        <div className="flex items-center justify-center gap-2 py-10 text-sm text-slate-500 dark:text-gray-400">
-          <RefreshCw size={16} className="animate-spin" /> Loading billing history…
+        <div className="flex items-center justify-center gap-2 py-8 text-sm text-slate-500 dark:text-gray-400">
+          <RefreshCw size={15} className="animate-spin" /> Loading billing history…
         </div>
       )}
 
       {!loading && error && (
-        <div className="p-4 rounded-xl border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 text-xs text-rose-700 dark:text-rose-300">
+        <div className="p-3 rounded-xl border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 text-xs text-rose-700 dark:text-rose-300">
           {error}
         </div>
       )}
 
       {!loading && !error && links.length === 0 && (
-        <div className="p-8 text-center rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80">
-          <p className="text-sm text-slate-500 dark:text-gray-400">No payments yet. Upgrade your plan from Sourcing Subscriptions to see receipts here.</p>
+        <div className="p-6 text-center rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80">
+          <p className="text-xs text-slate-500 dark:text-gray-400">No payments yet. Upgrade your plan from Sourcing Subscriptions to see receipts here.</p>
         </div>
       )}
 
       {!loading && !error && links.length > 0 && (
-        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 overflow-hidden">
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 overflow-hidden">
           <table className="w-full text-xs">
             <thead className="bg-slate-50 dark:bg-gray-800/60 text-slate-500 dark:text-gray-400">
               <tr>
-                <th className="text-left font-semibold px-4 py-2.5">Plan</th>
-                <th className="text-left font-semibold px-4 py-2.5">Amount</th>
-                <th className="text-left font-semibold px-4 py-2.5">Status</th>
-                <th className="text-left font-semibold px-4 py-2.5">Date</th>
-                <th className="text-right font-semibold px-4 py-2.5">Receipt</th>
+                <th className="text-left font-semibold px-3 py-2">Plan</th>
+                <th className="text-left font-semibold px-3 py-2">Amount</th>
+                <th className="text-left font-semibold px-3 py-2">Status</th>
+                <th className="text-left font-semibold px-3 py-2">Date</th>
+                <th className="text-right font-semibold px-3 py-2">Receipt</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
               {links.map((link) => (
                 <tr key={link.id}>
-                  <td className="px-4 py-2.5 font-medium text-slate-900 dark:text-white">
+                  <td className="px-3 py-2 font-medium text-slate-900 dark:text-white">
                     {PLAN_LABEL[link.planId] || link.planId}
                   </td>
-                  <td className="px-4 py-2.5 text-slate-700 dark:text-gray-300">₹{Number(link.amount || 0).toFixed(2)}</td>
+                  <td className="px-3 py-2 text-slate-700 dark:text-gray-300">₹{Number(link.amount || 0).toFixed(2)}</td>
                   <td className="px-4 py-2.5">
                     <span
                       className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${

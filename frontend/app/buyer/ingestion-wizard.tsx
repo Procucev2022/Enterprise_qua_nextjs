@@ -87,6 +87,12 @@ const ALL_CATEGORIES_OPTION = 'All Categories';
 const ALL_VENDORS_PAGE_SIZE = 100;
 const ALL_VENDORS_SEARCH_DEBOUNCE_MS = 350;
 
+const SOURCING_VERSION_LABELS: Record<string, string> = {
+  mode_1: 'V1(Internal Vendors)',
+  mode_2: 'V2(Internal + Procucev Vetted Vendors)',
+  mode_3: 'V3(Autonomous AI + 360 Qualification)',
+};
+
 function taxonomyMajors(): string[] {
   return getMajorCategories();
 }
@@ -171,11 +177,63 @@ export default function IngestionWizard({
   const [vendorFormCity, setVendorFormCity] = useState('');
   const [vendorFormState, setVendorFormState] = useState('');
   const [vendorFormPincode, setVendorFormPincode] = useState('');
+  const [vendorFormPincodeError, setVendorFormPincodeError] = useState<string | null>(null);
+  const [vendorFormPincodeValidating, setVendorFormPincodeValidating] = useState(false);
+  const [vendorFormPincodePostOffices, setVendorFormPincodePostOffices] = useState<PostOfficeDetail[]>([]);
+  const vendorFormPincodeDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    const raw = vendorFormPincode.trim();
+    if (vendorFormPincodeDebounceRef.current) clearTimeout(vendorFormPincodeDebounceRef.current);
+    if (!raw) {
+      setVendorFormPincodeError(null);
+      setVendorFormPincodeValidating(false);
+      setVendorFormPincodePostOffices([]);
+      return;
+    }
+    if (isDummyPincode(raw)) {
+      setVendorFormPincodeError('Invalid or dummy PIN code');
+      setVendorFormPincodeValidating(false);
+      setVendorFormPincodePostOffices([]);
+      return;
+    }
+    if (raw.length >= 3 && !PINCODE_PATTERN.test(raw)) {
+      setVendorFormPincodeError('Invalid PIN code format');
+      setVendorFormPincodeValidating(false);
+      setVendorFormPincodePostOffices([]);
+      return;
+    }
+    if (/^\d{6}$/.test(raw)) {
+      setVendorFormPincodeValidating(true);
+      vendorFormPincodeDebounceRef.current = setTimeout(async () => {
+        try {
+          const res = await validatePincode(raw);
+          if (!res.isValid) {
+            setVendorFormPincodeError(res.message || 'Invalid PIN code');
+            setVendorFormPincodePostOffices([]);
+          } else {
+            setVendorFormPincodeError(null);
+            setVendorFormPincodePostOffices(res.postOffices || []);
+          }
+        } catch {
+          setVendorFormPincodeError(null);
+        } finally {
+          setVendorFormPincodeValidating(false);
+        }
+      }, 350);
+    } else {
+      setVendorFormPincodeError(null);
+      setVendorFormPincodeValidating(false);
+      setVendorFormPincodePostOffices([]);
+    }
+  }, [vendorFormPincode]);
   const [vendorFormGstin, setVendorFormGstin] = useState('');
   const [isSubmittingVendor, setIsSubmittingVendor] = useState(false);
   const [sendingCategoryEmailVendors, setSendingCategoryEmailVendors] = useState<string[]>([]);
   const [sentCategoryEmailVendors, setSentCategoryEmailVendors] = useState<string[]>([]);
   const [vendorCategoryFilterTab, setVendorCategoryFilterTab] = useState<'all' | 'matched' | 'mismatched'>('all');
+  const [mode2VendorSearch, setMode2VendorSearch] = useState('');
+  const [mode2VendorCategoryFilterTab, setMode2VendorCategoryFilterTab] = useState<'all' | 'matched' | 'mismatched'>('all');
 
   const handleSendCategoryUpdateEmail = async (vendor: any, rfqCategorySignals: string[]) => {
     const vendorKey = vendor?.id || vendor?.email;
@@ -238,6 +296,10 @@ export default function IngestionWizard({
 
     if (!/^[1-9][0-9]{5}$/.test(vendorFormPincode.trim())) {
       showToast('Invalid Pincode', 'Please enter a valid 6-digit PIN code.', 'warning');
+      return;
+    }
+    if (vendorFormPincodeError) {
+      showToast('Invalid Pincode', vendorFormPincodeError, 'warning');
       return;
     }
 
@@ -822,53 +884,31 @@ export default function IngestionWizard({
   };
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6 animate-fade-in pb-12">
-      {/* Header */}
-      <div className="flex items-center justify-between pb-4 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
-            AI RFQ Ingestion & Multi-Mode Sourcing Dispatch
-          </h1>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleClearForm}
-            type="button"
-            className="btn btn-secondary btn-sm font-semibold inline-flex items-center gap-1.5 text-slate-600 hover:text-rose-600 dark:text-gray-300 dark:hover:text-rose-400 cursor-pointer"
-          >
-            <RotateCcw size={13} />
-            <span>Clear Form</span>
-          </button>
-          <button onClick={onCancel} className="btn btn-secondary btn-sm font-semibold cursor-pointer">
-            Exit Wizard
-          </button>
-        </div>
-      </div>
-
+    <div className="max-w-7xl mx-auto space-y-2.5 animate-fade-in pb-4">
       {/* Quota Exhausted Banner */}
       {isQuotaExhausted && (
         <div
           data-testid="ingestion-wizard-quota-exhausted-banner"
-          className="p-5 rounded-2xl bg-amber-500/10 border border-amber-500/30 dark:bg-amber-950/40 dark:border-amber-700/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm"
+          className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 dark:bg-amber-950/40 dark:border-amber-700/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 shadow-sm"
         >
-          <div className="flex items-start gap-3">
-            <div className="p-2 rounded-xl bg-amber-500/20 text-amber-600 dark:text-amber-400 shrink-0">
-              <AlertCircle size={22} />
+          <div className="flex items-start gap-2.5">
+            <div className="p-1.5 rounded-lg bg-amber-500/20 text-amber-600 dark:text-amber-400 shrink-0">
+              <AlertCircle size={20} />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-amber-950 dark:text-amber-200">
+              <h3 className="text-xs sm:text-sm font-bold text-amber-950 dark:text-amber-200">
                 {EXTRACTION.quotaExhaustedTitle}
               </h3>
-              <p className="text-xs text-amber-800 dark:text-amber-300 mt-1">
+              <p className="text-[11px] text-amber-800 dark:text-amber-300 mt-0.5">
                 {EXTRACTION.quotaExhaustedMessage}
               </p>
             </div>
           </div>
           <a
             href="/buyer/subscription-center"
-            className="btn btn-primary font-bold shrink-0 inline-flex items-center gap-2 px-4 py-2 text-xs shadow-md hover:shadow-lg"
+            className="btn btn-primary font-bold shrink-0 inline-flex items-center gap-2 px-3 py-1.5 text-xs shadow-md hover:shadow-lg"
           >
-            <Sparkles size={14} />
+            <Sparkles size={13} />
             <span>{EXTRACTION.upgradePlanAction}</span>
           </a>
         </div>
@@ -877,16 +917,13 @@ export default function IngestionWizard({
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* TOP: DOCUMENT & REQUISITION EMAIL UPLOAD & AI EXTRACTION      */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="glass-panel p-6 rounded-2xl space-y-4 border border-indigo-100 dark:border-indigo-950 bg-gradient-to-br from-indigo-50/50 via-white to-sky-50/30 dark:from-gray-900/90 dark:via-gray-900/80 dark:to-indigo-950/20 shadow-sm">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-100/60 dark:border-gray-800 pb-3">
+      <section className="glass-panel p-3 sm:p-3.5 rounded-xl space-y-2.5 border border-indigo-100 dark:border-indigo-950 bg-gradient-to-br from-indigo-50/50 via-white to-sky-50/30 dark:from-gray-900/90 dark:via-gray-900/80 dark:to-indigo-950/20 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-100/60 dark:border-gray-800 pb-2.5">
           <div>
-            <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <UploadCloud size={18} className="text-indigo-600 dark:text-indigo-400" />
+            <h2 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <UploadCloud size={16} className="text-indigo-600 dark:text-indigo-400" />
               Upload Source Documents & Forwarded Emails
             </h2>
-            <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-              Upload BOQ files (<span className="font-semibold text-slate-700 dark:text-slate-300">.xlsx, .xls, .csv, .pdf, .docx, .txt</span>) or Forwarded Requisition Emails (<span className="font-semibold text-indigo-600 dark:text-indigo-400">.eml, .msg</span>) — <span className="inline-flex items-center font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-1.5 py-0.5 rounded text-[11px]">Max 15 MB per file</span>
-            </p>
           </div>
 
           <div className="flex items-center gap-2">
@@ -934,26 +971,23 @@ export default function IngestionWizard({
             setIsDraggingDoc(false);
             if (e.dataTransfer.files) handleFilesSelected(e.dataTransfer.files);
           }}
-          className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all cursor-pointer group ${
+          className={`border-2 border-dashed rounded-xl p-4 text-center transition-all cursor-pointer group ${
             isDraggingDoc
               ? 'border-indigo-600 bg-indigo-100/70 dark:bg-indigo-900/50 scale-[1.01]'
               : 'border-indigo-300/80 dark:border-indigo-500/30 hover:border-indigo-500 bg-white/70 dark:bg-gray-900/40 hover:bg-indigo-50/50'
           }`}
         >
           <div className="flex items-center justify-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-200 dark:border-indigo-500/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
-              <FileSpreadsheet size={20} />
+            <div className="w-9 h-9 rounded-lg bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-200 dark:border-indigo-500/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
+              <FileSpreadsheet size={18} />
             </div>
-            <div className="w-10 h-10 rounded-xl bg-sky-100 dark:bg-sky-600/20 border border-sky-200 dark:border-sky-500/30 flex items-center justify-center text-sky-600 dark:text-sky-400 group-hover:scale-110 transition-transform">
-              <Mail size={20} />
+            <div className="w-9 h-9 rounded-lg bg-sky-100 dark:bg-sky-600/20 border border-sky-200 dark:border-sky-500/30 flex items-center justify-center text-sky-600 dark:text-sky-400 group-hover:scale-110 transition-transform">
+              <Mail size={18} />
             </div>
           </div>
-          <h3 className="text-xs font-bold text-slate-800 dark:text-white mt-2">
+          <h3 className="text-xs font-bold text-slate-800 dark:text-white mt-1.5">
             {isExtracting ? 'Gemini AI is parsing document contents...' : 'Drag and drop BOQ spreadsheets or .eml / .msg emails here'}
           </h3>
-          <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-            Supports Excel (.xlsx, .xls), CSV, PDF specs, Word (.docx), Plain Text (.txt), and Outlook/MIME Email (.eml, .msg) — <span className="font-semibold text-slate-700 dark:text-slate-300">Max 15 MB</span>.
-          </p>
         </div>
 
         {/* Uploaded Files List */}
@@ -998,7 +1032,7 @@ export default function IngestionWizard({
 
         {/* AI Extraction Outcome Banners */}
         {extractionSummary && (
-          <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 text-xs">
+          <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 text-xs">
             <div className="font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
               <Sparkles size={14} /> Extraction Complete
             </div>
@@ -1009,7 +1043,7 @@ export default function IngestionWizard({
         )}
 
         {extractionError && (
-          <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-700/60 text-xs space-y-1">
+          <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-700/60 text-xs space-y-1">
             <div className="font-bold text-amber-900 dark:text-amber-300 flex items-center gap-1.5">
               <AlertCircle size={14} /> Document Parsing Notice
             </div>
@@ -1022,17 +1056,22 @@ export default function IngestionWizard({
       </section>
 
       {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* SECTION 1: RFQ DETAILS & DELIVERY SPECIFICATIONS              */}
+      {/* MERGED SECTIONS 1, 2 & 3: RFQ DETAILS, LINE ITEMS & SOURCING  */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="glass-panel p-6 rounded-2xl space-y-5 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs">
-        <div className="border-b border-slate-100 dark:border-gray-800 pb-3">
-          <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-            <FileText size={18} className="text-indigo-600 dark:text-indigo-400" />
+      <section className="glass-panel p-3.5 sm:p-4 rounded-xl space-y-3 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-gray-800 pb-2.5">
+          <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <FileText size={16} className="text-indigo-600 dark:text-indigo-400" />
             1. RFQ Details & Delivery Terms
           </h2>
-          <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-            Specify the procurement title, target location, and financial parameters for this requirement.
-          </p>
+          <button
+            onClick={handleClearForm}
+            type="button"
+            className="btn btn-secondary btn-sm font-semibold inline-flex items-center gap-1.5 text-slate-600 hover:text-rose-600 dark:text-gray-300 dark:hover:text-rose-400 cursor-pointer self-end sm:self-auto"
+          >
+            <RotateCcw size={13} />
+            <span>Clear Form</span>
+          </button>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 text-xs">
@@ -1144,22 +1183,16 @@ export default function IngestionWizard({
             <FieldError message={formErrors.targetDeliveryDate} />
           </div>
         </div>
-      </section>
 
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* SECTION 2: LINE ITEMS & TAXONOMY CATEGORIZATION TABLE         */}
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="glass-panel p-6 rounded-2xl space-y-4 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-gray-800 pb-3">
-          <div>
-            <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <Sparkles size={18} className="text-indigo-600 dark:text-indigo-400" />
-              2. Line Items Specification ({form.lineItems.length})
-            </h2>
-            <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-              Classify each item into its standardized <strong>Major Category</strong> and <strong>Minor Category</strong> from the verified taxonomy.
-            </p>
-          </div>
+        {/* ── Section 2: Line Items & Taxonomy ── */}
+        <div className="pt-6 border-t border-slate-200 dark:border-slate-800 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-gray-800 pb-3">
+            <div>
+              <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Sparkles size={18} className="text-indigo-600 dark:text-indigo-400" />
+                2. Line Items Specification ({form.lineItems.length})
+              </h2>
+            </div>
 
           <div className="flex items-center gap-2">
             <button
@@ -1323,166 +1356,97 @@ export default function IngestionWizard({
             </table>
           </div>
         )}
-      </section>
+      </div>
 
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* SECTION 3: SOURCING MODE SELECTION (DROPDOWN)                 */}
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      <section className="glass-panel p-6 rounded-2xl space-y-4 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs">
-        <div className="border-b border-slate-100 dark:border-gray-800 pb-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        {/* ── Section 3: Sourcing Mode Selection ── */}
+        <div className="pt-6 border-t border-slate-200 dark:border-slate-800 space-y-4">
+          <div className="border-b border-slate-100 dark:border-gray-800 pb-3">
             <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
               <CheckCircle2 size={18} className="text-indigo-600 dark:text-indigo-400" />
               3. Select Sourcing Mode
             </h2>
-            <span className="text-xs font-semibold text-slate-500 dark:text-gray-400">
-              Choose how suppliers are matched and invited
-            </span>
           </div>
-        </div>
 
-        <div className="space-y-3" ref={sourcingDropdownRef}>
-          <label htmlFor="sourcing-mode-select" className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300">
-            Select Sourcing Version
-          </label>
+          <div className="space-y-3" ref={sourcingDropdownRef}>
+            <label htmlFor="sourcing-mode-select" className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300">
+              Select Sourcing Version
+            </label>
 
-          {/* Accessible Native Select for Screen Readers / Automated Test Querying */}
-          <select
-            id="sourcing-mode-select"
-            data-testid="sourcing-mode-select"
-            aria-label="Sourcing Mode"
-            value={form.sourcingMode}
-            onChange={(e) => patchForm('sourcingMode', e.target.value as SourcingMode)}
-            className="sr-only"
-            tabIndex={-1}
-          >
-            {SOURCING_MODES.map((mode) => (
-              <option
-                key={mode.id}
-                value={mode.id}
-                data-testid={`mode-option-${mode.id}`}
-              >
-                {mode.shortLabel}: {mode.description} • [{mode.featureSummary}]
-              </option>
-            ))}
-          </select>
+            {/* Accessible Native Select for Screen Readers / Automated Test Querying */}
+            <select
+              id="sourcing-mode-select"
+              data-testid="sourcing-mode-select"
+              aria-label="Sourcing Mode"
+              value={form.sourcingMode}
+              onChange={(e) => patchForm('sourcingMode', e.target.value as SourcingMode)}
+              className="sr-only"
+              tabIndex={-1}
+            >
+              {SOURCING_MODES.map((mode) => (
+                <option
+                  key={mode.id}
+                  value={mode.id}
+                  data-testid={`mode-option-${mode.id}`}
+                >
+                  {SOURCING_VERSION_LABELS[mode.id] || mode.shortLabel}
+                </option>
+              ))}
+            </select>
 
-          {/* Custom Rich Dropdown Selector */}
-          <div className="relative">
-            {(() => {
-              const activeMode = SOURCING_MODES.find((m) => m.id === form.sourcingMode) || SOURCING_MODES[0];
-              const badgeConfigs: Record<string, { icon: string; badge: string; badgeStyle: string }> = {
-                mode_1: {
-                  icon: '🎯',
-                  badge: 'STARTER',
-                  badgeStyle: 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-300 border-blue-200 dark:border-blue-800',
-                },
-                mode_2: {
-                  icon: '⚡',
-                  badge: 'RECOMMENDED',
-                  badgeStyle: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800',
-                },
-                mode_3: {
-                  icon: '🚀',
-                  badge: 'FULL REACH',
-                  badgeStyle: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800',
-                },
-              };
-              const activeConfig = badgeConfigs[activeMode.id] || badgeConfigs.mode_1;
+            {/* Custom Clean Dropdown Selector */}
+            <div className="relative">
+              {(() => {
+                const activeMode = SOURCING_MODES.find((m) => m.id === form.sourcingMode) || SOURCING_MODES[0];
 
-              return (
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => setIsSourcingDropdownOpen((prev) => !prev)}
-                    aria-expanded={isSourcingDropdownOpen}
-                    className="w-full text-left rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800/90 p-3.5 hover:border-indigo-400 dark:hover:border-indigo-500 focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 transition-all flex items-center justify-between gap-4 shadow-2xs cursor-pointer group"
-                  >
-                    <div className="flex items-start sm:items-center gap-3.5 min-w-0">
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-100 dark:border-indigo-900/50 text-lg shadow-2xs group-hover:scale-105 transition-transform">
-                        {activeConfig.icon}
+                return (
+                  <div>
+                    <button
+                      type="button"
+                      data-testid="sourcing-mode-trigger"
+                      onClick={() => setIsSourcingDropdownOpen((prev) => !prev)}
+                      aria-expanded={isSourcingDropdownOpen}
+                      className="w-full text-left rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800/90 p-3.5 hover:border-indigo-400 dark:hover:border-indigo-500 focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 transition-all flex items-center justify-between gap-4 shadow-2xs cursor-pointer group"
+                    >
+                      <div className="flex items-center gap-3.5 min-w-0">
+                        <span className="text-sm font-bold text-slate-900 dark:text-white">
+                          {SOURCING_VERSION_LABELS[activeMode.id] || activeMode.shortLabel}
+                        </span>
                       </div>
-                      <div className="min-w-0 space-y-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-black text-slate-900 dark:text-white">
-                            {activeMode.shortLabel}
-                          </span>
-                          <span className={`rounded-full px-2.5 py-0.5 text-[9px] font-extrabold uppercase tracking-wider border ${activeConfig.badgeStyle}`}>
-                            {activeConfig.badge}
-                          </span>
-                          <span className="text-xs text-slate-500 dark:text-gray-400 truncate hidden lg:inline">
-                            — {activeMode.description}
-                          </span>
-                        </div>
-                        {/* Selected Mode Feature Badge Pill */}
-                        <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-slate-50 dark:bg-gray-900/90 border border-slate-200/80 dark:border-gray-700/80 text-[11px] font-semibold text-slate-700 dark:text-gray-300">
-                          <CheckCircle2 size={12} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
-                          <span>{activeMode.featureSummary}</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hidden sm:inline">
-                        Change
-                      </span>
-                      <div className="p-1 rounded-lg bg-slate-100 dark:bg-gray-700/60 text-slate-500 dark:text-gray-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-300 transition-colors">
-                        <ChevronDown
-                          size={16}
-                          className={`transition-transform duration-200 ${
-                            isSourcingDropdownOpen ? 'rotate-180 text-indigo-600 dark:text-indigo-400' : ''
-                          }`}
-                        />
-                      </div>
-                    </div>
-                  </button>
-
-                  {/* Dropdown Menu Popover */}
-                  {isSourcingDropdownOpen && (
-                    <div className="absolute z-50 mt-2 w-full rounded-2xl border border-slate-200/90 dark:border-gray-700/80 bg-white/95 dark:bg-gray-900/95 backdrop-blur-xl shadow-2xl shadow-slate-900/10 dark:shadow-black/60 p-2 space-y-2 animate-fade-in">
-                      {SOURCING_MODES.map((mode, index) => {
-                        const isSelected = form.sourcingMode === mode.id;
-                        const config = [
-                          {
-                            icon: '🎯',
-                            badge: 'STARTER',
-                            badgeStyle: 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-300 border-blue-200 dark:border-blue-800',
-                          },
-                          {
-                            icon: '⚡',
-                            badge: 'RECOMMENDED',
-                            badgeStyle: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800',
-                          },
-                          {
-                            icon: '🚀',
-                            badge: 'FULL REACH',
-                            badgeStyle: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800',
-                          },
-                        ][index];
-
-                        return (
-                          <div
-                            key={mode.id}
-                            data-testid={`custom-mode-option-${mode.id}`}
-                            onClick={() => {
-                              patchForm('sourcingMode', mode.id as SourcingMode);
-                              setIsSourcingDropdownOpen(false);
-                            }}
-                            className={`p-3.5 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 ${
-                              isSelected
-                                ? 'bg-indigo-50/80 dark:bg-indigo-950/40 border-indigo-300 dark:border-indigo-700/80 shadow-xs'
-                                : 'bg-slate-50/50 dark:bg-gray-800/30 border-slate-100 dark:border-gray-800 hover:border-slate-300 dark:hover:border-gray-700 hover:bg-white dark:hover:bg-gray-800/80'
+                      <div className="flex items-center gap-2 shrink-0">
+                        <div className="p-1 rounded-lg bg-slate-100 dark:bg-gray-700/60 text-slate-500 dark:text-gray-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-300 transition-colors">
+                          <ChevronDown
+                            size={16}
+                            className={`transition-transform duration-200 ${
+                              isSourcingDropdownOpen ? 'rotate-180 text-indigo-600 dark:text-indigo-400' : ''
                             }`}
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="flex items-center gap-2.5">
-                                <span className="text-lg shrink-0" aria-hidden="true">{config.icon}</span>
-                                <h4 className={`text-sm font-bold ${isSelected ? 'text-indigo-950 dark:text-indigo-200' : 'text-slate-900 dark:text-white'}`}>
-                                  {mode.shortLabel}
-                                </h4>
-                                <span className={`rounded-full px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wider border ${config.badgeStyle}`}>
-                                  {config.badge}
-                                </span>
-                              </div>
+                          />
+                        </div>
+                      </div>
+                    </button>
+
+                    {/* Dropdown Menu Popover */}
+                    {isSourcingDropdownOpen && (
+                      <div className="absolute z-50 mt-2 w-full rounded-2xl border border-slate-200/90 dark:border-gray-700/80 bg-white/95 dark:bg-gray-900/95 backdrop-blur-xl shadow-2xl shadow-slate-900/10 dark:shadow-black/60 p-2 space-y-1.5 animate-fade-in">
+                        {SOURCING_MODES.map((mode) => {
+                          const isSelected = form.sourcingMode === mode.id;
+
+                          return (
+                            <div
+                              key={mode.id}
+                              data-testid={`custom-mode-option-${mode.id}`}
+                              onClick={() => {
+                                patchForm('sourcingMode', mode.id as SourcingMode);
+                                setIsSourcingDropdownOpen(false);
+                              }}
+                              className={`px-4 py-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2 ${
+                                isSelected
+                                  ? 'bg-indigo-50/80 dark:bg-indigo-950/40 border-indigo-300 dark:border-indigo-700/80 shadow-xs'
+                                  : 'bg-slate-50/50 dark:bg-gray-800/30 border-slate-100 dark:border-gray-800 hover:border-slate-300 dark:hover:border-gray-700 hover:bg-white dark:hover:bg-gray-800/80'
+                              }`}
+                            >
+                              <h4 className={`text-sm font-bold ${isSelected ? 'text-indigo-950 dark:text-indigo-200' : 'text-slate-900 dark:text-white'}`}>
+                                {SOURCING_VERSION_LABELS[mode.id] || mode.shortLabel}
+                              </h4>
 
                               <div className="flex items-center gap-1.5">
                                 {isSelected ? (
@@ -1496,43 +1460,29 @@ export default function IngestionWizard({
                                 )}
                               </div>
                             </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
 
-                            {/* Description */}
-                            <p className="text-xs text-slate-600 dark:text-gray-300 leading-relaxed pl-7">
-                              {mode.description}
-                            </p>
-
-                            {/* Feature Badge Pill */}
-                            <div className="pl-7 pt-0.5">
-                              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/90 dark:bg-gray-950/60 border border-slate-200/90 dark:border-gray-700/80 text-[11px] font-semibold text-slate-700 dark:text-gray-300 shadow-2xs">
-                                <CheckCircle2 size={12} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
-                                <span>{mode.featureSummary}</span>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
+            {/* Test & Quick Selector Target */}
+            <div className="hidden" aria-hidden="true">
+              {SOURCING_MODES.map((mode) => (
+                <button
+                  key={mode.id}
+                  type="button"
+                  data-testid={`mode-${mode.id}`}
+                  onClick={() => patchForm('sourcingMode', mode.id as SourcingMode)}
+                >
+                  {SOURCING_VERSION_LABELS[mode.id] || mode.shortLabel}
+                </button>
+              ))}
+            </div>
           </div>
-
-          {/* Test & Quick Selector Target */}
-          <div className="hidden" aria-hidden="true">
-            {SOURCING_MODES.map((mode) => (
-              <button
-                key={mode.id}
-                type="button"
-                data-testid={`mode-${mode.id}`}
-                onClick={() => patchForm('sourcingMode', mode.id as SourcingMode)}
-              >
-                {mode.shortLabel}
-              </button>
-            ))}
-          </div>
-        </div>
 
         {/* ── Mode 1: Private Approved Vendor Roster Preview ── */}
         {form.sourcingMode === 'mode_1' && (
@@ -1873,10 +1823,44 @@ export default function IngestionWizard({
           <div className="mt-5 rounded-2xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
             {(() => {
               const allMyVendors = buyerVendors.filter(isBuyerUploaded);
+              if (allMyVendors.length === 0) {
+                return (
+                  <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-2">
+                    <Users size={28} className="mx-auto text-slate-400 opacity-60" />
+                    <p className="text-xs font-bold text-slate-700 dark:text-gray-300">No Private Vendors Uploaded Yet</p>
+                    <p className="text-[11px] text-slate-500 dark:text-gray-400 max-w-md mx-auto">
+                      Please ingest your approved vendor directory or PO history to dispatch in Mode 2.
+                    </p>
+                  </div>
+                );
+              }
+
               const { signals: rfqSignals } = extractRfqCategorySignals(form);
-              const myVendors = rfqSignals.length > 0
+              const matchingVendors = rfqSignals.length > 0
                 ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals).isMatch)
                 : allMyVendors;
+              const mismatchedVendors = rfqSignals.length > 0
+                ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, rfqSignals).isMatch)
+                : [];
+
+              let pool = allMyVendors;
+              if (mode2VendorCategoryFilterTab === 'matched') {
+                pool = matchingVendors;
+              } else if (mode2VendorCategoryFilterTab === 'mismatched') {
+                pool = mismatchedVendors;
+              }
+
+              const myVendors = mode2VendorSearch.trim()
+                ? pool.filter((v) =>
+                    v.name.toLowerCase().includes(mode2VendorSearch.toLowerCase()) ||
+                    v.email?.toLowerCase().includes(mode2VendorSearch.toLowerCase()) ||
+                    v.majorCategory?.toLowerCase().includes(mode2VendorSearch.toLowerCase()) ||
+                    (v.contactPerson || '').toLowerCase().includes(mode2VendorSearch.toLowerCase())
+                  )
+                : pool;
+
+              const allIds = myVendors.map((v) => v.id);
+              const allSelected = allIds.length > 0 && allIds.every((id) => selectedVendorIds.includes(id));
 
               return (
                 <>
@@ -1889,11 +1873,11 @@ export default function IngestionWizard({
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                           <span>Mode 2: Hybrid Sourcing Pool</span>
                           <span className="badge badge-emerald text-[10px] font-bold">
-                            {myVendors.length} Private Suppliers Matched
+                            {matchingVendors.length} Private Suppliers Matched
                           </span>
                         </h3>
                         <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                          Dispatches to your approved roster ({myVendors.length}) with automated AI qualification and follow-ups.
+                          Dispatches to your approved roster ({allMyVendors.length}) with automated AI qualification and follow-ups.
                         </p>
                       </div>
                     </div>
@@ -1950,76 +1934,261 @@ export default function IngestionWizard({
                     </div>
                   )}
 
-                  {/* Buyer Approved Roster */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-xs font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1.5">
-                        <Building2 size={13} className="text-blue-600 dark:text-blue-400" />
-                        <span>Buyer Approved Roster ({myVendors.length} Private Vendors)</span>
-                      </h4>
-                      {myVendors.length > 0 && (
+                  {/* Category Filter Tabs & Toolbar */}
+                  <div className="space-y-2.5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-emerald-100 dark:border-emerald-900/40 pb-2">
+                      {rfqSignals.length > 0 && (
+                        <div className="flex items-center gap-1 bg-slate-100 dark:bg-gray-800 p-0.5 rounded-lg text-[10px] font-semibold">
+                          <button
+                            type="button"
+                            onClick={() => setMode2VendorCategoryFilterTab('all')}
+                            className={`px-2.5 py-1 rounded-md transition-all ${
+                              mode2VendorCategoryFilterTab === 'all'
+                                ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
+                                : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                            }`}
+                          >
+                            All ({allMyVendors.length})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setMode2VendorCategoryFilterTab('matched')}
+                            className={`px-2.5 py-1 rounded-md transition-all ${
+                              mode2VendorCategoryFilterTab === 'matched'
+                                ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
+                                : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                            }`}
+                          >
+                            Matched ({matchingVendors.length})
+                          </button>
+                          {mismatchedVendors.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setMode2VendorCategoryFilterTab('mismatched')}
+                              className={`px-2.5 py-1 rounded-md transition-all flex items-center gap-1 ${
+                                mode2VendorCategoryFilterTab === 'mismatched'
+                                  ? 'bg-white dark:bg-gray-900 text-amber-700 dark:text-amber-300 shadow-2xs font-bold'
+                                  : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                              }`}
+                            >
+                              <span>⚠️ Category Mismatch ({mismatchedVendors.length})</span>
+                            </button>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-between sm:justify-end gap-2 flex-1 text-[11px]">
+                        <div className="text-slate-500 dark:text-gray-400">
+                          {selectedVendorIds.length > 0 ? (
+                            <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                              {selectedVendorIds.length} of {matchingVendors.length} matched vendor(s) selected
+                            </span>
+                          ) : (
+                            <span>All {matchingVendors.length} category-matched vendors will receive this RFQ</span>
+                          )}
+                        </div>
                         <button
                           type="button"
                           onClick={() => {
-                            const allIds = myVendors.map((v) => v.id);
-                            const allSelected = allIds.length > 0 && allIds.every((id) => selectedVendorIds.includes(id));
+                            const selectableIds = myVendors.filter((v) => {
+                              if (rfqSignals.length === 0) return true;
+                              return matchVendorAgainstSignals(v, rfqSignals).isMatch;
+                            }).map((v) => v.id);
+
                             if (allSelected) {
                               setSelectedVendorIds([]);
                             } else {
-                              setSelectedVendorIds(Array.from(new Set([...selectedVendorIds, ...allIds])));
+                              setSelectedVendorIds(Array.from(new Set([...selectedVendorIds, ...selectableIds])));
                             }
                           }}
-                          className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400 hover:underline inline-flex items-center gap-1"
+                          className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
                         >
-                          {myVendors.every((v) => selectedVendorIds.includes(v.id)) ? <CheckSquare size={12} /> : <Square size={12} />}
-                          <span>{myVendors.every((v) => selectedVendorIds.includes(v.id)) ? 'Deselect All' : 'Select All'}</span>
+                          {allSelected ? <CheckSquare size={13} /> : <Square size={13} />}
+                          <span>{allSelected ? 'Deselect All' : 'Select All Matched'}</span>
                         </button>
-                      )}
+                      </div>
+                    </div>
+
+                    {/* Search Bar */}
+                    <div className="relative">
+                      <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
+                      <input
+                        type="search"
+                        value={mode2VendorSearch}
+                        onChange={(e) => setMode2VendorSearch(e.target.value)}
+                        placeholder="Search private suppliers by name, category, or contact info..."
+                        className="w-full text-xs pl-8 pr-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-slate-900 dark:text-white"
+                      />
                     </div>
 
                     {myVendors.length === 0 ? (
-                      <div className="p-3.5 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500">
-                        No private vendors found — please add vendors in your directory.
+                      <div className="p-4 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[11px] text-slate-500">
+                        No vendors match the search or filter criteria.
                       </div>
                     ) : (
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-48 overflow-y-auto pr-1">
-                        {myVendors.map((v, i) => {
-                          const isSelected = selectedVendorIds.includes(v.id) || selectedVendorIds.length === 0;
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-72 overflow-y-auto pr-1">
+                        {myVendors.map((vendor, idx) => {
+                          const rawMinor = vendor.minorCategories as string | string[] | undefined;
+                          const minorList: string[] = Array.isArray(rawMinor)
+                            ? rawMinor
+                            : typeof rawMinor === 'string'
+                            ? (rawMinor as string).split(',').map((s: string) => s.trim()).filter(Boolean)
+                            : Array.isArray(vendor.vendorSelectedCategories)
+                            ? vendor.vendorSelectedCategories
+                            : [];
+
+                          const matchResult = rfqSignals.length > 0
+                            ? matchVendorAgainstSignals(vendor, rfqSignals)
+                            : { isMatch: true };
+                          const isCategoryMismatch = rfqSignals.length > 0 && !matchResult.isMatch;
+
+                          const isSelected = !isCategoryMismatch && (selectedVendorIds.includes(vendor.id) || selectedVendorIds.length === 0);
+
                           return (
                             <div
-                              key={v.id || i}
+                              key={vendor.id || idx}
                               onClick={() => {
-                                const allIds = myVendors.map((vendor) => vendor.id);
+                                if (isCategoryMismatch) return;
                                 setSelectedVendorIds((prev) => {
                                   if (prev.length === 0) {
-                                    return allIds.filter((id) => id !== v.id);
+                                    return allIds.filter((id) => id !== vendor.id);
                                   }
-                                  return prev.includes(v.id) ? prev.filter((id) => id !== v.id) : [...prev, v.id];
+                                  return prev.includes(vendor.id)
+                                    ? prev.filter((id) => id !== vendor.id)
+                                    : [...prev, vendor.id];
                                 });
                               }}
-                              className={`cursor-pointer p-3 rounded-xl border space-y-1 transition-all ${
-                                isSelected
-                                  ? 'border-emerald-500 bg-white dark:bg-gray-900 shadow-2xs'
-                                  : 'border-slate-200/60 dark:border-gray-800 bg-white/60 dark:bg-gray-900/40 opacity-60'
+                              className={`rounded-xl border p-3.5 space-y-2 transition-all ${
+                                isCategoryMismatch
+                                  ? 'border-amber-300 dark:border-amber-700/80 bg-amber-50/40 dark:bg-amber-950/20 shadow-2xs'
+                                  : isSelected
+                                  ? 'cursor-pointer border-emerald-500 bg-emerald-50/30 dark:bg-emerald-950/20 dark:border-emerald-600 shadow-xs'
+                                  : 'cursor-pointer border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60'
                               }`}
                             >
-                              <div className="flex items-center justify-between gap-1">
-                                <div className="flex items-center gap-1.5 min-w-0">
-                                  <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
-                                    isSelected
+                              <div className="flex items-start justify-between gap-1.5">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${
+                                    isCategoryMismatch
+                                      ? 'bg-amber-500 border-amber-500 text-white opacity-80'
+                                      : isSelected
                                       ? 'bg-emerald-600 border-emerald-600 text-white'
                                       : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800'
                                   }`}>
-                                    {isSelected && <Check size={10} strokeWidth={3} />}
+                                    {isCategoryMismatch ? (
+                                      <AlertCircle size={12} strokeWidth={2.5} />
+                                    ) : isSelected ? (
+                                      <Check size={12} strokeWidth={3} />
+                                    ) : null}
                                   </span>
-                                  <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{v.name}</span>
+                                  <span className="text-xs font-bold text-slate-900 dark:text-white truncate" title={vendor.name}>
+                                    {vendor.name}
+                                  </span>
                                 </div>
-                                <span className="badge badge-blue text-[8px] font-bold shrink-0">Private</span>
+                                {isCategoryMismatch ? (
+                                  <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300 border border-amber-300 dark:border-amber-700 shrink-0">
+                                    ⚠️ Category Mismatch
+                                  </span>
+                                ) : (
+                                  <span className="badge badge-emerald text-[9px] font-bold shrink-0">
+                                    Preferred
+                                  </span>
+                                )}
                               </div>
-                              <div className="text-[10px] text-slate-500 dark:text-gray-400 flex items-center justify-between pl-5.5">
-                                <span className="font-semibold text-slate-700 dark:text-gray-300">{v.majorCategory || 'General Industrial'}</span>
-                                <span>{v.location || v.city || v.state || 'India'}</span>
+
+                              <div className="space-y-1 text-[11px] text-slate-600 dark:text-gray-300">
+                                {vendor.contactPerson && (
+                                  <div className="flex items-center gap-1.5 text-slate-700 dark:text-gray-300">
+                                    <Users size={11} className="text-slate-400 shrink-0" />
+                                    <span className="truncate">{vendor.contactPerson}</span>
+                                  </div>
+                                )}
+                                {vendor.email && (
+                                  <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
+                                    <Mail size={11} className="text-blue-500 shrink-0" />
+                                    <span className="font-mono text-[10px] truncate">{vendor.email}</span>
+                                  </div>
+                                )}
+                                {vendor.phone && (
+                                  <div className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
+                                    <Phone size={11} className="text-emerald-500 shrink-0" />
+                                    <span className="font-mono text-[10px]">{vendor.phone}</span>
+                                  </div>
+                                )}
                               </div>
+
+                              {/* Category Mismatch Warning & Update Button */}
+                              {isCategoryMismatch ? (
+                                <div className="pt-2 border-t border-amber-200/60 dark:border-amber-900/40 space-y-1.5">
+                                  <div className="text-[10px] text-amber-800 dark:text-amber-300 bg-amber-100/70 dark:bg-amber-950/40 p-2 rounded-lg border border-amber-200 dark:border-amber-900/50 space-y-0.5">
+                                    <p className="font-bold flex items-center justify-between">
+                                      <span>Registered Category:</span>
+                                      <span className="text-amber-900 dark:text-amber-200">{vendor.majorCategory || 'None'}</span>
+                                    </p>
+                                    <p className="text-[9px] text-amber-700 dark:text-amber-400">
+                                      Excluded from RFQ shortlist until details updated & verified.
+                                    </p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleSendCategoryUpdateEmail(vendor, rfqSignals);
+                                    }}
+                                    disabled={sendingCategoryEmailVendors.includes(vendor.id || vendor.email)}
+                                    className="w-full py-1.5 px-2.5 rounded-lg text-[10px] font-bold bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-50"
+                                    title="Send email requesting vendor to update their category"
+                                  >
+                                    {sendingCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
+                                      <>
+                                        <Loader2 size={11} className="animate-spin" />
+                                        <span>Sending Email...</span>
+                                      </>
+                                    ) : sentCategoryEmailVendors.includes(vendor.id || vendor.email) ? (
+                                      <>
+                                        <CheckCircle2 size={11} />
+                                        <span>Update Email Sent ✓</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Mail size={11} />
+                                        <span>Send Email to Update Category</span>
+                                      </>
+                                    )}
+                                  </button>
+                                </div>
+                              ) : (
+                                /* Category & Rating */
+                                <div className="pt-2 border-t border-slate-100 dark:border-gray-800 space-y-1.5">
+                                  <div className="flex items-center justify-between text-[10px]">
+                                    <span className="font-semibold text-emerald-700 dark:text-emerald-300 truncate max-w-[150px]">
+                                      {vendor.majorCategory || 'General Industrial'}
+                                    </span>
+                                    <span className="text-amber-500 font-bold flex items-center gap-0.5 shrink-0">
+                                      <Star size={10} className="fill-amber-400 text-amber-400" />
+                                      <span>{vendor.rating || 4.5}</span>
+                                    </span>
+                                  </div>
+                                  {minorList.length > 0 && (
+                                    <div className="flex flex-wrap gap-1">
+                                      {minorList.slice(0, 2).map((cat: string, ci: number) => (
+                                        <span
+                                          key={ci}
+                                          className="inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-medium bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 border border-slate-200/60 dark:border-gray-700/60 truncate max-w-[120px]"
+                                          title={cat}
+                                        >
+                                          {cat}
+                                        </span>
+                                      ))}
+                                      {minorList.length > 2 && (
+                                        <span className="text-[8px] font-bold text-slate-400 dark:text-gray-500 self-center">
+                                          +{minorList.length - 2}
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           );
                         })}
@@ -2163,6 +2332,7 @@ export default function IngestionWizard({
             })()}
           </div>
         )}
+        </div>
       </section>
 
       {/* ═══════════════════════════════════════════════════════════════ */}
@@ -2392,9 +2562,26 @@ export default function IngestionWizard({
                   />
                 </div>
                 <div>
-                  <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                    Pincode <span className="text-rose-500">*</span>
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block font-semibold text-slate-700 dark:text-gray-300">
+                      Pincode <span className="text-rose-500">*</span>
+                    </label>
+                    {vendorFormPincodeValidating && (
+                      <span className="text-[10px] text-indigo-500 font-bold flex items-center gap-1">
+                        <Loader2 size={10} className="animate-spin" /> Checking
+                      </span>
+                    )}
+                    {!vendorFormPincodeValidating && vendorFormPincodePostOffices.length > 0 && !vendorFormPincodeError && (
+                      <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-0.5">
+                        <CheckCircle2 size={10} /> Valid
+                      </span>
+                    )}
+                    {!vendorFormPincodeValidating && vendorFormPincodeError && vendorFormPincode.trim().length >= 6 && (
+                      <span className="text-[10px] font-bold text-rose-500 flex items-center gap-0.5">
+                        <AlertCircle size={10} /> Invalid
+                      </span>
+                    )}
+                  </div>
                   <input
                     type="text"
                     required
@@ -2402,8 +2589,13 @@ export default function IngestionWizard({
                     placeholder="e.g. 411001"
                     value={vendorFormPincode}
                     onChange={(e) => setVendorFormPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white font-mono"
+                    className={`w-full text-xs p-2 rounded-lg border font-mono ${
+                      vendorFormPincodeError ? 'border-rose-400 dark:border-rose-700' : 'border-slate-200 dark:border-gray-700'
+                    } bg-white dark:bg-gray-900 text-slate-900 dark:text-white`}
                   />
+                  {vendorFormPincodeError && vendorFormPincode.trim().length >= 6 && (
+                    <p className="text-[10px] text-rose-500 mt-0.5 font-medium">{vendorFormPincodeError}</p>
+                  )}
                 </div>
               </div>
 

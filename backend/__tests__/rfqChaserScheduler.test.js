@@ -19,6 +19,7 @@
 const whatsAppService = require('../src/services/whatsAppService');
 const smsService = require('../src/services/smsService');
 const mailerService = require('../src/services/mailerService');
+const domainQueries = require('../src/db/domainQueries');
 const scheduler = require('../src/services/rfqChaserScheduler');
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -65,32 +66,35 @@ afterEach(() => {
 // ── scheduleVendorChaser ─────────────────────────────────────────────────────
 
 describe('scheduleVendorChaser', () => {
-  test('registers exactly 3 timer handles in pendingTimers', () => {
-    scheduler.scheduleVendorChaser(RFQ, VENDOR, {});
-    expect(scheduler.pendingTimers.get(RFQ.rfqNumber)).toHaveLength(3);
+  test('persists Worker chasers without request-scoped timers', async () => {
+    const previousEnv = globalThis.__CF_ENV__;
+    const previousWaitUntil = globalThis.__CF_WAIT_UNTIL__;
+    const waitUntil = jest.fn();
+    const persistSpy = jest.spyOn(domainQueries, 'insertChaserJobInDB').mockResolvedValue(true);
+    globalThis.__CF_ENV__ = { DB: {} };
+    globalThis.__CF_WAIT_UNTIL__ = waitUntil;
+
+    try {
+      scheduler.scheduleVendorChaser(RFQ, VENDOR);
+
+      expect(scheduler.pendingTimers.has(RFQ.rfqNumber)).toBe(false);
+      expect(persistSpy).toHaveBeenCalledTimes(4);
+      expect(waitUntil).toHaveBeenCalledTimes(4);
+      await Promise.all(waitUntil.mock.calls.map(([promise]) => promise));
+    } finally {
+      if (previousEnv === undefined) delete globalThis.__CF_ENV__;
+      else globalThis.__CF_ENV__ = previousEnv;
+      if (previousWaitUntil === undefined) delete globalThis.__CF_WAIT_UNTIL__;
+      else globalThis.__CF_WAIT_UNTIL__ = previousWaitUntil;
+    }
   });
 
-  test('fires WhatsApp immediately (delay 0 or CHASER_DELAYS.WHATSAPP_MS)', async () => {
-    const waSpy = jest.spyOn(whatsAppService, 'sendRFQInvitationWhatsApp').mockResolvedValue({ success: true, messageId: 'wa-1' });
-    // Temporarily leave test env to test real dispatch path
-    const origEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = 'production';
-
+  test('registers exactly 4 timer handles in pendingTimers (SMS, Call, WhatsApp, Email)', () => {
     scheduler.scheduleVendorChaser(RFQ, VENDOR, {});
-    // WhatsApp fires at delay 0 — advance all pending timers
-    jest.runAllTimers();
-    await Promise.resolve(); // flush microtasks
-
-    expect(waSpy).toHaveBeenCalledWith(expect.objectContaining({
-      phone: VENDOR.phone,
-      rfqNumber: RFQ.rfqNumber,
-      rfqTitle: RFQ.title,
-      vendorName: VENDOR.name,
-    }));
-    process.env.NODE_ENV = origEnv;
+    expect(scheduler.pendingTimers.get(RFQ.rfqNumber)).toHaveLength(4);
   });
 
-  test('fires SMS after SMS delay and not before', async () => {
+  test('fires SMS within 5 min delay and not before', async () => {
     const smsSpy = jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: true, messageId: 'sms-1' });
     const origEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
@@ -108,6 +112,48 @@ describe('scheduleVendorChaser', () => {
     expect(smsSpy).toHaveBeenCalledWith(expect.objectContaining({
       mobile: VENDOR.phone,
       rfqNumber: RFQ.rfqNumber,
+    }));
+    process.env.NODE_ENV = origEnv;
+  });
+
+  test('fires Call reminder after 6 hours', async () => {
+    const origEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+
+    scheduler.scheduleVendorChaser(RFQ, VENDOR, {});
+
+    // Before 6h
+    jest.advanceTimersByTime(5 * 60 * 60 * 1000); // 5 hours
+    await Promise.resolve();
+
+    // Advance to 6 hours
+    jest.advanceTimersByTime(60 * 60 * 1000 + 100); // push past 6h
+    await Promise.resolve();
+
+    process.env.NODE_ENV = origEnv;
+  });
+
+  test('fires WhatsApp reminder after 12h delay', async () => {
+    const waSpy = jest.spyOn(whatsAppService, 'sendRFQInvitationWhatsApp').mockResolvedValue({ success: true, messageId: 'wa-1' });
+    const origEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+
+    scheduler.scheduleVendorChaser(RFQ, VENDOR, {});
+
+    // Before 12h
+    jest.advanceTimersByTime(11 * 60 * 60 * 1000);
+    await Promise.resolve();
+    expect(waSpy).not.toHaveBeenCalled();
+
+    // Cross 12h mark
+    jest.advanceTimersByTime(60 * 60 * 1000 + 100);
+    await Promise.resolve();
+
+    expect(waSpy).toHaveBeenCalledWith(expect.objectContaining({
+      phone: VENDOR.phone,
+      rfqNumber: RFQ.rfqNumber,
+      rfqTitle: RFQ.title,
+      vendorName: VENDOR.name,
     }));
     process.env.NODE_ENV = origEnv;
   });
@@ -145,13 +191,50 @@ describe('scheduleVendorChaser', () => {
   });
 });
 
+describe('dispatchDueChaserJobs', () => {
+  test('loads the full RFQ and sends the due email reminder', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const emailJob = {
+      id: 'chaser-RFQ-TEST-001-v-001-email',
+      rfq_number: RFQ.rfqNumber,
+      vendor_id: VENDOR.id,
+      vendor_name: VENDOR.name,
+      vendor_email: VENDOR.email,
+      vendor_phone: VENDOR.phone,
+      vendor_contact_person: VENDOR.contactPerson,
+      channel: 'email',
+    };
+    jest.spyOn(domainQueries, 'claimDueChaserJobsFromDB').mockResolvedValue([emailJob]);
+    jest.spyOn(domainQueries, 'getRFQByNumberFromDB').mockResolvedValue(RFQ);
+    jest.spyOn(domainQueries, 'markChaserJobFiredInDB').mockResolvedValue();
+    const emailSpy = jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: true });
+    process.env.NODE_ENV = 'production';
+
+    try {
+      await expect(scheduler.dispatchDueChaserJobs()).resolves.toEqual({
+        claimed: 1,
+        sent: 1,
+        failed: 0,
+        skipped: 0,
+      });
+      expect(emailSpy).toHaveBeenCalledWith(
+        VENDOR.email,
+        expect.objectContaining({ rfq: RFQ, isReminder: true })
+      );
+      expect(domainQueries.markChaserJobFiredInDB).toHaveBeenCalledWith(emailJob.id);
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+});
+
 // ── scheduleRFQChasers ────────────────────────────────────────────────────────
 
 describe('scheduleRFQChasers', () => {
-  test('creates 3 timers per vendor (2 vendors → 6 timers)', () => {
+  test('creates 4 timers per vendor (2 vendors → 8 timers)', () => {
     const vendors = [VENDOR, { ...VENDOR, id: 'v-999', name: 'Beta Supplies' }];
     scheduler.scheduleRFQChasers(RFQ, vendors);
-    expect(scheduler.pendingTimers.get(RFQ.rfqNumber)).toHaveLength(6);
+    expect(scheduler.pendingTimers.get(RFQ.rfqNumber)).toHaveLength(8);
   });
 
   test('calls getCreditInfo for each vendor', () => {
@@ -290,6 +373,27 @@ describe('_dispatchSms', () => {
     const result = await scheduler._dispatchSms(RFQ, VENDOR);
     expect(result.success).toBe(false);
     expect(result.error).toBe('timeout');
+  });
+});
+
+// ── _dispatchCall ────────────────────────────────────────────────────────────
+
+describe('_dispatchCall', () => {
+  const origEnv = process.env.NODE_ENV;
+
+  beforeEach(() => { process.env.NODE_ENV = 'production'; });
+  afterEach(() => { process.env.NODE_ENV = origEnv; });
+
+  test('returns skipped:true in test environment', async () => {
+    process.env.NODE_ENV = 'test';
+    const result = await scheduler._dispatchCall(RFQ, VENDOR);
+    expect(result.skipped).toBe(true);
+  });
+
+  test('returns skipped:true with reason calling_not_implemented in production', async () => {
+    const result = await scheduler._dispatchCall(RFQ, VENDOR);
+    expect(result.skipped).toBe(true);
+    expect(result.reason).toBe('calling_not_implemented');
   });
 });
 

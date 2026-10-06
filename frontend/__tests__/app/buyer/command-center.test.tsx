@@ -191,7 +191,6 @@ describe('app/buyer/command-center.tsx', () => {
       />
     );
 
-    expect(screen.getByText('Enterprise Sourcing Dashboard')).toBeInTheDocument();
     expect(screen.getByText('Active Pipeline')).toBeInTheDocument();
     expect(screen.getByText('Intake Sources')).toBeInTheDocument();
     expect(screen.getByText('Live Outreach')).toBeInTheDocument();
@@ -226,9 +225,8 @@ describe('app/buyer/command-center.tsx', () => {
     fireEvent.click(wizardButton as HTMLElement);
     expect(mockNavigateToWizard).toHaveBeenCalled();
 
-    // Manage Subscription button
-    fireEvent.click(screen.getByText(/Manage Subscription/i));
-    expect(mockNavigateToSubscription).toHaveBeenCalled();
+    // Manage Subscription was inside the removed banner
+    expect(screen.queryByText(/Manage Subscription/i)).not.toBeInTheDocument();
   });
 
   it('offers no directory, BOQ upload or analytics export in the header', () => {
@@ -256,8 +254,8 @@ describe('app/buyer/command-center.tsx', () => {
       />
     );
 
-    // Click Email Gateway filter
-    fireEvent.click(screen.getByText(/Email Gateway \(1\)/i));
+    // Click via Email Upload filter
+    fireEvent.click(screen.getByText(/via Email Upload \(1\)/i));
     expect(screen.getByText('Titanium Valves')).toBeInTheDocument();
     expect(screen.queryByText('Centrifugal Slurry Pumps')).not.toBeInTheDocument();
 
@@ -373,59 +371,8 @@ describe('app/buyer/command-center.tsx', () => {
     );
 
     expect(screen.getByText(/PO History Ingested/i)).toBeInTheDocument();
-    expect(screen.getByText(/Version 1 \(Client Roster Plan\)/i)).toBeInTheDocument();
-
-    // version_2
-    (useApp as jest.Mock).mockReturnValue({
-      rfqs: [],
-      aiFeed: [],
-      currentMode: 'mode_2',
-      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
-      showToast: mockShowToast,
-      selectedRFQForDeepDive: null,
-      setSelectedRFQForDeepDive: mockSetSelectedRFQForDeepDive,
-      deepDiveModalOpen: false,
-      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
-      openRFQDeepDive: mockOpenRFQDeepDive,
-      remainingFreeRFQs: 0,
-      activeSubscription: 'version_2',
-      activeBuyerAccount: null,
-      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
-      initialSetupCompleted: true,
-    });
-    rerender(
-      <CommandCenter
-        onNavigateToWizard={mockNavigateToWizard}
-        onNavigateToMatrix={mockNavigateToMatrix}
-      />
-    );
-    expect(screen.getByText(/Version 2 \(Hybrid Sourcing Plan\)/i)).toBeInTheDocument();
-
-    // version_3
-    (useApp as jest.Mock).mockReturnValue({
-      rfqs: [],
-      aiFeed: [],
-      currentMode: 'mode_3',
-      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
-      showToast: mockShowToast,
-      selectedRFQForDeepDive: null,
-      setSelectedRFQForDeepDive: mockSetSelectedRFQForDeepDive,
-      deepDiveModalOpen: false,
-      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
-      openRFQDeepDive: mockOpenRFQDeepDive,
-      remainingFreeRFQs: 0,
-      activeSubscription: 'version_3',
-      activeBuyerAccount: null,
-      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
-      initialSetupCompleted: true,
-    });
-    rerender(
-      <CommandCenter
-        onNavigateToWizard={mockNavigateToWizard}
-        onNavigateToMatrix={mockNavigateToMatrix}
-      />
-    );
-    expect(screen.getByText(/Version 3 \(AI Autonomous Sourcing Plan\)/i)).toBeInTheDocument();
+    // Banner is removed completely
+    expect(screen.queryByText(/Sourcing Plan:/i)).not.toBeInTheDocument();
   });
 
   it('filters AI feed strictly when activeBuyerAccount is present and handles various status badges', () => {
@@ -540,7 +487,7 @@ describe('app/buyer/command-center.tsx', () => {
     const intakeSourcesCard = screen.getByTitle('Click to view Intake Sources breakdown');
     fireEvent.click(intakeSourcesCard);
     expect(screen.getByText('3 Ingestion Channels')).toBeInTheDocument();
-    expect(screen.getByText('Channel-by-channel origin verification across Autonomous Email Gateway, Web Portal AI OCR, and Manual Entry.')).toBeInTheDocument();
+    expect(screen.getByText('Channel-by-channel origin verification across Autonomous via Email Upload, Web Portal AI OCR, and Manual Entry.')).toBeInTheDocument();
 
     // Close Intake Sources modal
     const closeButtons2 = screen.getAllByRole('button', { name: /Close/i });

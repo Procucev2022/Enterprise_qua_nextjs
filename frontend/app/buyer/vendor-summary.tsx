@@ -36,7 +36,9 @@ import {
   DollarSign,
   Tag,
   Check,
+  Loader2,
 } from 'lucide-react';
+import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
 
 interface VendorSummaryProps {
   onViewEvaluation: (record: VendorEvaluationRecord) => void;
@@ -162,6 +164,56 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [formState, setFormState] = useState('');
   const [formCountry, setFormCountry] = useState('India');
   const [formPincode, setFormPincode] = useState('');
+  const [formPincodeError, setFormPincodeError] = useState<string | null>(null);
+  const [formPincodeValidating, setFormPincodeValidating] = useState(false);
+  const [formPincodePostOffices, setFormPincodePostOffices] = useState<PostOfficeDetail[]>([]);
+  const formPincodeDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    const raw = formPincode.trim();
+    if (formPincodeDebounceRef.current) clearTimeout(formPincodeDebounceRef.current);
+    if (!raw) {
+      setFormPincodeError(null);
+      setFormPincodeValidating(false);
+      setFormPincodePostOffices([]);
+      return;
+    }
+    if (isDummyPincode(raw)) {
+      setFormPincodeError('Invalid or dummy PIN code');
+      setFormPincodeValidating(false);
+      setFormPincodePostOffices([]);
+      return;
+    }
+    if (raw.length >= 3 && !PINCODE_PATTERN.test(raw)) {
+      setFormPincodeError('Invalid PIN code format');
+      setFormPincodeValidating(false);
+      setFormPincodePostOffices([]);
+      return;
+    }
+    if (/^\d{6}$/.test(raw)) {
+      setFormPincodeValidating(true);
+      formPincodeDebounceRef.current = setTimeout(async () => {
+        try {
+          const res = await validatePincode(raw);
+          if (!res.isValid) {
+            setFormPincodeError(res.message || 'Invalid PIN code');
+            setFormPincodePostOffices([]);
+          } else {
+            setFormPincodeError(null);
+            setFormPincodePostOffices(res.postOffices || []);
+          }
+        } catch {
+          setFormPincodeError(null);
+        } finally {
+          setFormPincodeValidating(false);
+        }
+      }, 350);
+    } else {
+      setFormPincodeError(null);
+      setFormPincodeValidating(false);
+      setFormPincodePostOffices([]);
+    }
+  }, [formPincode]);
   const [formGst, setFormGst] = useState('');
   const [formPan, setFormPan] = useState('');
   const [formMsme, setFormMsme] = useState('');
@@ -235,6 +287,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       !formGst.trim()
     ) {
       showToast('Validation Error', 'Please complete all required fields including City, State, Pincode and GSTIN.', 'warning');
+      return;
+    }
+
+    if (formPincodeError) {
+      showToast('Invalid Pincode', formPincodeError, 'warning');
       return;
     }
 
@@ -330,6 +387,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     if (!selectedVendorForCrud) return;
     if (!formName.trim() || !formMajorCategory || !formEmail.trim() || !formContactPerson.trim() || !formPhone.trim()) {
       showToast('Validation Error', 'Please complete all required fields.', 'warning');
+      return;
+    }
+
+    if (formPincode.trim() && formPincodeError) {
+      showToast('Invalid Pincode', formPincodeError, 'warning');
       return;
     }
 
@@ -663,13 +725,13 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       <div
         key={vendor.id}
         className={
-          'glass-panel p-5 rounded-2xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 ' +
+          'glass-panel p-3 sm:p-3.5 rounded-xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-3 ' +
           (isSelected
             ? 'border-indigo-500 bg-indigo-50/20 dark:bg-indigo-950/20 ring-1 ring-indigo-500/30'
             : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm hover:border-indigo-500/40 dark:hover:border-indigo-400/40')
         }
       >
-        <div className="flex items-start md:items-center gap-3.5 flex-1">
+        <div className="flex items-start md:items-center gap-3 flex-1">
           <input
             type="checkbox"
             checked={isSelected}
@@ -680,7 +742,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           />
 
           {/* Left: Vendor Brand & Info */}
-          <div className="space-y-2 flex-1">
+          <div className="space-y-1.5 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-300 border border-indigo-200/40">
               {vendor.id}
@@ -1005,77 +1067,69 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   };
 
   return (
-    <div className="space-y-6 animate-fade-in pb-10">
-      {/* Title Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white flex items-center gap-2">
-            <Building2 className="text-indigo-600 dark:text-indigo-400" size={24} />
-            Vendor Directory &amp; Management
-          </h1>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
+    <div className="space-y-2.5 animate-fade-in pb-4">
+      {/* Top Action Bar */}
+      <div className="flex items-center justify-end gap-2 flex-wrap">
+        <button
+          type="button"
+          data-testid="open-add-vendor-modal"
+          onClick={handleOpenAddModal}
+          className="btn btn-primary btn-sm flex items-center gap-1.5 shadow-sm"
+        >
+          <Plus size={14} /> Add Vendor
+        </button>
+        {/* Upload Vendor Wizard Button */}
+        {onNavigateToWizard && (
           <button
             type="button"
-            data-testid="open-add-vendor-modal"
-            onClick={handleOpenAddModal}
-            className="btn btn-primary btn-sm flex items-center gap-1.5 shadow-sm"
+            onClick={onNavigateToWizard}
+            className="btn btn-secondary btn-sm flex items-center gap-1.5 shadow-sm"
           >
-            <Plus size={14} /> Add Vendor
+            <UploadCloud size={14} /> Upload Vendor
           </button>
-          {/* Upload Vendor Wizard Button */}
-          {onNavigateToWizard && (
-            <button
-              type="button"
-              onClick={onNavigateToWizard}
-              className="btn btn-secondary btn-sm flex items-center gap-1.5 shadow-sm"
-            >
-              <UploadCloud size={14} /> Upload Vendor
-            </button>
-          )}
-        </div>
+        )}
       </div>
 
       {/* Stats Counter Bar */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+        <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
           <div className="text-[10px] uppercase font-bold text-slate-400">Total Empanelled</div>
-          <div className="text-2xl font-black text-indigo-600 dark:text-indigo-400 mt-1">
+          <div className="text-xl sm:text-2xl font-black text-indigo-600 dark:text-indigo-400 mt-0.5">
             {buyerFilteredVendors.length}
           </div>
         </div>
-        <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
+        <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
           <div className="text-[10px] uppercase font-bold text-slate-400">OCR &amp; 360° Evaluated</div>
-          <div className="text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-1">
+          <div className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
             {buyerFilteredVendors.filter((v) => v.evaluated).length}
           </div>
         </div>
-        <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
+        <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
           <div className="text-[10px] uppercase font-bold text-slate-400">Preferred Status</div>
-          <div className="text-2xl font-black text-indigo-700 dark:text-indigo-300 mt-1">
+          <div className="text-xl sm:text-2xl font-black text-indigo-700 dark:text-indigo-300 mt-0.5">
             {buyerFilteredVendors.filter(
               (v) => v.status === 'PREFERRED ENTERPRISE SUPPLIER'
             ).length}
           </div>
         </div>
-        <div className="p-4 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
+        <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
           <div className="text-[10px] uppercase font-bold text-slate-400">Selected Suppliers</div>
-          <div className="text-2xl font-black text-purple-600 dark:text-purple-400 mt-1">
+          <div className="text-xl sm:text-2xl font-black text-purple-600 dark:text-purple-400 mt-0.5">
             {selectedVendorIds.length}
           </div>
         </div>
       </div>
 
       {/* Filter and Search Controls */}
-      <div className="glass-panel p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm flex flex-col md:flex-row gap-3">
+      <div className="glass-panel p-2.5 sm:p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm flex flex-col md:flex-row gap-2.5">
         <div className="relative flex-1">
-          <Search size={16} className="absolute left-3 top-3 text-slate-400" />
+          <Search size={15} className="absolute left-3 top-2.5 text-slate-400" />
           <input
             type="text"
             placeholder="Search vendors by name, contact, category..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="has-leading-icon text-xs"
+            className="has-leading-icon text-xs py-1.5"
           />
         </div>
 
@@ -1084,7 +1138,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           <select
             value={selectedCategory}
             onChange={(e) => setSelectedCategory(e.target.value)}
-            className="select-field text-xs"
+            className="select-field text-xs py-1.5"
           >
             {categories.map((c) => (
               <option key={c} value={c}>
@@ -1099,7 +1153,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           <select
             value={selectedStatus}
             onChange={(e) => setSelectedStatus(e.target.value)}
-            className="select-field text-xs"
+            className="select-field text-xs py-1.5"
           >
             <option value="ALL">All Statuses</option>
             <option value="EVALUATED">Evaluated Only</option>
@@ -1111,8 +1165,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       </div>
 
       {/* Multi-Selection Controls Bar */}
-      <div className="flex items-center justify-between gap-3 flex-wrap bg-slate-50 dark:bg-gray-900/60 p-3 rounded-xl border border-slate-200 dark:border-gray-800">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between gap-2.5 flex-wrap bg-slate-50 dark:bg-gray-900/60 p-2 sm:p-2.5 rounded-xl border border-slate-200 dark:border-gray-800">
+        <div className="flex items-center gap-2.5">
           <label className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-gray-300 cursor-pointer">
             <input
               type="checkbox"
@@ -1150,7 +1204,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       </div>
 
       {/* Vendors Display List */}
-      <div className="space-y-3">
+      <div className="space-y-2.5">
         {buyerFilteredVendors.map(renderVendorCard)}
         {buyerFilteredVendors.length === 0 && (
           <div className="p-8 text-center text-slate-500 border border-dashed border-slate-200 dark:border-gray-800 rounded-2xl bg-slate-50/50 dark:bg-gray-950/40 space-y-3">
@@ -1383,9 +1437,26 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   />
                 </div>
                 <div>
-                  <label htmlFor="add-vendor-pincode" className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                    Pincode <span className="text-rose-500">*</span>
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label htmlFor="add-vendor-pincode" className="block font-semibold text-slate-700 dark:text-gray-300">
+                      Pincode <span className="text-rose-500">*</span>
+                    </label>
+                    {formPincodeValidating && (
+                      <span className="text-[10px] text-indigo-500 font-bold flex items-center gap-1">
+                        <Loader2 size={10} className="animate-spin" /> Checking
+                      </span>
+                    )}
+                    {!formPincodeValidating && formPincodePostOffices.length > 0 && !formPincodeError && (
+                      <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-0.5">
+                        <CheckCircle2 size={10} /> Valid
+                      </span>
+                    )}
+                    {!formPincodeValidating && formPincodeError && formPincode.trim().length >= 6 && (
+                      <span className="text-[10px] font-bold text-rose-500 flex items-center gap-0.5">
+                        <AlertCircle size={10} /> Invalid
+                      </span>
+                    )}
+                  </div>
                   <input
                     id="add-vendor-pincode"
                     type="text"
@@ -1394,8 +1465,13 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     maxLength={6}
                     value={formPincode}
                     onChange={(e) => setFormPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 font-mono"
+                    className={`w-full text-xs p-2 rounded-lg border font-mono ${
+                      formPincodeError ? 'border-rose-400 dark:border-rose-700' : 'border-slate-200 dark:border-gray-700'
+                    } bg-white dark:bg-gray-900`}
                   />
+                  {formPincodeError && formPincode.trim().length >= 6 && (
+                    <p className="text-[10px] text-rose-500 mt-0.5 font-medium">{formPincodeError}</p>
+                  )}
                 </div>
               </div>
 
@@ -1697,13 +1773,36 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     />
                   </div>
                   <div>
-                    <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">Pincode</label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block font-semibold text-slate-700 dark:text-gray-300">Pincode</label>
+                      {formPincodeValidating && (
+                        <span className="text-[10px] text-indigo-500 font-bold flex items-center gap-1">
+                          <Loader2 size={10} className="animate-spin" /> Checking
+                        </span>
+                      )}
+                      {!formPincodeValidating && formPincodePostOffices.length > 0 && !formPincodeError && (
+                        <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-0.5">
+                          <CheckCircle2 size={10} /> Valid
+                        </span>
+                      )}
+                      {!formPincodeValidating && formPincodeError && formPincode.trim().length >= 6 && (
+                        <span className="text-[10px] font-bold text-rose-500 flex items-center gap-0.5">
+                          <AlertCircle size={10} /> Invalid
+                        </span>
+                      )}
+                    </div>
                     <input
                       type="text"
+                      maxLength={6}
                       value={formPincode}
-                      onChange={(e) => setFormPincode(e.target.value)}
-                      className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                      onChange={(e) => setFormPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      className={`w-full text-xs p-2 rounded-lg border font-mono ${
+                        formPincodeError ? 'border-rose-400 dark:border-rose-700' : 'border-slate-200 dark:border-gray-700'
+                      } bg-white dark:bg-gray-900`}
                     />
+                    {formPincodeError && formPincode.trim().length >= 6 && (
+                      <p className="text-[10px] text-rose-500 mt-0.5 font-medium">{formPincodeError}</p>
+                    )}
                   </div>
                   <div>
                     <label className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">Country</label>

@@ -59,15 +59,28 @@ describe('RoleNavigation Sidebar Dashboard', () => {
     expect(rail.className).not.toContain('rounded');
     expect(rail.className).not.toContain('lg:top-[88px]');
 
-    // Collapse / expand affordances are removed
-    expect(screen.queryByRole('button', { name: /Collapse|Expand/i })).not.toBeInTheDocument();
-
+    // Section headers are interactive toggle buttons, expanded by default
+    const sourcingSection = screen.getByRole('button', { name: /Toggle Sourcing Operations section/i });
+    expect(sourcingSection).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText(NAV.groups.buyerSourcing)).toBeInTheDocument();
     expect(screen.getByText(NAV.groups.buyerEvaluation)).toBeInTheDocument();
     expect(screen.getByText(NAV.groups.buyerAccount)).toBeInTheDocument();
+
+    // 8 Modules counter is removed from the bottom left rail footer
     expect(
-      screen.getByText(formatString(NAV.modulesCountTemplate, { count: ROLE_SIDEBAR_NAV.buyer.length }))
-    ).toBeInTheDocument();
+      screen.queryByText(formatString(NAV.modulesCountTemplate, { count: ROLE_SIDEBAR_NAV.buyer.length }))
+    ).not.toBeInTheDocument();
+
+    // Toggling a section collapses its items
+    expect(screen.getByRole('link', { name: /Screen 1\.1/ })).toBeInTheDocument();
+    fireEvent.click(sourcingSection);
+    expect(sourcingSection).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('link', { name: /Screen 1\.1/ })).not.toBeInTheDocument();
+
+    // Toggling again expands it back
+    fireEvent.click(sourcingSection);
+    expect(sourcingSection).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('link', { name: /Screen 1\.1/ })).toBeInTheDocument();
 
     // Active module is derived from the pathname and flagged for assistive tech
     expect(screen.getByRole('link', { name: /Screen 1\.1/ })).toHaveAttribute('aria-current', 'page');

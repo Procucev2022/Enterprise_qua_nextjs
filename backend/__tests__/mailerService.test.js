@@ -254,6 +254,13 @@ describe('mailerService', () => {
       expect(msg.html).toContain('Navi Mumbai Plant');
     });
 
+    test('labels follow-up mail as an RFQ reminder', () => {
+      const msg = mailerService.buildRfqInviteEmail('v@x.com', { rfq: RFQ, isReminder: true });
+      expect(msg.subject).toBe('Reminder: RFQ RFQ-2026-00500 in Pumps & Accessories');
+      expect(msg.html).toContain('RFQ Reminder');
+      expect(msg.html).toContain('This is a reminder to submit your quotation');
+    });
+
     test('omits rows and the greeting name when the data is not there — never invents them', () => {
       const bare = {
         rfqNumber: 'RFQ-2026-00777',
@@ -1543,5 +1550,4 @@ describe('mailerService', () => {
     });
   });
 });
-
 

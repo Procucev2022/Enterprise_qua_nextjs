@@ -149,8 +149,7 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     expect(screen.queryByTestId('wizard-step-2')).not.toBeInTheDocument();
     expect(screen.queryByTestId('wizard-step-3')).not.toBeInTheDocument();
 
-    // Verify header and sections render directly
-    expect(screen.getByText(/AI RFQ Ingestion & Multi-Mode Sourcing Dispatch/i)).toBeInTheDocument();
+    // Verify sections render directly
     expect(screen.getByText(/Upload Source Documents & Forwarded Emails/i)).toBeInTheDocument();
     expect(screen.getByText(/1. RFQ Details & Delivery Terms/i)).toBeInTheDocument();
     expect(screen.getByText(/2. Line Items Specification/i)).toBeInTheDocument();
@@ -230,7 +229,7 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     renderWizard();
 
     // Toggle dropdown open
-    const trigger = screen.getByRole('button', { name: /Change/i });
+    const trigger = screen.getByTestId('sourcing-mode-trigger');
     fireEvent.click(trigger);
     expect(screen.getByTestId('custom-mode-option-mode_1')).toBeInTheDocument();
 
@@ -260,16 +259,6 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     expect(screen.getByTestId('custom-mode-option-mode_2')).toBeInTheDocument();
     fireEvent.mouseDown(document.body);
     expect(screen.queryByTestId('custom-mode-option-mode_2')).not.toBeInTheDocument();
-  });
-
-  it('allows clicking quick sourcing mode button targets', () => {
-    renderWizard();
-    fireEvent.click(screen.getByTestId('mode-mode_3'));
-    const select = screen.getByRole('combobox', { name: /Sourcing Mode/i }) as HTMLSelectElement;
-    expect(select.value).toBe('mode_3');
-
-    fireEvent.click(screen.getByTestId('mode-mode_1'));
-    expect(select.value).toBe('mode_1');
   });
 
   it('validates required fields on submission and dispatches RFQ on valid input', async () => {
@@ -318,16 +307,13 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     expect(onComplete).toHaveBeenCalled();
   });
 
-  it('cancels when clicking Cancel button or Exit Wizard button', () => {
+  it('cancels when clicking Cancel button', () => {
     const onCancel = jest.fn();
     renderWizard({ onCancel });
 
-    fireEvent.click(screen.getByRole('button', { name: /Exit Wizard/i }));
-    expect(onCancel).toHaveBeenCalledTimes(1);
-
     const cancelButtons = screen.getAllByRole('button', { name: /^Cancel$/i });
     fireEvent.click(cancelButtons[0]);
-    expect(onCancel).toHaveBeenCalledTimes(2);
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
   it('resets all form fields and uploaded documents when clicking Clear Form', () => {

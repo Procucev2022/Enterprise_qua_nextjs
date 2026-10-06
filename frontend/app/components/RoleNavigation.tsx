@@ -32,6 +32,7 @@ import {
   Menu,
   X,
   LogOut,
+  ChevronDown,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -72,6 +73,14 @@ export default function RoleNavigation({ onLogout }: RoleNavigationProps) {
   const { currentRole, isLoggedIn } = useApp();
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
+
+  const toggleSection = (groupName: string) => {
+    setCollapsedSections((prev) => ({
+      ...prev,
+      [groupName]: !prev[groupName],
+    }));
+  };
 
   const role: UserRole = currentRole ?? 'buyer';
   const workspace = ROLE_WORKSPACE_META[role];
@@ -145,66 +154,82 @@ export default function RoleNavigation({ onLogout }: RoleNavigationProps) {
 
         {/* Module Groups */}
         <nav className="flex-1 px-2 pb-2">
-          {navGroups.map((group) => (
-            <div key={group.group} className="space-y-0.5">
-              <p className="px-2 pt-3 pb-1 text-[9px] font-black uppercase tracking-[0.08em] text-slate-400 dark:text-gray-500">
-                {group.group}
-              </p>
+          {navGroups.map((group) => {
+            const isCollapsed = Boolean(collapsedSections[group.group]);
 
-              {group.items.map((item) => {
-                const ItemIcon = SIDEBAR_ICONS[item.icon];
-                // The URL is the single source of truth for which module is
-                // active, so deep links and browser back/forward stay in sync.
-                const isActive = pathname === item.route;
-
-                return (
-                  <Link
-                    key={item.id}
-                    href={item.route}
-                    onClick={() => setMobileOpen(false)}
-                    aria-label={item.screenTag ? `${item.screenTag}: ${item.label}` : item.label}
-                    aria-current={isActive ? 'page' : undefined}
-                    title={item.description}
-                    className={`group w-full flex items-center gap-2.5 px-3 py-2 rounded-xl border transition-all text-left ${
-                      isActive
-                        ? `${workspace.accentActive} border-transparent shadow-xs`
-                        : `border-transparent text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/60 ${workspace.accentRing}`
+            return (
+              <div key={group.group} className="space-y-0.5">
+                <button
+                  type="button"
+                  onClick={() => toggleSection(group.group)}
+                  aria-expanded={!isCollapsed}
+                  aria-label={`Toggle ${group.group} section`}
+                  className="w-full flex items-center justify-between px-2 pt-3 pb-1 text-[9px] font-black uppercase tracking-[0.08em] text-slate-400 dark:text-gray-500 hover:text-slate-700 dark:hover:text-gray-300 transition-colors group cursor-pointer"
+                >
+                  <span>{group.group}</span>
+                  <ChevronDown
+                    size={12}
+                    className={`transition-transform duration-200 text-slate-400 group-hover:text-slate-600 dark:group-hover:text-gray-300 ${
+                      isCollapsed ? '-rotate-90' : 'rotate-0'
                     }`}
-                  >
-                    <span
-                      className={`flex items-center justify-center w-7 h-7 rounded-lg shrink-0 border transition-all ${
-                        isActive
-                          ? 'bg-white/20 border-white/30 text-white'
-                          : 'bg-slate-100 dark:bg-gray-800/70 border-slate-200 dark:border-gray-700/60'
-                      }`}
-                    >
-                      <ItemIcon size={14} />
-                    </span>
+                  />
+                </button>
 
-                    <span className="min-w-0 flex-1">
-                      <span className="truncate text-[12px] font-semibold block">{item.label}</span>
-                    </span>
+                {!isCollapsed && (
+                  <div className="space-y-0.5">
+                    {group.items.map((item) => {
+                      const ItemIcon = SIDEBAR_ICONS[item.icon];
+                      // The URL is the single source of truth for which module is
+                      // active, so deep links and browser back/forward stay in sync.
+                      const isActive = pathname === item.route;
 
-                    {isActive && (
-                      <span
-                        aria-hidden="true"
-                        title={NAV.activeModuleIndicator}
-                        className="w-1.5 h-1.5 rounded-full bg-white shrink-0"
-                      />
-                    )}
-                  </Link>
-                );
-              })}
-            </div>
-          ))}
+                      return (
+                        <Link
+                          key={item.id}
+                          href={item.route}
+                          onClick={() => setMobileOpen(false)}
+                          aria-label={item.screenTag ? `${item.screenTag}: ${item.label}` : item.label}
+                          aria-current={isActive ? 'page' : undefined}
+                          title={item.description}
+                          className={`group w-full flex items-center gap-2.5 px-3 py-2 rounded-xl border transition-all text-left ${
+                            isActive
+                              ? `${workspace.accentActive} border-transparent shadow-xs`
+                              : `border-transparent text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800/60 ${workspace.accentRing}`
+                          }`}
+                        >
+                          <span
+                            className={`flex items-center justify-center w-7 h-7 rounded-lg shrink-0 border transition-all ${
+                              isActive
+                                ? 'bg-white/20 border-white/30 text-white'
+                                : 'bg-slate-100 dark:bg-gray-800/70 border-slate-200 dark:border-gray-700/60'
+                            }`}
+                          >
+                            <ItemIcon size={14} />
+                          </span>
+
+                          <span className="min-w-0 flex-1">
+                            <span className="truncate text-[12px] font-semibold block">{item.label}</span>
+                          </span>
+
+                          {isActive && (
+                            <span
+                              aria-hidden="true"
+                              title={NAV.activeModuleIndicator}
+                              className="w-1.5 h-1.5 rounded-full bg-white shrink-0"
+                            />
+                          )}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </nav>
 
-        {/* Rail Footer: Module Counter & Session Exit */}
-        <div className="mt-auto px-2 py-2 border-t border-slate-100 dark:border-gray-800/80 bg-white dark:bg-[#0b0f19] space-y-1.5">
-          <p className="px-2 text-[9px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">
-            {formatString(NAV.modulesCountTemplate, { count: navItems.length })}
-          </p>
-
+        {/* Rail Footer: Session Exit */}
+        <div className="mt-auto px-2 py-2 border-t border-slate-100 dark:border-gray-800/80 bg-white dark:bg-[#0b0f19]">
           {onLogout && (
             <button
               type="button"

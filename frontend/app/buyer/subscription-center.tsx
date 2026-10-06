@@ -169,17 +169,9 @@ export default function SubscriptionCenter() {
   ];
 
   return (
-    <div className="space-y-6 animate-fade-in pb-10">
-      {/* Title Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
-            Procurement Sourcing Mode Subscriptions
-          </h1>
-          <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-            Compare subscription models, check free starter account quotas, and activate Version 1, 2, or 3 features.
-          </p>
-        </div>
+    <div className="space-y-2.5 animate-fade-in pb-4">
+      {/* Top Action Bar */}
+      <div className="flex items-center justify-end">
         <button
           onClick={handleResetTrial}
           className="btn btn-secondary btn-sm flex items-center gap-1 shrink-0"
@@ -190,17 +182,17 @@ export default function SubscriptionCenter() {
 
       {/* Trial Quota Info Alert */}
       {activeSubscription === 'free_trial' ? (
-        <div className="p-5 rounded-2xl bg-gradient-to-r from-amber-50/80 via-orange-50/60 to-indigo-50/80 dark:from-amber-950/30 dark:via-orange-950/20 dark:to-indigo-950/30 border border-amber-300 dark:border-amber-700/60 text-xs text-amber-900 dark:text-amber-200 space-y-3 shadow-sm">
+        <div className="p-3.5 sm:p-4 rounded-xl bg-gradient-to-r from-amber-50/80 via-orange-50/60 to-indigo-50/80 dark:from-amber-950/30 dark:via-orange-950/20 dark:to-indigo-950/30 border border-amber-300 dark:border-amber-700/60 text-xs text-amber-900 dark:text-amber-200 space-y-2 shadow-sm">
           <div className="flex items-center justify-between flex-wrap gap-2">
-            <div className="flex items-center gap-2 font-black text-sm">
-              <Sparkles className="text-amber-600 dark:text-amber-400 shrink-0" size={18} />
+            <div className="flex items-center gap-2 font-black text-xs sm:text-sm">
+              <Sparkles className="text-amber-600 dark:text-amber-400 shrink-0" size={16} />
               <span>🎁 Free Starter Account — 5 Free RFQs Included</span>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-amber-200/60 dark:bg-amber-900/60 text-amber-900 dark:text-amber-100 border border-amber-300">
+              <span className="px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-mono font-bold bg-amber-200/60 dark:bg-amber-900/60 text-amber-900 dark:text-amber-100 border border-amber-300">
                 Used: {Math.max(0, 5 - remainingFreeRFQs)} / 5
               </span>
-              <span className="px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-emerald-200/60 dark:bg-emerald-900/60 text-emerald-900 dark:text-emerald-100 border border-emerald-300">
+              <span className="px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-mono font-bold bg-emerald-200/60 dark:bg-emerald-900/60 text-emerald-900 dark:text-emerald-100 border border-emerald-300">
                 Remaining: {remainingFreeRFQs} / 5
               </span>
             </div>
@@ -208,7 +200,7 @@ export default function SubscriptionCenter() {
           <p className="text-xs leading-relaxed text-slate-700 dark:text-gray-300">
             Every new buyer receives <strong>5 Free RFQs in total</strong>. You can create your free RFQs using <strong>any version (Version 1: Client Roster, Version 2: Hybrid Sourcing, or Version 3: Autonomous AI)</strong>. The 5-RFQ allowance is shared across all versions. After the 5 free RFQs are used, please subscribe to continue creating and dispatching RFQs.
           </p>
-          <div className="w-full bg-amber-200/50 dark:bg-gray-800 rounded-full h-2.5 overflow-hidden mt-1">
+          <div className="w-full bg-amber-200/50 dark:bg-gray-800 rounded-full h-2 overflow-hidden mt-0.5">
             <div
               className="bg-gradient-to-r from-amber-500 to-emerald-500 h-full transition-all duration-300"
               style={{ width: `${(remainingFreeRFQs / 5) * 100}%` }}
@@ -216,11 +208,11 @@ export default function SubscriptionCenter() {
           </div>
         </div>
       ) : (
-        <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/60 text-xs text-emerald-800 dark:text-emerald-300 flex items-start gap-3 shadow-sm">
-          <ShieldCheck className="text-emerald-500 shrink-0 mt-0.5" size={16} />
-          <div className="space-y-1">
+        <div className="p-3 sm:p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/60 text-xs text-emerald-800 dark:text-emerald-300 flex items-start gap-2.5 shadow-sm">
+          <ShieldCheck className="text-emerald-500 shrink-0 mt-0.5" size={15} />
+          <div className="space-y-0.5">
             <span className="font-extrabold block">✅ Active Premium Plan: {activeSubscription === 'version_1' ? 'Version 1' : activeSubscription === 'version_2' ? 'Version 2' : 'Version 3'}</span>
-            <p>
+            <p className="text-[11px]">
               Thank you for subscribing! Your platform Sourcing Mode is now active. All dispatches, follow-up chasers, and evaluation matrices associated with this plan are unlocked.
             </p>
           </div>
@@ -228,7 +220,7 @@ export default function SubscriptionCenter() {
       )}
 
       {/* Plan Grid Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         {plans.map((p) => {
           const isActive = activeSubscription === p.id;
           const buttonLabel = isActive
@@ -238,7 +230,7 @@ export default function SubscriptionCenter() {
           return (
             <div
               key={p.id}
-              className={`rounded-3xl border bg-white dark:bg-gray-900 flex flex-col justify-between overflow-hidden transition-all shadow-md relative ${
+              className={`rounded-xl border bg-white dark:bg-gray-900 flex flex-col justify-between overflow-hidden transition-all shadow-sm relative ${
                 isActive
                   ? 'border-brand-500 ring-2 ring-brand-500/20 scale-[1.01]'
                   : 'border-slate-200 dark:border-gray-800 hover:border-slate-400 dark:hover:border-gray-700'
@@ -246,39 +238,39 @@ export default function SubscriptionCenter() {
             >
               {/* Highlight Ribbon */}
               {isActive && (
-                <div className="absolute top-0 right-0 bg-brand-500 text-white font-mono text-[9px] font-bold px-3 py-1 rounded-bl-xl uppercase tracking-widest">
+                <div className="absolute top-0 right-0 bg-brand-500 text-white font-mono text-[9px] font-bold px-2.5 py-0.5 rounded-bl-lg uppercase tracking-widest">
                   Active
                 </div>
               )}
 
               {/* Card Body */}
-              <div className="p-6 space-y-5">
-                <div className="space-y-1">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-450 dark:text-gray-500">
+              <div className="p-3.5 sm:p-4 space-y-3">
+                <div className="space-y-0.5">
+                  <span className="text-[9px] font-bold uppercase tracking-wider text-slate-450 dark:text-gray-500">
                     {p.subtext}
                   </span>
-                  <h3 className="text-lg font-black text-slate-900 dark:text-white">{p.name}</h3>
+                  <h3 className="text-base font-black text-slate-900 dark:text-white">{p.name}</h3>
                 </div>
 
                 <div className="flex items-baseline gap-1">
-                  <span className="text-3xl font-black text-slate-900 dark:text-white">{p.price}</span>
-                  <span className="text-[11px] text-slate-400 dark:text-gray-500 font-medium">{p.billing}</span>
+                  <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white">{p.price}</span>
+                  <span className="text-[10px] text-slate-400 dark:text-gray-500 font-medium">{p.billing}</span>
                 </div>
 
-                <p className="text-xs text-slate-500 dark:text-gray-400 leading-relaxed min-h-[48px]">
+                <p className="text-xs text-slate-500 dark:text-gray-400 leading-relaxed min-h-[40px]">
                   {p.description}
                 </p>
 
                 <hr className="border-slate-100 dark:border-gray-800/80" />
 
                 {/* Features List */}
-                <div className="space-y-2.5">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-450 dark:text-gray-500 block">
+                <div className="space-y-1.5">
+                  <span className="text-[9px] font-bold uppercase tracking-wider text-slate-450 dark:text-gray-500 block">
                     Core Benefits & Features:
                   </span>
-                  <ul className="space-y-2">
+                  <ul className="space-y-1.5">
                     {p.features.map((feat, idx) => (
-                      <li key={idx} className="flex items-start gap-2 text-xs text-slate-650 dark:text-gray-300">
+                      <li key={idx} className="flex items-start gap-1.5 text-xs text-slate-650 dark:text-gray-300">
                         <Check size={12} className="text-emerald-500 shrink-0 mt-0.5" />
                         <span>{feat}</span>
                       </li>
@@ -288,11 +280,11 @@ export default function SubscriptionCenter() {
               </div>
 
               {/* Card Footer Button */}
-              <div className="p-6 bg-slate-50 dark:bg-gray-950/40 border-t border-slate-150 dark:border-gray-800/60">
+              <div className="p-3 sm:p-3.5 bg-slate-50 dark:bg-gray-950/40 border-t border-slate-150 dark:border-gray-800/60">
                 <button
                   onClick={() => setPendingPayment({ planId: p.id })}
                   disabled={isActive}
-                  className={`btn w-full text-xs font-bold py-2 flex items-center justify-center gap-1.5 ${
+                  className={`btn w-full text-xs font-bold py-1.5 flex items-center justify-center gap-1.5 ${
                     isActive
                       ? 'btn-secondary border-emerald-300 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300 cursor-default opacity-85'
                       : 'btn-primary'

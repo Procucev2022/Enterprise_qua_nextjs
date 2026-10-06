@@ -76,6 +76,7 @@ const { app } = require('../src/server');
 const { RFQ_ATTACHMENT_CONFIG } = require('../src/config/constants');
 const attachments = require('../src/services/rfqAttachmentService');
 const authService = require('../src/services/authService');
+const A_FUTURE_DATE = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
 const { ATTACHMENT_STATUS } = attachments;
 
@@ -95,9 +96,6 @@ const pdfBody = () => Buffer.from('%PDF-1.4 line item annexure').toString('base6
 afterAll(() => {
   fakeR2Store.clear();
 });
-
-// Computed per run so the date never falls into the past (see api.test.js).
-const A_FUTURE_DATE = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
 describe('RFQ attachment storage service', () => {
   describe('resolveObjectKey', () => {
