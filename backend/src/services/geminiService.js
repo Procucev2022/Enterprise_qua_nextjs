@@ -21,7 +21,7 @@ const { GEMINI_CONFIG, GEMINI_INLINE_MIME_TYPES } = require('../config/constants
 const { logger } = require('./loggerService');
 // Monetary parsing lives with the ingestion layer that consumes these rows, so
 // prices from a model reply and prices from a browser-parsed BOQ normalise identically.
-const { normalizeAmount } = require('./rfqIngestionService');
+const { normalizeAmount, ensureTaxonomyLoaded, taxonomyCategoryNames } = require('./rfqIngestionService');
 
 /** Machine-readable outcomes the route maps onto responses. */
 const EXTRACTION_STATUS = {
@@ -64,7 +64,7 @@ MONETARY VALUES
 Return a SINGLE JSON object with EXACTLY this shape and no surrounding prose or markdown:
 {
   "documentTitle": "String, a short title for the overall requirement, or null",
-  "category": "String, the overall category if stated, or null",
+  "category": "String, the overall category if stated, copied exactly from the CATEGORY LIST, or null if no listed category is stated",
   "deliveryDate": "String in YYYY-MM-DD if a delivery or required-by date is stated, else null",
   "deliveryLocation": "String, overall delivery location or destination if stated, or null",
   "deliveryCity": "String, overall delivery city if stated, or null",
@@ -200,8 +200,24 @@ function toRawLineItems(parsed) {
  * Build the generateContent request body, sending the document either as text or
  * as inline base64 data depending on what the caller could produce.
  */
+/**
+ * The category instruction block, listing only names held in the category master.
+ * The model may not invent a category: a stated category that matches nothing in
+ * the master comes back null, and classification then falls back to the items.
+ */
+function categoryPromptBlock() {
+  const { majors, minors } = taxonomyCategoryNames();
+  if (majors.length === 0 && minors.length === 0) return '';
+  return `
+
+CATEGORY LIST
+If the document states a procurement category (for example "Category: Civil Works"), set "category" to the matching name copied exactly from this list. Use a major category name or a minor category name. Never invent a category, never reword one, and never use a name that is not in this list. If nothing stated matches the list, return null.
+Major categories: ${majors.join(' | ')}
+Minor categories: ${minors.join(' | ')}`;
+}
+
 function buildRequestBody({ documentText, inlineData, mimeType, fileName }) {
-  const parts = [{ text: EXTRACTION_PROMPT }];
+  const parts = [{ text: EXTRACTION_PROMPT + categoryPromptBlock() }];
 
   if (fileName) {
     parts.push({ text: `\nDOCUMENT FILE NAME: ${fileName}` });
@@ -340,6 +356,8 @@ async function extractLineItems(input = {}) {
     }
   }
 
+  // Loaded before the request is built so the category list is current.
+  await ensureTaxonomyLoaded();
   const requestBody = buildRequestBody({
     // Oversized text is truncated rather than rejected: the head of a BOQ still
     // carries the line items, and a hard failure would lose them entirely.
