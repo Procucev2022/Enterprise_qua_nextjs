@@ -19,6 +19,7 @@
 const whatsAppService = require('../src/services/whatsAppService');
 const smsService = require('../src/services/smsService');
 const mailerService = require('../src/services/mailerService');
+const domainQueries = require('../src/db/domainQueries');
 const scheduler = require('../src/services/rfqChaserScheduler');
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -65,6 +66,29 @@ afterEach(() => {
 // ── scheduleVendorChaser ─────────────────────────────────────────────────────
 
 describe('scheduleVendorChaser', () => {
+  test('persists Worker chasers without request-scoped timers', async () => {
+    const previousEnv = globalThis.__CF_ENV__;
+    const previousWaitUntil = globalThis.__CF_WAIT_UNTIL__;
+    const waitUntil = jest.fn();
+    const persistSpy = jest.spyOn(domainQueries, 'insertChaserJobInDB').mockResolvedValue(true);
+    globalThis.__CF_ENV__ = { DB: {} };
+    globalThis.__CF_WAIT_UNTIL__ = waitUntil;
+
+    try {
+      scheduler.scheduleVendorChaser(RFQ, VENDOR);
+
+      expect(scheduler.pendingTimers.has(RFQ.rfqNumber)).toBe(false);
+      expect(persistSpy).toHaveBeenCalledTimes(4);
+      expect(waitUntil).toHaveBeenCalledTimes(4);
+      await Promise.all(waitUntil.mock.calls.map(([promise]) => promise));
+    } finally {
+      if (previousEnv === undefined) delete globalThis.__CF_ENV__;
+      else globalThis.__CF_ENV__ = previousEnv;
+      if (previousWaitUntil === undefined) delete globalThis.__CF_WAIT_UNTIL__;
+      else globalThis.__CF_WAIT_UNTIL__ = previousWaitUntil;
+    }
+  });
+
   test('registers exactly 4 timer handles in pendingTimers (SMS, Call, WhatsApp, Email)', () => {
     scheduler.scheduleVendorChaser(RFQ, VENDOR, {});
     expect(scheduler.pendingTimers.get(RFQ.rfqNumber)).toHaveLength(4);
@@ -164,6 +188,43 @@ describe('scheduleVendorChaser', () => {
   test('does nothing when vendor is null', () => {
     expect(() => scheduler.scheduleVendorChaser(RFQ, null)).not.toThrow();
     expect(scheduler.pendingTimers.size).toBe(0);
+  });
+});
+
+describe('dispatchDueChaserJobs', () => {
+  test('loads the full RFQ and sends the due email reminder', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const emailJob = {
+      id: 'chaser-RFQ-TEST-001-v-001-email',
+      rfq_number: RFQ.rfqNumber,
+      vendor_id: VENDOR.id,
+      vendor_name: VENDOR.name,
+      vendor_email: VENDOR.email,
+      vendor_phone: VENDOR.phone,
+      vendor_contact_person: VENDOR.contactPerson,
+      channel: 'email',
+    };
+    jest.spyOn(domainQueries, 'claimDueChaserJobsFromDB').mockResolvedValue([emailJob]);
+    jest.spyOn(domainQueries, 'getRFQByNumberFromDB').mockResolvedValue(RFQ);
+    jest.spyOn(domainQueries, 'markChaserJobFiredInDB').mockResolvedValue();
+    const emailSpy = jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: true });
+    process.env.NODE_ENV = 'production';
+
+    try {
+      await expect(scheduler.dispatchDueChaserJobs()).resolves.toEqual({
+        claimed: 1,
+        sent: 1,
+        failed: 0,
+        skipped: 0,
+      });
+      expect(emailSpy).toHaveBeenCalledWith(
+        VENDOR.email,
+        expect.objectContaining({ rfq: RFQ, isReminder: true })
+      );
+      expect(domainQueries.markChaserJobFiredInDB).toHaveBeenCalledWith(emailJob.id);
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
   });
 });
 

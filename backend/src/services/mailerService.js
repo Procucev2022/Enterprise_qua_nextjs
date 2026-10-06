@@ -647,7 +647,7 @@ function emailGatewayAddress() {
 }
 
 function buildRfqInviteEmail(to, context = {}) {
-  const { rfq = {}, recipientName, buyerEmail, cc, freeCreditsRemaining, isSubscribed } = context;
+  const { rfq = {}, recipientName, buyerEmail, cc, freeCreditsRemaining, isSubscribed, isReminder = false } = context;
   const items = Array.isArray(rfq.extractedEntities) && rfq.extractedEntities.length > 0
     ? rfq.extractedEntities
     : Array.isArray(rfq.items) && rfq.items.length > 0
@@ -669,9 +669,10 @@ function buildRfqInviteEmail(to, context = {}) {
     .join('');
 
   const category = rfq.category || null;
+  const subjectPrefix = isReminder ? 'Reminder: RFQ' : 'New RFQ';
   const subject = category
-    ? `New RFQ ${rfq.rfqNumber} in ${category}`
-    : `New RFQ ${rfq.rfqNumber}`;
+    ? `${subjectPrefix} ${rfq.rfqNumber} in ${category}`
+    : `${subjectPrefix} ${rfq.rfqNumber}`;
 
   const budgetFormatted = rfq.budget != null && rfq.budget !== '' ? `₹${Number(rfq.budget).toLocaleString('en-IN')}` : null;
 
@@ -686,7 +687,7 @@ function buildRfqInviteEmail(to, context = {}) {
 
   const inner = `
     <p>${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}</p>
-    <p>${rfq.buyerAccountName ? `<strong>${rfq.buyerAccountName}</strong> has` : 'A buyer has'} raised a request for quotation your organisation is matched to.</p>
+    <p>${isReminder ? 'This is a reminder to submit your quotation for' : `${rfq.buyerAccountName ? `<strong>${rfq.buyerAccountName}</strong> has` : 'A buyer has'} raised a request for quotation your organisation is matched to.`}</p>
     <table style="width: 100%; border-collapse: collapse; margin: 16px 0; background: #f8fafc;">
       ${row('RFQ Number', rfq.rfqNumber)}
       ${row('Requirement', rfq.title)}
@@ -711,7 +712,7 @@ function buildRfqInviteEmail(to, context = {}) {
       ${
         isSubscribed
           ? '<div style="background: #f0fdf4; border: 1px solid #86efac; color: #166534; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px;">✨ <strong>Subscribed Supplier:</strong> You have active subscription access with unlimited quotation submissions.</div>'
-          : freeCreditsRemaining !== undefined
+          : freeCreditsRemaining !== undefined && freeCreditsRemaining !== null
           ? `<div style="background: #f8fafc; border: 1px solid #cbd5e1; color: #334155; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px;">📊 <strong>Available Free Quotation Credits:</strong> ${freeCreditsRemaining} / 5 remaining.${freeCreditsRemaining === 0 ? ' <span style="color: #b91c1c; font-weight: bold;">(Plan upgrade required to submit quote)</span>' : ''}</div>`
           : ''
       }
@@ -748,7 +749,7 @@ function buildRfqInviteEmail(to, context = {}) {
     replyTo: gatewayEmail,
     cc: buyerCc,
     subject,
-    html: wrapEmail('PROCUCEV ENTERPRISE', 'New Sourcing Enquiry', inner),
+    html: wrapEmail('PROCUCEV ENTERPRISE', isReminder ? 'RFQ Reminder' : 'New Sourcing Enquiry', inner),
   };
 }
 
@@ -1684,4 +1685,3 @@ module.exports = {
   getPublicFrontendUrl,
   getLogoUrl,
 };
-
