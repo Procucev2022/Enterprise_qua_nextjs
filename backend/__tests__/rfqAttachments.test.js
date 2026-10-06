@@ -96,6 +96,9 @@ afterAll(() => {
   fakeR2Store.clear();
 });
 
+// Computed per run so the date never falls into the past (see api.test.js).
+const A_FUTURE_DATE = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
 describe('RFQ attachment storage service', () => {
   describe('resolveObjectKey', () => {
     // An id is only ever generated server-side; refusing anything else is what
@@ -514,7 +517,7 @@ describe('RFQ attachment HTTP routes', () => {
         .send({
           title: 'Manually Keyed Spares Requirement',
           category: 'Engineering Spares - Mechanical',
-          targetDeliveryDate: '2026-10-05',
+          targetDeliveryDate: A_FUTURE_DATE,
           sourcingMode: 'mode_1',
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '400701',
@@ -533,7 +536,7 @@ describe('RFQ attachment HTTP routes', () => {
         .send({
           title: 'Requirement With No Documents',
           category: 'Engineering Spares - Mechanical',
-          targetDeliveryDate: '2026-10-05',
+          targetDeliveryDate: A_FUTURE_DATE,
           sourcingMode: 'mode_1',
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '400701',

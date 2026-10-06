@@ -604,7 +604,7 @@ describe('API Route Endpoints', () => {
           title: 'Procurement of Bearing Housings',
           category: 'Engineering Spares - Mechanical',
           budget: 90000,
-          targetDeliveryDate: '2026-10-05',
+          targetDeliveryDate: A_FUTURE_DATE,
           sourcingMode: 'mode_1',
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '400701',
@@ -636,7 +636,7 @@ describe('API Route Endpoints', () => {
         .send({
           title: 'Procurement of Attached Pumps',
           category: 'Engineering Spares - Mechanical',
-          targetDeliveryDate: '2026-10-05',
+          targetDeliveryDate: A_FUTURE_DATE,
           sourcingMode: 'mode_1',
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '400701',
@@ -672,7 +672,7 @@ describe('API Route Endpoints', () => {
         .send({
           title: 'Procurement of Unpriced Spares',
           category: 'Engineering Spares - Mechanical',
-          targetDeliveryDate: '2026-10-05',
+          targetDeliveryDate: A_FUTURE_DATE,
           sourcingMode: 'mode_1',
           deliveryLocation: 'Pune Facility, Dock 2',
           deliveryPincode: '411057',
@@ -692,7 +692,7 @@ describe('API Route Endpoints', () => {
         .send({
           title: 'Procurement of Bearing Housings',
           category: 'Engineering Spares - Mechanical',
-          targetDeliveryDate: '2026-10-05',
+          targetDeliveryDate: A_FUTURE_DATE,
           sourcingMode: 'mode_1',
           deliveryPincode: '400701',
         });
@@ -708,7 +708,7 @@ describe('API Route Endpoints', () => {
         .send({
           title: 'Procurement of Bearing Housings',
           category: 'Engineering Spares - Mechanical',
-          targetDeliveryDate: '2026-10-05',
+          targetDeliveryDate: A_FUTURE_DATE,
           sourcingMode: 'mode_1',
           deliveryLocation: 'X',
           deliveryPincode: '400701',
@@ -727,7 +727,7 @@ describe('API Route Endpoints', () => {
         .send({
           title: 'Procurement of Bearing Housings',
           category: 'Engineering Spares - Mechanical',
-          targetDeliveryDate: '2026-10-05',
+          targetDeliveryDate: A_FUTURE_DATE,
           sourcingMode: 'mode_1',
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
         });
@@ -743,7 +743,7 @@ describe('API Route Endpoints', () => {
         .send({
           title: 'Procurement of Bearing Housings',
           category: 'Engineering Spares - Mechanical',
-          targetDeliveryDate: '2026-10-05',
+          targetDeliveryDate: A_FUTURE_DATE,
           sourcingMode: 'mode_1',
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '!!',
@@ -760,7 +760,7 @@ describe('API Route Endpoints', () => {
         .send({
           title: 'Export Order for Valves',
           category: 'Engineering Spares - Mechanical',
-          targetDeliveryDate: '2026-10-05',
+          targetDeliveryDate: A_FUTURE_DATE,
           sourcingMode: 'mode_1',
           deliveryLocation: 'Tilbury Docks, Berth 4',
           deliveryPincode: 'SW1A 1AA',
