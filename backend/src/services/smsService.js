@@ -4,15 +4,8 @@ const { SMS_DLT_TEMPLATES } = require('../config/constants');
 // ─────────────────────────────────────────────────────────────────────────────
 // URL Shortener
 //
-// The approved DLT template uses {#var#} for the bid URL (Variable 3).
-// The full workers.dev URL is ~110 chars which pushes the total message to
-// 218 chars (2 SMS units). Indian carriers deliver Promotional 2-unit SMS
-// unreliably. Shortening to a TinyURL (~28 chars) keeps the message to
-// 1 SMS unit (≤160 chars) and improves delivery significantly.
-//
-// TinyURL is used because it requires no API key and has no daily quota limits
-// for standard usage. Falls back to the original URL silently if the request
-// fails so SMS is never blocked by a shortener outage.
+// This helper is not used for RFQ DLT messages: their URL must remain on a
+// domain registered for the approved {#urg#} variable.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // In-memory cache: original URL → shortened URL (avoids re-shortening on retries)
@@ -95,8 +88,16 @@ const SMS_GATEWAY_CONFIG = {
     return getEnv('SMS_GATEWAY_USER', 'Procucev_OTP');
   },
 
+  get RFQ_USER() {
+    return getEnv('SMS_GATEWAY_RFQ_USER', 'ProcucevWapp1');
+  },
+
   get PASS() {
     return getEnv('SMS_GATEWAY_PASS', 'TzlzyMcFEZRF');
+  },
+
+  get RFQ_PASS() {
+    return getEnv('SMS_GATEWAY_RFQ_PASS', SMS_GATEWAY_CONFIG.PASS);
   },
 
   get SENDER() {
@@ -353,12 +354,10 @@ async function sendRFQChaserSms({
       rfqNumber
     )}`;
 
-  // Exact approved DLT template (SMS_DLT_TEMPLATES.RFQ_CHASER.TEMPLATE):
-  // RFQ Alert: You are invited to bid for RFQ {#var#}, Item: {#var#}. Submit quote: {#var#} - Team Procucev.
-  // Variables mapped in order: rfqNumber → rfqTitle → bidUrl
-  const message = `RFQ Alert: You are invited to bid for RFQ ${rfqNumber}, Item: ${
-    rfqTitle || rfqNumber
-  }. Submit quote: ${resolvedBidLink} - Team Procucev.`;
+  const message = SMS_DLT_TEMPLATES.RFQ_CHASER.TEMPLATE
+    .replace('{#alp#}', rfqNumber)
+    .replace('{#alp#}', rfqTitle || rfqNumber)
+    .replace('{#urg#}', resolvedBidLink);
 
   const messageChars = message.length;
   const smsUnits = Math.ceil(messageChars / 160);
@@ -377,8 +376,8 @@ async function sendRFQChaserSms({
   );
 
   const payload = {
-    user: SMS_GATEWAY_CONFIG.USER,
-    pass: SMS_GATEWAY_CONFIG.PASS,
+    user: SMS_GATEWAY_CONFIG.RFQ_USER,
+    pass: SMS_GATEWAY_CONFIG.RFQ_PASS,
     smstosend: [
       {
         to: `91${formattedNumber}`,
@@ -392,63 +391,61 @@ async function sendRFQChaserSms({
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 6000);
-
-    const res = await fetch(SMS_GATEWAY_CONFIG.URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json, text/plain, */*',
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeout);
-
-    const responseText = await res.text();
-    const messageId = `sms-${Date.now()}`;
-
-    // ─────────────────────────────────────────────────────────────────────
-    // qua-bug branch implementation kept
-    // ─────────────────────────────────────────────────────────────────────
-    const isGatewayError =
-      !res.ok ||
-      /^(ERR|ERROR|FAIL|INVALID)/i.test(responseText.trim()) ||
-      /"status"\s*:\s*"(?:error|failed)"/i.test(responseText);
-
-    if (isGatewayError) {
-      logger.warn(
-        `SMS RFQ chaser gateway rejected message for 91${formattedNumber} — HTTP ${res.status}: ${responseText}`,
-        {
-          status: res.status,
-          response: responseText,
-          rfqNumber,
-          vendorName,
-          smsgid: SMS_GATEWAY_CONFIG.RFQ_SMSGID,
-          templateName: SMS_DLT_TEMPLATES.RFQ_CHASER.NAME,
+    try {
+      const res = await fetch(SMS_GATEWAY_CONFIG.URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/plain, */*',
         },
-        'SMS_SERVICE'
-      );
-    } else {
-      logger.info(
-        `SMS RFQ chaser dispatched to 91${formattedNumber} for ${rfqNumber}`,
-        {
-          status: res.status,
-          response: responseText,
-          rfqNumber,
-          vendorName,
-          smsgid: SMS_GATEWAY_CONFIG.RFQ_SMSGID,
-          templateName: SMS_DLT_TEMPLATES.RFQ_CHASER.NAME,
-          templateCategory: SMS_DLT_TEMPLATES.RFQ_CHASER.CATEGORY,
-        },
-        'SMS_SERVICE'
-      );
-    }
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      const responseText = await res.text();
 
-    return {
-      success: res.ok,
-      messageId,
-      response: responseText,
+      const messageId = `sms-${Date.now()}`;
+
+      const isGatewayError =
+        !res.ok ||
+        /^(ERR|ERROR|FAIL|INVALID|REJECTED)/i.test(responseText.trim()) ||
+        /"status"\s*:\s*"(?:error|failed|failure|invalid|rejected)"/i.test(responseText);
+
+      if (isGatewayError) {
+        logger.warn(
+          `SMS RFQ chaser gateway rejected message for 91${formattedNumber} — HTTP ${res.status}: ${responseText}`,
+          {
+            status: res.status,
+            response: responseText,
+            rfqNumber,
+            vendorName,
+            smsgid: SMS_GATEWAY_CONFIG.RFQ_SMSGID,
+            templateName: SMS_DLT_TEMPLATES.RFQ_CHASER.NAME,
+          },
+          'SMS_SERVICE'
+        );
+      } else {
+        logger.info(
+          `SMS RFQ chaser dispatched to 91${formattedNumber} for ${rfqNumber}`,
+          {
+            status: res.status,
+            response: responseText,
+            rfqNumber,
+            vendorName,
+            smsgid: SMS_GATEWAY_CONFIG.RFQ_SMSGID,
+            templateName: SMS_DLT_TEMPLATES.RFQ_CHASER.NAME,
+            templateCategory: SMS_DLT_TEMPLATES.RFQ_CHASER.CATEGORY,
+          },
+          'SMS_SERVICE'
+        );
+      }
+
+      return {
+        success: !isGatewayError,
+        messageId,
+        response: responseText,
+      };
+    } finally {
+      clearTimeout(timeout);
     };
   } catch (err) {
     logger.error(

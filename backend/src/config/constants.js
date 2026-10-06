@@ -774,28 +774,22 @@ const CHASER_DELAYS = {
 // ==============================================================================
 // Registered templates on sendmsg.in / TRAI DLT portal.
 //
-// Template Name      : RFQ_Notification_Seller
+// Template Name      : RFQ_Notification_Seller_Service
 // SMSGID             : 1777179076323440961
-// DLT Category       : PROMOTIONAL (STPL Active)
-// Approved Text      : RFQ Alert {#var#}. You are invited to bid for {#var#}. Submit quote : {#var#} - Team Procucev.
-// Variables          : {#var#}×3 → rfqNumber, rfqTitle, bidUrl
-//
-// NOTE: The bid URL (Variable 3) points to the actual workers.dev quotation-form
-// URL. TinyURL shortening is applied so the message fits in 1 SMS unit (≤160 chars)
-// and improves Promotional category delivery on Indian carriers.
-// The shortened URL redirects to the real quotation-form page.
+// Approved Text      : RFQ Alert {#alp#}: You are invited to bid for {#alp#}. Submit quote : {#urg#} - Team Procucev.
+// Variables          : {#alp#}, {#alp#}, {#urg#} → rfqNumber, rfqTitle, bidUrl
 //
 // OTP Template       : DLT ID 1102294821 (TRANSACTIONAL)
 const SMS_DLT_TEMPLATES = {
   RFQ_CHASER: {
     NAME:     'RFQ_Notification_Seller_Service',
-    SMSGID:   process.env.SMS_GATEWAY_RFQ_SMSGID || '1777179100456823380',
+    SMSGID:   process.env.SMS_GATEWAY_RFQ_SMSGID || '1777179076323440961',
     CATEGORY: 'SERVICE_IMPLICIT',
     // Exact approved template text — static parts must match character-for-character.
-    TEMPLATE: 'RFQ Alert: You are invited to bid for RFQ {#var#}, Item: {#var#}. Submit quote: {#var#} - Team Procucev.',
+    TEMPLATE: 'RFQ Alert {#alp#}: You are invited to bid for {#alp#}. Submit quote : {#urg#} - Team Procucev.',
     VARIABLES: ['rfqNumber', 'rfqTitle', 'bidUrl'],
-    // bidUrl points to the registered workers.dev quotation-form page.
-    // Public URL shorteners are forbidden under TRAI DLT unless whitelisted.
+    VARIABLE_TYPES: ['alp', 'alp', 'urg'],
+    // Keep the registered quotation URL; an unregistered URL shortener can fail DLT validation.
     URL_SHORTENING: false,
   },
   OTP: {
@@ -1497,5 +1491,4 @@ module.exports = {
   CHASER_DELAYS,
   SMS_DLT_TEMPLATES,
 };
-
 

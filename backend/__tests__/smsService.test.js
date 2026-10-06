@@ -2,6 +2,10 @@ const smsService = require('../src/services/smsService');
 
 describe('smsService Unit Tests', () => {
   const originalEnv = process.env.NODE_ENV;
+  const originalRfqSmsgid = process.env.SMS_GATEWAY_RFQ_SMSGID;
+  const originalSmsGatewayUser = process.env.SMS_GATEWAY_USER;
+  const originalRfqSmsGatewayUser = process.env.SMS_GATEWAY_RFQ_USER;
+  const originalRfqSmsGatewayPass = process.env.SMS_GATEWAY_RFQ_PASS;
   const originalFetch = global.fetch;
 
   beforeEach(() => {
@@ -10,6 +14,27 @@ describe('smsService Unit Tests', () => {
 
   afterEach(() => {
     process.env.NODE_ENV = originalEnv;
+    if (originalRfqSmsgid === undefined) {
+      delete process.env.SMS_GATEWAY_RFQ_SMSGID;
+    } else {
+      process.env.SMS_GATEWAY_RFQ_SMSGID = originalRfqSmsgid;
+    }
+    if (originalSmsGatewayUser === undefined) {
+      delete process.env.SMS_GATEWAY_USER;
+    } else {
+      process.env.SMS_GATEWAY_USER = originalSmsGatewayUser;
+    }
+    if (originalRfqSmsGatewayUser === undefined) {
+      delete process.env.SMS_GATEWAY_RFQ_USER;
+    } else {
+      process.env.SMS_GATEWAY_RFQ_USER = originalRfqSmsGatewayUser;
+    }
+    if (originalRfqSmsGatewayPass === undefined) {
+      delete process.env.SMS_GATEWAY_RFQ_PASS;
+    } else {
+      process.env.SMS_GATEWAY_RFQ_PASS = originalRfqSmsGatewayPass;
+    }
+    jest.useRealTimers();
     global.fetch = originalFetch;
     smsService.clearSmsThrottleCache();
     jest.restoreAllMocks();
@@ -51,6 +76,8 @@ describe('smsService Unit Tests', () => {
 
     test('performs live HTTP post in non-test environment', async () => {
       process.env.NODE_ENV = 'production';
+      process.env.SMS_GATEWAY_USER = 'Procucev_OTP';
+      process.env.SMS_GATEWAY_RFQ_USER = 'ProcucevWapp1';
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
         status: 200,
@@ -60,6 +87,10 @@ describe('smsService Unit Tests', () => {
       const res = await smsService.sendOtpSms('9157154504', '123456');
       expect(res.success).toBe(true);
       expect(res.response).toContain('MSG123');
+      expect(JSON.parse(global.fetch.mock.calls[0][1].body).user).toBe('Procucev_OTP');
+      expect(JSON.parse(global.fetch.mock.calls[0][1].body).pass).toBe(
+        smsService.SMS_GATEWAY_CONFIG.PASS
+      );
       expect(global.fetch).toHaveBeenCalledWith(
         smsService.SMS_GATEWAY_CONFIG.URL,
         expect.objectContaining({
@@ -169,6 +200,10 @@ describe('smsService Unit Tests', () => {
 
     test('sendRFQChaserSms handles production gateway flow, errors, and throttling', async () => {
       process.env.NODE_ENV = 'production';
+      process.env.SMS_GATEWAY_RFQ_SMSGID = '1777179076323440961';
+      process.env.SMS_GATEWAY_USER = 'Procucev_OTP';
+      process.env.SMS_GATEWAY_RFQ_USER = 'ProcucevWapp1';
+      process.env.SMS_GATEWAY_RFQ_PASS = 'rfq-account-test-password';
 
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
@@ -183,6 +218,15 @@ describe('smsService Unit Tests', () => {
         bidLink: 'https://procucev.com/quote/1',
       });
       expect(res.success).toBe(true);
+      const requestPayload = JSON.parse(global.fetch.mock.calls[0][1].body);
+      expect(requestPayload.user).toBe('ProcucevWapp1');
+      expect(requestPayload.pass).toBe('rfq-account-test-password');
+      expect(requestPayload.smstosend[0]).toMatchObject({
+        to: '919157154504',
+        from: 'PROCUC',
+        smstext: 'RFQ Alert RFQ-CHASER-01: You are invited to bid for Pumps. Submit quote : https://procucev.com/quote/1 - Team Procucev.',
+        smsgid: '1777179076323440961',
+      });
 
       // Rapid call triggers throttle
       const throttled = await smsService.sendRFQChaserSms({
@@ -191,6 +235,15 @@ describe('smsService Unit Tests', () => {
       });
       expect(throttled.success).toBe(true);
       expect(throttled.throttled).toBe(true);
+
+      smsService.clearSmsThrottleForPhone('9157154504');
+      const afterThrottleClear = await smsService.sendRFQChaserSms({
+        mobile: '9157154504',
+        rfqNumber: 'RFQ-CHASER-01',
+      });
+      expect(afterThrottleClear.success).toBe(true);
+      expect(afterThrottleClear.throttled).toBeUndefined();
+      expect(global.fetch).toHaveBeenCalledTimes(2);
 
       // Gateway failure response
       smsService.clearSmsThrottleCache();
@@ -205,15 +258,59 @@ describe('smsService Unit Tests', () => {
       });
       expect(failed.success).toBe(false);
 
+      smsService.clearSmsThrottleCache();
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => '{"status":"rejected","error":"Template mismatch"}',
+      });
+      const rejected = await smsService.sendRFQChaserSms({
+        mobile: '9157154504',
+        rfqNumber: 'RFQ-CHASER-03',
+      });
+      expect(rejected.success).toBe(false);
+
       // Gateway exception
       smsService.clearSmsThrottleCache();
       global.fetch = jest.fn().mockRejectedValue(new Error('Connection aborted'));
       const errorRes = await smsService.sendRFQChaserSms({
         mobile: '9157154504',
-        rfqNumber: 'RFQ-CHASER-03',
+        rfqNumber: 'RFQ-CHASER-04',
       });
       expect(errorRes.success).toBe(false);
       expect(errorRes.error).toBe('Connection aborted');
+    });
+
+    test('sendRFQChaserSms aborts requests that exceed the gateway timeout', async () => {
+      process.env.NODE_ENV = 'production';
+      global.fetch = jest.fn(
+        (_url, { signal }) =>
+          new Promise((resolve, reject) => {
+            signal.addEventListener(
+              'abort',
+              () => reject(new Error('SMS gateway request timed out')),
+              { once: true }
+            );
+          })
+      );
+      jest.useFakeTimers();
+
+      const pending = smsService.sendRFQChaserSms({
+        mobile: '9157154504',
+        rfqNumber: 'RFQ-TIMEOUT-01',
+      });
+      const pendingOtp = smsService.sendOtpSms('9157154505', '123456');
+      await jest.advanceTimersByTimeAsync(6000);
+      const [result, otpResult] = await Promise.all([pending, pendingOtp]);
+
+      expect(result).toMatchObject({
+        success: false,
+        error: 'SMS gateway request timed out',
+      });
+      expect(otpResult).toMatchObject({
+        success: false,
+        error: 'SMS gateway request timed out',
+      });
     });
 
     test('sendBuyerComparisonSms dispatches buyer comparison SMS and validates mobile', async () => {
@@ -233,6 +330,8 @@ describe('smsService Unit Tests', () => {
 
     test('sendBuyerComparisonSms handles production gateway flow, errors, and throttling', async () => {
       process.env.NODE_ENV = 'production';
+      process.env.SMS_GATEWAY_USER = 'Procucev_OTP';
+      process.env.SMS_GATEWAY_RFQ_USER = 'ProcucevWapp1';
 
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
@@ -247,6 +346,10 @@ describe('smsService Unit Tests', () => {
         quotesCount: 5,
       });
       expect(res.success).toBe(true);
+      expect(JSON.parse(global.fetch.mock.calls[0][1].body).user).toBe('Procucev_OTP');
+      expect(JSON.parse(global.fetch.mock.calls[0][1].body).pass).toBe(
+        smsService.SMS_GATEWAY_CONFIG.PASS
+      );
 
       // Throttling
       const throttled = await smsService.sendBuyerComparisonSms({
