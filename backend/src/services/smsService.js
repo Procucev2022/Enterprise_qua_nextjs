@@ -96,6 +96,10 @@ const SMS_GATEWAY_CONFIG = {
     return getEnv('SMS_GATEWAY_PASS', 'TzlzyMcFEZRF');
   },
 
+  get RFQ_PASS() {
+    return getEnv('SMS_GATEWAY_RFQ_PASS', SMS_GATEWAY_CONFIG.PASS);
+  },
+
   get SENDER() {
     return getEnv('SMS_GATEWAY_SENDER', 'PROCUC');
   },
@@ -373,7 +377,7 @@ async function sendRFQChaserSms({
 
   const payload = {
     user: SMS_GATEWAY_CONFIG.RFQ_USER,
-    pass: SMS_GATEWAY_CONFIG.PASS,
+    pass: SMS_GATEWAY_CONFIG.RFQ_PASS,
     smstosend: [
       {
         to: `91${formattedNumber}`,

@@ -5,6 +5,7 @@ describe('smsService Unit Tests', () => {
   const originalRfqSmsgid = process.env.SMS_GATEWAY_RFQ_SMSGID;
   const originalSmsGatewayUser = process.env.SMS_GATEWAY_USER;
   const originalRfqSmsGatewayUser = process.env.SMS_GATEWAY_RFQ_USER;
+  const originalRfqSmsGatewayPass = process.env.SMS_GATEWAY_RFQ_PASS;
   const originalFetch = global.fetch;
 
   beforeEach(() => {
@@ -27,6 +28,11 @@ describe('smsService Unit Tests', () => {
       delete process.env.SMS_GATEWAY_RFQ_USER;
     } else {
       process.env.SMS_GATEWAY_RFQ_USER = originalRfqSmsGatewayUser;
+    }
+    if (originalRfqSmsGatewayPass === undefined) {
+      delete process.env.SMS_GATEWAY_RFQ_PASS;
+    } else {
+      process.env.SMS_GATEWAY_RFQ_PASS = originalRfqSmsGatewayPass;
     }
     jest.useRealTimers();
     global.fetch = originalFetch;
@@ -82,6 +88,9 @@ describe('smsService Unit Tests', () => {
       expect(res.success).toBe(true);
       expect(res.response).toContain('MSG123');
       expect(JSON.parse(global.fetch.mock.calls[0][1].body).user).toBe('Procucev_OTP');
+      expect(JSON.parse(global.fetch.mock.calls[0][1].body).pass).toBe(
+        smsService.SMS_GATEWAY_CONFIG.PASS
+      );
       expect(global.fetch).toHaveBeenCalledWith(
         smsService.SMS_GATEWAY_CONFIG.URL,
         expect.objectContaining({
@@ -194,6 +203,7 @@ describe('smsService Unit Tests', () => {
       process.env.SMS_GATEWAY_RFQ_SMSGID = '1777179076323440961';
       process.env.SMS_GATEWAY_USER = 'Procucev_OTP';
       process.env.SMS_GATEWAY_RFQ_USER = 'ProcucevWapp1';
+      process.env.SMS_GATEWAY_RFQ_PASS = 'rfq-account-test-password';
 
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
@@ -210,6 +220,7 @@ describe('smsService Unit Tests', () => {
       expect(res.success).toBe(true);
       const requestPayload = JSON.parse(global.fetch.mock.calls[0][1].body);
       expect(requestPayload.user).toBe('ProcucevWapp1');
+      expect(requestPayload.pass).toBe('rfq-account-test-password');
       expect(requestPayload.smstosend[0]).toMatchObject({
         to: '919157154504',
         from: 'PROCUC',
@@ -336,6 +347,9 @@ describe('smsService Unit Tests', () => {
       });
       expect(res.success).toBe(true);
       expect(JSON.parse(global.fetch.mock.calls[0][1].body).user).toBe('Procucev_OTP');
+      expect(JSON.parse(global.fetch.mock.calls[0][1].body).pass).toBe(
+        smsService.SMS_GATEWAY_CONFIG.PASS
+      );
 
       // Throttling
       const throttled = await smsService.sendBuyerComparisonSms({
