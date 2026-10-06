@@ -524,10 +524,8 @@ CREATE INDEX IF NOT EXISTS idx_bulk_vendor_import_sessions_status ON bulk_vendor
 -- =============================================================================
 -- CHASER QUEUE (restart-resilient scheduled notifications)
 -- =============================================================================
--- One row per pending chaser dispatch. Written when a chaser is scheduled,
--- deleted when it fires or is cancelled. On server boot, undelivered rows with
--- fire_at <= now() are re-dispatched immediately; future rows restart their
--- setTimeout from the remaining time. Survives process restarts.
+-- One row per chaser dispatch. Workers claim due rows from a Cron Trigger;
+-- Node deployments also re-arm pending jobs on boot.
 CREATE TABLE IF NOT EXISTS chaser_queue (
   id TEXT PRIMARY KEY,
   rfq_number TEXT NOT NULL,
@@ -539,7 +537,7 @@ CREATE TABLE IF NOT EXISTS chaser_queue (
   vendor_contact_person TEXT,
   rfq_title TEXT,
   channel TEXT NOT NULL,           -- 'whatsapp' | 'sms' | 'email'
-  status TEXT NOT NULL DEFAULT 'pending',  -- 'pending' | 'fired' | 'failed' | 'cancelled'
+  status TEXT NOT NULL DEFAULT 'pending',  -- 'pending' | 'processing' | 'fired' | 'failed' | 'cancelled'
   fire_at TEXT NOT NULL,           -- ISO-8601 UTC time to fire
   fired_at TEXT,
   error TEXT,

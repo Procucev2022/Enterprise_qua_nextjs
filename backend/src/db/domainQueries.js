@@ -390,6 +390,16 @@ async function getRFQsFromDB() {
   return result.rows.map((row) => parseRaw(row.raw));
 }
 
+async function getRFQByNumberFromDB(rfqNumber) {
+  if (!pool.hasStorage()) return null;
+  const result = await pool.query(
+    'SELECT raw FROM rfqs WHERE rfq_number = $1 LIMIT 1',
+    [rfqNumber],
+    { d1: true }
+  );
+  return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+}
+
 async function upsertRFQInDB(rfq) {
   if (!pool.hasStorage()) return null;
   const { id, rfqNumber, category, status, sourcingMode, budget } = rfq;
@@ -962,6 +972,31 @@ async function getPendingChaserJobsFromDB() {
   return result.rows || [];
 }
 
+/**
+ * Atomically claim due chaser jobs for a scheduled dispatcher.
+ * Processing claims older than 15 minutes are reclaimable after a Worker
+ * invocation terminates before it can finish dispatching.
+ */
+async function claimDueChaserJobsFromDB(now, staleBefore, limit = 25) {
+  if (!pool.hasStorage()) return [];
+  const result = await pool.query(
+    `UPDATE chaser_queue
+     SET status='processing', updated_at=$1
+     WHERE id IN (
+       SELECT id FROM chaser_queue
+       WHERE (status='pending' AND fire_at <= $1)
+          OR (status='processing' AND updated_at <= $2)
+       ORDER BY fire_at ASC
+       LIMIT $3
+     )
+     RETURNING id, rfq_number, rfq_id, vendor_id, vendor_name, vendor_phone,
+               vendor_email, vendor_contact_person, rfq_title, channel, fire_at`,
+    [now, staleBefore, limit],
+    { d1: true }
+  );
+  return result.rows || [];
+}
+
 module.exports = {
   getVendorsFromDB,
   getVendorsPageFromDB,
@@ -975,6 +1010,7 @@ module.exports = {
   deleteVendorInDB,
   bulkInsertVendorsInDB,
   getRFQsFromDB,
+  getRFQByNumberFromDB,
   upsertRFQInDB,
   deleteRFQInDB,
   getEvaluationsFromDB,
@@ -1006,4 +1042,5 @@ module.exports = {
   markChaserJobFailedInDB,
   cancelChaserJobsForRFQInDB,
   getPendingChaserJobsFromDB,
+  claimDueChaserJobsFromDB,
 };
