@@ -3,6 +3,8 @@ const smsService = require('../src/services/smsService');
 describe('smsService Unit Tests', () => {
   const originalEnv = process.env.NODE_ENV;
   const originalRfqSmsgid = process.env.SMS_GATEWAY_RFQ_SMSGID;
+  const originalSmsGatewayUser = process.env.SMS_GATEWAY_USER;
+  const originalRfqSmsGatewayUser = process.env.SMS_GATEWAY_RFQ_USER;
   const originalFetch = global.fetch;
 
   beforeEach(() => {
@@ -15,6 +17,16 @@ describe('smsService Unit Tests', () => {
       delete process.env.SMS_GATEWAY_RFQ_SMSGID;
     } else {
       process.env.SMS_GATEWAY_RFQ_SMSGID = originalRfqSmsgid;
+    }
+    if (originalSmsGatewayUser === undefined) {
+      delete process.env.SMS_GATEWAY_USER;
+    } else {
+      process.env.SMS_GATEWAY_USER = originalSmsGatewayUser;
+    }
+    if (originalRfqSmsGatewayUser === undefined) {
+      delete process.env.SMS_GATEWAY_RFQ_USER;
+    } else {
+      process.env.SMS_GATEWAY_RFQ_USER = originalRfqSmsGatewayUser;
     }
     jest.useRealTimers();
     global.fetch = originalFetch;
@@ -58,6 +70,8 @@ describe('smsService Unit Tests', () => {
 
     test('performs live HTTP post in non-test environment', async () => {
       process.env.NODE_ENV = 'production';
+      process.env.SMS_GATEWAY_USER = 'Procucev_OTP';
+      process.env.SMS_GATEWAY_RFQ_USER = 'ProcucevWapp1';
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
         status: 200,
@@ -67,6 +81,7 @@ describe('smsService Unit Tests', () => {
       const res = await smsService.sendOtpSms('9157154504', '123456');
       expect(res.success).toBe(true);
       expect(res.response).toContain('MSG123');
+      expect(JSON.parse(global.fetch.mock.calls[0][1].body).user).toBe('Procucev_OTP');
       expect(global.fetch).toHaveBeenCalledWith(
         smsService.SMS_GATEWAY_CONFIG.URL,
         expect.objectContaining({
@@ -177,6 +192,8 @@ describe('smsService Unit Tests', () => {
     test('sendRFQChaserSms handles production gateway flow, errors, and throttling', async () => {
       process.env.NODE_ENV = 'production';
       process.env.SMS_GATEWAY_RFQ_SMSGID = '1777179076323440961';
+      process.env.SMS_GATEWAY_USER = 'Procucev_OTP';
+      process.env.SMS_GATEWAY_RFQ_USER = 'ProcucevWapp1';
 
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
@@ -192,6 +209,7 @@ describe('smsService Unit Tests', () => {
       });
       expect(res.success).toBe(true);
       const requestPayload = JSON.parse(global.fetch.mock.calls[0][1].body);
+      expect(requestPayload.user).toBe('ProcucevWapp1');
       expect(requestPayload.smstosend[0]).toMatchObject({
         to: '919157154504',
         from: 'PROCUC',
@@ -301,6 +319,8 @@ describe('smsService Unit Tests', () => {
 
     test('sendBuyerComparisonSms handles production gateway flow, errors, and throttling', async () => {
       process.env.NODE_ENV = 'production';
+      process.env.SMS_GATEWAY_USER = 'Procucev_OTP';
+      process.env.SMS_GATEWAY_RFQ_USER = 'ProcucevWapp1';
 
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
@@ -315,6 +335,7 @@ describe('smsService Unit Tests', () => {
         quotesCount: 5,
       });
       expect(res.success).toBe(true);
+      expect(JSON.parse(global.fetch.mock.calls[0][1].body).user).toBe('Procucev_OTP');
 
       // Throttling
       const throttled = await smsService.sendBuyerComparisonSms({

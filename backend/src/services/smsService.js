@@ -88,6 +88,10 @@ const SMS_GATEWAY_CONFIG = {
     return getEnv('SMS_GATEWAY_USER', 'Procucev_OTP');
   },
 
+  get RFQ_USER() {
+    return getEnv('SMS_GATEWAY_RFQ_USER', 'ProcucevWapp1');
+  },
+
   get PASS() {
     return getEnv('SMS_GATEWAY_PASS', 'TzlzyMcFEZRF');
   },
@@ -368,7 +372,7 @@ async function sendRFQChaserSms({
   );
 
   const payload = {
-    user: SMS_GATEWAY_CONFIG.USER,
+    user: SMS_GATEWAY_CONFIG.RFQ_USER,
     pass: SMS_GATEWAY_CONFIG.PASS,
     smstosend: [
       {
