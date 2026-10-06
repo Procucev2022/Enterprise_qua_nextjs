@@ -626,43 +626,75 @@ const EMAIL_INGESTION_CONFIG = {
 // prefix, ZohoPay.* vs ZohoPaySandbox.*, and a different API host), so each needs
 // its own full credential set rather than one set with a URL swap. ZOHO_MODE
 // picks which block is active; the backend must be restarted to change it.
-const ZOHO_MODE = (process.env.ZOHO_MODE || 'live').toLowerCase() === 'sandbox' ? 'sandbox' : 'live';
+// Read on every access, not once at load. The Worker copies its secrets into
+// process.env per request, so a value captured when this module loads is empty.
+function zohoModeFromEnv() {
+  return (process.env.ZOHO_MODE || 'live').toLowerCase() === 'sandbox' ? 'sandbox' : 'live';
+}
 
-const ZOHO_LIVE_CONFIG = {
-  CLIENT_ID: process.env.ZOHO_LIVE_CLIENT_ID || process.env.ZOHO_CLIENT_ID || '',
-  CLIENT_SECRET: process.env.ZOHO_LIVE_CLIENT_SECRET || process.env.ZOHO_CLIENT_SECRET || '',
-  REFRESH_TOKEN: process.env.ZOHO_LIVE_REFRESH_TOKEN || process.env.ZOHO_REFRESH_TOKEN || '',
-  OAUTH_TOKEN_URL: process.env.ZOHO_LIVE_OAUTH_TOKEN_URL || process.env.ZOHO_OAUTH_TOKEN_URL || 'https://accounts.zoho.in/oauth/v2/token',
-  PAYMENTS_BASE_URL: process.env.ZOHO_LIVE_PAYMENTS_BASE_URL || 'https://payments.zoho.in/api/v1',
-  ACCOUNT_ID: process.env.ZOHO_LIVE_PAYMENTS_ACCOUNT_ID || process.env.ZOHO_PAYMENTS_ACCOUNT_ID || '',
-  WEBHOOK_SIGNING_KEY: process.env.ZOHO_LIVE_WEBHOOK_SIGNING_KEY || process.env.ZOHO_WEBHOOK_SIGNING_KEY || '',
-  RETURN_URL_BASE: process.env.ZOHO_LIVE_RETURN_URL_BASE || process.env.ZOHO_PAYMENTS_RETURN_URL_BASE || 'http://localhost:3000',
-};
+function zohoLiveCredentials() {
+  return {
+    CLIENT_ID: process.env.ZOHO_LIVE_CLIENT_ID || process.env.ZOHO_CLIENT_ID || '',
+    CLIENT_SECRET: process.env.ZOHO_LIVE_CLIENT_SECRET || process.env.ZOHO_CLIENT_SECRET || '',
+    REFRESH_TOKEN: process.env.ZOHO_LIVE_REFRESH_TOKEN || process.env.ZOHO_REFRESH_TOKEN || '',
+    OAUTH_TOKEN_URL: process.env.ZOHO_LIVE_OAUTH_TOKEN_URL || process.env.ZOHO_OAUTH_TOKEN_URL || 'https://accounts.zoho.in/oauth/v2/token',
+    PAYMENTS_BASE_URL: process.env.ZOHO_LIVE_PAYMENTS_BASE_URL || 'https://payments.zoho.in/api/v1',
+    ACCOUNT_ID: process.env.ZOHO_LIVE_PAYMENTS_ACCOUNT_ID || process.env.ZOHO_PAYMENTS_ACCOUNT_ID || '',
+    WEBHOOK_SIGNING_KEY: process.env.ZOHO_LIVE_WEBHOOK_SIGNING_KEY || process.env.ZOHO_WEBHOOK_SIGNING_KEY || '',
+    RETURN_URL_BASE: process.env.ZOHO_LIVE_RETURN_URL_BASE || process.env.ZOHO_PAYMENTS_RETURN_URL_BASE || 'http://localhost:3000',
+  };
+}
 
-const ZOHO_SANDBOX_CONFIG = {
-  CLIENT_ID: process.env.ZOHO_SANDBOX_CLIENT_ID || process.env.ZOHO_CLIENT_ID || '',
-  CLIENT_SECRET: process.env.ZOHO_SANDBOX_CLIENT_SECRET || process.env.ZOHO_CLIENT_SECRET || '',
-  REFRESH_TOKEN: process.env.ZOHO_SANDBOX_REFRESH_TOKEN || '',
-  OAUTH_TOKEN_URL: process.env.ZOHO_SANDBOX_OAUTH_TOKEN_URL || 'https://accounts.zoho.in/oauth/v2/token',
-  PAYMENTS_BASE_URL: process.env.ZOHO_SANDBOX_PAYMENTS_BASE_URL || 'https://paymentssandbox.zoho.in/api/v1',
-  ACCOUNT_ID: process.env.ZOHO_SANDBOX_PAYMENTS_ACCOUNT_ID || process.env.ZOHO_PAYMENTS_ACCOUNT_ID || '',
-  WEBHOOK_SIGNING_KEY: process.env.ZOHO_SANDBOX_WEBHOOK_SIGNING_KEY || '',
-  RETURN_URL_BASE: process.env.ZOHO_SANDBOX_RETURN_URL_BASE || process.env.ZOHO_PAYMENTS_RETURN_URL_BASE || 'http://localhost:3000',
-};
+function zohoSandboxCredentials() {
+  return {
+    CLIENT_ID: process.env.ZOHO_SANDBOX_CLIENT_ID || process.env.ZOHO_CLIENT_ID || '',
+    CLIENT_SECRET: process.env.ZOHO_SANDBOX_CLIENT_SECRET || process.env.ZOHO_CLIENT_SECRET || '',
+    REFRESH_TOKEN: process.env.ZOHO_SANDBOX_REFRESH_TOKEN || '',
+    OAUTH_TOKEN_URL: process.env.ZOHO_SANDBOX_OAUTH_TOKEN_URL || 'https://accounts.zoho.in/oauth/v2/token',
+    PAYMENTS_BASE_URL: process.env.ZOHO_SANDBOX_PAYMENTS_BASE_URL || 'https://paymentssandbox.zoho.in/api/v1',
+    ACCOUNT_ID: process.env.ZOHO_SANDBOX_PAYMENTS_ACCOUNT_ID || process.env.ZOHO_PAYMENTS_ACCOUNT_ID || '',
+    WEBHOOK_SIGNING_KEY: process.env.ZOHO_SANDBOX_WEBHOOK_SIGNING_KEY || '',
+    RETURN_URL_BASE: process.env.ZOHO_SANDBOX_RETURN_URL_BASE || process.env.ZOHO_PAYMENTS_RETURN_URL_BASE || 'http://localhost:3000',
+  };
+}
 
-const ZOHO_ACTIVE_CREDENTIALS = ZOHO_MODE === 'sandbox' ? ZOHO_SANDBOX_CONFIG : ZOHO_LIVE_CONFIG;
+function buildZohoConfig() {
+  const mode = zohoModeFromEnv();
+  return {
+    MODE: mode,
+    ...(mode === 'sandbox' ? zohoSandboxCredentials() : zohoLiveCredentials()),
+    RECONCILIATION_ENABLED: String(process.env.ZOHO_RECONCILIATION_ENABLED || '').toLowerCase() === 'true',
+    // 10 minutes, matching the reference app's `0 */10 * * * *` cron.
+    RECONCILIATION_INTERVAL_MS: Number(process.env.ZOHO_RECONCILIATION_INTERVAL_MS || 10 * 60 * 1000),
+    // Refresh the cached access token this many ms before it actually expires, so
+    // a request never races a token that's about to go stale mid-flight.
+    TOKEN_REFRESH_BUFFER_MS: 60 * 1000,
+    GST_RATE: 0.18,
+  };
+}
 
-const ZOHO_CONFIG = {
-  MODE: ZOHO_MODE,
-  ...ZOHO_ACTIVE_CREDENTIALS,
-  RECONCILIATION_ENABLED: String(process.env.ZOHO_RECONCILIATION_ENABLED || '').toLowerCase() === 'true',
-  // 10 minutes, matching the reference app's `0 */10 * * * *` cron.
-  RECONCILIATION_INTERVAL_MS: Number(process.env.ZOHO_RECONCILIATION_INTERVAL_MS || 10 * 60 * 1000),
-  // Refresh the cached access token this many ms before it actually expires, so
-  // a request never races a token that's about to go stale mid-flight.
-  TOKEN_REFRESH_BUFFER_MS: 60 * 1000,
-  GST_RATE: 0.18,
-};
+// Same name and shape as before, so every call site is unchanged. Values assigned
+// to it (tests do this to set and restore fields) are kept as overrides and win
+// over the environment.
+const zohoConfigOverrides = {};
+const ZOHO_CONFIG = new Proxy({}, {
+  get: (_target, key) => (key in zohoConfigOverrides ? zohoConfigOverrides[key] : buildZohoConfig()[key]),
+  set: (_target, key, value) => {
+    zohoConfigOverrides[key] = value;
+    return true;
+  },
+  deleteProperty: (_target, key) => {
+    delete zohoConfigOverrides[key];
+    return true;
+  },
+  has: (_target, key) => key in zohoConfigOverrides || key in buildZohoConfig(),
+  ownKeys: () => [...new Set([...Object.keys(buildZohoConfig()), ...Object.keys(zohoConfigOverrides)])],
+  getOwnPropertyDescriptor: (_target, key) => {
+    if (!(key in zohoConfigOverrides) && !(key in buildZohoConfig())) return undefined;
+    const value = key in zohoConfigOverrides ? zohoConfigOverrides[key] : buildZohoConfig()[key];
+    return { enumerable: true, configurable: true, value, writable: true };
+  },
+});
 
 // The app's three vendor subscription plans (VENDOR_SUBSCRIPTION_PLANS above)
 // only carry a display price ('$149' etc.) — no numeric, currency-specific

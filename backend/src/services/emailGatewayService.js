@@ -1230,12 +1230,15 @@ async function processMessage(rawSource, config = resolveConfig()) {
  * gmail.modify scopes in addition to gmail.send (re-authorize via
  * scripts/get-gmail-refresh-token.js if the existing token predates this).
  */
-async function pollViaGmailApi(config = resolveConfig()) {
-  if (pollInFlight(runtime)) {
-    logger.warn('Email gateway poll skipped: previous buyer poll still in flight', { isPolling: runtime.isPolling, startedAt: runtime.pollStartedAt, ageMs: Date.now() - runtime.pollStartedAt, now: Date.now() }, 'EMAIL_GATEWAY');
+async function pollViaGmailApi(config = resolveConfig(), options = {}) {
+  // The lock state and the auth client default to the buyer identity; the vendor
+  // inbox passes its own so the two polls never share a lock or a token.
+  const state = options.state || runtime;
+  if (pollInFlight(state)) {
+    logger.warn('Email gateway poll skipped: previous buyer poll still in flight', { isPolling: state.isPolling, startedAt: state.pollStartedAt, ageMs: Date.now() - state.pollStartedAt, now: Date.now() }, 'EMAIL_GATEWAY');
     return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.POLL_ALREADY_RUNNING };
   }
-  const auth = mailerService.getGmailOAuthClient();
+  const auth = options.auth || mailerService.getGmailOAuthClient();
   if (!auth) {
     return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
   }
@@ -1243,18 +1246,18 @@ async function pollViaGmailApi(config = resolveConfig()) {
   const { google } = require('googleapis');
   const gmail = google.gmail({ version: 'v1', auth });
 
-  runtime.isPolling = true;
-  runtime.pollStartedAt = Date.now();
-  logger.info('Buyer poll lock SET', { site: 'pollViaGmailApi', startedAt: runtime.pollStartedAt }, 'EMAIL_GATEWAY');
-  runtime.consideredThisRun = 0;
-  runtime.ingestedThisRun = 0;
+  state.isPolling = true;
+  state.pollStartedAt = Date.now();
+  logger.info('Buyer poll lock SET', { site: 'pollViaGmailApi', startedAt: state.pollStartedAt }, 'EMAIL_GATEWAY');
+  state.consideredThisRun = 0;
+  state.ingestedThisRun = 0;
   const startedAt = Date.now();
   const outcomes = [];
 
   try {
-    // Deliberately NOT bounded by runtime.watchingSince the way the IMAP
+    // Deliberately NOT bounded by state.watchingSince the way the IMAP
     // path below is — confirmed live this genuinely breaks on Workers:
-    // `runtime` is plain in-memory module state, and Cloudflare spins up a
+    // `state` is plain in-memory module state, and Cloudflare spins up a
     // fresh isolate (resetting it to "now") far more often than a Node
     // process restarts, so `after:<watchingSince>` silently excluded mail
     // sent just seconds earlier in the *previous* isolate — every poll
@@ -1273,11 +1276,11 @@ async function pollViaGmailApi(config = resolveConfig()) {
       POLL_CALL_TIMEOUT_MS,
       'Gmail inbox list'
     );
-    runtime.lastConnectedAt = new Date().toISOString();
+    state.lastConnectedAt = new Date().toISOString();
 
     const messages = listRes.data.messages || [];
     for (const ref of messages) {
-      runtime.consideredThisRun += 1;
+      state.consideredThisRun += 1;
       // Gmail's own message id is already a stable per-message identifier —
       // no envelope Message-ID header to fall back to parsing here first,
       // unlike the IMAP path.
@@ -1335,7 +1338,7 @@ async function pollViaGmailApi(config = resolveConfig()) {
           result.status === INGESTION_OUTCOME.SKIPPED_OUTBOUND
         ) {
           if (result.status !== INGESTION_OUTCOME.SKIPPED_OUTBOUND && result.status !== INGESTION_OUTCOME.CREDITS_EXHAUSTED) {
-            runtime.ingestedThisRun += 1;
+            state.ingestedThisRun += 1;
           }
           // Marked read only for a message we actually acted on, and only after
           // the ledger write, so a failed write leaves it to be retried — same
@@ -1352,11 +1355,11 @@ async function pollViaGmailApi(config = resolveConfig()) {
       }
     }
 
-    runtime.lastError = null;
+    state.lastError = null;
     return {
       skipped: false,
-      considered: runtime.consideredThisRun,
-      ingested: runtime.ingestedThisRun,
+      considered: state.consideredThisRun,
+      ingested: state.ingestedThisRun,
       pending: Math.max((listRes.data.resultSizeEstimate || messages.length) - messages.length, 0),
       outcomes,
     };
@@ -1364,14 +1367,23 @@ async function pollViaGmailApi(config = resolveConfig()) {
     // An API or auth failure (e.g. an insufficiently-scoped refresh token).
     // Reported through status rather than thrown, same convention as the
     // IMAP path, so the panel can explain it and the interval keeps trying.
-    runtime.lastError = err.message;
+    state.lastError = err.message;
     logger.error(`Email gateway poll failed (Gmail API): ${err.message}`, err, 'EMAIL_GATEWAY');
-    return { skipped: false, error: err.message, considered: runtime.consideredThisRun, outcomes };
+    return { skipped: false, error: err.message, considered: state.consideredThisRun, outcomes };
   } finally {
-    runtime.isPolling = false;
-    runtime.lastPollAt = new Date().toISOString();
-    runtime.lastPollDurationMs = Date.now() - startedAt;
+    state.isPolling = false;
+    state.lastPollAt = new Date().toISOString();
+    state.lastPollDurationMs = Date.now() - startedAt;
   }
+}
+
+// Vendor replies arrive in the vendor identity's Gmail inbox, read with the
+// vendor token. Messages go through the same processMessage path as buyer mail.
+async function pollVendorViaGmailApi(config = resolveVendorConfig()) {
+  return pollViaGmailApi(config, {
+    auth: mailerService.getVendorGmailOAuthClient(),
+    state: vendorRuntime,
+  });
 }
 
 /**
@@ -1775,7 +1787,9 @@ async function pollBothInboxesOnce(buyerConfig = resolveConfig(), vendorConfig =
   logger.info('Executing scheduled dual-inbox email poll cycle', {}, 'EMAIL_GATEWAY');
   const [buyerSettled, vendorSettled] = await Promise.allSettled([
     emailGateway.pollOnce(buyerConfig),
-    emailGateway.pollVendorOnce(vendorConfig),
+    // Vendor replies are read through the vendor Gmail identity only. The IMAP
+    // path cannot connect from a Worker, so it is not used here.
+    emailGateway.pollVendorViaGmailApi(vendorConfig),
   ]);
 
   const buyer = buyerSettled.status === 'fulfilled'
@@ -1938,6 +1952,7 @@ const emailGateway = {
   pollOnce,
   pollViaGmailApi,
   pollVendorOnce,
+  pollVendorViaGmailApi,
   pollBothInboxesOnce,
   startPolling,
   startBuyerPolling,

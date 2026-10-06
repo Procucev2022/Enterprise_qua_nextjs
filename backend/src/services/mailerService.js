@@ -1680,6 +1680,7 @@ module.exports = {
   isVendorConfigured,
   isGmailApiConfigured,
   isVendorGmailApiConfigured,
+  getVendorGmailOAuthClient,
   isQuoteAlertGmailApiConfigured,
   getGmailOAuthClient,
   getPublicFrontendUrl,
