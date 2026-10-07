@@ -453,6 +453,39 @@ describe('RFQ ingestion service (AI line-item classification)', () => {
       expect(draft.category).toBe('Engineering Spares - Electrical');
     });
 
+    test('uses a declared major category for the header and fills items that have none', async () => {
+      const { draft, classification } = await ingestion.buildRFQDraft({
+        category: 'Civil Works',
+        lineItems: [
+          { itemName: 'Ordinary Portland Cement' },
+          { itemName: 'River sand' },
+          { itemName: 'Copper Cable' },
+        ],
+      });
+      expect(draft.category).toBe('Civil Works');
+      expect(draft.extractedEntities[0].majorCategory).toBe('Civil Works');
+      expect(draft.extractedEntities[1].majorCategory).toBe('Civil Works');
+      // The copper cable keeps its own classification and is flagged, not overridden.
+      expect(draft.extractedEntities[2].majorCategory).toBe('Engineering Spares - Electrical');
+      expect(draft.extractedEntities[2].categoryMismatch).toBe(true);
+      expect(classification.needsReview).toBeGreaterThanOrEqual(1);
+    });
+
+    test('resolves a declared minor category to its own major', async () => {
+      const { draft } = await ingestion.buildRFQDraft({
+        category: 'Cement Bulkers',
+        lineItems: [{ itemName: 'Centrifugal Pump' }],
+      });
+      expect(draft.category).toBe('CAPEX - Equipment & Machinery');
+    });
+
+    test('lists the taxonomy names for the model prompt', () => {
+      const { majors, minors } = ingestion.taxonomyCategoryNames();
+      expect(majors).toContain('Civil Works');
+      expect(minors).toContain('Cement Bulkers');
+      expect(new Set(minors).size).toBe(minors.length);
+    });
+
     test('prefers an explicit title over the derived one', async () => {
       const { draft } = await ingestion.buildRFQDraft({
         title: 'Q3 Mechanical Spares',

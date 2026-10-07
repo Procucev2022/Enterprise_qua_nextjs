@@ -692,7 +692,7 @@ describe('API Route Endpoints', () => {
         .send({
           title: 'Procurement of Bearing Housings',
           category: 'Engineering Spares - Mechanical',
-          targetDeliveryDate: '2026-10-05',
+          targetDeliveryDate: A_FUTURE_DATE,
           sourcingMode: 'mode_1',
           deliveryPincode: '400701',
         });
@@ -708,7 +708,7 @@ describe('API Route Endpoints', () => {
         .send({
           title: 'Procurement of Bearing Housings',
           category: 'Engineering Spares - Mechanical',
-          targetDeliveryDate: '2026-10-05',
+          targetDeliveryDate: A_FUTURE_DATE,
           sourcingMode: 'mode_1',
           deliveryLocation: 'X',
           deliveryPincode: '400701',
@@ -727,7 +727,7 @@ describe('API Route Endpoints', () => {
         .send({
           title: 'Procurement of Bearing Housings',
           category: 'Engineering Spares - Mechanical',
-          targetDeliveryDate: '2026-10-05',
+          targetDeliveryDate: A_FUTURE_DATE,
           sourcingMode: 'mode_1',
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
         });
@@ -743,7 +743,7 @@ describe('API Route Endpoints', () => {
         .send({
           title: 'Procurement of Bearing Housings',
           category: 'Engineering Spares - Mechanical',
-          targetDeliveryDate: '2026-10-05',
+          targetDeliveryDate: A_FUTURE_DATE,
           sourcingMode: 'mode_1',
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
           deliveryPincode: '!!',

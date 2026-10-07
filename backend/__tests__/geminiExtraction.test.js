@@ -15,6 +15,28 @@ function geminiReply(jsonText) {
   };
 }
 
+describe('Gemini category list in the extraction prompt', () => {
+  const ingestion = require('../src/services/rfqIngestionService');
+  const { CATEGORY_TAXONOMY_FIXTURE: taxonomy } = require('./fixtures/categoryTaxonomy');
+
+  test('lists only taxonomy names and asks the model to copy the category exactly', () => {
+    ingestion.primeTaxonomyIndex(taxonomy);
+    const body = gemini.buildRequestBody({ documentText: 'Category: Civil Works' });
+    const prompt = body.contents[0].parts[0].text;
+    expect(prompt).toContain('Major categories:');
+    expect(prompt).toContain('Civil Works');
+    expect(prompt).toContain('Cement Bulkers');
+    expect(prompt).toContain('copied exactly from the CATEGORY LIST');
+  });
+
+  test('omits the category block when the master holds no names', () => {
+    ingestion.resetTaxonomyIndex();
+    const body = gemini.buildRequestBody({ documentText: 'x' });
+    expect(body.contents[0].parts[0].text).not.toContain('Major categories:');
+    ingestion.primeTaxonomyIndex(taxonomy);
+  });
+});
+
 describe('Gemini document extraction service', () => {
   const originalKey = GEMINI_CONFIG.API_KEY;
   const originalFetch = global.fetch;

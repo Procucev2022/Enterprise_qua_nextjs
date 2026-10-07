@@ -105,6 +105,16 @@ function primeTaxonomyIndex(groups) {
   return taxonomyIndex;
 }
 
+/**
+ * The category names the taxonomy master holds, for constraining model output.
+ * Only meaningful after ensureTaxonomyLoaded(); empty before that.
+ */
+function taxonomyCategoryNames() {
+  const majors = [...taxonomyIndex.majorByKey.values()];
+  const minors = [...new Set([...taxonomyIndex.byMinorKey.values()].map((pair) => pair.minor))];
+  return { majors, minors };
+}
+
 /** Drop the cached index so the next ingest reloads it. */
 function resetTaxonomyIndex() {
   taxonomyIndex.majorByKey = new Map();
@@ -456,7 +466,26 @@ async function buildRFQDraft(payload = {}) {
     category: payload.category,
   });
 
-  const needsReview = entities.filter((e) => e.classificationStatus === STATUS.DEFAULT).length;
+  // A declared major category (e.g. the email's "Category: Civil Works") is the
+  // buyer's own statement of what the RFQ is for, so it decides the RFQ header.
+  // Items with no major of their own take it; items whose own classification
+  // conflicts with it are kept as classified but flagged for review.
+  // A declared minor (the model may return either level) resolves to its own major.
+  const declaredMajor =
+    canonicalMajor(payload.category) || taxonomyPairForMinor(payload.category)?.major || '';
+  if (declaredMajor) {
+    entities.forEach((entity) => {
+      if (!entity.majorCategory) {
+        entity.majorCategory = declaredMajor;
+      } else if (entity.majorCategory !== declaredMajor) {
+        entity.categoryMismatch = true;
+      }
+    });
+  }
+
+  const needsReview = entities.filter(
+    (e) => e.classificationStatus === STATUS.DEFAULT || e.categoryMismatch
+  ).length;
   const title = String(payload.title || '').trim() || deriveTitle(entities);
 
   // The RFQ header category follows the majority of its line items rather than
@@ -476,7 +505,7 @@ async function buildRFQDraft(payload = {}) {
 
   const draft = {
     title,
-    category: dominantMajor,
+    category: declaredMajor || dominantMajor,
     targetDeliveryDate: entities.length > 0 ? entities[0].targetDate : defaultTargetDate(),
     // Null rather than a placeholder figure: the wizard shows an empty budget
     // field so the buyer supplies the number the document did not state.
@@ -517,6 +546,7 @@ module.exports = {
   primeTaxonomyIndex,
   resetTaxonomyIndex,
   ensureTaxonomyLoaded,
+  taxonomyCategoryNames,
   canonicalMajor,
   taxonomyPairForMinor,
   isGenericCategory,
