@@ -4,7 +4,11 @@ on:
   push:
     branches:
       - prod
-      - 'prod-*
+      - 'prod-*'
+      - 'prod/**'
+      - production
+      - 'production-*'
+      - 'production/**'
   workflow_dispatch:
 
 concurrency:
