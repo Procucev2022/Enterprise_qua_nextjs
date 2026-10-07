@@ -13,6 +13,8 @@
 const pool = require('./pool');
 const { logger } = require('../services/loggerService');
 
+const memoryProcessedMessageIds = new Set();
+
 /** Outcomes recorded against a considered message. */
 const INGESTION_OUTCOME = {
   INGESTED: 'INGESTED',
@@ -41,13 +43,19 @@ const INGESTION_OUTCOME = {
  */
 async function hasProcessed(messageId) {
   if (!messageId) return false;
+  const key = String(messageId);
+  if (process.env.NODE_ENV !== 'test' && memoryProcessedMessageIds.has(key)) return true;
   try {
     const rows = await pool.rows(
       'select 1 from email_ingestion_log where message_id = $1 limit 1',
-      [String(messageId)],
+      [key],
       { d1: true }
     );
-    return rows.length > 0;
+    if (rows.length > 0) {
+      memoryProcessedMessageIds.add(key);
+      return true;
+    }
+    return false;
   } catch (err) {
     logger.error('Email ingestion ledger could not be read', err, 'EMAIL_GATEWAY');
     return true;
@@ -71,6 +79,7 @@ async function recordProcessed({
   rfqNumber = null,
 }) {
   if (!messageId) return false;
+  memoryProcessedMessageIds.add(String(messageId));
   try {
     // email_ingestion_log has already been ported to D1 (see d1Bridge.js).
     // CURRENT_TIMESTAMP (not now()) and CAST(... AS INTEGER) (not ::int, below

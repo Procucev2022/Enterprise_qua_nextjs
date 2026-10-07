@@ -276,6 +276,43 @@ describe('emailGatewayService.processMessage', () => {
     expect(createSpy).not.toHaveBeenCalled();
   });
 
+  test.each([
+    'SMTP_FROM',
+    'VENDOR_SMTP_FROM',
+    'VENDOR_GMAIL_SENDER_EMAIL',
+    'QUOTE_ALERT_GMAIL_SENDER_EMAIL',
+  ])('ignores a message from the platform sender configured by %s', async (senderEnv) => {
+    const senderAddress = 'platform-mailer@example.com';
+    const previousValue = process.env[senderEnv];
+    process.env[senderEnv] = `Procucev Notifications <${senderAddress}>`;
+    const selfMailEml = [
+      'Message-ID: <configured-loop@example.com>',
+      'From: Procucev Notifications <platform-mailer@example.com>',
+      'To: intake@procucev.com',
+      'Subject: Inquiry Logged for RFQ RFQ-2026-0001',
+      'MIME-Version: 1.0',
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      'Please clarify the delivery location.',
+    ].join('\r\n');
+
+    try {
+      const sendAckSpy = jest.spyOn(mailerService, 'sendVendorIssueAcknowledgementEmail');
+      const sendFailureSpy = jest.spyOn(mailerService, 'sendQuoteFailureEmail');
+      const result = await emailGatewayService.processMessage(Buffer.from(selfMailEml, 'utf8'), config());
+
+      expect(result.status).toBe(INGESTION_OUTCOME.SKIPPED_OUTBOUND);
+      expect(sendAckSpy).not.toHaveBeenCalled();
+      expect(sendFailureSpy).not.toHaveBeenCalled();
+    } finally {
+      if (previousValue === undefined) {
+        delete process.env[senderEnv];
+      } else {
+        process.env[senderEnv] = previousValue;
+      }
+    }
+  });
+
   // Real incident: a bounce ("Undeliverable: ...") for a notification the
   // gateway itself sent was treated as a genuine unauthorized sender, so the
   // gateway replied with ANOTHER "unauthorized buyer" notification straight
@@ -3053,7 +3090,6 @@ Can you quote something?
     emailGatewayService.stopPolling();
   });
 });
-
 
 
 

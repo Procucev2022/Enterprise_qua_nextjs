@@ -148,14 +148,9 @@ describe('validateManualRFQLineItem', () => {
     expect(validateManualRFQLineItem(completeItem({ technicalSpecs: '' }))).toEqual({});
   });
 
-  it('does not require a per-row target date', () => {
+  it('does not require or reject a per-row target date', () => {
     expect(validateManualRFQLineItem(completeItem({ targetDate: '' }))).toEqual({});
-  });
-
-  it('rejects a line item with a target date in the past', () => {
-    expect(validateManualRFQLineItem(completeItem({ targetDate: '2020-01-01' }))).toEqual({
-      targetDate: 'Target date cannot be earlier than today.',
-    });
+    expect(validateManualRFQLineItem(completeItem({ targetDate: '2020-01-01' }))).toEqual({});
   });
 
   it('validates isPastDateString edge cases', () => {

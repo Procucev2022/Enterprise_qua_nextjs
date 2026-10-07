@@ -1693,7 +1693,6 @@ class StoreService {
     // at creation time; inviteVendorsToRFQ schedules chasers when they are
     // manually added later).
     if (
-      (newRFQ.sourcingMode === 'mode_1' || newRFQ.sourcingMode === 'mode_2' || newRFQ.source === 'email_gateway') &&
       Array.isArray(newRFQ.assignedVendors) &&
       newRFQ.assignedVendors.length > 0
     ) {

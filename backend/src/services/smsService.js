@@ -97,7 +97,7 @@ const SMS_GATEWAY_CONFIG = {
   },
 
   get RFQ_PASS() {
-    return getEnv('SMS_GATEWAY_RFQ_PASS', SMS_GATEWAY_CONFIG.PASS);
+    return getEnv('SMS_GATEWAY_RFQ_PASS');
   },
 
   get SENDER() {
@@ -318,6 +318,12 @@ async function sendRFQChaserSms({
     };
   }
 
+  if (!SMS_GATEWAY_CONFIG.RFQ_USER || !SMS_GATEWAY_CONFIG.RFQ_PASS) {
+    const error = 'RFQ SMS gateway credentials are not configured';
+    logger.error(error, { rfqNumber }, 'SMS_SERVICE');
+    return { success: false, error };
+  }
+
   const now = Date.now();
   const lastSent = recentSmsDispatches.get(formattedNumber) || 0;
 
@@ -529,8 +535,8 @@ async function sendBuyerComparisonSms({
   const message = `[PRCU-RFQ] RFQ ${rfqNumber} closed. Quotation comparison matrix is ready (${quotesCount} quotes). Review: ${resolvedLink} - Team Procucev.`;
 
   const payload = {
-    user: SMS_GATEWAY_CONFIG.USER,
-    pass: SMS_GATEWAY_CONFIG.PASS,
+    user: SMS_GATEWAY_CONFIG.RFQ_USER,
+    pass: SMS_GATEWAY_CONFIG.RFQ_PASS,
     smstosend: [
       {
         to: `91${formattedNumber}`,

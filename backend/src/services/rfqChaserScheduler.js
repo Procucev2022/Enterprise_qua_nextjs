@@ -263,16 +263,18 @@ function scheduleVendorChaser(rfq, vendor, creditInfo = {}) {
   if (!rfq || !vendor) return;
 
   const { rfqNumber } = rfq;
-  const smsDelay = process.env.NODE_ENV === 'test'
-    ? (CHASER_DELAYS.SMS_MS ?? 5 * 60 * 1000)
-    : Math.max(5 * 60 * 1000, Number(CHASER_DELAYS.SMS_MS) || (5 * 60 * 1000));
-  const callDelay = CHASER_DELAYS.CALL_MS;
-  const waDelay = process.env.NODE_ENV === 'test'
-    ? (CHASER_DELAYS.WHATSAPP_MS ?? 12 * 60 * 60 * 1000)
-    : Math.max(12 * 60 * 60 * 1000, Number(CHASER_DELAYS.WHATSAPP_MS) || (12 * 60 * 60 * 1000));
-  const emailDelay = process.env.NODE_ENV === 'test'
-    ? (CHASER_DELAYS.EMAIL_MS ?? 24 * 60 * 60 * 1000)
-    : Math.max(24 * 60 * 60 * 1000, Number(CHASER_DELAYS.EMAIL_MS) || (24 * 60 * 60 * 1000));
+  const smsDelay = Number.isFinite(Number(CHASER_DELAYS.SMS_MS))
+    ? Number(CHASER_DELAYS.SMS_MS)
+    : 5 * 60 * 1000;
+  const callDelay = Number.isFinite(Number(CHASER_DELAYS.CALL_MS))
+    ? Number(CHASER_DELAYS.CALL_MS)
+    : 6 * 60 * 60 * 1000;
+  const waDelay = Number.isFinite(Number(CHASER_DELAYS.WHATSAPP_MS))
+    ? Number(CHASER_DELAYS.WHATSAPP_MS)
+    : 12 * 60 * 60 * 1000;
+  const emailDelay = Number.isFinite(Number(CHASER_DELAYS.EMAIL_MS))
+    ? Number(CHASER_DELAYS.EMAIL_MS)
+    : 24 * 60 * 60 * 1000;
 
   if (getD1Binding()) {
     const waitUntil = getWaitUntil();
