@@ -140,9 +140,7 @@ export function validateManualRFQLineItem(item: ManualRFQLineItem): ManualRFQLin
   if (clean(item.unit) === '') {
     errors.unit = MANUAL.unitRequired;
   }
-  if (item.targetDate && isPastDateString(item.targetDate)) {
-    errors.targetDate = MANUAL.targetDateCannotBePast || 'Target date cannot be earlier than today.';
-  }
+  // Delivery date is managed at the RFQ header level rather than per line item.
   // Major/minor category are no longer mandatory to dispatch a manual RFQ —
   // a buyer may not know the exact taxonomy slot for an item up front, and
   // an uncategorised line can still be reviewed/reclassified later.
@@ -233,12 +231,13 @@ export function validateManualRFQForm(form: ManualRFQForm): ManualRFQValidation 
  * labels the row as manually keyed instead of claiming the AI was 0% sure.
  */
 export function toExtractedEntity(item: ManualRFQLineItem): ExtractedEntity {
+  const rawTargetDate = clean(item.targetDate);
   return {
     id: item.id,
     itemName: clean(item.itemName),
     quantity: Number(item.quantity) || 0,
     unit: clean(item.unit),
-    targetDate: clean(item.targetDate),
+    targetDate: isPastDateString(rawTargetDate) ? '' : rawTargetDate,
     technicalSpecs: clean(item.technicalSpecs),
     confidence: MANUAL_ENTRY_CONFIDENCE,
     category: clean(item.minorCategory),
@@ -310,13 +309,15 @@ export function toRFQCreatePayload(
 export function fromExtractedEntity(entity: ExtractedEntity): ManualRFQLineItem {
   rowCounter += 1;
   const majorCategory = taxonomyMajorOrBlank(clean(entity.majorCategory));
+  const rawTargetDate = clean(entity.targetDate);
+  const targetDate = isPastDateString(rawTargetDate) ? '' : rawTargetDate;
   return {
     id: entity.id || `manual-item-${Date.now()}-${rowCounter}`,
     itemName: clean(entity.itemName),
     technicalSpecs: clean(entity.technicalSpecs),
     quantity: Number(entity.quantity) > 0 ? Number(entity.quantity) : null,
     unit: clean(entity.unit),
-    targetDate: clean(entity.targetDate),
+    targetDate,
     majorCategory,
     // Scoped to the major that survived: a minor from a discarded major cannot be
     // valid, and the dropdown would not offer it.

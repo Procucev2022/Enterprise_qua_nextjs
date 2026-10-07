@@ -567,30 +567,31 @@ async function extractRfqReferenceFromEmail(message) {
 function isOutgoingSystemMessage(message, config = {}) {
   if (!message || !message.fromAddress) return false;
   const senderEmail = String(message.fromAddress).trim().toLowerCase();
-  const mailboxUser = String(config.user || '').trim().toLowerCase();
-  const vendorUser = String(
-    process.env.VENDOR_EMAIL_GATEWAY_USER ||
-    process.env.VENDOR_SMTP_USER ||
-    'srinu20252026@gmail.com'
-  ).trim().toLowerCase();
-  const buyerUser = String(
-    process.env.EMAIL_GATEWAY_USER ||
-    process.env.SMTP_USER ||
-    'rfqprocucev@gmail.com'
-  ).trim().toLowerCase();
-  // The Gmail API buyer identity (used both to send and, now, to poll) is a
-  // separate credential from EMAIL_GATEWAY_USER/SMTP_USER — read from its
-  // own var rather than assuming it matches either.
-  const gmailApiUser = String(process.env.GMAIL_SENDER_EMAIL || '').trim().toLowerCase();
+  const normalizeAddress = (value) => {
+    const address = String(value || '').trim().match(/<\s*([^<>]+)\s*>/);
+    return (address ? address[1] : String(value || '')).trim().toLowerCase();
+  };
+  const platformSenders = [
+    config.user,
+    config.address,
+    process.env.EMAIL_GATEWAY_USER,
+    process.env.EMAIL_GATEWAY_ADDRESS,
+    process.env.SMTP_USER,
+    process.env.SMTP_FROM,
+    process.env.GMAIL_SENDER_EMAIL,
+    process.env.VENDOR_EMAIL_GATEWAY_USER,
+    process.env.VENDOR_EMAIL_GATEWAY_ADDRESS,
+    process.env.VENDOR_SMTP_USER,
+    process.env.VENDOR_SMTP_FROM,
+    process.env.VENDOR_GMAIL_SENDER_EMAIL,
+    process.env.QUOTE_ALERT_GMAIL_SENDER_EMAIL,
+    'srinu20252026@gmail.com',
+    'rfqprocucev@gmail.com',
+  ]
+    .map(normalizeAddress)
+    .filter(Boolean);
 
-  return (
-    senderEmail === mailboxUser ||
-    senderEmail === vendorUser ||
-    senderEmail === buyerUser ||
-    (gmailApiUser && senderEmail === gmailApiUser) ||
-    senderEmail === 'srinu20252026@gmail.com' ||
-    senderEmail === 'rfqprocucev@gmail.com'
-  );
+  return platformSenders.includes(senderEmail);
 }
 
 /**
@@ -1532,20 +1533,11 @@ async function pollOnce(config = resolveConfig()) {
 
           if (
             result.status === INGESTION_OUTCOME.INGESTED ||
-            result.status === INGESTION_OUTCOME.QUOTE_INGESTED ||
-            result.status === INGESTION_OUTCOME.CREDITS_EXHAUSTED ||
-            result.status === INGESTION_OUTCOME.SKIPPED_OUTBOUND
+            result.status === INGESTION_OUTCOME.QUOTE_INGESTED
           ) {
-            if (result.status !== INGESTION_OUTCOME.SKIPPED_OUTBOUND && result.status !== INGESTION_OUTCOME.CREDITS_EXHAUSTED) {
-              runtime.ingestedThisRun += 1;
-            }
-            // Marked read only for a message we actually acted on, and only after
-            // the ledger write, so a failed write leaves it to be retried. Mail
-            // the gateway rejected is left untouched: it belongs to the mailbox
-            // owner, not to us, and the ledger already stops it being
-            // reconsidered on the next poll.
-            await client.messageFlagsAdd(String(uid), ['\\Seen']);
+            runtime.ingestedThisRun += 1;
           }
+          await client.messageFlagsAdd(String(uid), ['\\Seen']).catch(() => {});
           outcomes.push({ uid, messageId: resolvedMessageId, status: result.status });
         } catch (err) {
           logger.error('Inbound message could not be processed', err, 'EMAIL_GATEWAY');
@@ -1688,15 +1680,11 @@ async function pollVendorOnce(config = resolveVendorConfig()) {
 
           if (
             result.status === INGESTION_OUTCOME.INGESTED ||
-            result.status === INGESTION_OUTCOME.QUOTE_INGESTED ||
-            result.status === INGESTION_OUTCOME.CREDITS_EXHAUSTED ||
-            result.status === INGESTION_OUTCOME.SKIPPED_OUTBOUND
+            result.status === INGESTION_OUTCOME.QUOTE_INGESTED
           ) {
-            if (result.status !== INGESTION_OUTCOME.SKIPPED_OUTBOUND && result.status !== INGESTION_OUTCOME.CREDITS_EXHAUSTED) {
-              vendorRuntime.ingestedThisRun += 1;
-            }
-            await client.messageFlagsAdd(String(uid), ['\\Seen']);
+            vendorRuntime.ingestedThisRun += 1;
           }
+          await client.messageFlagsAdd(String(uid), ['\\Seen']).catch(() => {});
           outcomes.push({ uid, messageId: resolvedMessageId, status: result.status });
         } catch (err) {
           logger.error('Inbound vendor message could not be processed', err, 'EMAIL_GATEWAY');

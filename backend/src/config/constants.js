@@ -783,13 +783,11 @@ const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 
 function resolveChaserDelay(envVal, defaultMs) {
-  if (process.env.NODE_ENV === 'test') {
-    return Number(envVal ?? defaultMs);
-  }
-  // In dev and production, never allow zero or negative delay so reminders cannot fire immediately on RFQ creation
-  const val = Number(envVal);
-  if (!isNaN(val) && val >= defaultMs) {
-    return val;
+  if (envVal !== undefined && envVal !== null && envVal !== '') {
+    const val = Number(envVal);
+    if (!isNaN(val) && val >= 0) {
+      return val;
+    }
   }
   return defaultMs;
 }

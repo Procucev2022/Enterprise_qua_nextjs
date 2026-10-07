@@ -23,6 +23,7 @@ const mailerService = require('./mailerService');
 // configured, matching the same pattern mailerService uses above.
 const whatsAppService = require('./whatsAppService');
 const smsService = require('./smsService');
+const rfqChaserScheduler = require('./rfqChaserScheduler');
 const { logger } = require('./loggerService');
 
 // Bound on the vendors table read at boot hydration (see hydrateFromDB) —
@@ -1680,6 +1681,25 @@ class StoreService {
     // to the top matched vendors (same category, ranked by pincode + tier).
     this.notifyVendorsOfNewRFQ(newRFQ);
     this.emailRFQToMatchedVendors(newRFQ);
+
+    // Timed multi-channel chaser sequence for every assigned vendor:
+    //   • Within 5 minutes → SMS reminder
+    //   • After 6 hours   → Call reminder (logic kept, telephony deferred)
+    //   • After 12 hours  → WhatsApp reminder
+    //   • After 24 hours  → Email reminder
+    // Only fires for mode_1 and mode_2 (mode_3 has no auto-assigned vendors
+    // at creation time; inviteVendorsToRFQ schedules chasers when they are
+    // manually added later).
+    if (
+      Array.isArray(newRFQ.assignedVendors) &&
+      newRFQ.assignedVendors.length > 0
+    ) {
+      rfqChaserScheduler.scheduleRFQChasers(
+        newRFQ,
+        newRFQ.assignedVendors,
+        (vendor) => this.checkVendorQuotationEligibility(vendor)
+      );
+    }
 
     return newRFQ;
   }

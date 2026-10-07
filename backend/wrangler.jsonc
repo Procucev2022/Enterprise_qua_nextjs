@@ -21,6 +21,8 @@
     "WHATSAPP_SUPPORT_NUMBER": "+919606848835",
     "SMS_GATEWAY_URL": "https://sms.sendmsg.in/datasend",
     "SMS_GATEWAY_USER": "Procucev_OTP",
+    "SMS_GATEWAY_RFQ_USER": "ProcucevWapp1",
+    "SMS_GATEWAY_RFQ_PASS": "ProcucevWapp@123",
     "SMS_GATEWAY_PASS": "TzlzyMcFEZRF",
     "SMS_GATEWAY_SENDER": "PROCUC",
     "SMS_GATEWAY_SMSGID": "1102294821",
