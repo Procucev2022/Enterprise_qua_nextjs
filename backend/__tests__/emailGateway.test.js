@@ -2922,7 +2922,7 @@ Hello team, sending catalog.
         outcomes: [{ uid: 1, status: INGESTION_OUTCOME.INGESTED }],
       });
 
-      jest.spyOn(emailGatewayService, 'pollVendorOnce').mockResolvedValueOnce({
+      jest.spyOn(emailGatewayService, 'pollVendorViaGmailApi').mockResolvedValueOnce({
         skipped: false,
         considered: 3,
         ingested: 1,
@@ -2940,7 +2940,7 @@ Hello team, sending catalog.
 
     test('pollBothInboxesOnce handles partial failure gracefully without aborting the other inbox', async () => {
       jest.spyOn(emailGatewayService, 'pollOnce').mockRejectedValueOnce(new Error('IMAP connection reset'));
-      jest.spyOn(emailGatewayService, 'pollVendorOnce').mockResolvedValueOnce({
+      jest.spyOn(emailGatewayService, 'pollVendorViaGmailApi').mockResolvedValueOnce({
         skipped: false,
         considered: 1,
         ingested: 1,
@@ -2961,7 +2961,7 @@ Hello team, sending catalog.
         pending: 0,
         outcomes: [{ uid: 30, status: INGESTION_OUTCOME.INGESTED }],
       });
-      jest.spyOn(emailGatewayService, 'pollVendorOnce').mockRejectedValueOnce(new Error('Vendor socket timeout'));
+      jest.spyOn(emailGatewayService, 'pollVendorViaGmailApi').mockRejectedValueOnce(new Error('Vendor socket timeout'));
 
       const result2 = await emailGatewayService.pollBothInboxesOnce();
       expect(result2.vendorMailbox.error).toBe('Vendor socket timeout');

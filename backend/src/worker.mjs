@@ -10,7 +10,6 @@ import { env, waitUntil } from 'cloudflare:workers';
 import app from './app.js';
 import emailGatewayService from './services/emailGatewayService.js';
 import zohoReconciliationService from './services/zohoReconciliationService.js';
-import rfqChaserScheduler from './services/rfqChaserScheduler.js';
 
 // d1Bridge.js (required by the CommonJS backend, deep under app.js) cannot
 // reach `env` itself: `require('cloudflare:workers')` at call time throws
@@ -61,12 +60,16 @@ const httpHandler = httpServerHandler({ port: PORT });
 // calls the same single-shot polling functions (pollBothInboxesOnce /
 // reconcileOnce) and dispatches due D1-backed chaser jobs.
 async function scheduled(controller, workerEnv, ctx) {
+  // The cron entry point never serves a web request, so nothing else loads the
+  // vendor list into this isolate. Without it, an email RFQ finds no vendors to
+  // invite. Same guard and call as the lazy hydration in app.js.
+  const { default: storeService } = await import('./services/storeService.js');
+  if (!storeService.isHydratedFromDB) {
+    await storeService.hydrateFromDB().catch((err) => console.error('[CRON] hydration failed', err));
+  }
   const cron = controller.cron;
   if (cron === EMAIL_GATEWAY_CRON) {
-    await Promise.all([
-      emailGatewayService.pollBothInboxesOnce(),
-      rfqChaserScheduler.dispatchDueChaserJobs(),
-    ]);
+    await emailGatewayService.pollBothInboxesOnce();
     return;
   }
   if (cron === ZOHO_RECONCILIATION_CRON) {
@@ -78,7 +81,6 @@ async function scheduled(controller, workerEnv, ctx) {
   await Promise.all([
     emailGatewayService.pollBothInboxesOnce(),
     zohoReconciliationService.reconcileOnce(),
-    rfqChaserScheduler.dispatchDueChaserJobs(),
   ]);
 }
 
