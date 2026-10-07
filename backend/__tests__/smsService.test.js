@@ -376,9 +376,11 @@ describe('smsService Unit Tests', () => {
         quotesCount: 5,
       });
       expect(res.success).toBe(true);
-      expect(JSON.parse(global.fetch.mock.calls[0][1].body).user).toBe('Procucev_OTP');
+      expect(JSON.parse(global.fetch.mock.calls[0][1].body).user).toBe(
+        smsService.SMS_GATEWAY_CONFIG.RFQ_USER
+      );
       expect(JSON.parse(global.fetch.mock.calls[0][1].body).pass).toBe(
-        smsService.SMS_GATEWAY_CONFIG.PASS
+        smsService.SMS_GATEWAY_CONFIG.RFQ_PASS
       );
 
       // Throttling

@@ -1491,20 +1491,11 @@ async function pollOnce(config = resolveConfig()) {
 
           if (
             result.status === INGESTION_OUTCOME.INGESTED ||
-            result.status === INGESTION_OUTCOME.QUOTE_INGESTED ||
-            result.status === INGESTION_OUTCOME.CREDITS_EXHAUSTED ||
-            result.status === INGESTION_OUTCOME.SKIPPED_OUTBOUND
+            result.status === INGESTION_OUTCOME.QUOTE_INGESTED
           ) {
-            if (result.status !== INGESTION_OUTCOME.SKIPPED_OUTBOUND && result.status !== INGESTION_OUTCOME.CREDITS_EXHAUSTED) {
-              runtime.ingestedThisRun += 1;
-            }
-            // Marked read only for a message we actually acted on, and only after
-            // the ledger write, so a failed write leaves it to be retried. Mail
-            // the gateway rejected is left untouched: it belongs to the mailbox
-            // owner, not to us, and the ledger already stops it being
-            // reconsidered on the next poll.
-            await client.messageFlagsAdd(String(uid), ['\\Seen']);
+            runtime.ingestedThisRun += 1;
           }
+          await client.messageFlagsAdd(String(uid), ['\\Seen']).catch(() => {});
           outcomes.push({ uid, messageId: resolvedMessageId, status: result.status });
         } catch (err) {
           logger.error('Inbound message could not be processed', err, 'EMAIL_GATEWAY');
@@ -1647,15 +1638,11 @@ async function pollVendorOnce(config = resolveVendorConfig()) {
 
           if (
             result.status === INGESTION_OUTCOME.INGESTED ||
-            result.status === INGESTION_OUTCOME.QUOTE_INGESTED ||
-            result.status === INGESTION_OUTCOME.CREDITS_EXHAUSTED ||
-            result.status === INGESTION_OUTCOME.SKIPPED_OUTBOUND
+            result.status === INGESTION_OUTCOME.QUOTE_INGESTED
           ) {
-            if (result.status !== INGESTION_OUTCOME.SKIPPED_OUTBOUND && result.status !== INGESTION_OUTCOME.CREDITS_EXHAUSTED) {
-              vendorRuntime.ingestedThisRun += 1;
-            }
-            await client.messageFlagsAdd(String(uid), ['\\Seen']);
+            vendorRuntime.ingestedThisRun += 1;
           }
+          await client.messageFlagsAdd(String(uid), ['\\Seen']).catch(() => {});
           outcomes.push({ uid, messageId: resolvedMessageId, status: result.status });
         } catch (err) {
           logger.error('Inbound vendor message could not be processed', err, 'EMAIL_GATEWAY');

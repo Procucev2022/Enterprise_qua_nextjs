@@ -212,12 +212,25 @@ async function deliverVendor(message, label) {
   const activeTransporter = getVendorTransporter();
   if (!activeTransporter) {
     if (isGmailApiConfigured()) {
-      logger.warn(
-        `Vendor SMTP not configured — falling back to the Gmail API (buyer account) for ${label}`,
-        { to: message.to },
-        'MAILER_SERVICE'
-      );
-      return deliverViaGmailApi(message, label);
+      try {
+        return await deliverViaGmailApi(message, label);
+      } catch (err) {
+        logger.warn(
+          `Vendor fallback to Gmail API failed for ${label} — attempting standard SMTP fallback`,
+          { errorMessage: err?.message, to: message.to },
+          'MAILER_SERVICE'
+        );
+      }
+    }
+    const defaultTransporter = getTransporter();
+    if (defaultTransporter) {
+      try {
+        const info = await defaultTransporter.sendMail(message);
+        logger.info(`${label} sent successfully to ${message.to} via fallback SMTP`, { messageId: info.messageId }, 'MAILER_SERVICE');
+        return { sent: true, messageId: info.messageId };
+      } catch (e) {
+        logger.warn(`Fallback SMTP send failed for ${label}`, { errorMessage: e?.message }, 'MAILER_SERVICE');
+      }
     }
     logger.warn(`Vendor SMTP not configured (VENDOR_SMTP_USER/VENDOR_SMTP_PASSWORD unset) — ${label} not sent`, { to: message.to }, 'MAILER_SERVICE');
     return { sent: false, reason: 'SMTP not configured' };
@@ -553,16 +566,39 @@ async function deliver(message, label) {
     return { sent: false, reason: 'test environment' };
   }
 
+  let lastError;
+
   if (isGmailApiConfigured()) {
-    return deliverViaGmailApi(message, label);
+    try {
+      return await deliverViaGmailApi(message, label);
+    } catch (err) {
+      lastError = err;
+      logger.warn(
+        `deliverViaGmailApi failed for ${label} — falling back to secondary transport`,
+        { errorMessage: err?.message, to: message.to },
+        'MAILER_SERVICE'
+      );
+    }
   }
 
   if (process.env.RESEND_API_KEY) {
-    return deliverViaResend(message, label);
+    try {
+      return await deliverViaResend(message, label);
+    } catch (err) {
+      lastError = err;
+      logger.warn(
+        `deliverViaResend failed for ${label} — falling back to secondary transport`,
+        { errorMessage: err?.message, to: message.to },
+        'MAILER_SERVICE'
+      );
+    }
   }
 
   const activeTransporter = getTransporter();
   if (!activeTransporter) {
+    if (lastError) {
+      throw lastError;
+    }
     logger.warn(`SMTP not configured (SMTP_USER/SMTP_PASSWORD unset) — ${label} not sent`, { to: message.to }, 'MAILER_SERVICE');
     return { sent: false, reason: 'SMTP not configured' };
   }
