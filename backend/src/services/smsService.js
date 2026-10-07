@@ -541,14 +541,20 @@ async function sendBuyerComparisonSms({
       rfqNumber
     )}`;
 
-  const rfqLabel = rfqNumber && rfqNumber.toUpperCase().startsWith('RFQ')
+  const rfqLabel = rfqNumber && rfqNumber.toUpperCase().startsWith('RFQ ')
     ? rfqNumber
     : `RFQ ${rfqNumber || ''}`.trim();
 
-  const message = SMS_DLT_TEMPLATES.BUYER_BIDS_UNLOCKED.TEMPLATE
-    .replace('{#var#}', rfqLabel)
-    .replace('{#var#}', String(quotesCount))
-    .replace('{#var#}', resolvedLink);
+  const rawTemplate = SMS_DLT_TEMPLATES.BUYER_BIDS_UNLOCKED.TEMPLATE;
+  const message = rawTemplate.includes('{#alp#}')
+    ? rawTemplate
+        .replace('{#alp#}', rfqLabel)
+        .replace('{#num#}', String(quotesCount))
+        .replace('{#urg#}', resolvedLink)
+    : rawTemplate
+        .replace('{#var#}', rfqLabel)
+        .replace('{#var#}', String(quotesCount))
+        .replace('{#var#}', resolvedLink);
 
   const messageChars = message.length;
   const smsUnits = Math.ceil(messageChars / 160);

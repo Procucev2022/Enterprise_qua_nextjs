@@ -809,6 +809,13 @@ const CHASER_DELAYS = {
 // Approved Text      : RFQ Alert {#alp#}: You are invited to bid for {#alp#}. Submit quote : {#urg#} - Team Procucev.
 // Variables          : {#alp#}, {#alp#}, {#urg#} → rfqNumber, rfqTitle, bidUrl
 //
+// Buyer Quote Matrix Template:
+// Reference Number   : 11-44JHMUY9DRFC
+// Template Id / SMSGID: 1777179138668879258
+// Header             : PROCUC
+// Approved Text      : RFQ Update: 48-hour bidding window for {#alp#} is completed. Quotation matrix is ready with {#num#} quotes. Review now: {#urg#} - Team Procucev.
+// Variables          : {#alp#}, {#num#}, {#urg#} → rfqLabel, quotesCount, matrixLink
+//
 // OTP Template       : DLT ID 1102294821 (TRANSACTIONAL)
 const SMS_DLT_TEMPLATES = {
   RFQ_CHASER: {
@@ -831,11 +838,13 @@ const SMS_DLT_TEMPLATES = {
   },
   BUYER_BIDS_UNLOCKED: {
     NAME:     'Buyer_Quote_Matrix_Ready',
-    SMSGID:   process.env.SMS_GATEWAY_BUYER_UNLOCKED_SMSGID || '1777179137793499753',
+    REFERENCE_NUMBER: '11-44JHMUY9DRFC',
+    SMSGID:   process.env.SMS_GATEWAY_BUYER_UNLOCKED_SMSGID || '1777179138668879258',
     CATEGORY: 'SERVICE_IMPLICIT',
-    TEMPLATE: 'RFQ Update: 48-hour bidding window for {#var#} is completed. Quotation matrix is ready with {#var#} quotes. Review now: {#var#} - Team Procucev.',
+    HEADER:   'PROCUC',
+    TEMPLATE: 'RFQ Update: 48-hour bidding window for {#alp#} is completed. Quotation matrix is ready with {#num#} quotes. Review now: {#urg#} - Team Procucev.',
     VARIABLES: ['rfqLabel', 'quotesCount', 'matrixLink'],
-    VARIABLE_TYPES: ['var', 'var', 'var'],
+    VARIABLE_TYPES: ['alp', 'num', 'urg'],
     URL_SHORTENING: false,
   },
 };
