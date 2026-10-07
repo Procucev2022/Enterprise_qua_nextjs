@@ -97,7 +97,7 @@ const SMS_GATEWAY_CONFIG = {
   },
 
   get RFQ_PASS() {
-    return getEnv('SMS_GATEWAY_RFQ_PASS', SMS_GATEWAY_CONFIG.PASS);
+    return getEnv('SMS_GATEWAY_RFQ_PASS');
   },
 
   get SENDER() {
@@ -316,6 +316,12 @@ async function sendRFQChaserSms({
       success: false,
       error: 'Invalid mobile number format',
     };
+  }
+
+  if (!SMS_GATEWAY_CONFIG.RFQ_USER || !SMS_GATEWAY_CONFIG.RFQ_PASS) {
+    const error = 'RFQ SMS gateway credentials are not configured';
+    logger.error(error, { rfqNumber }, 'SMS_SERVICE');
+    return { success: false, error };
   }
 
   const now = Date.now();

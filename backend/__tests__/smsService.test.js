@@ -177,6 +177,7 @@ describe('smsService Unit Tests', () => {
     });
 
     test('sendRFQChaserSms dispatches RFQ chaser SMS and handles validation', async () => {
+      process.env.SMS_GATEWAY_RFQ_PASS = 'rfq-account-test-password';
       const invalid = await smsService.sendRFQChaserSms({ mobile: '123', rfqNumber: 'RFQ-001' });
       expect(invalid.success).toBe(false);
 
@@ -196,6 +197,34 @@ describe('smsService Unit Tests', () => {
         rfqNumber: 'RFQ-002',
       });
       expect(validFallback.success).toBe(true);
+    });
+
+    test('does not use the OTP gateway password when RFQ credentials are missing', async () => {
+      const originalNodeEnv = process.env.NODE_ENV;
+      const originalRfqPassword = process.env.SMS_GATEWAY_RFQ_PASS;
+      process.env.NODE_ENV = 'production';
+      delete process.env.SMS_GATEWAY_RFQ_PASS;
+      global.fetch = jest.fn();
+
+      try {
+        const result = await smsService.sendRFQChaserSms({
+          mobile: '9157154504',
+          rfqNumber: 'RFQ-CREDENTIALS-01',
+        });
+
+        expect(result).toEqual({
+          success: false,
+          error: 'RFQ SMS gateway credentials are not configured',
+        });
+        expect(global.fetch).not.toHaveBeenCalled();
+      } finally {
+        process.env.NODE_ENV = originalNodeEnv;
+        if (originalRfqPassword === undefined) {
+          delete process.env.SMS_GATEWAY_RFQ_PASS;
+        } else {
+          process.env.SMS_GATEWAY_RFQ_PASS = originalRfqPassword;
+        }
+      }
     });
 
     test('sendRFQChaserSms handles production gateway flow, errors, and throttling', async () => {
@@ -283,6 +312,7 @@ describe('smsService Unit Tests', () => {
 
     test('sendRFQChaserSms aborts requests that exceed the gateway timeout', async () => {
       process.env.NODE_ENV = 'production';
+      process.env.SMS_GATEWAY_RFQ_PASS = 'rfq-account-test-password';
       global.fetch = jest.fn(
         (_url, { signal }) =>
           new Promise((resolve, reject) => {

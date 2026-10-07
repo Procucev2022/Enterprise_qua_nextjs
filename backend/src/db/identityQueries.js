@@ -257,7 +257,14 @@ async function resolveMasterUuid(table, column, value, extraActiveFilter = false
     [value],
     { d1: true }
   );
-  return result[0] ? result[0].uuid : null;
+  if (result[0]) return result[0].uuid;
+
+  const fallback = await pool.rows(
+    `select uuid from "${table}" where 1=1${activeClause} order by is_active desc limit 1`,
+    [],
+    { d1: true }
+  );
+  return fallback[0] ? fallback[0].uuid : null;
 }
 
 /**
@@ -355,25 +362,16 @@ async function insertBuyerAccount({
       orgUuid = crypto.randomUUID();
       await pool.query(
         `insert into organization
-           (uuid, organization_name, email, organization_phonenumber, contact_person,
-            org_type_uuid, client_status_uuid, self_client, source_type, company_id,
-            gmt_name, bfs_name, is_india, upgrade_days, rfq_credits, rfq_used_count,
-            quote_submitted, created_by, created_ts, last_modified_by, last_modified_ts)
-         values ($1, $2, $3, $4, $5, $6, $7, true, $8, $9, $10, $11, true, 0, 0, 0, 0, $12, strftime('%Y-%m-%dT%H:%M:%fZ','now'), $13, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
+           (uuid, organization_name, contact_name, contact_email, contact_phone,
+            org_type_uuid, is_active, created_ts, last_modified_ts)
+         values ($1, $2, $3, $4, $5, $6, 1, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
         [
           orgUuid,
           orgName,
+          displayName,
           normalizedEmail,
           normalizedPhone,
-          displayName,
           orgTypeUuid,
-          statusUuid,
-          IDENTITY_MASTER_DATA.SOURCE_TYPE_WEB,
-          buildCompanyId(orgName),
-          IDENTITY_MASTER_DATA.DEFAULT_GMT_PLAN,
-          IDENTITY_MASTER_DATA.DEFAULT_BFS_PLAN,
-          createdBy,
-          createdBy,
         ],
         { d1: true }
       );
@@ -383,14 +381,12 @@ async function insertBuyerAccount({
     await pool.query(
       `insert into "user"
          (uuid, username, email, password, full_name, first_name, phone,
-          org_uuid, role_uuid, client_status_uuid, unique_id,
-          is_active, self_client, is_approved, reset_password,
-          is_web_app, is_whats_app, is_bot,
-          source_type, verification_status, created_by, created_ts,
-          last_modified_by, last_modified_ts)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-               true, false, true, false, true, false, false,
-               $12, $13, $14, strftime('%Y-%m-%dT%H:%M:%fZ','now'), $15, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
+          organization_name, org_uuid, role_uuid,
+          is_active, is_approved, self_client,
+          verification_status, created_ts, last_modified_ts)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+               1, 1, 0,
+               $11, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
       [
         userUuid,
         normalizedEmail,
@@ -399,14 +395,10 @@ async function insertBuyerAccount({
         displayName,
         displayName,
         normalizedPhone,
+        orgName,
         orgUuid,
         roleUuid,
-        statusUuid,
-        buildUniqueId(),
-        IDENTITY_MASTER_DATA.SOURCE_TYPE_WEB,
         IDENTITY_MASTER_DATA.VERIFICATION_VERIFIED,
-        createdBy,
-        createdBy,
       ],
       { d1: true }
     );
@@ -796,25 +788,16 @@ async function insertVendorAccount({
       orgUuid = crypto.randomUUID();
       await pool.query(
         `insert into organization
-           (uuid, organization_name, email, organization_phonenumber, contact_person,
-            org_type_uuid, client_status_uuid, self_client, source_type, company_id,
-            gmt_name, bfs_name, is_india, upgrade_days, rfq_credits, rfq_used_count,
-            quote_submitted, created_by, created_ts, last_modified_by, last_modified_ts)
-         values ($1, $2, $3, $4, $5, $6, $7, true, $8, $9, $10, $11, true, 0, 0, 0, 0, $12, strftime('%Y-%m-%dT%H:%M:%fZ','now'), $13, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
+           (uuid, organization_name, contact_name, contact_email, contact_phone,
+            org_type_uuid, is_active, created_ts, last_modified_ts)
+         values ($1, $2, $3, $4, $5, $6, 1, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
         [
           orgUuid,
           orgName,
+          displayName,
           normalizedEmail,
           normalizedPhone,
-          displayName,
           orgTypeUuid,
-          statusUuid,
-          IDENTITY_MASTER_DATA.SOURCE_TYPE_WEB,
-          buildCompanyId(orgName),
-          IDENTITY_MASTER_DATA.DEFAULT_GMT_PLAN,
-          IDENTITY_MASTER_DATA.DEFAULT_BFS_PLAN,
-          createdBy,
-          createdBy,
         ],
         { d1: true }
       );
@@ -824,14 +807,12 @@ async function insertVendorAccount({
     await pool.query(
       `insert into "user"
          (uuid, username, email, password, full_name, first_name, phone,
-          org_uuid, role_uuid, client_status_uuid, unique_id,
-          is_active, self_client, is_approved, reset_password,
-          is_web_app, is_whats_app, is_bot,
-          source_type, verification_status, created_by, created_ts,
-          last_modified_by, last_modified_ts)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-               true, false, true, false, true, false, false,
-               $12, $13, $14, strftime('%Y-%m-%dT%H:%M:%fZ','now'), $15, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
+          organization_name, org_uuid, role_uuid,
+          is_active, is_approved, self_client,
+          verification_status, created_ts, last_modified_ts)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+               1, 1, 0,
+               $11, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
       [
         userUuid,
         normalizedEmail,
@@ -840,14 +821,10 @@ async function insertVendorAccount({
         displayName,
         displayName,
         normalizedPhone,
+        orgName,
         orgUuid,
         roleUuid,
-        statusUuid,
-        buildUniqueId(),
-        IDENTITY_MASTER_DATA.SOURCE_TYPE_WEB,
         IDENTITY_MASTER_DATA.VERIFICATION_VERIFIED,
-        createdBy,
-        createdBy,
       ],
       { d1: true }
     );
