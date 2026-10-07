@@ -169,7 +169,7 @@ jobs:
   deploy:
     name: Deploy to Cloudflare
     needs: [backend-gate, frontend-gate]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/prod')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     steps:
