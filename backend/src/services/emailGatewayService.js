@@ -50,8 +50,16 @@ const { INGESTION_OUTCOME } = emailGatewayQueries;
 // A poll that never clears its flag (a Gmail or Gemini call that hangs) must not
 // block every later run on a warm Worker isolate. The flag only counts as held
 // for this long; each external call is also bounded so a hang ends the poll.
+//
+// Live cron tails show the lock being SET and then nothing further logging for
+// that cycle at all -- not even this timeout's own rejection -- which points at
+// the platform's own cron invocation duration limit killing the isolate before
+// a 60s timer ever fires, leaving withTimeout's setTimeout (and the `finally`
+// that clears the lock) orphaned. Lowered well under that ceiling so our own
+// timeout wins the race and actually logs the real Gmail error instead of
+// going silent.
 const POLL_STALE_AFTER_MS = 2 * 60 * 1000;
-const POLL_CALL_TIMEOUT_MS = 60 * 1000;
+const POLL_CALL_TIMEOUT_MS = 20 * 1000;
 
 function pollInFlight(state) {
   return state.isPolling && Date.now() - state.pollStartedAt < POLL_STALE_AFTER_MS;
@@ -1343,7 +1351,22 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
           // Marked read only for a message we actually acted on, and only after
           // the ledger write, so a failed write leaves it to be retried — same
           // ordering the IMAP path uses and for the same reason.
-          await gmail.users.messages.modify({ userId: 'me', id: ref.id, requestBody: { removeLabelIds: ['UNREAD'] } });
+          //
+          // Bounded and self-swallowed, same as the "already processed" mark-read
+          // above: by this point recordProcessed has already written the real
+          // outcome, so a slow/failed mark-read here must never reach the outer
+          // catch below — that would overwrite a correct ledger entry with a
+          // false FAILED status for a message that actually succeeded. Worst
+          // case on a timeout: the message is still UNREAD and gets reconsidered
+          // next poll, where the ledger's hasProcessed check (line 1301) already
+          // catches it as ALREADY_PROCESSED and just retries the mark-read.
+          await withTimeout(
+            gmail.users.messages
+              .modify({ userId: 'me', id: ref.id, requestBody: { removeLabelIds: ['UNREAD'] } })
+              .catch(() => {}),
+            POLL_CALL_TIMEOUT_MS,
+            'Gmail mark-read (post-process)'
+          ).catch(() => {});
         }
         outcomes.push({ uid: ref.id, messageId: resolvedMessageId, status: result.status });
       } catch (err) {
