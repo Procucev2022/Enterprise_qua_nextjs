@@ -559,30 +559,31 @@ async function extractRfqReferenceFromEmail(message) {
 function isOutgoingSystemMessage(message, config = {}) {
   if (!message || !message.fromAddress) return false;
   const senderEmail = String(message.fromAddress).trim().toLowerCase();
-  const mailboxUser = String(config.user || '').trim().toLowerCase();
-  const vendorUser = String(
-    process.env.VENDOR_EMAIL_GATEWAY_USER ||
-    process.env.VENDOR_SMTP_USER ||
-    'srinu20252026@gmail.com'
-  ).trim().toLowerCase();
-  const buyerUser = String(
-    process.env.EMAIL_GATEWAY_USER ||
-    process.env.SMTP_USER ||
-    'rfqprocucev@gmail.com'
-  ).trim().toLowerCase();
-  // The Gmail API buyer identity (used both to send and, now, to poll) is a
-  // separate credential from EMAIL_GATEWAY_USER/SMTP_USER — read from its
-  // own var rather than assuming it matches either.
-  const gmailApiUser = String(process.env.GMAIL_SENDER_EMAIL || '').trim().toLowerCase();
+  const normalizeAddress = (value) => {
+    const address = String(value || '').trim().match(/<\s*([^<>]+)\s*>/);
+    return (address ? address[1] : String(value || '')).trim().toLowerCase();
+  };
+  const platformSenders = [
+    config.user,
+    config.address,
+    process.env.EMAIL_GATEWAY_USER,
+    process.env.EMAIL_GATEWAY_ADDRESS,
+    process.env.SMTP_USER,
+    process.env.SMTP_FROM,
+    process.env.GMAIL_SENDER_EMAIL,
+    process.env.VENDOR_EMAIL_GATEWAY_USER,
+    process.env.VENDOR_EMAIL_GATEWAY_ADDRESS,
+    process.env.VENDOR_SMTP_USER,
+    process.env.VENDOR_SMTP_FROM,
+    process.env.VENDOR_GMAIL_SENDER_EMAIL,
+    process.env.QUOTE_ALERT_GMAIL_SENDER_EMAIL,
+    'srinu20252026@gmail.com',
+    'rfqprocucev@gmail.com',
+  ]
+    .map(normalizeAddress)
+    .filter(Boolean);
 
-  return (
-    senderEmail === mailboxUser ||
-    senderEmail === vendorUser ||
-    senderEmail === buyerUser ||
-    (gmailApiUser && senderEmail === gmailApiUser) ||
-    senderEmail === 'srinu20252026@gmail.com' ||
-    senderEmail === 'rfqprocucev@gmail.com'
-  );
+  return platformSenders.includes(senderEmail);
 }
 
 /**
