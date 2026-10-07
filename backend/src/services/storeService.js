@@ -23,8 +23,6 @@ const mailerService = require('./mailerService');
 // configured, matching the same pattern mailerService uses above.
 const whatsAppService = require('./whatsAppService');
 const smsService = require('./smsService');
-// Timed chaser scheduler — schedules WhatsApp (immediate), SMS (+5 min),
-// and reminder email (+24 h) for every vendor on an RFQ.
 const rfqChaserScheduler = require('./rfqChaserScheduler');
 const { logger } = require('./loggerService');
 
@@ -1977,9 +1975,6 @@ class StoreService {
     const removed = this.rfqs.length < beforeLen;
     if (removed) {
       this._removeRFQ(id);
-      // Cancel any pending WhatsApp/SMS/email chaser timers so deleted RFQs
-      // don't trigger ghost dispatches minutes or hours later.
-      rfqChaserScheduler.clearScheduledChasers(id);
       if (this._delayedQuoteTimers && this._delayedQuoteTimers.has(id)) {
         const handles = this._delayedQuoteTimers.get(id) || [];
         handles.forEach((h) => clearTimeout(h));
@@ -2312,13 +2307,6 @@ class StoreService {
       //   • After 6 hours   → Call reminder (logic kept, telephony deferred)
       //   • After 12 hours  → WhatsApp reminder
       //   • After 24 hours  → Email reminder
-      // Dispatches are scheduled via rfqChaserScheduler, not sent immediately.
-      rfqChaserScheduler.scheduleVendorChaser(
-        updatedRFQ,
-        vendor,
-        this.checkVendorQuotationEligibility(vendor)
-      );
-
     }
 
     return {
