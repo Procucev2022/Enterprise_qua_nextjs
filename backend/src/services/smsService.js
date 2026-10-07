@@ -116,6 +116,15 @@ const SMS_GATEWAY_CONFIG = {
       SMS_DLT_TEMPLATES.RFQ_CHASER.SMSGID
     );
   },
+
+  // Buyer 48h bids unlocked template — uses SMS_DLT_TEMPLATES.BUYER_BIDS_UNLOCKED.SMSGID
+  // overridable via SMS_GATEWAY_BUYER_UNLOCKED_SMSGID env var.
+  get BUYER_UNLOCKED_SMSGID() {
+    return getEnv(
+      'SMS_GATEWAY_BUYER_UNLOCKED_SMSGID',
+      SMS_DLT_TEMPLATES.BUYER_BIDS_UNLOCKED.SMSGID
+    );
+  },
 };
 
 // In-memory cooldown throttle cache to prevent infinite / spam loop SMS dispatches
@@ -532,7 +541,31 @@ async function sendBuyerComparisonSms({
       rfqNumber
     )}`;
 
-  const message = `[PRCU-RFQ] RFQ ${rfqNumber} closed. Quotation comparison matrix is ready (${quotesCount} quotes). Review: ${resolvedLink} - Team Procucev.`;
+  const rfqLabel = rfqNumber && rfqNumber.toUpperCase().startsWith('RFQ')
+    ? rfqNumber
+    : `RFQ ${rfqNumber || ''}`.trim();
+
+  const message = SMS_DLT_TEMPLATES.BUYER_BIDS_UNLOCKED.TEMPLATE
+    .replace('{#var#}', rfqLabel)
+    .replace('{#var#}', String(quotesCount))
+    .replace('{#var#}', resolvedLink);
+
+  const messageChars = message.length;
+  const smsUnits = Math.ceil(messageChars / 160);
+
+  logger.info(
+    `[SMS_SERVICE] Buyer bids unlocked comparison SMS prepared: ${messageChars} chars (${smsUnits} unit${
+      smsUnits > 1 ? 's' : ''
+    })`,
+    {
+      rfqNumber,
+      messageChars,
+      smsUnits,
+      quotesCount,
+      matrixUrl: resolvedLink,
+    },
+    'SMS_SERVICE'
+  );
 
   const payload = {
     user: SMS_GATEWAY_CONFIG.RFQ_USER,
@@ -542,7 +575,7 @@ async function sendBuyerComparisonSms({
         to: `91${formattedNumber}`,
         from: SMS_GATEWAY_CONFIG.SENDER,
         smstext: message,
-        smsgid: SMS_GATEWAY_CONFIG.RFQ_SMSGID,
+        smsgid: SMS_GATEWAY_CONFIG.BUYER_UNLOCKED_SMSGID,
       },
     ],
   };
@@ -550,49 +583,61 @@ async function sendBuyerComparisonSms({
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 6000);
-
-    const res = await fetch(SMS_GATEWAY_CONFIG.URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json, text/plain, */*',
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeout);
-
-    const responseText = await res.text();
-    const messageId = `sms-comp-${Date.now()}`;
-
-    if (res.ok) {
-      logger.info(
-        `Buyer quotation comparison SMS dispatched to 91${formattedNumber} for ${rfqNumber}`,
-        {
-          status: res.status,
-          response: responseText,
-          rfqNumber,
+    try {
+      const res = await fetch(SMS_GATEWAY_CONFIG.URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/plain, */*',
         },
-        'SMS_SERVICE'
-      );
-    } else {
-      logger.warn(
-        `Buyer quotation comparison SMS gateway error for 91${formattedNumber} — HTTP ${res.status}`,
-        {
-          status: res.status,
-          response: responseText,
-          rfqNumber,
-        },
-        'SMS_SERVICE'
-      );
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      const responseText = await res.text();
+      const messageId = `sms-comp-${Date.now()}`;
+
+      const isGatewayError =
+        !res.ok ||
+        /^(ERR|ERROR|FAIL|INVALID|REJECTED)/i.test(responseText.trim()) ||
+        /"status"\s*:\s*"(?:error|failed|failure|invalid|rejected)"/i.test(responseText);
+
+      if (isGatewayError) {
+        logger.warn(
+          `SMS buyer bids unlocked gateway error for 91${formattedNumber} — HTTP ${res.status}: ${responseText}`,
+          {
+            status: res.status,
+            response: responseText,
+            rfqNumber,
+            buyerName,
+            smsgid: SMS_GATEWAY_CONFIG.BUYER_UNLOCKED_SMSGID,
+            templateName: SMS_DLT_TEMPLATES.BUYER_BIDS_UNLOCKED.NAME,
+          },
+          'SMS_SERVICE'
+        );
+      } else {
+        logger.info(
+          `Buyer bids unlocked comparison SMS dispatched to 91${formattedNumber} for ${rfqNumber}`,
+          {
+            status: res.status,
+            response: responseText,
+            rfqNumber,
+            buyerName,
+            smsgid: SMS_GATEWAY_CONFIG.BUYER_UNLOCKED_SMSGID,
+            templateName: SMS_DLT_TEMPLATES.BUYER_BIDS_UNLOCKED.NAME,
+          },
+          'SMS_SERVICE'
+        );
+      }
+
+      return {
+        success: !isGatewayError,
+        messageId,
+        response: responseText,
+      };
+    } finally {
+      clearTimeout(timeout);
     }
-
-    return {
-      success: res.ok,
-      messageId,
-      response: responseText,
-    };
   } catch (err) {
     logger.error(
       `Failed to dispatch buyer comparison SMS to 91${formattedNumber} for ${rfqNumber}`,

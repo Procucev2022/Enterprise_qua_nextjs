@@ -829,6 +829,15 @@ const SMS_DLT_TEMPLATES = {
     TEMPLATE: 'OTP for registering your access to Get My quoTe (GMT): {#var#}. Valid for 5 mins. Do not share. - Team Procucev.',
     VARIABLES: ['otp'],
   },
+  BUYER_BIDS_UNLOCKED: {
+    NAME:     'Buyer_Quote_Matrix_Ready',
+    SMSGID:   process.env.SMS_GATEWAY_BUYER_UNLOCKED_SMSGID || '1777179137793499753',
+    CATEGORY: 'SERVICE_IMPLICIT',
+    TEMPLATE: 'RFQ Update: 48-hour bidding window for {#var#} is completed. Quotation matrix is ready with {#var#} quotes. Review now: {#var#} - Team Procucev.',
+    VARIABLES: ['rfqLabel', 'quotesCount', 'matrixLink'],
+    VARIABLE_TYPES: ['var', 'var', 'var'],
+    URL_SHORTENING: false,
+  },
 };
 
 /**
