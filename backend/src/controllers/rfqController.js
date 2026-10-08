@@ -25,10 +25,15 @@ const RFQ_DEFAULT_STATUS = 'Quotes Pending';
 // each paid tier adds one mode on top of the last, matching store.tsx's
 // existing client-side gate (addNewRFQ) that this mirrors server-side.
 const SUBSCRIPTION_MODE_ENTITLEMENTS = {
-  free_trial: ['mode_1', 'mode_2', 'mode_3'],
-  version_1: ['mode_1'],
-  version_2: ['mode_1', 'mode_2'],
-  version_3: ['mode_1', 'mode_2', 'mode_3'],
+  free_trial: ['mode_0', 'mode_1', 'mode_2', 'mode_3', 'v0', 'v1', 'v2', 'v3', 'version_0', 'version_1', 'version_2', 'version_3'],
+  version_0: ['mode_0', 'v0', 'version_0'],
+  v0: ['mode_0', 'v0', 'version_0'],
+  version_1: ['mode_0', 'mode_1', 'v0', 'v1', 'version_0', 'version_1'],
+  v1: ['mode_0', 'mode_1', 'v0', 'v1', 'version_0', 'version_1'],
+  version_2: ['mode_0', 'mode_1', 'mode_2', 'v0', 'v1', 'v2', 'version_0', 'version_1', 'version_2'],
+  v2: ['mode_0', 'mode_1', 'mode_2', 'v0', 'v1', 'v2', 'version_0', 'version_1', 'version_2'],
+  version_3: ['mode_0', 'mode_1', 'mode_2', 'mode_3', 'v0', 'v1', 'v2', 'v3', 'version_0', 'version_1', 'version_2', 'version_3'],
+  v3: ['mode_0', 'mode_1', 'mode_2', 'mode_3', 'v0', 'v1', 'v2', 'v3', 'version_0', 'version_1', 'version_2', 'version_3'],
 };
 
 /**
@@ -445,10 +450,19 @@ async function createRFQ(req, res, next) {
     // subscription to enforce against.
     if (requestingBuyerAccount) {
       const plan = requestingBuyerAccount.subscriptionPlan || 'free_trial';
+      const isPaidPlan = ['version_1', 'version_2', 'version_3'].includes(plan);
       const entitledModes = SUBSCRIPTION_MODE_ENTITLEMENTS[plan] || SUBSCRIPTION_MODE_ENTITLEMENTS.free_trial;
-      const requestedMode = body.sourcingMode || 'mode_1';
+      const requestedMode = body.sourcingMode || 'mode_0';
+      const remainingCredits =
+        requestingBuyerAccount.remainingFreeRFQs !== undefined
+          ? requestingBuyerAccount.remainingFreeRFQs
+          : 5;
 
-      if (!entitledModes.includes(requestedMode)) {
+      const isV0 = requestedMode === 'mode_0' || requestedMode === 'v0' || requestedMode === 'version_0';
+
+      // Enterprise QUA – V0 (Free Starter Trial) is universally available to all accounts (0 credits consumed).
+      // Entitlement check is NEVER applied to V0 (always allowed). Only enforced for V1 / V2 / V3.
+      if (!isV0 && !entitledModes.includes(requestedMode)) {
         logger.warn(
           `Rejected RFQ creation: ${plan} plan does not include ${requestedMode}`,
           { plan, requestedMode },
@@ -460,16 +474,33 @@ async function createRFQ(req, res, next) {
         });
       }
 
-      if (plan === 'free_trial') {
-        const consumeResult = storeService.tryConsumeFreeRFQ(requestingBuyerAccount.id);
-        if (!consumeResult.ok) {
-          logger.warn('Rejected RFQ creation: free trial exhausted', { buyerAccountId: requestingBuyerAccount.id }, 'RFQ_CONTROLLER');
-          return res.status(403).json({
-            success: false,
-            error: 'Your free trial RFQs are used up. Upgrade to a paid plan to raise more.',
-          });
+      // Enterprise QUA – V0 (Free Starter Trial) Flow:
+      // V0 RFQ = No credit deduction (0 credits consumed). Allowed unconditionally even when remaining credits are 0.
+      // V1 / V2 / V3 RFQ = 1 credit deducted per RFQ from buyer's 5 free RFQ credits (if on free trial).
+      // Once 5 free credits are 0, V1/V2/V3 RFQs require paid subscription.
+      if (isV0) {
+        // V0 RFQ: No credit deduction
+        consumedFreeTrial = false;
+      } else {
+        // V1, V2, or V3:
+        if (!isPaidPlan) {
+          if (remainingCredits <= 0) {
+            logger.warn('Rejected RFQ creation: free credits exhausted for V1/V2/V3', { buyerAccountId: requestingBuyerAccount.id, requestedMode }, 'RFQ_CONTROLLER');
+            return res.status(403).json({
+              success: false,
+              error: 'Your 5 free trial RFQ credits for V1/V2/V3 have been fully used. Upgrade to a paid plan to raise more V1/V2/V3 RFQs, or continue using V0 Free Starter for Procucev Network RFQs.',
+            });
+          }
+          const consumeResult = storeService.tryConsumeFreeRFQ(requestingBuyerAccount.id);
+          if (!consumeResult.ok) {
+            logger.warn('Rejected RFQ creation: free trial exhausted', { buyerAccountId: requestingBuyerAccount.id }, 'RFQ_CONTROLLER');
+            return res.status(403).json({
+              success: false,
+              error: 'Your free trial RFQs are used up. Upgrade to a paid plan to raise more.',
+            });
+          }
+          consumedFreeTrial = true;
         }
-        consumedFreeTrial = true;
       }
     }
 
@@ -1039,14 +1070,14 @@ function approvePO(req, res, next) {
     // Awarding a PO is a buyer-side decision — a vendor has no business
     // approving their own (or anyone else's) award.
     if (!['buyer', 'category_manager', 'admin'].includes(req.user.role)) {
-      return res.status(403).json({ success: false, error: 'You do not have permission to approve a purchase order.' });
+      return res.status(403).json({ success: false, error: 'You do not have permission to approve a pre-purchase order.' });
     }
     const { vendorId, vendorName, totalAmount, approverNotes } = req.body;
     if (!vendorName || !totalAmount) {
       logger.warn(`Failed to approve PO for RFQ ${id}: Missing vendorName or totalAmount`, { id, body: req.body }, 'RFQ_CONTROLLER');
       return res.status(400).json({ success: false, error: 'vendorName and totalAmount are required.' });
     }
-    logger.info(`Approving Purchase Order for RFQ ${id}`, { id, vendorId, vendorName, totalAmount, approverNotes }, 'RFQ_CONTROLLER');
+    logger.info(`Approving Pre-Purchase Order for RFQ ${id}`, { id, vendorId, vendorName, totalAmount, approverNotes }, 'RFQ_CONTROLLER');
     const result = storeService.approvePurchaseOrder(id, vendorId, vendorName, totalAmount, approverNotes, req.user.email);
     if (!result) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });

@@ -255,6 +255,7 @@ const VALIDATION_SCHEMAS = {
   // data from the CM reviewing the import; this schema only decides what
   // counts as "worth flagging," not what counts as "allowed to import."
   vendorBulkImportRow: {
+    vendorCode: { type: 'string', required: false, maxLength: 100 },
     name: { type: 'string', required: false, minLength: 2, maxLength: 200, message: 'Company name is required.' },
     email: { type: 'string', required: false, pattern: EMAIL_REGEX, message: 'A valid email address is required.' },
     phone: { type: 'string', required: false, pattern: INDIAN_MOBILE_REGEX, message: INDIAN_MOBILE_MESSAGE },

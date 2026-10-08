@@ -176,7 +176,7 @@ describe('RFQ ingestion service (AI line-item classification)', () => {
     test('matches a minor case-insensitively and returns the taxonomy spelling', () => {
       const result = ingestion.classifyLineItem({ itemName: 'Rack', category: 'storage  racks' });
       expect(result).toMatchObject({
-        majorCategory: 'New Category-Product',
+        majorCategory: 'Others – New Product',
         minorCategory: 'Storage Racks',
       });
     });

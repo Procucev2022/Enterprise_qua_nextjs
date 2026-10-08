@@ -38,6 +38,7 @@ import {
   Database,
   Pencil,
   RefreshCw,
+  RotateCcw,
   ChevronDown,
 } from 'lucide-react';
 
@@ -419,8 +420,16 @@ export default function InitialSetupModal() {
             const phone = getVal(['phone', 'mobile', 'contact number', 'phone number', 'telephone', 'mobile number']) || '+91 98000 00000';
             const address = getVal(['address', 'location', 'city', 'plant location', 'street', 'office address']) || 'Industrial Zone, India';
             const gstNumber = getVal(['gstnumber', 'gstin', 'gst', 'gst number', 'tax id', 'gst no']) || '27AAACA0000A1Z0';
-            const ratingRaw = getVal(['vendorratingscore', 'rating', 'score', 'vendor rating', 'rating 0 100', 'performance score']);
-            const vendorRatingScore = ratingRaw && !isNaN(Number(ratingRaw)) ? Math.min(100, Math.max(0, Math.round(Number(ratingRaw)))) : undefined;
+            const ratingRaw = getVal(['vendorratingscore', 'rating', 'score', 'vendor rating', 'rating 0 100', 'performance score', 'vendor rating score', 'rating optional', 'rating 0-100', 'rating0100']);
+            let vendorRatingScore: number | undefined = undefined;
+            if (ratingRaw && !isNaN(Number(ratingRaw))) {
+              const num = Number(ratingRaw);
+              if (num > 0 && num <= 5) {
+                vendorRatingScore = Math.round(num * 20);
+              } else {
+                vendorRatingScore = Math.min(100, Math.max(0, Math.round(num)));
+              }
+            }
 
             return {
               id: `vm-upload-${Date.now()}-${idx}`,
@@ -504,6 +513,32 @@ export default function InitialSetupModal() {
               failedRecords: 0,
             });
           }
+
+          try {
+            const existingHistory = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
+            const historyEntry = {
+              id: `up-${Date.now()}`,
+              fileName: file.name,
+              timestamp: new Date().toLocaleString(),
+              total: parsedVendors.length,
+              imported: parsedVendors.length,
+              duplicates: 0,
+              failed: 0,
+              records: parsedVendors.slice(0, 100).map((v) => ({
+                vendorCode: v.vendorCode,
+                name: v.companyName,
+                contactPerson: v.contactPerson,
+                email: v.email,
+                phone: v.phone,
+                gstin: v.gstNumber,
+                category: 'Vendor Master',
+                city: v.address,
+                rating: v.vendorRatingScore,
+              })),
+            };
+            const updatedHistory = [historyEntry, ...existingHistory.filter((x: any) => x.fileName !== file.name)].slice(0, 30);
+            localStorage.setItem('procucev_vendor_upload_history', JSON.stringify(updatedHistory));
+          } catch {}
 
           showToast('Vendor Master Uploaded', `Loaded ${parsedVendors.length.toLocaleString('en-IN')} vendors from ${file.name}.`, 'success');
         } catch (err: any) {
@@ -927,23 +962,66 @@ export default function InitialSetupModal() {
   const mappedVendors = joinedVendors.filter((v) => v.categoriesMappedByBuyer);
   const unmappedVendors = joinedVendors.filter((v) => !v.categoriesMappedByBuyer);
 
-  // Download Sample Vendor Master CSV
-  const handleDownloadVendorMasterCsv = () => {
-    const csv =
-      'Vendor Code,Company Name,Contact Person,Email ID,Phone,Address,GSTIN,Rating (0-100 Optional)\n' +
-      'VND-1001,Apex Supplies Ltd.,Rajesh Nair,rajesh@apexsupplies.in,+91 98201 44820,"MIDC Thane, Mumbai, MH",27AAACA1928K1Z4,95\n' +
-      'VND-1002,Kiran Valve Industries,Amit Kumar,amit@kiranvalves.com,+91 97653 21098,"Bhosari, Pune, MH",27AAACK3921P1Z9,78\n' +
-      'VND-1007,Vortex Hydraulic Systems,Nikhil Rane,nikhil@vortexhydraulics.in,+91 98450 11920,"Peenya, Bangalore, KA",29AAACV8841P1Z5,82\n' +
-      'VND-1008,Nova Electrical Spares,Pooja Deshmukh,sales@novaelectricals.com,+91 97230 44510,"Makarpura, Vadodara, GJ",24AAACN4419K1Z1,\n';
+  // Download Sample Vendor Master Excel (.xlsx)
+  const handleDownloadVendorMasterExcel = () => {
+    const sampleRows = [
+      {
+        'Vendor Code': 'VND-1001',
+        'Company Name': 'Apex Supplies Ltd.',
+        'Contact Person': 'Rajesh Nair',
+        'Email ID': 'rajesh@apexsupplies.in',
+        Phone: '+91 98201 44820',
+        Address: 'MIDC Thane, Mumbai, MH',
+        GSTIN: '27AAACA1928K1Z4',
+        'Rating (0-100 Optional)': 95,
+      },
+      {
+        'Vendor Code': 'VND-1002',
+        'Company Name': 'Kiran Valve Industries',
+        'Contact Person': 'Amit Kumar',
+        'Email ID': 'amit@kiranvalves.com',
+        Phone: '+91 97653 21098',
+        Address: 'Bhosari, Pune, MH',
+        GSTIN: '27AAACK3921P1Z9',
+        'Rating (0-100 Optional)': 78,
+      },
+      {
+        'Vendor Code': 'VND-1007',
+        'Company Name': 'Vortex Hydraulic Systems',
+        'Contact Person': 'Nikhil Rane',
+        'Email ID': 'nikhil@vortexhydraulics.in',
+        Phone: '+91 98450 11920',
+        Address: 'Peenya, Bangalore, KA',
+        GSTIN: '29AAACV8841P1Z5',
+        'Rating (0-100 Optional)': 82,
+      },
+      {
+        'Vendor Code': 'VND-1008',
+        'Company Name': 'Nova Electrical Spares',
+        'Contact Person': 'Pooja Deshmukh',
+        'Email ID': 'sales@novaelectricals.com',
+        Phone: '+91 97230 44510',
+        Address: 'Makarpura, Vadodara, GJ',
+        GSTIN: '24AAACN4419K1Z1',
+        'Rating (0-100 Optional)': '',
+      },
+    ];
 
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const worksheet = XLSX.utils.json_to_sheet(sampleRows);
+    const workbook: XLSX.WorkBook = {
+      Sheets: { 'Vendor Master': worksheet },
+      SheetNames: ['Vendor Master'],
+    };
+    const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'Procucev_Template_1_Vendor_Master.csv';
+    link.download = 'Procucev_Template_1_Vendor_Master.xlsx';
     link.click();
-    showToast('Template Downloaded', 'Sample Vendor Master CSV template downloaded.', 'success');
+    showToast('Template Downloaded', 'Sample Vendor Master Excel template downloaded.', 'success');
   };
+  const handleDownloadVendorMasterCsv = handleDownloadVendorMasterExcel;
 
   // Download Sample PO Data CSV
   const handleDownloadPoDataCsv = () => {
@@ -960,7 +1038,7 @@ export default function InitialSetupModal() {
     link.href = url;
     link.download = `Procucev_Template_2_PO_Purchase_Dump_${selectedPeriod}.csv`;
     link.click();
-    showToast('Template Downloaded', 'Sample PO Purchase Order Dump CSV downloaded.', 'success');
+    showToast('Template Downloaded', 'Sample PO Pre-Purchase Order Dump CSV downloaded.', 'success');
   };
 
   const handleSimulatePOJoin = () => {
@@ -1044,16 +1122,6 @@ export default function InitialSetupModal() {
           </div>
         </div>
 
-        {/* Informative Why This is Required Box */}
-        <div className="p-4 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 text-xs text-indigo-950 dark:text-indigo-200 space-y-2">
-          <div className="font-bold text-indigo-900 dark:text-indigo-300 flex items-center gap-2">
-            <Sparkles size={16} className="text-indigo-600 shrink-0" />
-            <span>Dual-Stream ERP Ingestion Architecture</span>
-          </div>
-          <p className="text-[11px] leading-relaxed text-slate-700 dark:text-gray-300">
-            Because combined data is rarely available in enterprise systems, you can upload <strong>File 1 (Vendor Master Coordinates)</strong> first, followed by <strong>File 2 (Historical PO Spend Dump)</strong>. The system saves the vendor master, extracts purchased items from POs, and maps categories against each vendor profile. If a vendor is in the master but has no PO history, they receive an email notifying them to <strong>self-map their categories upon login</strong> in order to receive enquiries.
-          </p>
-        </div>
 
         {/* Step Progress Indicators */}
         <div className="grid grid-cols-5 gap-1.5 text-center text-[11px] font-bold">
@@ -1088,9 +1156,6 @@ export default function InitialSetupModal() {
               <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
                 Step 1: Choose Historical Purchase Period
               </h3>
-              <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                Select the time horizon of PO data you wish to cross-reference against your vendor master.
-              </p>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -1173,26 +1238,27 @@ export default function InitialSetupModal() {
               }}
             />
 
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
-                    Step 2: Upload File 1 — Vendor Master Database
-                  </h3>
-                  <span className="badge badge-indigo font-bold text-[10px]">Stored First</span>
-                </div>
-                <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                  Contains: Vendor Code, Company Name, Contact Person, Email, Phone, Address, GSTIN, and Optional Rating (0-100).
-                </p>
-              </div>
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
+                Step 2: Upload File 1 — Vendor Master
+              </h3>
+            </div>
 
-              <div className="flex items-center gap-2 flex-wrap">
+            {/* Single-line Simplified Vendor Master Info & Download Banner */}
+            <div className="p-3.5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-gradient-to-r from-indigo-50/70 via-purple-50/30 to-blue-50/70 dark:from-indigo-950/40 dark:via-purple-950/20 dark:to-blue-950/40 flex items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="badge badge-indigo font-bold text-[10px] shrink-0">Required Columns</span>
+                <span className="text-xs text-slate-700 dark:text-gray-300 font-medium truncate">
+                  Vendor Code, Company Name, Contact Person, Mobile, Email, GSTIN &amp; Location
+                </span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
-                  onClick={handleDownloadVendorMasterCsv}
-                  className="btn btn-secondary btn-xs font-bold text-[11px] flex items-center gap-1 shrink-0"
+                  onClick={handleDownloadVendorMasterExcel}
+                  className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
                 >
-                  <Download size={12} /> Download CSV Template
+                  <Download size={13} /> Download Excel Template
                 </button>
                 {storedVendors.length > 0 && (
                   <button
@@ -1211,90 +1277,99 @@ export default function InitialSetupModal() {
               <IngestionProgressCard job={vendorJob} title="Vendor Master" unit="vendors" />
             )}
 
-            {/* Drag & Drop Vendor Master Area */}
-            <div
-              onClick={() => vendorFileInputRef.current?.click()}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setIsDraggingVendor(true);
-              }}
-              onDragLeave={() => setIsDraggingVendor(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setIsDraggingVendor(false);
-                const file = e.dataTransfer.files?.[0];
-                if (file) handleVendorFileUpload(file);
-              }}
-              className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all cursor-pointer group ${
-                isDraggingVendor
-                  ? 'border-indigo-600 bg-indigo-100/70 dark:bg-indigo-900/50 scale-[1.01]'
-                  : storedVendors.length > 0 || vendorJob?.status === 'COMPLETED'
-                  ? 'border-emerald-300 dark:border-emerald-600/50 bg-emerald-50/40 dark:bg-emerald-950/20'
-                  : 'border-indigo-300 dark:border-indigo-500/50 hover:border-indigo-600 bg-indigo-50/40 dark:bg-indigo-950/20 hover:bg-indigo-50/80'
-              }`}
-            >
-              <div className="w-12 h-12 rounded-2xl bg-indigo-100 dark:bg-indigo-600/20 flex items-center justify-center mx-auto text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
-                <UploadCloud size={24} />
-              </div>
-              <h4 className="text-sm font-black text-slate-800 dark:text-white mt-2">
-                {isParsingVendor || vendorJob?.status === 'PROCESSING'
-                  ? 'Streaming and Processing Vendor Records in Background...'
-                  : storedVendors.length > 0 || vendorJob?.status === 'COMPLETED'
-                  ? `Vendor Master File Loaded (${(vendorJob?.importedRecords || storedVendors.length).toLocaleString('en-IN')} Suppliers)`
-                  : `Click to Browse or Drag & Drop Vendor Master (.xlsx, .csv, .xls)`}
-              </h4>
-              <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-1 max-w-md mx-auto">
-                {storedVendors.length > 0 || vendorJob
-                  ? `Active File: ${vendorFileName || vendorJob?.fileName}. Click below to upload another file or proceed.`
-                  : 'Upload your ERP vendor master sheet containing vendor codes, company names, contact details, GSTIN, and ratings.'}
-              </p>
-
-              <div className="mt-3 flex items-center justify-center gap-2 flex-wrap">
-                {storedVendors.length > 0 || vendorJob ? (
-                  <>
-                    <div className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-700 dark:text-indigo-300 px-3 py-1 rounded-full bg-white dark:bg-gray-800 border border-indigo-200 dark:border-indigo-800 shadow-sm">
-                      <Database size={12} className="text-indigo-500" />
-                      <span>Active File:</span>
-                      <span className="font-mono text-indigo-600 dark:text-indigo-400">{vendorFileName || vendorJob?.fileName}</span>
-                      <span className="text-slate-400">({(vendorJob?.importedRecords || storedVendors.length).toLocaleString('en-IN')} Suppliers)</span>
+            {/* Drag & Drop Vendor Master Area or Uploaded State Banner */}
+            {storedVendors.length > 0 || vendorJob?.status === 'COMPLETED' ? (
+              <div
+                data-testid="vendor-master-uploaded-card"
+                className="p-5 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border-2 border-emerald-500/40 dark:border-emerald-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-fade-in"
+              >
+                <div className="flex items-center gap-3.5">
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-600/20 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 flex items-center justify-center shrink-0 shadow-sm">
+                    <CheckCircle2 size={24} />
+                  </div>
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-black uppercase tracking-wider text-emerald-800 dark:text-emerald-300">
+                        Vendor Master Uploaded Successfully
+                      </span>
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-200/60 dark:bg-emerald-900/60 text-emerald-900 dark:text-emerald-200 border border-emerald-400/40">
+                        <Check size={10} /> Active
+                      </span>
                     </div>
+                    <p className="text-sm font-black font-mono text-slate-900 dark:text-white">
+                      {vendorFileName || vendorJob?.fileName || 'Vendor_Master_Database.xlsx'}
+                    </p>
+                    <p className="text-[11px] text-emerald-800/80 dark:text-emerald-300/80 font-medium">
+                      {(vendorJob?.importedRecords || storedVendors.length).toLocaleString('en-IN')} suppliers parsed and loaded into vendor master
+                    </p>
+                  </div>
+                </div>
 
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        vendorFileInputRef.current?.click();
-                      }}
-                      className="btn btn-primary btn-xs font-bold text-[11px] flex items-center gap-1"
-                    >
-                      <UploadCloud size={12} /> Choose Another File
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        clearVendorMasterData();
-                        setVendorJob(null);
-                      }}
-                      className="btn btn-secondary btn-xs font-bold text-[11px] text-rose-600 hover:text-rose-700 flex items-center gap-1"
-                    >
-                      <Trash2 size={12} /> Clear Selection
-                    </button>
-                  </>
-                ) : (
+                <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                  <button
+                    type="button"
+                    onClick={() => vendorFileInputRef.current?.click()}
+                    className="btn btn-secondary btn-sm font-bold text-xs flex items-center gap-1.5 border-slate-300 dark:border-gray-700 text-slate-700 dark:text-gray-200 hover:bg-slate-100 dark:hover:bg-gray-800"
+                    title="Replace or upload a different Vendor Master file"
+                  >
+                    <UploadCloud size={13} /> Choose Another File
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      clearVendorMasterData();
+                      setVendorJob(null);
+                    }}
+                    className="btn btn-secondary btn-sm font-bold text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 border-rose-200 dark:border-rose-900/50 flex items-center gap-1.5"
+                    title="Clear uploaded Vendor Master file"
+                  >
+                    <Trash2 size={13} /> Clear
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div
+                onClick={() => vendorFileInputRef.current?.click()}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setIsDraggingVendor(true);
+                }}
+                onDragLeave={() => setIsDraggingVendor(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setIsDraggingVendor(false);
+                  const file = e.dataTransfer.files?.[0];
+                  if (file) handleVendorFileUpload(file);
+                }}
+                className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all cursor-pointer group ${
+                  isDraggingVendor
+                    ? 'border-indigo-600 bg-indigo-100/70 dark:bg-indigo-900/50 scale-[1.01]'
+                    : 'border-indigo-300 dark:border-indigo-500/50 hover:border-indigo-600 bg-indigo-50/40 dark:bg-indigo-950/20 hover:bg-indigo-50/80'
+                }`}
+              >
+                <div className="w-10 h-10 rounded-xl bg-indigo-100 dark:bg-indigo-600/20 flex items-center justify-center mx-auto text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
+                  <UploadCloud size={20} />
+                </div>
+                <div className="text-xs font-bold text-slate-800 dark:text-white mt-2">
+                  {isParsingVendor || vendorJob?.status === 'PROCESSING'
+                    ? 'Streaming and Processing Vendor Records in Background...'
+                    : 'Click to browse or drag & drop Vendor Master (.xlsx, .csv, .xls)'}
+                </div>
+                <div className="mt-2 flex items-center justify-center gap-2">
                   <button
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       vendorFileInputRef.current?.click();
                     }}
-                    className="btn btn-primary btn-xs font-bold text-[11px] flex items-center gap-1"
+                    className="btn btn-primary btn-xs font-bold text-[10px] inline-flex items-center gap-1 shadow-xs"
                   >
-                    <UploadCloud size={12} /> Browse File
+                    <UploadCloud size={11} /> Browse File
                   </button>
-                )}
+                  <span className="text-[10px] text-slate-400">Supported formats: .xlsx, .csv, .xls (Max 10MB)</span>
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Table of Stored Vendor Master or Empty State */}
             {storedVendors.length > 0 ? (
@@ -1355,7 +1430,7 @@ export default function InitialSetupModal() {
                           <th className="p-2 min-w-[110px]">Phone</th>
                           <th className="p-2 min-w-[120px]">GSTIN</th>
                           <th className="p-2 min-w-[140px]">Address / Location</th>
-                          <th className="p-2 w-24">Rating</th>
+                          <th className="p-2 min-w-[110px]">Rating</th>
                           <th className="p-2 w-10 text-center">Action</th>
                         </tr>
                       </thead>
@@ -1426,23 +1501,24 @@ export default function InitialSetupModal() {
                               />
                             </td>
                             <td className="p-1.5 align-top">
-                              <div className="flex items-center gap-1">
+                              <div className="flex items-center gap-1.5">
                                 <input
                                   type="number"
                                   min="0"
                                   max="100"
                                   value={v.vendorRatingScore !== undefined ? v.vendorRatingScore : ''}
-                                  onChange={(e) =>
+                                  onChange={(e) => {
+                                    const raw = e.target.value.trim();
                                     handleUpdateVendorField(
                                       v.id,
                                       'vendorRatingScore',
-                                      e.target.value === '' ? undefined : Math.min(100, Math.max(0, Number(e.target.value)))
-                                    )
-                                  }
+                                      raw === '' ? undefined : Math.min(100, Math.max(0, Math.round(Number(raw))))
+                                    );
+                                  }}
                                   placeholder="0-100"
-                                  className="w-14 text-center font-bold text-xs px-1 py-1 rounded bg-amber-50/80 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-400 focus:border-amber-500 focus:outline-none transition-all"
+                                  className="w-16 text-center font-bold text-xs px-2 py-1 rounded bg-amber-50/80 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-400 placeholder:text-amber-400/60 focus:border-amber-500 focus:outline-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                 />
-                                <span className="text-[10px] text-slate-400 font-bold">/100</span>
+                                <span className="text-[10px] text-slate-400 font-bold shrink-0">/100</span>
                               </div>
                             </td>
                             <td className="p-1.5 align-top text-center">
@@ -1488,8 +1564,8 @@ export default function InitialSetupModal() {
                             <td className="p-2.5 text-slate-600 dark:text-gray-400 text-[11px] truncate max-w-[200px]">{v.address || '—'}</td>
                             <td className="p-2.5 font-bold">
                               {v.vendorRatingScore !== undefined && v.vendorRatingScore !== null ? (
-                                <span className="text-amber-600 dark:text-amber-400 flex items-center gap-0.5">
-                                  <Star size={11} fill="currentColor" /> {v.vendorRatingScore}/100
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800">
+                                  <Star size={11} className="fill-amber-400 text-amber-500" /> {v.vendorRatingScore}/100
                                 </span>
                               ) : (
                                 <span className="text-slate-400 text-[10px]">Optional (N/A)</span>
@@ -1599,28 +1675,32 @@ export default function InitialSetupModal() {
               }}
             />
 
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
-                    Step 3: Upload File 2 — Historical PO Purchase Dump
-                  </h3>
-                  <span className="badge badge-purple font-bold text-[10px]">
-                    {selectedPeriod === '1_year' ? '1 Year' : selectedPeriod === '2_years' ? '2 Years' : '3 Years'}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                  Contains: PO Number, PO Date, Vendor Name / Code, Line Item Description, Quantity, Spend, Department.
-                </p>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
+                  Step 3: Upload File 2 — Historical PO Purchase Dump
+                </h3>
+                <span className="badge badge-purple font-bold text-[10px]">
+                  {selectedPeriod === '1_year' ? '1 Year' : selectedPeriod === '2_years' ? '2 Years' : '3 Years'}
+                </span>
               </div>
+            </div>
 
-              <div className="flex items-center gap-2 flex-wrap">
+            {/* Single-line Simplified PO Dump Info & Download Banner */}
+            <div className="p-3.5 rounded-2xl border border-purple-200 dark:border-purple-900/60 bg-gradient-to-r from-purple-50/70 via-indigo-50/30 to-blue-50/70 dark:from-purple-950/40 dark:via-indigo-950/20 dark:to-blue-950/40 flex items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="badge badge-purple font-bold text-[10px] shrink-0">Required Columns</span>
+                <span className="text-xs text-slate-700 dark:text-gray-300 font-medium truncate">
+                  PO Number, PO Date, Vendor Name, Item Description, Quantity, Spend &amp; Department
+                </span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={handleDownloadPoDataCsv}
-                  className="btn btn-secondary btn-xs font-bold text-[11px] flex items-center gap-1 shrink-0"
+                  className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
                 >
-                  <Download size={12} /> Download CSV Template
+                  <Download size={13} /> Download CSV Template
                 </button>
                 <button
                   type="button"
@@ -1637,64 +1717,96 @@ export default function InitialSetupModal() {
               <IngestionProgressCard job={poJob} title="PO Dump" unit="PO records" />
             )}
 
-            {/* Drag & Drop PO Dump Area */}
-            <div
-              onClick={() => poFileInputRef.current?.click()}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setIsDraggingPo(true);
-              }}
-              onDragLeave={() => setIsDraggingPo(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setIsDraggingPo(false);
-                const file = e.dataTransfer.files?.[0];
-                if (file) handlePODataFileUpload(file);
-              }}
-              className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all cursor-pointer group ${
-                isDraggingPo
-                  ? 'border-purple-600 bg-purple-100/70 dark:bg-purple-900/50 scale-[1.01]'
-                  : poLineItems.length > 0 || poJob?.status === 'COMPLETED'
-                  ? 'border-emerald-300 dark:border-emerald-600/50 bg-emerald-50/40 dark:bg-emerald-950/20'
-                  : 'border-purple-300 dark:border-purple-500/50 hover:border-purple-600 bg-purple-50/40 dark:bg-purple-950/20 hover:bg-purple-50/80'
-              }`}
-            >
-              <div className="w-12 h-12 rounded-2xl bg-purple-100 dark:bg-purple-600/20 flex items-center justify-center mx-auto text-purple-600 dark:text-purple-400 group-hover:scale-110 transition-transform">
-                <FileSpreadsheet size={24} />
-              </div>
-              <h4 className="text-sm font-black text-slate-800 dark:text-white mt-2">
-                {isParsingPo || poJob?.status === 'PROCESSING'
-                  ? 'Streaming and Processing PO Dump Records in Background...'
-                  : poLineItems.length > 0 || poJob?.status === 'COMPLETED'
-                  ? `PO Dump Loaded (${(poJob?.importedRecords || poLineItems.length).toLocaleString('en-IN')} Records)`
-                  : `Click to Browse or Drag & Drop PO Purchase Dump (.xlsx, .csv, .xls)`}
-              </h4>
-              <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-1 max-w-md mx-auto">
-                {poLineItems.length > 0 || poJob
-                  ? `Active File: ${poFileName || poJob?.fileName}. Click below to change or upload another PO dump file.`
-                  : 'Upload your historical purchase orders to automatically extract purchased items and map vendor categories.'}
-              </p>
-
-              <div className="mt-3 flex items-center justify-center gap-2 flex-wrap">
-                <div className="inline-flex items-center gap-1 text-[11px] font-bold text-purple-700 dark:text-purple-300 px-3 py-1 rounded-full bg-white dark:bg-gray-800 border border-purple-200 dark:border-purple-800 shadow-sm">
-                  <FileSpreadsheet size={12} className="text-purple-500" />
-                  <span>Active File:</span>
-                  <span className="font-mono text-purple-600 dark:text-purple-400">{poFileName || poJob?.fileName}</span>
-                  <span className="text-slate-400">({(poJob?.importedRecords || poLineItems.length).toLocaleString('en-IN')} PO Lines)</span>
+            {/* Drag & Drop PO Dump Area or Uploaded State Banner */}
+            {poLineItems.length > 0 || poJob?.status === 'COMPLETED' ? (
+              <div
+                data-testid="po-dump-uploaded-card"
+                className="p-5 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border-2 border-emerald-500/40 dark:border-emerald-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-fade-in"
+              >
+                <div className="flex items-center gap-3.5">
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-600/20 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 flex items-center justify-center shrink-0 shadow-sm">
+                    <CheckCircle2 size={24} />
+                  </div>
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-black uppercase tracking-wider text-emerald-800 dark:text-emerald-300">
+                        PO Dump Uploaded Successfully
+                      </span>
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-200/60 dark:bg-emerald-900/60 text-emerald-900 dark:text-emerald-200 border border-emerald-400/40">
+                        <Check size={10} /> Active
+                      </span>
+                    </div>
+                    <p className="text-sm font-black font-mono text-slate-900 dark:text-white">
+                      {poFileName || poJob?.fileName || 'PO_Purchase_Dump.xlsx'}
+                    </p>
+                    <p className="text-[11px] text-emerald-800/80 dark:text-emerald-300/80 font-medium">
+                      {(poJob?.importedRecords || poLineItems.length).toLocaleString('en-IN')} PO records loaded for period ({selectedPeriod === '1_year' ? '1 Year' : selectedPeriod === '2_years' ? '2 Years' : '3 Years'})
+                    </p>
+                  </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    poFileInputRef.current?.click();
-                  }}
-                  className="btn btn-primary btn-xs font-bold text-[11px] flex items-center gap-1"
-                >
-                  <UploadCloud size={12} /> Choose Another File
-                </button>
+                <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                  <button
+                    type="button"
+                    onClick={() => poFileInputRef.current?.click()}
+                    className="btn btn-secondary btn-sm font-bold text-xs flex items-center gap-1.5 border-slate-300 dark:border-gray-700 text-slate-700 dark:text-gray-200 hover:bg-slate-100 dark:hover:bg-gray-800"
+                    title="Replace or upload a different PO Dump file"
+                  >
+                    <UploadCloud size={13} /> Choose Another File
+                  </button>
+                  <button
+                    type="button"
+                    onClick={resetToSamplePoData}
+                    className="btn btn-secondary btn-sm font-bold text-xs text-slate-600 dark:text-gray-300 hover:bg-slate-100 dark:hover:bg-gray-800 border-slate-300 dark:border-gray-700 flex items-center gap-1.5"
+                    title="Reset PO data to default sample"
+                  >
+                    <RotateCcw size={13} /> Reset
+                  </button>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div
+                onClick={() => poFileInputRef.current?.click()}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setIsDraggingPo(true);
+                }}
+                onDragLeave={() => setIsDraggingPo(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setIsDraggingPo(false);
+                  const file = e.dataTransfer.files?.[0];
+                  if (file) handlePODataFileUpload(file);
+                }}
+                className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all cursor-pointer group ${
+                  isDraggingPo
+                    ? 'border-purple-600 bg-purple-100/70 dark:bg-purple-900/50 scale-[1.01]'
+                    : 'border-purple-300 dark:border-purple-500/50 hover:border-purple-600 bg-purple-50/40 dark:bg-purple-950/20 hover:bg-purple-50/80'
+                }`}
+              >
+                <div className="w-10 h-10 rounded-xl bg-purple-100 dark:bg-purple-600/20 flex items-center justify-center mx-auto text-purple-600 dark:text-purple-400 group-hover:scale-110 transition-transform">
+                  <FileSpreadsheet size={20} />
+                </div>
+                <div className="text-xs font-bold text-slate-800 dark:text-white mt-2">
+                  {isParsingPo || poJob?.status === 'PROCESSING'
+                    ? 'Streaming and Processing PO Dump Records in Background...'
+                    : 'Click to browse or drag & drop PO Purchase Dump (.xlsx, .csv, .xls)'}
+                </div>
+                <div className="mt-2 flex items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      poFileInputRef.current?.click();
+                    }}
+                    className="btn btn-primary btn-xs font-bold text-[10px] inline-flex items-center gap-1 shadow-xs"
+                  >
+                    <UploadCloud size={11} /> Browse File
+                  </button>
+                  <span className="text-[10px] text-slate-400">Supported formats: .xlsx, .csv, .xls (Max 10MB)</span>
+                </div>
+              </div>
+            )}
 
             {/* PO Line Items Preview */}
             <div className="space-y-2">
@@ -1962,7 +2074,7 @@ export default function InitialSetupModal() {
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-indigo-900 dark:text-indigo-200 text-[11px] flex items-center gap-1">
                     <CheckCircle2 size={13} className="text-emerald-600" />
-                    Template A: Suppliers With PO History ({mappedVendors.length})
+                    Template A: Suppliers With Pre-Purchase Order History ({mappedVendors.length})
                   </span>
                 </div>
                 <div className="p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-indigo-100 dark:border-indigo-900 text-[10px] space-y-1 font-mono text-slate-700 dark:text-gray-300">
@@ -1980,7 +2092,7 @@ export default function InitialSetupModal() {
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-amber-900 dark:text-amber-200 text-[11px] flex items-center gap-1">
                     <AlertCircle size={13} className="text-amber-600" />
-                    Template B: Suppliers With NO POs ({unmappedVendors.length})
+                    Template B: Suppliers With NO Pre-Purchase Orders ({unmappedVendors.length})
                   </span>
                 </div>
                 <div className="p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-amber-200 dark:border-amber-900 text-[10px] space-y-1 font-mono text-slate-700 dark:text-gray-300">

@@ -24,6 +24,8 @@
 import {
   hasMajorCategory,
   hasMinorCategory,
+  autoCategorizeItem,
+  getDefaultMinorForMajor,
 } from './categoryTaxonomy';
 import { PINCODE_PATTERN, isDummyPincode } from './validationSchemas';
 import { UI_STRINGS, formatString } from './uiStrings';
@@ -309,6 +311,8 @@ export function toRFQCreatePayload(
 export function fromExtractedEntity(entity: ExtractedEntity): ManualRFQLineItem {
   rowCounter += 1;
   const majorCategory = taxonomyMajorOrBlank(clean(entity.majorCategory));
+  const minorCategory = taxonomyMinorOrBlank(majorCategory, clean(entity.minorCategory) || clean(entity.category));
+
   const rawTargetDate = clean(entity.targetDate);
   const targetDate = isPastDateString(rawTargetDate) ? '' : rawTargetDate;
   return {
@@ -319,9 +323,7 @@ export function fromExtractedEntity(entity: ExtractedEntity): ManualRFQLineItem 
     unit: clean(entity.unit),
     targetDate,
     majorCategory,
-    // Scoped to the major that survived: a minor from a discarded major cannot be
-    // valid, and the dropdown would not offer it.
-    minorCategory: taxonomyMinorOrBlank(majorCategory, clean(entity.minorCategory) || clean(entity.category)),
+    minorCategory,
   };
 }
 
@@ -353,7 +355,7 @@ export function updateManualRFQLineItem(
       if (item.id !== id) return item;
       const next = { ...item, ...patch };
       if (patch.majorCategory !== undefined && patch.majorCategory !== item.majorCategory) {
-        next.minorCategory = '';
+        next.minorCategory = patch.minorCategory !== undefined ? patch.minorCategory : '';
       }
       return next;
     }),

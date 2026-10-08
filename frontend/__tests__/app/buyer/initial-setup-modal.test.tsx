@@ -156,8 +156,8 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     fireEvent.click(screen.getByText(/Proceed to File 2: PO Dump/i));
     expect(mockShowToast).toHaveBeenCalledWith('Vendor Master Required', expect.any(String), 'warning');
 
-    // Download CSV template
-    fireEvent.click(screen.getByText(/Download CSV Template/i));
+    // Download Excel template
+    fireEvent.click(screen.getByText(/Download Excel Template/i));
     expect(mockShowToast).toHaveBeenCalledWith('Template Downloaded', expect.any(String), 'success');
 
     // Upload a Vendor Master file
@@ -800,5 +800,18 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     jest.useRealTimers();
     fetchSpy.mockRestore();
     consoleWarnSpy.mockRestore();
+  });
+
+  it('downloads vendor master Excel template and PO dump CSV template', () => {
+    render(<InitialSetupModal />);
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    const excelBtn = screen.getByText(/Download Excel Template/i);
+    fireEvent.click(excelBtn);
+    expect(excelBtn).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const csvBtn = screen.getByText(/Download CSV Template/i);
+    fireEvent.click(csvBtn);
+    expect(csvBtn).toBeInTheDocument();
   });
 });

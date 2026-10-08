@@ -243,7 +243,7 @@ describe('VendorUploadModal', () => {
     pickFile(new File(['x'], 'vendors.xlsx'));
     await screen.findByText('vendors.xlsx');
 
-    fireEvent.click(screen.getByText('Choose a Different File'));
+    fireEvent.click(screen.getAllByText(/Choose (a Different|Another) File/i)[0]);
     expect(screen.getByTestId('vendor-upload-dropzone')).toBeInTheDocument();
   });
 

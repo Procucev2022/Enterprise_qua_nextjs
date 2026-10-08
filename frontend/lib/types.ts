@@ -1,6 +1,6 @@
 export type UserRole = 'buyer' | 'category_manager' | 'vendor' | 'admin';
 
-export type SourcingMode = 'mode_1' | 'mode_2' | 'mode_3';
+export type SourcingMode = 'mode_0' | 'mode_1' | 'mode_2' | 'mode_3';
 
 export type VendorSubscriptionPlan = 'premium' | 'connect' | 'select' | 'premium_network';
 
@@ -944,6 +944,7 @@ export interface VendorEntry {
 export interface VendorUploadRow {
   rowNumber: number;
   vendor: {
+    vendorCode?: string;
     name: string;
     email: string;
     phone: string;

@@ -339,7 +339,7 @@ export const CATEGORY_TAXONOMY_FIXTURE: MajorMinorCategory[] = [
     ],
   },
   {
-    majorCategory: 'New Category-Product',
+    majorCategory: 'Others – New Product',
     minorCategories: [
       'Air Purifiers',
       'Automation & Controls',
@@ -386,7 +386,7 @@ export const CATEGORY_TAXONOMY_FIXTURE: MajorMinorCategory[] = [
     ],
   },
   {
-    majorCategory: 'New Category-Service',
+    majorCategory: 'Others – New Service',
     minorCategories: [
       'Appliances Services',
       'Calibration Services',

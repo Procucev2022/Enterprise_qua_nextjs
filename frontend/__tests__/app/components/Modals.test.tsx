@@ -91,8 +91,8 @@ describe('Modals.tsx', () => {
         />
       );
 
-      expect(screen.getByText('Purchase Order Generation & Dispatch')).toBeInTheDocument();
-      expect(screen.getByText('PURCHASE ORDER: PO-2026-001')).toBeInTheDocument();
+      expect(screen.getByText('Pre-Purchase Order Generation & Dispatch')).toBeInTheDocument();
+      expect(screen.getByText('PRE-PURCHASE ORDER: PO-2026-001')).toBeInTheDocument();
 
       // Export PDF button — now just triggers the browser print dialog
       const exportBtn = screen.getByText(/Export PDF/);
@@ -115,7 +115,7 @@ describe('Modals.tsx', () => {
 
       // Approve button — approvePO is now async and only resolves via the
       // real backend response
-      const approveBtn = screen.getByText(/APPROVE & GENERATE PO/);
+      const approveBtn = screen.getByText(/APPROVE & GENERATE PRE-PURCHASE ORDER/);
       await act(async () => {
         fireEvent.click(approveBtn);
         await Promise.resolve();
@@ -391,7 +391,7 @@ describe('Modals.tsx', () => {
         <RFQFollowUpDeepDiveModal isOpen={true} onClose={mockOnClose} rfq={sampleRfq} />
       );
 
-      expect(screen.getByText('RFQ AI Follow-Up Telemetry & Deep Dive')).toBeInTheDocument();
+      expect(screen.getByText('Vendor Follow-Up Details')).toBeInTheDocument();
       expect(screen.getByText('Apex Industrial Dynamics Pvt Ltd')).toBeInTheDocument();
 
       // Test all channel filter tabs using button role
@@ -433,7 +433,7 @@ describe('Modals.tsx', () => {
       }
 
       // Close Deep Dive
-      fireEvent.click(screen.getByText('Close Deep Dive'));
+      fireEvent.click(screen.getByText('Close Vendor Follow-Up Details'));
       expect(mockOnClose).toHaveBeenCalled();
     });
 
