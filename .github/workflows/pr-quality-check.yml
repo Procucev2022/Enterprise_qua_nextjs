@@ -1,13 +1,12 @@
-name: Enterprise CI Pipeline & Quality Gate
+name: PR Quality Gate
 
 on:
-  push:
-    branches: [main, master, develop, "database-migrate-**", "bug-ui-fixes", "**"]
   pull_request:
-    branches: [main, master, develop, "bug-ui-fixes"]
+    types: [opened, synchronize, reopened]
+    branches: ["**"]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: pr-qc-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -95,6 +94,10 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
 
     steps:
       - name: Checkout Repository
@@ -125,6 +128,7 @@ jobs:
 
       - name: Post PR Summary Comment
         if: github.event_name == 'pull_request'
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -141,66 +145,38 @@ jobs:
               summaryMarkdown = '## 🚀 Quality Gate Execution Completed';
             }
 
+            try {
+              core.summary.addRaw(summaryMarkdown).write();
+            } catch (summaryErr) {
+              console.warn('Unable to write to step summary:', summaryErr);
+            }
+
             const botCommentIdentifier = '<!-- procucev-ci-summary-comment -->';
             const body = `${botCommentIdentifier}\n${summaryMarkdown}`;
 
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-
-            const existingComment = comments.find((c) => c.body && c.body.includes(botCommentIdentifier));
-            if (existingComment) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existingComment.id,
-                body: body,
-              });
-            } else {
-              await github.rest.issues.createComment({
+            try {
+              const { data: comments } = await github.rest.issues.listComments({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
-                body: body,
               });
+
+              const existingComment = comments.find((c) => c.body && c.body.includes(botCommentIdentifier));
+              if (existingComment) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existingComment.id,
+                  body: body,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: body,
+                });
+              }
+            } catch (commentErr) {
+              core.warning(`Unable to post/update PR comment: ${commentErr.message}. Ensure GitHub Actions has Read and write permissions in Repository Settings > Actions > General.`);
             }
-  deploy:
-    name: Deploy to Cloudflare
-    needs: [backend-gate, frontend-gate]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Install Dependencies
-        run: |
-          npm ci --legacy-peer-deps || npm install --legacy-peer-deps
-          npm ci --prefix frontend --legacy-peer-deps || npm install --prefix frontend --legacy-peer-deps
-          npm ci --prefix backend --legacy-peer-deps || npm install --prefix backend --legacy-peer-deps
-
-      - name: Build Frontend (Vinext)
-        run: npm run build:vinext
-        working-directory: frontend
-
-      - name: Deploy to Cloudflare
-        run: npx wrangler deploy
-        working-directory: frontend
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
-      - name: Deploy Enterprise Backend Worker
-        run: npx wrangler deploy
-        working-directory: backend
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
