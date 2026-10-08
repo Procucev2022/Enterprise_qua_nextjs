@@ -315,16 +315,20 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
 
           {step === 'select' && (
             <div className="space-y-4">
-              {/* Single-line Simplified Template Download Banner */}
-              <div className="p-3 rounded-xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/50 dark:bg-indigo-950/20 flex items-center justify-between gap-3">
-                <span className="text-xs text-slate-700 dark:text-gray-300 font-medium truncate">
-                  Use standard template with unique Vendor Code, Company Name, Contact, Mobile & Category.
-                </span>
+              {/* Single-line Simplified Vendor Bulk Upload Info & Download Banner */}
+              <div className="p-3.5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-gradient-to-r from-indigo-50/70 via-purple-50/30 to-blue-50/70 dark:from-indigo-950/40 dark:via-purple-950/20 dark:to-blue-950/40 flex items-center justify-between gap-3 shadow-xs">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="badge badge-indigo font-bold text-[10px] shrink-0">Required Columns</span>
+                  <span className="text-xs text-slate-700 dark:text-gray-300 font-medium truncate">
+                    Vendor Code, Company Name, Contact Person, Mobile, Email &amp; Category
+                  </span>
+                </div>
                 <button
+                  type="button"
                   onClick={downloadVendorUploadTemplate}
-                  className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5 shrink-0"
+                  className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5 shrink-0 shadow-xs"
                 >
-                  <Download size={13} /> Download Template
+                  <Download size={13} /> Download Vendor Master Template
                 </button>
               </div>
 
