@@ -65,17 +65,34 @@ CREATE TABLE IF NOT EXISTS organization (
   address1 TEXT,
   city TEXT,
   state TEXT,
+  zip_code TEXT,
   country TEXT,
   pincode TEXT,
+  contact_person TEXT,
   contact_name TEXT,
   contact_email TEXT,
   contact_phone TEXT,
   contact_designation TEXT,
   sub_category TEXT,
+  email TEXT,
+  organization_phonenumber TEXT,
   logo_url TEXT,
   org_type_uuid TEXT,
+  client_status_uuid TEXT,
+  self_client INTEGER DEFAULT 0,
+  source_type TEXT,
+  company_id TEXT,
+  gmt_name TEXT,
+  bfs_name TEXT,
+  is_india INTEGER DEFAULT 1,
+  upgrade_days INTEGER DEFAULT 0,
+  rfq_credits INTEGER DEFAULT 0,
+  rfq_used_count INTEGER DEFAULT 0,
+  quote_submitted INTEGER DEFAULT 0,
   is_active INTEGER NOT NULL DEFAULT 1,
+  created_by TEXT,
   created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified_by TEXT,
   last_modified_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_organization_org_type_uuid ON organization (org_type_uuid);
@@ -84,54 +101,97 @@ CREATE INDEX IF NOT EXISTS idx_organization_gstin ON organization (gstin);
 CREATE TABLE IF NOT EXISTS "user" (
   uuid TEXT PRIMARY KEY,
   username TEXT NOT NULL,
+  email TEXT,
   password TEXT NOT NULL,
   full_name TEXT,
+  first_name TEXT,
+  phone TEXT,
   organization_name TEXT,
   org_uuid TEXT,
   role_uuid TEXT,
+  client_status_uuid TEXT,
+  unique_id TEXT,
   is_active INTEGER NOT NULL DEFAULT 1,
+  self_client INTEGER DEFAULT 0,
+  is_approved INTEGER DEFAULT 1,
+  reset_password INTEGER DEFAULT 0,
+  is_web_app INTEGER DEFAULT 1,
+  is_whats_app INTEGER DEFAULT 0,
+  is_bot INTEGER DEFAULT 0,
+  source_type TEXT,
+  verification_status TEXT,
   is_password_changed INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT,
   created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified_by TEXT,
   last_modified_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_user_username ON "user" (username);
 CREATE INDEX IF NOT EXISTS idx_user_org_uuid ON "user" (org_uuid);
 CREATE INDEX IF NOT EXISTS idx_user_role_uuid ON "user" (role_uuid);
 
+-- division/category are what findCategoryTaxonomy() (buyerProfileQueries.js)
+-- actually selects and groups by — not division_name/uuid-only as this table
+-- previously had. division_name kept only for any rows written under the old
+-- shape; no code reads it.
 CREATE TABLE IF NOT EXISTS category_division (
   uuid TEXT PRIMARY KEY,
-  division_name TEXT NOT NULL,
+  division TEXT,
+  category TEXT,
+  division_name TEXT,
   is_active INTEGER NOT NULL DEFAULT 1,
   created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_modified_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_category_division_division ON category_division (division);
 CREATE INDEX IF NOT EXISTS idx_category_division_name ON category_division (division_name);
 
+-- division/category/organization_id/user_id are what loadCategories() /
+-- replaceCategoriesD1() (buyerProfileQueries.js) actually read and write —
+-- not org_uuid/division_uuid as this table previously had.
 CREATE TABLE IF NOT EXISTS org_division_category (
   uuid TEXT PRIMARY KEY,
+  division TEXT,
+  category TEXT,
+  organization_id TEXT,
+  user_id TEXT,
   org_uuid TEXT,
   division_uuid TEXT,
   is_active INTEGER NOT NULL DEFAULT 1,
   created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_modified_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_org_division_category_organization_id ON org_division_category (organization_id);
+CREATE INDEX IF NOT EXISTS idx_org_division_category_user_id ON org_division_category (user_id);
 CREATE INDEX IF NOT EXISTS idx_org_division_category_org ON org_division_category (org_uuid);
 
+-- otp_key is what authSessionQueries.js actually keys every query on
+-- (INSERT ... ON CONFLICT (otp_key), WHERE otp_key = ?) — it must be UNIQUE.
+-- attempts backs incrementOtpAttempts(). id/email kept only because older
+-- rows may have been written under the previous shape; no code reads them.
 CREATE TABLE IF NOT EXISTS auth_otp_codes (
   id TEXT PRIMARY KEY,
-  email TEXT NOT NULL,
+  otp_key TEXT,
+  email TEXT,
   code TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
   expires_at TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_otp_codes_otp_key ON auth_otp_codes (otp_key);
 CREATE INDEX IF NOT EXISTS idx_auth_otp_codes_email ON auth_otp_codes (email);
 CREATE INDEX IF NOT EXISTS idx_auth_otp_codes_expires_at ON auth_otp_codes (expires_at);
 
+-- signature is what authSessionQueries.js actually keys every query on
+-- (INSERT ... ON CONFLICT (signature), WHERE signature = ?) — it must be
+-- UNIQUE. jti kept only for the same reason as id/email above.
 CREATE TABLE IF NOT EXISTS auth_revoked_tokens (
   jti TEXT PRIMARY KEY,
+  signature TEXT,
   expires_at TEXT NOT NULL,
   revoked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_revoked_tokens_signature ON auth_revoked_tokens (signature);
 CREATE INDEX IF NOT EXISTS idx_auth_revoked_tokens_expires_at ON auth_revoked_tokens (expires_at);
 
 -- =============================================================================

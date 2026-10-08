@@ -399,18 +399,29 @@ function isGmailApiConfigured() {
 }
 
 let gmailOAuthClient;
+let gmailOAuthClientRefreshToken;
 
 /**
  * Lazily builds an OAuth2 client from the refresh token minted once via
  * scripts/get-gmail-refresh-token.js. googleapis' OAuth2Client caches and
  * auto-refreshes the short-lived access token internally — no manual token
  * refresh logic needed here.
+ *
+ * Rebuilds whenever GMAIL_REFRESH_TOKEN no longer matches what this client
+ * was built with: a Worker isolate stays warm across many invocations (a
+ * cron poll especially), so a plain "build once" singleton would keep using
+ * whichever identity happened to be live the first time this ran on that
+ * isolate, silently ignoring a `wrangler secret put` rotation until the
+ * isolate eventually recycles on its own.
  */
 function getGmailOAuthClient() {
-  if (gmailOAuthClient) return gmailOAuthClient;
+  if (gmailOAuthClient && gmailOAuthClientRefreshToken === process.env.GMAIL_REFRESH_TOKEN) {
+    return gmailOAuthClient;
+  }
   if (!isGmailApiConfigured()) return undefined;
   gmailOAuthClient = new google.auth.OAuth2(process.env.GMAIL_CLIENT_ID, process.env.GMAIL_CLIENT_SECRET);
   gmailOAuthClient.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
+  gmailOAuthClientRefreshToken = process.env.GMAIL_REFRESH_TOKEN;
   return gmailOAuthClient;
 }
 
@@ -483,12 +494,17 @@ function isVendorGmailApiConfigured() {
 }
 
 let vendorGmailOAuthClient;
+let vendorGmailOAuthClientRefreshToken;
 
+/** Same staleness problem and fix as getGmailOAuthClient() above. */
 function getVendorGmailOAuthClient() {
-  if (vendorGmailOAuthClient) return vendorGmailOAuthClient;
+  if (vendorGmailOAuthClient && vendorGmailOAuthClientRefreshToken === process.env.VENDOR_GMAIL_REFRESH_TOKEN) {
+    return vendorGmailOAuthClient;
+  }
   if (!isVendorGmailApiConfigured()) return undefined;
   vendorGmailOAuthClient = new google.auth.OAuth2(process.env.GMAIL_CLIENT_ID, process.env.GMAIL_CLIENT_SECRET);
   vendorGmailOAuthClient.setCredentials({ refresh_token: process.env.VENDOR_GMAIL_REFRESH_TOKEN });
+  vendorGmailOAuthClientRefreshToken = process.env.VENDOR_GMAIL_REFRESH_TOKEN;
   return vendorGmailOAuthClient;
 }
 
@@ -526,12 +542,20 @@ function isQuoteAlertGmailApiConfigured() {
 }
 
 let quoteAlertGmailOAuthClient;
+let quoteAlertGmailOAuthClientRefreshToken;
 
+/** Same staleness problem and fix as getGmailOAuthClient() above. */
 function getQuoteAlertGmailOAuthClient() {
-  if (quoteAlertGmailOAuthClient) return quoteAlertGmailOAuthClient;
+  if (
+    quoteAlertGmailOAuthClient &&
+    quoteAlertGmailOAuthClientRefreshToken === process.env.QUOTE_ALERT_GMAIL_REFRESH_TOKEN
+  ) {
+    return quoteAlertGmailOAuthClient;
+  }
   if (!isQuoteAlertGmailApiConfigured()) return undefined;
   quoteAlertGmailOAuthClient = new google.auth.OAuth2(process.env.GMAIL_CLIENT_ID, process.env.GMAIL_CLIENT_SECRET);
   quoteAlertGmailOAuthClient.setCredentials({ refresh_token: process.env.QUOTE_ALERT_GMAIL_REFRESH_TOKEN });
+  quoteAlertGmailOAuthClientRefreshToken = process.env.QUOTE_ALERT_GMAIL_REFRESH_TOKEN;
   return quoteAlertGmailOAuthClient;
 }
 
