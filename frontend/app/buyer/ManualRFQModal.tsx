@@ -40,6 +40,7 @@ import {
   Square,
   Search,
   ExternalLink,
+  Zap,
 } from 'lucide-react';
 import { getMajorCategories, getMinorCategories, autoCategorizeItem, getDefaultMinorForMajor } from '@/lib/categoryTaxonomy';
 import { CURRENCY, SOURCING_MODES, entitledSourcingModes, RFQ_DOCUMENT_LIMITS } from '@/lib/constants';
@@ -110,16 +111,19 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     // eslint-disable-next-line react-hooks/rules-of-hooks
     store = useApp();
     buyerVendors = store?.buyerVendors || [];
-    entitledModes = entitledSourcingModes(store?.activeBuyerAccount?.subscriptionPlan ?? store?.activeSubscription);
+    entitledModes = entitledSourcingModes(
+      store?.activeBuyerAccount?.subscriptionPlan ?? store?.activeSubscription,
+      store?.activeBuyerAccount?.remainingFreeRFQs ?? store?.remainingFreeRFQs
+    );
     remainingFreeRFQs = store?.activeBuyerAccount?.remainingFreeRFQs ?? store?.remainingFreeRFQs ?? 5;
     activeSubscription = store?.activeBuyerAccount?.subscriptionPlan ?? store?.activeSubscription ?? 'free_trial';
     activeBuyerAccount = store?.activeBuyerAccount;
   } catch {
     buyerVendors = [];
   }
-  const isPaidPlan = ['version_1', 'version_2', 'version_3'].includes(activeSubscription);
-  const isQuotaExhausted = !isPaidPlan && remainingFreeRFQs <= 0;
   const [form, setForm] = useState<ManualRFQForm>(createEmptyManualRFQForm);
+  const isPaidPlan = ['version_1', 'version_2', 'version_3'].includes(activeSubscription);
+  const isQuotaExhausted = !isPaidPlan && remainingFreeRFQs <= 0 && form.sourcingMode !== 'mode_0';
 
   useEffect(() => {
     if (isOpen && activeBuyerAccount) {
@@ -476,11 +480,13 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
 
     if (form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2') {
       if (Array.isArray(buyerVendors)) {
-        const allMyUploadedVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+        const pool = form.sourcingMode === 'mode_1'
+          ? buyerVendors.filter((v) => isBuyerUploaded(v))
+          : buyerVendors;
         const { signals } = extractRfqCategorySignals(form);
         const candidatePool = selectedVendorIds.length > 0
-          ? allMyUploadedVendors.filter((v) => selectedVendorIds.includes(v.id))
-          : allMyUploadedVendors;
+          ? pool.filter((v) => selectedVendorIds.includes(v.id))
+          : pool;
 
         const matchingVendors: typeof candidatePool = [];
         const mismatchedVendors: typeof candidatePool = [];
@@ -642,26 +648,42 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
           {isQuotaExhausted && (
             <div
               data-testid="manual-rfq-quota-exhausted-banner"
-              className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 dark:bg-amber-950/40 dark:border-amber-700/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs"
+              className="p-4 rounded-xl bg-gradient-to-r from-amber-500/15 via-amber-500/10 to-emerald-500/10 border border-amber-500/30 dark:bg-amber-950/40 dark:border-amber-700/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs"
             >
               <div className="flex items-start gap-2.5">
                 <AlertCircle className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" size={18} />
-                <div>
-                  <h4 className="text-xs font-bold text-amber-900 dark:text-amber-200">
-                    {MODAL.quotaExhaustedTitle}
-                  </h4>
-                  <p className="text-[11px] text-amber-700 dark:text-amber-300 mt-0.5">
+                <div className="space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h4 className="text-xs font-bold text-amber-900 dark:text-amber-200">
+                      {MODAL.quotaExhaustedTitle}
+                    </h4>
+                    <span className="badge badge-emerald text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+                      <Zap size={10} className="fill-current" />
+                      {MODAL.v0FreeBadge}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-amber-800 dark:text-amber-300">
                     {MODAL.quotaExhaustedMessage}
                   </p>
                 </div>
               </div>
-              <a
-                href="/buyer/subscription-center"
-                className="btn btn-primary btn-sm font-bold shrink-0 inline-flex items-center gap-1.5 shadow-xs"
-              >
-                <Sparkles size={13} />
-                <span>{MODAL.upgradePlanAction}</span>
-              </a>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setForm((f) => ({ ...f, sourcingMode: 'mode_0' }))}
+                  className="btn btn-sm bg-emerald-600 hover:bg-emerald-700 text-white font-bold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
+                >
+                  <Zap size={13} className="fill-current" />
+                  <span>{MODAL.useV0Action}</span>
+                </button>
+                <a
+                  href="/buyer/subscription-center"
+                  className="btn btn-primary btn-sm font-bold shrink-0 inline-flex items-center gap-1.5 shadow-xs"
+                >
+                  <Sparkles size={13} />
+                  <span>{MODAL.upgradePlanAction}</span>
+                </a>
+              </div>
             </div>
           )}
 
@@ -1062,29 +1084,40 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
 
             <div
               aria-label={MODAL.sourcingModeLabel}
-              className="grid grid-cols-1 md:grid-cols-3 gap-3"
+              className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3"
             >
-              {SOURCING_MODES.map((mode, index) => {
+              {SOURCING_MODES.map((mode) => {
                 const isSelected = form.sourcingMode === mode.id;
                 const isEntitled = entitledModes.includes(mode.id as SourcingMode);
 
-                const modeConfig = [
-                  {
+                const modeConfigMap: Record<string, { icon: string; accent: string; badge: string | null }> = {
+                  mode_0: {
+                    icon: "🌱",
+                    accent: "sky",
+                    badge: "FREE STARTER",
+                  },
+                  mode_1: {
                     icon: "🎯",
                     accent: "indigo",
-                    badge: index === 0 ? "STARTER" : null,
+                    badge: "STARTER",
                   },
-                  {
+                  mode_2: {
                     icon: "⚡",
                     accent: "violet",
-                    badge: index === 1 ? "RECOMMENDED" : null,
+                    badge: "RECOMMENDED",
                   },
-                  {
+                  mode_3: {
                     icon: "🚀",
                     accent: "emerald",
-                    badge: index === 2 ? "FULL REACH" : null,
+                    badge: "FULL REACH",
                   },
-                ][index];
+                };
+
+                const modeConfig = modeConfigMap[mode.id] || {
+                  icon: "📦",
+                  accent: "indigo",
+                  badge: null,
+                };
 
                 return (
                   <div
@@ -1221,6 +1254,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                 );
               })}
             </div>
+
+
 
             {/* ── Mode 1: Private Approved Vendor Roster Preview ── */}
             {form.sourcingMode === 'mode_1' && (
@@ -1471,7 +1506,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
             {form.sourcingMode === 'mode_2' && (
               <div className="mt-4 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-4 space-y-3 animate-fade-in shadow-2xs">
                 {(() => {
-                  const allMyVendors = buyerVendors.filter(isBuyerUploaded);
+                  const allMyVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
 
                   return (
                     <>
@@ -1484,11 +1519,11 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                             <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
                               <span>Mode 2: Hybrid Sourcing Pool</span>
                               <span className="badge badge-emerald text-[9px] font-bold">
-                                {allMyVendors.length} Private Suppliers
+                                {allMyVendors.length} Approved Suppliers
                               </span>
                             </h4>
                             <p className="text-[10px] text-slate-500 dark:text-gray-400">
-                              Dispatches to your approved roster ({allMyVendors.length}) with automated AI qualification and follow-ups.
+                              Dispatches to your approved internal roster below + automatically matched Procucev verified network suppliers in the background.
                             </p>
                           </div>
                         </div>
@@ -1547,8 +1582,8 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
 
                       {allMyVendors.length === 0 ? (
                         <div className="p-3 text-center rounded-lg bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 text-[10px] text-slate-500 space-y-1">
-                          <p className="font-semibold text-slate-600 dark:text-gray-400">No private vendors uploaded yet.</p>
-                          <p className="text-[9px] text-slate-400">Please ingest your approved vendor directory or PO history to dispatch in Mode 2.</p>
+                          <p className="font-semibold text-slate-600 dark:text-gray-400">No vendors found in directory.</p>
+                          <p className="text-[9px] text-slate-400">Please ingest your approved vendor directory or explore Procucev network vendors.</p>
                         </div>
                       ) : (() => {
                         const term = vendorSearchQuery.trim().toLowerCase();
@@ -1654,19 +1689,30 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                                           <span>{vendor.name}</span>
                                         </span>
                                       </div>
-                                      {isCategoryMismatch ? (
-                                        <span
-                                          data-testid="category-mismatch-badge"
-                                          className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border border-amber-300 dark:border-amber-700 shrink-0"
-                                          title="Category mismatch with RFQ. Excluded from shortlist until updated."
-                                        >
-                                          ⚠️ Mismatch
-                                        </span>
-                                      ) : (
-                                        <span className="badge badge-emerald text-[8px] font-bold shrink-0">
-                                          Preferred
-                                        </span>
-                                      )}
+                                      <div className="flex items-center gap-1 shrink-0">
+                                        {isBuyerUploaded(vendor) ? (
+                                          <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-slate-100 text-slate-700 dark:bg-gray-800 dark:text-gray-300 border border-slate-200 dark:border-gray-700">
+                                            📁 Internal
+                                          </span>
+                                        ) : (
+                                          <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300 border border-sky-300 dark:border-sky-700">
+                                            ✨ Procucev Vetted
+                                          </span>
+                                        )}
+                                        {isCategoryMismatch ? (
+                                          <span
+                                            data-testid="category-mismatch-badge"
+                                            className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border border-amber-300 dark:border-amber-700 shrink-0"
+                                            title="Category mismatch with RFQ. Excluded from shortlist until updated."
+                                          >
+                                            ⚠️ Mismatch
+                                          </span>
+                                        ) : (
+                                          <span className="badge badge-emerald text-[8px] font-bold shrink-0">
+                                            Preferred
+                                          </span>
+                                        )}
+                                      </div>
                                     </div>
 
                                     <div className="space-y-0.5 text-[10px] text-slate-500 dark:text-gray-400 pl-5">
@@ -1893,13 +1939,23 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
               {MODAL.cancelAction}
             </button>
             {isQuotaExhausted ? (
-              <a
-                href="/buyer/subscription-center"
-                className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5"
-              >
-                <Sparkles size={14} />
-                <span>Please Upgrade Your Plan</span>
-              </a>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setForm((f) => ({ ...f, sourcingMode: 'mode_0' }))}
+                  className="btn btn-sm bg-emerald-600 hover:bg-emerald-700 text-white font-bold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
+                >
+                  <Zap size={13} className="fill-current" />
+                  <span>{MODAL.useV0Action}</span>
+                </button>
+                <a
+                  href="/buyer/subscription-center"
+                  className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
+                >
+                  <Sparkles size={14} />
+                  <span>Please Upgrade Your Plan</span>
+                </a>
+              </div>
             ) : (
               <button
                 onClick={handleSubmit}
