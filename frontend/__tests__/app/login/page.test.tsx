@@ -444,7 +444,7 @@ describe('LoginPage', () => {
   describe('registration', () => {
 
     const completeDualOtp = (emailOtp = '123456', mobileOtp = '123456') => {
-      fireEvent.change(screen.getByLabelText(/Email OTP/i), { target: { value: emailOtp } });
+      fireEvent.change(screen.getByLabelText(/Email (Verification Code \(OTP\)|OTP)/i), { target: { value: emailOtp } });
       fireEvent.change(screen.getByLabelText(/Mobile OTP/i), { target: { value: mobileOtp } });
       fireEvent.click(screen.getByRole('button', { name: /Verify & Activate Account/i }));
     };

@@ -459,13 +459,13 @@ export function autoCategorizeItem(
       const minorLower = minor.toLowerCase();
       if (
         combined.includes(minorLower) ||
-        tokens.some((token) => token.length >= 3 && minorLower.includes(token))
+        tokens.some((token) => token.length >= 4 && minorLower.split(/\s+/).includes(token))
       ) {
         return { majorCategory: major, minorCategory: minor };
       }
     }
     const majorLower = major.toLowerCase();
-    if (combined.includes(majorLower) || tokens.some((token) => token.length >= 4 && majorLower.includes(token))) {
+    if (combined.includes(majorLower) || tokens.some((token) => token.length >= 4 && majorLower.split(/\s+/).includes(token))) {
       const defaultMinor = group.minorCategories?.[0] || '';
       return { majorCategory: major, minorCategory: defaultMinor };
     }

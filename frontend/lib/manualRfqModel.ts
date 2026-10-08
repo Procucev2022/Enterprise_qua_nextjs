@@ -310,16 +310,8 @@ export function toRFQCreatePayload(
  */
 export function fromExtractedEntity(entity: ExtractedEntity): ManualRFQLineItem {
   rowCounter += 1;
-  let majorCategory = taxonomyMajorOrBlank(clean(entity.majorCategory));
-  let minorCategory = taxonomyMinorOrBlank(majorCategory, clean(entity.minorCategory) || clean(entity.category));
-  
-  if (!majorCategory && (clean(entity.itemName) || clean(entity.technicalSpecs))) {
-    const auto = autoCategorizeItem(clean(entity.itemName), clean(entity.technicalSpecs));
-    if (auto.majorCategory) {
-      majorCategory = auto.majorCategory;
-      minorCategory = auto.minorCategory;
-    }
-  }
+  const majorCategory = taxonomyMajorOrBlank(clean(entity.majorCategory));
+  const minorCategory = taxonomyMinorOrBlank(majorCategory, clean(entity.minorCategory) || clean(entity.category));
 
   const rawTargetDate = clean(entity.targetDate);
   const targetDate = isPastDateString(rawTargetDate) ? '' : rawTargetDate;
@@ -363,19 +355,7 @@ export function updateManualRFQLineItem(
       if (item.id !== id) return item;
       const next = { ...item, ...patch };
       if (patch.majorCategory !== undefined && patch.majorCategory !== item.majorCategory) {
-        if (patch.majorCategory) {
-          next.minorCategory = patch.minorCategory || getDefaultMinorForMajor(patch.majorCategory);
-        } else {
-          next.minorCategory = '';
-        }
-      } else if (patch.itemName !== undefined || patch.technicalSpecs !== undefined) {
-        const auto = autoCategorizeItem(next.itemName, next.technicalSpecs);
-        if (auto.majorCategory) {
-          next.majorCategory = auto.majorCategory;
-          next.minorCategory = auto.minorCategory || getDefaultMinorForMajor(auto.majorCategory);
-        } else if (next.majorCategory && !next.minorCategory) {
-          next.minorCategory = getDefaultMinorForMajor(next.majorCategory);
-        }
+        next.minorCategory = patch.minorCategory !== undefined ? patch.minorCategory : '';
       }
       return next;
     }),

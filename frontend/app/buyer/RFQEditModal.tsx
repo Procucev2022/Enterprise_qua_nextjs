@@ -403,8 +403,10 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
           if (row.id !== id) return row;
           const nextRow = { ...row, ...changes };
           if (changes.majorCategory !== undefined && changes.majorCategory !== row.majorCategory) {
-            if (changes.majorCategory) {
-              nextRow.minorCategory = changes.minorCategory || getDefaultMinorForMajor(changes.majorCategory);
+            if (changes.minorCategory !== undefined) {
+              nextRow.minorCategory = changes.minorCategory;
+            } else if (changes.majorCategory) {
+              nextRow.minorCategory = getDefaultMinorForMajor(changes.majorCategory);
             } else {
               nextRow.minorCategory = '';
             }

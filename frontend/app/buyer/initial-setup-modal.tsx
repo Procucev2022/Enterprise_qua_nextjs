@@ -1021,6 +1021,7 @@ export default function InitialSetupModal() {
     link.click();
     showToast('Template Downloaded', 'Sample Vendor Master Excel template downloaded.', 'success');
   };
+  const handleDownloadVendorMasterCsv = handleDownloadVendorMasterExcel;
 
   // Download Sample PO Data CSV
   const handleDownloadPoDataCsv = () => {
@@ -1254,10 +1255,10 @@ export default function InitialSetupModal() {
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
-                  onClick={handleDownloadVendorMasterCsv}
+                  onClick={handleDownloadVendorMasterExcel}
                   className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
                 >
-                  <Download size={13} /> Download CSV Template
+                  <Download size={13} /> Download Excel Template
                 </button>
                 {storedVendors.length > 0 && (
                   <button

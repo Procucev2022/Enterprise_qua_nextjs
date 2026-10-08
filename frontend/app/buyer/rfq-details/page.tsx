@@ -60,9 +60,10 @@ function BuyerRFQDetailsView() {
   const searchParams = useSearchParams();
   const rfqNumber = searchParams.get(RFQ_PARAM);
 
-  const { updateRFQ } = useApp();
+  const { updateRFQ, deleteRFQ } = useApp();
   const [state, setState] = useState<LoadState>({ status: 'idle' });
   const [isEditing, setIsEditing] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const load = useCallback(async (identifier: string) => {
     setState({ status: 'loading' });
@@ -155,15 +156,26 @@ function BuyerRFQDetailsView() {
     return saved;
   };
 
+  const handleDelete = async (identifier: string) => {
+    await deleteRFQ(identifier);
+    onBack();
+  };
+
   return (
     <>
       <RFQDetails
         rfq={rfq}
         onBack={onBack}
         onEdit={() => setIsEditing(true)}
+        onDelete={() => setIsDeleting(true)}
         onUpdate={(updatedRfq) => setState({ status: 'loaded', rfq: updatedRfq })}
       />
       <RFQEditModal rfq={isEditing ? rfq : null} onClose={() => setIsEditing(false)} onSave={handleSave} />
+      <RFQDeleteDialog
+        rfq={isDeleting ? rfq : null}
+        onClose={() => setIsDeleting(false)}
+        onConfirm={handleDelete}
+      />
     </>
   );
 }

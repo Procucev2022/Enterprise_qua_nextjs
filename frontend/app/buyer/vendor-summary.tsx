@@ -1018,7 +1018,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 className="btn btn-amber btn-xs font-bold flex items-center gap-1 shadow-xs"
                 title="Rate supplier manually or generate AI rating based on performance & quotation parameters"
               >
-                <Star size={11} className="fill-current" /> Rate Vendor
+                <Star size={11} className="fill-current" /> Revise Rating
               </button>
 
               {showEvaluation ? (
