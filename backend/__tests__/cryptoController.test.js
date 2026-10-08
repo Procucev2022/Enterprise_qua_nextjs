@@ -5,7 +5,7 @@ const cryptoController = require('../src/controllers/cryptoController');
 const { authHeader } = require('./testHelpers');
 
 describe('Crypto Controller & /api/crypto Endpoints', () => {
-  const samplePlaintext = 'Confidential Purchase Order Amount: ₹12,50,000';
+  const samplePlaintext = 'Confidential Pre-Purchase Order Amount: ₹12,50,000';
 
   describe('POST /api/crypto/encrypt', () => {
     test('should successfully encrypt plaintext payload', async () => {

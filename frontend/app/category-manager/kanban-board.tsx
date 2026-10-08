@@ -473,7 +473,7 @@ export default function KanbanBoard({
                     onClick={() => openRFQDeepDive(rfq)}
                     className="btn btn-secondary btn-sm text-[10px] px-2 ml-auto"
                   >
-                    <Search size={10} /> Deep Dive
+                    <Search size={10} /> Vendor Follow-Up Details
                   </button>
                 </div>
 

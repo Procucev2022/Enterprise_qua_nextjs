@@ -1117,7 +1117,7 @@ function buildRfqFinalComparisonEmail(toOrParams, maybeContext) {
     <div style="text-align: center; margin: 24px 0;">
       <a href="${resolvedUrl}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 14px;">Open Comparison Matrix in Buyer Portal</a>
     </div>
-    <p style="font-size: 12px; color: #64748b; text-align: center;">Sign in to your Procucev Buyer Portal to view detailed line-item quotes, audit logs, and approve Purchase Orders.</p>
+    <p style="font-size: 12px; color: #64748b; text-align: center;">Sign in to your Procucev Buyer Portal to view detailed line-item quotes, audit logs, and approve Pre-Purchase Orders.</p>
   `;
 
   return {
@@ -1365,7 +1365,7 @@ function buildVendorCategoryMappingEmail({
 
   const inner = `
     <p>${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}</p>
-    <p><strong>${buyer}</strong> has added your organisation to their vendor master and mapped your supply categories from your purchase order history with them.</p>
+    <p><strong>${buyer}</strong> has added your organisation to their vendor master and mapped your supply categories from your pre-purchase order history with them.</p>
     <table style="width: 100%; border-collapse: collapse; margin: 16px 0; background: #f8fafc;">
       ${row('Buyer', buyer)}
       ${row('Your vendor code', vendorCode)}
@@ -1404,7 +1404,7 @@ function buildVendorSelfMappingEmail({ to, recipientName, buyerOrganizationName,
   const inner = `
     <p>${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}</p>
     <p><strong>${buyer}</strong> has added your organisation to their vendor master on Procucev.</p>
-    <p>No historical purchase order data was available for your organisation, so your supply categories could not be mapped automatically. <strong>To become eligible for relevant enquiries, please sign in and select the categories you supply.</strong></p>
+    <p>No historical pre-purchase order data was available for your organisation, so your supply categories could not be mapped automatically. <strong>To become eligible for relevant enquiries, please sign in and select the categories you supply.</strong></p>
     <table style="width: 100%; border-collapse: collapse; margin: 16px 0; background: #f8fafc;">
       ${row('Buyer', buyer)}
       ${row('Your vendor code', vendorCode)}
