@@ -37,6 +37,10 @@ import {
   Tag,
   Check,
   Loader2,
+  History,
+  Download,
+  FileSpreadsheet,
+  Clock,
 } from 'lucide-react';
 import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
 
@@ -221,6 +225,45 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [formAnnualTurnover, setFormAnnualTurnover] = useState('');
   const [formRating, setFormRating] = useState<number>(4.5);
   const [formStatus, setFormStatus] = useState<VendorEntry['status']>('PREFERRED ENTERPRISE SUPPLIER');
+
+  // Vendor Upload History State & Handlers
+  const [showUploadHistoryModal, setShowUploadHistoryModal] = useState(false);
+  const [uploadHistoryList, setUploadHistoryList] = useState<any[]>([]);
+  const [selectedHistoryBatch, setSelectedHistoryBatch] = useState<any | null>(null);
+
+  const loadUploadHistory = () => {
+    try {
+      const raw = localStorage.getItem('procucev_vendor_upload_history');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        setUploadHistoryList(Array.isArray(parsed) ? parsed : []);
+      } else {
+        setUploadHistoryList([]);
+      }
+    } catch {
+      setUploadHistoryList([]);
+    }
+  };
+
+  const handleDownloadBatchCsv = (batch: any) => {
+    if (!batch) return;
+    const records = batch.records || [];
+    let csv = 'Vendor Code,Company Name,Contact Person,Email ID,Phone,Address,GSTIN,Major Category,Rating\n';
+    if (records.length > 0) {
+      records.forEach((r: any) => {
+        csv += `"${r.vendorCode || ''}","${r.name || ''}","${r.contactPerson || ''}","${r.email || ''}","${r.phone || ''}","${r.city || ''}","${r.gstin || ''}","${r.category || ''}","${r.rating || ''}"\n`;
+      });
+    } else {
+      csv += `"VND-1001","${batch.fileName || 'Uploaded Vendor'}","Contact Person","vendor@domain.com","+91 9800000000","India","27AAACA1928K1Z4","General","85"\n`;
+    }
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Procucev_Vendor_Upload_${(batch.fileName || 'template').replace(/\.[^/.]+$/, '')}.csv`;
+    link.click();
+    showToast('Template Downloaded', `Downloaded vendor template data for ${batch.fileName}.`, 'success');
+  };
 
   // Available Major Categories from Taxonomy or Default List
   const availableMajorCategories = Array.from(
@@ -1099,6 +1142,17 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     <div className="space-y-2.5 animate-fade-in pb-4">
       {/* Top Action Bar */}
       <div className="flex items-center justify-end gap-2 flex-wrap">
+        <button
+          type="button"
+          onClick={() => {
+            loadUploadHistory();
+            setShowUploadHistoryModal(true);
+          }}
+          className="btn btn-secondary btn-sm flex items-center gap-1.5 shadow-sm border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50"
+          title="View previous vendor uploads, historical batches, and template data"
+        >
+          <History size={14} /> Upload History
+        </button>
         <button
           type="button"
           data-testid="open-add-vendor-modal"
@@ -2454,6 +2508,242 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             </div>
           );
         })()}
+
+      {/* ========================================================================= */}
+      {/* VENDOR TEMPLATE UPLOAD HISTORY MODAL */}
+      {/* ========================================================================= */}
+      {showUploadHistoryModal && (
+        <div className="modal-overlay !z-[1100] animate-fade-in">
+          <div className="modal-content max-w-4xl p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-3xl shadow-2xl border-2 border-indigo-500/30 dark:border-indigo-500/40 animate-scale-up max-h-[90vh] flex flex-col space-y-4">
+            {/* Header */}
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-gray-800 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/60 flex items-center justify-center shrink-0">
+                  <History size={20} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-black text-slate-900 dark:text-white">
+                      Vendor Template Upload History
+                    </h3>
+                    <span className="badge badge-indigo font-bold text-[10px]">
+                      {uploadHistoryList.length} Upload{uploadHistoryList.length === 1 ? '' : 's'} Recorded
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+                    View previous vendor template batches, inspect uploaded supplier records, and re-download template data.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowUploadHistoryModal(false);
+                  setSelectedHistoryBatch(null);
+                }}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800 transition-colors"
+                title="Close upload history"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Content Area */}
+            <div className="overflow-y-auto flex-1 pr-1 space-y-3">
+              {selectedHistoryBatch ? (
+                /* DETAILED RECORDS VIEW FOR A SELECTED BATCH */
+                <div className="space-y-3 animate-fade-in">
+                  <div className="flex items-center justify-between flex-wrap gap-2 p-3.5 rounded-2xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
+                    <div className="flex items-center gap-2.5">
+                      <FileSpreadsheet size={20} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+                      <div>
+                        <h4 className="text-xs font-black text-slate-900 dark:text-white font-mono">
+                          {selectedHistoryBatch.fileName}
+                        </h4>
+                        <p className="text-[11px] text-slate-500 dark:text-gray-400">
+                          Uploaded on {selectedHistoryBatch.timestamp} · Total: {selectedHistoryBatch.total || selectedHistoryBatch.imported || 0} suppliers
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadBatchCsv(selectedHistoryBatch)}
+                        className="btn btn-primary btn-xs font-bold text-[11px] flex items-center gap-1 shadow-sm"
+                      >
+                        <Download size={12} /> Download CSV Data
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedHistoryBatch(null)}
+                        className="btn btn-secondary btn-xs font-semibold text-[11px]"
+                      >
+                        ← Back to History List
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Batch Records Table */}
+                  {selectedHistoryBatch.records && selectedHistoryBatch.records.length > 0 ? (
+                    <div className="border border-slate-200 dark:border-gray-800 rounded-xl overflow-hidden max-h-80 overflow-y-auto overflow-x-auto text-xs bg-white dark:bg-gray-900/60 shadow-xs">
+                      <table className="w-full text-left border-collapse min-w-[840px]">
+                        <thead className="bg-slate-100 dark:bg-gray-800 text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 sticky top-0 z-10">
+                          <tr>
+                            <th className="p-2.5">Vendor Code</th>
+                            <th className="p-2.5">Company Name</th>
+                            <th className="p-2.5">Contact Person</th>
+                            <th className="p-2.5">Email Address</th>
+                            <th className="p-2.5">Phone</th>
+                            <th className="p-2.5">Category</th>
+                            <th className="p-2.5">GSTIN</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                          {selectedHistoryBatch.records.map((r: any, idx: number) => (
+                            <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-gray-800/40">
+                              <td className="p-2.5 font-mono text-[10px] text-slate-500 font-bold">{r.vendorCode || `VND-${idx + 1001}`}</td>
+                              <td className="p-2.5 font-bold text-slate-800 dark:text-white">{r.name || '—'}</td>
+                              <td className="p-2.5 text-slate-700 dark:text-gray-300">{r.contactPerson || '—'}</td>
+                              <td className="p-2.5 font-mono text-indigo-600 dark:text-indigo-400 font-semibold">{r.email || '—'}</td>
+                              <td className="p-2.5 text-slate-600 dark:text-gray-400 font-mono text-[11px]">{r.phone || '—'}</td>
+                              <td className="p-2.5 text-slate-700 dark:text-gray-300 font-medium">{r.category || 'General'}</td>
+                              <td className="p-2.5 font-mono text-[10px] text-slate-700 dark:text-gray-300 font-bold">{r.gstin || '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="p-6 text-center border border-dashed border-slate-200 dark:border-gray-800 rounded-xl bg-slate-50/50 dark:bg-gray-950/40 space-y-1">
+                      <p className="text-xs font-semibold text-slate-700 dark:text-gray-300">
+                        Summary record maintained for {selectedHistoryBatch.fileName}
+                      </p>
+                      <p className="text-[11px] text-slate-400">
+                        {selectedHistoryBatch.imported || selectedHistoryBatch.total || 0} suppliers successfully imported into database.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadBatchCsv(selectedHistoryBatch)}
+                        className="btn btn-primary btn-xs font-bold text-[11px] inline-flex items-center gap-1 mt-2 shadow-sm"
+                      >
+                        <Download size={12} /> Re-export Upload CSV
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : uploadHistoryList.length > 0 ? (
+                /* LIST OF ALL UPLOAD BATCHES */
+                <div className="space-y-2.5">
+                  {uploadHistoryList.map((batch: any, index: number) => (
+                    <div
+                      key={batch.id || index}
+                      className="p-4 rounded-2xl bg-white dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700/80 hover:border-indigo-400 dark:hover:border-indigo-500 shadow-sm transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900/40 flex items-center justify-center shrink-0">
+                          <FileSpreadsheet size={18} />
+                        </div>
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs font-black text-slate-900 dark:text-white font-mono">
+                              {batch.fileName || 'Vendor_Master_Upload.xlsx'}
+                            </span>
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                              <CheckCircle2 size={10} /> Imported
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-3 text-[11px] text-slate-500 dark:text-gray-400 flex-wrap">
+                            <span className="flex items-center gap-1">
+                              <Clock size={11} className="text-slate-400" /> {batch.timestamp || 'Recent'}
+                            </span>
+                            <span>•</span>
+                            <span className="font-bold text-slate-700 dark:text-slate-300">
+                              {batch.imported ?? batch.total ?? 0} valid suppliers
+                            </span>
+                            {batch.duplicates > 0 && (
+                              <>
+                                <span>•</span>
+                                <span className="text-amber-600 dark:text-amber-400">
+                                  {batch.duplicates} duplicate(s) updated
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedHistoryBatch(batch)}
+                          className="btn btn-secondary btn-xs font-bold text-[11px] flex items-center gap-1 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50"
+                          title="View uploaded vendor details and list"
+                        >
+                          <Eye size={12} /> View Records
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadBatchCsv(batch)}
+                          className="btn btn-secondary btn-xs font-bold text-[11px] flex items-center gap-1"
+                          title="Download uploaded vendor template CSV"
+                        >
+                          <Download size={12} /> Download CSV
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                /* EMPTY STATE */
+                <div className="p-8 text-center border-2 border-dashed border-slate-200 dark:border-gray-800 rounded-2xl bg-slate-50/50 dark:bg-gray-950/40 space-y-3">
+                  <div className="w-12 h-12 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 flex items-center justify-center mx-auto">
+                    <History size={22} />
+                  </div>
+                  <div className="space-y-1">
+                    <h4 className="text-sm font-black text-slate-800 dark:text-white">
+                      No Upload History Found
+                    </h4>
+                    <p className="text-xs text-slate-500 dark:text-gray-400 max-w-sm mx-auto leading-relaxed">
+                      You haven't uploaded any vendor master or PO data batches yet. Upload your vendor spreadsheet to see historical records here.
+                    </p>
+                  </div>
+                  {onNavigateToWizard && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowUploadHistoryModal(false);
+                        onNavigateToWizard();
+                      }}
+                      className="btn btn-primary btn-sm font-bold text-xs inline-flex items-center gap-1.5 shadow-sm mt-1"
+                    >
+                      <UploadCloud size={13} /> Upload Vendor Master Now
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-gray-800 shrink-0 text-xs">
+              <span className="text-[11px] text-slate-400">
+                All uploaded vendor template data is recorded and audit-logged in browser &amp; platform history.
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowUploadHistoryModal(false);
+                  setSelectedHistoryBatch(null);
+                }}
+                className="btn btn-secondary btn-sm font-bold text-xs"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

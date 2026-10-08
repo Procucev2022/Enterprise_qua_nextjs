@@ -44,6 +44,17 @@ interface UploadHistoryEntry {
   imported: number;
   duplicates: number;
   failed: number;
+  records?: Array<{
+    vendorCode?: string;
+    name: string;
+    contactPerson?: string;
+    email: string;
+    phone?: string;
+    gstin?: string;
+    category?: string;
+    city?: string;
+    rating?: number;
+  }>;
 }
 
 const PREVIEW_PAGE_SIZE = 50;
@@ -170,6 +181,16 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
       imported: result.imported,
       duplicates: result.duplicates,
       failed: result.failed,
+      records: rows.slice(0, 100).map((r) => ({
+        vendorCode: r.vendor.vendorCode,
+        name: r.vendor.name,
+        contactPerson: r.vendor.contactPerson,
+        email: r.vendor.email,
+        phone: r.vendor.phone,
+        gstin: r.vendor.gstin,
+        category: r.vendor.majorCategory,
+        city: r.vendor.city,
+      })),
     };
     try {
       const nextHistory = [historyEntry, ...historyList].slice(0, 30);

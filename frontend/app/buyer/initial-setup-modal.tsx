@@ -506,6 +506,32 @@ export default function InitialSetupModal() {
             });
           }
 
+          try {
+            const existingHistory = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
+            const historyEntry = {
+              id: `up-${Date.now()}`,
+              fileName: file.name,
+              timestamp: new Date().toLocaleString(),
+              total: parsedVendors.length,
+              imported: parsedVendors.length,
+              duplicates: 0,
+              failed: 0,
+              records: parsedVendors.slice(0, 100).map((v) => ({
+                vendorCode: v.vendorCode,
+                name: v.companyName,
+                contactPerson: v.contactPerson,
+                email: v.email,
+                phone: v.phone,
+                gstin: v.gstNumber,
+                category: 'Vendor Master',
+                city: v.address,
+                rating: v.vendorRatingScore,
+              })),
+            };
+            const updatedHistory = [historyEntry, ...existingHistory.filter((x: any) => x.fileName !== file.name)].slice(0, 30);
+            localStorage.setItem('procucev_vendor_upload_history', JSON.stringify(updatedHistory));
+          } catch {}
+
           showToast('Vendor Master Uploaded', `Loaded ${parsedVendors.length.toLocaleString('en-IN')} vendors from ${file.name}.`, 'success');
         } catch (err: any) {
           console.error('Vendor Master Parse Error:', err);
