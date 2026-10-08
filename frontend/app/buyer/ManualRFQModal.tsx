@@ -80,6 +80,12 @@ function minorsFor(major: string): string[] {
   return getMinorCategories(major);
 }
 
+function withStoredValue(options: string[], value: string): string[] {
+  const trimmed = (value || '').trim();
+  if (trimmed === '' || options.some((o) => o.toLowerCase() === trimmed.toLowerCase())) return options;
+  return [trimmed, ...options];
+}
+
 interface ManualRFQModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -959,7 +965,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                               className="w-44"
                             >
                               <option value="">{MODAL.selectPlaceholder}</option>
-                              {taxonomyMajors().map((major) => (
+                              {withStoredValue(taxonomyMajors(), item.majorCategory).map((major) => (
                                 <option key={major} value={major}>
                                   {major}
                                 </option>
@@ -977,7 +983,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                               className="w-44 disabled:opacity-50"
                             >
                               <option value="">{MODAL.selectPlaceholder}</option>
-                              {minorsFor(item.majorCategory).map((minor) => (
+                              {withStoredValue(minorsFor(item.majorCategory), item.minorCategory).map((minor) => (
                                 <option key={minor} value={minor}>
                                   {minor}
                                 </option>

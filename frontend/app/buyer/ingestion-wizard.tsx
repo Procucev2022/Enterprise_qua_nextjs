@@ -101,6 +101,12 @@ function minorsFor(major: string): string[] {
   return getMinorCategories(major);
 }
 
+function withStoredValue(options: string[], value: string): string[] {
+  const trimmed = (value || '').trim();
+  if (trimmed === '' || options.some((o) => o.toLowerCase() === trimmed.toLowerCase())) return options;
+  return [trimmed, ...options];
+}
+
 interface IngestionWizardProps {
   onComplete: () => void;
   onCancel: () => void;
@@ -734,10 +740,15 @@ export default function IngestionWizard({
               lineItems: prev.lineItems.map((item) => {
                 const matched = classified.get(item.id);
                 if (!matched) return item;
+                const nextMajor = matched.majorCategory || item.majorCategory;
+                const nextMinor =
+                  matched.minorCategory ||
+                  item.minorCategory ||
+                  (nextMajor ? getDefaultMinorForMajor(nextMajor) : '');
                 return {
                   ...item,
-                  majorCategory: matched.majorCategory || item.majorCategory,
-                  minorCategory: matched.minorCategory || item.minorCategory,
+                  majorCategory: nextMajor,
+                  minorCategory: nextMinor,
                 };
               }),
             }));
@@ -1346,7 +1357,7 @@ export default function IngestionWizard({
                         >
                           <option value="">{MODAL.selectPlaceholder}</option>
                           <option value={ALL_CATEGORIES_OPTION}>All Categories</option>
-                          {taxonomyMajors().map((major) => (
+                          {withStoredValue(taxonomyMajors(), item.majorCategory).map((major) => (
                             <option key={major} value={major}>
                               {major}
                             </option>
@@ -1367,7 +1378,7 @@ export default function IngestionWizard({
                           <option value="">
                             {item.majorCategory === ALL_CATEGORIES_OPTION ? 'Not required' : MODAL.selectPlaceholder}
                           </option>
-                          {minorsFor(item.majorCategory).map((minor) => (
+                          {withStoredValue(minorsFor(item.majorCategory), item.minorCategory).map((minor) => (
                             <option key={minor} value={minor}>
                               {minor}
                             </option>
