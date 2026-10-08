@@ -16,5 +16,25 @@
   },
   "version_metadata": {
     "binding": "CF_VERSION_METADATA"
+  },
+  "env": {
+    "dev": {
+      "name": "procucev-enterprise-frontend-dev",
+      "version_metadata": {
+        "binding": "CF_VERSION_METADATA"
+      }
+    },
+    "prod": {
+      "name": "procucev-enterprise-frontend",
+      "version_metadata": {
+        "binding": "CF_VERSION_METADATA"
+      }
+    },
+    "production": {
+      "name": "procucev-enterprise-frontend",
+      "version_metadata": {
+        "binding": "CF_VERSION_METADATA"
+      }
+    }
   }
 }
