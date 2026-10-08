@@ -962,22 +962,64 @@ export default function InitialSetupModal() {
   const mappedVendors = joinedVendors.filter((v) => v.categoriesMappedByBuyer);
   const unmappedVendors = joinedVendors.filter((v) => !v.categoriesMappedByBuyer);
 
-  // Download Sample Vendor Master CSV
-  const handleDownloadVendorMasterCsv = () => {
-    const csv =
-      'Vendor Code,Company Name,Contact Person,Email ID,Phone,Address,GSTIN,Rating (0-100 Optional)\n' +
-      'VND-1001,Apex Supplies Ltd.,Rajesh Nair,rajesh@apexsupplies.in,+91 98201 44820,"MIDC Thane, Mumbai, MH",27AAACA1928K1Z4,95\n' +
-      'VND-1002,Kiran Valve Industries,Amit Kumar,amit@kiranvalves.com,+91 97653 21098,"Bhosari, Pune, MH",27AAACK3921P1Z9,78\n' +
-      'VND-1007,Vortex Hydraulic Systems,Nikhil Rane,nikhil@vortexhydraulics.in,+91 98450 11920,"Peenya, Bangalore, KA",29AAACV8841P1Z5,82\n' +
-      'VND-1008,Nova Electrical Spares,Pooja Deshmukh,sales@novaelectricals.com,+91 97230 44510,"Makarpura, Vadodara, GJ",24AAACN4419K1Z1,\n';
+  // Download Sample Vendor Master Excel (.xlsx)
+  const handleDownloadVendorMasterExcel = () => {
+    const sampleRows = [
+      {
+        'Vendor Code': 'VND-1001',
+        'Company Name': 'Apex Supplies Ltd.',
+        'Contact Person': 'Rajesh Nair',
+        'Email ID': 'rajesh@apexsupplies.in',
+        Phone: '+91 98201 44820',
+        Address: 'MIDC Thane, Mumbai, MH',
+        GSTIN: '27AAACA1928K1Z4',
+        'Rating (0-100 Optional)': 95,
+      },
+      {
+        'Vendor Code': 'VND-1002',
+        'Company Name': 'Kiran Valve Industries',
+        'Contact Person': 'Amit Kumar',
+        'Email ID': 'amit@kiranvalves.com',
+        Phone: '+91 97653 21098',
+        Address: 'Bhosari, Pune, MH',
+        GSTIN: '27AAACK3921P1Z9',
+        'Rating (0-100 Optional)': 78,
+      },
+      {
+        'Vendor Code': 'VND-1007',
+        'Company Name': 'Vortex Hydraulic Systems',
+        'Contact Person': 'Nikhil Rane',
+        'Email ID': 'nikhil@vortexhydraulics.in',
+        Phone: '+91 98450 11920',
+        Address: 'Peenya, Bangalore, KA',
+        GSTIN: '29AAACV8841P1Z5',
+        'Rating (0-100 Optional)': 82,
+      },
+      {
+        'Vendor Code': 'VND-1008',
+        'Company Name': 'Nova Electrical Spares',
+        'Contact Person': 'Pooja Deshmukh',
+        'Email ID': 'sales@novaelectricals.com',
+        Phone: '+91 97230 44510',
+        Address: 'Makarpura, Vadodara, GJ',
+        GSTIN: '24AAACN4419K1Z1',
+        'Rating (0-100 Optional)': '',
+      },
+    ];
 
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const worksheet = XLSX.utils.json_to_sheet(sampleRows);
+    const workbook: XLSX.WorkBook = {
+      Sheets: { 'Vendor Master': worksheet },
+      SheetNames: ['Vendor Master'],
+    };
+    const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'Procucev_Template_1_Vendor_Master.csv';
+    link.download = 'Procucev_Template_1_Vendor_Master.xlsx';
     link.click();
-    showToast('Template Downloaded', 'Sample Vendor Master CSV template downloaded.', 'success');
+    showToast('Template Downloaded', 'Sample Vendor Master Excel template downloaded.', 'success');
   };
 
   // Download Sample PO Data CSV
@@ -995,7 +1037,7 @@ export default function InitialSetupModal() {
     link.href = url;
     link.download = `Procucev_Template_2_PO_Purchase_Dump_${selectedPeriod}.csv`;
     link.click();
-    showToast('Template Downloaded', 'Sample PO Purchase Order Dump CSV downloaded.', 'success');
+    showToast('Template Downloaded', 'Sample PO Pre-Purchase Order Dump CSV downloaded.', 'success');
   };
 
   const handleSimulatePOJoin = () => {
@@ -2031,7 +2073,7 @@ export default function InitialSetupModal() {
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-indigo-900 dark:text-indigo-200 text-[11px] flex items-center gap-1">
                     <CheckCircle2 size={13} className="text-emerald-600" />
-                    Template A: Suppliers With PO History ({mappedVendors.length})
+                    Template A: Suppliers With Pre-Purchase Order History ({mappedVendors.length})
                   </span>
                 </div>
                 <div className="p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-indigo-100 dark:border-indigo-900 text-[10px] space-y-1 font-mono text-slate-700 dark:text-gray-300">
@@ -2049,7 +2091,7 @@ export default function InitialSetupModal() {
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-amber-900 dark:text-amber-200 text-[11px] flex items-center gap-1">
                     <AlertCircle size={13} className="text-amber-600" />
-                    Template B: Suppliers With NO POs ({unmappedVendors.length})
+                    Template B: Suppliers With NO Pre-Purchase Orders ({unmappedVendors.length})
                   </span>
                 </div>
                 <div className="p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-amber-200 dark:border-amber-900 text-[10px] space-y-1 font-mono text-slate-700 dark:text-gray-300">

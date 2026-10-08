@@ -1606,7 +1606,7 @@ export default function IngestionWizard({
                     <Users size={28} className="mx-auto text-slate-400 opacity-60" />
                     <p className="text-xs font-bold text-slate-700 dark:text-gray-300">No Private Vendors Uploaded Yet</p>
                     <p className="text-[11px] text-slate-500 dark:text-gray-400 max-w-md mx-auto">
-                      Please ingest your 1–3 Year Purchase Orders or add approved vendors in the Vendor Directory to auto-dispatch in Mode 1.
+                      Please ingest your 1–3 Year Pre-Purchase Orders or add approved vendors in the Vendor Directory to auto-dispatch in Mode 1.
                     </p>
                   </div>
                 );
