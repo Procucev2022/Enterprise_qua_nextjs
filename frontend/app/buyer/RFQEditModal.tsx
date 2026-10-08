@@ -313,6 +313,7 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
   const [pincodeError, setPincodeError] = useState<string | null>(null);
   const [pincodeValidating, setPincodeValidating] = useState(false);
   const [pincodePostOffices, setPincodePostOffices] = useState<PostOfficeDetail[]>([]);
+  const [isCategorizing, setIsCategorizing] = useState(false);
   const pincodeDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
@@ -422,7 +423,6 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
     });
   };
 
-  const [isCategorizing, setIsCategorizing] = useState(false);
   const handleAutoCategorizeAll = () => {
     if (!form) return;
     setIsCategorizing(true);

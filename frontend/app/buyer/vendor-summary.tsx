@@ -2822,7 +2822,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                         ) : records.length > 0 ? (
                           <div className="p-6 text-center border border-dashed border-slate-200 dark:border-gray-800 rounded-xl bg-white dark:bg-gray-900 space-y-1">
                             <p className="text-xs font-semibold text-slate-700 dark:text-gray-300">
-                              No suppliers match "{batchSearchQuery}"
+                              No suppliers match &quot;{batchSearchQuery}&quot;
                             </p>
                             <p className="text-[11px] text-slate-400">
                               Try clearing your search query to view all {records.length} records in this batch.
@@ -2974,7 +2974,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       No Upload History Found
                     </h4>
                     <p className="text-xs text-slate-500 dark:text-gray-400 max-w-sm mx-auto leading-relaxed">
-                      You haven't uploaded any vendor master or PO data batches yet. Upload your vendor spreadsheet to see historical records here.
+                      You haven&apos;t uploaded any vendor master or PO data batches yet. Upload your vendor spreadsheet to see historical records here.
                     </p>
                   </div>
                   {onNavigateToWizard && (
