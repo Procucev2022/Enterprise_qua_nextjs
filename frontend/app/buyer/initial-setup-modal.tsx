@@ -420,8 +420,16 @@ export default function InitialSetupModal() {
             const phone = getVal(['phone', 'mobile', 'contact number', 'phone number', 'telephone', 'mobile number']) || '+91 98000 00000';
             const address = getVal(['address', 'location', 'city', 'plant location', 'street', 'office address']) || 'Industrial Zone, India';
             const gstNumber = getVal(['gstnumber', 'gstin', 'gst', 'gst number', 'tax id', 'gst no']) || '27AAACA0000A1Z0';
-            const ratingRaw = getVal(['vendorratingscore', 'rating', 'score', 'vendor rating', 'rating 0 100', 'performance score']);
-            const vendorRatingScore = ratingRaw && !isNaN(Number(ratingRaw)) ? Math.min(100, Math.max(0, Math.round(Number(ratingRaw)))) : undefined;
+            const ratingRaw = getVal(['vendorratingscore', 'rating', 'score', 'vendor rating', 'rating 0 100', 'performance score', 'vendor rating score', 'rating optional', 'rating 0-100', 'rating0100']);
+            let vendorRatingScore: number | undefined = undefined;
+            if (ratingRaw && !isNaN(Number(ratingRaw))) {
+              const num = Number(ratingRaw);
+              if (num > 0 && num <= 5) {
+                vendorRatingScore = Math.round(num * 20);
+              } else {
+                vendorRatingScore = Math.min(100, Math.max(0, Math.round(num)));
+              }
+            }
 
             return {
               id: `vm-upload-${Date.now()}-${idx}`,
@@ -1105,9 +1113,6 @@ export default function InitialSetupModal() {
               <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
                 Step 1: Choose Historical Purchase Period
               </h3>
-              <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                Select the time horizon of PO data you wish to cross-reference against your vendor master.
-              </p>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -1364,7 +1369,7 @@ export default function InitialSetupModal() {
                           <th className="p-2 min-w-[110px]">Phone</th>
                           <th className="p-2 min-w-[120px]">GSTIN</th>
                           <th className="p-2 min-w-[140px]">Address / Location</th>
-                          <th className="p-2 w-24">Rating</th>
+                          <th className="p-2 min-w-[110px]">Rating</th>
                           <th className="p-2 w-10 text-center">Action</th>
                         </tr>
                       </thead>
@@ -1435,23 +1440,24 @@ export default function InitialSetupModal() {
                               />
                             </td>
                             <td className="p-1.5 align-top">
-                              <div className="flex items-center gap-1">
+                              <div className="flex items-center gap-1.5">
                                 <input
                                   type="number"
                                   min="0"
                                   max="100"
                                   value={v.vendorRatingScore !== undefined ? v.vendorRatingScore : ''}
-                                  onChange={(e) =>
+                                  onChange={(e) => {
+                                    const raw = e.target.value.trim();
                                     handleUpdateVendorField(
                                       v.id,
                                       'vendorRatingScore',
-                                      e.target.value === '' ? undefined : Math.min(100, Math.max(0, Number(e.target.value)))
-                                    )
-                                  }
+                                      raw === '' ? undefined : Math.min(100, Math.max(0, Math.round(Number(raw))))
+                                    );
+                                  }}
                                   placeholder="0-100"
-                                  className="w-14 text-center font-bold text-xs px-1 py-1 rounded bg-amber-50/80 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-400 focus:border-amber-500 focus:outline-none transition-all"
+                                  className="w-16 text-center font-bold text-xs px-2 py-1 rounded bg-amber-50/80 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-400 placeholder:text-amber-400/60 focus:border-amber-500 focus:outline-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                 />
-                                <span className="text-[10px] text-slate-400 font-bold">/100</span>
+                                <span className="text-[10px] text-slate-400 font-bold shrink-0">/100</span>
                               </div>
                             </td>
                             <td className="p-1.5 align-top text-center">
@@ -1497,8 +1503,8 @@ export default function InitialSetupModal() {
                             <td className="p-2.5 text-slate-600 dark:text-gray-400 text-[11px] truncate max-w-[200px]">{v.address || '—'}</td>
                             <td className="p-2.5 font-bold">
                               {v.vendorRatingScore !== undefined && v.vendorRatingScore !== null ? (
-                                <span className="text-amber-600 dark:text-amber-400 flex items-center gap-0.5">
-                                  <Star size={11} fill="currentColor" /> {v.vendorRatingScore}/100
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800">
+                                  <Star size={11} className="fill-amber-400 text-amber-500" /> {v.vendorRatingScore}/100
                                 </span>
                               ) : (
                                 <span className="text-slate-400 text-[10px]">Optional (N/A)</span>
