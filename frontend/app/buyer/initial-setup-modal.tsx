@@ -1071,15 +1071,6 @@ export default function InitialSetupModal() {
           </div>
         </div>
 
-        {/* Informative Why This is Required Box - Simplified to 1 Line */}
-        <div className="px-4 py-2.5 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 text-xs text-indigo-950 dark:text-indigo-200 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 truncate">
-            <Sparkles size={15} className="text-indigo-600 shrink-0" />
-            <span className="text-[11px] truncate">
-              <strong>Dual-Stream Ingestion:</strong> Upload File 1 (Vendor Master), then File 2 (Historical PO Dump) for automated AI category cross-mapping.
-            </span>
-          </div>
-        </div>
 
         {/* Step Progress Indicators */}
         <div className="grid grid-cols-5 gap-1.5 text-center text-[11px] font-bold">
