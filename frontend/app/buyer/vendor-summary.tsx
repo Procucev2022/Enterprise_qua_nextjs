@@ -576,17 +576,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     };
   };
 
-  // Open Revision Modal
+  // Open Rating / Revision Modal for any vendor
   const openRevisionModal = (vendor: any) => {
     const engagement = getVendorRfqEngagement(vendor);
-    if (!engagement.isEngaged) {
-      showToast(
-        'Rating Revision Restricted',
-        `You cannot revise the performance rating for "${vendor.name}" because this supplier has not participated in any RFQs with your organization.`,
-        'warning'
-      );
-      return;
-    }
 
     setSelectedVendorForRevision(vendor);
     const currentScore = vendor.score || (vendor.rating ? Math.round(vendor.rating * 20) : 88);
@@ -600,7 +592,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
     const contextNote = engagement.isUsedInRFQ
       ? `Performance evaluated on procurement cycle (${engagement.recentRfqNumber}): Excellent technical adherence, competitive cost structure, and verified on-time delivery compliance.`
-      : `Operational evaluation for buyer empanelled vendor (${vendor.name}): Verified commercial terms, factory audit compliance, and SLA terms.`;
+      : `Operational evaluation for supplier (${vendor.name}): Verified commercial terms, technical capability, and quotation parameters.`;
 
     setRemarks(vendor.latestRatingRevision?.remarks || contextNote);
   };
@@ -1019,32 +1011,15 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 </button>
               )}
 
-              {/* Revise Rating Button */}
-              {engagement.isEngaged ? (
-                <button
-                  type="button"
-                  onClick={() => openRevisionModal(vendor)}
-                  className="btn btn-amber btn-xs font-bold flex items-center gap-1 shadow-xs"
-                  title={`Revise supplier rating (${engagement.qualificationReason})`}
-                >
-                  <Star size={11} className="fill-current" /> Revise Rating
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() =>
-                    showToast(
-                      'Rating Revision Locked',
-                      `You cannot revise the rating for "${vendor.name}" because this supplier has neither been used in any of your RFQs nor uploaded by your organization.`,
-                      'warning'
-                    )
-                  }
-                  className="btn btn-secondary btn-xs flex items-center gap-1 opacity-50 cursor-not-allowed text-slate-400 border-dashed"
-                  title="Rating revision locked: Buyers can only revise performance ratings for suppliers who have been uploaded or engaged in at least one RFQ."
-                >
-                  <Lock size={10} /> Rating Locked
-                </button>
-              )}
+              {/* Rate Vendor / AI Rating Button */}
+              <button
+                type="button"
+                onClick={() => openRevisionModal(vendor)}
+                className="btn btn-amber btn-xs font-bold flex items-center gap-1 shadow-xs"
+                title="Rate supplier manually or generate AI rating based on performance & quotation parameters"
+              >
+                <Star size={11} className="fill-current" /> Rate Vendor
+              </button>
 
               {showEvaluation ? (
                 <button
