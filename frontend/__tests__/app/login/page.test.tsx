@@ -153,7 +153,7 @@ describe('LoginPage', () => {
       expect(mockReplace).toHaveBeenCalledWith(ROLE_LANDING_ROUTE.buyer);
     });
 
-    it('routes an admin account to the admin workspace regardless of the selected role', async () => {
+    it('routes an admin account to the admin workspace automatically based on credentials', async () => {
       (authClient.loginWithPassword as jest.Mock).mockResolvedValue({
         success: true,
         user: { ...BUYER_SESSION, role: 'admin' },
@@ -161,7 +161,6 @@ describe('LoginPage', () => {
       });
 
       render(<LoginPage />);
-      // The visitor leaves "Buyer" selected, but the record says admin.
       typeInto(/Registered Email ID/i, 'admin@procucev.com');
       typeInto(/Registered Mobile Number/i, LOGIN_MOBILE);
       typeInto(/^Password$/i, 'secret123');
@@ -308,8 +307,7 @@ describe('LoginPage', () => {
       await waitFor(() => {
         expect(authClient.requestOtp).toHaveBeenCalledWith(
           BUYER_SESSION.email,
-          LOGIN_MOBILE,
-          'buyer'
+          LOGIN_MOBILE
         );
       });
 
@@ -692,18 +690,13 @@ describe('LoginPage', () => {
   });
 
   describe('form controls', () => {
-    it('switches the selected role, resetting any pending OTP step', () => {
+    it('does not render manual role selection buttons on sign-in and auto-detects roles', () => {
       render(<LoginPage />);
 
-      fireEvent.click(screen.getByRole('button', { name: /Vendor Partner/i }));
-      // The vendor branch still offers both auth methods.
-      expect(screen.getByRole('button', { name: /Email OTP/i })).toBeInTheDocument();
-
-      fireEvent.click(screen.getByRole('button', { name: /Cat Manager/i }));
-      // Category managers sign in with a password only.
-      expect(screen.queryByRole('button', { name: /Email OTP/i })).not.toBeInTheDocument();
-
-      fireEvent.click(screen.getByRole('button', { name: /System Admin/i }));
+      expect(screen.queryByRole('button', { name: /^Buyer$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Cat Manager/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Vendor Partner/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /System Admin/i })).not.toBeInTheDocument();
       expect(screen.getByLabelText(/Registered Email ID/i)).toBeInTheDocument();
     });
 
