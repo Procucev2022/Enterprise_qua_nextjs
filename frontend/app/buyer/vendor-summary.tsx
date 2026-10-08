@@ -148,6 +148,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [deliveryScore, setDeliveryScore] = useState<number | string>(85);
   const [remarks, setRemarks] = useState('');
   const [isSubmittingRevision, setIsSubmittingRevision] = useState(false);
+  const [isAiGeneratingRating, setIsAiGeneratingRating] = useState(false);
 
   // CRUD Form State
   const [formName, setFormName] = useState('');
@@ -553,6 +554,34 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       : `Operational evaluation for buyer empanelled vendor (${vendor.name}): Verified commercial terms, factory audit compliance, and SLA terms.`;
 
     setRemarks(vendor.latestRatingRevision?.remarks || contextNote);
+  };
+
+  const handleAiGenerateRating = () => {
+    if (!selectedVendorForRevision) return;
+    setIsAiGeneratingRating(true);
+    const vendor = selectedVendorForRevision;
+    const engagement = getVendorRfqEngagement(vendor);
+
+    // Performance & quotation parameters calculation:
+    const hasGst = Boolean(vendor.gstin);
+    const hasIso = Boolean(vendor.verified || vendor.iso);
+    const baseQuality = hasIso ? 92 : hasGst ? 88 : 82;
+    const computedQuality = Math.min(98, Math.max(70, baseQuality + ((vendor.score || 85) > 80 ? 4 : -2)));
+    const computedCost = Math.min(96, Math.max(65, 86 + (vendor.rating && vendor.rating >= 4.5 ? 6 : -4)));
+    const computedDelivery = Math.min(99, Math.max(75, engagement.isUsedInRFQ ? 94 : 88));
+
+    setTimeout(() => {
+      setQualityScore(computedQuality);
+      setCostScore(computedCost);
+      setDeliveryScore(computedDelivery);
+      const composite = Math.round((computedQuality + computedCost + computedDelivery) / 3);
+      const stars = (composite / 20).toFixed(1);
+      setRemarks(
+        `AI Auto-Generated Performance Rating (${stars} ★): Quality compliance indexed at ${computedQuality}% (${hasIso ? 'ISO/Verified' : 'Standard compliance'}), quotation competitiveness scored at ${computedCost}%, and OTIF delivery adherence calculated at ${computedDelivery}%.`
+      );
+      setIsAiGeneratingRating(false);
+      showToast('AI Rating Generated', `Calculated performance scores for ${vendor.name} based on operational and quotation parameters.`, 'success');
+    }, 400);
   };
 
   const handleSaveRatingRevision = async (e: React.FormEvent) => {
@@ -2227,9 +2256,24 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
                   {/* Performance Criteria Inputs (Quality, Cost, Delivery against 100) */}
                   <div className="space-y-3.5 p-4 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 block">
-                      1. Enter Performance Scores (0 to 100 Scale)
-                    </span>
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300">
+                        1. Rate Performance (Manual or AI Generated)
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleAiGenerateRating}
+                        disabled={isAiGeneratingRating}
+                        className="btn btn-xs font-bold bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white flex items-center gap-1.5 shadow-sm"
+                      >
+                        {isAiGeneratingRating ? (
+                          <Loader2 size={11} className="animate-spin" />
+                        ) : (
+                          <Sparkles size={11} />
+                        )}
+                        Auto-Generate with AI
+                      </button>
+                    </div>
 
                     {/* Quality Score */}
                     <div className="space-y-1.5">

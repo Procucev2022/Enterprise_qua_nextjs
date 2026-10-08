@@ -998,7 +998,19 @@ export default function IngestionWizard({
                 <FileCheck size={14} className="text-emerald-600 dark:text-emerald-400" />
                 Uploaded Documents ({uploadedFiles.length})
               </span>
-              <span className="text-[10px] text-slate-400">Click &quot;Extract Line Items with AI&quot; to auto-fill form</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUploadedFiles([]);
+                    fileInputRef.current?.click();
+                  }}
+                  className="btn btn-secondary btn-xs font-semibold flex items-center gap-1"
+                >
+                  <Paperclip size={11} /> Choose Another File
+                </button>
+                <span className="text-[10px] text-slate-400 hidden sm:inline">Click &quot;Extract Line Items with AI&quot; to auto-fill form</span>
+              </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
               {uploadedFiles.map((file, idx) => (

@@ -16,8 +16,8 @@
 // this app's own conventions (see ManualRFQModal.tsx for the modal shell).
 // ==============================================================================
 
-import React, { useMemo, useRef, useState } from 'react';
-import { X, Upload, Download, FileSpreadsheet, CheckCircle2, AlertTriangle, Loader2, XCircle } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { X, Upload, Download, FileSpreadsheet, CheckCircle2, AlertTriangle, Loader2, XCircle, History, Clock } from 'lucide-react';
 import { useApp } from '@/lib/store';
 import {
   bulkImportVendorRows,
@@ -36,13 +36,26 @@ interface VendorUploadModalProps {
 
 type Step = 'select' | 'preview' | 'importing' | 'result';
 
+interface UploadHistoryEntry {
+  id: string;
+  fileName: string;
+  timestamp: string;
+  total: number;
+  imported: number;
+  duplicates: number;
+  failed: number;
+}
+
 const PREVIEW_PAGE_SIZE = 50;
+const HISTORY_STORAGE_KEY = 'procucev_vendor_upload_history';
 
 export default function VendorUploadModal({ isOpen, onClose, onImportComplete }: VendorUploadModalProps) {
   const { showToast, refreshFromDB } = useApp();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [step, setStep] = useState<Step>('select');
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyList, setHistoryList] = useState<UploadHistoryEntry[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isParsing, setIsParsing] = useState(false);
   const [fileName, setFileName] = useState('');
@@ -53,11 +66,19 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
   const [importProgress, setImportProgress] = useState<VendorUploadImportResponse | null>(null);
   const [importResult, setImportResult] = useState<VendorUploadImportResponse | null>(null);
 
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
+      if (raw) {
+        setHistoryList(JSON.parse(raw));
+      }
+    } catch {
+      setHistoryList([]);
+    }
+  }, [isOpen]);
+
   const validRows = useMemo(() => rows.filter((r) => r.isValid), [rows]);
   const invalidRows = useMemo(() => rows.filter((r) => !r.isValid), [rows]);
-  // A row with no email still uploads (not rejected, not fabricated an
-  // email) — highlighted here so it's visible before the import even runs,
-  // not just in a downloadable report afterward.
   const missingEmailRows = useMemo(() => validRows.filter((r) => r.missingEmail), [validRows]);
 
   const filteredRows = useMemo(() => {
@@ -71,6 +92,7 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
 
   function resetState() {
     setStep('select');
+    setShowHistory(false);
     setFileName('');
     setRows([]);
     setBlankRowCount(0);
@@ -81,7 +103,7 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
   }
 
   function handleClose() {
-    if (step === 'importing') return; // don't tear down mid-import
+    if (step === 'importing') return;
     resetState();
     onClose();
   }
@@ -132,16 +154,29 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
   }
 
   async function handleImport() {
-    // Every parsed (non-blank) row is imported, not just the ones that
-    // passed every check — a row with a bad email/phone format or a missing
-    // name still becomes a real vendor record, just one flagged with
-    // `hasIssues` so it's visible, not silently dropped.
     if (rows.length === 0) return;
     setStep('importing');
     setImportProgress({ total: 0, imported: 0, missingEmail: 0, duplicates: 0, failed: 0, results: [] });
     const result = await bulkImportVendorRows(rows, (soFar) => setImportProgress(soFar));
     setImportResult(result);
     setStep('result');
+
+    // Save into History
+    const historyEntry: UploadHistoryEntry = {
+      id: `up-${Date.now()}`,
+      fileName: fileName || 'vendors.xlsx',
+      timestamp: new Date().toLocaleString(),
+      total: rows.length,
+      imported: result.imported,
+      duplicates: result.duplicates,
+      failed: result.failed,
+    };
+    try {
+      const nextHistory = [historyEntry, ...historyList].slice(0, 30);
+      setHistoryList(nextHistory);
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(nextHistory));
+    } catch {}
+
     if (result.imported > 0) {
       await refreshFromDB();
       onImportComplete?.();
@@ -150,15 +185,13 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
 
   function downloadFailedRowsReport() {
     if (!importResult) return;
-    const failedRowNumbers = new Set(
-      importResult.results.filter((r) => r.status !== 'imported').map((r) => r.rowNumber)
-    );
-    const lines = ['Row Number,Email,Status,Reason'];
+    const lines = ['Row Number,Vendor Code,Email,Status,Reason'];
     importResult.results
       .filter((r) => r.status !== 'imported')
       .forEach((r) => {
         const reason = (r.errors || [r.reason || '']).join('; ').replace(/,/g, ';');
-        lines.push(`${r.rowNumber},${r.email || ''},${r.status},${reason}`);
+        const originalRow = rows.find((row) => row.rowNumber === r.rowNumber);
+        lines.push(`${r.rowNumber},${originalRow?.vendor.vendorCode || ''},${r.email || ''},${r.status},${reason}`);
       });
     const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
@@ -169,7 +202,6 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    void failedRowNumbers; // computed for clarity/debuggability, not otherwise used
   }
 
   if (!isOpen) return null;
@@ -183,45 +215,99 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
       data-testid="vendor-upload-modal"
     >
       <div className="w-full max-w-4xl rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-slate-200 dark:border-gray-800 my-auto">
-        <header className="flex items-start justify-between gap-3 px-5 py-4 border-b border-slate-200 dark:border-gray-800">
-          <div>
-            <h2 id="vendor-upload-modal-title" className="text-base font-bold text-slate-900 dark:text-white">
-              Bulk Upload Vendors
-            </h2>
-            <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5 max-w-2xl">
-              Download the Vendor Master template, fill it in, then upload to import many vendors at once.
-            </p>
+        <header className="flex items-center justify-between gap-3 px-5 py-4 border-b border-slate-200 dark:border-gray-800">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400">
+              <Upload size={18} />
+            </div>
+            <div>
+              <h2 id="vendor-upload-modal-title" className="text-base font-bold text-slate-900 dark:text-white">
+                Bulk Upload Vendors
+              </h2>
+              <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
+                Upload vendors via standard Excel spreadsheet (.xlsx) with unique Vendor Codes.
+              </p>
+            </div>
           </div>
-          <button
-            onClick={handleClose}
-            disabled={step === 'importing'}
-            aria-label="Close"
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-900 dark:hover:text-white disabled:opacity-40"
-          >
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowHistory(!showHistory)}
+              className={`btn btn-xs font-semibold flex items-center gap-1.5 ${showHistory ? 'btn-primary' : 'btn-secondary'}`}
+              title="View Upload History"
+            >
+              <History size={13} /> {showHistory ? 'Hide History' : 'Upload History'}
+            </button>
+            <button
+              onClick={handleClose}
+              disabled={step === 'importing'}
+              aria-label="Close"
+              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-900 dark:hover:text-white disabled:opacity-40"
+            >
+              <X size={18} />
+            </button>
+          </div>
         </header>
 
         <div className="px-5 py-4 space-y-4 text-xs">
+          {/* History Panel */}
+          {showHistory && (
+            <div className="p-4 rounded-xl border border-slate-200 dark:border-gray-800 bg-slate-50/70 dark:bg-gray-950/40 space-y-2">
+              <div className="flex items-center justify-between font-bold text-slate-800 dark:text-gray-200">
+                <span className="flex items-center gap-1.5"><Clock size={14} /> Previous Vendor Upload History</span>
+                <span className="text-[10px] text-slate-400 font-normal">{historyList.length} recorded</span>
+              </div>
+              {historyList.length === 0 ? (
+                <p className="text-slate-400 italic text-[11px]">No previous uploads recorded on this browser.</p>
+              ) : (
+                <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+                  {historyList.map((item) => (
+                    <div
+                      key={item.id}
+                      className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 flex items-center justify-between text-[11px]"
+                    >
+                      <div>
+                        <span className="font-bold text-slate-800 dark:text-gray-200">{item.fileName}</span>
+                        <div className="text-[10px] text-slate-400">{item.timestamp}</div>
+                      </div>
+                      <div className="flex items-center gap-2 font-mono text-[10px]">
+                        <span className="px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-bold">
+                          {item.imported} Imported
+                        </span>
+                        {item.duplicates > 0 && (
+                          <span className="px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300">
+                            {item.duplicates} Duplicates
+                          </span>
+                        )}
+                        {item.failed > 0 && (
+                          <span className="px-1.5 py-0.5 rounded bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-300">
+                            {item.failed} Failed
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {step === 'select' && (
             <div className="space-y-4">
-              <div className="p-3.5 rounded-xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/50 dark:bg-indigo-950/20 flex items-center justify-between gap-3 flex-wrap">
-                <div>
-                  <h3 className="text-xs font-bold text-slate-900 dark:text-white">1. Download Template</h3>
-                  <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                    Company Name, Person Name, Email Id, Mobile No, GSTIN, Pin Code, City, State, Category, Products.
-                  </p>
-                </div>
+              {/* Single-line Simplified Template Download Banner */}
+              <div className="p-3 rounded-xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/50 dark:bg-indigo-950/20 flex items-center justify-between gap-3">
+                <span className="text-xs text-slate-700 dark:text-gray-300 font-medium truncate">
+                  Use standard template with unique Vendor Code, Company Name, Contact, Mobile & Category.
+                </span>
                 <button
                   onClick={downloadVendorUploadTemplate}
-                  className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5"
+                  className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5 shrink-0"
                 >
-                  <Download size={13} /> Download Vendor Master Template
+                  <Download size={13} /> Download Template
                 </button>
               </div>
 
               <div>
-                <h3 className="text-xs font-bold text-slate-900 dark:text-white mb-2">2. Upload File</h3>
                 <div
                   onDragOver={(e) => {
                     e.preventDefault();
@@ -239,13 +325,16 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                 >
                   {isParsing ? (
                     <div className="flex flex-col items-center gap-2 text-slate-500 dark:text-gray-400">
-                      <Loader2 size={22} className="animate-spin" />
-                      <span>Parsing file…</span>
+                      <Loader2 size={22} className="animate-spin text-indigo-600" />
+                      <span>Parsing vendor spreadsheet…</span>
                     </div>
                   ) : (
                     <div className="flex flex-col items-center gap-2 text-slate-500 dark:text-gray-400">
                       <Upload size={22} />
-                      <span>Click to browse or drag & drop a .xlsx file</span>
+                      <span className="font-semibold text-slate-700 dark:text-gray-300">
+                        Click to browse or drag &amp; drop your Vendor Master .xlsx file
+                      </span>
+                      <span className="text-[10px] text-slate-400">Supported formats: .xlsx (Max 10MB)</span>
                     </div>
                   )}
                   <input
@@ -263,10 +352,24 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
 
           {step === 'preview' && (
             <div className="space-y-3">
-              <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-gray-400">
-                <FileSpreadsheet size={14} />
-                <span className="font-bold text-slate-800 dark:text-gray-200">{fileName}</span>
-                {blankRowCount > 0 && <span>({blankRowCount} blank row(s) skipped)</span>}
+              <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-gray-400">
+                <div className="flex items-center gap-2">
+                  <FileSpreadsheet size={14} className="text-indigo-600 dark:text-indigo-400" />
+                  <span className="font-bold text-slate-800 dark:text-gray-200">{fileName}</span>
+                  {blankRowCount > 0 && <span>({blankRowCount} blank row(s) skipped)</span>}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStep('select');
+                    setRows([]);
+                    setFileName('');
+                    setTimeout(() => fileInputRef.current?.click(), 50);
+                  }}
+                  className="btn btn-secondary btn-xs font-semibold flex items-center gap-1"
+                >
+                  <Upload size={11} /> Choose Another File
+                </button>
               </div>
 
               <div className="grid grid-cols-4 gap-2">
@@ -308,6 +411,7 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                   <thead className="sticky top-0 bg-slate-50 dark:bg-gray-900">
                     <tr className="border-b border-slate-200 dark:border-gray-800 text-slate-500 dark:text-gray-400 font-bold">
                       <th className="p-2">Row</th>
+                      <th className="p-2">Vendor Code</th>
                       <th className="p-2">Status</th>
                       <th className="p-2">Company Name</th>
                       <th className="p-2">Email</th>
@@ -326,6 +430,7 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                         }`}
                       >
                         <td className="p-2 font-mono">{r.rowNumber}</td>
+                        <td className="p-2 font-mono font-semibold">{r.vendor.vendorCode || '—'}</td>
                         <td className="p-2">
                           {!r.isValid ? (
                             <span className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400 font-bold">
@@ -341,7 +446,7 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                             </span>
                           )}
                         </td>
-                        <td className="p-2">{r.vendor.name || '—'}</td>
+                        <td className="p-2 font-semibold">{r.vendor.name || '—'}</td>
                         <td className="p-2">{r.vendor.email || <span className="text-amber-600 dark:text-amber-400 font-bold">No Email</span>}</td>
                         <td className="p-2">{r.vendor.phone || '—'}</td>
                         <td className="p-2">{r.vendor.gstin || '—'}</td>
@@ -376,8 +481,17 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
               )}
 
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-gray-800">
-                <button onClick={resetState} className="btn btn-secondary btn-sm">
-                  Choose a Different File
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStep('select');
+                    setRows([]);
+                    setFileName('');
+                    setTimeout(() => fileInputRef.current?.click(), 50);
+                  }}
+                  className="btn btn-secondary btn-sm"
+                >
+                  Choose Another File
                 </button>
                 <button
                   onClick={handleImport}

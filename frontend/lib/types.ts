@@ -944,6 +944,7 @@ export interface VendorEntry {
 export interface VendorUploadRow {
   rowNumber: number;
   vendor: {
+    vendorCode?: string;
     name: string;
     email: string;
     phone: string;

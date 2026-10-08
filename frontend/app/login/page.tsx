@@ -735,7 +735,7 @@ export default function LoginPage() {
                     </div>
 
                     <div className="space-y-1">
-                      <label htmlFor="otp-code" className={fieldLabel}>Enter Email OTP Code</label>
+                      <label htmlFor="otp-code" className={fieldLabel}>Email Verification Code (OTP)</label>
                       <div className="relative">
                         <Key className={iconClass} size={14} />
                         <input
@@ -1027,7 +1027,7 @@ export default function LoginPage() {
                     <div className="space-y-1">
                       <div className="flex justify-between items-center">
                         <label htmlFor="reg-email-otp" className={fieldLabel}>
-                          1. Email OTP (Sent to {regEmail.toLowerCase()})
+                          1. Email Verification Code (OTP) (Sent to {regEmail.toLowerCase()})
                         </label>
                       </div>
                       <div className="relative">

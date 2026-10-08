@@ -311,7 +311,7 @@ describe('LoginPage', () => {
         );
       });
 
-      typeInto(/Enter Email OTP Code/i, OTP_CODE);
+      typeInto(/Email Verification Code \(OTP\)/i, OTP_CODE);
       fireEvent.click(screen.getByRole('button', { name: /Verify & Sign In/i }));
 
       await waitFor(() => {
@@ -349,7 +349,7 @@ describe('LoginPage', () => {
           'warning'
         );
       });
-      expect(screen.queryByLabelText(/Enter Email OTP Code/i)).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/Email Verification Code \(OTP\)/i)).not.toBeInTheDocument();
     });
 
     it('reports an invalid code', async () => {
@@ -363,9 +363,9 @@ describe('LoginPage', () => {
       switchToOtp();
       fillOtpIdentity();
       fireEvent.click(screen.getByRole('button', { name: /Request Login OTP/i }));
-      await waitFor(() => expect(screen.getByLabelText(/Enter Email OTP Code/i)).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByLabelText(/Email Verification Code \(OTP\)/i)).toBeInTheDocument());
 
-      typeInto(/Enter Email OTP Code/i, '999999');
+      typeInto(/Email Verification Code \(OTP\)/i, '999999');
       fireEvent.click(screen.getByRole('button', { name: /Verify & Sign In/i }));
 
       await waitFor(() => {
@@ -385,9 +385,9 @@ describe('LoginPage', () => {
       switchToOtp();
       fillOtpIdentity();
       fireEvent.click(screen.getByRole('button', { name: /Request Login OTP/i }));
-      await waitFor(() => expect(screen.getByLabelText(/Enter Email OTP Code/i)).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByLabelText(/Email Verification Code \(OTP\)/i)).toBeInTheDocument());
 
-      typeInto(/Enter Email OTP Code/i, '1234');
+      typeInto(/Email Verification Code \(OTP\)/i, '1234');
       fireEvent.submit(
         screen.getByRole('button', { name: /Verify & Sign In/i }).closest('form') as HTMLFormElement
       );
@@ -433,7 +433,7 @@ describe('LoginPage', () => {
       switchToOtp();
       fillOtpIdentity();
       fireEvent.click(screen.getByRole('button', { name: /Request Login OTP/i }));
-      await waitFor(() => expect(screen.getByLabelText(/Enter Email OTP Code/i)).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByLabelText(/Email Verification Code \(OTP\)/i)).toBeInTheDocument());
 
       fireEvent.click(screen.getByRole('button', { name: /^Back$/i }));
 

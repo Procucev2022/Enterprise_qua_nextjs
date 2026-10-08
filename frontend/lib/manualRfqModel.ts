@@ -24,6 +24,7 @@
 import {
   hasMajorCategory,
   hasMinorCategory,
+  autoCategorizeItem,
 } from './categoryTaxonomy';
 import { PINCODE_PATTERN, isDummyPincode } from './validationSchemas';
 import { UI_STRINGS, formatString } from './uiStrings';
@@ -308,7 +309,17 @@ export function toRFQCreatePayload(
  */
 export function fromExtractedEntity(entity: ExtractedEntity): ManualRFQLineItem {
   rowCounter += 1;
-  const majorCategory = taxonomyMajorOrBlank(clean(entity.majorCategory));
+  let majorCategory = taxonomyMajorOrBlank(clean(entity.majorCategory));
+  let minorCategory = taxonomyMinorOrBlank(majorCategory, clean(entity.minorCategory) || clean(entity.category));
+  
+  if (!majorCategory && (clean(entity.itemName) || clean(entity.technicalSpecs))) {
+    const auto = autoCategorizeItem(clean(entity.itemName), clean(entity.technicalSpecs));
+    if (auto.majorCategory) {
+      majorCategory = auto.majorCategory;
+      minorCategory = auto.minorCategory;
+    }
+  }
+
   const rawTargetDate = clean(entity.targetDate);
   const targetDate = isPastDateString(rawTargetDate) ? '' : rawTargetDate;
   return {
@@ -319,9 +330,7 @@ export function fromExtractedEntity(entity: ExtractedEntity): ManualRFQLineItem 
     unit: clean(entity.unit),
     targetDate,
     majorCategory,
-    // Scoped to the major that survived: a minor from a discarded major cannot be
-    // valid, and the dropdown would not offer it.
-    minorCategory: taxonomyMinorOrBlank(majorCategory, clean(entity.minorCategory) || clean(entity.category)),
+    minorCategory,
   };
 }
 
@@ -354,6 +363,12 @@ export function updateManualRFQLineItem(
       const next = { ...item, ...patch };
       if (patch.majorCategory !== undefined && patch.majorCategory !== item.majorCategory) {
         next.minorCategory = '';
+      } else if (!next.majorCategory && (patch.itemName !== undefined || patch.technicalSpecs !== undefined)) {
+        const auto = autoCategorizeItem(next.itemName, next.technicalSpecs);
+        if (auto.majorCategory) {
+          next.majorCategory = auto.majorCategory;
+          next.minorCategory = auto.minorCategory;
+        }
       }
       return next;
     }),
