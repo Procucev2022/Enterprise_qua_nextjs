@@ -23,10 +23,11 @@
 
 import type { MajorMinorCategory } from './types';
 
-/** Trim, collapse whitespace and casefold, so 'Storage  Racks' matches. */
+/** Trim, collapse whitespace, normalize dashes and casefold, so 'Storage  Racks' and 'Others - New Product' match. */
 function taxonomyKey(value: string): string {
   return String(value || '')
     .trim()
+    .replace(/[–—]/g, '-')
     .replace(/\s+/g, ' ')
     .toLowerCase();
 }
@@ -40,9 +41,76 @@ let minorsByMajorKey = new Map<string, Map<string, string>>();
  *
  * Called by the store once the fetch resolves. Indexes are rebuilt rather than
  * merged: a category removed from the master must stop being offered.
+ * Automatically replaces legacy 'New Category' with 'Others – New Product' and 'Others – New Service'.
  */
 export function setCategoryTaxonomy(next: MajorMinorCategory[]): void {
-  groups = (Array.isArray(next) ? next : []).filter((g) => Boolean(g && g.majorCategory));
+  const rawList = (Array.isArray(next) ? next : []).filter((g) => Boolean(g && g.majorCategory));
+  const transformed: MajorMinorCategory[] = [];
+
+  rawList.forEach((group) => {
+    const rawMajor = String(group.majorCategory || '').trim();
+    const key = taxonomyKey(rawMajor);
+
+    if (key === 'new category' || key === 'new category-product') {
+      transformed.push({
+        majorCategory: 'Others – New Product',
+        minorCategories:
+          group.minorCategories && group.minorCategories.length > 0
+            ? group.minorCategories
+            : DEFAULT_MAJOR_MINORS['others - new product'],
+      });
+      if (key === 'new category') {
+        transformed.push({
+          majorCategory: 'Others – New Service',
+          minorCategories: DEFAULT_MAJOR_MINORS['others - new service'],
+        });
+      }
+    } else if (key === 'new category-service') {
+      transformed.push({
+        majorCategory: 'Others – New Service',
+        minorCategories:
+          group.minorCategories && group.minorCategories.length > 0
+            ? group.minorCategories
+            : DEFAULT_MAJOR_MINORS['others - new service'],
+      });
+    } else if (key === 'others - new product') {
+      transformed.push({
+        majorCategory: 'Others – New Product',
+        minorCategories:
+          group.minorCategories && group.minorCategories.length > 0
+            ? group.minorCategories
+            : DEFAULT_MAJOR_MINORS['others - new product'],
+      });
+    } else if (key === 'others - new service') {
+      transformed.push({
+        majorCategory: 'Others – New Service',
+        minorCategories:
+          group.minorCategories && group.minorCategories.length > 0
+            ? group.minorCategories
+            : DEFAULT_MAJOR_MINORS['others - new service'],
+      });
+    } else {
+      transformed.push(group);
+    }
+  });
+
+  // Ensure both 'Others – New Product' and 'Others – New Service' are always present in the options
+  if (transformed.length > 0) {
+    if (!transformed.some((g) => taxonomyKey(g.majorCategory) === 'others - new product')) {
+      transformed.push({
+        majorCategory: 'Others – New Product',
+        minorCategories: DEFAULT_MAJOR_MINORS['others - new product'],
+      });
+    }
+    if (!transformed.some((g) => taxonomyKey(g.majorCategory) === 'others - new service')) {
+      transformed.push({
+        majorCategory: 'Others – New Service',
+        minorCategories: DEFAULT_MAJOR_MINORS['others - new service'],
+      });
+    }
+  }
+
+  groups = transformed;
   majorsByKey = new Map();
   minorsByMajorKey = new Map();
 
@@ -68,9 +136,22 @@ export function isCategoryTaxonomyLoaded(): boolean {
   return groups.length > 0;
 }
 
-/** Major categories in master display order. */
+/** Major categories in master display order, with guaranteed standard options fallback. */
 export function getMajorCategories(): string[] {
-  return groups.map((group) => group.majorCategory);
+  if (groups.length > 0) {
+    return groups.map((group) => group.majorCategory);
+  }
+  return [
+    'Engineering Spares - Mechanical',
+    'Engineering Spares - Electrical',
+    'Civil Works',
+    'Information Technology (IT) & Software',
+    'Occuptional Health and Safety',
+    'Logistics & Transportation',
+    'Chemicals & Raw Materials',
+    'Others – New Product',
+    'Others – New Service',
+  ];
 }
 
 const DEFAULT_MAJOR_MINORS: Record<string, string[]> = {
@@ -131,17 +212,28 @@ const DEFAULT_MAJOR_MINORS: Record<string, string[]> = {
     'Specialty Chemicals',
     'Polymers & Resins',
   ],
-  'others – new product': [
+  'others - new product': [
     'Storage Racks',
     'Packaging Material',
     'General Consumables',
+    'Air Purifiers',
+    'Furniture',
+    'Cleanroom Solutions',
+    'Measuring Equipment',
+    'Renewable Energy',
+    'Water Treatment Plants',
     'Others',
   ],
-  'others – new service': [
+  'others - new service': [
     'Consulting',
     'Maintenance & AMC',
     'Installation & Fabrication',
     'Inspection & Testing',
+    'Calibration Services',
+    'Appliances Services',
+    'Drone Surveys',
+    'Warehousing',
+    'Waste Management',
   ],
 };
 
