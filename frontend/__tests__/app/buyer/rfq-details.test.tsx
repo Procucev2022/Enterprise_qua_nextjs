@@ -921,12 +921,14 @@ function makeInquiry(overrides: any = {}): any {
         })
       );
 
+      // Procucev/internal vendors are shown in the buyer's chat list by name
+      // only (not fully hidden) — only their contact details are withheld.
       expect(screen.getByText('Vendor Inquiries & Clarifications')).toBeInTheDocument();
       expect(screen.getAllByText('Local Machine Shop').length).toBeGreaterThanOrEqual(1);
-      expect(screen.queryByText('Global Turbines Ltd')).not.toBeInTheDocument();
+      expect(screen.getAllByText('Global Turbines Ltd').length).toBeGreaterThanOrEqual(1);
     });
 
-    it('filters out Procucev vendors from Assigned Suppliers for V1/V2/V3', () => {
+    it('filters Procucev vendors out of the Assigned & Invited Suppliers panel specifically (they still surface by name in chat)', () => {
       renderDetails(
         buildRFQ({
           sourcingMode: 'mode_2',
@@ -945,9 +947,11 @@ function makeInquiry(overrides: any = {}): any {
         })
       );
 
-      expect(screen.getByText('Assigned & Invited Suppliers')).toBeInTheDocument();
-      expect(screen.getAllByText('Client Approved Supplier').length).toBeGreaterThanOrEqual(1);
-      expect(screen.queryByText('Assigned Network Supplier')).not.toBeInTheDocument();
+      const panelHeading = screen.getByText('Assigned & Invited Suppliers');
+      const panel = panelHeading.closest('section');
+      expect(panel).not.toBeNull();
+      expect(within(panel as HTMLElement).getAllByText('Client Approved Supplier').length).toBeGreaterThanOrEqual(1);
+      expect(within(panel as HTMLElement).queryByText('Assigned Network Supplier')).not.toBeInTheDocument();
     });
 
     it('allows searching vendors and filtering by status tabs', () => {

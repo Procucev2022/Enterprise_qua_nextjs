@@ -515,6 +515,80 @@ async function findCategoryTaxonomy() {
   }));
 }
 
+const DISPATCH_TEMPLATE_TYPES = ['category_mapped', 'self_map_required'];
+
+/**
+ * Both of an organisation's vendor-onboarding email templates, keyed by type.
+ * A missing type means the caller should fall back to the hardcoded default
+ * wording — see mailerService.buildVendorCategoryMappingEmail /
+ * buildVendorSelfMappingEmail.
+ */
+async function getDispatchTemplates(organizationId) {
+  if (!pool.hasStorage() || !organizationId) return {};
+  const rows = await pool.rows(
+    `select template_type, subject, message
+       from vendor_dispatch_templates
+      where organization_id = $1`,
+    [organizationId],
+    { d1: true }
+  );
+  const byType = {};
+  rows.forEach((row) => {
+    byType[row.template_type] = {
+      subject: text(row.subject) || null,
+      message: text(row.message) || null,
+    };
+  });
+  return byType;
+}
+
+/**
+ * Save (or clear) one organisation's custom subject/message for one template
+ * type. An empty subject and message deletes the row rather than storing an
+ * empty override, so the hardcoded default wording comes back automatically.
+ */
+async function upsertDispatchTemplate(organizationId, templateType, { subject, message } = {}, updatedBy) {
+  if (!pool.hasStorage() || !organizationId) return null;
+  if (!DISPATCH_TEMPLATE_TYPES.includes(templateType)) {
+    throw new Error(`Unknown vendor dispatch template type: ${templateType}`);
+  }
+
+  const cleanSubject = text(subject);
+  const cleanMessage = text(message);
+
+  if (cleanSubject === '' && cleanMessage === '') {
+    await pool.query(
+      `delete from vendor_dispatch_templates where organization_id = $1 and template_type = $2`,
+      [organizationId, templateType],
+      { d1: true }
+    );
+    return null;
+  }
+
+  const uuid = crypto.randomUUID();
+  await pool.query(
+    `insert into vendor_dispatch_templates (uuid, organization_id, template_type, subject, message, updated_by, created_ts, updated_ts)
+     values ($1, $2, $3, $4, $5, $6, now(), now())
+     on conflict (organization_id, template_type) do update
+       set subject = excluded.subject,
+           message = excluded.message,
+           updated_by = excluded.updated_by,
+           updated_ts = now()`,
+    [uuid, organizationId, templateType, cleanSubject || null, cleanMessage || null, updatedBy || null],
+    {
+      d1: true,
+      d1Text: `insert into vendor_dispatch_templates (uuid, organization_id, template_type, subject, message, updated_by, created_ts, updated_ts)
+     values ($1, $2, $3, $4, $5, $6, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+     on conflict (organization_id, template_type) do update
+       set subject = excluded.subject,
+           message = excluded.message,
+           updated_by = excluded.updated_by,
+           updated_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
+    }
+  );
+  return { subject: cleanSubject || null, message: cleanMessage || null };
+}
+
 module.exports = {
   text,
   preferred,
@@ -528,4 +602,6 @@ module.exports = {
   findCategoryTaxonomy,
   PROFILE_COLUMN_MAP,
   PROFILE_SELECT,
+  getDispatchTemplates,
+  upsertDispatchTemplate,
 };

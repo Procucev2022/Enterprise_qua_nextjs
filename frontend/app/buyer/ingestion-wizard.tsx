@@ -1423,6 +1423,17 @@ export default function IngestionWizard({
             </table>
           </div>
         )}
+
+        {form.lineItems.length > 0 && (
+          <div className="pt-1">
+            <button
+              onClick={() => setForm(addManualRFQLineItem(form))}
+              className="btn btn-primary btn-sm font-bold flex items-center gap-1 shadow-xs"
+            >
+              <Plus size={14} /> Add Line Item
+            </button>
+          </div>
+        )}
       </div>
 
         {/* ── Section 3: Sourcing Mode Selection ── */}
