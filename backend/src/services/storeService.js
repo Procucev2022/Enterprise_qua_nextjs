@@ -3667,15 +3667,15 @@ class StoreService {
     const issueDate = new Date().toISOString().substring(0, 10);
     const auditRecord = this.addAuditLog({
       userEmail: approverEmail || (this.activeBuyerAccount ? this.activeBuyerAccount.corporateEmail : SYSTEM_ACTOR_EMAIL),
-      action: `Formally approved & sealed Purchase Order ${poNumber} awarded to ${vendorName} ($${Number(totalAmount).toLocaleString()}). Notes: ${approverNotes}`,
+      action: `Formally approved & sealed Pre-Purchase Order ${poNumber} awarded to ${vendorName} ($${Number(totalAmount).toLocaleString()}). Notes: ${approverNotes}`,
       rfqNumber,
     });
 
     // Notify the buyer of PO generation / award
     this.notifyBuyer(rfq.buyerAccountId || approverEmail, {
       kind: 'po_approved',
-      title: `PO Approved — ${rfq.rfqNumber}`,
-      message: `Purchase order ${poNumber} awarded to ${vendorName} (₹${Number(totalAmount).toLocaleString()}).`,
+      title: `Pre-PO Approved — ${rfq.rfqNumber}`,
+      message: `Pre-Purchase order ${poNumber} awarded to ${vendorName} (₹${Number(totalAmount).toLocaleString()}).`,
       meta: { poNumber, rfqNumber: rfq.rfqNumber, vendorId, vendorName, totalAmount },
     });
 
@@ -3686,8 +3686,8 @@ class StoreService {
         recipientId: vendorId,
         kind: 'po_awarded',
         rfq,
-        title: `Purchase Order Awarded — ${rfq.rfqNumber}`,
-        message: `Congratulations! ${rfq.buyerAccountName || 'The buyer'} has approved and awarded purchase order ${poNumber} to you.`,
+        title: `Pre-Purchase Order Awarded — ${rfq.rfqNumber}`,
+        message: `Congratulations! ${rfq.buyerAccountName || 'The buyer'} has approved and awarded pre-purchase order ${poNumber} to you.`,
         meta: { poNumber, rfqNumber: rfq.rfqNumber, totalAmount },
       });
       this.notifications.unshift(vendorNotification);

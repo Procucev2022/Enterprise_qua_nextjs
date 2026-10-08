@@ -1420,18 +1420,18 @@ const VENDOR_INGESTION_CONFIG = {
 
 /** User-facing messages. `{param}` placeholders are filled by formatMessage. */
 const VENDOR_INGESTION_MESSAGES = {
-  NOT_A_BUYER: 'Only a buyer can ingest vendor master and purchase order data.',
+  NOT_A_BUYER: 'Only a buyer can ingest vendor master and pre-purchase order data.',
   SESSION_MISSING_USER: 'Your session does not identify a user. Please sign in again.',
   ORGANIZATION_NOT_LINKED: 'Your account is not linked to an organisation, so vendor data cannot be scoped to it.',
   SESSION_NOT_FOUND: 'That ingestion session does not exist for your organisation.',
   SESSION_REQUIRED: 'Start an ingestion session before uploading a file.',
-  HORIZON_REQUIRED: 'Select a time horizon before uploading the purchase order dump.',
+  HORIZON_REQUIRED: 'Select a time horizon before uploading the pre-purchase order dump.',
   HORIZON_CUSTOM_DATES_REQUIRED: 'A custom time horizon needs both a start date and an end date.',
   HORIZON_START_AFTER_END: 'The time horizon start date must fall on or before its end date.',
   HORIZON_END_IN_FUTURE: 'The time horizon end date cannot be in the future.',
   VENDOR_MASTER_REQUIRED_FIRST: 'Upload and confirm your Vendor Master before uploading the PO dump.',
   VENDOR_MASTER_EMPTY: 'No valid vendor rows were supplied, so nothing was stored.',
-  PO_DUMP_EMPTY: 'No valid purchase order rows were supplied, so nothing was stored.',
+  PO_DUMP_EMPTY: 'No valid pre-purchase order rows were supplied, so nothing was stored.',
   PO_DUMP_REQUIRED_FIRST: 'Upload and confirm your PO dump before running the category match.',
   JOIN_REQUIRED_FIRST: 'Run the vendor and PO match before starting AI categorisation.',
   TOO_MANY_ROWS: 'A single upload request may carry at most {max} rows. Large files are sent in chunks.',
@@ -1439,7 +1439,7 @@ const VENDOR_INGESTION_MESSAGES = {
   PO_LIMIT: 'A PO dump may hold at most {max} line items.',
   MAPPING_NOT_FOUND: 'That vendor is not part of this ingestion session.',
   MAPPING_NO_PO_HISTORY:
-    'This supplier has no purchase order history inside the selected period, so it cannot be categorised automatically. It is flagged for self-mapping.',
+    'This supplier has no pre-purchase order history inside the selected period, so it cannot be categorised automatically. It is flagged for self-mapping.',
   CATEGORY_MASTER_EMPTY:
     'Your category master is empty, so there is nothing for the categoriser to choose from. Add categories to your organisation profile first.',
   MAJOR_CATEGORY_UNKNOWN: '"{category}" is not a major category in your organisation\'s category master.',

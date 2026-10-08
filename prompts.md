@@ -2382,3 +2382,19 @@ pull all the latest code and run locally
 https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/166
 check and pass all the coverages and testcase and change the code and again push in that pr only
 ```
+
+---
+
+**Timestamp**: 2026-10-08T16:44:54+05:30
+
+```text
+fix this issuses
+```
+
+---
+
+**Timestamp**: 2026-10-08T18:10:19+05:30
+
+```text
+raise the pr for this issuses
+```

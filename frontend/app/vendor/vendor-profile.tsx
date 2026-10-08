@@ -796,7 +796,7 @@ export default function VendorProfilePage() {
                   )}
                 </div>
                 <p className="text-[9.5px] text-slate-400">
-                  Extracted from historical buyer purchase orders &amp; master records (Larsen &amp; Toubro).
+                  Extracted from historical buyer pre-purchase orders &amp; master records (Larsen &amp; Toubro).
                 </p>
               </div>
 

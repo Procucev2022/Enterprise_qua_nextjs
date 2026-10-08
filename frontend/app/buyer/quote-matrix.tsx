@@ -174,7 +174,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
               className="btn btn-secondary btn-sm text-[11px] px-2.5 flex items-center gap-1.5"
             >
               <Search size={12} />
-              <span>Deep Dive Telemetry ({currentRFQ.followUpData.respondedCount}/{currentRFQ.followUpData.totalInvited} Responded) ↗</span>
+              <span>Vendor Follow-Up Details ({currentRFQ.followUpData.respondedCount}/{currentRFQ.followUpData.totalInvited} Responded) ↗</span>
             </button>
           </div>
         )}
@@ -424,7 +424,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                           onClick={() => handleSelectVendor(quote)}
                           className="btn btn-emerald btn-lg w-full font-bold shadow-md"
                         >
-                          <ShieldCheck size={16} /> [ APPROVE & GENERATE PO ]
+                          <ShieldCheck size={16} /> [ APPROVE & GENERATE PRE-PURCHASE ORDER ]
                         </button>
                       ) : (
                         <button
