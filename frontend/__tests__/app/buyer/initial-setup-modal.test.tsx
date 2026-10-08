@@ -156,8 +156,8 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     fireEvent.click(screen.getByText(/Proceed to File 2: PO Dump/i));
     expect(mockShowToast).toHaveBeenCalledWith('Vendor Master Required', expect.any(String), 'warning');
 
-    // Download CSV template
-    fireEvent.click(screen.getByText(/Download CSV Template/i));
+    // Download Excel template
+    fireEvent.click(screen.getByText(/Download Excel Template/i));
     expect(mockShowToast).toHaveBeenCalledWith('Template Downloaded', expect.any(String), 'success');
 
     // Upload a Vendor Master file

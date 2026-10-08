@@ -909,7 +909,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     if (!hasMappedCategories) {
       subject = `[Action Required] Set Up Categories: ${buyerCompany} added you to their Preferred Vendor Network`;
-      authInstructions = `You have been added by ${buyerContact} from ${buyerCompany} into their private preferred vendor network from their vendor master records. Because no past purchase orders were found in their historical dump, the buyer did not map any product categories for your company. Please log in with your Email ID as User Name and the First-Time Temporary Password provided below. For all subsequent logins, authentication is performed via a 4-digit OTP sent directly to your registered email inbox.`;
+      authInstructions = `You have been added by ${buyerContact} from ${buyerCompany} into their private preferred vendor network from their vendor master records. Because no past pre-purchase orders were found in their historical dump, the buyer did not map any product categories for your company. Please log in with your Email ID as User Name and the First-Time Temporary Password provided below. For all subsequent logins, authentication is performed via a 4-digit OTP sent directly to your registered email inbox.`;
       profileUpdateInstructions = `Please log in to complete your enterprise compliance profile (factory specs, GSTIN/PAN, plant location, capacity).`;
       categoryUpdateInstructions = `ATTENTION: The buyer didn't map any categories for you because no historical PO items were found in their purchase dump. Please log in and map your categories yourself across our 13 Major Categories and 280+ Minor Category taxonomy in order to receive enquiries and RFQ opportunities.`;
       unmappedSelfServiceMessage = `The buyer didn't map any categories for you, so please map yourself in order to receive enquiries.`;
@@ -920,7 +920,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       categoryUpdateInstructions = `The buyer (${buyerCompany}) analyzed their past purchase records and mapped your company to the following taxonomy:\n• 1st Set (Primary Major Category): ${assignedMajor}\n• 2nd Set (Minor Categories & Product Lines): ${assignedMinors.join(', ')}\nPlease log in to review, confirm, or expand your category specializations across our 280+ standard minor categories.`;
     } else {
       subject = `[Action Required] Welcome to Procucev: ${buyerCompany} has added you to their Preferred Vendor Network`;
-      authInstructions = `You have been added by ${buyerContact} from ${buyerCompany} into their private preferred vendor network based on their past purchase orders. Please log in with your Email ID as User Name and the First-Time Temporary Password provided below. For all subsequent logins, authentication is performed via a 4-digit OTP sent directly to your registered email inbox.`;
+      authInstructions = `You have been added by ${buyerContact} from ${buyerCompany} into their private preferred vendor network based on their past pre-purchase orders. Please log in with your Email ID as User Name and the First-Time Temporary Password provided below. For all subsequent logins, authentication is performed via a 4-digit OTP sent directly to your registered email inbox.`;
       profileUpdateInstructions = `Please log in and complete your enterprise profile, including plant location, turnover, machinery, and statutory tax credentials (GSTIN / PAN).`;
       categoryUpdateInstructions = `The buyer (${buyerCompany}) analyzed their purchase history and assigned your company to:\n• 1st Set (Primary Major Category): ${assignedMajor}\n• 2nd Set (Minor Categories & Product Lines): ${assignedMinors.join(', ')}\nPlease confirm these categories upon login so you receive incoming RFQ invitations matching your product lines.`;
     }
@@ -2034,7 +2034,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        showToast('PO Approval Failed', data.error || 'Could not approve the purchase order.', 'warning');
+        showToast('PO Approval Failed', data.error || 'Could not approve the pre-purchase order.', 'warning');
         return { success: false, error: data.error };
       }
 
@@ -2047,26 +2047,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       );
 
       addFeedItem(
-        `Purchase Order Generated: ${rfqNumber}`,
-        `Approved PO ${data.poNumber} generated for ${vendorName} totaling ${formatCurrency(amount)}. Dispatched to ERP & Vendor Portal.`,
+        `Pre-Purchase Order Generated: ${rfqNumber}`,
+        `Approved Pre-PO ${data.poNumber} generated for ${vendorName} totaling ${formatCurrency(amount)}. Dispatched to ERP & Vendor Portal.`,
         'approval',
         rfqNumber
       );
 
       addAuditLog(
-        `Approved PO Generation & Dispatched Contract for ${rfqNumber} to ${vendorName} (${formatCurrency(amount)})`,
+        `Approved Pre-Purchase Order (PO) Generation & Dispatched Contract for ${rfqNumber} to ${vendorName} (${formatCurrency(amount)})`,
         rfqNumber
       );
 
       showToast(
-        'Purchase Order Issued!',
-        `Official PO ${data.poNumber} generated and signed with a real SHA-256 digital stamp for ${vendorName}.`,
+        'Pre-Purchase Order Issued!',
+        `Official Pre-Purchase Order ${data.poNumber} generated and signed with a real SHA-256 digital stamp for ${vendorName}.`,
         'success'
       );
 
       return { success: true, poNumber: data.poNumber, issueDate: data.issueDate, shaSignature: data.shaSignature, lineItems: data.lineItems };
     } catch (err: any) {
-      showToast('PO Approval Failed', err?.message || 'Network error while approving the purchase order.', 'warning');
+      showToast('PO Approval Failed', err?.message || 'Network error while approving the pre-purchase order.', 'warning');
       return { success: false, error: err?.message };
     }
   };

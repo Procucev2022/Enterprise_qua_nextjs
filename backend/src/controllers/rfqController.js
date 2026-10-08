@@ -1070,14 +1070,14 @@ function approvePO(req, res, next) {
     // Awarding a PO is a buyer-side decision — a vendor has no business
     // approving their own (or anyone else's) award.
     if (!['buyer', 'category_manager', 'admin'].includes(req.user.role)) {
-      return res.status(403).json({ success: false, error: 'You do not have permission to approve a purchase order.' });
+      return res.status(403).json({ success: false, error: 'You do not have permission to approve a pre-purchase order.' });
     }
     const { vendorId, vendorName, totalAmount, approverNotes } = req.body;
     if (!vendorName || !totalAmount) {
       logger.warn(`Failed to approve PO for RFQ ${id}: Missing vendorName or totalAmount`, { id, body: req.body }, 'RFQ_CONTROLLER');
       return res.status(400).json({ success: false, error: 'vendorName and totalAmount are required.' });
     }
-    logger.info(`Approving Purchase Order for RFQ ${id}`, { id, vendorId, vendorName, totalAmount, approverNotes }, 'RFQ_CONTROLLER');
+    logger.info(`Approving Pre-Purchase Order for RFQ ${id}`, { id, vendorId, vendorName, totalAmount, approverNotes }, 'RFQ_CONTROLLER');
     const result = storeService.approvePurchaseOrder(id, vendorId, vendorName, totalAmount, approverNotes, req.user.email);
     if (!result) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });

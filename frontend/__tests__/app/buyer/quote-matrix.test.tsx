@@ -18,7 +18,7 @@ jest.mock('../../../app/components/Modals', () => ({
   RFQFollowUpDeepDiveModal: ({ isOpen, onClose }: any) =>
     isOpen ? (
       <div data-testid="deep-dive-modal">
-        <button onClick={onClose}>Close Deep Dive</button>
+        <button onClick={onClose}>Close Vendor Follow-Up Details</button>
       </div>
     ) : null,
 }));
@@ -147,7 +147,7 @@ describe('QuoteMatrix Component Tests', () => {
     render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
 
     // Preferred vendor PO action
-    const approveBtn = screen.getByText(/\[ APPROVE & GENERATE PO \]/i);
+    const approveBtn = screen.getByText(/\[ APPROVE & GENERATE PRE-PURCHASE ORDER \]/i);
     fireEvent.click(approveBtn);
 
     expect(screen.getByTestId('po-modal')).toBeInTheDocument();
@@ -172,12 +172,12 @@ describe('QuoteMatrix Component Tests', () => {
     });
 
     render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
-    const deepDiveBtn = screen.getByText(/Deep Dive Telemetry/i);
+    const deepDiveBtn = screen.getByText(/Vendor Follow-Up Details \(.*Responded\)/i);
     fireEvent.click(deepDiveBtn);
 
     expect(mockOpenRFQDeepDive).toHaveBeenCalledWith(mockRFQs[0]);
 
-    const closeDeepDiveBtn = screen.getByText(/Close Deep Dive/i);
+    const closeDeepDiveBtn = screen.getByText(/Close Vendor Follow-Up Details/i);
     fireEvent.click(closeDeepDiveBtn);
     expect(mockSetDeepDiveModalOpen).toHaveBeenCalledWith(false);
   });
