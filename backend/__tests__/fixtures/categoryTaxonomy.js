@@ -376,6 +376,7 @@ const CATEGORY_TAXONOMY_FIXTURE = [
   {
     "majorCategory": "Others – New Service",
     "minorCategories": [
+      "Consulting",
       "Appliances Services",
       "Calibration Services",
       "Corrosion Protection",

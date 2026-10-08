@@ -94,22 +94,6 @@ export function setCategoryTaxonomy(next: MajorMinorCategory[]): void {
     }
   });
 
-  // Ensure both 'Others – New Product' and 'Others – New Service' are always present in the options
-  if (transformed.length > 0) {
-    if (!transformed.some((g) => taxonomyKey(g.majorCategory) === 'others - new product')) {
-      transformed.push({
-        majorCategory: 'Others – New Product',
-        minorCategories: DEFAULT_MAJOR_MINORS['others - new product'],
-      });
-    }
-    if (!transformed.some((g) => taxonomyKey(g.majorCategory) === 'others - new service')) {
-      transformed.push({
-        majorCategory: 'Others – New Service',
-        minorCategories: DEFAULT_MAJOR_MINORS['others - new service'],
-      });
-    }
-  }
-
   groups = transformed;
   majorsByKey = new Map();
   minorsByMajorKey = new Map();

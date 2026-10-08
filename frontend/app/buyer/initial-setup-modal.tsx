@@ -1195,6 +1195,12 @@ export default function InitialSetupModal() {
               }}
             />
 
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
+                Step 2: Upload File 1 — Vendor Master
+              </h3>
+            </div>
+
             {/* Single-line Simplified Vendor Master Info & Download Banner */}
             <div className="p-3.5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-gradient-to-r from-indigo-50/70 via-purple-50/30 to-blue-50/70 dark:from-indigo-950/40 dark:via-purple-950/20 dark:to-blue-950/40 flex items-center justify-between gap-3 shadow-xs">
               <div className="flex items-center gap-2 min-w-0">
@@ -1209,7 +1215,7 @@ export default function InitialSetupModal() {
                   onClick={handleDownloadVendorMasterCsv}
                   className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
                 >
-                  <Download size={13} /> Download Vendor Master Template
+                  <Download size={13} /> Download CSV Template
                 </button>
                 {storedVendors.length > 0 && (
                   <button
@@ -1306,7 +1312,19 @@ export default function InitialSetupModal() {
                     ? 'Streaming and Processing Vendor Records in Background...'
                     : 'Click to browse or drag & drop Vendor Master (.xlsx, .csv, .xls)'}
                 </div>
-                <span className="text-[10px] text-slate-400">Supported formats: .xlsx, .csv, .xls (Max 10MB)</span>
+                <div className="mt-2 flex items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      vendorFileInputRef.current?.click();
+                    }}
+                    className="btn btn-primary btn-xs font-bold text-[10px] inline-flex items-center gap-1 shadow-xs"
+                  >
+                    <UploadCloud size={11} /> Browse File
+                  </button>
+                  <span className="text-[10px] text-slate-400">Supported formats: .xlsx, .csv, .xls (Max 10MB)</span>
+                </div>
               </div>
             )}
 
@@ -1614,6 +1632,17 @@ export default function InitialSetupModal() {
               }}
             />
 
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
+                  Step 3: Upload File 2 — Historical PO Purchase Dump
+                </h3>
+                <span className="badge badge-purple font-bold text-[10px]">
+                  {selectedPeriod === '1_year' ? '1 Year' : selectedPeriod === '2_years' ? '2 Years' : '3 Years'}
+                </span>
+              </div>
+            </div>
+
             {/* Single-line Simplified PO Dump Info & Download Banner */}
             <div className="p-3.5 rounded-2xl border border-purple-200 dark:border-purple-900/60 bg-gradient-to-r from-purple-50/70 via-indigo-50/30 to-blue-50/70 dark:from-purple-950/40 dark:via-indigo-950/20 dark:to-blue-950/40 flex items-center justify-between gap-3 shadow-xs">
               <div className="flex items-center gap-2 min-w-0">
@@ -1628,7 +1657,7 @@ export default function InitialSetupModal() {
                   onClick={handleDownloadPoDataCsv}
                   className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
                 >
-                  <Download size={13} /> Download PO Dump Template
+                  <Download size={13} /> Download CSV Template
                 </button>
                 <button
                   type="button"
@@ -1720,7 +1749,19 @@ export default function InitialSetupModal() {
                     ? 'Streaming and Processing PO Dump Records in Background...'
                     : 'Click to browse or drag & drop PO Purchase Dump (.xlsx, .csv, .xls)'}
                 </div>
-                <span className="text-[10px] text-slate-400">Supported formats: .xlsx, .csv, .xls (Max 10MB)</span>
+                <div className="mt-2 flex items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      poFileInputRef.current?.click();
+                    }}
+                    className="btn btn-primary btn-xs font-bold text-[10px] inline-flex items-center gap-1 shadow-xs"
+                  >
+                    <UploadCloud size={11} /> Browse File
+                  </button>
+                  <span className="text-[10px] text-slate-400">Supported formats: .xlsx, .csv, .xls (Max 10MB)</span>
+                </div>
               </div>
             )}
 
