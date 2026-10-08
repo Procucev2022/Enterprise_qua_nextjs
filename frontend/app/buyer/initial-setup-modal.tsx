@@ -1071,15 +1071,14 @@ export default function InitialSetupModal() {
           </div>
         </div>
 
-        {/* Informative Why This is Required Box */}
-        <div className="p-4 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 text-xs text-indigo-950 dark:text-indigo-200 space-y-2">
-          <div className="font-bold text-indigo-900 dark:text-indigo-300 flex items-center gap-2">
-            <Sparkles size={16} className="text-indigo-600 shrink-0" />
-            <span>Dual-Stream ERP Ingestion Architecture</span>
+        {/* Informative Why This is Required Box - Simplified to 1 Line */}
+        <div className="px-4 py-2.5 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 text-xs text-indigo-950 dark:text-indigo-200 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 truncate">
+            <Sparkles size={15} className="text-indigo-600 shrink-0" />
+            <span className="text-[11px] truncate">
+              <strong>Dual-Stream Ingestion:</strong> Upload File 1 (Vendor Master), then File 2 (Historical PO Dump) for automated AI category cross-mapping.
+            </span>
           </div>
-          <p className="text-[11px] leading-relaxed text-slate-700 dark:text-gray-300">
-            Because combined data is rarely available in enterprise systems, you can upload <strong>File 1 (Vendor Master Coordinates)</strong> first, followed by <strong>File 2 (Historical PO Spend Dump)</strong>. The system saves the vendor master, extracts purchased items from POs, and maps categories against each vendor profile. If a vendor is in the master but has no PO history, they receive an email notifying them to <strong>self-map their categories upon login</strong> in order to receive enquiries.
-          </p>
         </div>
 
         {/* Step Progress Indicators */}
@@ -1200,26 +1199,21 @@ export default function InitialSetupModal() {
               }}
             />
 
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
-                    Step 2: Upload File 1 — Vendor Master Database
-                  </h3>
-                  <span className="badge badge-indigo font-bold text-[10px]">Stored First</span>
-                </div>
-                <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                  Contains: Vendor Code, Company Name, Contact Person, Email, Phone, Address, GSTIN, and Optional Rating (0-100).
-                </p>
+            {/* Single-line Simplified Vendor Master Info & Download Banner */}
+            <div className="p-3.5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-gradient-to-r from-indigo-50/70 via-purple-50/30 to-blue-50/70 dark:from-indigo-950/40 dark:via-purple-950/20 dark:to-blue-950/40 flex items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="badge badge-indigo font-bold text-[10px] shrink-0">Required Columns</span>
+                <span className="text-xs text-slate-700 dark:text-gray-300 font-medium truncate">
+                  Vendor Code, Company Name, Contact Person, Mobile, Email, GSTIN &amp; Location
+                </span>
               </div>
-
-              <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={handleDownloadVendorMasterCsv}
-                  className="btn btn-secondary btn-xs font-bold text-[11px] flex items-center gap-1 shrink-0"
+                  className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
                 >
-                  <Download size={12} /> Download CSV Template
+                  <Download size={13} /> Download Vendor Master Template
                 </button>
                 {storedVendors.length > 0 && (
                   <button
@@ -1308,30 +1302,15 @@ export default function InitialSetupModal() {
                     : 'border-indigo-300 dark:border-indigo-500/50 hover:border-indigo-600 bg-indigo-50/40 dark:bg-indigo-950/20 hover:bg-indigo-50/80'
                 }`}
               >
-                <div className="w-12 h-12 rounded-2xl bg-indigo-100 dark:bg-indigo-600/20 flex items-center justify-center mx-auto text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
-                  <UploadCloud size={24} />
+                <div className="w-10 h-10 rounded-xl bg-indigo-100 dark:bg-indigo-600/20 flex items-center justify-center mx-auto text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
+                  <UploadCloud size={20} />
                 </div>
-                <h4 className="text-sm font-black text-slate-800 dark:text-white mt-2">
+                <div className="text-xs font-bold text-slate-800 dark:text-white mt-2">
                   {isParsingVendor || vendorJob?.status === 'PROCESSING'
                     ? 'Streaming and Processing Vendor Records in Background...'
-                    : `Click to Browse or Drag & Drop Vendor Master (.xlsx, .csv, .xls)`}
-                </h4>
-                <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-1 max-w-md mx-auto">
-                  Upload your ERP vendor master sheet containing vendor codes, company names, contact details, GSTIN, and ratings.
-                </p>
-
-                <div className="mt-3 flex items-center justify-center gap-2">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      vendorFileInputRef.current?.click();
-                    }}
-                    className="btn btn-primary btn-xs font-bold text-[11px] flex items-center gap-1 shadow-sm"
-                  >
-                    <UploadCloud size={12} /> Browse File
-                  </button>
+                    : 'Click to browse or drag & drop Vendor Master (.xlsx, .csv, .xls)'}
                 </div>
+                <span className="text-[10px] text-slate-400">Supported formats: .xlsx, .csv, .xls (Max 10MB)</span>
               </div>
             )}
 
@@ -1638,28 +1617,21 @@ export default function InitialSetupModal() {
               }}
             />
 
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
-                    Step 3: Upload File 2 — Historical PO Purchase Dump
-                  </h3>
-                  <span className="badge badge-purple font-bold text-[10px]">
-                    {selectedPeriod === '1_year' ? '1 Year' : selectedPeriod === '2_years' ? '2 Years' : '3 Years'}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                  Contains: PO Number, PO Date, Vendor Name / Code, Line Item Description, Quantity, Spend, Department.
-                </p>
+            {/* Single-line Simplified PO Dump Info & Download Banner */}
+            <div className="p-3.5 rounded-2xl border border-purple-200 dark:border-purple-900/60 bg-gradient-to-r from-purple-50/70 via-indigo-50/30 to-blue-50/70 dark:from-purple-950/40 dark:via-indigo-950/20 dark:to-blue-950/40 flex items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="badge badge-purple font-bold text-[10px] shrink-0">Required Columns</span>
+                <span className="text-xs text-slate-700 dark:text-gray-300 font-medium truncate">
+                  PO Number, PO Date, Vendor Name, Item Description, Quantity, Spend &amp; Department
+                </span>
               </div>
-
-              <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={handleDownloadPoDataCsv}
-                  className="btn btn-secondary btn-xs font-bold text-[11px] flex items-center gap-1 shrink-0"
+                  className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
                 >
-                  <Download size={12} /> Download CSV Template
+                  <Download size={13} /> Download PO Dump Template
                 </button>
                 <button
                   type="button"
@@ -1743,30 +1715,15 @@ export default function InitialSetupModal() {
                     : 'border-purple-300 dark:border-purple-500/50 hover:border-purple-600 bg-purple-50/40 dark:bg-purple-950/20 hover:bg-purple-50/80'
                 }`}
               >
-                <div className="w-12 h-12 rounded-2xl bg-purple-100 dark:bg-purple-600/20 flex items-center justify-center mx-auto text-purple-600 dark:text-purple-400 group-hover:scale-110 transition-transform">
-                  <FileSpreadsheet size={24} />
+                <div className="w-10 h-10 rounded-xl bg-purple-100 dark:bg-purple-600/20 flex items-center justify-center mx-auto text-purple-600 dark:text-purple-400 group-hover:scale-110 transition-transform">
+                  <FileSpreadsheet size={20} />
                 </div>
-                <h4 className="text-sm font-black text-slate-800 dark:text-white mt-2">
+                <div className="text-xs font-bold text-slate-800 dark:text-white mt-2">
                   {isParsingPo || poJob?.status === 'PROCESSING'
                     ? 'Streaming and Processing PO Dump Records in Background...'
-                    : `Click to Browse or Drag & Drop PO Purchase Dump (.xlsx, .csv, .xls)`}
-                </h4>
-                <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-1 max-w-md mx-auto">
-                  Upload your historical purchase orders to automatically extract purchased items and map vendor categories.
-                </p>
-
-                <div className="mt-3 flex items-center justify-center gap-2">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      poFileInputRef.current?.click();
-                    }}
-                    className="btn btn-primary btn-xs font-bold text-[11px] flex items-center gap-1 shadow-sm"
-                  >
-                    <UploadCloud size={12} /> Browse File
-                  </button>
+                    : 'Click to browse or drag & drop PO Purchase Dump (.xlsx, .csv, .xls)'}
                 </div>
+                <span className="text-[10px] text-slate-400">Supported formats: .xlsx, .csv, .xls (Max 10MB)</span>
               </div>
             )}
 
