@@ -41,7 +41,7 @@ import {
   Search,
   ExternalLink,
 } from 'lucide-react';
-import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
+import { getMajorCategories, getMinorCategories, autoCategorizeItem } from '@/lib/categoryTaxonomy';
 import { CURRENCY, SOURCING_MODES, entitledSourcingModes, RFQ_DOCUMENT_LIMITS } from '@/lib/constants';
 import { createRFQ, extractLineItemsFromDocument, fetchAllVendors, uploadRFQAttachment, requestVendorCategoryUpdateEmail } from '@/lib/rfqClient';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
@@ -246,8 +246,55 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
   const lineItemErrors = submitAttempted ? validation.lineItemErrors : {};
 
   const patchForm = useCallback(<K extends keyof ManualRFQForm>(key: K, value: ManualRFQForm[K]) => {
-    setForm((prev) => ({ ...prev, [key]: value }));
+    setForm((prev) => {
+      const next = { ...prev, [key]: value };
+      if (key === 'title' && typeof value === 'string' && value.trim().length >= 3) {
+        const auto = autoCategorizeItem(value);
+        if (auto.majorCategory) {
+          if (!next.majorCategory) next.majorCategory = auto.majorCategory;
+          if (next.lineItems.length > 0 && !next.lineItems[0].majorCategory) {
+            next.lineItems = [
+              {
+                ...next.lineItems[0],
+                majorCategory: auto.majorCategory,
+                minorCategory: auto.minorCategory,
+              },
+              ...next.lineItems.slice(1),
+            ];
+          }
+        }
+      }
+      return next;
+    });
   }, []);
+
+  const [isCategorizing, setIsCategorizing] = useState(false);
+
+  const handleAutoCategorizeAll = () => {
+    setIsCategorizing(true);
+    try {
+      let detectedMajor = '';
+      const updatedLineItems = form.lineItems.map((item) => {
+        const auto = autoCategorizeItem(item.itemName, item.technicalSpecs || form.title);
+        const nextMajor = auto.majorCategory || item.majorCategory || 'Engineering Spares - Mechanical';
+        const nextMinor = auto.minorCategory || item.minorCategory || 'Pumps & Accessories';
+        if (auto.majorCategory && !detectedMajor) detectedMajor = auto.majorCategory;
+        return {
+          ...item,
+          majorCategory: nextMajor,
+          minorCategory: nextMinor,
+        };
+      });
+
+      setForm((prev) => ({
+        ...prev,
+        majorCategory: detectedMajor || prev.majorCategory || 'Engineering Spares - Mechanical',
+        lineItems: updatedLineItems,
+      }));
+    } finally {
+      setIsCategorizing(false);
+    }
+  };
 
   useEffect(() => {
     const raw = form.deliveryPincode.trim();
@@ -836,12 +883,24 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
               <h3 className="text-xs font-bold text-slate-900 dark:text-white">
                 {formatString(MODAL.lineItemsHeading, { count: form.lineItems.length })}
               </h3>
-              <button
-                onClick={() => setForm(addManualRFQLineItem(form))}
-                className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5"
-              >
-                <Plus size={13} /> {MODAL.addItemAction}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleAutoCategorizeAll}
+                  disabled={isCategorizing || form.lineItems.length === 0}
+                  className="btn btn-secondary btn-sm text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800 flex items-center gap-1 font-semibold disabled:opacity-50"
+                  title="Auto-identify and assign major/minor categories for all items"
+                >
+                  {isCategorizing ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                  {isCategorizing ? 'Classifying...' : 'Auto-Categorize All (AI)'}
+                </button>
+                <button
+                  onClick={() => setForm(addManualRFQLineItem(form))}
+                  className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5"
+                >
+                  <Plus size={13} /> {MODAL.addItemAction}
+                </button>
+              </div>
             </div>
 
             <FieldError message={formErrors.lineItems} />

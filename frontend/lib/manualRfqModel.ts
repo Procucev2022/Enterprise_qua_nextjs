@@ -363,7 +363,7 @@ export function updateManualRFQLineItem(
       const next = { ...item, ...patch };
       if (patch.majorCategory !== undefined && patch.majorCategory !== item.majorCategory) {
         next.minorCategory = '';
-      } else if (!next.majorCategory && (patch.itemName !== undefined || patch.technicalSpecs !== undefined)) {
+      } else if (patch.itemName !== undefined || patch.technicalSpecs !== undefined) {
         const auto = autoCategorizeItem(next.itemName, next.technicalSpecs);
         if (auto.majorCategory) {
           next.majorCategory = auto.majorCategory;

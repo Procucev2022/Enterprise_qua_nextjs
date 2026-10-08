@@ -117,33 +117,150 @@ const KNOWN_KEYWORD_RULES: Array<{
   major: string;
   minor: string;
 }> = [
-  { keywords: ['pump', 'impeller', 'hydraulic'], major: 'Engineering Spares - Mechanical', minor: 'Pumps & Accessories' },
-  { keywords: ['valve', 'hose', 'flange', 'fitting', 'coupling'], major: 'Engineering Spares - Mechanical', minor: 'Hoses, Valves & Fittings' },
-  { keywords: ['pipe', 'piping', 'tubing'], major: 'Engineering Spares - Mechanical', minor: 'Pipes & Pipe Fittings' },
-  { keywords: ['filter', 'cartridge', 'strainer'], major: 'Engineering Spares - Mechanical', minor: 'Filters' },
-  { keywords: ['tool', 'tackle', 'wrench', 'spanner', 'drill', 'cutter'], major: 'Engineering Spares - Mechanical', minor: 'Tools & Tackles' },
-  { keywords: ['motor', 'rotor', 'stator', 'servo'], major: 'Engineering Spares - Electrical', minor: 'Motors' },
-  { keywords: ['cable', 'wire', 'wiring', 'conduit'], major: 'Engineering Spares - Electrical', minor: 'Cables' },
-  { keywords: ['panel', 'switchboard', 'distribution board', 'mcc panel', 'pcc panel'], major: 'Engineering Spares - Electrical', minor: 'Panels' },
-  { keywords: ['sensor', 'transducer', 'transmitter', 'detector'], major: 'Engineering Spares - Electrical', minor: 'Sensors' },
-  { keywords: ['mccb', 'breaker', 'switchgear', 'fuse', 'contactor'], major: 'Engineering Spares - Electrical', minor: 'Circuit Breakers' },
-  { keywords: ['transformer', 'inverter', 'rectifier', 'ups'], major: 'Engineering Spares - Electrical', minor: 'Transformers' },
-  { keywords: ['rebar', 'tmt', 'steel bar', 'reinforcement'], major: 'Civil Works', minor: 'TMT BARS' },
-  { keywords: ['peb', 'pre-engineered', 'shed', 'warehouse structure'], major: 'Civil Works', minor: 'PEB Structure' },
-  { keywords: ['cement', 'concrete', 'mortar', 'grout'], major: 'Civil Works', minor: 'Cement' },
-  { keywords: ['brick', 'block', 'aac block', 'masonry'], major: 'Civil Works', minor: 'Bricks & Blocks' },
-  { keywords: ['steel', 'plate', 'sheet', 'angle', 'channel', 'beam'], major: 'Raw Material', minor: 'Steels' },
-  { keywords: ['laptop', 'desktop', 'computer', 'server', 'monitor'], major: 'IT', minor: 'Laptop' },
-  { keywords: ['software', 'license', 'saas', 'cloud', 'antivirus'], major: 'IT', minor: 'Software' },
-  { keywords: ['freight', 'transport', 'logistics', 'shipping', 'cargo'], major: 'Logistics', minor: 'Road transport' },
-  { keywords: ['fire extinguisher', 'hydrant', 'sprinkler'], major: 'Occuptional Health and Safety', minor: 'Fire Extinguishers' },
-  { keywords: ['safety jacket', 'high vis', 'vest'], major: 'Occuptional Health and Safety', minor: 'Safety jackets' },
-  { keywords: ['safety shoe', 'boots', 'steel toe'], major: 'Occuptional Health and Safety', minor: 'Safety Shoes' },
-  { keywords: ['helmet', 'hard hat'], major: 'Occuptional Health and Safety', minor: 'Hemlets' },
-  { keywords: ['harness', 'fall arrest', 'safety belt'], major: 'Occuptional Health and Safety', minor: 'Harness' },
-  { keywords: ['glove', 'gloves', 'hand protection'], major: 'Occuptional Health and Safety', minor: 'Gloves' },
-  { keywords: ['storage rack', 'racking', 'pallet rack', 'shelving'], major: 'Others – New Product', minor: 'Storage Racks' },
-  { keywords: ['consulting', 'audit', 'training', 'installation service', 'maintenance service'], major: 'Others – New Service', minor: 'Consulting' },
+  {
+    keywords: [
+      'pump', 'pumps', 'impeller', 'hydraulic', 'hydraulics', 'bearing', 'bearings', 'gear', 'gears',
+      'compressor', 'boiler', 'turbine', 'conveyor', 'conveyors', 'cylinder', 'piston', 'shaft', 'spares',
+      'mechanical', 'coupling', 'couplings', 'clutch', 'pulley', 'pulleys', 'spring', 'springs', 'nozzle', 'nozzles'
+    ],
+    major: 'Engineering Spares - Mechanical',
+    minor: 'Pumps & Accessories',
+  },
+  {
+    keywords: ['valve', 'valves', 'hose', 'hoses', 'flange', 'flanges', 'fitting', 'fittings', 'gasket', 'gaskets', 'seal', 'seals', 'o-ring', 'o rings'],
+    major: 'Engineering Spares - Mechanical',
+    minor: 'Hoses, Valves & Fittings',
+  },
+  {
+    keywords: ['pipe', 'pipes', 'piping', 'tubing', 'tube', 'tubes', 'nipple', 'elbow', 'tee', 'reducer'],
+    major: 'Engineering Spares - Mechanical',
+    minor: 'Pipes & Pipe Fittings',
+  },
+  {
+    keywords: ['filter', 'filters', 'cartridge', 'strainer', 'strainers', 'filtration'],
+    major: 'Engineering Spares - Mechanical',
+    minor: 'Filters',
+  },
+  {
+    keywords: ['tool', 'tools', 'tackle', 'tackles', 'wrench', 'spanner', 'drill', 'cutter', 'fastener', 'fasteners', 'bolt', 'bolts', 'nut', 'nuts', 'screw', 'screws'],
+    major: 'Engineering Spares - Mechanical',
+    minor: 'Tools & Tackles',
+  },
+  {
+    keywords: ['motor', 'motors', 'rotor', 'stator', 'servo', 'vfd', 'drive', 'drives'],
+    major: 'Engineering Spares - Electrical',
+    minor: 'Motors',
+  },
+  {
+    keywords: ['cable', 'cables', 'wire', 'wires', 'wiring', 'conduit', 'conduits', 'harness', 'copper wire'],
+    major: 'Engineering Spares - Electrical',
+    minor: 'Cables',
+  },
+  {
+    keywords: ['panel', 'panels', 'switchboard', 'distribution board', 'mcc', 'pcc', 'db box', 'enclosure'],
+    major: 'Engineering Spares - Electrical',
+    minor: 'Panels',
+  },
+  {
+    keywords: ['sensor', 'sensors', 'transducer', 'transmitter', 'detector', 'gauge', 'meter', 'flowmeter', 'thermocouple', 'rtd', 'plc', 'scada'],
+    major: 'Engineering Spares - Electrical',
+    minor: 'Sensors',
+  },
+  {
+    keywords: ['mccb', 'mcb', 'acb', 'breaker', 'breakers', 'switchgear', 'fuse', 'fuses', 'contactor', 'contactors', 'relay', 'relays', 'switch', 'switches'],
+    major: 'Engineering Spares - Electrical',
+    minor: 'Circuit Breakers',
+  },
+  {
+    keywords: ['transformer', 'transformers', 'inverter', 'inverters', 'rectifier', 'ups', 'battery', 'batteries', 'generator', 'generators'],
+    major: 'Engineering Spares - Electrical',
+    minor: 'Transformers',
+  },
+  {
+    keywords: ['rebar', 'rebars', 'tmt', 'steel bar', 'reinforcement', 'tmt bar', 'tmt bars'],
+    major: 'Civil Works',
+    minor: 'TMT BARS',
+  },
+  {
+    keywords: ['peb', 'pre-engineered', 'shed', 'warehouse structure', 'steel structure', 'roofing sheet', 'purlin'],
+    major: 'Civil Works',
+    minor: 'PEB Structure',
+  },
+  {
+    keywords: ['cement', 'concrete', 'mortar', 'grout', 'r質', 'aggregate', 'sand'],
+    major: 'Civil Works',
+    minor: 'Cement',
+  },
+  {
+    keywords: ['brick', 'bricks', 'block', 'blocks', 'aac block', 'aac blocks', 'masonry', 'paver'],
+    major: 'Civil Works',
+    minor: 'Bricks & Blocks',
+  },
+  {
+    keywords: ['steel', 'steels', 'plate', 'plates', 'sheet', 'sheets', 'angle', 'channel', 'beam', 'beams', 'metal', 'alloy'],
+    major: 'Raw Material',
+    minor: 'Steels',
+  },
+  {
+    keywords: ['chemical', 'chemicals', 'acid', 'solvent', 'resin', 'oil', 'grease', 'lubricant', 'lubricants', 'paint', 'coating'],
+    major: 'Raw Material',
+    minor: 'Chemicals',
+  },
+  {
+    keywords: ['laptop', 'laptops', 'desktop', 'computer', 'computers', 'server', 'servers', 'monitor', 'monitors', 'keyboard', 'printer'],
+    major: 'IT',
+    minor: 'Laptop',
+  },
+  {
+    keywords: ['software', 'license', 'licenses', 'saas', 'cloud', 'antivirus', 'database', 'app'],
+    major: 'IT',
+    minor: 'Software',
+  },
+  {
+    keywords: ['freight', 'transport', 'logistics', 'shipping', 'cargo', 'courier', 'road transport', 'trucking'],
+    major: 'Logistics',
+    minor: 'Road transport',
+  },
+  {
+    keywords: ['fire extinguisher', 'extinguisher', 'extinguishers', 'hydrant', 'sprinkler', 'fire fighting'],
+    major: 'Occuptional Health and Safety',
+    minor: 'Fire Extinguishers',
+  },
+  {
+    keywords: ['safety jacket', 'safety jackets', 'high vis', 'vest', 'vests', 'reflective jacket'],
+    major: 'Occuptional Health and Safety',
+    minor: 'Safety jackets',
+  },
+  {
+    keywords: ['safety shoe', 'safety shoes', 'boots', 'steel toe', 'safety boot'],
+    major: 'Occuptional Health and Safety',
+    minor: 'Safety Shoes',
+  },
+  {
+    keywords: ['helmet', 'helmets', 'hard hat', 'hard hats', 'hemlet'],
+    major: 'Occuptional Health and Safety',
+    minor: 'Hemlets',
+  },
+  {
+    keywords: ['safety harness', 'fall arrest', 'safety belt', 'lanyard'],
+    major: 'Occuptional Health and Safety',
+    minor: 'Harness',
+  },
+  {
+    keywords: ['glove', 'gloves', 'hand protection', 'safety gloves', 'nitrile gloves', 'leather gloves', 'mask', 'goggle', 'goggles', 'ppe'],
+    major: 'Occuptional Health and Safety',
+    minor: 'Gloves',
+  },
+  {
+    keywords: ['storage rack', 'racking', 'pallet rack', 'shelving', 'slotted angle', 'mezzanine'],
+    major: 'Others – New Product',
+    minor: 'Storage Racks',
+  },
+  {
+    keywords: ['consulting', 'audit', 'training', 'installation service', 'maintenance service', 'service', 'repair', 'fabrication', 'commissioning', 'inspection', 'manpower', 'calibration'],
+    major: 'Others – New Service',
+    minor: 'Consulting',
+  },
 ];
 
 /**
@@ -159,9 +276,18 @@ export function autoCategorizeItem(
     return { majorCategory: '', minorCategory: '' };
   }
 
+  // Tokenize the combined text into words
+  const tokens = combined.split(/[\s,./\\;:\-_+()\[\]{}|*&^%$#@!~`]+/).filter((t) => t.length >= 2);
+
   // 1. Direct match against known procurement keyword patterns
   for (const rule of KNOWN_KEYWORD_RULES) {
-    if (rule.keywords.some((kw) => combined.includes(kw.toLowerCase()))) {
+    if (
+      rule.keywords.some(
+        (kw) =>
+          combined.includes(kw.toLowerCase()) ||
+          tokens.some((token) => token === kw.toLowerCase() || (kw.length >= 4 && token.startsWith(kw.toLowerCase())))
+      )
+    ) {
       return { majorCategory: rule.major, minorCategory: rule.minor };
     }
   }
@@ -171,23 +297,30 @@ export function autoCategorizeItem(
     const major = group.majorCategory;
     for (const minor of group.minorCategories || []) {
       const minorLower = minor.toLowerCase();
-      if (combined.includes(minorLower) || minorLower.includes(combined)) {
+      if (
+        combined.includes(minorLower) ||
+        tokens.some((token) => token.length >= 3 && minorLower.includes(token))
+      ) {
         return { majorCategory: major, minorCategory: minor };
       }
     }
     const majorLower = major.toLowerCase();
-    if (combined.includes(majorLower)) {
+    if (combined.includes(majorLower) || tokens.some((token) => token.length >= 4 && majorLower.includes(token))) {
       const defaultMinor = group.minorCategories?.[0] || '';
       return { majorCategory: major, minorCategory: defaultMinor };
     }
   }
 
   // 3. Fallback based on service vs product cues
-  if (/service|repair|maintenance|installation|consulting|commissioning|inspection/i.test(combined)) {
-    return { majorCategory: 'Others – New Service', minorCategory: 'Others' };
+  if (/service|repair|maintenance|installation|consulting|commissioning|inspection|testing|audit|civil work/i.test(combined)) {
+    return { majorCategory: 'Others – New Service', minorCategory: 'Consulting' };
   }
 
-  return { majorCategory: 'Others – New Product', minorCategory: 'Others' };
+  if (/product|material|equipment|supply|supplies|spares|item|hardware/i.test(combined)) {
+    return { majorCategory: 'Others – New Product', minorCategory: 'Others' };
+  }
+
+  return { majorCategory: '', minorCategory: '' };
 }
 
 /** Total minor categories across every major, for the summary counters. */
