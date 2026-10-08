@@ -503,34 +503,6 @@ class StoreService {
     });
   }
 
-  /**
-   * Identifies whether a vendor is a Procucev platform/network vendor vs buyer-uploaded.
-   */
-  isProcucevVendor(v) {
-    if (!v) return false;
-    const s = String(v.source || '').toLowerCase().trim();
-    const id = String(v.id || '').toLowerCase().trim();
-    const isBuyer =
-      s === 'buyer_uploaded' ||
-      s === 'vendor_master_ingestion' ||
-      s === 'historical_purchase_dump' ||
-      s === 'buyer_manual' ||
-      s === 'buyer_excel' ||
-      s === 'buyer' ||
-      s.includes('buyer') ||
-      s.includes('ingestion') ||
-      s.includes('purchase_dump') ||
-      Boolean(v.addedByBuyerCompany) ||
-      Boolean(v.buyerId) ||
-      Boolean(v.buyerAccountId) ||
-      id.startsWith('v-hist-') ||
-      id.startsWith('v-navin-') ||
-      id.startsWith('vm-') ||
-      id.startsWith('v-ingest-') ||
-      id.startsWith('v-buyer-');
-    return !isBuyer;
-  }
-
   getVendorById(id, scopedBuyerId = null) {
     const vendor = this.vendors.find((v) => v.id === id || v.email === id);
     if (!vendor) return undefined;
@@ -2146,35 +2118,33 @@ class StoreService {
 
   isBuyerUploaded(vendor) {
     if (!vendor) return false;
-    if (vendor.addedByBuyerCompany) return true;
-    if (vendor.buyerAccountId || vendor.buyerId) return true;
-    const src = String(vendor.source || '').toLowerCase();
-    if (
-      src === 'buyer_uploaded' ||
-      src === 'buyer_manual' ||
-      src === 'excel_upload' ||
-      src === 'po_ingestion' ||
-      src === 'client_uploaded'
-    ) {
-      return true;
-    }
-    return false;
+    if (vendor.addedByBuyerCompany || vendor.buyerAccountId || vendor.buyerId) return true;
+    const s = String(vendor.source || '').toLowerCase().trim();
+    const id = String(vendor.id || '').toLowerCase().trim();
+    return Boolean(
+      s === 'buyer_uploaded' ||
+      s === 'vendor_master_ingestion' ||
+      s === 'historical_purchase_dump' ||
+      s === 'buyer_manual' ||
+      s === 'buyer_excel' ||
+      s === 'excel_upload' ||
+      s === 'po_ingestion' ||
+      s === 'client_uploaded' ||
+      s === 'buyer' ||
+      s.includes('buyer') ||
+      s.includes('ingestion') ||
+      s.includes('purchase_dump') ||
+      id.startsWith('v-hist-') ||
+      id.startsWith('v-navin-') ||
+      id.startsWith('vm-') ||
+      id.startsWith('v-ingest-') ||
+      id.startsWith('v-buyer-')
+    );
   }
 
   isProcucevVendor(vendor) {
     if (!vendor) return false;
-    if (this.isBuyerUploaded(vendor)) return false;
-    const src = String(vendor.source || '').toLowerCase();
-    if (
-      src === 'procucev_network' ||
-      src === 'procucev_verified' ||
-      src === 'platform' ||
-      src === 'network' ||
-      src === 'marketplace'
-    ) {
-      return true;
-    }
-    return !vendor.addedByBuyerCompany && !vendor.buyerAccountId && !vendor.buyerId;
+    return !this.isBuyerUploaded(vendor);
   }
 
   /**
