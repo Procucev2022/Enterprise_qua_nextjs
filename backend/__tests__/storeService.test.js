@@ -1033,22 +1033,58 @@ describe('Store Service & Business Operations', () => {
       storeService.createRFQ({ title: 'On-category and rostered', category: 'Bearings' }, buyer);
       expect(storeService.getNotificationsFor('vendor', rostered.id)).toHaveLength(1);
     });
+
+    test('mode_0 (Version 0) RFQ assigns and is visible ONLY to Procucev platform vendors, excluding private buyer-uploaded vendors', () => {
+      const procucevVendor = storeService.addVendor({
+        name: 'Procucev Network Vendor',
+        email: 'procucev-net@ex.com',
+        majorCategory: 'Industrial Fasteners',
+        source: 'procucev_network',
+      });
+
+      const privateVendor = storeService.addVendor({
+        name: 'Private Buyer Vendor',
+        email: 'private-vendor@ex.com',
+        majorCategory: 'Industrial Fasteners',
+        addedByBuyerCompany: 'V0 Test Buyer Org',
+        source: 'buyer_uploaded',
+      });
+
+      const buyer = storeService.addBuyerAccount({
+        organizationName: 'V0 Test Buyer Org',
+        corporateEmail: 'v0-test-buyer@ex.com',
+        subscriptionPlan: 'free_trial',
+      });
+
+      const rfq = storeService.createRFQ({
+        title: 'V0 Fasteners Requisition',
+        category: 'Industrial Fasteners',
+        sourcingMode: 'mode_0',
+      }, buyer);
+
+      // Verify vendorCoversRFQ for mode_0
+      expect(storeService.vendorCoversRFQ(procucevVendor, rfq)).toBe(true);
+      expect(storeService.vendorCoversRFQ(privateVendor, rfq)).toBe(false);
+
+      // Verify assignedVendors contains only Procucev vendors
+      const assignedIds = (rfq.assignedVendors || []).map((v) => v.id);
+      expect(assignedIds).toContain(procucevVendor.id);
+      expect(assignedIds).not.toContain(privateVendor.id);
+    });
   });
 
   describe('inviteVendorsToRFQ (category manager invite flow)', () => {
     let inviteEmailSpy;
 
     beforeEach(() => {
+      storeService.reset();
+      storeService.aiFeed = [];
       inviteEmailSpy = jest
         .spyOn(mailerService, 'sendRfqInviteEmail')
         .mockResolvedValue({ sent: false, reason: 'test environment' });
       // getVendors() re-syncs from Neon whenever a pool is configured; guard
       // against any pool.pool state leaked from another test in this file.
       jest.spyOn(domainQueries, 'getVendorsFromDB').mockResolvedValue([]);
-    });
-
-    afterEach(() => {
-      jest.restoreAllMocks();
     });
 
     afterEach(() => {

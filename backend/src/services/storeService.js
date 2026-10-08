@@ -557,7 +557,7 @@ class StoreService {
       buyerAccountId: resolvedBuyerId,
       rating: vendorData.rating || 4.5,
       score: vendorData.score || 85.0,
-      source: vendorData.source || 'buyer_manual',
+      source: vendorData.source || (resolvedBuyerId || vendorData.addedByBuyerCompany ? 'buyer_manual' : 'procucev_network'),
       status: vendorData.status || 'PREFERRED ENTERPRISE SUPPLIER',
       evaluated: vendorData.evaluated !== undefined ? vendorData.evaluated : false,
       hasRecord: vendorData.hasRecord !== undefined ? vendorData.hasRecord : false,
@@ -1576,6 +1576,58 @@ class StoreService {
       }
     }
 
+    // Enterprise QUA – V0 (Free Starter Trial) Flow:
+    // When buyer raises RFQ from V0 (mode_0), RFQ is sent ONLY to Procucev vendors.
+    // Buyer-uploaded vendors are excluded from V0 RFQs.
+    if (newRFQ.sourcingMode === 'mode_0' || newRFQ.sourcingMode === 'v0') {
+      const MAX_V0_CATEGORY_INVITES = 100;
+      // Filter existing assignedVendors to strictly Procucev vendors
+      newRFQ.assignedVendors = (Array.isArray(newRFQ.assignedVendors) ? newRFQ.assignedVendors : []).filter((v) => {
+        const resolved = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
+        return this.isProcucevVendor(resolved);
+      });
+
+      // Auto-populate category-matched Procucev verified vendors
+      let procucevMatches = this.candidateVendorsForRFQ(newRFQ)
+        .filter((v) => this.isProcucevVendor(v))
+        .sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0));
+
+      if (newRFQ.deliveryPincode) {
+        const targetPincode = String(newRFQ.deliveryPincode).trim();
+        const pinMatches = procucevMatches.filter(
+          (v) => v.pincode && String(v.pincode).trim() === targetPincode
+        );
+        const pinNonMatches = procucevMatches.filter(
+          (v) => !(v.pincode && String(v.pincode).trim() === targetPincode)
+        );
+        procucevMatches = [...pinMatches, ...pinNonMatches].slice(0, MAX_V0_CATEGORY_INVITES);
+      } else {
+        procucevMatches = procucevMatches.slice(0, MAX_V0_CATEGORY_INVITES);
+      }
+
+      const existingKeys = new Set(
+        (newRFQ.assignedVendors || []).map((v) => (v.id || v.email || v.name || '').toLowerCase())
+      );
+      const additions = procucevMatches
+        .filter((v) => !existingKeys.has((v.id || v.email || v.name || '').toLowerCase()))
+        .map((v) => ({
+          id: v.id,
+          name: v.name,
+          email: v.email || null,
+          contactPerson: v.contactPerson || null,
+          phone: v.phone || null,
+          source: v.source || 'procucev_network',
+        }));
+
+      if (additions.length > 0) {
+        newRFQ.assignedVendors = [...newRFQ.assignedVendors, ...additions];
+      }
+      if (newRFQ.followUpData) {
+        newRFQ.followUpData.totalInvited = newRFQ.assignedVendors.length;
+        newRFQ.followUpData.vendors = newRFQ.assignedVendors;
+      }
+    }
+
     // Category-based network-wide vendor invite — Version 2 (mode_2, "Hybrid
     // Sourcing Pool: Private Roster + AI Routing") ONLY. Every vendor whose
     // major/minor category matches this RFQ is merged into assignedVendors,
@@ -2064,6 +2116,37 @@ class StoreService {
     return changed;
   }
 
+  isBuyerUploaded(vendor) {
+    if (!vendor) return false;
+    if (vendor.addedByBuyerCompany || vendor.buyerAccountId || vendor.buyerId) return true;
+    const s = String(vendor.source || '').toLowerCase().trim();
+    const id = String(vendor.id || '').toLowerCase().trim();
+    return Boolean(
+      s === 'buyer_uploaded' ||
+      s === 'vendor_master_ingestion' ||
+      s === 'historical_purchase_dump' ||
+      s === 'buyer_manual' ||
+      s === 'buyer_excel' ||
+      s === 'excel_upload' ||
+      s === 'po_ingestion' ||
+      s === 'client_uploaded' ||
+      s === 'buyer' ||
+      s.includes('buyer') ||
+      s.includes('ingestion') ||
+      s.includes('purchase_dump') ||
+      id.startsWith('v-hist-') ||
+      id.startsWith('v-navin-') ||
+      id.startsWith('vm-') ||
+      id.startsWith('v-ingest-') ||
+      id.startsWith('v-buyer-')
+    );
+  }
+
+  isProcucevVendor(vendor) {
+    if (!vendor) return false;
+    return !this.isBuyerUploaded(vendor);
+  }
+
   /**
    * Whether a vendor covers an RFQ's category.
    *
@@ -2116,6 +2199,18 @@ class StoreService {
    */
   vendorCoversRFQ(vendor, rfq) {
     if (!vendor || !rfq) return false;
+
+    // Enterprise QUA – V0 Flow: When RFQ is raised from V0 (mode_0), it reaches ONLY Procucev vendors.
+    if (rfq.sourcingMode === 'mode_0' || rfq.sourcingMode === 'v0') {
+      if (!this.isProcucevVendor(vendor)) {
+        return false;
+      }
+      const signals = this._rfqCategorySignals(rfq);
+      if (signals.length > 0 && signals.some((c) => this.vendorCoversCategory(vendor, c))) {
+        return true;
+      }
+      return this._isInvitedVendor(vendor, rfq);
+    }
 
     // Same-buyer-company match alone used to grant a private-roster vendor
     // blanket access to every RFQ that buyer ever creates, regardless of

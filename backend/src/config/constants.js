@@ -4,6 +4,15 @@
 
 const SOURCING_MODES = [
   {
+    id: 'mode_0',
+    code: 'Version 0',
+    name: 'Version 0: Free Starter Trial Plan (Procucev Network Only)',
+    shortLabel: 'Version 0',
+    description:
+      'Free Starter Trial mode. RFQs are strictly circulated only to verified Procucev network vendors without consuming free credits.',
+    badgeColor: 'border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10',
+  },
+  {
     id: 'mode_1',
     code: 'Version 1',
     name: 'Version 1: Client Roster Sourcing Plan',
@@ -35,12 +44,13 @@ const SOURCING_MODES = [
 const BUYER_SUBSCRIPTION_PLANS = [
   {
     id: 'free_trial',
-    name: 'Free Trial Starter',
+    name: 'Free Trial Starter (V0)',
     price: '$0',
-    billing: '5 Free RFQs included',
-    description: 'Explore all 3 sourcing modes (Mode 1, Mode 2 & Mode 3) with full multi-channel AI chasing.',
+    billing: '5 Free RFQ Credits included for V1/V2/V3 + Unlimited V0',
+    description: 'Create unlimited V0 RFQs sent to Procucev verified vendors (0 credits deducted), plus 5 free RFQ credits for V1, V2, or V3.',
     features: [
-      '5 Free RFQ dispatches across any operational mode',
+      'V0 Free Starter: Unlimited RFQs to Procucev network vendors (0 credits deducted)',
+      '5 Free RFQ credits to trial V1 (Client Roster), V2 (Hybrid), and V3 (AI Autonomous)',
       'Autonomous Voice, WhatsApp & SMS multi-channel follow-ups',
       'Interactive Quote Matrix & 1-click PO generation',
       'SHA-256 cryptographic audit transaction seals',
@@ -809,6 +819,13 @@ const CHASER_DELAYS = {
 // Approved Text      : RFQ Alert {#alp#}: You are invited to bid for {#alp#}. Submit quote : {#urg#} - Team Procucev.
 // Variables          : {#alp#}, {#alp#}, {#urg#} → rfqNumber, rfqTitle, bidUrl
 //
+// Buyer Quote Matrix Template:
+// Reference Number   : 11-44JHMUY9DRFC
+// Template Id / SMSGID: 1777179138668879258
+// Header             : PROCUC
+// Approved Text      : RFQ Update: 48-hour bidding window for {#alp#} is completed. Quotation matrix is ready with {#num#} quotes. Review now: {#urg#} - Team Procucev.
+// Variables          : {#alp#}, {#num#}, {#urg#} → rfqLabel, quotesCount, matrixLink
+//
 // OTP Template       : DLT ID 1102294821 (TRANSACTIONAL)
 const SMS_DLT_TEMPLATES = {
   RFQ_CHASER: {
@@ -829,6 +846,17 @@ const SMS_DLT_TEMPLATES = {
     TEMPLATE: 'OTP for registering your access to Get My quoTe (GMT): {#var#}. Valid for 5 mins. Do not share. - Team Procucev.',
     VARIABLES: ['otp'],
   },
+  BUYER_BIDS_UNLOCKED: {
+    NAME:     'Buyer_Quote_Matrix_Ready',
+    REFERENCE_NUMBER: '11-44JHMUY9DRFC',
+    SMSGID:   process.env.SMS_GATEWAY_BUYER_UNLOCKED_SMSGID || '1777179138668879258',
+    CATEGORY: 'SERVICE_IMPLICIT',
+    HEADER:   'PROCUC',
+    TEMPLATE: 'RFQ Update: 48-hour bidding window for {#alp#} is completed. Quotation matrix is ready with {#num#} quotes. Review now: {#urg#} - Team Procucev.',
+    VARIABLES: ['rfqLabel', 'quotesCount', 'matrixLink'],
+    VARIABLE_TYPES: ['alp', 'num', 'urg'],
+    URL_SHORTENING: false,
+  },
 };
 
 /**
@@ -838,6 +866,9 @@ const SMS_DLT_TEMPLATES = {
  * - version_3: mode_3 (Version 3: AI Autonomous Sourcing Plan)
  */
 const BUYER_SUBSCRIPTION_TO_SOURCING_MODE = {
+  version_0: 'mode_0',
+  mode_0: 'mode_0',
+  v0: 'mode_0',
   version_1: 'mode_1',
   version_2: 'mode_2',
   version_3: 'mode_3',
@@ -851,10 +882,10 @@ const BUYER_SUBSCRIPTION_TO_SOURCING_MODE = {
 
 /**
  * Resolves the RFQ version / sourcing mode based upon the subscription of the buyer.
- * Defaults to Version 2 ('mode_2') as specified in EMAIL_GATEWAY_CONFIG.INGESTED_SOURCING_MODE.
+ * Defaults to INGESTED_SOURCING_MODE ('mode_2') for free starter trial / unselected plan.
  *
  * @param {Object|string|null|undefined} buyerAccountOrPlan - Buyer account object or subscription plan string
- * @returns {string} Sourcing mode ('mode_1' | 'mode_2' | 'mode_3')
+ * @returns {string} Sourcing mode ('mode_0' | 'mode_1' | 'mode_2' | 'mode_3')
  */
 function resolveBuyerSourcingMode(buyerAccountOrPlan) {
   const plan =

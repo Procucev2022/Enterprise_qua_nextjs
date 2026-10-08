@@ -299,10 +299,12 @@ export const UI_STRINGS = {
     extractingAction: 'Reading…',
     removeAttachmentAria: 'Remove {fileName}',
 
-    quotaExhaustedTitle: 'Free RFQ Limit Reached (0 of 5 Remaining)',
+    quotaExhaustedTitle: 'Free RFQ Limit Reached for V1, V2 & V3 (0 of 5 Remaining)',
     quotaExhaustedMessage:
-      'You have consumed all 5 free RFQs. Please upgrade your plan to continue creating and dispatching RFQs across Version 1, Version 2, or Version 3.',
+      'You have consumed all 5 free credits for V1, V2, and V3. You can still create multiple free RFQs using V0 (Procucev Network Vendors) at 0 credits, or upgrade your plan.',
     upgradePlanAction: 'Upgrade Plan',
+    useV0Action: 'Switch to V0 (Free)',
+    v0FreeBadge: '⚡ Unlimited Free RFQs with V0',
 
     serverAllocatesNumber: 'The RFQ number is allocated when you save.',
     cancelAction: 'Cancel',
@@ -311,10 +313,12 @@ export const UI_STRINGS = {
   },
 
   rfqExtraction: {
-    quotaExhaustedTitle: 'Free RFQ Quota Exhausted (0 of 5 Remaining)',
+    quotaExhaustedTitle: 'Free RFQ Quota Exhausted for V1, V2 & V3 (0 of 5 Remaining)',
     quotaExhaustedMessage:
-      'You have used all 5 free RFQs shared across V1, V2, and V3. Please upgrade your plan to continue creating and dispatching new RFQs.',
+      'You have consumed all 5 free credits for V1, V2, and V3. You can still create multiple free RFQs using V0 (Procucev Network Vendors) at 0 credits, or upgrade your plan.',
     upgradePlanAction: 'Upgrade Plan',
+    useV0Action: 'Switch to V0 (Free)',
+    v0FreeBadge: '⚡ Unlimited Free RFQs with V0',
 
     // Step 1
     noFileTitle: 'No Document Selected',
