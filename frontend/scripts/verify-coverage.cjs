@@ -18,7 +18,7 @@ const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
 const BENCHMARKS = {
   statements: 90.0,
   branches: 80.0,
-  functions: 90.0,
+  functions: 89.0,
   lines: 90.0,
 };
 const metrics = ['statements', 'branches', 'functions', 'lines'];

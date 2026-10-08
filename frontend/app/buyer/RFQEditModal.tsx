@@ -19,8 +19,8 @@
 // ==============================================================================
 
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, CheckCircle2, Loader2, Paperclip, Plus, Save, Trash2, X } from 'lucide-react';
-import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
+import { AlertCircle, CheckCircle2, Loader2, Paperclip, Plus, Save, Sparkles, Trash2, X } from 'lucide-react';
+import { getMajorCategories, getMinorCategories, autoCategorizeItem, getDefaultMinorForMajor } from '@/lib/categoryTaxonomy';
 import { CURRENCY, RFQ_STATUSES, formatFileSize, formatIndianDateTime } from '@/lib/constants';
 import { PINCODE_PATTERN, isDummyPincode, validatePincode, PostOfficeDetail } from '@/lib/validationSchemas';
 import { uploadRFQAttachment } from '@/lib/rfqClient';
@@ -313,6 +313,7 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
   const [pincodeError, setPincodeError] = useState<string | null>(null);
   const [pincodeValidating, setPincodeValidating] = useState(false);
   const [pincodePostOffices, setPincodePostOffices] = useState<PostOfficeDetail[]>([]);
+  const [isCategorizing, setIsCategorizing] = useState(false);
   const pincodeDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
@@ -394,14 +395,61 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
   };
 
   const patchRow = (id: string, changes: Partial<RFQEditLineItem>) => {
-    setForm((prev) =>
-      prev
-        ? {
-            ...prev,
-            lineItems: prev.lineItems.map((row) => (row.id === id ? { ...row, ...changes } : row)),
+    setForm((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        lineItems: prev.lineItems.map((row) => {
+          if (row.id !== id) return row;
+          const nextRow = { ...row, ...changes };
+          if (changes.majorCategory !== undefined && changes.majorCategory !== row.majorCategory) {
+            if (changes.minorCategory !== undefined) {
+              nextRow.minorCategory = changes.minorCategory;
+            } else if (changes.majorCategory) {
+              nextRow.minorCategory = getDefaultMinorForMajor(changes.majorCategory);
+            } else {
+              nextRow.minorCategory = '';
+            }
+          } else if (changes.itemName !== undefined || changes.technicalSpecs !== undefined) {
+            const auto = autoCategorizeItem(nextRow.itemName, nextRow.technicalSpecs || prev.title);
+            if (auto.majorCategory && (!row.majorCategory || changes.itemName !== undefined)) {
+              nextRow.majorCategory = auto.majorCategory;
+              nextRow.minorCategory = auto.minorCategory || getDefaultMinorForMajor(auto.majorCategory);
+            } else if (nextRow.majorCategory && !nextRow.minorCategory) {
+              nextRow.minorCategory = getDefaultMinorForMajor(nextRow.majorCategory);
+            }
           }
-        : prev
-    );
+          return nextRow;
+        }),
+      };
+    });
+  };
+
+  const handleAutoCategorizeAll = () => {
+    if (!form) return;
+    setIsCategorizing(true);
+    try {
+      let detectedMajor = '';
+      const updatedLineItems = form.lineItems.map((item) => {
+        const auto = autoCategorizeItem(item.itemName, item.technicalSpecs || form.title);
+        const nextMajor = auto.majorCategory || item.majorCategory || form.category || 'Engineering Spares - Mechanical';
+        const nextMinor = auto.minorCategory || (nextMajor ? getDefaultMinorForMajor(nextMajor) : '') || 'Pumps & Accessories';
+        if (nextMajor && !detectedMajor) detectedMajor = nextMajor;
+        return {
+          ...item,
+          majorCategory: nextMajor,
+          minorCategory: nextMinor,
+        };
+      });
+
+      setForm((prev) => (prev ? {
+        ...prev,
+        category: detectedMajor || prev.category || 'Engineering Spares - Mechanical',
+        lineItems: updatedLineItems,
+      } : prev));
+    } finally {
+      setIsCategorizing(false);
+    }
   };
 
   const addRow = () => patch('lineItems', [...form.lineItems, emptyEditRow()]);
@@ -672,12 +720,24 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                   {form.lineItems.length}
                 </span>
               </h3>
-              <button
-                onClick={addRow}
-                className="btn btn-secondary btn-xs font-bold inline-flex items-center gap-1.5"
-              >
-                <Plus size={12} /> {EDIT.addItemAction}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleAutoCategorizeAll}
+                  disabled={isCategorizing || form.lineItems.length === 0}
+                  className="btn btn-secondary btn-xs text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800 flex items-center gap-1 font-semibold disabled:opacity-50"
+                  title="Auto-identify and assign major/minor categories for all items"
+                >
+                  {isCategorizing ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                  {isCategorizing ? 'Classifying...' : 'Auto-Categorize All (AI)'}
+                </button>
+                <button
+                  onClick={addRow}
+                  className="btn btn-secondary btn-xs font-bold inline-flex items-center gap-1.5"
+                >
+                  <Plus size={12} /> {EDIT.addItemAction}
+                </button>
+              </div>
             </div>
 
             <FieldError message={errors.lineItems} />

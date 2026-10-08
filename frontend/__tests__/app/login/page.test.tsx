@@ -153,7 +153,7 @@ describe('LoginPage', () => {
       expect(mockReplace).toHaveBeenCalledWith(ROLE_LANDING_ROUTE.buyer);
     });
 
-    it('routes an admin account to the admin workspace regardless of the selected role', async () => {
+    it('routes an admin account to the admin workspace automatically based on credentials', async () => {
       (authClient.loginWithPassword as jest.Mock).mockResolvedValue({
         success: true,
         user: { ...BUYER_SESSION, role: 'admin' },
@@ -161,7 +161,6 @@ describe('LoginPage', () => {
       });
 
       render(<LoginPage />);
-      // The visitor leaves "Buyer" selected, but the record says admin.
       typeInto(/Registered Email ID/i, 'admin@procucev.com');
       typeInto(/Registered Mobile Number/i, LOGIN_MOBILE);
       typeInto(/^Password$/i, 'secret123');
@@ -308,12 +307,11 @@ describe('LoginPage', () => {
       await waitFor(() => {
         expect(authClient.requestOtp).toHaveBeenCalledWith(
           BUYER_SESSION.email,
-          LOGIN_MOBILE,
-          'buyer'
+          LOGIN_MOBILE
         );
       });
 
-      typeInto(/Enter Email OTP Code/i, OTP_CODE);
+      typeInto(/Email Verification Code \(OTP\)/i, OTP_CODE);
       fireEvent.click(screen.getByRole('button', { name: /Verify & Sign In/i }));
 
       await waitFor(() => {
@@ -351,7 +349,7 @@ describe('LoginPage', () => {
           'warning'
         );
       });
-      expect(screen.queryByLabelText(/Enter Email OTP Code/i)).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/Email Verification Code \(OTP\)/i)).not.toBeInTheDocument();
     });
 
     it('reports an invalid code', async () => {
@@ -365,9 +363,9 @@ describe('LoginPage', () => {
       switchToOtp();
       fillOtpIdentity();
       fireEvent.click(screen.getByRole('button', { name: /Request Login OTP/i }));
-      await waitFor(() => expect(screen.getByLabelText(/Enter Email OTP Code/i)).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByLabelText(/Email Verification Code \(OTP\)/i)).toBeInTheDocument());
 
-      typeInto(/Enter Email OTP Code/i, '999999');
+      typeInto(/Email Verification Code \(OTP\)/i, '999999');
       fireEvent.click(screen.getByRole('button', { name: /Verify & Sign In/i }));
 
       await waitFor(() => {
@@ -387,9 +385,9 @@ describe('LoginPage', () => {
       switchToOtp();
       fillOtpIdentity();
       fireEvent.click(screen.getByRole('button', { name: /Request Login OTP/i }));
-      await waitFor(() => expect(screen.getByLabelText(/Enter Email OTP Code/i)).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByLabelText(/Email Verification Code \(OTP\)/i)).toBeInTheDocument());
 
-      typeInto(/Enter Email OTP Code/i, '1234');
+      typeInto(/Email Verification Code \(OTP\)/i, '1234');
       fireEvent.submit(
         screen.getByRole('button', { name: /Verify & Sign In/i }).closest('form') as HTMLFormElement
       );
@@ -435,7 +433,7 @@ describe('LoginPage', () => {
       switchToOtp();
       fillOtpIdentity();
       fireEvent.click(screen.getByRole('button', { name: /Request Login OTP/i }));
-      await waitFor(() => expect(screen.getByLabelText(/Enter Email OTP Code/i)).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByLabelText(/Email Verification Code \(OTP\)/i)).toBeInTheDocument());
 
       fireEvent.click(screen.getByRole('button', { name: /^Back$/i }));
 
@@ -446,7 +444,7 @@ describe('LoginPage', () => {
   describe('registration', () => {
 
     const completeDualOtp = (emailOtp = '123456', mobileOtp = '123456') => {
-      fireEvent.change(screen.getByLabelText(/Email OTP/i), { target: { value: emailOtp } });
+      fireEvent.change(screen.getByLabelText(/Email (Verification Code \(OTP\)|OTP)/i), { target: { value: emailOtp } });
       fireEvent.change(screen.getByLabelText(/Mobile OTP/i), { target: { value: mobileOtp } });
       fireEvent.click(screen.getByRole('button', { name: /Verify & Activate Account/i }));
     };
@@ -692,18 +690,13 @@ describe('LoginPage', () => {
   });
 
   describe('form controls', () => {
-    it('switches the selected role, resetting any pending OTP step', () => {
+    it('does not render manual role selection buttons on sign-in and auto-detects roles', () => {
       render(<LoginPage />);
 
-      fireEvent.click(screen.getByRole('button', { name: /Vendor Partner/i }));
-      // The vendor branch still offers both auth methods.
-      expect(screen.getByRole('button', { name: /Email OTP/i })).toBeInTheDocument();
-
-      fireEvent.click(screen.getByRole('button', { name: /Cat Manager/i }));
-      // Category managers sign in with a password only.
-      expect(screen.queryByRole('button', { name: /Email OTP/i })).not.toBeInTheDocument();
-
-      fireEvent.click(screen.getByRole('button', { name: /System Admin/i }));
+      expect(screen.queryByRole('button', { name: /^Buyer$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Cat Manager/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Vendor Partner/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /System Admin/i })).not.toBeInTheDocument();
       expect(screen.getByLabelText(/Registered Email ID/i)).toBeInTheDocument();
     });
 

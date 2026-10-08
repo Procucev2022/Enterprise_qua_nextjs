@@ -722,15 +722,27 @@ class StoreService {
 
     const existingEmails = new Set(this.vendors.map((v) => (v.email || '').toLowerCase()));
     const seenInBatch = new Set();
+    const seenVendorCodesInBatch = new Set();
     const results = [];
     const toInsert = [];
 
     rows.forEach((row, idx) => {
       const email = (row.email || '').toLowerCase();
-      // A row with no email can never collide on the vendors.email UNIQUE
-      // constraint (Postgres never treats two NULLs as equal), so it is
-      // never a duplicate — the checks below only apply to rows that
-      // actually carry an email.
+      const vendorCode = (row.vendorCode || '').trim().toLowerCase();
+
+      if (vendorCode) {
+        if (seenVendorCodesInBatch.has(vendorCode)) {
+          results.push({
+            rowNumber: row.rowNumber,
+            status: 'duplicate',
+            email: row.email,
+            reason: `Duplicate Vendor Code "${row.vendorCode}" within the uploaded file.`,
+          });
+          return;
+        }
+        seenVendorCodesInBatch.add(vendorCode);
+      }
+
       if (email) {
         if (existingEmails.has(email)) {
           results.push({ rowNumber: row.rowNumber, status: 'duplicate', email: row.email, reason: 'A vendor with this email already exists.' });
@@ -744,17 +756,8 @@ class StoreService {
       }
 
       const newVendor = {
-        // Date.now() alone collides constantly at chunk sizes in the
-        // hundreds/thousands — many rows in the same forEach pass land in the
-        // same millisecond, and a 4-char random suffix alone has a real
-        // chance of repeating across a 1000-row batch (birthday paradox: at
-        // n=1000 rows against ~1.68M possible suffixes, roughly a 1-in-4
-        // chance per chunk). A collision hit vendors_pkey and failed the
-        // WHOLE batched INSERT for every row in that chunk, not just the
-        // colliding one. `idx` (this row's position in the batch) is unique
-        // within a single call by construction, so it's included directly
-        // rather than relying on chance.
         id: `v-bulk-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+        vendorCode: row.vendorCode || '',
         name: row.name,
         contactPerson: row.contactPerson || '',
         phone: row.phone,

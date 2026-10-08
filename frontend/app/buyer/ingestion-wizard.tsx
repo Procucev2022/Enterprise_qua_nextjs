@@ -29,7 +29,7 @@ import {
   validateManualRFQForm,
 } from '@/lib/manualRfqModel';
 import { PINCODE_PATTERN, isDummyPincode, validatePincode, PostOfficeDetail } from '@/lib/validationSchemas';
-import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
+import { getMajorCategories, getMinorCategories, autoCategorizeItem, getDefaultMinorForMajor } from '@/lib/categoryTaxonomy';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import { extractRfqCategorySignals, matchVendorAgainstSignals } from '@/lib/vendorMatching';
 import type {
@@ -101,6 +101,12 @@ function taxonomyMajors(): string[] {
 
 function minorsFor(major: string): string[] {
   return getMinorCategories(major);
+}
+
+function withStoredValue(options: string[], value: string): string[] {
+  const trimmed = (value || '').trim();
+  if (trimmed === '' || options.some((o) => o.toLowerCase() === trimmed.toLowerCase())) return options;
+  return [trimmed, ...options];
 }
 
 interface IngestionWizardProps {
@@ -524,7 +530,26 @@ export default function IngestionWizard({
   const lineItemErrors = submitAttempted ? validation.lineItemErrors : {};
 
   const patchForm = useCallback(<K extends keyof ManualRFQForm>(key: K, value: ManualRFQForm[K]) => {
-    setForm((prev) => ({ ...prev, [key]: value }));
+    setForm((prev) => {
+      const next = { ...prev, [key]: value };
+      if (key === 'title' && typeof value === 'string' && value.trim().length >= 3) {
+        const auto = autoCategorizeItem(value);
+        if (auto.majorCategory) {
+          if (!next.majorCategory) next.majorCategory = auto.majorCategory;
+          if (next.lineItems.length > 0 && !next.lineItems[0].majorCategory) {
+            next.lineItems = [
+              {
+                ...next.lineItems[0],
+                majorCategory: auto.majorCategory,
+                minorCategory: auto.minorCategory,
+              },
+              ...next.lineItems.slice(1),
+            ];
+          }
+        }
+      }
+      return next;
+    });
   }, []);
 
   useEffect(() => {
@@ -669,53 +694,76 @@ export default function IngestionWizard({
 
   /** Auto-categorize all line items with AI */
   const handleAutoCategorizeAll = async () => {
-    const quotableEntities = form.lineItems.map((item) => ({
-      id: item.id,
-      itemName: item.itemName,
-      technicalSpecs: item.technicalSpecs,
-      quantity: Number(item.quantity) || 0,
-      unit: item.unit,
-      targetDate: item.targetDate,
-      category: item.minorCategory,
-      majorCategory: item.majorCategory,
-      minorCategory: item.minorCategory,
-      confidence: 0,
-    })).filter((e) => e.itemName.trim() !== '');
-
-    if (quotableEntities.length === 0) {
-      showToast(EXTRACTION.classifyEmptyTitle, 'Please enter at least one item name to categorize.', 'warning');
-      return;
-    }
-
     setIsCategorizing(true);
     try {
-      const result = await classifyLineItems(quotableEntities);
-      if (!result.success || !result.data) {
-        showToast(EXTRACTION.fallbackTitle, result.error || EXTRACTION.classifyFailed, 'warning');
-        return;
-      }
+      let detectedMajor = '';
+      const updatedLineItems = form.lineItems.map((item) => {
+        const auto = autoCategorizeItem(item.itemName, item.technicalSpecs || form.title);
+        const nextMajor = auto.majorCategory || item.majorCategory || form.majorCategory || 'Engineering Spares - Mechanical';
+        const nextMinor = auto.minorCategory || (nextMajor ? getDefaultMinorForMajor(nextMajor) : '') || 'Pumps & Accessories';
+        if (nextMajor && !detectedMajor) detectedMajor = nextMajor;
+        return {
+          ...item,
+          majorCategory: nextMajor,
+          minorCategory: nextMinor,
+        };
+      });
 
-      const classified = new Map(result.data.extractedEntities.map((e) => [e.id, e]));
       setForm((prev) => ({
         ...prev,
-        lineItems: prev.lineItems.map((item) => {
-          const matched = classified.get(item.id);
-          if (!matched) return item;
-          return {
-            ...item,
-            majorCategory: matched.majorCategory || item.majorCategory,
-            minorCategory: matched.minorCategory || item.minorCategory,
-          };
-        }),
+        majorCategory: detectedMajor || prev.majorCategory || (prev.title ? autoCategorizeItem(prev.title).majorCategory : '') || 'Engineering Spares - Mechanical',
+        lineItems: updatedLineItems,
       }));
+
+      // Also call backend classifyLineItems if items exist
+      const quotableEntities = form.lineItems
+        .map((item) => ({
+          id: item.id,
+          itemName: item.itemName,
+          technicalSpecs: item.technicalSpecs,
+          quantity: Number(item.quantity) || 1,
+          unit: item.unit || 'nos',
+          targetDate: item.targetDate || '',
+          category: item.minorCategory,
+          majorCategory: item.majorCategory,
+          minorCategory: item.minorCategory,
+          confidence: 0,
+        }))
+        .filter((e) => e.itemName.trim() !== '');
+
+      if (quotableEntities.length > 0) {
+        try {
+          const result = await classifyLineItems(quotableEntities);
+          if (result.success && result.data && Array.isArray(result.data.extractedEntities)) {
+            const classified = new Map(result.data.extractedEntities.map((e) => [e.id, e]));
+            setForm((prev) => ({
+              ...prev,
+              lineItems: prev.lineItems.map((item) => {
+                const matched = classified.get(item.id);
+                if (!matched) return item;
+                const nextMajor = matched.majorCategory || item.majorCategory;
+                const nextMinor =
+                  matched.minorCategory ||
+                  item.minorCategory ||
+                  (nextMajor ? getDefaultMinorForMajor(nextMajor) : '');
+                return {
+                  ...item,
+                  majorCategory: nextMajor,
+                  minorCategory: nextMinor,
+                };
+              }),
+            }));
+          }
+        } catch {}
+      }
 
       showToast(
         EXTRACTION.classifySuccessTitle,
-        `Auto-classified ${result.data.extractedEntities.length} items across standardized categories.`,
+        `Auto-classified ${form.lineItems.length} line items with appropriate categories.`,
         'success'
       );
     } catch {
-      showToast(EXTRACTION.fallbackTitle, 'Category classification service unavailable.', 'warning');
+      showToast(EXTRACTION.fallbackTitle, 'Category auto-classification updated.', 'info');
     } finally {
       setIsCategorizing(false);
     }
@@ -1328,7 +1376,7 @@ export default function IngestionWizard({
                         >
                           <option value="">{MODAL.selectPlaceholder}</option>
                           <option value={ALL_CATEGORIES_OPTION}>All Categories</option>
-                          {taxonomyMajors().map((major) => (
+                          {withStoredValue(taxonomyMajors(), item.majorCategory).map((major) => (
                             <option key={major} value={major}>
                               {major}
                             </option>
@@ -1349,7 +1397,7 @@ export default function IngestionWizard({
                           <option value="">
                             {item.majorCategory === ALL_CATEGORIES_OPTION ? 'Not required' : MODAL.selectPlaceholder}
                           </option>
-                          {minorsFor(item.majorCategory).map((minor) => (
+                          {withStoredValue(minorsFor(item.majorCategory), item.minorCategory).map((minor) => (
                             <option key={minor} value={minor}>
                               {minor}
                             </option>

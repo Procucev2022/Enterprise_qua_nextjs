@@ -801,4 +801,17 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     fetchSpy.mockRestore();
     consoleWarnSpy.mockRestore();
   });
+
+  it('downloads vendor master Excel template and PO dump CSV template', () => {
+    render(<InitialSetupModal />);
+    fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
+    const excelBtn = screen.getByText(/Download Excel Template/i);
+    fireEvent.click(excelBtn);
+    expect(excelBtn).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const csvBtn = screen.getByText(/Download CSV Template/i);
+    fireEvent.click(csvBtn);
+    expect(csvBtn).toBeInTheDocument();
+  });
 });

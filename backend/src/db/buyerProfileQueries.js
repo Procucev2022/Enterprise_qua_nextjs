@@ -471,9 +471,20 @@ async function findCategoryTaxonomy() {
 
   const byDivision = new Map();
   rows.forEach((row) => {
-    const major = text(row.division);
+    let major = text(row.division);
     const minor = text(row.category);
     if (major === '' || minor === '') return;
+
+    // Replace legacy single 'New Category' with 'Others – New Product' and 'Others – New Service'
+    const majorKey = major.trim().replace(/[–—]/g, '-').toLowerCase();
+    if (majorKey === 'new category-product' || majorKey === 'new category product' || majorKey === 'others - new product') {
+      major = 'Others – New Product';
+    } else if (majorKey === 'new category-service' || majorKey === 'new category service' || majorKey === 'others - new service') {
+      major = 'Others – New Service';
+    } else if (majorKey === 'new category') {
+      major = 'Others – New Product';
+    }
+
     if (!byDivision.has(major)) byDivision.set(major, []);
     const minors = byDivision.get(major);
     // The master contains near-duplicate rows differing only by case or spacing;
@@ -482,6 +493,21 @@ async function findCategoryTaxonomy() {
       minors.push(minor);
     }
   });
+
+  // Ensure 'Others – New Service' is also present if 'Others – New Product' is added
+  if (byDivision.has('Others – New Product') && !byDivision.has('Others – New Service')) {
+    byDivision.set('Others – New Service', [
+      'Consulting',
+      'Maintenance & AMC',
+      'Installation & Fabrication',
+      'Inspection & Testing',
+      'Calibration Services',
+      'Appliances Services',
+      'Drone Surveys',
+      'Warehousing',
+      'Waste Management',
+    ]);
+  }
 
   return Array.from(byDivision.entries()).map(([majorCategory, minorCategories]) => ({
     majorCategory,

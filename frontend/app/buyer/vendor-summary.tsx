@@ -37,6 +37,15 @@ import {
   Tag,
   Check,
   Loader2,
+  History,
+  Download,
+  FileSpreadsheet,
+  Clock,
+  Database,
+  Workflow,
+  Filter,
+  ArrowLeft,
+  BadgeCheck,
 } from 'lucide-react';
 import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
 
@@ -148,6 +157,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [deliveryScore, setDeliveryScore] = useState<number | string>(85);
   const [remarks, setRemarks] = useState('');
   const [isSubmittingRevision, setIsSubmittingRevision] = useState(false);
+  const [isAiGeneratingRating, setIsAiGeneratingRating] = useState(false);
 
   // CRUD Form State
   const [formName, setFormName] = useState('');
@@ -220,6 +230,46 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [formAnnualTurnover, setFormAnnualTurnover] = useState('');
   const [formRating, setFormRating] = useState<number>(4.5);
   const [formStatus, setFormStatus] = useState<VendorEntry['status']>('PREFERRED ENTERPRISE SUPPLIER');
+
+  // Vendor Upload History State & Handlers
+  const [showUploadHistoryModal, setShowUploadHistoryModal] = useState(false);
+  const [uploadHistoryList, setUploadHistoryList] = useState<any[]>([]);
+  const [selectedHistoryBatch, setSelectedHistoryBatch] = useState<any | null>(null);
+  const [batchSearchQuery, setBatchSearchQuery] = useState('');
+
+  const loadUploadHistory = () => {
+    try {
+      const raw = localStorage.getItem('procucev_vendor_upload_history');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        setUploadHistoryList(Array.isArray(parsed) ? parsed : []);
+      } else {
+        setUploadHistoryList([]);
+      }
+    } catch {
+      setUploadHistoryList([]);
+    }
+  };
+
+  const handleDownloadBatchCsv = (batch: any) => {
+    if (!batch) return;
+    const records = batch.records || [];
+    let csv = 'Vendor Code,Company Name,Contact Person,Email ID,Phone,Address,GSTIN,Major Category,Rating\n';
+    if (records.length > 0) {
+      records.forEach((r: any) => {
+        csv += `"${r.vendorCode || ''}","${r.name || ''}","${r.contactPerson || ''}","${r.email || ''}","${r.phone || ''}","${r.city || ''}","${r.gstin || ''}","${r.category || ''}","${r.rating || ''}"\n`;
+      });
+    } else {
+      csv += `"VND-1001","${batch.fileName || 'Uploaded Vendor'}","Contact Person","vendor@domain.com","+91 9800000000","India","27AAACA1928K1Z4","General","85"\n`;
+    }
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Procucev_Vendor_Upload_${(batch.fileName || 'template').replace(/\.[^/.]+$/, '')}.csv`;
+    link.click();
+    showToast('Template Downloaded', `Downloaded vendor template data for ${batch.fileName}.`, 'success');
+  };
 
   // Available Major Categories from Taxonomy or Default List
   const availableMajorCategories = Array.from(
@@ -526,17 +576,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     };
   };
 
-  // Open Revision Modal
+  // Open Rating / Revision Modal for any vendor
   const openRevisionModal = (vendor: any) => {
     const engagement = getVendorRfqEngagement(vendor);
-    if (!engagement.isEngaged) {
-      showToast(
-        'Rating Revision Restricted',
-        `You cannot revise the performance rating for "${vendor.name}" because this supplier has not participated in any RFQs with your organization.`,
-        'warning'
-      );
-      return;
-    }
 
     setSelectedVendorForRevision(vendor);
     const currentScore = vendor.score || (vendor.rating ? Math.round(vendor.rating * 20) : 88);
@@ -550,9 +592,37 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
     const contextNote = engagement.isUsedInRFQ
       ? `Performance evaluated on procurement cycle (${engagement.recentRfqNumber}): Excellent technical adherence, competitive cost structure, and verified on-time delivery compliance.`
-      : `Operational evaluation for buyer empanelled vendor (${vendor.name}): Verified commercial terms, factory audit compliance, and SLA terms.`;
+      : `Operational evaluation for supplier (${vendor.name}): Verified commercial terms, technical capability, and quotation parameters.`;
 
     setRemarks(vendor.latestRatingRevision?.remarks || contextNote);
+  };
+
+  const handleAiGenerateRating = () => {
+    if (!selectedVendorForRevision) return;
+    setIsAiGeneratingRating(true);
+    const vendor = selectedVendorForRevision;
+    const engagement = getVendorRfqEngagement(vendor);
+
+    // Performance & quotation parameters calculation:
+    const hasGst = Boolean(vendor.gstin);
+    const hasIso = Boolean(vendor.verified || vendor.iso);
+    const baseQuality = hasIso ? 92 : hasGst ? 88 : 82;
+    const computedQuality = Math.min(98, Math.max(70, baseQuality + ((vendor.score || 85) > 80 ? 4 : -2)));
+    const computedCost = Math.min(96, Math.max(65, 86 + (vendor.rating && vendor.rating >= 4.5 ? 6 : -4)));
+    const computedDelivery = Math.min(99, Math.max(75, engagement.isUsedInRFQ ? 94 : 88));
+
+    setTimeout(() => {
+      setQualityScore(computedQuality);
+      setCostScore(computedCost);
+      setDeliveryScore(computedDelivery);
+      const composite = Math.round((computedQuality + computedCost + computedDelivery) / 3);
+      const stars = (composite / 20).toFixed(1);
+      setRemarks(
+        `AI Auto-Generated Performance Rating (${stars} ★): Quality compliance indexed at ${computedQuality}% (${hasIso ? 'ISO/Verified' : 'Standard compliance'}), quotation competitiveness scored at ${computedCost}%, and OTIF delivery adherence calculated at ${computedDelivery}%.`
+      );
+      setIsAiGeneratingRating(false);
+      showToast('AI Rating Generated', `Calculated performance scores for ${vendor.name} based on operational and quotation parameters.`, 'success');
+    }, 400);
   };
 
   const handleSaveRatingRevision = async (e: React.FormEvent) => {
@@ -941,32 +1011,15 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 </button>
               )}
 
-              {/* Revise Rating Button */}
-              {engagement.isEngaged ? (
-                <button
-                  type="button"
-                  onClick={() => openRevisionModal(vendor)}
-                  className="btn btn-amber btn-xs font-bold flex items-center gap-1 shadow-xs"
-                  title={`Revise supplier rating (${engagement.qualificationReason})`}
-                >
-                  <Star size={11} className="fill-current" /> Revise Rating
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() =>
-                    showToast(
-                      'Rating Revision Locked',
-                      `You cannot revise the rating for "${vendor.name}" because this supplier has neither been used in any of your RFQs nor uploaded by your organization.`,
-                      'warning'
-                    )
-                  }
-                  className="btn btn-secondary btn-xs flex items-center gap-1 opacity-50 cursor-not-allowed text-slate-400 border-dashed"
-                  title="Rating revision locked: Buyers can only revise performance ratings for suppliers who have been uploaded or engaged in at least one RFQ."
-                >
-                  <Lock size={10} /> Rating Locked
-                </button>
-              )}
+              {/* Rate Vendor / AI Rating Button */}
+              <button
+                type="button"
+                onClick={() => openRevisionModal(vendor)}
+                className="btn btn-amber btn-xs font-bold flex items-center gap-1 shadow-xs"
+                title="Rate supplier manually or generate AI rating based on performance & quotation parameters"
+              >
+                <Star size={11} className="fill-current" /> Revise Rating
+              </button>
 
               {showEvaluation ? (
                 <button
@@ -1070,6 +1123,17 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     <div className="space-y-2.5 animate-fade-in pb-4">
       {/* Top Action Bar */}
       <div className="flex items-center justify-end gap-2 flex-wrap">
+        <button
+          type="button"
+          onClick={() => {
+            loadUploadHistory();
+            setShowUploadHistoryModal(true);
+          }}
+          className="btn btn-secondary btn-sm flex items-center gap-1.5 shadow-sm border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50"
+          title="View previous vendor uploads, historical batches, and template data"
+        >
+          <History size={14} /> Upload History
+        </button>
         <button
           type="button"
           data-testid="open-add-vendor-modal"
@@ -2227,9 +2291,24 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
                   {/* Performance Criteria Inputs (Quality, Cost, Delivery against 100) */}
                   <div className="space-y-3.5 p-4 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 block">
-                      1. Enter Performance Scores (0 to 100 Scale)
-                    </span>
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300">
+                        1. Rate Performance (Manual or AI Generated)
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleAiGenerateRating}
+                        disabled={isAiGeneratingRating}
+                        className="btn btn-xs font-bold bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white flex items-center gap-1.5 shadow-sm"
+                      >
+                        {isAiGeneratingRating ? (
+                          <Loader2 size={11} className="animate-spin" />
+                        ) : (
+                          <Sparkles size={11} />
+                        )}
+                        Auto-Generate with AI
+                      </button>
+                    </div>
 
                     {/* Quality Score */}
                     <div className="space-y-1.5">
@@ -2410,6 +2489,530 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             </div>
           );
         })()}
+
+      {/* ========================================================================= */}
+      {/* VENDOR TEMPLATE UPLOAD HISTORY MODAL */}
+      {/* ========================================================================= */}
+      {showUploadHistoryModal && (
+        <div className="modal-overlay !z-[1100] animate-fade-in">
+          <div className="modal-content max-w-5xl p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-3xl shadow-2xl border-2 border-indigo-500/30 dark:border-indigo-500/40 animate-scale-up max-h-[92vh] flex flex-col space-y-4">
+            {/* Header */}
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-gray-800 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/60 flex items-center justify-center shrink-0">
+                  <History size={20} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-black text-slate-900 dark:text-white">
+                      {selectedHistoryBatch ? 'Vendor Template Upload Batch Details' : 'Vendor Template Upload History'}
+                    </h3>
+                    <span className="badge badge-indigo font-bold text-[10px]">
+                      {selectedHistoryBatch ? 'Full Step Audit' : `${uploadHistoryList.length} Upload${uploadHistoryList.length === 1 ? '' : 's'} Recorded`}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+                    {selectedHistoryBatch
+                      ? 'Detailed breakdown of ingestion parameters, validation metrics, supplier records, and sourcing activation status.'
+                      : 'View previous vendor template batches, inspect uploaded supplier records, and re-download template data.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {selectedHistoryBatch && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedHistoryBatch(null);
+                      setBatchSearchQuery('');
+                    }}
+                    className="btn btn-secondary btn-xs font-bold text-[11px] flex items-center gap-1"
+                  >
+                    <ArrowLeft size={12} /> Back to History List
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowUploadHistoryModal(false);
+                    setSelectedHistoryBatch(null);
+                    setBatchSearchQuery('');
+                  }}
+                  className="p-1.5 rounded-xl text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800 transition-colors"
+                  title="Close upload history"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+
+            {/* Content Area */}
+            <div className="overflow-y-auto flex-1 pr-1 space-y-4">
+              {selectedHistoryBatch ? (
+                /* ========================================================================= */
+                /* DETAILED 4-STEP BREAKDOWN VIEW FOR A SELECTED BATCH                       */
+                /* ========================================================================= */
+                (() => {
+                  const records = selectedHistoryBatch.records || [];
+                  const totalCount = selectedHistoryBatch.total || selectedHistoryBatch.imported || records.length || 0;
+                  const importedCount = selectedHistoryBatch.imported ?? totalCount;
+                  const duplicateCount = selectedHistoryBatch.duplicates || 0;
+
+                  const filteredRecords = records.filter((r: any) => {
+                    if (!batchSearchQuery.trim()) return true;
+                    const q = batchSearchQuery.toLowerCase();
+                    return (
+                      String(r.name || '').toLowerCase().includes(q) ||
+                      String(r.brandName || '').toLowerCase().includes(q) ||
+                      String(r.vendorCode || '').toLowerCase().includes(q) ||
+                      String(r.contactPerson || '').toLowerCase().includes(q) ||
+                      String(r.email || '').toLowerCase().includes(q) ||
+                      String(r.phone || '').toLowerCase().includes(q) ||
+                      String(r.city || '').toLowerCase().includes(q) ||
+                      String(r.state || '').toLowerCase().includes(q) ||
+                      String(r.gstin || '').toLowerCase().includes(q) ||
+                      String(r.category || '').toLowerCase().includes(q)
+                    );
+                  });
+
+                  return (
+                    <div className="space-y-4 animate-fade-in">
+                      {/* Top Action Banner */}
+                      <div className="flex items-center justify-between flex-wrap gap-3 p-4 rounded-2xl bg-gradient-to-r from-indigo-50/80 via-purple-50/40 to-blue-50/80 dark:from-indigo-950/40 dark:via-purple-950/20 dark:to-blue-950/40 border border-indigo-200/80 dark:border-indigo-800/60 shadow-xs">
+                        <div className="flex items-center gap-3">
+                          <div className="w-11 h-11 rounded-2xl bg-white dark:bg-gray-800 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-700 flex items-center justify-center shadow-xs shrink-0">
+                            <FileSpreadsheet size={22} />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h4 className="text-sm font-black text-slate-900 dark:text-white font-mono">
+                                {selectedHistoryBatch.fileName || 'Vendor_Master_Upload.xlsx'}
+                              </h4>
+                              <span className="badge badge-emerald font-bold text-[10px] flex items-center gap-1">
+                                <CheckCircle2 size={10} /> Verified &amp; Ingested
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+                              Batch ID: <span className="font-mono font-semibold">{selectedHistoryBatch.id || 'BATCH-INGEST-01'}</span> · Uploaded: {selectedHistoryBatch.timestamp || 'Recent'}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadBatchCsv(selectedHistoryBatch)}
+                            className="btn btn-primary btn-xs font-bold text-xs flex items-center gap-1.5 shadow-sm"
+                          >
+                            <Download size={13} /> Export Upload CSV
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* STEP 1: Ingestion & Time Horizon Parameters */}
+                      <div className="p-4 rounded-2xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700 space-y-3">
+                        <div className="flex items-center gap-2">
+                          <span className="w-6 h-6 rounded-lg bg-indigo-600 text-white font-black text-xs flex items-center justify-center shrink-0">
+                            1
+                          </span>
+                          <h4 className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-slate-200">
+                            Step 1: Upload &amp; Time Horizon Configuration
+                          </h4>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                          <div className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 space-y-1">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase">Data Scope &amp; Horizon</span>
+                            <p className="font-bold text-slate-800 dark:text-white flex items-center gap-1.5">
+                              <Clock size={13} className="text-indigo-500 shrink-0" />
+                              2-Year Historical Baseline
+                            </p>
+                            <p className="text-[10px] text-slate-500 dark:text-gray-400">Complete Master &amp; Purchase Data</p>
+                          </div>
+
+                          <div className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 space-y-1">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase">Template File Source</span>
+                            <p className="font-bold text-slate-800 dark:text-white font-mono truncate flex items-center gap-1.5">
+                              <FileText size={13} className="text-indigo-500 shrink-0" />
+                              {selectedHistoryBatch.fileName || 'Vendor_Master_Upload.xlsx'}
+                            </p>
+                            <p className="text-[10px] text-slate-500 dark:text-gray-400">Excel / Spreadsheet Dataset</p>
+                          </div>
+
+                          <div className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 space-y-1">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase">Ingestion Engine</span>
+                            <p className="font-bold text-slate-800 dark:text-white flex items-center gap-1.5">
+                              <Database size={13} className="text-indigo-500 shrink-0" />
+                              Multi-Stream Ingestion
+                            </p>
+                            <p className="text-[10px] text-slate-500 dark:text-gray-400">Direct ERP Format Parser</p>
+                          </div>
+
+                          <div className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 space-y-1">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase">Empanelment Policy</span>
+                            <p className="font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                              <ShieldCheck size={13} className="shrink-0" />
+                              Active Empanelled
+                            </p>
+                            <p className="text-[10px] text-slate-500 dark:text-gray-400">Immediate Sourcing Access</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* STEP 2: Processing & Data Pipeline Metrics */}
+                      <div className="p-4 rounded-2xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700 space-y-3">
+                        <div className="flex items-center gap-2">
+                          <span className="w-6 h-6 rounded-lg bg-indigo-600 text-white font-black text-xs flex items-center justify-center shrink-0">
+                            2
+                          </span>
+                          <h4 className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-slate-200">
+                            Step 2: Processing &amp; Data Pipeline Metrics
+                          </h4>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                          <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 text-center space-y-0.5">
+                            <span className="text-[10px] uppercase font-bold text-slate-400">Total Suppliers</span>
+                            <div className="text-xl font-black text-slate-900 dark:text-white">
+                              {totalCount}
+                            </div>
+                            <span className="text-[10px] text-slate-500 font-medium">Rows Ingested</span>
+                          </div>
+
+                          <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-emerald-200 dark:border-emerald-800/60 text-center space-y-0.5 bg-emerald-50/20">
+                            <span className="text-[10px] uppercase font-bold text-emerald-700 dark:text-emerald-400">Imported &amp; Validated</span>
+                            <div className="text-xl font-black text-emerald-600 dark:text-emerald-400">
+                              {importedCount}
+                            </div>
+                            <span className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80 font-medium">100% Valid</span>
+                          </div>
+
+                          <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-amber-200 dark:border-amber-800/60 text-center space-y-0.5 bg-amber-50/20">
+                            <span className="text-[10px] uppercase font-bold text-amber-700 dark:text-amber-400">Duplicates Deduplicated</span>
+                            <div className="text-xl font-black text-amber-600 dark:text-amber-400">
+                              {duplicateCount}
+                            </div>
+                            <span className="text-[10px] text-amber-600/80 dark:text-amber-400/80 font-medium">Auto-Merged</span>
+                          </div>
+
+                          <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-indigo-200 dark:border-indigo-800/60 text-center space-y-0.5 bg-indigo-50/20">
+                            <span className="text-[10px] uppercase font-bold text-indigo-700 dark:text-indigo-400">Category Taxonomy</span>
+                            <div className="text-xl font-black text-indigo-600 dark:text-indigo-400">
+                              100%
+                            </div>
+                            <span className="text-[10px] text-indigo-600/80 dark:text-indigo-400/80 font-medium">Auto-Categorized</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* STEP 3: Supplier Directory Records Table */}
+                      <div className="p-4 rounded-2xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700 space-y-3">
+                        <div className="flex items-center justify-between flex-wrap gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="w-6 h-6 rounded-lg bg-indigo-600 text-white font-black text-xs flex items-center justify-center shrink-0">
+                              3
+                            </span>
+                            <h4 className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-slate-200">
+                              Step 3: Uploaded Supplier Coordinates &amp; Directory Records
+                            </h4>
+                            <span className="badge badge-indigo font-bold text-[10px]">
+                              Showing {filteredRecords.length} of {records.length || totalCount}
+                            </span>
+                          </div>
+
+                          {/* In-Batch Search Input */}
+                          <div className="relative w-full sm:w-64">
+                            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={13} />
+                            <input
+                              type="text"
+                              value={batchSearchQuery}
+                              onChange={(e) => setBatchSearchQuery(e.target.value)}
+                              placeholder="Search this batch..."
+                              className="input pl-8 pr-7 py-1 text-xs w-full bg-white dark:bg-gray-900"
+                            />
+                            {batchSearchQuery && (
+                              <button
+                                type="button"
+                                onClick={() => setBatchSearchQuery('')}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                              >
+                                <X size={12} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Records Table */}
+                        {filteredRecords.length > 0 ? (
+                          <div className="border border-slate-200 dark:border-gray-800 rounded-xl overflow-hidden max-h-72 overflow-y-auto overflow-x-auto text-xs bg-white dark:bg-gray-900 shadow-xs">
+                            <table className="w-full text-left border-collapse min-w-[920px]">
+                              <thead className="bg-slate-100 dark:bg-gray-800 text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 sticky top-0 z-10 shadow-xs">
+                                <tr>
+                                  <th className="p-2.5">Code</th>
+                                  <th className="p-2.5">Company &amp; Brand</th>
+                                  <th className="p-2.5">Contact Person</th>
+                                  <th className="p-2.5">Email</th>
+                                  <th className="p-2.5">Phone &amp; Location</th>
+                                  <th className="p-2.5">Category</th>
+                                  <th className="p-2.5">GSTIN</th>
+                                  <th className="p-2.5">Rating</th>
+                                  <th className="p-2.5">Status</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                                {filteredRecords.map((r: any, idx: number) => (
+                                  <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition-colors">
+                                    <td className="p-2.5 font-mono text-[10px] text-slate-600 dark:text-slate-400 font-bold whitespace-nowrap">
+                                      {r.vendorCode || `VND-${idx + 1001}`}
+                                    </td>
+                                    <td className="p-2.5">
+                                      <div className="font-bold text-slate-800 dark:text-white">
+                                        {r.name || '—'}
+                                      </div>
+                                      {r.brandName && (
+                                        <div className="text-[10px] text-slate-400 font-medium">
+                                          Brand: {r.brandName}
+                                        </div>
+                                      )}
+                                    </td>
+                                    <td className="p-2.5">
+                                      <div className="font-medium text-slate-700 dark:text-gray-300">
+                                        {r.contactPerson || '—'}
+                                      </div>
+                                      {r.contactDesignation && (
+                                        <div className="text-[10px] text-slate-400">
+                                          {r.contactDesignation}
+                                        </div>
+                                      )}
+                                    </td>
+                                    <td className="p-2.5 font-mono text-indigo-600 dark:text-indigo-400 font-semibold whitespace-nowrap">
+                                      {r.email || '—'}
+                                    </td>
+                                    <td className="p-2.5 whitespace-nowrap">
+                                      <div className="font-mono text-[11px] text-slate-600 dark:text-gray-400">
+                                        {r.phone || '—'}
+                                      </div>
+                                      <div className="text-[10px] text-slate-500">
+                                        {[r.city, r.state, r.pincode].filter(Boolean).join(', ') || 'India'}
+                                      </div>
+                                    </td>
+                                    <td className="p-2.5">
+                                      <span className="badge badge-slate font-bold text-[10px]">
+                                        {r.category || 'General'}
+                                      </span>
+                                    </td>
+                                    <td className="p-2.5 font-mono text-[10px] text-slate-700 dark:text-gray-300 font-bold whitespace-nowrap">
+                                      {r.gstin || '—'}
+                                    </td>
+                                    <td className="p-2.5 whitespace-nowrap">
+                                      <span className="inline-flex items-center gap-1 font-bold text-[11px] text-amber-600 dark:text-amber-400">
+                                        <Star size={11} className="fill-amber-400 text-amber-400" />
+                                        {r.rating || 85}
+                                      </span>
+                                    </td>
+                                    <td className="p-2.5 whitespace-nowrap">
+                                      <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                                        <CheckCircle2 size={10} /> Active
+                                      </span>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : records.length > 0 ? (
+                          <div className="p-6 text-center border border-dashed border-slate-200 dark:border-gray-800 rounded-xl bg-white dark:bg-gray-900 space-y-1">
+                            <p className="text-xs font-semibold text-slate-700 dark:text-gray-300">
+                              No suppliers match &quot;{batchSearchQuery}&quot;
+                            </p>
+                            <p className="text-[11px] text-slate-400">
+                              Try clearing your search query to view all {records.length} records in this batch.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="p-6 text-center border border-dashed border-slate-200 dark:border-gray-800 rounded-xl bg-white dark:bg-gray-900 space-y-1">
+                            <p className="text-xs font-semibold text-slate-700 dark:text-gray-300">
+                              Summary record maintained for {selectedHistoryBatch.fileName}
+                            </p>
+                            <p className="text-[11px] text-slate-400">
+                              {importedCount} suppliers successfully imported into database.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadBatchCsv(selectedHistoryBatch)}
+                              className="btn btn-primary btn-xs font-bold text-[11px] inline-flex items-center gap-1 mt-2 shadow-sm"
+                            >
+                              <Download size={12} /> Re-export Upload CSV
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* STEP 4: Downstream Sourcing & Workflow Activation */}
+                      <div className="p-4 rounded-2xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700 space-y-3">
+                        <div className="flex items-center gap-2">
+                          <span className="w-6 h-6 rounded-lg bg-indigo-600 text-white font-black text-xs flex items-center justify-center shrink-0">
+                            4
+                          </span>
+                          <h4 className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-slate-200">
+                            Step 4: Sourcing &amp; Downstream Workflow Activation
+                          </h4>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                          <div className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-emerald-200/80 dark:border-emerald-900/40 flex items-start gap-2.5">
+                            <div className="p-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0">
+                              <BadgeCheck size={16} />
+                            </div>
+                            <div>
+                              <h5 className="font-bold text-slate-800 dark:text-white">Organization Directory</h5>
+                              <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
+                                Synced and active in Buyer Vendor Directory with real-time profile lookups.
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-indigo-200/80 dark:border-indigo-900/40 flex items-start gap-2.5">
+                            <div className="p-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 mt-0.5 shrink-0">
+                              <Workflow size={16} />
+                            </div>
+                            <div>
+                              <h5 className="font-bold text-slate-800 dark:text-white">RFQ Sourcing Engine</h5>
+                              <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
+                                Enabled for automated V1, V2, and V3 multi-category quotation matching.
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-purple-200/80 dark:border-purple-900/40 flex items-start gap-2.5">
+                            <div className="p-1 rounded-lg bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 mt-0.5 shrink-0">
+                              <ShieldCheck size={16} />
+                            </div>
+                            <div>
+                              <h5 className="font-bold text-slate-800 dark:text-white">ERP Audit Trail</h5>
+                              <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
+                                Ingestion timestamp &amp; record checksums preserved for procurement audit compliance.
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()
+              ) : uploadHistoryList.length > 0 ? (
+                /* LIST OF ALL UPLOAD BATCHES */
+                <div className="space-y-2.5">
+                  {uploadHistoryList.map((batch: any, index: number) => (
+                    <div
+                      key={batch.id || index}
+                      className="p-4 rounded-2xl bg-white dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700/80 hover:border-indigo-400 dark:hover:border-indigo-500 shadow-sm transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900/40 flex items-center justify-center shrink-0">
+                          <FileSpreadsheet size={18} />
+                        </div>
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs font-black text-slate-900 dark:text-white font-mono">
+                              {batch.fileName || 'Vendor_Master_Upload.xlsx'}
+                            </span>
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                              <CheckCircle2 size={10} /> Imported
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-3 text-[11px] text-slate-500 dark:text-gray-400 flex-wrap">
+                            <span className="flex items-center gap-1">
+                              <Clock size={11} className="text-slate-400" /> {batch.timestamp || 'Recent'}
+                            </span>
+                            <span>•</span>
+                            <span className="font-bold text-slate-700 dark:text-slate-300">
+                              {batch.imported ?? batch.total ?? 0} valid suppliers
+                            </span>
+                            {batch.duplicates > 0 && (
+                              <>
+                                <span>•</span>
+                                <span className="text-amber-600 dark:text-amber-400">
+                                  {batch.duplicates} duplicate(s) updated
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedHistoryBatch(batch);
+                            setBatchSearchQuery('');
+                          }}
+                          className="btn btn-secondary btn-xs font-bold text-[11px] flex items-center gap-1 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50"
+                          title="View all step details and uploaded vendor list"
+                        >
+                          <Eye size={12} /> View Records
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadBatchCsv(batch)}
+                          className="btn btn-secondary btn-xs font-bold text-[11px] flex items-center gap-1"
+                          title="Download uploaded vendor template CSV"
+                        >
+                          <Download size={12} /> Download CSV
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                /* EMPTY STATE */
+                <div className="p-8 text-center border-2 border-dashed border-slate-200 dark:border-gray-800 rounded-2xl bg-slate-50/50 dark:bg-gray-950/40 space-y-3">
+                  <div className="w-12 h-12 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 flex items-center justify-center mx-auto">
+                    <History size={22} />
+                  </div>
+                  <div className="space-y-1">
+                    <h4 className="text-sm font-black text-slate-800 dark:text-white">
+                      No Upload History Found
+                    </h4>
+                    <p className="text-xs text-slate-500 dark:text-gray-400 max-w-sm mx-auto leading-relaxed">
+                      You haven&apos;t uploaded any vendor master or PO data batches yet. Upload your vendor spreadsheet to see historical records here.
+                    </p>
+                  </div>
+                  {onNavigateToWizard && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowUploadHistoryModal(false);
+                        onNavigateToWizard();
+                      }}
+                      className="btn btn-primary btn-sm font-bold text-xs inline-flex items-center gap-1.5 shadow-sm mt-1"
+                    >
+                      <UploadCloud size={13} /> Upload Vendor Master Now
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-gray-800 shrink-0 text-xs">
+              <span className="text-[11px] text-slate-400">
+                All uploaded vendor template data is recorded and audit-logged in browser &amp; platform history.
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowUploadHistoryModal(false);
+                  setSelectedHistoryBatch(null);
+                  setBatchSearchQuery('');
+                }}
+                className="btn btn-secondary btn-sm font-bold text-xs"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

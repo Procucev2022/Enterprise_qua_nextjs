@@ -490,8 +490,9 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     // the item text is what routes them.
     'fire extinguisher': { major: 'Occuptional Health and Safety', minor: 'Fire Extinguishers' },
     'safety jacket': { major: 'Occuptional Health and Safety', minor: 'Safety jackets' },
-    'safety shoe': { major: 'Occuptional Health and Safety', minor: 'Safety Shoes' },
-    'storage rack': { major: 'New Category-Product', minor: 'Storage Racks' },
+    'storage rack': { major: 'Others – New Product', minor: 'Storage Racks' },
+    consulting: { major: 'Others – New Service', minor: 'Consulting' },
+    calibration: { major: 'Others – New Service', minor: 'Calibration Services' },
     helmet: { major: 'Occuptional Health and Safety', minor: 'Hemlets' },
     harness: { major: 'Occuptional Health and Safety', minor: 'Harness' },
     glove: { major: 'Occuptional Health and Safety', minor: 'Gloves' },
