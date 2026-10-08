@@ -20,7 +20,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertCircle, CheckCircle2, Loader2, Paperclip, Plus, Save, Sparkles, Trash2, X } from 'lucide-react';
-import { getMajorCategories, getMinorCategories, autoCategorizeItem } from '@/lib/categoryTaxonomy';
+import { getMajorCategories, getMinorCategories, autoCategorizeItem, getDefaultMinorForMajor } from '@/lib/categoryTaxonomy';
 import { CURRENCY, RFQ_STATUSES, formatFileSize, formatIndianDateTime } from '@/lib/constants';
 import { PINCODE_PATTERN, isDummyPincode, validatePincode, PostOfficeDetail } from '@/lib/validationSchemas';
 import { uploadRFQAttachment } from '@/lib/rfqClient';
@@ -401,11 +401,19 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
         lineItems: prev.lineItems.map((row) => {
           if (row.id !== id) return row;
           const nextRow = { ...row, ...changes };
-          if (changes.itemName !== undefined || changes.technicalSpecs !== undefined) {
+          if (changes.majorCategory !== undefined && changes.majorCategory !== row.majorCategory) {
+            if (changes.majorCategory) {
+              nextRow.minorCategory = changes.minorCategory || getDefaultMinorForMajor(changes.majorCategory);
+            } else {
+              nextRow.minorCategory = '';
+            }
+          } else if (changes.itemName !== undefined || changes.technicalSpecs !== undefined) {
             const auto = autoCategorizeItem(nextRow.itemName, nextRow.technicalSpecs || prev.title);
             if (auto.majorCategory && (!row.majorCategory || changes.itemName !== undefined)) {
               nextRow.majorCategory = auto.majorCategory;
-              nextRow.minorCategory = auto.minorCategory;
+              nextRow.minorCategory = auto.minorCategory || getDefaultMinorForMajor(auto.majorCategory);
+            } else if (nextRow.majorCategory && !nextRow.minorCategory) {
+              nextRow.minorCategory = getDefaultMinorForMajor(nextRow.majorCategory);
             }
           }
           return nextRow;
@@ -422,9 +430,9 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
       let detectedMajor = '';
       const updatedLineItems = form.lineItems.map((item) => {
         const auto = autoCategorizeItem(item.itemName, item.technicalSpecs || form.title);
-        const nextMajor = auto.majorCategory || item.majorCategory || 'Engineering Spares - Mechanical';
-        const nextMinor = auto.minorCategory || item.minorCategory || 'Pumps & Accessories';
-        if (auto.majorCategory && !detectedMajor) detectedMajor = auto.majorCategory;
+        const nextMajor = auto.majorCategory || item.majorCategory || form.category || 'Engineering Spares - Mechanical';
+        const nextMinor = auto.minorCategory || (nextMajor ? getDefaultMinorForMajor(nextMajor) : '') || 'Pumps & Accessories';
+        if (nextMajor && !detectedMajor) detectedMajor = nextMajor;
         return {
           ...item,
           majorCategory: nextMajor,

@@ -25,6 +25,7 @@ import {
   hasMajorCategory,
   hasMinorCategory,
   autoCategorizeItem,
+  getDefaultMinorForMajor,
 } from './categoryTaxonomy';
 import { PINCODE_PATTERN, isDummyPincode } from './validationSchemas';
 import { UI_STRINGS, formatString } from './uiStrings';
@@ -362,12 +363,18 @@ export function updateManualRFQLineItem(
       if (item.id !== id) return item;
       const next = { ...item, ...patch };
       if (patch.majorCategory !== undefined && patch.majorCategory !== item.majorCategory) {
-        next.minorCategory = '';
+        if (patch.majorCategory) {
+          next.minorCategory = patch.minorCategory || getDefaultMinorForMajor(patch.majorCategory);
+        } else {
+          next.minorCategory = '';
+        }
       } else if (patch.itemName !== undefined || patch.technicalSpecs !== undefined) {
         const auto = autoCategorizeItem(next.itemName, next.technicalSpecs);
         if (auto.majorCategory) {
           next.majorCategory = auto.majorCategory;
-          next.minorCategory = auto.minorCategory;
+          next.minorCategory = auto.minorCategory || getDefaultMinorForMajor(auto.majorCategory);
+        } else if (next.majorCategory && !next.minorCategory) {
+          next.minorCategory = getDefaultMinorForMajor(next.majorCategory);
         }
       }
       return next;

@@ -41,7 +41,7 @@ import {
   Search,
   ExternalLink,
 } from 'lucide-react';
-import { getMajorCategories, getMinorCategories, autoCategorizeItem } from '@/lib/categoryTaxonomy';
+import { getMajorCategories, getMinorCategories, autoCategorizeItem, getDefaultMinorForMajor } from '@/lib/categoryTaxonomy';
 import { CURRENCY, SOURCING_MODES, entitledSourcingModes, RFQ_DOCUMENT_LIMITS } from '@/lib/constants';
 import { createRFQ, extractLineItemsFromDocument, fetchAllVendors, uploadRFQAttachment, requestVendorCategoryUpdateEmail } from '@/lib/rfqClient';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
@@ -276,9 +276,9 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
       let detectedMajor = '';
       const updatedLineItems = form.lineItems.map((item) => {
         const auto = autoCategorizeItem(item.itemName, item.technicalSpecs || form.title);
-        const nextMajor = auto.majorCategory || item.majorCategory || 'Engineering Spares - Mechanical';
-        const nextMinor = auto.minorCategory || item.minorCategory || 'Pumps & Accessories';
-        if (auto.majorCategory && !detectedMajor) detectedMajor = auto.majorCategory;
+        const nextMajor = auto.majorCategory || item.majorCategory || form.majorCategory || 'Engineering Spares - Mechanical';
+        const nextMinor = auto.minorCategory || (nextMajor ? getDefaultMinorForMajor(nextMajor) : '') || 'Pumps & Accessories';
+        if (nextMajor && !detectedMajor) detectedMajor = nextMajor;
         return {
           ...item,
           majorCategory: nextMajor,
@@ -288,7 +288,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
 
       setForm((prev) => ({
         ...prev,
-        majorCategory: detectedMajor || prev.majorCategory || 'Engineering Spares - Mechanical',
+        majorCategory: detectedMajor || prev.majorCategory || (prev.title ? autoCategorizeItem(prev.title).majorCategory : '') || 'Engineering Spares - Mechanical',
         lineItems: updatedLineItems,
       }));
     } finally {

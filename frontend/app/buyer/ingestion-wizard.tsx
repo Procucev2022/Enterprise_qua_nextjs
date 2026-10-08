@@ -29,7 +29,7 @@ import {
   validateManualRFQForm,
 } from '@/lib/manualRfqModel';
 import { PINCODE_PATTERN, isDummyPincode, validatePincode, PostOfficeDetail } from '@/lib/validationSchemas';
-import { getMajorCategories, getMinorCategories, autoCategorizeItem } from '@/lib/categoryTaxonomy';
+import { getMajorCategories, getMinorCategories, autoCategorizeItem, getDefaultMinorForMajor } from '@/lib/categoryTaxonomy';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import { extractRfqCategorySignals, matchVendorAgainstSignals } from '@/lib/vendorMatching';
 import type {
@@ -692,9 +692,9 @@ export default function IngestionWizard({
       let detectedMajor = '';
       const updatedLineItems = form.lineItems.map((item) => {
         const auto = autoCategorizeItem(item.itemName, item.technicalSpecs || form.title);
-        const nextMajor = auto.majorCategory || item.majorCategory || 'Engineering Spares - Mechanical';
-        const nextMinor = auto.minorCategory || item.minorCategory || 'Pumps & Accessories';
-        if (auto.majorCategory && !detectedMajor) detectedMajor = auto.majorCategory;
+        const nextMajor = auto.majorCategory || item.majorCategory || form.majorCategory || 'Engineering Spares - Mechanical';
+        const nextMinor = auto.minorCategory || (nextMajor ? getDefaultMinorForMajor(nextMajor) : '') || 'Pumps & Accessories';
+        if (nextMajor && !detectedMajor) detectedMajor = nextMajor;
         return {
           ...item,
           majorCategory: nextMajor,
@@ -1035,19 +1035,7 @@ export default function IngestionWizard({
                 <FileCheck size={14} className="text-emerald-600 dark:text-emerald-400" />
                 Uploaded Documents ({uploadedFiles.length})
               </span>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUploadedFiles([]);
-                    fileInputRef.current?.click();
-                  }}
-                  className="btn btn-secondary btn-xs font-semibold flex items-center gap-1"
-                >
-                  <Paperclip size={11} /> Choose Another File
-                </button>
-                <span className="text-[10px] text-slate-400 hidden sm:inline">Click &quot;Extract Line Items with AI&quot; to auto-fill form</span>
-              </div>
+              <span className="text-[10px] text-slate-400">Click &quot;Extract Line Items with AI&quot; to auto-fill form</span>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
               {uploadedFiles.map((file, idx) => (

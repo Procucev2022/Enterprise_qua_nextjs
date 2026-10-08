@@ -73,24 +73,108 @@ export function getMajorCategories(): string[] {
   return groups.map((group) => group.majorCategory);
 }
 
-/** Minor categories under a major, or an empty list when the major is unknown. */
+const DEFAULT_MAJOR_MINORS: Record<string, string[]> = {
+  'engineering spares - mechanical': [
+    'Pumps & Accessories',
+    'Hoses, Valves & Fittings',
+    'Pipes & Pipe Fittings',
+    'Filters',
+    'Tools & Tackles',
+    'Machinery Parts',
+    'Compressors & Accessories',
+    'Customised Parts',
+  ],
+  'engineering spares - electrical': [
+    'Motors',
+    'Cables',
+    'Panels',
+    'Transformers',
+    'Circuit Breakers',
+    'Lighting',
+    'Switchgear',
+    'Customised Parts',
+  ],
+  'civil works': [
+    'PEB Structure',
+    'TMT BARS',
+    'Roofing Sheets',
+    'Paints',
+    'Plumbing',
+    'Fabrication',
+    'Bricks & Blocks',
+  ],
+  'information technology (it) & software': [
+    'Cloud Infrastructure & Storage',
+    'Enterprise Software & Licenses',
+    'IT Hardware & Peripherals',
+    'IT Infrastructure',
+    'Cybersecurity Solutions',
+    'Data & Analytics Platforms',
+  ],
+  'occuptional health and safety': [
+    'Hemlets',
+    'Harness',
+    'Gloves',
+    'Safety Shoes',
+    'Eye Protection',
+    'Fire Safety',
+  ],
+  'logistics & transportation': [
+    'Freight Forwarding',
+    'Road Transportation',
+    'Warehousing & 3PL',
+    'Express Cargo & Courier',
+  ],
+  'chemicals & raw materials': [
+    'Industrial Chemicals',
+    'Solvents & Lubricants',
+    'Specialty Chemicals',
+    'Polymers & Resins',
+  ],
+  'others – new product': [
+    'Storage Racks',
+    'Packaging Material',
+    'General Consumables',
+    'Others',
+  ],
+  'others – new service': [
+    'Consulting',
+    'Maintenance & AMC',
+    'Installation & Fabrication',
+    'Inspection & Testing',
+  ],
+};
+
+/** Minor categories under a major, or standard default list when dynamic taxonomy is loading. */
 export function getMinorCategories(major: string): string[] {
   if (!major) return [];
   const key = taxonomyKey(major);
   const group = groups.find((g) => taxonomyKey(g.majorCategory) === key);
-  return group ? group.minorCategories || [] : [];
+  if (group && group.minorCategories && group.minorCategories.length > 0) {
+    return group.minorCategories;
+  }
+  return DEFAULT_MAJOR_MINORS[key] || [];
+}
+
+/** Get the first/default minor category for a given major category */
+export function getDefaultMinorForMajor(major: string): string {
+  if (!major) return '';
+  const minors = getMinorCategories(major);
+  return minors[0] || '';
 }
 
 /** Whether the master contains this major category. */
 export function hasMajorCategory(major: string): boolean {
-  return Boolean(major && majorsByKey.has(taxonomyKey(major)));
+  return Boolean(major && (majorsByKey.has(taxonomyKey(major)) || DEFAULT_MAJOR_MINORS[taxonomyKey(major)]));
 }
 
 /** Whether the master contains this minor under this major. */
 export function hasMinorCategory(major: string, minor: string): boolean {
   if (!major || !minor) return false;
   const minors = minorsByMajorKey.get(taxonomyKey(major));
-  return Boolean(minors && minors.has(taxonomyKey(minor)));
+  if (minors && minors.has(taxonomyKey(minor))) return true;
+  const defaults = DEFAULT_MAJOR_MINORS[taxonomyKey(major)] || [];
+  return defaults.some((d) => taxonomyKey(d) === taxonomyKey(minor));
 }
 
 /**
