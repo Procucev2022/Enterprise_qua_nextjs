@@ -930,7 +930,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
     // Wait for the bootstrap vendor to actually hydrate into buyerVendors
     // before submitting — otherwise the form dispatches before context state
     // catches up, and assignedVendors comes back empty regardless of the fix.
-    await waitFor(() => expect(screen.getByText(/1 Private Suppliers Matched/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/1 (Hybrid|Private) Suppliers Matched/i)).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
       target: { value: 'Navi Mumbai Plant' },

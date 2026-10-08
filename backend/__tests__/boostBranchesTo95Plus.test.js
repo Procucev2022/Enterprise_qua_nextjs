@@ -212,5 +212,60 @@ describe('Full Branch & Function Benchmark Boost (>90%)', () => {
     expect(misaligned.isCategoryAligned).toBe(false);
   });
 
+  test('rfqController V0 sourcing mode variations', async () => {
+    const rfqController = require('../src/controllers/rfqController');
+    const next = jest.fn();
 
+    const buyer = storeService.addBuyerAccount({
+      organizationName: 'V0 Test Org',
+      email: 'v0test@example.com',
+      subscriptionPlan: 'free_trial',
+      remainingFreeRFQs: 0,
+    });
+
+    const res1 = mockRes();
+    await rfqController.createRFQ({
+      body: {
+        title: 'V0 RFQ Mode 0',
+        category: 'Electronics',
+        sourcingMode: 'mode_0',
+        targetDeliveryDate: '2026-10-15',
+        deliveryLocation: 'Mumbai',
+        deliveryPincode: '400001',
+        extractedEntities: [{ itemName: 'Item 1', quantity: 10, unit: 'pcs' }],
+      },
+      user: { email: 'v0test@example.com' },
+    }, res1, next);
+    expect(res1.status).toHaveBeenCalledWith(201);
+
+    const res2 = mockRes();
+    await rfqController.createRFQ({
+      body: {
+        title: 'V0 RFQ V0 Alias',
+        category: 'Electronics',
+        sourcingMode: 'v0',
+        targetDeliveryDate: '2026-10-15',
+        deliveryLocation: 'Mumbai',
+        deliveryPincode: '400001',
+        extractedEntities: [{ itemName: 'Item 2', quantity: 5, unit: 'pcs' }],
+      },
+      user: { email: 'v0test@example.com' },
+    }, res2, next);
+    expect(res2.status).toHaveBeenCalledWith(201);
+
+    const res3 = mockRes();
+    await rfqController.createRFQ({
+      body: {
+        title: 'V0 RFQ Version 0 Alias',
+        category: 'Electronics',
+        sourcingMode: 'version_0',
+        targetDeliveryDate: '2026-10-15',
+        deliveryLocation: 'Mumbai',
+        deliveryPincode: '400001',
+        extractedEntities: [{ itemName: 'Item 3', quantity: 2, unit: 'pcs' }],
+      },
+      user: { email: 'v0test@example.com' },
+    }, res3, next);
+    expect(res3.status).toHaveBeenCalledWith(201);
+  });
 });

@@ -2167,17 +2167,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     if (activeSubscription === 'free_trial') {
-      // Free Account grants 5 Free RFQs usable across ANY Version (Version 1, Version 2, Version 3)
-      if (remainingFreeRFQs <= 0) {
-        showToast('Free RFQ Quota Exhausted', 'You have used all 5 free RFQs. Please activate a sourcing plan to continue dispatching.', 'warning');
-        throw new Error('Free account quota exhausted');
+      if (rfqData.sourcingMode === 'mode_0') {
+        showToast('V0 RFQ Dispatched', 'Created RFQ via V0 (Procucev Network Vendors). 0 free RFQ credits used.', 'success');
+      } else {
+        if (remainingFreeRFQs <= 0) {
+          showToast('Free RFQ Quota Exhausted', 'You have hit your limit on V1, V2, and V3, but you can create multiple RFQs with V0 (Procucev Network Vendors). Upgrade your plan to continue creating RFQs with V1, V2, or V3.', 'warning');
+          throw new Error('Free account quota exhausted');
+        }
+        setRemainingFreeRFQs(prev => {
+          const next = Math.max(0, prev - 1);
+          const modeName = rfqData.sourcingMode === 'mode_1' ? 'Version 1 (Client Roster)' : rfqData.sourcingMode === 'mode_2' ? 'Version 2 (Hybrid Network)' : 'Version 3 (Autonomous AI)';
+          showToast('Free RFQ Dispatched', `Used 1 Free RFQ via ${modeName}. You have ${next} free RFQs remaining across all versions.`, 'success');
+          return next;
+        });
       }
-      setRemainingFreeRFQs(prev => {
-        const next = Math.max(0, prev - 1);
-        const modeName = rfqData.sourcingMode === 'mode_1' ? 'Version 1 (Client Roster)' : rfqData.sourcingMode === 'mode_2' ? 'Version 2 (Hybrid Network)' : 'Version 3 (Autonomous AI)';
-        showToast('Free RFQ Dispatched', `Used 1 Free RFQ via ${modeName}. You have ${next} free RFQs remaining across all versions.`, 'success');
-        return next;
-      });
     } else {
       if (rfqData.sourcingMode === 'mode_2' && activeSubscription === 'version_1') {
         showToast('Upgrade Required', 'Version 2 (Mode 2) Sourcing requires a Version 2 (Hybrid Network) Plan subscription.', 'warning');

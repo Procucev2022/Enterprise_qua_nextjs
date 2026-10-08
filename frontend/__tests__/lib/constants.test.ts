@@ -27,8 +27,12 @@ import {
 describe('lib/constants', () => {
   it('should export valid SOURCING_MODES', () => {
     expect(Array.isArray(SOURCING_MODES)).toBe(true);
-    expect(SOURCING_MODES.length).toBe(3);
-    
+    expect(SOURCING_MODES.length).toBe(4);
+
+    const mode0 = SOURCING_MODES.find(m => m.id === 'mode_0');
+    expect(mode0).toBeDefined();
+    expect(mode0?.code).toBe('Version 0');
+
     const mode1 = SOURCING_MODES.find(m => m.id === 'mode_1');
     expect(mode1).toBeDefined();
     expect(mode1?.code).toBe('Version 1');
@@ -278,22 +282,22 @@ describe('resolveBuyerSourcingMode & BUYER_SUBSCRIPTION_TO_SOURCING_MODE', () =>
 
 describe('entitledSourcingModes', () => {
   it('mirrors the backend SUBSCRIPTION_MODE_ENTITLEMENTS tiers exactly', () => {
-    expect(entitledSourcingModes('free_trial')).toEqual(['mode_1', 'mode_2', 'mode_3']);
-    expect(entitledSourcingModes('version_1')).toEqual(['mode_1']);
-    expect(entitledSourcingModes('version_2')).toEqual(['mode_1', 'mode_2']);
-    expect(entitledSourcingModes('version_3')).toEqual(['mode_1', 'mode_2', 'mode_3']);
+    expect(entitledSourcingModes('free_trial')).toEqual(['mode_0', 'mode_1', 'mode_2', 'mode_3']);
+    expect(entitledSourcingModes('version_1')).toEqual(['mode_0', 'mode_1']);
+    expect(entitledSourcingModes('version_2')).toEqual(['mode_0', 'mode_1', 'mode_2']);
+    expect(entitledSourcingModes('version_3')).toEqual(['mode_0', 'mode_1', 'mode_2', 'mode_3']);
   });
 
   it('falls back to the most restrictive tier for an unrecognised plan string, not to allowing everything', () => {
-    expect(entitledSourcingModes('some_unknown_plan')).toEqual(['mode_1']);
+    expect(entitledSourcingModes('some_unknown_plan')).toEqual(['mode_0', 'mode_1']);
   });
 
   it('is case-insensitive and trims whitespace', () => {
-    expect(entitledSourcingModes(' Version_2 ')).toEqual(['mode_1', 'mode_2']);
+    expect(entitledSourcingModes(' Version_2 ')).toEqual(['mode_0', 'mode_1', 'mode_2']);
   });
 
   it('defaults to the most restrictive tier when the plan is unresolved (null/undefined), not to allowing everything', () => {
-    expect(entitledSourcingModes(null)).toEqual(['mode_1']);
-    expect(entitledSourcingModes(undefined)).toEqual(['mode_1']);
+    expect(entitledSourcingModes(null)).toEqual(['mode_0', 'mode_1']);
+    expect(entitledSourcingModes(undefined)).toEqual(['mode_0', 'mode_1']);
   });
 });
