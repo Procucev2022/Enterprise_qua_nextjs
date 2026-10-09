@@ -90,6 +90,7 @@ function buildOpportunityFromRFQ(rfq: RFQItem): VendorOpportunity {
     rfqNumber: rfq.rfqNumber,
     title: rfq.title,
     buyer: rfq.buyerAccountName || 'Buyer identity not disclosed',
+    buyerAccountId: rfq.buyerAccountId,
     deadline: rfq.targetDeliveryDate || '',
     daysRemaining: daysUntilDate(rfq.targetDeliveryDate),
     type: rfq.sourcingMode === 'mode_3' ? 'network_marketplace' : 'direct_invitation',

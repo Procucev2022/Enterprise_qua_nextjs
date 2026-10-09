@@ -2497,3 +2497,32 @@ resolve all the conflict and merge
 solve it
 Error: request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": read tcp 192.168.0.102:56573->172.217.112.4:443: wsarecv: An established connection was aborted by the software in your host machine.: request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": read tcp 192.168.0.102:56573->172.217.112.4:443: wsarecv: An established connection was aborted by the software in your host machine.Error: request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": dial tcp: lookup daily-cloudcode-pa.googleapis.com: no such host: request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": dial tcp: lookup daily-cloudcode-pa.googleapis.com: no such host
 ```
+
+---
+
+### Prompt
+
+**Timestamp**: 2026-10-09T21:16:13+05:30
+
+```text
+In Enterprise QUA, the existing feature that provides 5 free quotation bids to vendors is already implemented. Do not modify, remove, or change this existing functionality.
+
+Implement buyer-specific vendor access rules. When a buyer uploads or adds a vendor to their vendor list, that vendor should be able to view and submit **unlimited quotations for RFQs created by that respective buyer**, without requiring a subscription or consuming the vendor's existing 5 free bid credits for those RFQs.
+
+For example, if Buyer A uploads Vendor X, Vendor X must be able to submit unlimited quotations for Buyer A's RFQs without a subscription. However, Vendor X must not be allowed to bid on other buyers' RFQs unless separately authorized under the existing business rules.
+
+Keep the existing 5 free bids feature unchanged for other RFQs and vendors who are not covered by this buyer-specific arrangement. Enforce buyer ownership and vendor mapping permissions in the backend APIs as well as the frontend. Do not change the existing subscription plans, payment flow, vendor onboarding, RFQ creation, or any unrelated functionality.
+
+Before implementation, inspect the existing codebase and reuse the current vendor mapping and subscription logic wherever possible. Make only the necessary changes and test that buyer-mapped vendors can submit unlimited quotations for their respective buyers' RFQs while all existing free-bid and subscription rules continue to work for other RFQs.
+```
+
+---
+
+### Prompt
+
+**Timestamp**: 2026-10-09T22:43:24+05:30
+
+```text
+raise the pr for using this current br4anch
+```
+

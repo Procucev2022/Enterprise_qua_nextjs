@@ -82,6 +82,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const [myVendorId, setMyVendorId] = useState<string | null>(null);
   const [myVendorName, setMyVendorName] = useState<string>('');
   const [myAddedByBuyerCompany, setMyAddedByBuyerCompany] = useState<string | null>(null);
+  const [myBuyerId, setMyBuyerId] = useState<string | null>(null);
   const [freeCreditsRemaining, setFreeCreditsRemaining] = useState<number | null>(null);
   const myVendorRecord = buyerVendors?.find(
     (v) => v.email?.toLowerCase() === currentUserSession?.email?.toLowerCase()
@@ -121,6 +122,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
           setMyVendorId(data.data.id);
           setMyVendorName(data.data.name);
           setMyAddedByBuyerCompany(data.data.addedByBuyerCompany || null);
+          setMyBuyerId(data.data.buyerId || data.data.buyerAccountId || null);
           if (data.data.freeQuotationCredits !== undefined) {
             setFreeCreditsRemaining(Number(data.data.freeQuotationCredits));
           }
@@ -177,14 +179,19 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     });
 
   // Was a hardcoded list of 4 specific RFQ numbers standing in for "this
-  // vendor's own buyer roster" — direct-vs-marketplace now reflects the real
-  // relationship: this vendor's real addedByBuyerCompany against the RFQ's
-  // real buyer (same real fields opportunity-feed.tsx and the backend's own
-  // quota enforcement in GET /api/rfqs/:id/email-preview check).
+  // Direct-vs-marketplace reflects the real relationship:
+  // When a buyer uploads or adds a vendor, the vendor is buyer-mapped and has unlimited quotations for that buyer's RFQs.
   const isOwnBuyerRfq = (rfqNumber: string) => {
-    if (!myAddedByBuyerCompany) return false;
     const rfq = vendorOpportunities.find((o) => o.rfqNumber === rfqNumber);
-    return !!rfq && rfq.buyer === myAddedByBuyerCompany;
+    if (!rfq) return false;
+    if (myAddedByBuyerCompany && rfq.buyer === myAddedByBuyerCompany) return true;
+    if (myBuyerId && (rfq as any).buyerAccountId === myBuyerId) return true;
+    if (myVendorRecord) {
+      if (myVendorRecord.addedByBuyerCompany && rfq.buyer === myVendorRecord.addedByBuyerCompany) return true;
+      if (myVendorRecord.buyerId && (rfq as any).buyerAccountId === myVendorRecord.buyerId) return true;
+      if (myVendorRecord.buyerAccountId && (rfq as any).buyerAccountId === myVendorRecord.buyerAccountId) return true;
+    }
+    return false;
   };
 
   // Compile RFQ Bidding summaries
@@ -299,7 +306,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     if (vendorOpportunities.length === 0) return;
     autoOpenedRef.current = true;
     const alreadyQuoted = submittedQuotes.some((q) => q.rfqNumber === opportunity.rfqNumber);
-    const locked = !isOwnBuyerRfq(opportunity.rfqNumber) && vendorSubscription !== 'connect' && vendorSubscription !== 'select';
+    const locked = !isOwnBuyerRfq(opportunity.rfqNumber) && vendorSubscription !== 'connect' && vendorSubscription !== 'select' && effectiveFreeCredits <= 0;
     if (!alreadyQuoted && !locked) {
       openBidForm(opportunity);
     }

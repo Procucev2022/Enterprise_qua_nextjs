@@ -961,22 +961,92 @@ class StoreService {
 
 
   /**
+   * Checks whether a vendor is mapped to / owned by the buyer who created the given RFQ.
+   *
+   * A vendor is buyer-mapped when uploaded or added by that respective buyer:
+   *  - vendor.buyerId / vendor.buyerAccountId matches rfq.buyerAccountId
+   *  - vendor.addedByBuyerCompany matches rfq.buyerAccountName
+   *  - vendor.buyerEmail matches rfq.buyerEmail / rfq.raisedByEmail
+   *  - vendor.mappedBuyerIds / vendor.buyerIds includes rfq.buyerAccountId
+   *  - or the resolved buyerAccount for the RFQ matches the vendor's buyer fields.
+   */
+  isVendorMappedToRfqBuyer(vendor, rfq) {
+    if (!vendor || !rfq) return false;
+
+    const rfqBuyerId = rfq.buyerAccountId ? String(rfq.buyerAccountId).trim().toLowerCase() : null;
+    const rfqBuyerName = rfq.buyerAccountName ? String(rfq.buyerAccountName).trim().toLowerCase() : null;
+    const rfqBuyerEmail = (rfq.buyerEmail || rfq.raisedByEmail) ? String(rfq.buyerEmail || rfq.raisedByEmail).trim().toLowerCase() : null;
+
+    const vBuyerId = vendor.buyerId ? String(vendor.buyerId).trim().toLowerCase() : null;
+    const vBuyerAccountId = vendor.buyerAccountId ? String(vendor.buyerAccountId).trim().toLowerCase() : null;
+    const vAddedBy = vendor.addedByBuyerCompany ? String(vendor.addedByBuyerCompany).trim().toLowerCase() : null;
+    const vBuyerEmail = vendor.buyerEmail ? String(vendor.buyerEmail).trim().toLowerCase() : null;
+
+    // Direct id match
+    if (rfqBuyerId && (vBuyerId === rfqBuyerId || vBuyerAccountId === rfqBuyerId)) {
+      return true;
+    }
+
+    // Direct company name match
+    if (rfqBuyerName && vAddedBy && vAddedBy === rfqBuyerName) {
+      return true;
+    }
+
+    // Direct email match
+    if (rfqBuyerEmail && vBuyerEmail && vBuyerEmail === rfqBuyerEmail) {
+      return true;
+    }
+
+    // Array of mapped buyer ids if present
+    const mappedIds = Array.isArray(vendor.mappedBuyerIds)
+      ? vendor.mappedBuyerIds
+      : (Array.isArray(vendor.buyerIds) ? vendor.buyerIds : []);
+    if (rfqBuyerId && mappedIds.some((id) => String(id).trim().toLowerCase() === rfqBuyerId)) {
+      return true;
+    }
+
+    // Fallback: check buyerAccount lookup if one side only has email/id and the other has company name
+    if (rfqBuyerId && Array.isArray(this.buyerAccounts)) {
+      const buyerAcc = this.buyerAccounts.find(
+        (a) => a && (String(a.id).trim().toLowerCase() === rfqBuyerId || (a.corporateEmail && String(a.corporateEmail).trim().toLowerCase() === rfqBuyerId))
+      );
+      if (buyerAcc) {
+        const orgName = (buyerAcc.organizationName || '').trim().toLowerCase();
+        const corpEmail = (buyerAcc.corporateEmail || '').trim().toLowerCase();
+        if (orgName && vAddedBy && vAddedBy === orgName) return true;
+        if (corpEmail && vBuyerEmail && vBuyerEmail === corpEmail) return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
    * Check whether a vendor is eligible to submit a quotation for an RFQ.
    *
+   * Buyer-specific vendor access rule:
+   * When a buyer uploads or adds a vendor to their vendor list, that vendor is eligible
+   * to submit unlimited quotations for RFQs created by that respective buyer, without requiring
+   * a subscription or consuming the vendor's 5 free bid credits.
+   *
+   * Otherwise (for other buyers' RFQs or network RFQs):
    * Initial allowance: Each vendor starts with 5 free quotation credits.
    * Once free credits are exhausted, an active paid subscription ('connect' or 'select')
    * is strictly required.
    */
-  checkVendorQuotationEligibility(vendor) {
+  checkVendorQuotationEligibility(vendor, rfq = null) {
     if (!vendor) {
       return {
         eligible: false,
         reason: 'Vendor record not found',
         freeCreditsRemaining: 0,
         isSubscribed: false,
+        isBuyerMapped: false,
         subscriptionPlan: 'none',
       };
     }
+
+    const isBuyerMapped = Boolean(rfq && this.isVendorMappedToRfqBuyer(vendor, rfq));
 
     const freeCredits = vendor.freeQuotationCredits !== undefined
       ? Number(vendor.freeQuotationCredits)
@@ -989,12 +1059,14 @@ class StoreService {
       vendor.subscriptionStatus === 'active'
     );
 
-    const eligible = freeCredits > 0 || isSubscribed;
+    // If buyer-mapped for this respective buyer's RFQ: unlimited quotations, no subscription needed.
+    const eligible = isBuyerMapped || freeCredits > 0 || isSubscribed;
 
     return {
       eligible,
       freeCreditsRemaining: Math.max(0, freeCredits),
-      isSubscribed,
+      isSubscribed: isSubscribed || isBuyerMapped,
+      isBuyerMapped,
       subscriptionPlan: vendor.subscriptionPlan || 'premium',
     };
   }
@@ -1002,13 +1074,17 @@ class StoreService {
   /**
    * Deduct 1 quotation credit from a vendor after quotation submission on a new RFQ.
    * Resubmitting/updating a quote for the same RFQ does not consume an extra credit.
+   * Buyer-mapped vendors quoting their respective buyer's RFQs do NOT consume free credits.
    * Subscribed vendors do not consume free credits below 0.
    */
   consumeVendorQuotationCredit(vendorId, rfqId) {
     const vendor = this.getVendorById(vendorId, 'all');
     if (!vendor) return null;
 
-    const eligibility = this.checkVendorQuotationEligibility(vendor);
+    const rfq = rfqId ? this.getRFQById(rfqId) : null;
+    const isBuyerMapped = Boolean(rfq && this.isVendorMappedToRfqBuyer(vendor, rfq));
+
+    const eligibility = this.checkVendorQuotationEligibility(vendor, rfq);
     const quotedRfqIds = Array.isArray(vendor.quotedRfqIds) ? [...vendor.quotedRfqIds] : [];
     const normalizedRfqId = rfqId ? String(rfqId).trim() : null;
     const alreadyQuoted = normalizedRfqId && quotedRfqIds.includes(normalizedRfqId);
@@ -1018,7 +1094,9 @@ class StoreService {
     }
 
     let newCredits = eligibility.freeCreditsRemaining;
-    if (!alreadyQuoted && !eligibility.isSubscribed) {
+    // Buyer-mapped vendors submitting quotes for their respective buyer's RFQs do NOT consume free credits!
+    // Subscribed vendors also do not consume free credits.
+    if (!alreadyQuoted && !eligibility.isSubscribed && !isBuyerMapped) {
       newCredits = Math.max(0, eligibility.freeCreditsRemaining - 1);
     }
 
@@ -1031,8 +1109,8 @@ class StoreService {
     });
 
     logger.info(
-      `Quotation credit updated for vendor ${vendor.name || vendor.id}: remaining ${newCredits} (RFQ ${rfqId || 'N/A'}, subscribed: ${eligibility.isSubscribed})`,
-      { vendorId: vendor.id, freeQuotationCredits: newCredits, isSubscribed: eligibility.isSubscribed },
+      `Quotation credit updated for vendor ${vendor.name || vendor.id}: remaining ${newCredits} (RFQ ${rfqId || 'N/A'}, subscribed: ${eligibility.isSubscribed}, buyerMapped: ${isBuyerMapped})`,
+      { vendorId: vendor.id, freeQuotationCredits: newCredits, isSubscribed: eligibility.isSubscribed, isBuyerMapped },
       'STORE_SERVICE'
     );
 
@@ -2233,6 +2311,17 @@ class StoreService {
     // same rule candidateVendorsForRFQ/vendorCoversCategory already apply
     // to the network-wide invite pool — a private roster relationship
     // grants eligibility, it never bypasses relevance.
+    // Buyer-specific vendor access rule:
+    // When a buyer uploads or adds a vendor to their vendor list, that vendor can view
+    // RFQs created by that respective buyer.
+    if (this.isVendorMappedToRfqBuyer(vendor, rfq)) {
+      const signals = this._rfqCategorySignals(rfq);
+      if (signals.length === 0 || !vendor.majorCategory || signals.some((c) => this.vendorCoversCategory(vendor, c))) {
+        return true;
+      }
+      return this._isInvitedVendor(vendor, rfq);
+    }
+
     if (
       vendor.addedByBuyerCompany &&
       rfq.buyerAccountName &&
