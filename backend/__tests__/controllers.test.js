@@ -475,6 +475,91 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     expect(poNotFoundRes.status).toHaveBeenCalledWith(404);
   });
 
+  // A portal quote with per-line-item pricing stores lineItemQuotes alongside
+  // the aggregate unitPrice/totalPrice, same shape the email-ingestion path
+  // already populates — so quote-matrix.tsx compares portal and email
+  // quotes the same way regardless of submission channel. Isolated RFQ and
+  // vendor identity so it can't collide with the shared-state assertions in
+  // "rfqController methods & error handling" above (quote credits, resubmit
+  // replacement, etc.).
+  test('addQuote stores lineItemQuotes when the portal form supplies per-line-item pricing', async () => {
+    const next = jest.fn();
+    const vendorUser = { role: 'vendor', email: 'lineitem-vendor@test.com' };
+    const vendorProfile = storeService.addVendor({
+      name: 'Line Item Vendor Co',
+      email: vendorUser.email,
+      majorCategory: 'Mechanical',
+    });
+
+    const seededRfq = storeService.createRFQ({
+      title: 'RFQ for line-item pricing test',
+      category: 'Mechanical',
+      targetDeliveryDate: A_FUTURE_DATE,
+    });
+    // Grant this vendor access the same way a CM invite does, so addQuote's
+    // canAccessRfq/vendorCoversRFQ gate doesn't 404 an otherwise-unrelated vendor.
+    storeService.updateRFQ(seededRfq.id, {
+      assignedVendors: [{ id: vendorProfile.id, email: vendorUser.email, name: vendorProfile.name }],
+    });
+
+    const res = mockRes();
+    await rfqController.addQuote(
+      {
+        params: { id: seededRfq.id },
+        body: {
+          unitPrice: 150,
+          totalPrice: 900,
+          lineItemQuotes: [
+            { lineItemId: 'li-1', itemName: 'Item A', quantity: 2, unitPrice: 200, totalPrice: 400 },
+            { lineItemId: 'li-2', itemName: 'Item B', quantity: 5, unitPrice: 100, totalPrice: 500 },
+          ],
+        },
+        user: vendorUser,
+      },
+      res,
+      next
+    );
+
+    expect(res.status).not.toHaveBeenCalledWith(400);
+    expect(res.status).not.toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalled();
+    const storedRFQ = res.json.mock.calls[0][0].data;
+    expect(storedRFQ.quotes).toHaveLength(1);
+    expect(storedRFQ.quotes[0].lineItemQuotes).toEqual([
+      { lineItemId: 'li-1', itemName: 'Item A', quantity: 2, unitPrice: 200, totalPrice: 400 },
+      { lineItemId: 'li-2', itemName: 'Item B', quantity: 5, unitPrice: 100, totalPrice: 500 },
+    ]);
+  });
+
+  test('addQuote omits lineItemQuotes entirely when the caller does not supply it', async () => {
+    const next = jest.fn();
+    const vendorUser = { role: 'vendor', email: 'blended-price-vendor@test.com' };
+    const vendorProfile = storeService.addVendor({
+      name: 'Blended Price Vendor Co',
+      email: vendorUser.email,
+      majorCategory: 'Mechanical',
+    });
+
+    const seededRfq = storeService.createRFQ({
+      title: 'RFQ for blended-price test',
+      category: 'Mechanical',
+      targetDeliveryDate: A_FUTURE_DATE,
+    });
+    storeService.updateRFQ(seededRfq.id, {
+      assignedVendors: [{ id: vendorProfile.id, email: vendorUser.email, name: vendorProfile.name }],
+    });
+
+    const res = mockRes();
+    await rfqController.addQuote(
+      { params: { id: seededRfq.id }, body: { unitPrice: 150 }, user: vendorUser },
+      res,
+      next
+    );
+
+    const storedRFQ = res.json.mock.calls[0][0].data;
+    expect(storedRFQ.quotes[0]).not.toHaveProperty('lineItemQuotes');
+  });
+
   test('supportChatController methods & error handling', async () => {
     const next = jest.fn();
     const res = mockRes();

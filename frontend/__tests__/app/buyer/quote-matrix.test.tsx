@@ -135,6 +135,61 @@ describe('QuoteMatrix Component Tests', () => {
     expect(screen.getByText(formatCurrency(85000))).toBeInTheDocument();
   });
 
+  test('renders a line-item-wise comparison row per RFQ item, highlighting the lowest real price, and downloads an Excel file', () => {
+    const itemizedRfq = {
+      ...mockRFQs[0],
+      id: 'rfq-itemized',
+      rfqNumber: 'RFQ-2026-ITEM01',
+      extractedEntities: [
+        { id: 'li-a', itemName: 'Centrifugal Pump 500 GPM', quantity: 6, unit: 'Units' },
+        { id: 'li-b', itemName: 'Mounting Bracket', quantity: 12, unit: 'Units' },
+      ],
+      quotes: [
+        {
+          ...mockRFQs[0].quotes[0],
+          lineItemQuotes: [
+            { lineItemId: 'li-a', itemName: 'Centrifugal Pump 500 GPM', quantity: 6, unitPrice: 12000, totalPrice: 72000 },
+            { lineItemId: 'li-b', itemName: 'Mounting Bracket', quantity: 12, unitPrice: 300, totalPrice: 3600 },
+          ],
+        },
+        {
+          ...mockRFQs[0].quotes[1],
+          // No lineItemQuotes — this vendor never itemized, falls back to its blended price.
+        },
+      ],
+    };
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: [itemizedRfq],
+      selectedRFQForMatrix: itemizedRfq,
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      deepDiveModalOpen: false,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      selectedRFQForDeepDive: null,
+    });
+
+    render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+
+    expect(screen.getByText('Line-Item-Wise Bid Comparison')).toBeInTheDocument();
+    expect(screen.getByText('Centrifugal Pump 500 GPM')).toBeInTheDocument();
+    expect(screen.getByText('Mounting Bracket')).toBeInTheDocument();
+    // Apex itemized this row at 12,000 — real price, rendered as formatted currency.
+    expect(screen.getByText(formatCurrency(12000))).toBeInTheDocument();
+    // Kiran never itemized — falls back to its blended unit price, marked not itemized.
+    expect(screen.getAllByText(/not itemized/i).length).toBeGreaterThan(0);
+
+    const downloadBtn = screen.getByText(/Download Excel/i);
+    expect(downloadBtn).toBeInTheDocument();
+    // Clicking it should not throw even though xlsx isn't mocked here — it
+    // exercises the real export path end to end (jsdom stubs URL.createObjectURL).
+    const originalCreateObjectURL = URL.createObjectURL;
+    URL.createObjectURL = jest.fn(() => 'blob:mock');
+    URL.revokeObjectURL = jest.fn();
+    fireEvent.click(downloadBtn);
+    URL.createObjectURL = originalCreateObjectURL;
+  });
+
   test('allows selecting a different RFQ from dropdown', () => {
     render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
     const select = screen.getByRole('combobox');
