@@ -2480,3 +2480,11 @@ Add number of procucev vendor for version 2 and  version3 here and mode v1 vendo
 ```text
 Completely remove the Vendor Email Templates feature from the Enterprise QUA portal, including its sidebar menu option, page, UI components, and related fields. Do not modify, delete, or change any existing backend code, APIs, database tables, business logic, or other functionalities. Ensure that only the Vendor Email Templates feature is removed from the UI and that all other modules, navigation options, and existing features continue to work exactly as they do now. Do not make any unrelated code changes, refactoring, or UI modifications. Preserve the existing codebase and functionality without affecting any other part of the application.
 ```
+
+---
+
+**Timestamp**: 2026-10-09T18:50:45+05:30
+
+```text
+resolve all the conflict and merge 
+```
