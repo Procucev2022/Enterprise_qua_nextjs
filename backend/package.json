@@ -6,9 +6,9 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "test": "jest --maxWorkers=2",
+    "test": "jest --forceExit",
     "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage --maxWorkers=2 && node scripts/verify-coverage.js",
+    "test:coverage": "jest --coverage --forceExit && node scripts/verify-coverage.js",
     "check:coverage": "node scripts/verify-coverage.js",
     "db:migrate": "node src/db/migrate.js",
     "db:migrate:d1": "node scripts/migrate-d1.js",
