@@ -248,6 +248,7 @@ export default function InitialSetupModal() {
   // Active Session & Ingestion Job States
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [vendorJob, setVendorJob] = useState<IngestionJobState | null>(null);
+  const [submissionError, setSubmissionError] = useState<string | null>(null);
   const [poJob, setPoJob] = useState<IngestionJobState | null>(null);
 
   // Separate Upload States & File Handlers
@@ -462,9 +463,42 @@ export default function InitialSetupModal() {
           const rawJson: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
 
           if (!rawJson || rawJson.length === 0) {
-            showToast('Empty File', 'The uploaded file has no readable data rows.', 'warning');
+            showToast('Empty File', 'The uploaded Vendor Master file has no readable data rows.', 'warning');
             setIsParsingVendor(false);
             setVendorJob(null);
+            return;
+          }
+
+          const headerKeys = Object.keys(rawJson[0]);
+          const hasCompanyName = headerKeys.some((k) => {
+            const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return ['companyname', 'company', 'vendorname', 'vendor', 'suppliername', 'supplier', 'name', 'organization'].some(
+              (c) => clean === c || (clean.includes(c) && !clean.includes('code') && !clean.includes('mail') && !clean.includes('phone') && !clean.includes('contact'))
+            );
+          });
+          const hasEmail = headerKeys.some((k) => {
+            const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return ['email', 'emailid', 'emailaddress', 'mail', 'corporateemail', 'companyemail', 'vendoremail'].some((c) => clean.includes(c));
+          });
+          const hasPhone = headerKeys.some((k) => {
+            const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return ['phone', 'mobile', 'contactnumber', 'phonenumber', 'telephone', 'mobileno', 'contactno', 'cell', 'whatsapp'].some((c) => clean.includes(c));
+          });
+          const hasVendorCode = headerKeys.some((k) => {
+            const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return ['vendorcode', 'suppliercode', 'vendorid', 'supplierid', 'vcode', 'vendorno', 'vndcode'].some((c) => clean.includes(c));
+          });
+
+          if (!hasCompanyName && !hasEmail && !hasPhone && !hasVendorCode) {
+            const foundHeaders = headerKeys.filter(Boolean).slice(0, 6).join(', ') || 'None';
+            showToast(
+              'Invalid Sheet Headers',
+              `Sheet headers do not match Vendor Master required fields. Expected: Company Name, Email ID, Mobile No. (Found: [${foundHeaders}]). Please download and use the official Vendor Master template.`,
+              'warning'
+            );
+            setIsParsingVendor(false);
+            setVendorJob(null);
+            if (vendorFileInputRef.current) vendorFileInputRef.current.value = '';
             return;
           }
 
@@ -727,6 +761,37 @@ export default function InitialSetupModal() {
             showToast('Empty PO File', 'The uploaded PO dump has no readable rows.', 'warning');
             setIsParsingPo(false);
             setPoJob(null);
+            return;
+          }
+
+          const headerKeys = Object.keys(rawJson[0]);
+          const hasPoNumber = headerKeys.some((k) => {
+            const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return ['ponumber', 'po', 'pono', 'orderid', 'ordernumber', 'orderno', 'purchaseorder'].some((c) => clean === c || clean.includes(c));
+          });
+          const hasVendor = headerKeys.some((k) => {
+            const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return ['vendorname', 'vendoridentifier', 'vendor', 'suppliername', 'supplier', 'companyname', 'vendorcode', 'vendorid'].some((c) => clean === c || clean.includes(c));
+          });
+          const hasItem = headerKeys.some((k) => {
+            const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return ['lineitemdescription', 'lineitem', 'itemdescription', 'description', 'itemname', 'productdescription', 'productname', 'materialdescription', 'material', 'servicedescription', 'service', 'item'].some((c) => clean === c || clean.includes(c));
+          });
+          const hasSpendOrQty = headerKeys.some((k) => {
+            const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return ['quantity', 'qty', 'spend', 'totalspend', 'totalspendinr', 'totalamount', 'totalamountinr', 'totalinr', 'unitprice', 'price', 'rate', 'amount', 'totalvalue', 'poamount', 'total'].some((c) => clean === c || clean.includes(c));
+          });
+
+          if (!hasPoNumber && !hasVendor && !hasItem && !hasSpendOrQty) {
+            const foundHeaders = headerKeys.filter(Boolean).slice(0, 6).join(', ') || 'None';
+            showToast(
+              'Invalid PO Sheet Headers',
+              `Sheet headers do not match PO Purchase Dump required fields. Expected: PO Number, Vendor Name, Item Description, Quantity / Spend. (Found: [${foundHeaders}]). Please download and use the provided PO Dump Excel template.`,
+              'warning'
+            );
+            setIsParsingPo(false);
+            setPoJob(null);
+            if (poFileInputRef.current) poFileInputRef.current.value = '';
             return;
           }
 
@@ -1123,23 +1188,86 @@ export default function InitialSetupModal() {
   };
   const handleDownloadVendorMasterCsv = handleDownloadVendorMasterExcel;
 
-  // Download Sample PO Data CSV
-  const handleDownloadPoDataCsv = () => {
-    const csv =
-      'PO Number,PO Date,Vendor Name / Code,Item Name & Description,Quantity,Unit,Unit Price,Total Spend,Department\n' +
-      'PO-2025-00891,2025-04-12,Apex Supplies Ltd.,Centrifugal Water Pump 500 GPM (15 HP Motor),12,Units,12500,150000,Mechanical\n' +
-      'PO-2025-01156,2025-08-04,Kiran Valve Industries,Flanged Gate Valve 4-inch Class 150,24,Units,3800,91200,Piping\n' +
-      'PO-2025-01431,2025-10-10,TechnoForce Engineering Ltd,LV Switchgear Modular Panels with Drawout MCCB,3,Panels,85000,255000,Electrical\n' +
-      'PO-2025-01740,2025-12-05,Everest Steel & Infra Structures,Fe500D TMT High-Yield Reinforcement Bars,120,Tons,620,744000,Civil\n';
+  // Download Sample PO Data Excel (.xlsx)
+  const handleDownloadPoDataExcel = () => {
+    const samplePoRows = [
+      {
+        'PO Number': 'PO-2025-00891',
+        'PO Date': '2025-04-12',
+        'Vendor Name': 'Apex Supplies Ltd.',
+        'Item Description': 'Centrifugal Water Pump 500 GPM (15 HP Motor)',
+        'Specifications': '15 HP Motor, 500 GPM, Cast Iron, Class 150',
+        Quantity: 12,
+        Unit: 'Units',
+        'Unit Price (INR)': 12500,
+        'Total Spend (INR)': 150000,
+        Department: 'Mechanical',
+      },
+      {
+        'PO Number': 'PO-2025-01156',
+        'PO Date': '2025-08-04',
+        'Vendor Name': 'Kiran Valve Industries',
+        'Item Description': 'Flanged Gate Valve 4-inch Class 150',
+        'Specifications': 'Forged Steel, ASTM A105, Flanged RF',
+        Quantity: 24,
+        Unit: 'Units',
+        'Unit Price (INR)': 3800,
+        'Total Spend (INR)': 91200,
+        Department: 'Piping',
+      },
+      {
+        'PO Number': 'PO-2025-01431',
+        'PO Date': '2025-10-10',
+        'Vendor Name': 'Nova Electrical Spares',
+        'Item Description': 'LV Switchgear Modular Panels with Drawout MCCB',
+        'Specifications': '415V, 3-Phase 50Hz, 800A Busbar Rating',
+        Quantity: 3,
+        Unit: 'Panels',
+        'Unit Price (INR)': 85000,
+        'Total Spend (INR)': 255000,
+        Department: 'Electrical',
+      },
+      {
+        'PO Number': 'PO-2025-01740',
+        'PO Date': '2025-12-05',
+        'Vendor Name': 'Everest Steel & Infra Structures',
+        'Item Description': 'Fe500D TMT High-Yield Reinforcement Bars',
+        'Specifications': 'IS 1786 Grade Fe500D, 16mm Diameter',
+        Quantity: 120,
+        Unit: 'Tons',
+        'Unit Price (INR)': 6200,
+        'Total Spend (INR)': 744000,
+        Department: 'Civil',
+      },
+      {
+        'PO Number': 'PO-2025-02015',
+        'PO Date': '2026-01-20',
+        'Vendor Name': 'Vortex Hydraulic Systems',
+        'Item Description': 'Hydraulic Power Pack Unit 200 Bar with Gear Pump',
+        'Specifications': '200 Bar Working Pressure, 40L Reservoir',
+        Quantity: 2,
+        Unit: 'Units',
+        'Unit Price (INR)': 110000,
+        'Total Spend (INR)': 220000,
+        Department: 'Mechanical',
+      },
+    ];
 
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const worksheet = XLSX.utils.json_to_sheet(samplePoRows);
+    const workbook: XLSX.WorkBook = {
+      Sheets: { 'PO Purchase Dump': worksheet },
+      SheetNames: ['PO Purchase Dump'],
+    };
+    const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `Procucev_Template_2_PO_Purchase_Dump_${selectedPeriod}.csv`;
+    link.download = `Procucev_Template_2_PO_Purchase_Dump_${selectedPeriod}.xlsx`;
     link.click();
-    showToast('Template Downloaded', 'Sample PO Pre-Purchase Order Dump CSV downloaded.', 'success');
+    showToast('Template Downloaded', 'Sample PO Pre-Purchase Order Dump Excel template downloaded.', 'success');
   };
+  const handleDownloadPoDataCsv = handleDownloadPoDataExcel;
 
   const handleSimulatePOJoin = () => {
     setIsProcessingPOJoin(true);
@@ -1181,9 +1309,22 @@ export default function InitialSetupModal() {
 
   const handleConfirmFinalIngestion = async () => {
     if (isConfirmingIngestion) return;
+    setSubmissionError(null);
     setIsConfirmingIngestion(true);
     try {
+      if (joinedVendors.length === 0) {
+        const msg = 'No vendor records found to ingest. Please upload a valid Vendor Master file first.';
+        setSubmissionError(msg);
+        showToast('Ingestion Error', msg, 'warning');
+        return;
+      }
       const imported = await processHistoricalPurchaseData(selectedPeriod, joinedVendors);
+      if (imported === 0 && !lastIngestionSummary) {
+        const msg = 'Failed to ingest historical purchase data. Please check your network connection and server status, then try again.';
+        setSubmissionError(msg);
+        showToast('Ingestion Failed', msg, 'warning');
+        return;
+      }
       if (!lastIngestionSummary) {
         const mapped = joinedVendors.filter((v) => v.categoriesMappedByBuyer);
         const unmapped = joinedVendors.filter((v) => !v.categoriesMappedByBuyer);
@@ -1201,8 +1342,11 @@ export default function InitialSetupModal() {
           totalVendors: joinedVendors.length,
         });
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Ingestion confirmation error:', err);
+      const msg = err?.message || 'An unexpected error occurred during ingestion. Please try again.';
+      setSubmissionError(msg);
+      showToast('Ingestion Error', msg, 'warning');
     } finally {
       setIsConfirmingIngestion(false);
     }
@@ -1845,10 +1989,10 @@ export default function InitialSetupModal() {
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
-                  onClick={handleDownloadPoDataCsv}
+                  onClick={handleDownloadPoDataExcel}
                   className="btn btn-secondary btn-sm font-bold inline-flex items-center gap-1.5 shadow-xs"
                 >
-                  <Download size={13} /> Download CSV Template
+                  <Download size={13} /> Download PO Dump Template (.xlsx)
                 </button>
                 <button
                   type="button"
@@ -2488,6 +2632,32 @@ export default function InitialSetupModal() {
                     <span className="font-black text-purple-700 dark:text-purple-300 text-sm">Active (Day 3)</span>
                   </div>
                 </div>
+
+                {/* Submission Error Banner */}
+                {submissionError && (
+                  <div className="p-4 rounded-2xl bg-rose-50/90 dark:bg-rose-950/50 border-2 border-rose-300 dark:border-rose-800/80 text-rose-900 dark:text-rose-200 flex items-start justify-between gap-3 animate-fade-in shadow-sm">
+                    <div className="flex items-start gap-3">
+                      <AlertCircle size={20} className="text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                      <div className="space-y-1">
+                        <h5 className="font-bold text-xs uppercase tracking-wide text-rose-800 dark:text-rose-300">
+                          Ingestion &amp; Dispatch Error
+                        </h5>
+                        <p className="text-xs font-medium leading-relaxed">{submissionError}</p>
+                        <p className="text-[11px] text-rose-700/80 dark:text-rose-400/80">
+                          Please verify your file data, network, or server connection and retry.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSubmissionError(null)}
+                      className="p-1 text-rose-400 hover:text-rose-600 rounded-lg shrink-0"
+                      title="Dismiss error"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                )}
 
                 <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-gray-800">
                   <button

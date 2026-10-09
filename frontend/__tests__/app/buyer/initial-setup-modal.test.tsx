@@ -211,7 +211,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
 
     // Download PO dump template
-    fireEvent.click(screen.getByText(/Download CSV Template/i));
+    fireEvent.click(screen.getByText(/Download PO Dump Template/i));
     expect(mockShowToast).toHaveBeenCalledWith('Template Downloaded', expect.any(String), 'success');
 
     // Reset PO in Step 3
@@ -898,7 +898,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     fetchSpy.mockRestore();
   });
 
-  it('downloads vendor master Excel template and PO dump CSV template', () => {
+  it('downloads vendor master Excel template and PO dump Excel template', () => {
     render(<InitialSetupModal />);
     // In Step 1: Time Horizon
     const vendorTemplateBtn = screen.getByText(/Download Vendor Master Template/i);
@@ -909,9 +909,9 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(screen.queryByText(/Download Vendor Master Template/i)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByText('3. PO Dump'));
-    const csvBtn = screen.getByText(/Download CSV Template/i);
-    fireEvent.click(csvBtn);
-    expect(csvBtn).toBeInTheDocument();
+    const poExcelBtn = screen.getByText(/Download PO Dump Template/i);
+    fireEvent.click(poExcelBtn);
+    expect(poExcelBtn).toBeInTheDocument();
   });
 
   it('renders Completion Summary on setup completion for both mapped and unmapped vendors', async () => {
@@ -1579,5 +1579,111 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     // Auto-assigned vendor code VND-1001 should be rendered, not the email address in vendor code cell
     expect(screen.getByText('VND-1001')).toBeInTheDocument();
     expect(screen.getByText('govardhan.kilari@procucev.com')).toBeInTheDocument();
+  });
+
+  it('shows a clear error message when uploaded Vendor Master sheet has non-matching headers', async () => {
+    const wsInvalid = XLSX.utils.json_to_sheet([
+      {
+        'Unrelated Column A': 'Value 1',
+        'Unrelated Column B': 'Value 2',
+      },
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, wsInvalid, 'Sheet1');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const invalidFile: any = new File([buf], 'invalid_vendor.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    invalidFile.__buffer = buf;
+
+    const { container } = render(<InitialSetupModal />);
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [invalidFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Invalid Sheet Headers',
+      expect.stringContaining('Sheet headers do not match Vendor Master required fields'),
+      'warning'
+    );
+  });
+
+  it('shows a clear error message when uploaded PO dump sheet has non-matching headers', async () => {
+    const wsInvalid = XLSX.utils.json_to_sheet([
+      {
+        'Random Field 1': 'Random 1',
+        'Random Field 2': 'Random 2',
+      },
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, wsInvalid, 'Sheet1');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const invalidFile: any = new File([buf], 'invalid_po.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    invalidFile.__buffer = buf;
+
+    const { container } = render(<InitialSetupModal />);
+    fireEvent.click(screen.getByText('3. PO Dump'));
+
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [invalidFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Invalid PO Sheet Headers',
+      expect.stringContaining('Sheet headers do not match PO Purchase Dump required fields'),
+      'warning'
+    );
+  });
+
+  it('displays a clear submission error banner on Step 5 when final ingestion fails', async () => {
+    const failingIngest = jest.fn().mockRejectedValue(new Error('PostgreSQL database connection timed out'));
+    (useApp as jest.Mock).mockReturnValue({
+      initialSetupModalOpen: true,
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      historicalPurchaseDataPeriod: '2_years',
+      setHistoricalPurchaseDataPeriod: mockSetHistoricalPurchaseDataPeriod,
+      processHistoricalPurchaseData: failingIngest,
+      lastIngestionSummary: null,
+      setInitialSetupCompleted: jest.fn(),
+      activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
+      buyerVendors: mockBuyerVendors,
+      showToast: mockShowToast,
+    });
+
+    const { container } = render(<InitialSetupModal />);
+    
+    // Add a manual vendor in Step 2 so joinedVendors has records
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    const addBtn = screen.getByText(/Add Vendor Manually/i);
+    fireEvent.click(addBtn);
+
+    fireEvent.click(screen.getByText('5. Dispatch Emails'));
+
+    const completeBtn = screen.getByText(/COMPLETE SETUP & INGEST/i);
+    await act(async () => {
+      fireEvent.click(completeBtn);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    expect(screen.getByText('Ingestion & Dispatch Error')).toBeInTheDocument();
+    expect(screen.getByText(/PostgreSQL database connection timed out/i)).toBeInTheDocument();
+    expect(mockShowToast).toHaveBeenCalledWith('Ingestion Error', expect.any(String), 'warning');
+
+    // Dismiss error
+    const dismissBtn = screen.getByTitle('Dismiss error');
+    fireEvent.click(dismissBtn);
+    expect(screen.queryByText('Ingestion & Dispatch Error')).not.toBeInTheDocument();
   });
 });
