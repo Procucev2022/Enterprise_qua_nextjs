@@ -4,7 +4,7 @@ import React, { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import { useApp } from '@/lib/store';
-import { formatCurrency } from '@/lib/constants';
+import { formatCurrency, normalizePoDate } from '@/lib/constants';
 import { fetchDispatchTemplates, type DispatchTemplate } from '@/lib/buyerProfileClient';
 import {
   VendorMasterUploadRecord,
@@ -690,7 +690,7 @@ export default function InitialSetupModal() {
       reader.onload = async (e) => {
         try {
           const data = new Uint8Array(e.target?.result as ArrayBuffer);
-          const workbook = XLSX.read(data, { type: 'array' });
+          const workbook = XLSX.read(data, { type: 'array', cellDates: true });
           const firstSheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[firstSheetName];
           const rawJson: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
@@ -704,12 +704,12 @@ export default function InitialSetupModal() {
 
           const parsedPOs: PurchaseOrderLineItemRecord[] = rawJson.map((row, idx) => {
             const keys = Object.keys(row);
-            const getVal = (possibleKeys: string[]): string => {
+            const getRawVal = (possibleKeys: string[]): unknown => {
               for (const pk of possibleKeys) {
                 const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
                 const matchedKey = keys.find((k) => k.toLowerCase().trim().replace(/[^a-z0-9]/g, '') === pkClean);
                 if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
-                  return String(row[matchedKey]).trim();
+                  return row[matchedKey];
                 }
               }
               for (const pk of possibleKeys) {
@@ -720,14 +720,20 @@ export default function InitialSetupModal() {
                   return kClean.includes(pkClean) || pkClean.includes(kClean);
                 });
                 if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
-                  return String(row[matchedKey]).trim();
+                  return row[matchedKey];
                 }
               }
-              return '';
+              return undefined;
+            };
+
+            const getVal = (possibleKeys: string[]): string => {
+              const raw = getRawVal(possibleKeys);
+              return raw !== undefined && raw !== null ? String(raw).trim() : '';
             };
 
             const poNumber = getVal(['ponumber', 'po number', 'po #', 'po no', 'pono', 'order id', 'order number', 'order no']) || `PO-2025-${(1000 + idx).toString()}`;
-            const poDate = getVal(['podate', 'po date', 'date', 'order date', 'creation date']) || '2025-06-15';
+            const rawPoDate = getRawVal(['podate', 'po date', 'date', 'order date', 'creation date']);
+            const poDate = normalizePoDate(rawPoDate) || '2025-06-15';
             const vendorIdentifier = getVal(['vendor name', 'vendor identifier', 'vendor', 'supplier name', 'supplier', 'company name', 'vendor code', 'vendor id']) || 'Apex Supplies Ltd.';
             const itemName = getVal(['line item description', 'line item', 'item description', 'description', 'item name', 'product description', 'product name', 'material description', 'material', 'service description', 'service', 'item']) || 'Industrial Mechanical Spares';
             const specs = getVal(['specs', 'specification', 'technical specs', 'specifications', 'details', 'item specs', 'grade']);
@@ -1905,7 +1911,7 @@ export default function InitialSetupModal() {
                     {poLineItems.slice(0, poPreviewLimit).map((p) => (
                       <tr key={p.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/40">
                         <td className="p-2.5 font-mono text-[10px] text-slate-500">{p.poNumber}</td>
-                        <td className="p-2.5 font-mono text-[10px] text-slate-600 dark:text-gray-300">{p.poDate || '—'}</td>
+                        <td className="p-2.5 font-mono text-[10px] text-slate-600 dark:text-gray-300">{normalizePoDate(p.poDate) || p.poDate || '—'}</td>
                         <td className="p-2.5 font-bold text-slate-800 dark:text-white">{p.vendorIdentifier}</td>
                         <td className="p-2.5 font-semibold text-slate-800 dark:text-gray-200">{p.itemName}</td>
                         <td className="p-2.5 text-slate-400 text-[10px] max-w-[160px] truncate">{p.specs || '—'}</td>
