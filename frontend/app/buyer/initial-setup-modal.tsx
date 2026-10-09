@@ -273,6 +273,52 @@ export default function InitialSetupModal() {
     };
   };
 
+  // Live job progress polling — setVendorJob/setPoJob were previously only
+  // ever set once, from the upload response, at the instant the background
+  // job had barely started (0 processed). "Progress is tracked live" was
+  // never actually true: nothing re-fetched the job afterward, so the
+  // progress card just froze at that first snapshot until the buyer
+  // reloaded the page. Polls GET /:sessionId/jobs/:jobId every 2s while a
+  // job is PENDING/PROCESSING and stops itself once it lands on a terminal
+  // status (or the session/modal goes away).
+  React.useEffect(() => {
+    if (!sessionId) return;
+    const pollableJobs: Array<['vendor' | 'po', IngestionJobState | null]> = [
+      ['vendor', vendorJob],
+      ['po', poJob],
+    ];
+    const active = pollableJobs.filter(
+      ([, job]) => job && (job.status === 'PENDING' || job.status === 'PROCESSING')
+    );
+    if (active.length === 0) return;
+
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      for (const [which, job] of active) {
+        if (!job) continue;
+        try {
+          const res = await fetch(`/api/vendor-ingestion/${sessionId}/jobs/${job.id}`, {
+            headers: authFetchHeaders(),
+          });
+          if (!res.ok || cancelled) continue;
+          const json = await res.json();
+          const freshJob: IngestionJobState | undefined = json?.data?.job;
+          if (!freshJob || cancelled) continue;
+          if (which === 'vendor') setVendorJob(freshJob);
+          else setPoJob(freshJob);
+        } catch (err) {
+          console.warn(`Could not refresh ${which} ingestion job progress:`, err);
+        }
+      }
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, vendorJob?.id, vendorJob?.status, poJob?.id, poJob?.status]);
+
   const handleCloseModal = async () => {
     if (sessionId && (vendorJob?.status === 'PROCESSING' || poJob?.status === 'PROCESSING')) {
       try {
