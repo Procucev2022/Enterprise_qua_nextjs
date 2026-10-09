@@ -183,6 +183,9 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
 
     await waitFor(() => expect(mockExtract).toHaveBeenCalled());
     expect(screen.getByText(/Extraction Complete/i)).toBeInTheDocument();
+    expect(screen.getByText(/Successfully extracted/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/BOQ_Pumps\.xlsx/i).length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText(/using gemini/i)).not.toBeInTheDocument();
     expect(screen.getByDisplayValue('Pump Requirement')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Centrifugal Water Pump 500 GPM')).toBeInTheDocument();
   });
@@ -607,7 +610,10 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
 
     clickExtract();
     await waitFor(() => expect(mockExtract).toHaveBeenCalled());
-    expect(screen.getByText(/Gemini 2.5 AI/i)).toBeInTheDocument();
+    expect(screen.getByText(/Extraction Complete/i)).toBeInTheDocument();
+    expect(screen.getByText(/Successfully extracted/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/BOQ_Pumps\.xlsx/i).length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText(/Gemini 2.5 AI/i)).not.toBeInTheDocument();
   });
 
   it('falls back to a default message when extraction fails without an error string', async () => {

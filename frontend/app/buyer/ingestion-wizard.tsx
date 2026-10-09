@@ -1089,7 +1089,7 @@ export default function IngestionWizard({
               <Sparkles size={14} /> Extraction Complete
             </div>
             <p className="text-[11px] text-emerald-900/80 dark:text-emerald-200 mt-0.5">
-              Successfully extracted <strong>{extractionSummary.accepted} line items</strong> from &ldquo;{extractionSummary.fileName}&rdquo; using {extractionSummary.model}. Review and adjust details below.
+              Successfully extracted <strong>{extractionSummary.accepted} line items</strong> from &ldquo;{extractionSummary.fileName}&rdquo;.
             </p>
           </div>
         )}

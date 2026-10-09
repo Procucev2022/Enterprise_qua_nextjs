@@ -339,7 +339,7 @@ export const UI_STRINGS = {
     // Step 2 outcome banners
     successTitle: 'AI Extraction Complete',
     successSummary:
-      '{accepted} line items extracted by {model}. {needsReview} need a category review before dispatch.',
+      'Successfully extracted {accepted} line items from “{fileName}”.',
     successToast: '{accepted} line items extracted from {fileName}.',
     fallbackTitle: 'Line Items Could Not Be Read',
     fallbackHint: 'Add each line item below, assign its minor category, then continue to sourcing.',
