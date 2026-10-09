@@ -1743,16 +1743,24 @@ class StoreService {
     //   • After 6 hours   → Call reminder (logic kept, telephony deferred)
     //   • After 12 hours  → WhatsApp reminder
     //   • After 24 hours  → Email reminder
-    // Only fires for mode_1 and mode_2 (mode_3 has no auto-assigned vendors
-    // at creation time; inviteVendorsToRFQ schedules chasers when they are
-    // manually added later).
     if (
       Array.isArray(newRFQ.assignedVendors) &&
       newRFQ.assignedVendors.length > 0
     ) {
+      const resolvedVendors = newRFQ.assignedVendors.map((v) => {
+        const full = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
+        return {
+          ...v,
+          phone: full.phone || full.mobile || full.mobileNumber || v.phone,
+          email: full.email || v.email,
+          name: full.name || v.name,
+          contactPerson: full.contactPerson || v.contactPerson,
+        };
+      });
+
       rfqChaserScheduler.scheduleRFQChasers(
         newRFQ,
-        newRFQ.assignedVendors,
+        resolvedVendors,
         (vendor) => this.checkVendorQuotationEligibility(vendor)
       );
     }
