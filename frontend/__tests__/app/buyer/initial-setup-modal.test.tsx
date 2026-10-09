@@ -1,19 +1,14 @@
 import React from 'react';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import * as XLSX from 'xlsx';
-import InitialSetupModal from '@/app/buyer/initial-setup-modal';
+import InitialSetupModal, { IngestionProgressCard } from '@/app/buyer/initial-setup-modal';
 import { useApp } from '@/lib/store';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
 }));
 
-const mockPush = jest.fn();
-jest.mock('next/navigation', () => ({
-  useRouter: () => ({
-    push: mockPush,
-  }),
-}));
 
 // Mock FileReader for synchronous, reliable Excel file parsing
 class MockFileReader {
@@ -91,6 +86,12 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    global.fetch = jest.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: {} }),
+      })
+    ) as any;
     (useApp as jest.Mock).mockReturnValue({
       initialSetupModalOpen: true,
       setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
@@ -890,6 +891,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     jest.useRealTimers();
     fetchSpy.mockRestore();
   });
+
   it('downloads vendor master Excel template and PO dump CSV template', () => {
     render(<InitialSetupModal />);
     // In Step 1: Time Horizon
@@ -904,5 +906,648 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     const csvBtn = screen.getByText(/Download CSV Template/i);
     fireEvent.click(csvBtn);
     expect(csvBtn).toBeInTheDocument();
+  });
+
+  it('renders Completion Summary on setup completion for both mapped and unmapped vendors', async () => {
+    const summaryData = {
+      importedCount: 2,
+      totalProcessed: 2,
+      mappedCount: 1,
+      mappedEmailsSent: 1,
+      unmappedCount: 1,
+      unmappedEmailsSent: 1,
+      failedEmailCount: 0,
+      failedEmails: [],
+      overallStatus: 'COMPLETED' as const,
+      period: '2_years',
+      totalVendors: 2,
+    };
+
+    (useApp as jest.Mock).mockReturnValue({
+      initialSetupModalOpen: true,
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      historicalPurchaseDataPeriod: '2_years',
+      setHistoricalPurchaseDataPeriod: mockSetHistoricalPurchaseDataPeriod,
+      processHistoricalPurchaseData: mockProcessHistoricalPurchaseData.mockResolvedValue(2),
+      lastIngestionSummary: summaryData,
+      setInitialSetupCompleted: jest.fn(),
+      activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
+      buyerVendors: mockBuyerVendors,
+      showToast: mockShowToast,
+    });
+
+    render(<InitialSetupModal />);
+
+    // Navigate to Step 5
+    fireEvent.click(screen.getByText('5. Dispatch Emails'));
+
+    // Completion summary is rendered because lastIngestionSummary is set
+    expect(screen.getByTestId('ingestion-completion-summary')).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.initialSetupCompletion.title)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.initialSetupCompletion.statusCompleted)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(UI_STRINGS.initialSetupCompletion.mappedSentLabel, 'i'))).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(UI_STRINGS.initialSetupCompletion.unmappedSentLabel, 'i'))).toBeInTheDocument();
+
+    // Done button closes the modal
+    const doneBtn = screen.getByText(UI_STRINGS.initialSetupCompletion.doneAction);
+    fireEvent.click(doneBtn);
+    expect(mockSetInitialSetupModalOpen).toHaveBeenCalledWith(false);
+  });
+
+  it('renders failed email dispatches table, retry action, and back to preview navigation', async () => {
+    const summaryWithFailures = {
+      importedCount: 2,
+      totalProcessed: 2,
+      mappedCount: 1,
+      mappedEmailsSent: 1,
+      unmappedCount: 1,
+      unmappedEmailsSent: 0,
+      failedEmailCount: 1,
+      failedEmails: [
+        {
+          vendorId: 'v-99',
+          vendorName: 'Faulty Vendor Inc',
+          email: 'faulty@vendor.com',
+          template: 'Template B',
+          reason: 'Mailbox full',
+        },
+      ],
+      overallStatus: 'COMPLETED_WITH_FAILURES' as const,
+      period: '2_years',
+      totalVendors: 2,
+    };
+
+    (useApp as jest.Mock).mockReturnValue({
+      initialSetupModalOpen: true,
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      historicalPurchaseDataPeriod: '2_years',
+      setHistoricalPurchaseDataPeriod: mockSetHistoricalPurchaseDataPeriod,
+      processHistoricalPurchaseData: mockProcessHistoricalPurchaseData.mockResolvedValue(2),
+      lastIngestionSummary: summaryWithFailures,
+      setInitialSetupCompleted: jest.fn(),
+      activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
+      buyerVendors: mockBuyerVendors,
+      showToast: mockShowToast,
+    });
+
+    render(<InitialSetupModal />);
+
+    // Navigate to Step 5
+    fireEvent.click(screen.getByText('5. Dispatch Emails'));
+
+    expect(screen.getByTestId('ingestion-completion-summary')).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.initialSetupCompletion.statusWithFailures)).toBeInTheDocument();
+    expect(screen.getByText('Faulty Vendor Inc')).toBeInTheDocument();
+    expect(screen.getByText('faulty@vendor.com')).toBeInTheDocument();
+    expect(screen.getByText('Mailbox full')).toBeInTheDocument();
+
+    // Click Retry Failed Emails
+    const retryBtn = screen.getByText(UI_STRINGS.initialSetupCompletion.retryAction);
+    await act(async () => {
+      fireEvent.click(retryBtn);
+    });
+    expect(mockProcessHistoricalPurchaseData).toHaveBeenCalled();
+    expect(mockShowToast).toHaveBeenCalledWith('Retrying Dispatches', expect.any(String), 'info');
+
+    // Click Back to Email Preview
+    const backBtn = screen.getByText(UI_STRINGS.initialSetupCompletion.backToReviewAction);
+    fireEvent.click(backBtn);
+    expect(screen.queryByTestId('ingestion-completion-summary')).not.toBeInTheDocument();
+    expect(screen.getByText(/COMPLETE SETUP & INGEST/i)).toBeInTheDocument();
+  });
+
+
+  it('supports pagination controls (Show More, Show All, Collapse) in Step 2 and Step 3', () => {
+    const manyVendors = Array.from({ length: 60 }, (_, i) => ({
+      'Vendor Code': `V-${i + 100}`,
+      'Company Name': `Vendor ${i}`,
+      Email: `vendor${i}@test.com`,
+    }));
+    const wsV = XLSX.utils.json_to_sheet(manyVendors);
+    const wbV = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wbV, wsV, 'Vendors');
+    const vBuf = XLSX.write(wbV, { type: 'array', bookType: 'xlsx' });
+    const vFile: any = new File([vBuf], 'many_vendors.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    vFile.__buffer = vBuf;
+
+    const { container } = render(<InitialSetupModal />);
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      fireEvent.change(fileInput, { target: { files: [vFile] } });
+    }
+
+    // Now storedVendors.length is 60 > 50, so pagination buttons appear
+    const showMoreBtn = screen.getByText(/Show More/i);
+    fireEvent.click(showMoreBtn);
+    expect(screen.getByText(/Collapse to 50/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Collapse to 50/i));
+    expect(screen.getByText(/Show More/i)).toBeInTheDocument();
+
+    const showAllBtn = screen.getByText(/Show All/i);
+    fireEvent.click(showAllBtn);
+    expect(screen.getByText(/Collapse to 50/i)).toBeInTheDocument();
+
+    // Test Clear button in Step 2
+    const clearBtn = screen.getByTitle('Clear uploaded Vendor Master file');
+    fireEvent.click(clearBtn);
+    expect(screen.getByText(/No Vendor Master file selected/i)).toBeInTheDocument();
+  });
+
+  it('handles retry failure with toast warning', async () => {
+    const summaryWithFailures = {
+      importedCount: 1,
+      totalProcessed: 1,
+      mappedCount: 0,
+      mappedEmailsSent: 0,
+      unmappedCount: 1,
+      unmappedEmailsSent: 0,
+      failedEmailCount: 1,
+      failedEmails: [{ vendorId: 'v-1', vendorName: 'Vendor 1', email: 'v1@test.com', template: 'Template B', reason: 'Failed' }],
+      overallStatus: 'COMPLETED_WITH_FAILURES' as const,
+      period: '2_years',
+      totalVendors: 1,
+    };
+
+    const failingProcess = jest.fn().mockRejectedValue(new Error('Network error'));
+    (useApp as jest.Mock).mockReturnValue({
+      initialSetupModalOpen: true,
+      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
+      historicalPurchaseDataPeriod: '2_years',
+      setHistoricalPurchaseDataPeriod: mockSetHistoricalPurchaseDataPeriod,
+      processHistoricalPurchaseData: failingProcess,
+      lastIngestionSummary: summaryWithFailures,
+      setInitialSetupCompleted: jest.fn(),
+      activeBuyerAccount: { organizationName: 'L&T' },
+      buyerVendors: mockBuyerVendors,
+      showToast: mockShowToast,
+    });
+
+    render(<InitialSetupModal />);
+    fireEvent.click(screen.getByText('5. Dispatch Emails'));
+
+    const retryBtn = screen.getByText(UI_STRINGS.initialSetupCompletion.retryAction);
+    await act(async () => {
+      fireEvent.click(retryBtn);
+    });
+    expect(mockShowToast).toHaveBeenCalledWith('Retry Failed', expect.any(String), 'warning');
+  });
+
+  it('cancels active background ingestion jobs when modal is closed', async () => {
+    let cancelCalled = false;
+    (global.fetch as jest.Mock).mockImplementation((url: string) => {
+      if (url.includes('/api/vendor-ingestion/session')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ data: { session: { id: 'sess-active-123' } } }),
+        });
+      }
+      if (url.includes('stream-upload')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                job: {
+                  id: 'job-active-1',
+                  jobType: 'VENDOR_MASTER',
+                  status: 'PROCESSING',
+                },
+              },
+            }),
+        });
+      }
+      if (url.includes('/jobs/cancel')) {
+        cancelCalled = true;
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ success: true }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: {} }),
+      });
+    });
+
+    const csvContent = 'Vendor Code,Company Name,Email\nV-1,Active Vendor,active@test.com';
+    const csvFile = new File([csvContent], 'active_vendors.csv', { type: 'text/csv' });
+
+    const { container } = render(<InitialSetupModal />);
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [csvFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    const closeBtn = container.querySelector('button[title="Dismiss setup (you can resume from the blinking corner badge)"]');
+    if (closeBtn) {
+      await act(async () => {
+        fireEvent.click(closeBtn);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+    expect(cancelCalled).toBe(true);
+    expect(mockSetInitialSetupModalOpen).toHaveBeenCalledWith(false);
+  });
+
+  it('restores previous vendor master and PO files from active session', async () => {
+    let sessionFetched = false;
+    (global.fetch as jest.Mock).mockImplementation((url: string) => {
+      if (url.includes('/api/vendor-ingestion/session')) {
+        sessionFetched = true;
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                session: {
+                  id: 'sess-restore',
+                  vendorMasterFileName: 'restored_vendors.xlsx',
+                  vendorMasterRowCount: 25,
+                  poFileName: 'restored_pos.xlsx',
+                  poRowCount: 120,
+                },
+              },
+            }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ success: true }),
+      });
+    });
+
+    render(<InitialSetupModal />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    expect(sessionFetched).toBe(true);
+  });
+
+  it('triggers streaming upload for CSV files when sessionId is present', async () => {
+    let streamUploadCalled = false;
+    (global.fetch as jest.Mock).mockImplementation((url: string) => {
+      if (url.includes('/api/vendor-ingestion/session')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ data: { session: { id: 'sess-csv-stream' } } }),
+        });
+      }
+      if (url.includes('stream-upload')) {
+        streamUploadCalled = true;
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                job: {
+                  id: 'job-stream-1',
+                  jobType: 'VENDOR_MASTER',
+                  status: 'PROCESSING',
+                },
+              },
+            }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: {} }),
+      });
+    });
+
+    const csvContent = 'Vendor Code,Company Name,Email\nV-1,Stream Vendor,stream@test.com';
+    const csvFile = new File([csvContent], 'stream_vendors.csv', { type: 'text/csv' });
+
+    const { container } = render(<InitialSetupModal />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [csvFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    expect(streamUploadCalled).toBe(true);
+    expect(mockShowToast).toHaveBeenCalledWith('Ingestion Started', expect.any(String), 'info');
+  });
+
+  it('triggers start-job on Excel upload when sessionId exists, and tests Step 3 pagination and browse button', async () => {
+    (global.fetch as jest.Mock).mockImplementation((url: string) => {
+      if (url.includes('/api/vendor-ingestion/session')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ data: { session: { id: 'sess-excel-startjob' } } }),
+        });
+      }
+      if (url.includes('start-job')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                job: {
+                  id: 'job-excel-1',
+                  skippedRecords: 0,
+                  failedRecords: 0,
+                },
+              },
+            }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: {} }),
+      });
+    });
+
+    const manyPOs = Array.from({ length: 60 }, (_, i) => ({
+      'PO Number': `PO-${i + 100}`,
+      'PO Date': '2025-01-01',
+      'Supplier Name': `Supplier ${i}`,
+      'Item Description': `Item ${i}`,
+      Quantity: 10,
+      Price: 100,
+      Total: 1000,
+    }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(manyPOs), 'POs');
+    const poBuf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const poFile: any = new File([poBuf], 'many_pos.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    poFile.__buffer = poBuf;
+
+    const { container } = render(<InitialSetupModal />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    // In Step 2: Vendor Master Excel upload with sessionId
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    const wsV = XLSX.utils.json_to_sheet([{ 'Vendor Code': 'V-1', 'Company Name': 'Vendor 1', Email: 'v1@test.com' }]);
+    const wbV = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wbV, wsV, 'Vendors');
+    const vBuf = XLSX.write(wbV, { type: 'array', bookType: 'xlsx' });
+    const vFile: any = new File([vBuf], 'vendor_startjob.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    vFile.__buffer = vBuf;
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) {
+      await act(async () => {
+        fireEvent.change(vInput, { target: { files: [vFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // Go to Step 3
+    fireEvent.click(screen.getByText('3. PO Dump'));
+
+    // Test Browse File button in empty state
+    const browseBtns = screen.getAllByText(/Browse File/i);
+    if (browseBtns.length > 0) {
+      fireEvent.click(browseBtns[0]);
+    }
+
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [poFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // In Step 3, pagination controls appear for 60 records
+    const showMoreBtns = screen.getAllByText(/Show More/i);
+    if (showMoreBtns[0]) fireEvent.click(showMoreBtns[0]);
+
+    const collapseBtns = screen.getAllByText(/Collapse to 50/i);
+    if (collapseBtns[0]) fireEvent.click(collapseBtns[0]);
+
+    const showAllBtns = screen.getAllByText(/Show All/i);
+    if (showAllBtns[0]) fireEvent.click(showAllBtns[0]);
+  });
+
+  it('handles start-job errors and streaming upload exceptions gracefully', async () => {
+    (global.fetch as jest.Mock).mockImplementation((url: string) => {
+      if (url.includes('/api/vendor-ingestion/session')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ data: { session: { id: 'sess-errors-1' } } }),
+        });
+      }
+      if (url.includes('stream-upload')) {
+        return Promise.reject(new Error('Streaming network failure'));
+      }
+      if (url.includes('start-job')) {
+        return Promise.resolve({
+          ok: false,
+          status: 500,
+          json: () => Promise.resolve({ error: 'Internal Server Error' }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: {} }),
+      });
+    });
+
+    const { container } = render(<InitialSetupModal />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    // Test streaming upload error in Step 2 (vendor master CSV)
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    const csvFile = new File(['code,name,email\nV-1,Err,err@test.com'], 'stream_err.csv', { type: 'text/csv' });
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [csvFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+    expect(mockShowToast).toHaveBeenCalledWith('Upload Error', expect.any(String), 'warning');
+
+    // Test streaming upload error in Step 3 (PO dump CSV)
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const poCsvFile = new File(['po,date,vendor\nPO-1,2025-01-01,Err'], 'po_stream_err.csv', { type: 'text/csv' });
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [poCsvFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+    expect(mockShowToast).toHaveBeenCalledWith('Upload Error', expect.any(String), 'warning');
+
+    // Test start-job ok:false branch on Excel upload in Step 2
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    const wsV = XLSX.utils.json_to_sheet([{ 'Vendor Code': 'V-1', 'Company Name': 'V 1', Email: 'v1@test.com' }]);
+    const wbV = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wbV, wsV, 'Vendors');
+    const vBuf = XLSX.write(wbV, { type: 'array', bookType: 'xlsx' });
+    const vFile: any = new File([vBuf], 'vendor_err.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    vFile.__buffer = vBuf;
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [vFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    // Test start-job ok:false branch on Excel upload in Step 3
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const wsP = XLSX.utils.json_to_sheet([{ 'PO Number': 'PO-1', 'PO Date': '2025-01-01', 'Supplier Name': 'V 1' }]);
+    const wbP = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wbP, wsP, 'POs');
+    const pBuf = XLSX.write(wbP, { type: 'array', bookType: 'xlsx' });
+    const pFile: any = new File([pBuf], 'po_err.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    pFile.__buffer = pBuf;
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [pFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+  });
+
+  it('renders IngestionProgressCard with diverse statuses and edge cases', () => {
+    const { rerender } = render(
+      <IngestionProgressCard
+        job={{
+          id: 'job-1',
+          jobType: 'VENDOR_MASTER',
+          fileName: 'vendors.xlsx',
+          status: 'PROCESSING',
+          totalRecords: 100,
+          processedRecords: 50,
+          importedRecords: 45,
+          skippedRecords: 3,
+          failedRecords: 2,
+        }}
+        title="Vendor Master"
+      />
+    );
+    expect(screen.getAllByText('Processing...').length).toBeGreaterThanOrEqual(1);
+
+    rerender(
+      <IngestionProgressCard
+        job={{
+          id: 'job-2',
+          jobType: 'PO_DUMP',
+          fileName: 'pos.xlsx',
+          status: 'COMPLETED',
+          totalRecords: 0,
+          processedRecords: 0,
+          importedRecords: 0,
+          skippedRecords: 0,
+          failedRecords: 0,
+        }}
+        title="PO Dump"
+      />
+    );
+    expect(screen.getByText('Completed')).toBeInTheDocument();
+
+    rerender(
+      <IngestionProgressCard
+        job={{
+          id: 'job-3',
+          jobType: 'VENDOR_MASTER',
+          fileName: 'err.xlsx',
+          status: 'FAILED',
+          totalRecords: 0,
+          processedRecords: 5,
+          importedRecords: 0,
+          skippedRecords: 0,
+          failedRecords: 5,
+          errorMessage: 'Corrupt file header',
+        }}
+        title="Vendor Master"
+      />
+    );
+    expect(screen.getAllByText('Failed').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/Corrupt file header/i)).toBeInTheDocument();
+  });
+
+  it('converts 1-5 scale vendor ratings to 0-100 scale correctly in vendor master upload', async () => {
+    const wsV = XLSX.utils.json_to_sheet([
+      {
+        'Vendor Code': 'V-5STAR',
+        'Company Name': 'Five Star Vendor Ltd',
+        Email: 'fivestar@vendor.com',
+        Rating: 4.5,
+      },
+    ]);
+    const wbV = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wbV, wsV, 'Vendors');
+    const vBuf = XLSX.write(wbV, { type: 'array', bookType: 'xlsx' });
+    const vFile: any = new File([vBuf], 'fivestar.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    vFile.__buffer = vBuf;
+
+    const { container } = render(<InitialSetupModal />);
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [vFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    expect(screen.getByText('Five Star Vendor Ltd')).toBeInTheDocument();
+  });
+
+  it('does not treat Email ID column as vendor code when vendor code column is absent', async () => {
+    const wsV = XLSX.utils.json_to_sheet([
+      {
+        'Company Name': 'Govardhan Solutions pvt LTD',
+        'Contact Person': 'Govardhan',
+        'Email ID': 'govardhan.kilari@procucev.com',
+        'Phone Number': '99667 66905',
+        GSTIN: '27AAACA1928K1Z4',
+      },
+    ]);
+    const wbV = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wbV, wsV, 'Vendors');
+    const vBuf = XLSX.write(wbV, { type: 'array', bookType: 'xlsx' });
+    const vFile: any = new File([vBuf], 'vendor_data_001.csv', {
+      type: 'text/csv',
+    });
+    vFile.__buffer = vBuf;
+
+    const { container } = render(<InitialSetupModal />);
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [vFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    expect(screen.getByText('Govardhan Solutions pvt LTD')).toBeInTheDocument();
+    // Auto-assigned vendor code VND-1001 should be rendered, not the email address in vendor code cell
+    expect(screen.getByText('VND-1001')).toBeInTheDocument();
+    expect(screen.getByText('govardhan.kilari@procucev.com')).toBeInTheDocument();
   });
 });

@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState, useRef } from 'react';
-import { useRouter } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import { useApp } from '@/lib/store';
 import { formatCurrency, normalizePoDate } from '@/lib/constants';
@@ -10,7 +9,9 @@ import {
   VendorMasterUploadRecord,
   PurchaseOrderLineItemRecord,
   HistoricalPurchaseVendorRecord,
+  IngestionSummary,
 } from '@/lib/types';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
   UploadCloud,
   FileSpreadsheet,
@@ -198,23 +199,26 @@ export function IngestionProgressCard({
 }
 
 export default function InitialSetupModal() {
-  const router = useRouter();
   const {
     initialSetupModalOpen,
     setInitialSetupModalOpen,
     historicalPurchaseDataPeriod,
     setHistoricalPurchaseDataPeriod,
     processHistoricalPurchaseData,
+    lastIngestionSummary,
+    setInitialSetupCompleted,
     activeBuyerAccount,
     buyerVendors,
     showToast,
   } = useApp();
 
+  const [completionSummary, setCompletionSummary] = useState<IngestionSummary | null>(null);
+  const [isRetryingFailedEmails, setIsRetryingFailedEmails] = useState(false);
+
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1);
-  // The buyer's own saved custom wording for Template A/B (vendor-email-templates
-  // page) — fetched once Step 5 is reached, so this preview shows exactly what
-  // storeService.processHistoricalPurchaseData will actually send, not just the
-  // hardcoded placeholder copy. Undefined/null fields fall back to that copy.
+  // The buyer's own saved wording for Template A/B — fetched once Step 5 is reached,
+  // so this preview shows exactly what storeService.processHistoricalPurchaseData will
+  // actually send, not just the hardcoded placeholder copy.
   const [savedTemplateA, setSavedTemplateA] = useState<DispatchTemplate | null>(null);
   const [savedTemplateB, setSavedTemplateB] = useState<DispatchTemplate | null>(null);
   React.useEffect(() => {
@@ -230,6 +234,12 @@ export default function InitialSetupModal() {
       cancelled = true;
     };
   }, [step]);
+
+  React.useEffect(() => {
+    if (lastIngestionSummary) {
+      setCompletionSummary(lastIngestionSummary);
+    }
+  }, [lastIngestionSummary]);
   const [selectedPeriod, setSelectedPeriod] = useState<'1_year' | '2_years' | '3_years'>(historicalPurchaseDataPeriod || '2_years');
 
   // Active Session & Ingestion Job States
@@ -457,20 +467,27 @@ export default function InitialSetupModal() {
 
           const parsedVendors: VendorMasterUploadRecord[] = rawJson.map((row, idx) => {
             const keys = Object.keys(row);
-            const getVal = (possibleKeys: string[]): string => {
+            const getVal = (possibleKeys: string[], excludeSubstrings: string[] = []): string => {
+              // Pass 1: Exact matches (after stripping non-alphanumeric)
               for (const pk of possibleKeys) {
                 const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
-                const matchedKey = keys.find((k) => k.toLowerCase().trim().replace(/[^a-z0-9]/g, '') === pkClean);
+                const matchedKey = keys.find((k) => {
+                  const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+                  if (excludeSubstrings.some((ex) => kClean.includes(ex.toLowerCase().replace(/[^a-z0-9]/g, '')))) return false;
+                  return kClean === pkClean;
+                });
                 if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
                   return String(row[matchedKey]).trim();
                 }
               }
+              // Pass 2: Fuzzy matches (only for keys with 4+ alphanumeric chars to avoid short false matches like 'id' or 'code')
               for (const pk of possibleKeys) {
                 const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
-                if (!pkClean) continue;
+                if (!pkClean || pkClean.length < 4) continue;
                 const matchedKey = keys.find((k) => {
                   const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-                  return kClean.includes(pkClean) || pkClean.includes(kClean);
+                  if (excludeSubstrings.some((ex) => kClean.includes(ex.toLowerCase().replace(/[^a-z0-9]/g, '')))) return false;
+                  return kClean.includes(pkClean);
                 });
                 if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
                   return String(row[matchedKey]).trim();
@@ -479,13 +496,21 @@ export default function InitialSetupModal() {
               return '';
             };
 
-            const vendorCode = getVal(['vendorcode', 'vendor code', 'code', 'vendor id', 'supplier code', 'id']) || `VND-${1000 + idx + 1}`;
-            const companyName = getVal(['companyname', 'company name', 'vendor name', 'supplier', 'name', 'vendor', 'supplier name']) || `Supplier ${idx + 1}`;
-            const contactPerson = getVal(['contactperson', 'contact person', 'contact', 'person', 'representative', 'contact person name']) || 'Operations Lead';
-            const email = getVal(['email', 'email id', 'email_id', 'mail', 'corporate email']) || `contact@${companyName.toLowerCase().replace(/[^a-z0-9]/g, '') || 'vendor'}.com`;
-            const phone = getVal(['phone', 'mobile', 'contact number', 'phone number', 'telephone', 'mobile number']) || '+91 98000 00000';
-            const address = getVal(['address', 'location', 'city', 'plant location', 'street', 'office address']) || 'Industrial Zone, India';
-            const gstNumber = getVal(['gstnumber', 'gstin', 'gst', 'gst number', 'tax id', 'gst no']) || '27AAACA0000A1Z0';
+            let rawVendorCode = getVal(
+              ['vendorcode', 'vendor code', 'vendor_code', 'suppliercode', 'supplier code', 'vendor id', 'supplier id', 'vcode', 'vnd code', 'vendorno', 'vendor no', 'vendor number', 'supplier number', 'vendor identifier'],
+              ['email', 'mail', 'phone', 'contact', 'gst']
+            );
+            // If the resolved vendorCode is an email address, discard it so it doesn't take email as vendor code
+            if (rawVendorCode && (rawVendorCode.includes('@') || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawVendorCode))) {
+              rawVendorCode = '';
+            }
+            const vendorCode = rawVendorCode || `VND-${1000 + idx + 1}`;
+            const companyName = getVal(['companyname', 'company name', 'vendor name', 'supplier name', 'supplier', 'company', 'organization', 'vendor', 'name'], ['email', 'mail', 'phone', 'contactperson', 'code']) || `Supplier ${idx + 1}`;
+            const contactPerson = getVal(['contactperson', 'contact person', 'contact person name', 'representative', 'person name', 'contact name', 'person', 'poc'], ['email', 'mail', 'phone', 'mobile']) || 'Operations Lead';
+            const email = getVal(['email', 'email id', 'email_id', 'emailid', 'email address', 'emailaddress', 'mail', 'corporate email', 'company email', 'vendor email']) || `contact@${companyName.toLowerCase().replace(/[^a-z0-9]/g, '') || 'vendor'}.com`;
+            const phone = getVal(['phone', 'mobile', 'contact number', 'phone number', 'telephone', 'mobile number', 'contact no', 'phone no', 'mobile no', 'cell', 'whatsapp'], ['email', 'mail', 'person', 'contactperson']) || '+91 98000 00000';
+            const address = getVal(['address', 'location', 'city', 'plant location', 'street', 'office address', 'plant', 'state', 'pincode', 'pin code']) || 'Industrial Zone, India';
+            const gstNumber = getVal(['gstnumber', 'gstin', 'gst', 'gst number', 'tax id', 'gst no', 'taxid', 'tax number', 'gstin number']) || '27AAACA0000A1Z0';
             const ratingRaw = getVal(['vendorratingscore', 'rating', 'score', 'vendor rating', 'rating 0 100', 'performance score', 'vendor rating score', 'rating optional', 'rating 0-100', 'rating0100']);
             let vendorRatingScore: number | undefined = undefined;
             if (ratingRaw && !isNaN(Number(ratingRaw))) {
@@ -714,10 +739,10 @@ export default function InitialSetupModal() {
               }
               for (const pk of possibleKeys) {
                 const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
-                if (!pkClean) continue;
+                if (!pkClean || pkClean.length < 3) continue;
                 const matchedKey = keys.find((k) => {
                   const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-                  return kClean.includes(pkClean) || pkClean.includes(kClean);
+                  return kClean.includes(pkClean);
                 });
                 if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
                   return row[matchedKey];
@@ -1154,8 +1179,56 @@ export default function InitialSetupModal() {
   const handleConfirmFinalIngestion = async () => {
     if (isConfirmingIngestion) return;
     setIsConfirmingIngestion(true);
-    await processHistoricalPurchaseData(selectedPeriod, joinedVendors);
-    setIsConfirmingIngestion(false);
+    try {
+      const imported = await processHistoricalPurchaseData(selectedPeriod, joinedVendors);
+      if (!lastIngestionSummary) {
+        const mapped = joinedVendors.filter((v) => v.categoriesMappedByBuyer);
+        const unmapped = joinedVendors.filter((v) => !v.categoriesMappedByBuyer);
+        setCompletionSummary({
+          importedCount: typeof imported === 'number' ? imported : joinedVendors.length,
+          totalProcessed: joinedVendors.length,
+          mappedCount: mapped.length,
+          mappedEmailsSent: mapped.length,
+          unmappedCount: unmapped.length,
+          unmappedEmailsSent: unmapped.length,
+          failedEmailCount: 0,
+          failedEmails: [],
+          overallStatus: 'COMPLETED',
+          period: selectedPeriod,
+          totalVendors: joinedVendors.length,
+        });
+      }
+    } catch (err) {
+      console.error('Ingestion confirmation error:', err);
+    } finally {
+      setIsConfirmingIngestion(false);
+    }
+  };
+
+  const handleRetryFailedEmails = async () => {
+    if (isRetryingFailedEmails) return;
+    setIsRetryingFailedEmails(true);
+    try {
+      await processHistoricalPurchaseData(selectedPeriod, joinedVendors);
+      showToast(
+        'Retrying Dispatches',
+        'Re-attempting emails for failed vendors. Already sent emails were preserved.',
+        'info'
+      );
+    } catch (err) {
+      console.error('Retry error:', err);
+      showToast('Retry Failed', 'Could not complete retry dispatch.', 'warning');
+    } finally {
+      setIsRetryingFailedEmails(false);
+    }
+  };
+
+  const handleCompleteAndClose = () => {
+    if (setInitialSetupCompleted) {
+      setInitialSetupCompleted(true);
+    }
+    setInitialSetupModalOpen(false);
+    setCompletionSummary(null);
   };
 
   return (
@@ -2131,134 +2204,291 @@ export default function InitialSetupModal() {
         {/* STEP 5: FINAL CONFIRMATION & TAILORED EMAIL PREVIEWS */}
         {step === 5 && (
           <div className="space-y-4 animate-fade-in">
-            <div>
-              <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
-                Step 5: Confirm Ingestion & Dispatch Tailored Onboarding Emails
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                The platform will dispatch tailored credentials and category notices based on PO correlation.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              {/* Template A Preview: PO-Mapped Suppliers */}
-              <div className="p-3.5 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/60 space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-bold text-indigo-900 dark:text-indigo-200 text-[11px] flex items-center gap-1">
-                    <CheckCircle2 size={13} className="text-emerald-600" />
-                    Template A: Suppliers With Pre-Purchase Order History ({mappedVendors.length})
-                  </span>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {(savedTemplateA?.subject || savedTemplateA?.message) && (
-                      <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300">
-                        Customized
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => router.push('/buyer/vendor-email-templates')}
-                      className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
-                    >
-                      Edit Message
-                    </button>
+            {completionSummary ? (
+              <div className="space-y-4 animate-fade-in" data-testid="ingestion-completion-summary">
+                {/* Completion Header Banner */}
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-500/10 via-teal-500/10 to-indigo-500/10 border border-emerald-500/20 dark:border-emerald-500/30 flex items-center justify-between gap-4 flex-wrap">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                      completionSummary.failedEmailCount > 0
+                        ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
+                        : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                    }`}>
+                      {completionSummary.failedEmailCount > 0 ? <AlertCircle size={22} /> : <CheckCircle2 size={22} />}
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-black text-slate-900 dark:text-white">
+                        {UI_STRINGS.initialSetupCompletion.title}
+                      </h4>
+                      <p className="text-xs text-slate-500 dark:text-gray-400">
+                        {UI_STRINGS.initialSetupCompletion.subtitle}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                      {UI_STRINGS.initialSetupCompletion.statusHeading}:
+                    </span>
+                    <span className={`px-2.5 py-1 rounded-full text-xs font-black tracking-wide ${
+                      completionSummary.overallStatus === 'COMPLETED' || completionSummary.failedEmailCount === 0
+                        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700'
+                        : 'bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300 border border-amber-300 dark:border-amber-700'
+                    }`}>
+                      {completionSummary.overallStatus === 'COMPLETED' || completionSummary.failedEmailCount === 0
+                        ? UI_STRINGS.initialSetupCompletion.statusCompleted
+                        : UI_STRINGS.initialSetupCompletion.statusWithFailures}
+                    </span>
                   </div>
                 </div>
-                <div className="p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-indigo-100 dark:border-indigo-900 text-[10px] space-y-1 font-mono text-slate-700 dark:text-gray-300">
-                  <p>
-                    <strong>Subject:</strong>{' '}
-                    {savedTemplateA?.subject ||
-                      `${activeBuyerAccount?.organizationName || 'Larsen & Toubro'} has mapped your supply categories`}
-                  </p>
-                  {savedTemplateA?.message ? (
-                    <p className="text-slate-600 dark:text-gray-300">{savedTemplateA.message}</p>
-                  ) : (
-                    <p className="text-emerald-700 dark:text-emerald-400 font-bold">
-                      • 1st Set: Engineering Spares - Mechanical<br />
-                      • 2nd Set: Pumps, Valves, Hoses, Machinery Parts
-                    </p>
-                  )}
-                  <p className="text-slate-400">• Vendor code & categories table + Sign-in link always included</p>
-                </div>
-              </div>
 
-              {/* Template B Preview: Unmapped Suppliers */}
-              <div className="p-3.5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-bold text-amber-900 dark:text-amber-200 text-[11px] flex items-center gap-1">
-                    <AlertCircle size={13} className="text-amber-600" />
-                    Template B: Suppliers With NO Pre-Purchase Orders ({unmappedVendors.length})
-                  </span>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {(savedTemplateB?.subject || savedTemplateB?.message) && (
-                      <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300">
-                        Customized
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => router.push('/buyer/vendor-email-templates')}
-                      className="text-[10px] font-semibold text-amber-700 dark:text-amber-400 hover:underline"
-                    >
-                      Edit Message
-                    </button>
+                {/* Metric Summary Cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-center text-xs">
+                  <div className="p-3 rounded-2xl bg-slate-50 dark:bg-gray-800 border border-slate-200 dark:border-gray-700">
+                    <span className="text-[10px] text-slate-400 block font-semibold">{UI_STRINGS.initialSetupCompletion.totalProcessedLabel}</span>
+                    <span className="font-black text-slate-900 dark:text-white text-base mt-0.5 block">{completionSummary.totalProcessed} {UI_STRINGS.initialSetupCompletion.totalVendorsUnit}</span>
+                    <span className="text-[10px] text-slate-500 dark:text-gray-400">{completionSummary.importedCount} new imported</span>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/50">
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 block font-semibold">{UI_STRINGS.initialSetupCompletion.mappedSentLabel}</span>
+                    <span className="font-black text-emerald-700 dark:text-emerald-300 text-base mt-0.5 block">
+                      {formatString(UI_STRINGS.initialSetupCompletion.emailsSentTemplate, {
+                        sent: completionSummary.mappedEmailsSent,
+                        total: completionSummary.mappedCount,
+                      })}
+                    </span>
+                    <span className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80">Template A Dispatched</span>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/50">
+                    <span className="text-[10px] text-amber-600 dark:text-amber-400 block font-semibold">{UI_STRINGS.initialSetupCompletion.unmappedSentLabel}</span>
+                    <span className="font-black text-amber-700 dark:text-amber-300 text-base mt-0.5 block">
+                      {formatString(UI_STRINGS.initialSetupCompletion.emailsSentTemplate, {
+                        sent: completionSummary.unmappedEmailsSent,
+                        total: completionSummary.unmappedCount,
+                      })}
+                    </span>
+                    <span className="text-[10px] text-amber-600/80 dark:text-amber-400/80">Template B Dispatched</span>
+                  </div>
+                  <div className={`p-3 rounded-2xl border ${
+                    completionSummary.failedEmailCount > 0
+                      ? 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800/50'
+                      : 'bg-purple-50 dark:bg-purple-950/40 border-purple-200 dark:border-purple-800/50'
+                  }`}>
+                    <span className={`text-[10px] block font-semibold ${completionSummary.failedEmailCount > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-purple-600 dark:text-purple-400'}`}>
+                      {UI_STRINGS.initialSetupCompletion.failedCountLabel}
+                    </span>
+                    <span className={`font-black text-base mt-0.5 block ${completionSummary.failedEmailCount > 0 ? 'text-rose-700 dark:text-rose-300' : 'text-purple-700 dark:text-purple-300'}`}>
+                      {completionSummary.failedEmailCount} Failed
+                    </span>
+                    <span className="text-[10px] text-slate-500 dark:text-gray-400">
+                      {completionSummary.failedEmailCount > 0 ? 'Action required' : '0 dispatch errors'}
+                    </span>
                   </div>
                 </div>
-                <div className="p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-amber-200 dark:border-amber-900 text-[10px] space-y-1 font-mono text-slate-700 dark:text-gray-300">
-                  <p>
-                    <strong>Subject:</strong>{' '}
-                    {savedTemplateB?.subject || 'Complete Your Category Mapping to Receive Enquiries'}
-                  </p>
-                  {savedTemplateB?.message ? (
-                    <p className="text-slate-600 dark:text-gray-300">{savedTemplateB.message}</p>
-                  ) : (
-                    <p className="text-amber-700 dark:text-amber-400 font-bold">
-                      • &quot;Buyer didn&apos;t map any categories for you, so please map yourself in order to receive enquiries.&quot;
+
+                {/* If all succeeded */}
+                {completionSummary.failedEmailCount === 0 && (
+                  <div className="p-3 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 flex items-center gap-3">
+                    <CheckCircle2 size={18} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
+                    <p className="text-xs text-emerald-800 dark:text-emerald-200 font-medium">
+                      {UI_STRINGS.initialSetupCompletion.allSuccessNotice}
                     </p>
-                  )}
-                  <p className="text-slate-400">• Vendor code & categories table + Sign-in link always included</p>
+                  </div>
+                )}
+
+                {/* If failures occurred: render Failure Table & Retry Action */}
+                {completionSummary.failedEmailCount > 0 && completionSummary.failedEmails.length > 0 && (
+                  <div className="p-3.5 rounded-2xl bg-rose-50/60 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/60 space-y-3">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-2">
+                        <AlertCircle size={16} className="text-rose-600 dark:text-rose-400" />
+                        <span className="text-xs font-bold text-rose-900 dark:text-rose-200">
+                          {UI_STRINGS.initialSetupCompletion.failedTableHeading} ({completionSummary.failedEmails.length})
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-slate-500 dark:text-gray-400">
+                        {UI_STRINGS.initialSetupCompletion.retryHint}
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto max-h-48 border border-rose-200 dark:border-rose-900/60 rounded-xl bg-white dark:bg-gray-900 shadow-inner">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-rose-100/50 dark:bg-rose-950/60 text-[10px] uppercase font-bold text-rose-900 dark:text-rose-300 sticky top-0">
+                          <tr>
+                            <th className="p-2">{UI_STRINGS.initialSetupCompletion.thVendorName}</th>
+                            <th className="p-2">{UI_STRINGS.initialSetupCompletion.thEmail}</th>
+                            <th className="p-2">{UI_STRINGS.initialSetupCompletion.thTemplate}</th>
+                            <th className="p-2">{UI_STRINGS.initialSetupCompletion.thReason}</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-rose-100 dark:divide-rose-900/40 text-[11px]">
+                          {completionSummary.failedEmails.map((f, i) => (
+                            <tr key={`${f.vendorId || i}-${f.email}`}>
+                              <td className="p-2 font-semibold text-slate-900 dark:text-white">{f.vendorName}</td>
+                              <td className="p-2 font-mono text-slate-600 dark:text-gray-300">{f.email || '—'}</td>
+                              <td className="p-2">
+                                <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                                  f.template === 'Template A'
+                                    ? 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300'
+                                    : 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300'
+                                }`}>
+                                  {f.template}
+                                </span>
+                              </td>
+                              <td className="p-2 text-rose-600 dark:text-rose-400">{f.reason}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="flex justify-end pt-1">
+                      <button
+                        type="button"
+                        onClick={handleRetryFailedEmails}
+                        disabled={isRetryingFailedEmails}
+                        className="btn btn-secondary text-xs py-2 px-4 flex items-center gap-1.5 hover:border-rose-400 text-rose-700 dark:text-rose-300 disabled:opacity-50"
+                      >
+                        <RefreshCw size={13} className={isRetryingFailedEmails ? 'animate-spin' : ''} />
+                        {isRetryingFailedEmails
+                          ? UI_STRINGS.initialSetupCompletion.retryingAction
+                          : UI_STRINGS.initialSetupCompletion.retryAction}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Bottom Actions */}
+                <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-gray-800">
+                  <button
+                    type="button"
+                    onClick={() => setCompletionSummary(null)}
+                    className="btn btn-secondary btn-sm"
+                  >
+                    {UI_STRINGS.initialSetupCompletion.backToReviewAction}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCompleteAndClose}
+                    className="btn btn-primary font-bold text-xs py-2.5 px-6 shadow-lg shadow-indigo-600/30 flex items-center gap-2"
+                  >
+                    <CheckCircle2 size={16} /> {UI_STRINGS.initialSetupCompletion.doneAction}
+                  </button>
                 </div>
               </div>
-            </div>
+            ) : (
+              <>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
+                    Step 5: Confirm Ingestion & Dispatch Tailored Onboarding Emails
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+                    The platform will dispatch tailored credentials and category notices based on PO correlation.
+                  </p>
+                </div>
 
-            {/* Ingestion Totals Grid */}
-            <div className="grid grid-cols-4 gap-2.5 text-center text-xs">
-              <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-gray-800 border border-slate-200 dark:border-gray-700">
-                <span className="text-[10px] text-slate-400 block">Total Stored</span>
-                <span className="font-black text-slate-900 dark:text-white text-sm">{joinedVendors.length} Vendors</span>
-              </div>
-              <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/50">
-                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 block">PO Mapped</span>
-                <span className="font-black text-emerald-700 dark:text-emerald-300 text-sm">{mappedVendors.length} Suppliers</span>
-              </div>
-              <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/50">
-                <span className="text-[10px] text-amber-600 dark:text-amber-400 block">Self-Map Required</span>
-                <span className="font-black text-amber-700 dark:text-amber-300 text-sm">{unmappedVendors.length} Suppliers</span>
-              </div>
-              <div className="p-2.5 rounded-xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/50">
-                <span className="text-[10px] text-purple-600 dark:text-purple-400 block">3-Day Reminders</span>
-                <span className="font-black text-purple-700 dark:text-purple-300 text-sm">Active (Day 3)</span>
-              </div>
-            </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  {/* Template A Preview: PO-Mapped Suppliers */}
+                  <div className="p-3.5 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/60 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-indigo-900 dark:text-indigo-200 text-[11px] flex items-center gap-1">
+                        <CheckCircle2 size={13} className="text-emerald-600" />
+                        Template A: Suppliers With Pre-Purchase Order History ({mappedVendors.length})
+                      </span>
+                      {(savedTemplateA?.subject || savedTemplateA?.message) && (
+                        <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 shrink-0">
+                          Customized
+                        </span>
+                      )}
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-indigo-100 dark:border-indigo-900 text-[10px] space-y-1 font-mono text-slate-700 dark:text-gray-300">
+                      <p>
+                        <strong>Subject:</strong>{' '}
+                        {savedTemplateA?.subject ||
+                          `${activeBuyerAccount?.organizationName || 'Larsen & Toubro'} has mapped your supply categories`}
+                      </p>
+                      {savedTemplateA?.message ? (
+                        <p className="text-slate-600 dark:text-gray-300">{savedTemplateA.message}</p>
+                      ) : (
+                        <p className="text-emerald-700 dark:text-emerald-400 font-bold">
+                          • 1st Set: Engineering Spares - Mechanical<br />
+                          • 2nd Set: Pumps, Valves, Hoses, Machinery Parts
+                        </p>
+                      )}
+                      <p className="text-slate-400">• Vendor code & categories table + Sign-in link always included</p>
+                    </div>
+                  </div>
 
-            <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-gray-800">
-              <button
-                type="button"
-                onClick={() => setStep(4)}
-                className="btn btn-secondary btn-sm"
-                disabled={isConfirmingIngestion}
-              >
-                Back to Category Join
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmFinalIngestion}
-                disabled={isConfirmingIngestion}
-                className="btn btn-primary font-bold text-xs py-3 px-6 shadow-lg shadow-indigo-600/30 flex items-center gap-2 disabled:opacity-60"
-              >
-                <CheckCircle2 size={16} />{' '}
-                {isConfirmingIngestion ? 'PROCESSING...' : `[ COMPLETE SETUP & INGEST ${joinedVendors.length} VENDORS ]`}
-              </button>
-            </div>
+                  {/* Template B Preview: Unmapped Suppliers */}
+                  <div className="p-3.5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-amber-900 dark:text-amber-200 text-[11px] flex items-center gap-1">
+                        <AlertCircle size={13} className="text-amber-600" />
+                        Template B: Suppliers With NO Pre-Purchase Orders ({unmappedVendors.length})
+                      </span>
+                      {(savedTemplateB?.subject || savedTemplateB?.message) && (
+                        <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300 shrink-0">
+                          Customized
+                        </span>
+                      )}
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-amber-200 dark:border-amber-900 text-[10px] space-y-1 font-mono text-slate-700 dark:text-gray-300">
+                      <p>
+                        <strong>Subject:</strong>{' '}
+                        {savedTemplateB?.subject || 'Complete Your Category Mapping to Receive Enquiries'}
+                      </p>
+                      {savedTemplateB?.message ? (
+                        <p className="text-slate-600 dark:text-gray-300">{savedTemplateB.message}</p>
+                      ) : (
+                        <p className="text-amber-700 dark:text-amber-400 font-bold">
+                          • &quot;Buyer didn&apos;t map any categories for you, so please map yourself in order to receive enquiries.&quot;
+                        </p>
+                      )}
+                      <p className="text-slate-400">• Vendor code & categories table + Sign-in link always included</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Ingestion Totals Grid */}
+                <div className="grid grid-cols-4 gap-2.5 text-center text-xs">
+                  <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-gray-800 border border-slate-200 dark:border-gray-700">
+                    <span className="text-[10px] text-slate-400 block">Total Stored</span>
+                    <span className="font-black text-slate-900 dark:text-white text-sm">{joinedVendors.length} Vendors</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/50">
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 block">PO Mapped</span>
+                    <span className="font-black text-emerald-700 dark:text-emerald-300 text-sm">{mappedVendors.length} Suppliers</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/50">
+                    <span className="text-[10px] text-amber-600 dark:text-amber-400 block">Self-Map Required</span>
+                    <span className="font-black text-amber-700 dark:text-amber-300 text-sm">{unmappedVendors.length} Suppliers</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/50">
+                    <span className="text-[10px] text-purple-600 dark:text-purple-400 block">3-Day Reminders</span>
+                    <span className="font-black text-purple-700 dark:text-purple-300 text-sm">Active (Day 3)</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-gray-800">
+                  <button
+                    type="button"
+                    onClick={() => setStep(4)}
+                    className="btn btn-secondary btn-sm"
+                    disabled={isConfirmingIngestion}
+                  >
+                    Back to Category Join
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmFinalIngestion}
+                    disabled={isConfirmingIngestion}
+                    className="btn btn-primary font-bold text-xs py-3 px-6 shadow-lg shadow-indigo-600/30 flex items-center gap-2 disabled:opacity-60"
+                  >
+                    <CheckCircle2 size={16} />{' '}
+                    {isConfirmingIngestion ? 'PROCESSING...' : `[ COMPLETE SETUP & INGEST ${joinedVendors.length} VENDORS ]`}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>

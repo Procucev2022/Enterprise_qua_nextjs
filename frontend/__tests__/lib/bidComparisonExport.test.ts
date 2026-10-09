@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
-import { downloadBidComparisonExcel } from '@/lib/bidComparisonExport';
-import type { RFQItem, QuoteComparison } from '@/lib/types';
+import { downloadBidComparisonExcel, downloadVendorQuotationExcel } from '@/lib/bidComparisonExport';
+import type { RFQItem, QuoteComparison, LineItemBid } from '@/lib/types';
 
 jest.mock('xlsx', () => ({
   utils: {
@@ -89,6 +89,62 @@ describe('downloadBidComparisonExcel', () => {
 
   test('triggers a download with the RFQ number in the filename', () => {
     downloadBidComparisonExcel(makeRfq(), [makeQuote()]);
+
+    expect(XLSX.write).toHaveBeenCalledWith(expect.anything(), { bookType: 'xlsx', type: 'array' });
+    expect(createObjectURLSpy).toHaveBeenCalled();
+    expect(clickSpy).toHaveBeenCalled();
+    expect(revokeObjectURLSpy).toHaveBeenCalledWith('blob:mock-url');
+  });
+});
+
+describe('downloadVendorQuotationExcel', () => {
+  let createObjectURLSpy: jest.SpyInstance;
+  let revokeObjectURLSpy: jest.SpyInstance;
+  let clickSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    createObjectURLSpy = jest.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock-url');
+    revokeObjectURLSpy = jest.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    clickSpy = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    createObjectURLSpy.mockRestore();
+    revokeObjectURLSpy.mockRestore();
+    clickSpy.mockRestore();
+  });
+
+  const lineItems: LineItemBid[] = [
+    { id: 'li-1', description: 'Pump', quantity: 2, unit: 'Nos', unitPrice: 0, leadTimeDays: 0, marketBandStatus: 'optimal', paymentTerms: '' },
+    { id: 'li-2', description: 'Valve', quantity: 5, unit: 'Nos', unitPrice: 0, leadTimeDays: 0, marketBandStatus: 'optimal', paymentTerms: '' },
+  ];
+
+  test('builds one row per line item with the entered rate and computed amount', () => {
+    downloadVendorQuotationExcel('RFQ-2026-TEST01', lineItems, { 'li-1': '500', 'li-2': '50' });
+
+    expect(XLSX.utils.json_to_sheet).toHaveBeenCalledWith(
+      [
+        { Item: 'Pump', Quantity: 2, UOM: 'Nos', 'Rate (INR)': 500, 'Amount (INR)': 1000 },
+        { Item: 'Valve', Quantity: 5, UOM: 'Nos', 'Rate (INR)': 50, 'Amount (INR)': 250 },
+      ],
+      { header: ['Item', 'Quantity', 'UOM', 'Rate (INR)', 'Amount (INR)'] },
+    );
+  });
+
+  test('leaves rate/amount blank (not 0) for a line item not yet priced', () => {
+    downloadVendorQuotationExcel('RFQ-2026-TEST01', lineItems, { 'li-1': '500' });
+
+    expect(XLSX.utils.json_to_sheet).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ Item: 'Valve', 'Rate (INR)': '', 'Amount (INR)': '' }),
+      ]),
+      expect.anything(),
+    );
+  });
+
+  test('triggers a download with the RFQ number in the filename', () => {
+    downloadVendorQuotationExcel('RFQ-2026-TEST01', lineItems, { 'li-1': '500', 'li-2': '50' });
 
     expect(XLSX.write).toHaveBeenCalledWith(expect.anything(), { bookType: 'xlsx', type: 'array' });
     expect(createObjectURLSpy).toHaveBeenCalled();

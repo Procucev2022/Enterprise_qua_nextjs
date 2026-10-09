@@ -2251,9 +2251,9 @@ why immediatly received whatsapp rfq alert check flow i asked what i need flow b
 ## 2026-10-03T17:16:03Z
 
 ```text
-i have rfq 2 flow one in rfq create by email and two is rfq flow in portal 
+i have rfq 2 flow one in rfq create by email and two is rfq flow in portal
 
-for portal when vendor submit bid then stop buyer received quate email for 48 hours after buyer make recived quate email 
+for portal when vendor submit bid then stop buyer received quate email for 48 hours after buyer make recived quate email
 ```
 
 ---
@@ -2353,7 +2353,7 @@ vendor submit quate then why received buyer this email if vendor submit qaute fr
 ## 2026-10-03T18:13:54Z
 
 ```text
-in this section if procucev vendor hoy to add badge 
+in this section if procucev vendor hoy to add badge
 
 Vendor Inquiries & Clarifications
 ```
@@ -2415,3 +2415,85 @@ after the buyer can give the po data the data is taken as wrongly in decimal it 
 Remove vendor master template from vendor master and put in Time Horizon only all required columns present in vendor master and template present at time vendor master template name
 ```
 
+---
+
+**Timestamp**: 2026-10-09T11:16:50+05:30
+
+```text
+### Requirement: Send Emails to Both Mapped and Unmapped Vendors on Setup Completion
+
+Update the **Buyer Initial Setup → Step 5: Dispatch Emails** functionality in QUA AI 2.0.
+
+**Expected Behavior:**
+
+When the Buyer clicks **“Complete Setup & Ingest Vendors”**, the system must process both vendor groups and send the appropriate email to each vendor automatically in a single action.
+
+**1. Mapped Vendors**
+- Identify vendors whose categories are successfully mapped using Pre-Purchase Order (PPO) history.
+- Send **Template A: Suppliers With Pre-Purchase Order History** to each eligible mapped vendor.
+- Include the vendor's relevant mapped categories and the appropriate onboarding information.
+
+**2. Unmapped Vendors**
+- Identify vendors whose categories are not mapped because they have no Pre-Purchase Order history.
+- Send **Template B: Suppliers With NO Pre-Purchase Orders** to each eligible unmapped vendor.
+- Inform them that they need to map their categories manually to receive relevant RFQ enquiries.
+
+**3. Execution & Validation Rules**
+- **Single-Click Workflow:** Both email groups must be processed and dispatched together when the Buyer completes setup. No manual switching or multiple completion clicks should be required.
+- **Deduplication:** Ensure vendors are not emailed multiple times if the action is retried.
+- **Validation:** Only send emails to vendors with valid email addresses.
+- **Feedback:** Provide a clear summary to the Buyer showing:
+  - Total vendors processed
+  - Count of Template A emails sent (Mapped)
+  - Count of Template B emails sent (Unmapped)
+  - Any failed or skipped records with reasons
+```
+
+---
+
+**Timestamp**: 2026-10-09T15:46:45+05:30
+
+```text
+raise the pr
+```
+
+---
+
+**Timestamp**: 2026-10-09T16:01:10+05:30
+
+```text
+Remove the test from the UI after extracted the data only show Successfully extracted number of line items and from "file name only" then remove the test using gemini -3- falsh an all
+```
+
+---
+
+**Timestamp**: 2026-10-09T16:38:54+05:30
+
+```text
+Add number of procucev vendor for version 2 and  version3 here and mode v1 vendor 10 next mode v2 procucev vendor 20  like that
+```
+
+---
+
+**Timestamp**: 2026-10-09T17:27:44+05:30
+
+```text
+Completely remove the Vendor Email Templates feature from the Enterprise QUA portal, including its sidebar menu option, page, UI components, and related fields. Do not modify, delete, or change any existing backend code, APIs, database tables, business logic, or other functionalities. Ensure that only the Vendor Email Templates feature is removed from the UI and that all other modules, navigation options, and existing features continue to work exactly as they do now. Do not make any unrelated code changes, refactoring, or UI modifications. Preserve the existing codebase and functionality without affecting any other part of the application.
+```
+
+---
+
+**Timestamp**: 2026-10-09T18:50:45+05:30
+
+```text
+resolve all the conflict and merge 
+```
+
+---
+
+**Timestamp**: 2026-10-09T19:05:52+05:30
+
+```text
+solve it
+Error: request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": read tcp 192.168.0.102:56573->172.217.112.4:443: wsarecv: An established connection was aborted by the software in your host machine.: request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": read tcp 192.168.0.102:56573->172.217.112.4:443: wsarecv: An established connection was aborted by the software in your host machine.Error: request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": dial tcp: lookup daily-cloudcode-pa.googleapis.com: no such host: request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": dial tcp: lookup daily-cloudcode-pa.googleapis.com: no such host
+```

@@ -44,6 +44,8 @@ export interface LineItemBid {
   id: string;
   description: string;
   quantity: number;
+  /** Unit of measure (e.g. "Nos", "Kg", "Rft") — the RFQ's own extracted unit, shown next to Qty in a bid comparison. */
+  unit?: string;
   unitPrice: number;
   leadTimeDays: number;
   uploadedDocument?: string;
@@ -1071,6 +1073,30 @@ export interface HistoricalPurchaseVendorRecord {
   secondSetSecondaryMajors?: string[]; // 2nd Set: Secondary Major Categories
   isExistingInDatabase?: boolean;
   tempPassword?: string;
+}
+
+export interface IngestionFailedEmail {
+  vendorId?: string;
+  vendorName: string;
+  email: string;
+  template: string;
+  reason: string;
+}
+
+export interface IngestionSummary {
+  importedCount: number;
+  totalProcessed: number;
+  mappedCount: number;
+  mappedEmailsSent: number;
+  unmappedCount: number;
+  unmappedEmailsSent: number;
+  failedEmailCount: number;
+  failedEmails: IngestionFailedEmail[];
+  skippedCount?: number;
+  skipped?: Array<{ row: number; reason: string }>;
+  period?: string;
+  totalVendors?: number;
+  overallStatus: 'COMPLETED' | 'COMPLETED_WITH_FAILURES' | 'FAILED';
 }
 
 // ==============================================================================

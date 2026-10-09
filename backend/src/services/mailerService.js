@@ -88,7 +88,9 @@ function getTransporter() {
 }
 
 function fromAddress() {
-  const user = getEnv('GMAIL_SENDER_EMAIL') || getEnv('SMTP_FROM') || getEnv('SMTP_USER') || 'RFQ@procucev.com';
+
+  const user = process.env.SMTP_FROM || process.env.SMTP_USER || 'manav.procucev@gmail.com';
+
   if (user.includes('<') && user.includes('>')) {
     return user;
   }
@@ -275,6 +277,9 @@ async function deliverVendor(message, label) {
       );
       return deliverViaGmailApi(message, label);
     }
+    if (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__) {
+      return deliverViaMailChannels(message, label);
+    }
     throw err;
   }
 }
@@ -393,11 +398,58 @@ async function deliverViaResend(message, label) {
   return { sent: true, messageId: body.id };
 }
 
-/** True when GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN are all set. */
+/**
+ * Sends email via MailChannels HTTPS API (natively supported on Cloudflare Workers without raw sockets).
+ */
+async function deliverViaMailChannels(message, label) {
+  const fromEmail = process.env.SMTP_FROM || process.env.SMTP_USER || 'manav.procucev@gmail.com';
+  const fromName = 'Procucev Enterprise';
+
+  logger.info(`Dispatching ${label} to ${message.to} via MailChannels API`, { subject: message.subject }, 'MAILER_SERVICE');
+  const res = await fetch('https://api.mailchannels.net/tx/v1/send', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      personalizations: [{ to: [{ email: message.to }] }],
+      from: {
+        email: fromEmail,
+        name: fromName,
+      },
+      subject: message.subject,
+      content: [
+        {
+          type: 'text/plain',
+          value: message.text || (message.html ? message.html.replace(/<[^>]+>/g, ' ') : ''),
+        },
+        {
+          type: 'text/html',
+          value: message.html || '',
+        },
+      ],
+    }),
+  });
+
+  if (!res.ok && res.status !== 202) {
+    const errorBody = await res.text().catch(() => '');
+    const err = new Error(`MailChannels responded ${res.status}: ${errorBody}`);
+    err.code = 'MAILCHANNELS_API_ERROR';
+    throw err;
+  }
+
+  logger.info(`${label} sent successfully to ${message.to} via MailChannels`, {}, 'MAILER_SERVICE');
+  return { sent: true, provider: 'mailchannels' };
+}
+
+let gmailApiDisabled = false;
+
+/** True when GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN are all set and active. */
 function isGmailApiConfigured() {
-  const hasClientId = Boolean(getEnv('GMAIL_CLIENT_ID'));
-  const hasClientSecret = Boolean(getEnv('GMAIL_CLIENT_SECRET'));
-  const hasRefreshToken = Boolean(getEnv('GMAIL_REFRESH_TOKEN'));
+  if (gmailApiDisabled) return false;
+  const hasClientId = Boolean(process.env.GMAIL_CLIENT_ID);
+  const hasClientSecret = Boolean(process.env.GMAIL_CLIENT_SECRET);
+  const hasRefreshToken = Boolean(process.env.GMAIL_REFRESH_TOKEN);
   if (!hasClientId || !hasClientSecret || !hasRefreshToken) {
     logger.warn(
       'Gmail API not configured',
@@ -586,6 +638,9 @@ async function deliver(message, label) {
       return await deliverViaGmailApi(message, label);
     } catch (err) {
       lastError = err;
+      if (err?.message?.includes('invalid_grant') || err?.response?.data?.error === 'invalid_grant') {
+        gmailApiDisabled = true;
+      }
       logger.warn(
         `deliverViaGmailApi failed for ${label} — falling back to secondary transport`,
         { errorMessage: err?.message, to: message.to },
@@ -612,14 +667,28 @@ async function deliver(message, label) {
     if (lastError) {
       throw lastError;
     }
+    if (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__) {
+      try {
+        return await deliverViaMailChannels(message, label);
+      } catch (mcErr) {
+        logger.warn(`MailChannels send failed for ${label}`, { errorMessage: mcErr?.message }, 'MAILER_SERVICE');
+      }
+    }
     logger.warn(`SMTP not configured (SMTP_USER/SMTP_PASSWORD unset) — ${label} not sent`, { to: message.to }, 'MAILER_SERVICE');
     return { sent: false, reason: 'SMTP not configured' };
   }
 
-  logger.info(`Dispatching ${label} to ${message.to}`, { subject: message.subject }, 'MAILER_SERVICE');
-  const info = await activeTransporter.sendMail(message);
-  logger.info(`${label} sent successfully to ${message.to}`, { messageId: info.messageId }, 'MAILER_SERVICE');
-  return { sent: true, messageId: info.messageId };
+  try {
+    logger.info(`Dispatching ${label} to ${message.to}`, { subject: message.subject }, 'MAILER_SERVICE');
+    const info = await activeTransporter.sendMail(message);
+    logger.info(`${label} sent successfully to ${message.to}`, { messageId: info.messageId }, 'MAILER_SERVICE');
+    return { sent: true, messageId: info.messageId };
+  } catch (smtpErr) {
+    if (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__) {
+      return await deliverViaMailChannels(message, label);
+    }
+    throw smtpErr;
+  }
 }
 
 /** Shared frame so every Procucev email reads consistently. No invented data. */
@@ -661,15 +730,19 @@ function row(label, value) {
 
 // ── OTP ──────────────────────────────────────────────────────────────────────
 
-function buildOtpEmail(to, code, expiresInSeconds) {
+function buildOtpEmail(to, code, expiresInSeconds, context = {}) {
   const minutes = Math.max(1, Math.round((expiresInSeconds || 600) / 60));
+  const isReg = typeof context === 'object' && context?.isRegistration;
+  const headline = isReg ? 'Account Registration Verification' : 'Secure Sign-In Verification';
+  const subject = isReg ? 'Your Procucev Enterprise Account Verification Code' : 'Your Procucev Enterprise verification code';
   return {
     from: fromAddress(),
     to,
-    subject: 'Your Procucev Enterprise verification code',
+    subject,
+    text: `Your Procucev Enterprise verification code is: ${code}\n\nThis code expires in ${minutes} minute${minutes === 1 ? '' : 's'}.\nIf you did not request this, you can safely ignore this email.`,
     html: wrapEmail(
       'PROCUCEV ENTERPRISE',
-      'Secure Sign-In Verification',
+      headline,
       `<p>Your one-time verification code is:</p>
        <p style="font-size: 32px; font-weight: bold; letter-spacing: 8px; text-align: center; margin: 20px 0; color: #0284c7;">${code}</p>
        <p style="font-size: 13px; color: #64748b; margin: 0;">This code expires in ${minutes} minute${minutes === 1 ? '' : 's'}. If you did not request this, you can safely ignore this email.</p>`
@@ -677,8 +750,8 @@ function buildOtpEmail(to, code, expiresInSeconds) {
   };
 }
 
-async function sendOtpEmail(to, code, expiresInSeconds) {
-  return deliver(buildOtpEmail(to, code, expiresInSeconds), 'OTP email');
+async function sendOtpEmail(to, code, expiresInSeconds, context = {}) {
+  return deliver(buildOtpEmail(to, code, expiresInSeconds, context), 'OTP email');
 }
 
 // ── New RFQ → matched vendors (buyer raised an enquiry in their category) ─────
