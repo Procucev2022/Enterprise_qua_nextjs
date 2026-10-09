@@ -151,9 +151,21 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   // This vendor's real submitted quotes, read back from the actual RFQ
   // records (rfq.quotes[]) instead of a hardcoded 2-row placeholder list.
   const submittedQuotes = rfqs
-    .filter((rfq) => (rfq.quotes || []).some((q) => q.vendorId === myVendorId))
+    .filter((rfq) =>
+      (rfq.quotes || []).some(
+        (q: any) =>
+          (myVendorId && q.vendorId === myVendorId) ||
+          (currentUserSession?.email && q.vendorEmail && q.vendorEmail.toLowerCase() === currentUserSession.email.toLowerCase()) ||
+          (myVendorName && q.vendorName && q.vendorName.toLowerCase().trim() === myVendorName.toLowerCase().trim())
+      )
+    )
     .map((rfq) => {
-      const myQuote: any = (rfq.quotes || []).find((q: any) => q.vendorId === myVendorId);
+      const myQuote: any = (rfq.quotes || []).find(
+        (q: any) =>
+          (myVendorId && q.vendorId === myVendorId) ||
+          (currentUserSession?.email && q.vendorEmail && q.vendorEmail.toLowerCase() === currentUserSession.email.toLowerCase()) ||
+          (myVendorName && q.vendorName && q.vendorName.toLowerCase().trim() === myVendorName.toLowerCase().trim())
+      );
       return {
         rfqNumber: rfq.rfqNumber,
         title: rfq.title,

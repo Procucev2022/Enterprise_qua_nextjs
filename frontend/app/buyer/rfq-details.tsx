@@ -1683,7 +1683,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         title={DETAILS.quotesHeading}
         count={quotes.length}
         toolbar={
-          quotes.length > 0 && activeRfq && !isV0 ? (
+          quotes.length > 0 && activeRfq && (!isV0 || currentRole !== 'buyer') ? (
             <button
               onClick={() => router.push(`/buyer/quote-matrix?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`)}
               className="btn btn-primary btn-xs font-bold inline-flex items-center gap-1.5"
@@ -1693,7 +1693,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           ) : undefined
         }
       >
-        {isV0 ? (
+        {isV0 && currentRole === 'buyer' && !isVendor ? (
           <div className="px-4 pb-10 pt-4 flex flex-col items-center text-center max-w-xl mx-auto space-y-3">
             <span className="w-16 h-16 rounded-2xl bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 flex items-center justify-center shadow-inner">
               <Mail size={26} />
@@ -1707,7 +1707,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               When vendor submits quote, you will receive quote details in your email
             </span>
           </div>
-        ) : currentRole === 'buyer' && activeRfq?.quotesHidden ? (
+        ) : currentRole === 'buyer' && !isVendor && activeRfq?.quotesHidden ? (
           <div className="px-4 pb-10 pt-4 flex flex-col items-center text-center max-w-xl mx-auto space-y-3">
             <span className="w-16 h-16 rounded-2xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 flex items-center justify-center shadow-inner">
               <Lock size={26} />

@@ -995,9 +995,13 @@ async function sendVendorCreditsExhaustedEmail(toOrParams, maybeContext) {
 
 function buildQuoteReceivedEmail(to, { rfq = {}, quote = {}, recipientName }) {
   const isEmailSource = rfq.source === 'email' || rfq.source === 'email_gateway' || rfq.source === 'inbound_email';
+  const isV0 =
+    rfq.sourcingMode === 'mode_0' ||
+    rfq.sourcingMode === 'v0' ||
+    rfq.sourcingMode === 'version_0';
   const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
   const createdAtMs = rfq.createdAt ? new Date(rfq.createdAt).getTime() : 0;
-  const isWithin48h = !isEmailSource && ((createdAtMs > 0 && Date.now() - createdAtMs < FORTY_EIGHT_HOURS_MS) || Boolean(rfq.quotesHidden));
+  const isWithin48h = !isEmailSource && !isV0 && ((createdAtMs > 0 && Date.now() - createdAtMs < FORTY_EIGHT_HOURS_MS) || Boolean(rfq.quotesHidden));
   const isClosed = rfq.status === 'Closed';
   const isSealed = isWithin48h && !isClosed;
 
