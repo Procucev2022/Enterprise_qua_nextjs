@@ -2546,4 +2546,26 @@ Fix the existing Enterprise QUA bulk RFQ upload functionality to extract and pro
 raise the pr for this code
 ```
 
+---
+
+### Prompt
+
+**Timestamp**: 2026-10-10T00:30:04+05:30
+
+```text
+both .eml an dpdf documnets are not working fix this issuse
+```
+
+---
+
+### Prompt
+
+**Timestamp**: 2026-10-10T01:00:44+05:30
+
+```text
+raise the pr
+```
+
+
+
 

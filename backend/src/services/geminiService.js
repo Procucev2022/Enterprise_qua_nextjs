@@ -113,9 +113,9 @@ function resolveApiKeys() {
     .filter(Boolean);
 }
 
-/** Models to attempt, primary first. */
+/** Models to attempt, primary first, deduplicated. */
 function resolveModelChain() {
-  return [GEMINI_CONFIG.PRIMARY_MODEL, ...GEMINI_CONFIG.FALLBACK_MODELS].filter(Boolean);
+  return Array.from(new Set([GEMINI_CONFIG.PRIMARY_MODEL, ...GEMINI_CONFIG.FALLBACK_MODELS].filter(Boolean)));
 }
 
 /**

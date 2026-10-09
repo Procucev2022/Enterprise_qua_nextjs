@@ -282,14 +282,18 @@ export async function buildExtractionRequest(file: File): Promise<RFQExtractionR
     return { fileName: file.name, inlineData: await readAsBase64(file), mimeType };
   }
   if (/\.pdf$/i.test(file.name)) {
+    let pdfText = '';
     try {
-      const pdfText = await extractPdfText(await readAsArrayBuffer(file));
-      if (pdfText && pdfText.length >= 15) {
-        return { fileName: file.name, documentText: pdfText };
-      }
+      pdfText = await extractPdfText(await readAsArrayBuffer(file));
     } catch {
       // fallback to inline data below
     }
+    return {
+      fileName: file.name,
+      inlineData: await readAsBase64(file),
+      mimeType: file.type || 'application/pdf',
+      ...(pdfText && pdfText.length >= 15 ? { documentText: pdfText } : {}),
+    };
   }
   return {
     fileName: file.name,
