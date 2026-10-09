@@ -15,4 +15,15 @@ router.put('/me', authenticate, requireRole('buyer'), buyerProfileController.upd
 // reason for it to be readable anonymously.
 router.get('/categories', authenticate, buyerProfileController.getCategoryTaxonomy);
 
+// Buyer-editable subject/message for the two vendor-onboarding email
+// templates sent by storeService.processHistoricalPurchaseData — same
+// organisation-scoping as /me above.
+router.get('/dispatch-templates', authenticate, requireRole('buyer'), buyerProfileController.getDispatchTemplates);
+router.put(
+  '/dispatch-templates/:templateType',
+  authenticate,
+  requireRole('buyer'),
+  buyerProfileController.updateDispatchTemplate
+);
+
 module.exports = router;

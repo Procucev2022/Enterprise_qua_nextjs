@@ -343,6 +343,15 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       group: NAV_GROUPS.buyerAccount,
       route: '/buyer/profile',
     },
+    {
+      id: 'vendor_email_templates',
+      screenTag: 'Screen 1.8b',
+      label: NAV_ITEMS.vendorEmailTemplates.label,
+      description: NAV_ITEMS.vendorEmailTemplates.description,
+      icon: 'Mail',
+      group: NAV_GROUPS.buyerAccount,
+      route: '/buyer/vendor-email-templates',
+    },
     // Temporarily hidden: Buyer Billing History
     /*
     {
@@ -581,6 +590,8 @@ export const BUYER_PROFILE_ENDPOINTS = {
   ME: '/api/buyer-profile/me',
   /** Shared major/minor procurement taxonomy the category tree renders. */
   CATEGORIES: '/api/buyer-profile/categories',
+  /** The signed-in buyer's custom vendor-onboarding email templates (Template A/B). */
+  DISPATCH_TEMPLATES: '/api/buyer-profile/dispatch-templates',
 };
 
 /**

@@ -246,6 +246,71 @@ describe('Buyer profile service', () => {
     });
   });
 
+  // ── Vendor onboarding dispatch templates (Template A / Template B) ─────────
+  describe('getDispatchTemplates', () => {
+    test('resolves the organisation from the session and reads its templates', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: true, profile: STORED_PROFILE });
+      const readSpy = jest
+        .spyOn(buyerProfileQueries, 'getDispatchTemplates')
+        .mockResolvedValue({ category_mapped: { subject: 'Hi', message: 'Welcome' } });
+
+      await expect(buyerProfileService.getDispatchTemplates(SESSION)).resolves.toEqual({
+        category_mapped: { subject: 'Hi', message: 'Welcome' },
+      });
+      expect(readSpy).toHaveBeenCalledWith('org-1');
+    });
+
+    test('reports a 409 when the account has no organisation', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: false, reason: 'ORG_NOT_LINKED' });
+      await expect(buyerProfileService.getDispatchTemplates(SESSION)).rejects.toMatchObject({ status: 409 });
+    });
+
+    test('reports a 503 when the read fails', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: true, profile: STORED_PROFILE });
+      jest.spyOn(buyerProfileQueries, 'getDispatchTemplates').mockRejectedValue(new Error('ETIMEDOUT'));
+      await expect(buyerProfileService.getDispatchTemplates(SESSION)).rejects.toMatchObject({
+        status: 503,
+        message: BUYER_PROFILE_MESSAGES.PROFILE_LOAD_FAILED,
+      });
+    });
+  });
+
+  describe('saveDispatchTemplate', () => {
+    test('saves the custom subject/message for the signed-in buyer\'s organisation', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: true, profile: STORED_PROFILE });
+      const writeSpy = jest
+        .spyOn(buyerProfileQueries, 'upsertDispatchTemplate')
+        .mockResolvedValue({ subject: 'Hi', message: 'Welcome' });
+
+      const result = await buyerProfileService.saveDispatchTemplate(SESSION, 'category_mapped', {
+        subject: 'Hi',
+        message: 'Welcome',
+      });
+
+      expect(result).toEqual({ subject: 'Hi', message: 'Welcome' });
+      expect(writeSpy).toHaveBeenCalledWith('org-1', 'category_mapped', { subject: 'Hi', message: 'Welcome' }, SESSION.email);
+    });
+
+    test('rejects an unknown template type before touching the database', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: true, profile: STORED_PROFILE });
+      const writeSpy = jest.spyOn(buyerProfileQueries, 'upsertDispatchTemplate');
+
+      await expect(
+        buyerProfileService.saveDispatchTemplate(SESSION, 'not_a_real_type', { subject: 'x', message: 'y' })
+      ).rejects.toMatchObject({ status: 400 });
+      expect(writeSpy).not.toHaveBeenCalled();
+    });
+
+    test('reports a 503 when the write fails', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: true, profile: STORED_PROFILE });
+      jest.spyOn(buyerProfileQueries, 'upsertDispatchTemplate').mockRejectedValue(new Error('ETIMEDOUT'));
+
+      await expect(
+        buyerProfileService.saveDispatchTemplate(SESSION, 'self_map_required', { subject: 'x', message: 'y' })
+      ).rejects.toMatchObject({ status: 503, message: BUYER_PROFILE_MESSAGES.PROFILE_SAVE_FAILED });
+    });
+  });
+
   // ── Write ─────────────────────────────────────────────────────────────────
   describe('saveProfile', () => {
     function mockHappyPath() {

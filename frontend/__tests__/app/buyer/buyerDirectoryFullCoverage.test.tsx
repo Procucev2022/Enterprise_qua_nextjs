@@ -316,8 +316,9 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
       </AppProvider>
     );
 
-    // Add line item
-    const addBtn = screen.getByRole('button', { name: /Add Line Item/i });
+    // Add line item — the button now also appears below the last line item,
+    // so with one already present there are two matches; either works.
+    const addBtn = screen.getAllByRole('button', { name: /Add Line Item/i })[0];
     fireEvent.click(addBtn);
 
     const itemInputs = screen.getAllByPlaceholderText(/e\.g\. Centrifugal water pump/i);

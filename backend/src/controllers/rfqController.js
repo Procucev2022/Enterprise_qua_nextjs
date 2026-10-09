@@ -952,7 +952,7 @@ async function addQuote(req, res, next) {
       });
     }
 
-    const { unitPrice, totalPrice, leadTimeDays, warrantyYears, paymentTerms, remarks, vendorCategory, complianceStatus } = req.body;
+    const { unitPrice, totalPrice, leadTimeDays, warrantyYears, paymentTerms, remarks, vendorCategory, complianceStatus, lineItemQuotes } = req.body;
     if (!unitPrice) {
       logger.warn(`Failed to add quote to RFQ ${id}: Missing unitPrice`, { id }, 'RFQ_CONTROLLER');
       return res.status(400).json({ success: false, error: 'unitPrice is required.' });
@@ -991,6 +991,12 @@ async function addQuote(req, res, next) {
       paymentTerms: paymentTerms || '',
       remarks: remarks || '',
       submittedAt: new Date().toISOString(),
+      // Per-line-item pricing from the portal quote form, when the RFQ has
+      // more than one line item — same shape the email-ingestion path
+      // already populates (see emailGatewayService.js), so quote-matrix.tsx
+      // compares portal and email quotes the same way regardless of
+      // submission channel.
+      ...(Array.isArray(lineItemQuotes) && lineItemQuotes.length > 0 ? { lineItemQuotes } : {}),
     };
     logger.info(`Adding quote from ${quote.vendorName} to RFQ ${id}`, { id, vendorName: quote.vendorName, price: quote.unitPrice }, 'RFQ_CONTROLLER');
     const updatedRFQ = storeService.addQuoteToRFQ(id, quote);

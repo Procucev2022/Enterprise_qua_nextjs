@@ -609,8 +609,9 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     const inquiries = Array.isArray(activeRfq.inquiries) ? activeRfq.inquiries : [];
     inquiries.forEach((inq) => {
       const isProc = checkIsProcucevVendor(inq.vendorId, inq.vendorName, inq.vendorEmail, inq);
-      // For V1, V2, V3 on Buyer side: do NOT show Procucev Network vendors in chat channels
-      if (isProc) return;
+      // Procucev/internal vendors are shown in the buyer's chat list by name
+      // only — their email/phone/other contact details are never exposed.
+      // See the `isProc` stripping applied below.
 
       const key = inq.vendorId || inq.vendorEmail || inq.vendorName || inq.id;
       const msgs = Array.isArray(inq.messages) && inq.messages.length > 0
@@ -647,7 +648,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         key,
         vendorId: inq.vendorId,
         vendorName: inq.vendorName || 'Vendor',
-        vendorEmail: inq.vendorEmail,
+        vendorEmail: isProc ? undefined : inq.vendorEmail,
         inquiryId: inq.id,
         inquiry: inq,
         messages: msgs,
@@ -655,7 +656,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         lastMessage: lastMsg
           ? { message: lastMsg.message, timestamp: lastMsg.timestamp, senderRole: lastMsg.senderRole }
           : undefined,
-        isProcucev: false,
+        isProcucev: isProc,
       });
     });
 
@@ -675,9 +676,8 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         typeof v === 'object' ? v : undefined
       );
 
-      // For V1, V2, V3 on Buyer side: do NOT show Procucev Network vendors in chat channels
-      if (isProc) return;
-
+      // Procucev/internal vendors are shown by name only — never their
+      // email, contact person or phone.
       const key = vId || vEmail || vName;
       const existing = Array.from(map.values()).find(
         (c) => (vEmail && c.vendorEmail === vEmail) || c.vendorName === vName || (vId && c.vendorId === vId)
@@ -688,17 +688,17 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           key,
           vendorId: typeof v === 'string' ? v : v.id,
           vendorName: vName,
-          vendorEmail: vEmail,
+          vendorEmail: isProc ? undefined : vEmail,
           messages: [],
           status: 'no_messages',
-          contactPerson: vContact,
-          phone: vPhone,
-          isProcucev: false,
+          contactPerson: isProc ? undefined : vContact,
+          phone: isProc ? undefined : vPhone,
+          isProcucev: isProc,
         });
       } else {
-        if (!existing.contactPerson && vContact) existing.contactPerson = vContact;
-        if (!existing.phone && vPhone) existing.phone = vPhone;
-        existing.isProcucev = false;
+        if (!existing.contactPerson && vContact && !isProc) existing.contactPerson = vContact;
+        if (!existing.phone && vPhone && !isProc) existing.phone = vPhone;
+        if (existing.isProcucev === undefined) existing.isProcucev = isProc;
       }
     });
 
@@ -706,9 +706,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     const quotes = Array.isArray(activeRfq.quotes) ? activeRfq.quotes : [];
     quotes.forEach((q: any) => {
       const isProc = checkIsProcucevVendor(q.vendorId, q.vendorName, q.vendorEmail, q);
-      // For V1, V2, V3 on Buyer side: do NOT show Procucev Network vendors in chat channels
-      if (isProc) return;
-
+      // Procucev/internal vendors are shown by name only.
       const vId = q.vendorId || q.vendorName;
       const key = vId || q.vendorName;
       const existing = Array.from(map.values()).find(
@@ -722,15 +720,14 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           vendorName: q.vendorName || 'Quoting Vendor',
           messages: [],
           status: 'no_messages',
-          isProcucev: false,
+          isProcucev: isProc,
         });
       } else if (existing.isProcucev === undefined) {
-        existing.isProcucev = false;
+        existing.isProcucev = isProc;
       }
     });
 
     return Array.from(map.values())
-      .filter((c) => !c.isProcucev)
       .sort((a, b) => {
         if (a.status === 'open' && b.status !== 'open') return -1;
         if (b.status === 'open' && a.status !== 'open') return 1;

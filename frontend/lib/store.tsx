@@ -994,6 +994,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             email: v.email,
             phone: v.phone,
             location: v.address,
+            // Sent explicitly rather than left for the backend to infer from
+            // majorCategory's sentinel string below — storeService branches
+            // the onboarding email (Template A vs B) on this flag directly.
+            categoriesMappedByBuyer: Boolean(v.categoriesMappedByBuyer),
             majorCategory: v.categoriesMappedByBuyer
               ? v.firstSetMajorCategory || 'Engineering Spares - Mechanical'
               : 'Uncategorized (No Past POs)',
