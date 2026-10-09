@@ -470,20 +470,27 @@ export default function InitialSetupModal() {
 
           const parsedVendors: VendorMasterUploadRecord[] = rawJson.map((row, idx) => {
             const keys = Object.keys(row);
-            const getVal = (possibleKeys: string[]): string => {
+            const getVal = (possibleKeys: string[], excludeSubstrings: string[] = []): string => {
+              // Pass 1: Exact matches (after stripping non-alphanumeric)
               for (const pk of possibleKeys) {
                 const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
-                const matchedKey = keys.find((k) => k.toLowerCase().trim().replace(/[^a-z0-9]/g, '') === pkClean);
+                const matchedKey = keys.find((k) => {
+                  const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+                  if (excludeSubstrings.some((ex) => kClean.includes(ex.toLowerCase().replace(/[^a-z0-9]/g, '')))) return false;
+                  return kClean === pkClean;
+                });
                 if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
                   return String(row[matchedKey]).trim();
                 }
               }
+              // Pass 2: Fuzzy matches (only for keys with 4+ alphanumeric chars to avoid short false matches like 'id' or 'code')
               for (const pk of possibleKeys) {
                 const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
-                if (!pkClean) continue;
+                if (!pkClean || pkClean.length < 4) continue;
                 const matchedKey = keys.find((k) => {
                   const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-                  return kClean.includes(pkClean) || pkClean.includes(kClean);
+                  if (excludeSubstrings.some((ex) => kClean.includes(ex.toLowerCase().replace(/[^a-z0-9]/g, '')))) return false;
+                  return kClean.includes(pkClean);
                 });
                 if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
                   return String(row[matchedKey]).trim();
@@ -492,13 +499,21 @@ export default function InitialSetupModal() {
               return '';
             };
 
-            const vendorCode = getVal(['vendorcode', 'vendor code', 'code', 'vendor id', 'supplier code', 'id']) || `VND-${1000 + idx + 1}`;
-            const companyName = getVal(['companyname', 'company name', 'vendor name', 'supplier', 'name', 'vendor', 'supplier name']) || `Supplier ${idx + 1}`;
-            const contactPerson = getVal(['contactperson', 'contact person', 'contact', 'person', 'representative', 'contact person name']) || 'Operations Lead';
-            const email = getVal(['email', 'email id', 'email_id', 'mail', 'corporate email']) || `contact@${companyName.toLowerCase().replace(/[^a-z0-9]/g, '') || 'vendor'}.com`;
-            const phone = getVal(['phone', 'mobile', 'contact number', 'phone number', 'telephone', 'mobile number']) || '+91 98000 00000';
-            const address = getVal(['address', 'location', 'city', 'plant location', 'street', 'office address']) || 'Industrial Zone, India';
-            const gstNumber = getVal(['gstnumber', 'gstin', 'gst', 'gst number', 'tax id', 'gst no']) || '27AAACA0000A1Z0';
+            let rawVendorCode = getVal(
+              ['vendorcode', 'vendor code', 'vendor_code', 'suppliercode', 'supplier code', 'vendor id', 'supplier id', 'vcode', 'vnd code', 'vendorno', 'vendor no', 'vendor number', 'supplier number', 'vendor identifier'],
+              ['email', 'mail', 'phone', 'contact', 'gst']
+            );
+            // If the resolved vendorCode is an email address, discard it so it doesn't take email as vendor code
+            if (rawVendorCode && (rawVendorCode.includes('@') || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawVendorCode))) {
+              rawVendorCode = '';
+            }
+            const vendorCode = rawVendorCode || `VND-${1000 + idx + 1}`;
+            const companyName = getVal(['companyname', 'company name', 'vendor name', 'supplier name', 'supplier', 'company', 'organization', 'vendor', 'name'], ['email', 'mail', 'phone', 'contactperson', 'code']) || `Supplier ${idx + 1}`;
+            const contactPerson = getVal(['contactperson', 'contact person', 'contact person name', 'representative', 'person name', 'contact name', 'person', 'poc'], ['email', 'mail', 'phone', 'mobile']) || 'Operations Lead';
+            const email = getVal(['email', 'email id', 'email_id', 'emailid', 'email address', 'emailaddress', 'mail', 'corporate email', 'company email', 'vendor email']) || `contact@${companyName.toLowerCase().replace(/[^a-z0-9]/g, '') || 'vendor'}.com`;
+            const phone = getVal(['phone', 'mobile', 'contact number', 'phone number', 'telephone', 'mobile number', 'contact no', 'phone no', 'mobile no', 'cell', 'whatsapp'], ['email', 'mail', 'person', 'contactperson']) || '+91 98000 00000';
+            const address = getVal(['address', 'location', 'city', 'plant location', 'street', 'office address', 'plant', 'state', 'pincode', 'pin code']) || 'Industrial Zone, India';
+            const gstNumber = getVal(['gstnumber', 'gstin', 'gst', 'gst number', 'tax id', 'gst no', 'taxid', 'tax number', 'gstin number']) || '27AAACA0000A1Z0';
             const ratingRaw = getVal(['vendorratingscore', 'rating', 'score', 'vendor rating', 'rating 0 100', 'performance score', 'vendor rating score', 'rating optional', 'rating 0-100', 'rating0100']);
             let vendorRatingScore: number | undefined = undefined;
             if (ratingRaw && !isNaN(Number(ratingRaw))) {
@@ -727,10 +742,10 @@ export default function InitialSetupModal() {
               }
               for (const pk of possibleKeys) {
                 const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
-                if (!pkClean) continue;
+                if (!pkClean || pkClean.length < 3) continue;
                 const matchedKey = keys.find((k) => {
                   const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-                  return kClean.includes(pkClean) || pkClean.includes(kClean);
+                  return kClean.includes(pkClean);
                 });
                 if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
                   return row[matchedKey];
