@@ -4,7 +4,8 @@ import React, { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import { useApp } from '@/lib/store';
-import { formatCurrency } from '@/lib/constants';
+import { formatCurrency, normalizePoDate } from '@/lib/constants';
+import { fetchDispatchTemplates, type DispatchTemplate } from '@/lib/buyerProfileClient';
 import {
   VendorMasterUploadRecord,
   PurchaseOrderLineItemRecord,
@@ -210,6 +211,25 @@ export default function InitialSetupModal() {
   } = useApp();
 
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1);
+  // The buyer's own saved custom wording for Template A/B (vendor-email-templates
+  // page) — fetched once Step 5 is reached, so this preview shows exactly what
+  // storeService.processHistoricalPurchaseData will actually send, not just the
+  // hardcoded placeholder copy. Undefined/null fields fall back to that copy.
+  const [savedTemplateA, setSavedTemplateA] = useState<DispatchTemplate | null>(null);
+  const [savedTemplateB, setSavedTemplateB] = useState<DispatchTemplate | null>(null);
+  React.useEffect(() => {
+    if (step !== 5) return;
+    let cancelled = false;
+    (async () => {
+      const result = await fetchDispatchTemplates();
+      if (cancelled || !result.success) return;
+      setSavedTemplateA(result.data?.category_mapped || null);
+      setSavedTemplateB(result.data?.self_map_required || null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [step]);
   const [selectedPeriod, setSelectedPeriod] = useState<'1_year' | '2_years' | '3_years'>(historicalPurchaseDataPeriod || '2_years');
 
   // Active Session & Ingestion Job States
@@ -252,6 +272,52 @@ export default function InitialSetupModal() {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     };
   };
+
+  // Live job progress polling — setVendorJob/setPoJob were previously only
+  // ever set once, from the upload response, at the instant the background
+  // job had barely started (0 processed). "Progress is tracked live" was
+  // never actually true: nothing re-fetched the job afterward, so the
+  // progress card just froze at that first snapshot until the buyer
+  // reloaded the page. Polls GET /:sessionId/jobs/:jobId every 2s while a
+  // job is PENDING/PROCESSING and stops itself once it lands on a terminal
+  // status (or the session/modal goes away).
+  React.useEffect(() => {
+    if (!sessionId) return;
+    const pollableJobs: Array<['vendor' | 'po', IngestionJobState | null]> = [
+      ['vendor', vendorJob],
+      ['po', poJob],
+    ];
+    const active = pollableJobs.filter(
+      ([, job]) => job && (job.status === 'PENDING' || job.status === 'PROCESSING')
+    );
+    if (active.length === 0) return;
+
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      for (const [which, job] of active) {
+        if (!job) continue;
+        try {
+          const res = await fetch(`/api/vendor-ingestion/${sessionId}/jobs/${job.id}`, {
+            headers: authFetchHeaders(),
+          });
+          if (!res.ok || cancelled) continue;
+          const json = await res.json();
+          const freshJob: IngestionJobState | undefined = json?.data?.job;
+          if (!freshJob || cancelled) continue;
+          if (which === 'vendor') setVendorJob(freshJob);
+          else setPoJob(freshJob);
+        } catch (err) {
+          console.warn(`Could not refresh ${which} ingestion job progress:`, err);
+        }
+      }
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, vendorJob?.id, vendorJob?.status, poJob?.id, poJob?.status]);
 
   const handleCloseModal = async () => {
     if (sessionId && (vendorJob?.status === 'PROCESSING' || poJob?.status === 'PROCESSING')) {
@@ -624,7 +690,7 @@ export default function InitialSetupModal() {
       reader.onload = async (e) => {
         try {
           const data = new Uint8Array(e.target?.result as ArrayBuffer);
-          const workbook = XLSX.read(data, { type: 'array' });
+          const workbook = XLSX.read(data, { type: 'array', cellDates: true });
           const firstSheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[firstSheetName];
           const rawJson: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
@@ -638,12 +704,12 @@ export default function InitialSetupModal() {
 
           const parsedPOs: PurchaseOrderLineItemRecord[] = rawJson.map((row, idx) => {
             const keys = Object.keys(row);
-            const getVal = (possibleKeys: string[]): string => {
+            const getRawVal = (possibleKeys: string[]): unknown => {
               for (const pk of possibleKeys) {
                 const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
                 const matchedKey = keys.find((k) => k.toLowerCase().trim().replace(/[^a-z0-9]/g, '') === pkClean);
                 if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
-                  return String(row[matchedKey]).trim();
+                  return row[matchedKey];
                 }
               }
               for (const pk of possibleKeys) {
@@ -654,14 +720,20 @@ export default function InitialSetupModal() {
                   return kClean.includes(pkClean) || pkClean.includes(kClean);
                 });
                 if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
-                  return String(row[matchedKey]).trim();
+                  return row[matchedKey];
                 }
               }
-              return '';
+              return undefined;
+            };
+
+            const getVal = (possibleKeys: string[]): string => {
+              const raw = getRawVal(possibleKeys);
+              return raw !== undefined && raw !== null ? String(raw).trim() : '';
             };
 
             const poNumber = getVal(['ponumber', 'po number', 'po #', 'po no', 'pono', 'order id', 'order number', 'order no']) || `PO-2025-${(1000 + idx).toString()}`;
-            const poDate = getVal(['podate', 'po date', 'date', 'order date', 'creation date']) || '2025-06-15';
+            const rawPoDate = getRawVal(['podate', 'po date', 'date', 'order date', 'creation date']);
+            const poDate = normalizePoDate(rawPoDate) || '2025-06-15';
             const vendorIdentifier = getVal(['vendor name', 'vendor identifier', 'vendor', 'supplier name', 'supplier', 'company name', 'vendor code', 'vendor id']) || 'Apex Supplies Ltd.';
             const itemName = getVal(['line item description', 'line item', 'item description', 'description', 'item name', 'product description', 'product name', 'material description', 'material', 'service description', 'service', 'item']) || 'Industrial Mechanical Spares';
             const specs = getVal(['specs', 'specification', 'technical specs', 'specifications', 'details', 'item specs', 'grade']);
@@ -1839,7 +1911,7 @@ export default function InitialSetupModal() {
                     {poLineItems.slice(0, poPreviewLimit).map((p) => (
                       <tr key={p.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/40">
                         <td className="p-2.5 font-mono text-[10px] text-slate-500">{p.poNumber}</td>
-                        <td className="p-2.5 font-mono text-[10px] text-slate-600 dark:text-gray-300">{p.poDate || '—'}</td>
+                        <td className="p-2.5 font-mono text-[10px] text-slate-600 dark:text-gray-300">{normalizePoDate(p.poDate) || p.poDate || '—'}</td>
                         <td className="p-2.5 font-bold text-slate-800 dark:text-white">{p.vendorIdentifier}</td>
                         <td className="p-2.5 font-semibold text-slate-800 dark:text-gray-200">{p.itemName}</td>
                         <td className="p-2.5 text-slate-400 text-[10px] max-w-[160px] truncate">{p.specs || '—'}</td>
@@ -2071,36 +2143,79 @@ export default function InitialSetupModal() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
               {/* Template A Preview: PO-Mapped Suppliers */}
               <div className="p-3.5 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/60 space-y-2">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <span className="font-bold text-indigo-900 dark:text-indigo-200 text-[11px] flex items-center gap-1">
                     <CheckCircle2 size={13} className="text-emerald-600" />
                     Template A: Suppliers With Pre-Purchase Order History ({mappedVendors.length})
                   </span>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {(savedTemplateA?.subject || savedTemplateA?.message) && (
+                      <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300">
+                        Customized
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => router.push('/buyer/vendor-email-templates')}
+                      className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
+                    >
+                      Edit Message
+                    </button>
+                  </div>
                 </div>
                 <div className="p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-indigo-100 dark:border-indigo-900 text-[10px] space-y-1 font-mono text-slate-700 dark:text-gray-300">
-                  <p><strong>Subject:</strong> [Action Required] Welcome: {activeBuyerAccount?.organizationName || 'Larsen & Toubro'} mapped your categories</p>
-                  <p className="text-emerald-700 dark:text-emerald-400 font-bold">
-                    • 1st Set: Engineering Spares - Mechanical<br />
-                    • 2nd Set: Pumps, Valves, Hoses, Machinery Parts
+                  <p>
+                    <strong>Subject:</strong>{' '}
+                    {savedTemplateA?.subject ||
+                      `${activeBuyerAccount?.organizationName || 'Larsen & Toubro'} has mapped your supply categories`}
                   </p>
-                  <p className="text-slate-400">• User: [Email] | Pass: [TempPass] | OTP Ready</p>
+                  {savedTemplateA?.message ? (
+                    <p className="text-slate-600 dark:text-gray-300">{savedTemplateA.message}</p>
+                  ) : (
+                    <p className="text-emerald-700 dark:text-emerald-400 font-bold">
+                      • 1st Set: Engineering Spares - Mechanical<br />
+                      • 2nd Set: Pumps, Valves, Hoses, Machinery Parts
+                    </p>
+                  )}
+                  <p className="text-slate-400">• Vendor code & categories table + Sign-in link always included</p>
                 </div>
               </div>
 
               {/* Template B Preview: Unmapped Suppliers */}
               <div className="p-3.5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 space-y-2">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <span className="font-bold text-amber-900 dark:text-amber-200 text-[11px] flex items-center gap-1">
                     <AlertCircle size={13} className="text-amber-600" />
                     Template B: Suppliers With NO Pre-Purchase Orders ({unmappedVendors.length})
                   </span>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {(savedTemplateB?.subject || savedTemplateB?.message) && (
+                      <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300">
+                        Customized
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => router.push('/buyer/vendor-email-templates')}
+                      className="text-[10px] font-semibold text-amber-700 dark:text-amber-400 hover:underline"
+                    >
+                      Edit Message
+                    </button>
+                  </div>
                 </div>
                 <div className="p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-amber-200 dark:border-amber-900 text-[10px] space-y-1 font-mono text-slate-700 dark:text-gray-300">
-                  <p><strong>Subject:</strong> [Action Required] Set Up Categories: {activeBuyerAccount?.organizationName || 'Larsen & Toubro'} added you</p>
-                  <p className="text-amber-700 dark:text-amber-400 font-bold">
-                    • &quot;Buyer didn&apos;t map any categories for you, so please map yourself in order to receive enquiries.&quot;
+                  <p>
+                    <strong>Subject:</strong>{' '}
+                    {savedTemplateB?.subject || 'Complete Your Category Mapping to Receive Enquiries'}
                   </p>
-                  <p className="text-slate-400">• User: [Email] | Pass: [TempPass] | OTP Ready</p>
+                  {savedTemplateB?.message ? (
+                    <p className="text-slate-600 dark:text-gray-300">{savedTemplateB.message}</p>
+                  ) : (
+                    <p className="text-amber-700 dark:text-amber-400 font-bold">
+                      • &quot;Buyer didn&apos;t map any categories for you, so please map yourself in order to receive enquiries.&quot;
+                    </p>
+                  )}
+                  <p className="text-slate-400">• Vendor code & categories table + Sign-in link always included</p>
                 </div>
               </div>
             </div>

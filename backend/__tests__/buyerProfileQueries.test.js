@@ -700,4 +700,86 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
       expect(spy.mock.calls[0][0]).toContain('order by ord.first_seen');
     });
   });
+
+  // ── Vendor onboarding dispatch templates (Template A / Template B) ─────────
+  describe('getDispatchTemplates / upsertDispatchTemplate', () => {
+    const originalCfEnv = globalThis.__CF_ENV__;
+    const originalPool = dbPool.pool;
+
+    beforeEach(() => {
+      globalThis.__CF_ENV__ = { DB: { prepare: jest.fn() } };
+      dbPool.pool = null;
+    });
+
+    afterEach(() => {
+      globalThis.__CF_ENV__ = originalCfEnv;
+      dbPool.pool = originalPool;
+    });
+
+    test('getDispatchTemplates returns {} without querying when organizationId is missing', async () => {
+      const spy = jest.spyOn(dbPool, 'rows');
+      await expect(buyerProfileQueries.getDispatchTemplates(null)).resolves.toEqual({});
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    test('getDispatchTemplates keys the result by template_type', async () => {
+      jest.spyOn(dbPool, 'rows').mockResolvedValue([
+        { template_type: 'category_mapped', subject: 'Welcome', message: 'Hi there' },
+        { template_type: 'self_map_required', subject: null, message: null },
+      ]);
+
+      const result = await buyerProfileQueries.getDispatchTemplates('org-1');
+
+      expect(result).toEqual({
+        category_mapped: { subject: 'Welcome', message: 'Hi there' },
+        self_map_required: { subject: null, message: null },
+      });
+    });
+
+    test('upsertDispatchTemplate rejects an unknown template type', async () => {
+      await expect(
+        buyerProfileQueries.upsertDispatchTemplate('org-1', 'not_a_real_type', { subject: 'x', message: 'y' })
+      ).rejects.toThrow('Unknown vendor dispatch template type');
+    });
+
+    test('upsertDispatchTemplate deletes the row when both fields are blank', async () => {
+      const spy = jest.spyOn(dbPool, 'query').mockResolvedValue({ rows: [] });
+
+      const result = await buyerProfileQueries.upsertDispatchTemplate('org-1', 'category_mapped', {
+        subject: '  ',
+        message: '',
+      });
+
+      expect(result).toBeNull();
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.calls[0][0]).toContain('delete from vendor_dispatch_templates');
+      expect(spy.mock.calls[0][1]).toEqual(['org-1', 'category_mapped']);
+    });
+
+    test('upsertDispatchTemplate upserts and returns the saved subject/message', async () => {
+      const spy = jest.spyOn(dbPool, 'query').mockResolvedValue({ rows: [] });
+
+      const result = await buyerProfileQueries.upsertDispatchTemplate(
+        'org-1',
+        'self_map_required',
+        { subject: 'Please map your categories', message: 'Welcome to Procucev' },
+        'buyer@acme.com'
+      );
+
+      expect(result).toEqual({ subject: 'Please map your categories', message: 'Welcome to Procucev' });
+      expect(spy).toHaveBeenCalledTimes(1);
+      const [sql, params, options] = spy.mock.calls[0];
+      expect(sql).toContain('insert into vendor_dispatch_templates');
+      expect(sql).toContain('on conflict (organization_id, template_type) do update');
+      expect(params).toEqual([
+        expect.any(String),
+        'org-1',
+        'self_map_required',
+        'Please map your categories',
+        'Welcome to Procucev',
+        'buyer@acme.com',
+      ]);
+      expect(options.d1).toBe(true);
+    });
+  });
 });

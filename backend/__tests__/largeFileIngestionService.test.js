@@ -158,13 +158,28 @@ describe('largeFileIngestionService unit tests', () => {
       expect(mapped.rating).toBe(88);
     });
 
-    it('generates fallback values for vendor master rows when fields are empty', () => {
+    it('leaves vendor master fields blank rather than inventing placeholder data when a row has nothing', () => {
       const headerMap = largeFileIngestionService.extractHeaderIndices([], 'VENDOR_MASTER');
       const mapped = largeFileIngestionService.mapRowValues([], headerMap, 'VENDOR_MASTER', 2);
-      expect(mapped.vendorCode).toBe('VND-1003');
-      expect(mapped.companyName).toBe('Supplier 3');
-      expect(mapped.contactPerson).toBe('Operations Lead');
+      expect(mapped.vendorCode).toBeNull();
+      expect(mapped.companyName).toBe('');
+      expect(mapped.contactPerson).toBeNull();
+      expect(mapped.email).toBeNull();
+      expect(mapped.phone).toBeNull();
       expect(mapped.rating).toBeNull();
+    });
+
+    it('normalizes email and phone to one standard, lower-cased/digits-only shape', () => {
+      const headers = ['Company Name', 'Email', 'Phone'];
+      const headerMap = largeFileIngestionService.extractHeaderIndices(headers, 'VENDOR_MASTER');
+      const mapped = largeFileIngestionService.mapRowValues(
+        ['Atlas Pumps', 'Suresh@Atlas.COM ', '+91 98000-11122'],
+        headerMap,
+        'VENDOR_MASTER',
+        0
+      );
+      expect(mapped.email).toBe('suresh@atlas.com');
+      expect(mapped.phone).toBe('+919800011122');
     });
 
     it('extracts po dump header mapping and maps row values with unit price calculation', () => {
@@ -184,7 +199,7 @@ describe('largeFileIngestionService unit tests', () => {
       expect(mapped.department).toBe('Piping');
     });
 
-    it('calculates spend from unit price when spend is 0, and default spend when both are 0', () => {
+    it('calculates spend from unit price when spend is 0, and leaves it 0 (not invented) when both are 0', () => {
       const headers = ['PO Number', 'PO Date', 'Vendor Name', 'Item Description', 'Quantity', 'Unit Price', 'Total Spend'];
       const headerMap = largeFileIngestionService.extractHeaderIndices(headers, 'PO_DUMP');
 
@@ -192,9 +207,45 @@ describe('largeFileIngestionService unit tests', () => {
       const mapped1 = largeFileIngestionService.mapRowValues(['PO-1', '2025-01-01', 'Supplier A', 'Bolts', '5', '100', '0'], headerMap, 'PO_DUMP', 0);
       expect(mapped1.spend).toBe(500);
 
-      // Default spend
+      // Neither spend nor unit price supplied — left at 0, not a guessed default.
       const mapped2 = largeFileIngestionService.mapRowValues(['PO-2', '2025-01-01', 'Supplier B', 'Nuts', '4', '0', '0'], headerMap, 'PO_DUMP', 1);
-      expect(mapped2.spend).toBe(2000); // 4 * 500
+      expect(mapped2.spend).toBe(0);
+    });
+
+    it('normalizes the PO number and date to one standard shape', () => {
+      const headers = ['PO Number', 'PO Date', 'Vendor Name', 'Item Description'];
+      const headerMap = largeFileIngestionService.extractHeaderIndices(headers, 'PO_DUMP');
+
+      const iso = largeFileIngestionService.mapRowValues(['po 4471', '2025-06-15', 'Vendor A', 'Bolts'], headerMap, 'PO_DUMP', 0);
+      expect(iso.poNumber).toBe('PO 4471');
+      expect(iso.poDate).toBe('2025-06-15');
+
+      const dmy = largeFileIngestionService.mapRowValues(['PO-4472', '15/06/2025', 'Vendor B', 'Nuts'], headerMap, 'PO_DUMP', 1);
+      expect(dmy.poDate).toBe('2025-06-15');
+
+      const unparseable = largeFileIngestionService.mapRowValues(['PO-4473', 'not a date', 'Vendor C', 'Washers'], headerMap, 'PO_DUMP', 2);
+      expect(unparseable.poDate).toBeNull();
+
+      const blank = largeFileIngestionService.mapRowValues(['', '', 'Vendor D', 'Clips'], headerMap, 'PO_DUMP', 3);
+      expect(blank.poNumber).toBeNull();
+      expect(blank.poDate).toBeNull();
+    });
+
+    it('normalizes Excel date serial decimals and various date formats in PO dump rows', () => {
+      const headers = ['PO Number', 'PO Date', 'Vendor Name', 'Line Item Description', 'Quantity', 'Spend'];
+      const headerMap = largeFileIngestionService.extractHeaderIndices(headers, 'PO_DUMP');
+
+      // Excel decimal serial (e.g. 45995.00011574074)
+      const mappedDecimal = largeFileIngestionService.mapRowValues(['PO-100', '45995.00011574074', 'Supplier X', 'Laptop', '1', '50000'], headerMap, 'PO_DUMP', 0);
+      expect(mappedDecimal.poDate).toBe('2025-12-04');
+
+      // Integer serial
+      const mappedSerial = largeFileIngestionService.mapRowValues(['PO-101', '45995', 'Supplier X', 'Laptop', '1', '50000'], headerMap, 'PO_DUMP', 1);
+      expect(mappedSerial.poDate).toBe('2025-12-04');
+
+      // DD-MM-YYYY format
+      const mappedDmy = largeFileIngestionService.mapRowValues(['PO-102', '12-04-2025', 'Supplier X', 'Laptop', '1', '50000'], headerMap, 'PO_DUMP', 2);
+      expect(mappedDmy.poDate).toBe('2025-04-12');
     });
   });
 
@@ -220,17 +271,33 @@ describe('largeFileIngestionService unit tests', () => {
     it('processes valid and invalid po dump batches', async () => {
       jest.spyOn(queries, 'bulkInsertPoLineItems').mockResolvedValueOnce([{ id: 1 }]);
       const res = await largeFileIngestionService.processPoDumpBatch('s1', 'o1', [
-        { vendorName: 'Apex', poDate: '2025-01-01' },
-        { itemDescription: 'No Vendor' },
+        { vendorName: 'Apex', poDate: '2025-01-01', itemDescription: 'Valves', department: 'Piping' },
+        { itemDescription: 'No Vendor', department: 'Piping' },
       ], { horizonStart: '2025-01-01', horizonEnd: '2025-12-31' });
       expect(res.imported).toBe(1);
       expect(res.skipped).toBe(1);
       expect(res.failed).toBe(1);
     });
 
+    it('rejects a po dump row missing item details or category even when vendor identity is present', async () => {
+      const res = await largeFileIngestionService.processPoDumpBatch('s1', 'o1', [
+        { vendorName: 'Apex', department: 'Piping' }, // no item details
+        { vendorName: 'Apex', itemDescription: 'Valves' }, // no category
+      ], null);
+      expect(res.imported).toBe(0);
+      expect(res.failed).toBe(2);
+      expect(res.errors[0].reason).toBe('Item Details are required');
+      expect(res.errors[1].reason).toBe('Category is required');
+    });
+
     it('handles bulkInsertPoLineItems failure', async () => {
       jest.spyOn(queries, 'bulkInsertPoLineItems').mockRejectedValueOnce(new Error('DB err'));
-      const res = await largeFileIngestionService.processPoDumpBatch('s1', 'o1', [{ vendorName: 'Apex' }], null);
+      const res = await largeFileIngestionService.processPoDumpBatch(
+        's1',
+        'o1',
+        [{ vendorName: 'Apex', itemDescription: 'Valves', department: 'Piping' }],
+        null
+      );
       expect(res.imported).toBe(0);
       expect(res.skipped).toBe(1);
     });
@@ -423,7 +490,10 @@ describe('largeFileIngestionService unit tests', () => {
         jobId: 'job-arr-po',
         sessionId: 'sess-arr-po',
         organizationId: 'org-1',
-        rows: [{ vendorName: 'Apex', poDate: '2025-06-01' }, { itemDescription: 'No vendor' }], // 1 valid, 1 invalid
+        rows: [
+          { vendorName: 'Apex', poDate: '2025-06-01', itemDescription: 'Valves', department: 'Piping' },
+          { itemDescription: 'No vendor' },
+        ], // 1 valid, 1 invalid
         fileName: 'po.xlsx',
         jobType: 'PO_DUMP',
         batchSize: 5,

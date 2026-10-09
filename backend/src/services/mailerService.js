@@ -1383,13 +1383,18 @@ function buildVendorCategoryMappingEmail({
   vendorCode,
   majorCategory,
   minorCategories = [],
+  customSubject,
+  customMessage,
 }) {
   const buyer = buyerOrganizationName || 'A buyer on Procucev';
   const minorHtml = categoryList(minorCategories);
 
+  const defaultMessage = `<p><strong>${buyer}</strong> has added your organisation to their vendor master and mapped your supply categories from your pre-purchase order history with them.</p>`;
+  const messageHtml = (customMessage && customMessage.trim() !== '') ? `<p>${customMessage}</p>` : defaultMessage;
+
   const inner = `
     <p>${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}</p>
-    <p><strong>${buyer}</strong> has added your organisation to their vendor master and mapped your supply categories from your pre-purchase order history with them.</p>
+    ${messageHtml}
     <table style="width: 100%; border-collapse: collapse; margin: 16px 0; background: #f8fafc;">
       ${row('Buyer', buyer)}
       ${row('Your vendor code', vendorCode)}
@@ -1407,10 +1412,14 @@ function buildVendorCategoryMappingEmail({
     <p style="font-size: 13px; color: #64748b; margin: 0;">Sign in with this email address; a one-time verification code will be sent to it.</p>
   `;
 
+  const subject = (customSubject && customSubject.trim() !== '')
+    ? customSubject
+    : `${buyer} has mapped your supply categories${majorCategory ? ` — ${majorCategory}` : ''}`;
+
   return {
     from: fromAddress(),
     to,
-    subject: `${buyer} has mapped your supply categories${majorCategory ? ` — ${majorCategory}` : ''}`,
+    subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Vendor Category Mapping Confirmed', inner),
   };
 }
@@ -1422,13 +1431,18 @@ function buildVendorCategoryMappingEmail({
  * something wrong: the buyer simply had no purchasing history to categorise them
  * from. Nothing about the buyer's spend or other suppliers is disclosed.
  */
-function buildVendorSelfMappingEmail({ to, recipientName, buyerOrganizationName, vendorCode }) {
+function buildVendorSelfMappingEmail({ to, recipientName, buyerOrganizationName, vendorCode, customSubject, customMessage }) {
   const buyer = buyerOrganizationName || 'A buyer on Procucev';
+
+  const defaultMessage = `
+    <p><strong>${buyer}</strong> has added your organisation to their vendor master on Procucev.</p>
+    <p>No historical pre-purchase order data was available for your organisation, so your supply categories could not be mapped automatically. <strong>To become eligible for relevant enquiries, please sign in and select the categories you supply.</strong></p>
+  `;
+  const messageHtml = (customMessage && customMessage.trim() !== '') ? `<p>${customMessage}</p>` : defaultMessage;
 
   const inner = `
     <p>${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}</p>
-    <p><strong>${buyer}</strong> has added your organisation to their vendor master on Procucev.</p>
-    <p>No historical pre-purchase order data was available for your organisation, so your supply categories could not be mapped automatically. <strong>To become eligible for relevant enquiries, please sign in and select the categories you supply.</strong></p>
+    ${messageHtml}
     <table style="width: 100%; border-collapse: collapse; margin: 16px 0; background: #f8fafc;">
       ${row('Buyer', buyer)}
       ${row('Your vendor code', vendorCode)}
@@ -1440,10 +1454,14 @@ function buildVendorSelfMappingEmail({ to, recipientName, buyerOrganizationName,
     <p style="font-size: 13px; color: #64748b; margin: 0;">Sign in with this email address; a one-time verification code will be sent to it. Until your categories are mapped, you will not be matched to enquiries.</p>
   `;
 
+  const subject = (customSubject && customSubject.trim() !== '')
+    ? customSubject
+    : 'Complete Your Category Mapping to Receive Enquiries';
+
   return {
     from: fromAddress(),
     to,
-    subject: 'Complete Your Category Mapping to Receive Enquiries',
+    subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Category Mapping Required', inner),
   };
 }

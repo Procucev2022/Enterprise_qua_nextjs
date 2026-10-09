@@ -165,6 +165,25 @@ CREATE INDEX IF NOT EXISTS idx_org_division_category_organization_id ON org_divi
 CREATE INDEX IF NOT EXISTS idx_org_division_category_user_id ON org_division_category (user_id);
 CREATE INDEX IF NOT EXISTS idx_org_division_category_org ON org_division_category (org_uuid);
 
+-- One row per organisation per vendor-onboarding email template
+-- ('category_mapped' = Template A / 'self_map_required' = Template B, see
+-- mailerService.buildVendorCategoryMappingEmail / buildVendorSelfMappingEmail).
+-- No row for a (organization_id, template_type) pair means the hardcoded
+-- default wording is used — purely additive, same convention as every other
+-- table in this file.
+CREATE TABLE IF NOT EXISTS vendor_dispatch_templates (
+  uuid TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL,
+  template_type TEXT NOT NULL,
+  subject TEXT,
+  message TEXT,
+  updated_by TEXT,
+  created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (organization_id, template_type)
+);
+CREATE INDEX IF NOT EXISTS idx_vendor_dispatch_templates_org ON vendor_dispatch_templates (organization_id);
+
 -- otp_key is what authSessionQueries.js actually keys every query on
 -- (INSERT ... ON CONFLICT (otp_key), WHERE otp_key = ?) — it must be UNIQUE.
 -- attempts backs incrementOtpAttempts(). id/email kept only because older

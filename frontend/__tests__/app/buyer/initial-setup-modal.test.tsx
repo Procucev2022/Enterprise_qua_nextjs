@@ -545,6 +545,15 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'Unit Price': 100,
           'Total Spend': 100,
         },
+        {
+          'PO Number': 'PO-8884',
+          'PO Date': 45995.00011574074,
+          'Vendor Name': 'Apex Supplies Ltd.',
+          'Item Name': 'Decimal Date Test',
+          Quantity: 1,
+          'Unit Price': 100,
+          'Total Spend': 100,
+        },
       ]),
       'POs'
     );
@@ -802,6 +811,85 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     consoleWarnSpy.mockRestore();
   });
 
+  it('polls PO Dump job progress live instead of freezing at the initial 0-processed snapshot', async () => {
+    const sessionId = 'session-po-poll-test';
+    const jobId = 'job-po-poll-test';
+
+    const initialJob = {
+      id: jobId,
+      jobType: 'PO_DUMP',
+      fileName: 'po_dump.csv',
+      status: 'PROCESSING',
+      totalRecords: 500,
+      processedRecords: 0,
+      importedRecords: 0,
+      skippedRecords: 0,
+      failedRecords: 0,
+    };
+    const progressedJob = { ...initialJob, processedRecords: 250, importedRecords: 240 };
+
+    const fetchSpy = jest.spyOn(global, 'fetch').mockImplementation(((url: string) => {
+      if (url === '/api/vendor-ingestion/session') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, data: { session: { id: sessionId } } }),
+        });
+      }
+      if (url.includes('/stream-upload')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, data: { job: initialJob } }),
+        });
+      }
+      if (url === `/api/vendor-ingestion/${sessionId}/jobs/${jobId}`) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ success: true, data: { job: progressedJob } }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ success: true, data: {} }) });
+    }) as any);
+
+    jest.useFakeTimers();
+    render(<InitialSetupModal />);
+
+    // Session init fires on mount — flush it before navigating.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const poFile: any = new File(['PO Number,Vendor Name,Item Description,Category\n'], 'po_dump.csv', {
+      type: 'text/csv',
+    });
+    const poInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(poInput, { target: { files: [poFile] } });
+      await Promise.resolve();
+    });
+
+    expect(mockShowToast).toHaveBeenCalledWith('Ingestion Started', expect.any(String), 'info');
+
+    // Nothing has polled yet — this is the bug being fixed: the job object
+    // the UI holds right now is still the 0-processed snapshot.
+    expect(fetchSpy).not.toHaveBeenCalledWith(
+      `/api/vendor-ingestion/${sessionId}/jobs/${jobId}`,
+      expect.anything()
+    );
+
+    await act(async () => {
+      jest.advanceTimersByTime(2000);
+      await Promise.resolve();
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      `/api/vendor-ingestion/${sessionId}/jobs/${jobId}`,
+      expect.anything()
+    );
+
+    jest.useRealTimers();
+    fetchSpy.mockRestore();
+  });
   it('downloads vendor master Excel template and PO dump CSV template', () => {
     render(<InitialSetupModal />);
     fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));

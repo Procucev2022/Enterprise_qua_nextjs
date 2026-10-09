@@ -92,10 +92,48 @@ async function getCategoryTaxonomy(req, res, next) {
   }
 }
 
+/**
+ * GET /api/buyer-profile/dispatch-templates
+ * The signed-in buyer's custom vendor-onboarding email templates (Template A
+ * / Template B). A missing type in the response means the default hardcoded
+ * wording is in effect.
+ */
+async function getDispatchTemplates(req, res, next) {
+  try {
+    const templates = await buyerProfileService.getDispatchTemplates(req.user);
+    return res.json({ success: true, data: templates });
+  } catch (err) {
+    return respondWithError(err, res, next, 'Unexpected error reading vendor dispatch templates');
+  }
+}
+
+/**
+ * PUT /api/buyer-profile/dispatch-templates/:templateType
+ * Save (or, with both fields blank, clear) the custom subject/message for one
+ * template type ('category_mapped' | 'self_map_required').
+ */
+async function updateDispatchTemplate(req, res, next) {
+  try {
+    const { templateType } = req.params;
+    const { subject, message } = req.body || {};
+    logger.info(
+      'Vendor dispatch template update requested',
+      { user: req.user.email, templateType },
+      LOG_CATEGORY
+    );
+    const saved = await buyerProfileService.saveDispatchTemplate(req.user, templateType, { subject, message });
+    return res.json({ success: true, data: saved });
+  } catch (err) {
+    return respondWithError(err, res, next, 'Unexpected error saving vendor dispatch template');
+  }
+}
+
 module.exports = {
   getClientIp,
   respondWithError,
   getMyProfile,
   updateMyProfile,
   getCategoryTaxonomy,
+  getDispatchTemplates,
+  updateDispatchTemplate,
 };

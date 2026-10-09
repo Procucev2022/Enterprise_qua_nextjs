@@ -10,6 +10,7 @@ const {
 const pool = require('../db/pool');
 const domainQueries = require('../db/domainQueries');
 const identityQueries = require('../db/identityQueries');
+const buyerProfileQueries = require('../db/buyerProfileQueries');
 const { getWaitUntil } = require('../db/d1Bridge');
 const { createAuditEntry, verifyAuditTrail } = require('./auditService');
 const { evaluateQuotes, calculate360Evaluation, calculateRevisedRating } = require('./evaluationService');
@@ -3170,6 +3171,53 @@ class StoreService {
     const attributedAccount = requestingBuyerAccount || this.activeBuyerAccount;
     const buyerId = attributedAccount ? attributedAccount.id : null;
     const buyerEmail = attributedAccount ? attributedAccount.corporateEmail : null;
+    const buyerOrganizationName = attributedAccount ? attributedAccount.organizationName : 'Procucev Enterprise';
+
+    // Step 5 of the buyer setup wizard previews "Template A" (PO-history
+    // match) / "Template B" (no match) per vendor — this is the one place
+    // that actually has to honor that, instead of always sending the
+    // generic onboarding email regardless of what was previewed. Templates
+    // are org-scoped and buyer-editable (vendor_dispatch_templates); a
+    // lookup failure here must not block vendor ingestion, so it falls back
+    // to the hardcoded default wording on any error.
+    let dispatchTemplates = {};
+    if (buyerEmail) {
+      try {
+        const identity = await identityQueries.findUserByEmail(buyerEmail);
+        if (identity && identity.orgId) {
+          dispatchTemplates = await buyerProfileQueries.getDispatchTemplates(identity.orgId);
+        }
+      } catch (err) {
+        logger.error('Failed to load vendor dispatch templates', err, 'STORE_SERVICE');
+      }
+    }
+
+    /** Template A when the vendor has a buyer-mapped category, else Template B. */
+    const buildMappingEmail = (rec, { to, recipientName, vendorCode }) => {
+      const hasMapping = rec.categoriesMappedByBuyer === true || Boolean((rec.majorCategory || '').trim());
+      if (hasMapping) {
+        const override = dispatchTemplates.category_mapped || {};
+        return mailerService.buildVendorCategoryMappingEmail({
+          to,
+          recipientName,
+          buyerOrganizationName,
+          vendorCode,
+          majorCategory: rec.majorCategory,
+          minorCategories: Array.isArray(rec.minorCategories) ? rec.minorCategories : [],
+          customSubject: override.subject,
+          customMessage: override.message,
+        });
+      }
+      const override = dispatchTemplates.self_map_required || {};
+      return mailerService.buildVendorSelfMappingEmail({
+        to,
+        recipientName,
+        buyerOrganizationName,
+        vendorCode,
+        customSubject: override.subject,
+        customMessage: override.message,
+      });
+    };
 
     vendorRecords.forEach((rec, idx) => {
       const name = (rec.companyName || rec.name || '').trim();
@@ -3196,19 +3244,15 @@ class StoreService {
       );
       if (existing) {
         if (existing.email && existing.onboardingEmailStatus !== 'sent') {
-          const tempPassword = existing.tempPassword || this._generateTempPassword();
-          const emailPayload = mailerService.buildVendorOnboardingEmail({
+          const emailPayload = buildMappingEmail(rec, {
             to: existing.email,
             recipientName: existing.contactPerson || existing.name,
-            buyerOrganizationName: attributedAccount ? attributedAccount.organizationName : 'Procucev Enterprise',
             vendorCode: existing.id,
-            tempPassword: tempPassword,
-            contactPhone: existing.phone,
           });
           mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding')
             .then((delivery) => {
               if (delivery.sent) {
-                this.updateVendor(existing.id, { onboardingEmailStatus: 'sent', tempPassword });
+                this.updateVendor(existing.id, { onboardingEmailStatus: 'sent' });
                 logger.info(`Onboarding email sent for existing vendor ${existing.email}`, { vendorId: existing.id }, 'STORE_SERVICE');
               }
             })
@@ -3308,13 +3352,10 @@ class StoreService {
               return;
             }
 
-            const emailPayload = mailerService.buildVendorOnboardingEmail({
+            const emailPayload = buildMappingEmail(rec, {
               to: newVendor.email,
               recipientName: newVendor.contactPerson || newVendor.name,
-              buyerOrganizationName: attributedAccount ? attributedAccount.organizationName : 'Procucev Enterprise',
               vendorCode: newVendor.id,
-              tempPassword: tempPassword,
-              contactPhone: newVendor.phone,
             });
 
             try {
