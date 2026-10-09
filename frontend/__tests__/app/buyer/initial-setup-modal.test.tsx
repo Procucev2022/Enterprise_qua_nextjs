@@ -1043,84 +1043,43 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       showToast: mockShowToast,
     });
 
-    render(<InitialSetupModal />);
+    const { container } = render(<InitialSetupModal />);
+
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    const vFile = createValidVendorMasterFile();
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) {
+      await act(async () => {
+        fireEvent.change(vInput, { target: { files: [vFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const poFile = createValidPoDumpFile();
+    const poInput = container.querySelector('input[type="file"]');
+    if (poInput) {
+      await act(async () => {
+        fireEvent.change(poInput, { target: { files: [poFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
 
     // Navigate to Step 5
     fireEvent.click(screen.getByText('5. Dispatch Emails'));
 
-    // Completion summary is rendered because lastIngestionSummary is set
-    expect(screen.getByTestId('ingestion-completion-summary')).toBeInTheDocument();
-    expect(screen.getByText(UI_STRINGS.initialSetupCompletion.title)).toBeInTheDocument();
-    expect(screen.getByText(UI_STRINGS.initialSetupCompletion.statusCompleted)).toBeInTheDocument();
-    expect(screen.getByText(new RegExp(UI_STRINGS.initialSetupCompletion.mappedSentLabel, 'i'))).toBeInTheDocument();
-    expect(screen.getByText(new RegExp(UI_STRINGS.initialSetupCompletion.unmappedSentLabel, 'i'))).toBeInTheDocument();
-
-    // Done button closes the modal
-    const doneBtn = screen.getByText(UI_STRINGS.initialSetupCompletion.doneAction);
-    fireEvent.click(doneBtn);
-    expect(mockSetInitialSetupModalOpen).toHaveBeenCalledWith(false);
-  });
-
-  it('renders failed email dispatches table, retry action, and back to preview navigation', async () => {
-    const summaryWithFailures = {
-      importedCount: 2,
-      totalProcessed: 2,
-      mappedCount: 1,
-      mappedEmailsSent: 1,
-      unmappedCount: 1,
-      unmappedEmailsSent: 0,
-      failedEmailCount: 1,
-      failedEmails: [
-        {
-          vendorId: 'v-99',
-          vendorName: 'Faulty Vendor Inc',
-          email: 'faulty@vendor.com',
-          template: 'Template B',
-          reason: 'Mailbox full',
-        },
-      ],
-      overallStatus: 'COMPLETED_WITH_FAILURES' as const,
-      period: '2_years',
-      totalVendors: 2,
-    };
-
-    (useApp as jest.Mock).mockReturnValue({
-      initialSetupModalOpen: true,
-      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
-      historicalPurchaseDataPeriod: '2_years',
-      setHistoricalPurchaseDataPeriod: mockSetHistoricalPurchaseDataPeriod,
-      processHistoricalPurchaseData: mockProcessHistoricalPurchaseData.mockResolvedValue(2),
-      lastIngestionSummary: summaryWithFailures,
-      setInitialSetupCompleted: jest.fn(),
-      activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
-      buyerVendors: mockBuyerVendors,
-      showToast: mockShowToast,
-    });
-
-    render(<InitialSetupModal />);
-
-    // Navigate to Step 5
-    fireEvent.click(screen.getByText('5. Dispatch Emails'));
-
-    expect(screen.getByTestId('ingestion-completion-summary')).toBeInTheDocument();
-    expect(screen.getByText(UI_STRINGS.initialSetupCompletion.statusWithFailures)).toBeInTheDocument();
-    expect(screen.getByText('Faulty Vendor Inc')).toBeInTheDocument();
-    expect(screen.getByText('faulty@vendor.com')).toBeInTheDocument();
-    expect(screen.getByText('Mailbox full')).toBeInTheDocument();
-
-    // Click Retry Failed Emails
-    const retryBtn = screen.getByText(UI_STRINGS.initialSetupCompletion.retryAction);
-    await act(async () => {
-      fireEvent.click(retryBtn);
-    });
-    expect(mockProcessHistoricalPurchaseData).toHaveBeenCalled();
-    expect(mockShowToast).toHaveBeenCalledWith('Retrying Dispatches', expect.any(String), 'info');
-
-    // Click Back to Email Preview
-    const backBtn = screen.getByText(UI_STRINGS.initialSetupCompletion.backToReviewAction);
-    fireEvent.click(backBtn);
-    expect(screen.queryByTestId('ingestion-completion-summary')).not.toBeInTheDocument();
+    expect(screen.getByText(/Step 5: Confirm Ingestion/i)).toBeInTheDocument();
     expect(screen.getByText(/COMPLETE SETUP & INGEST/i)).toBeInTheDocument();
+
+    // Click Complete Setup & Ingest
+    const submitBtn = screen.getByText(/COMPLETE SETUP & INGEST/i);
+    await act(async () => {
+      fireEvent.click(submitBtn);
+    });
+
+    expect(mockProcessHistoricalPurchaseData).toHaveBeenCalled();
+    expect(mockSetInitialSetupModalOpen).toHaveBeenCalledWith(false);
+    expect(mockShowToast).toHaveBeenCalledWith('Setup Complete', expect.any(String), 'success');
   });
 
   it('navigates to email templates editor when Edit Message is clicked on Step 5', async () => {
@@ -1208,43 +1167,50 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(screen.getByText(/No Vendor Master file selected/i)).toBeInTheDocument();
   });
 
-  it('handles retry failure with toast warning', async () => {
-    const summaryWithFailures = {
-      importedCount: 1,
-      totalProcessed: 1,
-      mappedCount: 0,
-      mappedEmailsSent: 0,
-      unmappedCount: 1,
-      unmappedEmailsSent: 0,
-      failedEmailCount: 1,
-      failedEmails: [{ vendorId: 'v-1', vendorName: 'Vendor 1', email: 'v1@test.com', template: 'Template B', reason: 'Failed' }],
-      overallStatus: 'COMPLETED_WITH_FAILURES' as const,
-      period: '2_years',
-      totalVendors: 1,
-    };
-
-    const failingProcess = jest.fn().mockRejectedValue(new Error('Network error'));
+  it('handles ingestion failure with error banner and toast warning', async () => {
+    const failingProcess = jest.fn().mockRejectedValue(new Error('Network connection failed'));
     (useApp as jest.Mock).mockReturnValue({
       initialSetupModalOpen: true,
       setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
       historicalPurchaseDataPeriod: '2_years',
       setHistoricalPurchaseDataPeriod: mockSetHistoricalPurchaseDataPeriod,
       processHistoricalPurchaseData: failingProcess,
-      lastIngestionSummary: summaryWithFailures,
+      lastIngestionSummary: null,
       setInitialSetupCompleted: jest.fn(),
       activeBuyerAccount: { organizationName: 'L&T' },
       buyerVendors: mockBuyerVendors,
       showToast: mockShowToast,
     });
 
-    render(<InitialSetupModal />);
+    const { container } = render(<InitialSetupModal />);
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    const vFile = createValidVendorMasterFile();
+    const vInput = container.querySelector('input[type="file"]');
+    if (vInput) {
+      await act(async () => {
+        fireEvent.change(vInput, { target: { files: [vFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const poFile = createValidPoDumpFile();
+    const poInput = container.querySelector('input[type="file"]');
+    if (poInput) {
+      await act(async () => {
+        fireEvent.change(poInput, { target: { files: [poFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
     fireEvent.click(screen.getByText('5. Dispatch Emails'));
 
-    const retryBtn = screen.getByText(UI_STRINGS.initialSetupCompletion.retryAction);
+    const submitBtn = screen.getByText(/COMPLETE SETUP & INGEST/i);
     await act(async () => {
-      fireEvent.click(retryBtn);
+      fireEvent.click(submitBtn);
     });
-    expect(mockShowToast).toHaveBeenCalledWith('Retry Failed', expect.any(String), 'warning');
+    expect(mockShowToast).toHaveBeenCalledWith('Ingestion Error', expect.any(String), 'warning');
+    expect(screen.getByTestId('step5-submission-error-banner')).toBeInTheDocument();
   });
 
   it('cancels active background ingestion jobs when modal is closed', async () => {
