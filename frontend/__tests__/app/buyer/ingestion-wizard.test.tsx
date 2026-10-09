@@ -187,6 +187,30 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     expect(screen.getByDisplayValue('Centrifugal Water Pump 500 GPM')).toBeInTheDocument();
   });
 
+  it('extracts and displays all 100 valid items from bulk multi-worksheet file without arbitrary 10-item limit', async () => {
+    const bulk100 = Array.from({ length: 100 }, (_, i) =>
+      entity({
+        id: `ent-bulk-${i + 1}`,
+        itemName: `Procurement Valve ${i + 1}`,
+        quantity: i + 1,
+        unit: 'Nos',
+        technicalSpecs: `Spec Grade ${i + 1}`,
+      })
+    );
+
+    mockExtract.mockResolvedValueOnce(successResult(bulk100));
+
+    renderWizard();
+
+    uploadFile(new File(['binary content'], 'Bulk_200_Worksheet_Items.xlsx', { type: '' }));
+    clickExtract();
+
+    await waitFor(() => expect(mockExtract).toHaveBeenCalled());
+    expect(screen.getByText(/Extraction Complete/i)).toBeInTheDocument();
+    expect(screen.getByText(/Successfully extracted/i)).toHaveTextContent('100 line items');
+    expect(screen.getByDisplayValue('Procurement Valve 1')).toBeInTheDocument();
+  });
+
   it('allows adding, editing, and deleting line items in the table', () => {
     renderWizard();
 

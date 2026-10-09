@@ -2526,3 +2526,24 @@ Before implementation, inspect the existing codebase and reuse the current vendo
 raise the pr for using this current br4anch
 ```
 
+---
+
+### Prompt
+
+**Timestamp**: 2026-10-09T23:05:14+05:30
+
+```text
+Fix the existing Enterprise QUA bulk RFQ upload functionality to extract and process all valid line items, without an arbitrary limit of 10 items. For example, if a file contains 200 items and only 100 have valid quantities, process all 100 valid items according to the existing validation rules. Ensure accurate extraction of item descriptions, quantities, units, and technical specifications across all supported worksheets. Reuse the existing code, AI extraction logic, and validation mechanisms. Identify and fix the root cause without rewriting the feature or modifying unrelated functionality. Verify that all valid items are correctly saved and displayed in the final RFQ.
+```
+
+---
+
+### Prompt
+
+**Timestamp**: 2026-10-10T00:14:38+05:30
+
+```text
+raise the pr for this code
+```
+
+
