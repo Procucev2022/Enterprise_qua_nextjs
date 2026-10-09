@@ -15,6 +15,20 @@ if (typeof dns.setDefaultResultOrder === 'function') {
   dns.setDefaultResultOrder('ipv4first');
 }
 
+/**
+ * Reads an environment variable or secret, checking both process.env and
+ * Cloudflare Worker globalThis.__CF_ENV__.
+ */
+function getEnv(key) {
+  if (process.env && process.env[key] !== undefined && process.env[key] !== '') {
+    return process.env[key];
+  }
+  if (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__[key] !== undefined && globalThis.__CF_ENV__[key] !== '') {
+    return globalThis.__CF_ENV__[key];
+  }
+  return undefined;
+}
+
 let transporter;
 let vendorTransporter;
 
@@ -74,7 +88,7 @@ function getTransporter() {
 }
 
 function fromAddress() {
-  const user = process.env.SMTP_FROM || process.env.SMTP_USER || 'RFQ@procucev.com';
+  const user = getEnv('GMAIL_SENDER_EMAIL') || getEnv('SMTP_FROM') || getEnv('SMTP_USER') || 'RFQ@procucev.com';
   if (user.includes('<') && user.includes('>')) {
     return user;
   }
@@ -88,10 +102,9 @@ function fromAddress() {
  */
 function getPublicFrontendUrl() {
   const envVal =
-    process.env.PUBLIC_FRONTEND_URL ||
-    process.env.APP_PUBLIC_URL ||
-    process.env.FRONTEND_URL ||
-    (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.PUBLIC_FRONTEND_URL);
+    getEnv('PUBLIC_FRONTEND_URL') ||
+    getEnv('APP_PUBLIC_URL') ||
+    getEnv('FRONTEND_URL');
   if (envVal && typeof envVal === 'string' && envVal.trim()) {
     return envVal.trim().replace(/\/+$/, '');
   }
@@ -119,24 +132,24 @@ function getLogoUrl() {
 function getVendorTransporter() {
   if (vendorTransporter) return vendorTransporter;
 
-  const user = process.env.VENDOR_SMTP_USER;
-  const rawPass = process.env.VENDOR_SMTP_PASSWORD;
+  const user = getEnv('VENDOR_SMTP_USER');
+  const rawPass = getEnv('VENDOR_SMTP_PASSWORD');
   if (!user || !rawPass) return undefined;
 
   const pass = rawPass.replace(/\s+/g, '');
-  const host = process.env.VENDOR_SMTP_HOST || 'smtp.gmail.com';
+  const host = getEnv('VENDOR_SMTP_HOST') || 'smtp.gmail.com';
   const isGmail =
-    (process.env.VENDOR_SMTP_SERVICE && process.env.VENDOR_SMTP_SERVICE.toLowerCase() === 'gmail') ||
+    (getEnv('VENDOR_SMTP_SERVICE') && getEnv('VENDOR_SMTP_SERVICE').toLowerCase() === 'gmail') ||
     host.toLowerCase().includes('gmail');
 
   let port;
   let secure;
 
-  if (process.env.VENDOR_SMTP_PORT) {
-    port = Number(process.env.VENDOR_SMTP_PORT);
-    secure = process.env.VENDOR_SMTP_SECURE !== undefined ? process.env.VENDOR_SMTP_SECURE === 'true' : port === 465;
-  } else if (process.env.VENDOR_SMTP_SECURE !== undefined) {
-    secure = process.env.VENDOR_SMTP_SECURE === 'true';
+  if (getEnv('VENDOR_SMTP_PORT')) {
+    port = Number(getEnv('VENDOR_SMTP_PORT'));
+    secure = getEnv('VENDOR_SMTP_SECURE') !== undefined ? getEnv('VENDOR_SMTP_SECURE') === 'true' : port === 465;
+  } else if (getEnv('VENDOR_SMTP_SECURE') !== undefined) {
+    secure = getEnv('VENDOR_SMTP_SECURE') === 'true';
     port = secure ? 465 : 587;
   } else if (isGmail) {
     port = 465;
@@ -165,7 +178,7 @@ function getVendorTransporter() {
 }
 
 function vendorFromAddress() {
-  const user = process.env.VENDOR_SMTP_FROM || process.env.VENDOR_SMTP_USER || 'srinu20252026@gmail.com';
+  const user = getEnv('VENDOR_GMAIL_SENDER_EMAIL') || getEnv('VENDOR_SMTP_FROM') || getEnv('VENDOR_SMTP_USER') || 'srinu20252026@gmail.com';
   if (user.includes('<') && user.includes('>')) {
     return user;
   }
@@ -174,9 +187,10 @@ function vendorFromAddress() {
 
 function vendorGatewayAddress() {
   return (
-    process.env.VENDOR_EMAIL_GATEWAY_ADDRESS ||
-    process.env.VENDOR_EMAIL_GATEWAY_USER ||
-    process.env.VENDOR_SMTP_USER ||
+    getEnv('VENDOR_EMAIL_GATEWAY_ADDRESS') ||
+    getEnv('VENDOR_GMAIL_SENDER_EMAIL') ||
+    getEnv('VENDOR_EMAIL_GATEWAY_USER') ||
+    getEnv('VENDOR_SMTP_USER') ||
     'srinu20252026@gmail.com'
   );
 }
@@ -381,14 +395,10 @@ async function deliverViaResend(message, label) {
 
 /** True when GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN are all set. */
 function isGmailApiConfigured() {
-  const hasClientId = Boolean(process.env.GMAIL_CLIENT_ID);
-  const hasClientSecret = Boolean(process.env.GMAIL_CLIENT_SECRET);
-  const hasRefreshToken = Boolean(process.env.GMAIL_REFRESH_TOKEN);
+  const hasClientId = Boolean(getEnv('GMAIL_CLIENT_ID'));
+  const hasClientSecret = Boolean(getEnv('GMAIL_CLIENT_SECRET'));
+  const hasRefreshToken = Boolean(getEnv('GMAIL_REFRESH_TOKEN'));
   if (!hasClientId || !hasClientSecret || !hasRefreshToken) {
-    // Diagnostic only — booleans, never the secret values themselves.
-    // Added while tracking down why the Gmail API branch wasn't firing in
-    // production despite `wrangler secret list` confirming all three are
-    // registered on the Worker.
     logger.warn(
       'Gmail API not configured',
       { hasClientId, hasClientSecret, hasRefreshToken },
@@ -401,27 +411,17 @@ function isGmailApiConfigured() {
 let gmailOAuthClient;
 let gmailOAuthClientRefreshToken;
 
-/**
- * Lazily builds an OAuth2 client from the refresh token minted once via
- * scripts/get-gmail-refresh-token.js. googleapis' OAuth2Client caches and
- * auto-refreshes the short-lived access token internally — no manual token
- * refresh logic needed here.
- *
- * Rebuilds whenever GMAIL_REFRESH_TOKEN no longer matches what this client
- * was built with: a Worker isolate stays warm across many invocations (a
- * cron poll especially), so a plain "build once" singleton would keep using
- * whichever identity happened to be live the first time this ran on that
- * isolate, silently ignoring a `wrangler secret put` rotation until the
- * isolate eventually recycles on its own.
- */
 function getGmailOAuthClient() {
-  if (gmailOAuthClient && gmailOAuthClientRefreshToken === process.env.GMAIL_REFRESH_TOKEN) {
+  const refreshToken = getEnv('GMAIL_REFRESH_TOKEN');
+  if (gmailOAuthClient && gmailOAuthClientRefreshToken === refreshToken) {
     return gmailOAuthClient;
   }
   if (!isGmailApiConfigured()) return undefined;
-  gmailOAuthClient = new google.auth.OAuth2(process.env.GMAIL_CLIENT_ID, process.env.GMAIL_CLIENT_SECRET);
-  gmailOAuthClient.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
-  gmailOAuthClientRefreshToken = process.env.GMAIL_REFRESH_TOKEN;
+  const clientId = getEnv('GMAIL_CLIENT_ID');
+  const clientSecret = getEnv('GMAIL_CLIENT_SECRET');
+  gmailOAuthClient = new google.auth.OAuth2(clientId, clientSecret);
+  gmailOAuthClient.setCredentials({ refresh_token: refreshToken });
+  gmailOAuthClientRefreshToken = refreshToken;
   return gmailOAuthClient;
 }
 
@@ -463,8 +463,9 @@ async function deliverViaGmailApi(message, label) {
   const gmail = google.gmail({ version: 'v1', auth });
 
   logger.info(`Dispatching ${label} to ${message.to} via Gmail API`, { subject: message.subject }, 'MAILER_SERVICE');
+  const sender = getEnv('GMAIL_SENDER_EMAIL');
   const raw = buildRawMimeMessage({
-    from: process.env.GMAIL_SENDER_EMAIL ? `"Procucev Enterprise" <${process.env.GMAIL_SENDER_EMAIL}>` : fromAddress(),
+    from: sender ? `"Procucev Enterprise" <${sender}>` : fromAddress(),
     to: message.to,
     subject: message.subject,
     html: message.html,
@@ -475,47 +476,35 @@ async function deliverViaGmailApi(message, label) {
   return { sent: true, messageId: res.data.id };
 }
 
-/**
- * True when a dedicated vendor-mailbox Gmail identity is configured.
- *
- * Reuses the same OAuth2 "app" (GMAIL_CLIENT_ID/SECRET — one Google Cloud
- * client can authorize any number of Google accounts) with its own refresh
- * token, minted the same way as the buyer one (see
- * scripts/get-gmail-refresh-token.js), signed in as the dedicated vendor
- * mailbox instead of the buyer account. This is the real fix for vendor
- * mail always appearing to come from the buyer's Gmail account: raw SMTP
- * (the original VENDOR_SMTP_* design) can never work on Cloudflare Workers
- * at all (confirmed live — its TLS layer doesn't implement
- * rejectUnauthorized), so a second identity has to go through the Gmail
- * API too, not through SMTP with different credentials.
- */
 function isVendorGmailApiConfigured() {
-  return Boolean(process.env.GMAIL_CLIENT_ID) && Boolean(process.env.GMAIL_CLIENT_SECRET) && Boolean(process.env.VENDOR_GMAIL_REFRESH_TOKEN);
+  return Boolean(getEnv('GMAIL_CLIENT_ID')) && Boolean(getEnv('GMAIL_CLIENT_SECRET')) && Boolean(getEnv('VENDOR_GMAIL_REFRESH_TOKEN'));
 }
 
 let vendorGmailOAuthClient;
 let vendorGmailOAuthClientRefreshToken;
 
-/** Same staleness problem and fix as getGmailOAuthClient() above. */
 function getVendorGmailOAuthClient() {
-  if (vendorGmailOAuthClient && vendorGmailOAuthClientRefreshToken === process.env.VENDOR_GMAIL_REFRESH_TOKEN) {
+  const refreshToken = getEnv('VENDOR_GMAIL_REFRESH_TOKEN');
+  if (vendorGmailOAuthClient && vendorGmailOAuthClientRefreshToken === refreshToken) {
     return vendorGmailOAuthClient;
   }
   if (!isVendorGmailApiConfigured()) return undefined;
-  vendorGmailOAuthClient = new google.auth.OAuth2(process.env.GMAIL_CLIENT_ID, process.env.GMAIL_CLIENT_SECRET);
-  vendorGmailOAuthClient.setCredentials({ refresh_token: process.env.VENDOR_GMAIL_REFRESH_TOKEN });
-  vendorGmailOAuthClientRefreshToken = process.env.VENDOR_GMAIL_REFRESH_TOKEN;
+  const clientId = getEnv('GMAIL_CLIENT_ID');
+  const clientSecret = getEnv('GMAIL_CLIENT_SECRET');
+  vendorGmailOAuthClient = new google.auth.OAuth2(clientId, clientSecret);
+  vendorGmailOAuthClient.setCredentials({ refresh_token: refreshToken });
+  vendorGmailOAuthClientRefreshToken = refreshToken;
   return vendorGmailOAuthClient;
 }
 
-/** Same as deliverViaGmailApi, but signed in as the dedicated vendor mailbox. */
 async function deliverViaVendorGmailApi(message, label) {
   const auth = getVendorGmailOAuthClient();
   const gmail = google.gmail({ version: 'v1', auth });
 
   logger.info(`Dispatching ${label} to ${message.to} via vendor Gmail API`, { subject: message.subject }, 'MAILER_SERVICE');
+  const sender = getEnv('VENDOR_GMAIL_SENDER_EMAIL');
   const raw = buildRawMimeMessage({
-    from: process.env.VENDOR_GMAIL_SENDER_EMAIL ? `"Procucev Enterprise" <${process.env.VENDOR_GMAIL_SENDER_EMAIL}>` : vendorFromAddress(),
+    from: sender ? `"Procucev Enterprise" <${sender}>` : vendorFromAddress(),
     to: message.to,
     subject: message.subject,
     html: message.html,

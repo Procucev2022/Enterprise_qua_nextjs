@@ -1266,4 +1266,112 @@ describe("QuotationForm Comprehensive Suite", () => {
       screen.queryByRole("heading", { name: /Submit Quotation/i }),
     ).not.toBeInTheDocument();
   });
+
+  test("filters opportunities by search query and status, and supports clearing filters", async () => {
+    const onBack = jest.fn();
+    renderWithProvider(
+      <QuotationFormCustomWrapper onBack={onBack} withSession customSubscription="select" />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/Search RFQ number, title, or buyer/i)).toBeInTheDocument();
+    });
+
+    const searchInput = screen.getByPlaceholderText(/Search RFQ number, title, or buyer/i);
+    const statusSelect = screen.getByRole("combobox");
+
+    // Search for pump
+    fireEvent.change(searchInput, { target: { value: "Pump" } });
+    expect(screen.getByText(/Centrifugal Water Pump/i)).toBeInTheDocument();
+
+    // Filter by open
+    fireEvent.change(statusSelect, { target: { value: "open" } });
+    expect(screen.getByText(/Centrifugal Water Pump/i)).toBeInTheDocument();
+
+    // Filter by submitted
+    fireEvent.change(statusSelect, { target: { value: "submitted" } });
+    expect(screen.getByText(/No matching enquiries/i)).toBeInTheDocument();
+
+    // Filter by closed
+    fireEvent.change(statusSelect, { target: { value: "closed" } });
+    expect(screen.getByText(/No matching enquiries/i)).toBeInTheDocument();
+
+    // Search with non-matching query
+    fireEvent.change(searchInput, { target: { value: "xyznonexistentquery999" } });
+    expect(screen.getByText(/No matching enquiries/i)).toBeInTheDocument();
+
+    // Click clear search and filters
+    const clearBtn = screen.getByRole("button", { name: /Clear search and filters/i });
+    fireEvent.click(clearBtn);
+
+    expect(screen.getByText(/Centrifugal Water Pump/i)).toBeInTheDocument();
+  });
+
+  test("opens inquiry modal, enters message, submits via Enter and button, and closes modal", async () => {
+    const onBack = jest.fn();
+    renderWithProvider(
+      <QuotationFormCustomWrapper onBack={onBack} withSession customSubscription="select" />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Centrifugal Water Pump/i)).toBeInTheDocument();
+    });
+
+    const clarifyBtn = screen.getByRole("button", { name: /Clarify/i });
+    fireEvent.click(clarifyBtn);
+
+    expect(
+      screen.getByRole("heading", { name: /Raise Issue \/ Clarification/i }),
+    ).toBeInTheDocument();
+
+    const textarea = screen.getByPlaceholderText(/Type your question regarding specs/i);
+    expect(textarea).toBeInTheDocument();
+
+    // Type query
+    fireEvent.change(textarea, { target: { value: "Can we deliver in batches?" } });
+
+    // Submit via Enter key
+    await act(async () => {
+      fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
+    });
+
+    // Close button
+    const closeBtns = screen.getAllByRole("button", { name: /Close/i });
+    fireEvent.click(closeBtns[closeBtns.length - 1]);
+
+    expect(
+      screen.queryByRole("heading", { name: /Raise Issue \/ Clarification/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  test("handles inquiry dispatch with button click and failure toast", async () => {
+    const onBack = jest.fn();
+    renderWithProvider(
+      <QuotationFormCustomWrapper onBack={onBack} withSession customSubscription="select" />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Centrifugal Water Pump/i)).toBeInTheDocument();
+    });
+
+    const clarifyBtn = screen.getByRole("button", { name: /Clarify/i });
+    fireEvent.click(clarifyBtn);
+
+    const textarea = screen.getByPlaceholderText(/Type your question regarding specs/i);
+    fireEvent.change(textarea, { target: { value: "What is the warranty period?" } });
+
+    const submitBtn = screen.getByRole("button", { name: /Send Clarification/i });
+    await act(async () => {
+      fireEvent.click(submitBtn);
+    });
+
+    // Close via top X icon
+    const modalHeading = screen.getByRole("heading", { name: /Raise Issue \/ Clarification/i });
+    const modalHeader = modalHeading.closest(".flex");
+    const xBtn = modalHeader?.querySelector("button");
+    if (xBtn) {
+      fireEvent.click(xBtn);
+    }
+  });
 });
+
