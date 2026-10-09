@@ -622,6 +622,8 @@ export interface VendorOpportunity {
   majorCategory: string;
   /** From the leading line item's real minorCategory — empty when none was classified. */
   minorCategory: string;
+  /** The buyer account ID that owns this RFQ, used for buyer-specific vendor access verification. */
+  buyerAccountId?: string | null;
 }
 
 export interface AuditLogEntry {
@@ -886,6 +888,8 @@ export interface VendorEntry {
   remindersSentCount?: number;
   addedByBuyerCompany?: string;
   addedByBuyerName?: string;
+  buyerId?: string;
+  buyerAccountId?: string;
   profileCompletionStatus?: 'pending' | 'completed';
 
   // Dual-Stream Category Mapping & Reconciliation (Client-Mapped vs Vendor-Selected)

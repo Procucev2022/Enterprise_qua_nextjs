@@ -951,22 +951,6 @@ async function addQuote(req, res, next) {
       return res.status(400).json({ success: false, error: 'Create your vendor profile before submitting a quote.' });
     }
 
-    const eligibility = storeService.checkVendorQuotationEligibility(vendorRecord);
-    if (!eligibility.eligible) {
-      logger.warn(
-        `Vendor ${vendorRecord.name} (${vendorRecord.id}) attempted to quote RFQ ${id} but 5 free quotation credits are exhausted`,
-        { id, vendorId: vendorRecord.id, freeCreditsRemaining: eligibility.freeCreditsRemaining, subscriptionPlan: eligibility.subscriptionPlan },
-        'RFQ_CONTROLLER'
-      );
-      return res.status(403).json({
-        success: false,
-        error: 'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.',
-        upgradeRequired: true,
-        freeCreditsRemaining: 0,
-        subscriptionPlan: eligibility.subscriptionPlan,
-      });
-    }
-
     const { unitPrice, totalPrice, leadTimeDays, warrantyYears, paymentTerms, remarks, vendorCategory, complianceStatus, lineItemQuotes } = req.body;
     if (!unitPrice) {
       logger.warn(`Failed to add quote to RFQ ${id}: Missing unitPrice`, { id }, 'RFQ_CONTROLLER');
@@ -993,6 +977,23 @@ async function addQuote(req, res, next) {
       logger.warn(`RFQ not found or out of scope for quote submission: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
+
+    const eligibility = storeService.checkVendorQuotationEligibility(vendorRecord, targetRfq);
+    if (!eligibility.eligible) {
+      logger.warn(
+        `Vendor ${vendorRecord.name} (${vendorRecord.id}) attempted to quote RFQ ${id} but 5 free quotation credits are exhausted`,
+        { id, vendorId: vendorRecord.id, freeCreditsRemaining: eligibility.freeCreditsRemaining, subscriptionPlan: eligibility.subscriptionPlan },
+        'RFQ_CONTROLLER'
+      );
+      return res.status(403).json({
+        success: false,
+        error: 'Your 5 free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.',
+        upgradeRequired: true,
+        freeCreditsRemaining: 0,
+        subscriptionPlan: eligibility.subscriptionPlan,
+      });
+    }
+
     const quote = {
       vendorId: vendorRecord.id,
       vendorName: vendorRecord.name,
@@ -1050,8 +1051,7 @@ async function generateEmailPreview(req, res, next) {
     if (req.user && req.user.role === 'vendor') {
       const requestingVendor = storeService.getVendorById(req.user.email, 'all');
       if (requestingVendor) {
-        const isDirect =
-          !!requestingVendor.addedByBuyerCompany && requestingVendor.addedByBuyerCompany === rfq.buyerAccountName;
+        const isDirect = storeService.isVendorMappedToRfqBuyer(requestingVendor, rfq);
         if (!isDirect) {
           const used = requestingVendor.rfqDownloadsUsed || 0;
           storeService.updateVendor(requestingVendor.id, { rfqDownloadsUsed: used + 1 });
