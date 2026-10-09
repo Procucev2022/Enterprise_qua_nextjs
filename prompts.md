@@ -2415,3 +2415,38 @@ after the buyer can give the po data the data is taken as wrongly in decimal it 
 Remove vendor master template from vendor master and put in Time Horizon only all required columns present in vendor master and template present at time vendor master template name
 ```
 
+---
+
+**Timestamp**: 2026-10-09T11:16:50+05:30
+
+```text
+### Requirement: Send Emails to Both Mapped and Unmapped Vendors on Setup Completion
+
+Update the **Buyer Initial Setup → Step 5: Dispatch Emails** functionality in QUA AI 2.0.
+
+**Expected Behavior:**
+
+When the Buyer clicks **“Complete Setup & Ingest Vendors”**, the system must process both vendor groups and send the appropriate email to each vendor automatically in a single action.
+
+**1. Mapped Vendors**
+- Identify vendors whose categories are successfully mapped using Pre-Purchase Order (PPO) history.
+- Send **Template A: Suppliers With Pre-Purchase Order History** to each eligible mapped vendor.
+- Include the vendor's relevant mapped categories and the appropriate onboarding information.
+
+**2. Unmapped Vendors**
+- Identify vendors whose categories are not mapped because they have no Pre-Purchase Order history.
+- Send **Template B: Suppliers With NO Pre-Purchase Orders** to each eligible unmapped vendor.
+- Inform them that they need to map their categories manually to receive relevant RFQ enquiries.
+
+**3. Execution & Validation Rules**
+- **Single-Click Workflow:** Both email groups must be processed and dispatched together when the Buyer completes setup. No manual switching or multiple completion clicks should be required.
+- **Deduplication:** Ensure vendors are not emailed multiple times if the action is retried.
+- **Validation:** Only send emails to vendors with valid email addresses.
+- **Feedback:** Provide a clear summary to the Buyer showing:
+  - Total vendors processed
+  - Count of Template A emails sent (Mapped)
+  - Count of Template B emails sent (Unmapped)
+  - Any failed or skipped records with reasons
+```
+
+

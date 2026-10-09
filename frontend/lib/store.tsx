@@ -19,6 +19,7 @@ import {
   VendorOnboardingEmailPayload,
   VendorProfileReminderPayload,
   HistoricalPurchaseVendorRecord,
+  IngestionSummary,
   ExtractedEntity,
   BuyerAccount,
   VendorRatingRevisionRecord,
@@ -165,6 +166,8 @@ interface AppContextType {
   historicalPurchaseDataPeriod: '1_year' | '2_years' | '3_years';
   setHistoricalPurchaseDataPeriod: (period: '1_year' | '2_years' | '3_years') => void;
   processHistoricalPurchaseData: (period: '1_year' | '2_years' | '3_years', vendors: HistoricalPurchaseVendorRecord[]) => Promise<number>;
+  lastIngestionSummary: IngestionSummary | null;
+  setLastIngestionSummary: (summary: IngestionSummary | null) => void;
 
   // Buyer Uploaded Vendors, Database Check & Automated Onboarding Emails
   buyerVendors: VendorEntry[];
@@ -963,6 +966,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [initialSetupModalOpen, setInitialSetupModalOpen] = useState<boolean>(false);
   const [initialSetupCompleted, setInitialSetupCompleted] = useState<boolean>(false);
   const [historicalPurchaseDataPeriod, setHistoricalPurchaseDataPeriod] = useState<'1_year' | '2_years' | '3_years'>('1_year');
+  const [lastIngestionSummary, setLastIngestionSummary] = useState<IngestionSummary | null>(null);
 
   const processHistoricalPurchaseData = async (
     period: '1_year' | '2_years' | '3_years',
@@ -1023,13 +1027,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return 0;
     }
 
+    const summary: IngestionSummary = {
+      importedCount: data.importedCount ?? 0,
+      totalProcessed: data.totalProcessed ?? vendors.length,
+      mappedCount: data.mappedCount ?? mappedCount,
+      mappedEmailsSent: data.mappedEmailsSent ?? (data.mappedCount ?? mappedCount),
+      unmappedCount: data.unmappedCount ?? unmappedCount,
+      unmappedEmailsSent: data.unmappedEmailsSent ?? (data.unmappedCount ?? unmappedCount),
+      failedEmailCount: data.failedEmailCount ?? (Array.isArray(data.failedEmails) ? data.failedEmails.length : 0),
+      failedEmails: Array.isArray(data.failedEmails) ? data.failedEmails : [],
+      skippedCount: data.skippedCount ?? 0,
+      skipped: Array.isArray(data.skipped) ? data.skipped : [],
+      period: data.period ?? period,
+      totalVendors: data.totalVendors ?? vendors.length,
+      overallStatus: data.overallStatus ?? (data.failedEmailCount > 0 ? 'COMPLETED_WITH_FAILURES' : 'COMPLETED'),
+    };
+    setLastIngestionSummary(summary);
+
     await refreshFromDB();
     setInitialSetupCompleted(true);
-    setInitialSetupModalOpen(false);
+    // Note: Modal remains open so InitialSetupModal can display the Completion Summary to the user
 
     addFeedItem(
       `Historical Purchase & Vendor Master Ingestion Complete: ${data.importedCount} Vendors`,
-      `Processed separate Vendor Master & ${periodLabel} PO dumps. ${mappedCount} suppliers categorized into 1st/2nd sets. ${unmappedCount} suppliers notified to self-map categories.`,
+      `Processed separate Vendor Master & ${periodLabel} PO dumps. ${summary.mappedEmailsSent}/${summary.mappedCount} Template A sent. ${summary.unmappedEmailsSent}/${summary.unmappedCount} Template B sent. ${summary.failedEmailCount} failed.`,
       'invitation',
       undefined,
       `${data.importedCount} Ingested Vendors`,
@@ -1037,13 +1058,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     );
 
     addAuditLog(
-      `Ingested separate Vendor Master & ${periodLabel} PO files (${vendors.length} submitted, ${data.importedCount} new: ${mappedCount} PO-mapped, ${unmappedCount} self-mapping required).`
+      `Ingested separate Vendor Master & ${periodLabel} PO files (${vendors.length} submitted, ${data.importedCount} new: ${summary.mappedEmailsSent} Template A sent, ${summary.unmappedEmailsSent} Template B sent, ${summary.failedEmailCount} failed).`
     );
 
     showToast(
-      'Initial Setup Completed',
-      `Processed ${periodLabel} PO dump & Vendor Master. ${data.importedCount} new suppliers added (of ${vendors.length} submitted).`,
-      'success'
+      summary.failedEmailCount > 0 ? 'Setup Completed with Warnings' : 'Initial Setup Completed',
+      `Processed ${periodLabel} PO dump & Vendor Master. Dispatched ${summary.mappedEmailsSent} Template A and ${summary.unmappedEmailsSent} Template B emails (${summary.failedEmailCount} failed).`,
+      summary.failedEmailCount > 0 ? 'warning' : 'success'
     );
 
     return data.importedCount;
@@ -2411,6 +2432,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         historicalPurchaseDataPeriod,
         setHistoricalPurchaseDataPeriod,
         processHistoricalPurchaseData,
+        lastIngestionSummary,
+        setLastIngestionSummary,
         buyerVendors,
         addBuyerVendor,
         updateBuyerVendor,

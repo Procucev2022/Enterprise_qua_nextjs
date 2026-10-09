@@ -1456,6 +1456,33 @@ export const UI_STRINGS = {
       templateDownloadedTitle: 'Template downloaded',
     },
   },
+
+  initialSetupCompletion: {
+    title: 'Setup & Vendor Ingestion Summary',
+    subtitle: 'Dual-group vendor processing and onboarding email dispatch completed in a single coordinated action.',
+    statusHeading: 'Overall Ingestion Status',
+    statusCompleted: 'COMPLETED',
+    statusWithFailures: 'COMPLETED WITH WARNINGS',
+    statusFailed: 'FAILED',
+    totalProcessedLabel: 'Total Processed',
+    totalVendorsUnit: 'Vendors',
+    mappedSentLabel: 'Template A: Pre-PO Mapped',
+    unmappedSentLabel: 'Template B: Self-Map Required',
+    failedCountLabel: 'Failed Email Dispatches',
+    failedTableHeading: 'Failed Email Dispatches Requiring Attention',
+    thVendorName: 'Vendor Name',
+    thEmail: 'Email Address',
+    thTemplate: 'Template',
+    thReason: 'Failure Reason',
+    retryAction: 'Retry Failed Emails',
+    retryingAction: 'Retrying Dispatches…',
+    doneAction: 'Done & View Dashboard',
+    backToReviewAction: 'Back to Email Preview',
+    allSuccessNotice: 'All eligible mapped (Template A) and unmapped (Template B) vendor onboarding emails dispatched successfully.',
+    retryHint: 'Retrying will safely re-attempt only failed emails without duplicating successful dispatches.',
+    suppliersUnit: 'Suppliers',
+    emailsSentTemplate: '{sent} of {total} Emails Sent',
+  },
 };
 
 /**

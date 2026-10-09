@@ -782,6 +782,79 @@ describe('Store Service & Business Operations', () => {
       }
     });
 
+    test('processHistoricalPurchaseData dispatches both Template A and B in a single action and tracks failures and deduplication on retry', async () => {
+      const findSpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+      const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({ created: true });
+      const categoryMappedSpy = jest
+        .spyOn(mailerService, 'buildVendorCategoryMappingEmail')
+        .mockImplementation(({ to }) => ({ to, subject: 'Template A', html: '<p>A</p>' }));
+      const selfMapSpy = jest
+        .spyOn(mailerService, 'buildVendorSelfMappingEmail')
+        .mockImplementation(({ to }) => ({ to, subject: 'Template B', html: '<p>B</p>' }));
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockImplementation(async (payload) => {
+        if (payload.to === 'failing-vendor@example.com') {
+          return { sent: false, reason: 'Mailbox full' };
+        }
+        return { sent: true };
+      });
+
+      try {
+        const result = await storeService.processHistoricalPurchaseData('2_years', [
+          {
+            companyName: 'Mapped Supplier Co',
+            email: 'mapped-both@example.com',
+            categoriesMappedByBuyer: true,
+            majorCategory: 'Mechanical',
+            minorCategories: ['Valves'],
+          },
+          {
+            companyName: 'Unmapped Supplier Co',
+            email: 'unmapped-both@example.com',
+            categoriesMappedByBuyer: false,
+          },
+          {
+            companyName: 'Failing Email Supplier Co',
+            email: 'failing-vendor@example.com',
+            categoriesMappedByBuyer: false,
+          },
+          {
+            companyName: 'Invalid Email Supplier Co',
+            email: 'invalid-email-address',
+            categoriesMappedByBuyer: true,
+          },
+        ]);
+
+        expect(result.success).toBe(true);
+        expect(result.totalProcessed).toBe(4);
+        expect(result.mappedCount).toBe(2);
+        expect(result.unmappedCount).toBe(2);
+        expect(result.mappedEmailsSent).toBe(1);
+        expect(result.unmappedEmailsSent).toBe(1);
+        expect(result.failedEmailCount).toBe(2);
+        expect(result.overallStatus).toBe('COMPLETED_WITH_FAILURES');
+        expect(categoryMappedSpy).toHaveBeenCalled();
+        expect(selfMapSpy).toHaveBeenCalled();
+
+        // Safe retry: previously sent vendors must not be emailed again
+        const retryResult = await storeService.processHistoricalPurchaseData('2_years', [
+          {
+            companyName: 'Mapped Supplier Co',
+            email: 'mapped-both@example.com',
+            categoriesMappedByBuyer: true,
+            majorCategory: 'Mechanical',
+            minorCategories: ['Valves'],
+          },
+        ]);
+        expect(retryResult.mappedEmailsSent).toBe(1);
+      } finally {
+        findSpy.mockRestore();
+        identitySpy.mockRestore();
+        categoryMappedSpy.mockRestore();
+        selfMapSpy.mockRestore();
+        sendSpy.mockRestore();
+      }
+    });
+
     test('updateRFQ & addQuoteToRFQ', () => {
       const updated = storeService.updateRFQ(rfqId, { targetSavings: '20%' });
       expect(updated.targetSavings).toBe('20%');
