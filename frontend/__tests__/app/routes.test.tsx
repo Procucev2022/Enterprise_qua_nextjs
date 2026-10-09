@@ -306,7 +306,7 @@ describe('Role screen routes', () => {
     // The page reads the RFQ from the API now, not from store state. The record is
     // only complete server-side, and the bootstrap payload no longer carries RFQs
     // at all, so a store lookup reported "not found" for RFQs that exist.
-    it('rfq details fetches the RFQ named in the query string and returns to the portfolio', async () => {
+    it('rfq details fetches the RFQ named in the query string and returns to the dashboard', async () => {
       mockSearchParams.set('rfq', 'RFQ-1');
       mockFetchRFQById.mockResolvedValue({ success: true, rfq: RFQ });
 
@@ -316,7 +316,7 @@ describe('Role screen routes', () => {
       expect(mockFetchRFQById).toHaveBeenCalledWith('RFQ-1');
 
       clickCallback('rfq-details:onBack');
-      expect(mockPush).toHaveBeenCalledWith('/buyer/rfq-summary');
+      expect(mockPush).toHaveBeenCalledWith('/buyer/dashboard');
       mockSearchParams.delete('rfq');
     });
 

@@ -84,7 +84,7 @@ function BuyerRFQDetailsView() {
     void load(rfqNumber);
   }, [rfqNumber, load]);
 
-  const onBack = () => router.push('/buyer/rfq-summary');
+  const onBack = () => router.push('/buyer/dashboard');
 
   if (!rfqNumber) {
     return (

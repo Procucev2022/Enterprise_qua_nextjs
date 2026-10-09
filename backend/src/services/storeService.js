@@ -3247,7 +3247,8 @@ class StoreService {
     const failedEmails = [];
     const vendorsToEmail = [];
 
-    vendorRecords.forEach((rec, idx) => {
+    for (let idx = 0; idx < vendorRecords.length; idx++) {
+      const rec = vendorRecords[idx];
       const name = (rec.companyName || rec.name || '').trim();
       const email = (rec.email || '').trim();
 
@@ -3260,28 +3261,78 @@ class StoreService {
               ? 'Missing company name.'
               : 'Missing contact email.',
         });
-        return;
+        continue;
       }
 
       const isMapped = isMappedRecord(rec);
       if (isMapped) mappedCount++;
       else unmappedCount++;
 
-      // Check duplicates only within this buyer's scope (not global platform)
-      // Require both email AND name to match for a duplicate
-      const existing = this.vendors.find(
-        (v) => v.buyerId === buyerId &&
-          v.email && v.email.toLowerCase() === email.toLowerCase() &&
-          v.name && v.name.toLowerCase() === name.toLowerCase()
+      const minorCategories = Array.isArray(rec.minorCategories) ? rec.minorCategories : [];
+      const majorCategory = (rec.majorCategory || '').trim() || null;
+
+      // Check if vendor already exists in memory or in DB
+      let existing = this.vendors.find(
+        (v) => v.email && v.email.toLowerCase() === email.toLowerCase()
       );
-      if (existing) {
-        vendorsToEmail.push({ rec, vendor: existing, isNew: false, isMapped });
-        return;
+      if (!existing && pool.hasStorage()) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          existing = await domainQueries.getVendorByEmailFromDB(email);
+          if (existing && !this.vendors.some((v) => v.id === existing.id)) {
+            this.vendors.push(existing);
+          }
+        } catch (e) {
+          logger.error('Failed to lookup vendor by email from DB', e, 'STORE_SERVICE');
+        }
       }
 
-      const minorCategories = Array.isArray(rec.minorCategories) ? rec.minorCategories : [];
+      if (existing) {
+        const sBuyerId = buyerId ? String(buyerId).toLowerCase() : null;
+        const sBuyerEmail = buyerEmail ? String(buyerEmail).toLowerCase() : null;
+        const alreadyScopedToThisBuyer = Boolean(
+          (sBuyerId && (
+            (existing.buyerId && String(existing.buyerId).toLowerCase() === sBuyerId) ||
+            (existing.buyerAccountId && String(existing.buyerAccountId).toLowerCase() === sBuyerId)
+          )) ||
+          (sBuyerEmail && existing.buyerEmail && String(existing.buyerEmail).toLowerCase() === sBuyerEmail)
+        );
+
+        existing.buyerId = buyerId || existing.buyerId || null;
+        existing.buyerAccountId = buyerId || existing.buyerAccountId || null;
+        existing.buyerEmail = buyerEmail || existing.buyerEmail || null;
+        if (name) existing.name = name;
+        if (rec.contactPerson) existing.contactPerson = (rec.contactPerson || '').trim();
+        if (rec.phone) existing.phone = (rec.phone || '').trim();
+        if (rec.location || rec.address) existing.location = (rec.location || rec.address || '').trim();
+        if (majorCategory) existing.majorCategory = majorCategory;
+        if (minorCategories.length > 0) {
+          existing.minorCategories = minorCategories;
+          existing.clientMappedCategories = minorCategories;
+        }
+        if (Number.isFinite(Number(rec.rating))) existing.rating = Number(rec.rating);
+        if (Number.isFinite(Number(rec.score))) existing.score = Number(rec.score);
+        existing.hasRecord = true;
+        existing.isExistingInDatabase = true;
+
+        if (pool.hasStorage()) {
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            await domainQueries.upsertVendorInDB(existing);
+          } catch (err) {
+            logger.error('Failed to update existing vendor in DB', err, 'STORE_SERVICE');
+          }
+        }
+
+        if (!alreadyScopedToThisBuyer) {
+          importedCount++;
+        }
+        vendorsToEmail.push({ rec, vendor: existing, isNew: !alreadyScopedToThisBuyer, isMapped });
+        continue;
+      }
+
       const newVendor = {
-        id: `v-hist-${Date.now()}-${idx}`,
+        id: `v-hist-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
         buyerId: buyerId || null,
         buyerAccountId: buyerId || null,
         buyerEmail: buyerEmail || null,
@@ -3289,7 +3340,7 @@ class StoreService {
         email,
         contactPerson: (rec.contactPerson || '').trim() || null,
         phone: (rec.phone || '').trim() || null,
-        majorCategory: (rec.majorCategory || '').trim() || null,
+        majorCategory,
         minorCategories,
         location: (rec.location || rec.address || '').trim() || null,
         // Absent, not assumed. A supplier arriving from a spend extract has not
@@ -3311,7 +3362,7 @@ class StoreService {
       createdThisRun.push({ row: idx + 1, vendor: newVendor, isMapped });
       importedCount++;
       vendorsToEmail.push({ rec, vendor: newVendor, isNew: true, isMapped });
-    });
+    }
 
     // Confirm each new vendor actually landed in Postgres before reporting
     // success for it — a row whose email collided with one from a different

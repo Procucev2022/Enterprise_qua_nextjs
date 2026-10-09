@@ -12,7 +12,7 @@
 // ==============================================================================
 
 const pool = require('./pool');
-const { getD1Binding, batchD1 } = require('./d1Bridge');
+const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
 
 // ── Vendors ──────────────────────────────────────────────────────────────────
 
@@ -274,7 +274,7 @@ async function deleteVendorInDB(id) {
 async function bulkInsertVendorsInDB(vendors) {
   if (!pool.hasStorage() || vendors.length === 0) return [];
 
-  const d1 = getD1Binding();
+  const d1 = getD1Binding() || getD1HttpClient();
   if (d1) {
     const statements = vendors.map((vendor) => ({
       text: `INSERT INTO vendors (id, email, major_category, status, source, raw, updated_at)

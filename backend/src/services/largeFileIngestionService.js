@@ -393,6 +393,7 @@ async function processVendorMasterBatch(sessionId, organizationId, batch) {
     } catch (err) {
       logger.error('Failed to upsert vendor master batch', err, LOG_CATEGORY);
       skipped += valid.length;
+      invalid.push({ reason: `Database error: ${err.message}` });
     }
   }
 
@@ -462,6 +463,7 @@ async function processPoDumpBatch(sessionId, organizationId, batch, session) {
     } catch (err) {
       logger.error('Failed to insert PO dump batch', err, LOG_CATEGORY);
       skipped += valid.length;
+      invalid.push({ reason: `Database error: ${err.message}` });
     }
   }
 
