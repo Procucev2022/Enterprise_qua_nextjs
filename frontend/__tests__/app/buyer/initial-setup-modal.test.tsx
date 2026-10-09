@@ -9,12 +9,6 @@ jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
 }));
 
-const mockPush = jest.fn();
-jest.mock('next/navigation', () => ({
-  useRouter: () => ({
-    push: mockPush,
-  }),
-}));
 
 // Mock FileReader for synchronous, reliable Excel file parsing
 class MockFileReader {
@@ -1022,30 +1016,6 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(screen.getByText(/COMPLETE SETUP & INGEST/i)).toBeInTheDocument();
   });
 
-  it('navigates to email templates editor when Edit Message is clicked on Step 5', async () => {
-    (useApp as jest.Mock).mockReturnValue({
-      initialSetupModalOpen: true,
-      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
-      historicalPurchaseDataPeriod: '2_years',
-      setHistoricalPurchaseDataPeriod: mockSetHistoricalPurchaseDataPeriod,
-      processHistoricalPurchaseData: mockProcessHistoricalPurchaseData,
-      lastIngestionSummary: null,
-      setInitialSetupCompleted: jest.fn(),
-      activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
-      buyerVendors: mockBuyerVendors,
-      showToast: mockShowToast,
-    });
-
-    render(<InitialSetupModal />);
-    fireEvent.click(screen.getByText('5. Dispatch Emails'));
-
-    const editButtons = screen.getAllByText('Edit Message');
-    expect(editButtons.length).toBeGreaterThanOrEqual(2);
-    fireEvent.click(editButtons[0]);
-    expect(mockPush).toHaveBeenCalledWith('/buyer/vendor-email-templates');
-    fireEvent.click(editButtons[1]);
-    expect(mockPush).toHaveBeenCalledWith('/buyer/vendor-email-templates');
-  });
 
   it('supports pagination controls (Show More, Show All, Collapse) in Step 2 and Step 3', () => {
     const manyVendors = Array.from({ length: 60 }, (_, i) => ({

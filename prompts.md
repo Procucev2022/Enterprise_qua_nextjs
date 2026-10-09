@@ -2448,3 +2448,35 @@ When the Buyer clicks **“Complete Setup & Ingest Vendors”**, the system must
   - Count of Template B emails sent (Unmapped)
   - Any failed or skipped records with reasons
 ```
+
+---
+
+**Timestamp**: 2026-10-09T15:46:45+05:30
+
+```text
+raise the pr
+```
+
+---
+
+**Timestamp**: 2026-10-09T16:01:10+05:30
+
+```text
+Remove the test from the UI after extracted the data only show Successfully extracted number of line items and from "file name only" then remove the test using gemini -3- falsh an all
+```
+
+---
+
+**Timestamp**: 2026-10-09T16:38:54+05:30
+
+```text
+Add number of procucev vendor for version 2 and  version3 here and mode v1 vendor 10 next mode v2 procucev vendor 20  like that
+```
+
+---
+
+**Timestamp**: 2026-10-09T17:27:44+05:30
+
+```text
+Completely remove the Vendor Email Templates feature from the Enterprise QUA portal, including its sidebar menu option, page, UI components, and related fields. Do not modify, delete, or change any existing backend code, APIs, database tables, business logic, or other functionalities. Ensure that only the Vendor Email Templates feature is removed from the UI and that all other modules, navigation options, and existing features continue to work exactly as they do now. Do not make any unrelated code changes, refactoring, or UI modifications. Preserve the existing codebase and functionality without affecting any other part of the application.
+```
