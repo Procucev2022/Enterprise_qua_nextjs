@@ -146,6 +146,8 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
         return <span className="badge badge-emerald">AI Recommended</span>;
       case 'In Evaluation':
         return <span className="badge badge-blue">In Evaluation</span>;
+      case 'Quotes Received':
+        return <span className="badge badge-blue">Quotes Received</span>;
       case 'PO Generated':
         return <span className="badge badge-purple">PO Generated</span>;
       case 'Parsing':

@@ -23,6 +23,7 @@ import {
   Search,
   Info,
   Lock,
+  Mail,
 } from 'lucide-react';
 
 interface QuoteMatrixProps {
@@ -181,7 +182,23 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
       </div>
 
       {/* Evaluation Matrix Comparison Table */}
-      {currentRole === 'buyer' && currentRFQ?.quotesHidden ? (
+      {currentRole === 'buyer' && (currentRFQ?.sourcingMode === 'mode_0' || (currentRFQ?.sourcingMode as any) === 'v0' || (currentRFQ?.sourcingMode as any) === 'version_0') ? (
+        <div className="p-8 text-center glass-panel rounded-xl space-y-3 border border-indigo-200 dark:border-indigo-800/50 bg-indigo-50/40 dark:bg-indigo-950/20 shadow-sm">
+          <div className="w-12 h-12 mx-auto rounded-xl bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shadow-inner">
+            <Mail size={24} />
+          </div>
+          <div className="space-y-1">
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white">Direct Email Quotes (Version 0 Free Starter)</h3>
+            <p className="text-xs text-slate-600 dark:text-gray-300 max-w-lg mx-auto">
+              Quotations for V0 RFQs are sent directly to your registered corporate email upon submission. Comparative portal matrices and vendor details are not displayed in the portal for V0.
+            </p>
+          </div>
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-white dark:bg-gray-800 text-indigo-800 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700/60 shadow-sm">
+            <Mail size={13} />
+            <span>Check your inbox for vendor quotations on {currentRFQ.rfqNumber}</span>
+          </div>
+        </div>
+      ) : currentRole === 'buyer' && currentRFQ?.quotesHidden ? (
         <div className="p-8 text-center glass-panel rounded-xl space-y-3 border border-amber-300 dark:border-amber-700/50 bg-amber-50/50 dark:bg-amber-950/20 shadow-md">
           <div className="w-12 h-12 mx-auto rounded-xl bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 flex items-center justify-center shadow-inner">
             <Lock size={24} />

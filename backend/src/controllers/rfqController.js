@@ -112,6 +112,22 @@ function applyQuotesVisibility(rfq, role) {
   if (!rfq) return rfq;
   if (role !== 'buyer') return rfq;
 
+  const isV0 =
+    rfq.sourcingMode === 'mode_0' ||
+    rfq.sourcingMode === 'v0' ||
+    rfq.sourcingMode === 'version_0';
+
+  if (isV0) {
+    // For V0: Quotes and vendor details are not displayed in the buyer portal.
+    // The 48-hour restriction does not apply to V0.
+    return {
+      ...rfq,
+      quotes: [],
+      assignedVendors: [],
+      quotesHidden: false,
+    };
+  }
+
   const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
   const createdAtMs = rfq.createdAt ? new Date(rfq.createdAt).getTime() : 0;
   const isWithin48h = createdAtMs > 0 && Date.now() - createdAtMs < FORTY_EIGHT_HOURS_MS;
@@ -122,7 +138,6 @@ function applyQuotesVisibility(rfq, role) {
     return {
       ...rfq,
       quotes: [],
-      quotesCount: 0,
       quotesHidden: true,
       quotesHiddenUntil: unhideAt,
       quotesHiddenReason: 'Received quotes remain hidden from the buyer for 48 hours after release to preserve bidding integrity.',

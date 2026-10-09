@@ -1270,12 +1270,14 @@ export default function IngestionWizard({
               {isCategorizing ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
               {isCategorizing ? 'Classifying...' : 'Auto-Categorize All (AI)'}
             </button>
-            <button
-              onClick={() => setForm(addManualRFQLineItem(form))}
-              className="btn btn-primary btn-sm font-bold flex items-center gap-1 shadow-xs"
-            >
-              <Plus size={14} /> Add Line Item
-            </button>
+            {form.lineItems.length < 5 && (
+              <button
+                onClick={() => setForm(addManualRFQLineItem(form))}
+                className="btn btn-primary btn-sm font-bold flex items-center gap-1 shadow-xs"
+              >
+                <Plus size={14} /> Add Line Item
+              </button>
+            )}
           </div>
         </div>
 
@@ -1421,6 +1423,18 @@ export default function IngestionWizard({
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* ── When 5+ items exist, place Add Line Item at bottom-right ── */}
+        {form.lineItems.length >= 5 && (
+          <div className="flex justify-end pt-1">
+            <button
+              onClick={() => setForm(addManualRFQLineItem(form))}
+              className="btn btn-primary btn-sm font-bold flex items-center gap-1 shadow-xs"
+            >
+              <Plus size={14} /> Add Line Item
+            </button>
           </div>
         )}
       </div>

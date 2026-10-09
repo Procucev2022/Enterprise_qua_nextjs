@@ -1124,6 +1124,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       case 'PO Generated':
         return 'bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800';
       case 'In Evaluation':
+      case 'Quotes Received':
         return 'bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800';
       case 'AI Recommended':
         return 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800';
@@ -1685,7 +1686,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         title={DETAILS.quotesHeading}
         count={quotes.length}
         toolbar={
-          quotes.length > 0 && activeRfq ? (
+          quotes.length > 0 && activeRfq && !isV0 ? (
             <button
               onClick={() => router.push(`/buyer/quote-matrix?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`)}
               className="btn btn-primary btn-xs font-bold inline-flex items-center gap-1.5"
@@ -1695,7 +1696,21 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           ) : undefined
         }
       >
-        {currentRole === 'buyer' && activeRfq?.quotesHidden ? (
+        {isV0 ? (
+          <div className="px-4 pb-10 pt-4 flex flex-col items-center text-center max-w-xl mx-auto space-y-3">
+            <span className="w-16 h-16 rounded-2xl bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 flex items-center justify-center shadow-inner">
+              <Mail size={26} />
+            </span>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white">Quotes Delivered Directly to Email</h3>
+            <p className="text-xs text-slate-600 dark:text-gray-300 max-w-md">
+              In the V0 flow, when a matched vendor submits a quote, you will receive the complete quotation details directly in your registered email. Quotes are not displayed in the portal for comparison.
+            </p>
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-blue-800 dark:text-blue-300 bg-blue-100/70 dark:bg-blue-900/40 px-3.5 py-1.5 rounded-full border border-blue-200 dark:border-blue-800 shadow-sm">
+              <CheckCircle2 size={13} />
+              When vendor submits quote, you will receive quote details in your email
+            </span>
+          </div>
+        ) : currentRole === 'buyer' && activeRfq?.quotesHidden ? (
           <div className="px-4 pb-10 pt-4 flex flex-col items-center text-center max-w-xl mx-auto space-y-3">
             <span className="w-16 h-16 rounded-2xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 flex items-center justify-center shadow-inner">
               <Lock size={26} />
