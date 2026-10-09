@@ -430,12 +430,6 @@ async function processPoDumpBatch(sessionId, organizationId, batch, session) {
       continue;
     }
 
-    // Defensive re-normalization: row.poDate should already be ISO by the
-    // time it reaches here (mapRowValues' normalizePoDate), but this batch
-    // function is also called from paths that build rows directly without
-    // going through that step — a raw Excel serial or non-ISO string must
-    // still be normalized before the horizon comparison below, or every
-    // such row silently falls outside the window.
     const poDate = normalizePoDate(row.poDate || row.date);
 
     // Stamp inHorizon — a row with no parseable PO date can't be confirmed

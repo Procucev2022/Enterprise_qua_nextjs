@@ -1537,9 +1537,6 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                             <Info size={11} />
                             <span>AI Matching Info</span>
                           </button>
-                          <span className="text-[9px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-100/70 dark:bg-emerald-900/50 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
-                            ⚡ Hybrid Active
-                          </span>
                         </div>
                       </div>
 

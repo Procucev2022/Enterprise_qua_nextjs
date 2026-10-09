@@ -1075,6 +1075,30 @@ export interface HistoricalPurchaseVendorRecord {
   tempPassword?: string;
 }
 
+export interface IngestionFailedEmail {
+  vendorId?: string;
+  vendorName: string;
+  email: string;
+  template: string;
+  reason: string;
+}
+
+export interface IngestionSummary {
+  importedCount: number;
+  totalProcessed: number;
+  mappedCount: number;
+  mappedEmailsSent: number;
+  unmappedCount: number;
+  unmappedEmailsSent: number;
+  failedEmailCount: number;
+  failedEmails: IngestionFailedEmail[];
+  skippedCount?: number;
+  skipped?: Array<{ row: number; reason: string }>;
+  period?: string;
+  totalVendors?: number;
+  overallStatus: 'COMPLETED' | 'COMPLETED_WITH_FAILURES' | 'FAILED';
+}
+
 // ==============================================================================
 // VENDOR MASTER & PO DATA INGESTION (buyer module)
 // ==============================================================================

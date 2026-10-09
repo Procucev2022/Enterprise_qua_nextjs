@@ -3200,32 +3200,52 @@ class StoreService {
       }
     }
 
+    const isMappedRecord = (rec) => {
+      if (rec.categoriesMappedByBuyer === true) return true;
+      if (rec.categoriesMappedByBuyer === false) return false;
+      const maj = (rec.majorCategory || '').trim();
+      return Boolean(maj && !maj.toLowerCase().includes('uncategorized'));
+    };
+
     /** Template A when the vendor has a buyer-mapped category, else Template B. */
     const buildMappingEmail = (rec, { to, recipientName, vendorCode }) => {
-      const hasMapping = rec.categoriesMappedByBuyer === true || Boolean((rec.majorCategory || '').trim());
+      const hasMapping = isMappedRecord(rec);
       if (hasMapping) {
         const override = dispatchTemplates.category_mapped || {};
-        return mailerService.buildVendorCategoryMappingEmail({
+        return {
+          templateType: 'Template A',
+          payload: mailerService.buildVendorCategoryMappingEmail({
+            to,
+            recipientName,
+            buyerOrganizationName,
+            vendorCode,
+            majorCategory: rec.majorCategory || 'Engineering Spares - Mechanical',
+            minorCategories: Array.isArray(rec.minorCategories) ? rec.minorCategories : [],
+            customSubject: override.subject,
+            customMessage: override.message,
+          }),
+        };
+      }
+      const override = dispatchTemplates.self_map_required || {};
+      return {
+        templateType: 'Template B',
+        payload: mailerService.buildVendorSelfMappingEmail({
           to,
           recipientName,
           buyerOrganizationName,
           vendorCode,
-          majorCategory: rec.majorCategory,
-          minorCategories: Array.isArray(rec.minorCategories) ? rec.minorCategories : [],
           customSubject: override.subject,
           customMessage: override.message,
-        });
-      }
-      const override = dispatchTemplates.self_map_required || {};
-      return mailerService.buildVendorSelfMappingEmail({
-        to,
-        recipientName,
-        buyerOrganizationName,
-        vendorCode,
-        customSubject: override.subject,
-        customMessage: override.message,
-      });
+        }),
+      };
     };
+
+    let mappedCount = 0;
+    let mappedEmailsSent = 0;
+    let unmappedCount = 0;
+    let unmappedEmailsSent = 0;
+    const failedEmails = [];
+    const vendorsToEmail = [];
 
     vendorRecords.forEach((rec, idx) => {
       const name = (rec.companyName || rec.name || '').trim();
@@ -3243,6 +3263,10 @@ class StoreService {
         return;
       }
 
+      const isMapped = isMappedRecord(rec);
+      if (isMapped) mappedCount++;
+      else unmappedCount++;
+
       // Check duplicates only within this buyer's scope (not global platform)
       // Require both email AND name to match for a duplicate
       const existing = this.vendors.find(
@@ -3251,23 +3275,7 @@ class StoreService {
           v.name && v.name.toLowerCase() === name.toLowerCase()
       );
       if (existing) {
-        if (existing.email && existing.onboardingEmailStatus !== 'sent') {
-          const emailPayload = buildMappingEmail(rec, {
-            to: existing.email,
-            recipientName: existing.contactPerson || existing.name,
-            vendorCode: existing.id,
-          });
-          mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding')
-            .then((delivery) => {
-              if (delivery.sent) {
-                this.updateVendor(existing.id, { onboardingEmailStatus: 'sent' });
-                logger.info(`Onboarding email sent for existing vendor ${existing.email}`, { vendorId: existing.id }, 'STORE_SERVICE');
-              }
-            })
-            .catch((err) => {
-              logger.error(`Error sending onboarding email to ${existing.email}`, err, 'STORE_SERVICE');
-            });
-        }
+        vendorsToEmail.push({ rec, vendor: existing, isNew: false, isMapped });
         return;
       }
 
@@ -3300,99 +3308,24 @@ class StoreService {
         isCategoryAligned: false,
       };
       this.vendors.push(newVendor);
-      createdThisRun.push({ row: idx + 1, vendor: newVendor });
+      createdThisRun.push({ row: idx + 1, vendor: newVendor, isMapped });
       importedCount++;
-
-      // Create identity database account for the vendor so they can log in —
-      // but only if one doesn't already exist. insertVendorAccount resets
-      // password+phone on an *existing* identity account (correct for the
-      // CLI provisioning script it also serves; wrong here, where the row is
-      // just a historical-purchase-dump entry that may well already have a
-      // real login). Confirmed live: this exact class of call silently
-      // clobbered a real vendor's password with a random one they were never
-      // told, via bulkAddVendors' sibling path — see that fix's comment.
-      // Checked up front (not just logged after the fact once
-      // insertVendorAccount's own `result.created === false` came back,
-      // which is what this used to do) so the reset never happens at all.
-      if (newVendor.email) {
-        // The whole sequence below is handed to waitUntil (via _background),
-        // via a real async IIFE with genuine awaits — the previous version
-        // used nested .then()/.catch() chains where the inner
-        // insertVendorAccount/sendVendorIngestionEmail calls were never
-        // returned from their enclosing .then() callback, so even wrapping
-        // the outer promise wouldn't have covered them: the outer chain
-        // resolved as soon as its synchronous body finished, not once the
-        // inner unawaited calls actually completed. Confirmed live (same
-        // root cause as addVendor's own onboarding call, see that comment):
-        // a buyer-added vendor's identity account and onboarding email
-        // silently never happened.
-        this._background(
-          (async () => {
-            const existingIdentity = await identityQueries.findUserByEmail(newVendor.email).catch((err) => {
-              logger.error(`Failed to check existing identity for ${newVendor.email}`, err, 'STORE_SERVICE');
-              return null;
-            });
-            if (existingIdentity) {
-              logger.info(
-                `Skipped onboarding identity provisioning for ${newVendor.email}: an identity account already exists`,
-                { vendorId: newVendor.id },
-                'STORE_SERVICE'
-              );
-              return;
-            }
-
-            const tempPassword = this._generateTempPassword();
-
-            try {
-              const result = await identityQueries.insertVendorAccount({
-                email: newVendor.email,
-                password: tempPassword,
-                phone: newVendor.phone || null,
-                fullName: newVendor.contactPerson || newVendor.name,
-                organizationName: newVendor.name,
-                createdBy: 'vendor-ingestion',
-              });
-              if (result.created) {
-                logger.info(`Vendor identity account created for ${newVendor.email}`, { vendorId: newVendor.id }, 'STORE_SERVICE');
-              }
-            } catch (err) {
-              logger.error(`Failed to create vendor identity account for ${newVendor.email}`, err, 'STORE_SERVICE');
-              return;
-            }
-
-            const emailPayload = buildMappingEmail(rec, {
-              to: newVendor.email,
-              recipientName: newVendor.contactPerson || newVendor.name,
-              vendorCode: newVendor.id,
-            });
-
-            try {
-              const delivery = await mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding');
-              if (delivery.sent) {
-                this.updateVendor(newVendor.id, { onboardingEmailStatus: 'sent', tempPassword });
-                logger.info(`Onboarding email sent to ${newVendor.email}`, { vendorId: newVendor.id }, 'STORE_SERVICE');
-              } else {
-                logger.warn(`Failed to send onboarding email to ${newVendor.email}`, { reason: delivery.reason }, 'STORE_SERVICE');
-              }
-            } catch (err) {
-              logger.error(`Error sending onboarding email to ${newVendor.email}`, err, 'STORE_SERVICE');
-            }
-          })(),
-          `Onboarding provisioning failed for ${newVendor.email}`
-        );
-      }
+      vendorsToEmail.push({ rec, vendor: newVendor, isNew: true, isMapped });
     });
 
     // Confirm each new vendor actually landed in Postgres before reporting
     // success for it — a row whose email collided with one from a different
     // buyer (or the marketplace directory) is rolled back here instead of
     // staying an in-memory-only phantom.
-    for (const { row, vendor } of createdThisRun) {
+    for (const { row, vendor, isMapped } of createdThisRun) {
       try {
         await this.confirmVendorPersisted(vendor);
       } catch (err) {
         this.vendors = this.vendors.filter((v) => v.id !== vendor.id);
         importedCount--;
+        if (isMapped) mappedCount--; else unmappedCount--;
+        const toEmailIdx = vendorsToEmail.findIndex((item) => item.vendor.id === vendor.id);
+        if (toEmailIdx !== -1) vendorsToEmail.splice(toEmailIdx, 1);
         skipped.push({
           row,
           reason: err && err.statusCode === 409
@@ -3402,20 +3335,113 @@ class StoreService {
       }
     }
 
+    // Process email dispatches for both mapped (Template A) and unmapped (Template B) vendors in a single action
+    for (const { rec, vendor, isNew, isMapped } of vendorsToEmail) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!vendor.email || !emailRegex.test(vendor.email)) {
+        failedEmails.push({
+          vendorId: vendor.id,
+          vendorName: vendor.name,
+          email: vendor.email || '',
+          template: isMapped ? 'Template A' : 'Template B',
+          reason: !vendor.email ? 'Vendor record has no registered email address.' : 'Invalid email address format.',
+        });
+        continue;
+      }
+
+      // Avoid duplicate emails on retried actions if already confirmed sent
+      if (vendor.onboardingEmailStatus === 'sent') {
+        if (isMapped) mappedEmailsSent++;
+        else unmappedEmailsSent++;
+        logger.info(`Skipping duplicate onboarding email to ${vendor.email} (already sent)`, { vendorId: vendor.id }, 'STORE_SERVICE');
+        continue;
+      }
+
+      let tempPassword = this._generateTempPassword();
+      try {
+        const existingIdentity = await identityQueries.findUserByEmail(vendor.email).catch(() => null);
+        if (existingIdentity) {
+          logger.info(`Skipped onboarding identity provisioning for ${vendor.email}: an identity account already exists`, { vendorId: vendor.id }, 'STORE_SERVICE');
+          if (isNew) {
+            continue;
+          }
+        } else {
+          const result = await identityQueries.insertVendorAccount({
+            email: vendor.email,
+            password: tempPassword,
+            phone: vendor.phone || null,
+            fullName: vendor.contactPerson || vendor.name,
+            organizationName: vendor.name,
+            createdBy: 'vendor-ingestion',
+          });
+          if (result && result.created) {
+            logger.info(`Vendor identity account created for ${vendor.email}`, { vendorId: vendor.id }, 'STORE_SERVICE');
+          }
+        }
+      } catch (idErr) {
+        logger.error(`Failed to verify or provision identity for ${vendor.email}`, idErr, 'STORE_SERVICE');
+      }
+
+      const { templateType, payload } = buildMappingEmail(rec, {
+        to: vendor.email,
+        recipientName: vendor.contactPerson || vendor.name,
+        vendorCode: vendor.id,
+      });
+
+      try {
+        const delivery = await mailerService.sendVendorIngestionEmail(payload, 'onboarding');
+        if (delivery && delivery.sent) {
+          this.updateVendor(vendor.id, { onboardingEmailStatus: 'sent', tempPassword });
+          if (isMapped) mappedEmailsSent++;
+          else unmappedEmailsSent++;
+          logger.info(`Onboarding email (${templateType}) sent to ${vendor.email}`, { vendorId: vendor.id }, 'STORE_SERVICE');
+        } else {
+          failedEmails.push({
+            vendorId: vendor.id,
+            vendorName: vendor.name,
+            email: vendor.email,
+            template: templateType,
+            reason: (delivery && delivery.reason) || 'Email service rejected delivery',
+          });
+          logger.warn(`Failed to send onboarding email to ${vendor.email}`, { reason: delivery?.reason }, 'STORE_SERVICE');
+        }
+      } catch (sendErr) {
+        failedEmails.push({
+          vendorId: vendor.id,
+          vendorName: vendor.name,
+          email: vendor.email,
+          template: templateType,
+          reason: sendErr.message || 'Error communicating with email service',
+        });
+        logger.error(`Error sending onboarding email to ${vendor.email}`, sendErr, 'STORE_SERVICE');
+      }
+    }
+
+    const totalProcessed = mappedCount + unmappedCount;
+    const overallStatus = failedEmails.length === 0 ? 'COMPLETED' : (mappedEmailsSent + unmappedEmailsSent > 0 ? 'COMPLETED_WITH_FAILURES' : 'FAILED');
+
     // Attributed to the requesting buyer's own account when the controller
     // resolved one from the session (same convention as createRFQ).
     this.addAuditLog({
       userEmail: attributedAccount ? attributedAccount.corporateEmail : SYSTEM_ACTOR_EMAIL,
-      action: `Processed ${period.replace('_', ' ')} historical purchase dump: ${importedCount} supplier(s) empanelled, ${skipped.length} row(s) rejected as unidentifiable.`,
+      action: `Processed ${period.replace('_', ' ')} historical purchase dump: ${importedCount} supplier(s) empanelled (${mappedEmailsSent} Template A sent, ${unmappedEmailsSent} Template B sent, ${failedEmails.length} failed).`,
     });
 
     return {
       success: true,
       importedCount,
+      totalProcessed,
+      mappedCount,
+      mappedEmailsSent,
+      unmappedCount,
+      unmappedEmailsSent,
+      failedEmailCount: failedEmails.length,
+      failedEmails,
       skippedCount: skipped.length,
       skipped,
       period,
       totalVendors: this.vendors.length,
+      overallStatus,
     };
   }
 
