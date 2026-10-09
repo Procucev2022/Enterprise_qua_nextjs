@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 import { rfqAttachmentUrl, submitRFQInquiry } from '@/lib/rfqClient';
+import { downloadVendorQuotationExcel } from '@/lib/bidComparisonExport';
 import { VendorOpportunity } from '@/lib/types';
 import {
   ArrowLeft,
@@ -1048,9 +1049,20 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 <div className="space-y-3">
                   {(biddingOn.lineItems?.length || 0) > 1 ? (
                     <div>
-                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-                        Line Item Pricing *
-                      </label>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          Line Item Pricing *
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            downloadVendorQuotationExcel(biddingOn.rfqNumber, biddingOn.lineItems || [], bidLineItemPrices)
+                          }
+                          className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"
+                        >
+                          <Download size={11} /> Export as Excel
+                        </button>
+                      </div>
                       <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-gray-800">
                         <table className="w-full text-left text-[11px] border-collapse">
                           <thead>

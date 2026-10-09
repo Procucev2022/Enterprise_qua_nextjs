@@ -690,6 +690,14 @@ describe("QuotationForm Comprehensive Suite", () => {
     expect(screen.getByText("800")).toBeInTheDocument(); // 200 * qty 4
     expect(screen.getByText("2,800")).toBeInTheDocument(); // Total
 
+    // Export as Excel — downloads the line items exactly as currently entered.
+    const createObjectURLSpy = jest.fn(() => "blob:mock-quotation");
+    const revokeObjectURLSpy = jest.fn();
+    global.URL.createObjectURL = createObjectURLSpy;
+    global.URL.revokeObjectURL = revokeObjectURLSpy;
+    fireEvent.click(screen.getByText(/Export as Excel/i));
+    expect(createObjectURLSpy).toHaveBeenCalled();
+
     const submitQuotationBtn = screen.getByRole("button", { name: /Submit Quotation/i });
     await act(async () => {
       fireEvent.click(submitQuotationBtn);
