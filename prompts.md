@@ -2488,3 +2488,12 @@ Completely remove the Vendor Email Templates feature from the Enterprise QUA por
 ```text
 resolve all the conflict and merge 
 ```
+
+---
+
+**Timestamp**: 2026-10-09T19:05:52+05:30
+
+```text
+solve it
+Error: request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": read tcp 192.168.0.102:56573->172.217.112.4:443: wsarecv: An established connection was aborted by the software in your host machine.: request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": read tcp 192.168.0.102:56573->172.217.112.4:443: wsarecv: An established connection was aborted by the software in your host machine.Error: request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": dial tcp: lookup daily-cloudcode-pa.googleapis.com: no such host: request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": dial tcp: lookup daily-cloudcode-pa.googleapis.com: no such host
+```
