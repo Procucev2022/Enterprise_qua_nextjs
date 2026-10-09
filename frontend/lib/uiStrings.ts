@@ -141,10 +141,6 @@ export const UI_STRINGS = {
         label: 'Buyer Profile',
         description: 'Organisation, tax identity & approvers',
       },
-      vendorEmailTemplates: {
-        label: 'Vendor Email Templates',
-        description: 'Customize vendor onboarding emails',
-      },
       buyerDbSync: {
         label: 'Buyer DB Sync',
         description: 'Integrated public database reconciliation',

@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState, useRef } from 'react';
-import { useRouter } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import { useApp } from '@/lib/store';
 import { formatCurrency, normalizePoDate } from '@/lib/constants';
@@ -200,7 +199,6 @@ export function IngestionProgressCard({
 }
 
 export default function InitialSetupModal() {
-  const router = useRouter();
   const {
     initialSetupModalOpen,
     setInitialSetupModalOpen,
@@ -218,10 +216,9 @@ export default function InitialSetupModal() {
   const [isRetryingFailedEmails, setIsRetryingFailedEmails] = useState(false);
 
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1);
-  // The buyer's own saved custom wording for Template A/B (vendor-email-templates
-  // page) — fetched once Step 5 is reached, so this preview shows exactly what
-  // storeService.processHistoricalPurchaseData will actually send, not just the
-  // hardcoded placeholder copy. Undefined/null fields fall back to that copy.
+  // The buyer's own saved wording for Template A/B — fetched once Step 5 is reached,
+  // so this preview shows exactly what storeService.processHistoricalPurchaseData will
+  // actually send, not just the hardcoded placeholder copy.
   const [savedTemplateA, setSavedTemplateA] = useState<DispatchTemplate | null>(null);
   const [savedTemplateB, setSavedTemplateB] = useState<DispatchTemplate | null>(null);
   React.useEffect(() => {
@@ -2397,20 +2394,11 @@ export default function InitialSetupModal() {
                         <CheckCircle2 size={13} className="text-emerald-600" />
                         Template A: Suppliers With Pre-Purchase Order History ({mappedVendors.length})
                       </span>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        {(savedTemplateA?.subject || savedTemplateA?.message) && (
-                          <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300">
-                            Customized
-                          </span>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => router.push('/buyer/vendor-email-templates')}
-                          className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
-                        >
-                          Edit Message
-                        </button>
-                      </div>
+                      {(savedTemplateA?.subject || savedTemplateA?.message) && (
+                        <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 shrink-0">
+                          Customized
+                        </span>
+                      )}
                     </div>
                     <div className="p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-indigo-100 dark:border-indigo-900 text-[10px] space-y-1 font-mono text-slate-700 dark:text-gray-300">
                       <p>
@@ -2437,20 +2425,11 @@ export default function InitialSetupModal() {
                         <AlertCircle size={13} className="text-amber-600" />
                         Template B: Suppliers With NO Pre-Purchase Orders ({unmappedVendors.length})
                       </span>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        {(savedTemplateB?.subject || savedTemplateB?.message) && (
-                          <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300">
-                            Customized
-                          </span>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => router.push('/buyer/vendor-email-templates')}
-                          className="text-[10px] font-semibold text-amber-700 dark:text-amber-400 hover:underline"
-                        >
-                          Edit Message
-                        </button>
-                      </div>
+                      {(savedTemplateB?.subject || savedTemplateB?.message) && (
+                        <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300 shrink-0">
+                          Customized
+                        </span>
+                      )}
                     </div>
                     <div className="p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-amber-200 dark:border-amber-900 text-[10px] space-y-1 font-mono text-slate-700 dark:text-gray-300">
                       <p>
