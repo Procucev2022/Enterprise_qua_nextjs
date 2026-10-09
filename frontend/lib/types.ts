@@ -394,13 +394,7 @@ export interface RFQCreatePayload {
   extractedEntities: ExtractedEntity[];
   attachments: RFQAttachment[];
   inquiries?: RFQInquiry[];
-  assignedVendors?: Array<{
-    id?: string;
-    name: string;
-    email?: string | null;
-    contactPerson?: string | null;
-    phone?: string | null;
-  }>;
+  assignedVendors?: RFQAssignedVendor[];
 }
 
 /**
@@ -471,7 +465,7 @@ export interface RFQItem {
   title: string;
   category: string;
   sourcingMode: SourcingMode;
-  status: 'Parsing' | 'In Evaluation' | 'AI Recommended' | 'PO Generated' | 'Quotes Pending' | 'Closed' | 'Expired';
+  status: 'Parsing' | 'In Evaluation' | 'AI Recommended' | 'PO Generated' | 'Quotes Pending' | 'Quotes Received' | 'Closed' | 'Expired';
   quotesCount: number;
   targetDeliveryDate: string;
   /**
@@ -557,11 +551,12 @@ export interface RFQInquiry {
 
 /** One entry on RFQItem.assignedVendors — a vendor invited to this RFQ. */
 export interface RFQAssignedVendor {
-  id: string;
+  id?: string;
   name: string;
   email?: string | null;
   contactPerson?: string | null;
   phone?: string | null;
+  city?: string | null;
 }
 
 /** A candidate vendor for RFQ invitation — a VendorEntry plus invite state. */

@@ -1426,6 +1426,8 @@ export function ActivePipelineModal({
         return <span className="badge badge-emerald text-xs px-2.5 py-1">AI Recommended</span>;
       case 'In Evaluation':
         return <span className="badge badge-blue text-xs px-2.5 py-1">In Evaluation</span>;
+      case 'Quotes Received':
+        return <span className="badge badge-blue text-xs px-2.5 py-1">Quotes Received</span>;
       case 'PO Generated':
         return <span className="badge badge-purple text-xs px-2.5 py-1">PO Generated</span>;
       case 'Parsing':

@@ -890,7 +890,6 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     jest.useRealTimers();
     fetchSpy.mockRestore();
   });
-
   it('downloads vendor master Excel template and PO dump CSV template', () => {
     render(<InitialSetupModal />);
     // In Step 1: Time Horizon

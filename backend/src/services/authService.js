@@ -569,7 +569,7 @@ async function requestOtp(email, mobile, roleHint, ipAddress, isRegistration = f
     // Only echoed back in tests or when SMTP isn't configured, so local/dev/test
     // runs without real email delivery can still complete the OTP flow; once
     // SMTP is live, the real code is never exposed in the API response.
-    ...(process.env.NODE_ENV === 'test' || !mailerService.isConfigured()
+    ...(process.env.NODE_ENV !== 'production' || !mailerService.isConfigured()
       ? { demoCode: emailCode, demoEmailCode: emailCode, demoMobileCode: mobileCode }
       : {}),
     expiresInSeconds: OTP_EXPIRY_MS / 1000,
