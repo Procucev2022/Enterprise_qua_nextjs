@@ -720,6 +720,7 @@ async function extractRFQFromDocument(req, res, next) {
       source: 'web_portal',
       sourceFileName: body.fileName,
       ...(sourceEmail ? { sourceEmail } : {}),
+      requireValidQuantity: true,
     });
 
     if (classification.accepted === 0) {

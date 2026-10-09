@@ -140,6 +140,30 @@ describe('flattenWorkbook', () => {
     expect(text).toBe('SHEET: Sheet1\n |  | Pump | 4');
     sparse.mockRestore();
   });
+
+  test('flattens a large multi-sheet workbook with 200 items across worksheets without arbitrary limit', () => {
+    const sheet1Rows: unknown[][] = [['Item Description', 'Quantity', 'Unit', 'Specification']];
+    const sheet2Rows: unknown[][] = [['Product', 'Order Qty', 'UOM', 'Technical Specs']];
+
+    for (let i = 1; i <= 100; i++) {
+      sheet1Rows.push([`Mechanical Valve ${i}`, 10 + i, 'Nos', `SS316 Class ${i}00`]);
+      sheet2Rows.push([`Electrical Cable ${i}`, 100 + i, 'Meters', `XLPE 4C ${i}mm`]);
+    }
+
+    const text = flattenWorkbook(
+      workbook({
+        Mechanical: sheet1Rows,
+        Electrical: sheet2Rows,
+      })
+    );
+
+    expect(text).toContain('SHEET: Mechanical');
+    expect(text).toContain('SHEET: Electrical');
+    expect(text).toContain('Mechanical Valve 1 | 11 | Nos | SS316 Class 100');
+    expect(text).toContain('Mechanical Valve 100 | 110 | Nos | SS316 Class 10000');
+    expect(text).toContain('Electrical Cable 1 | 101 | Meters | XLPE 4C 1mm');
+    expect(text).toContain('Electrical Cable 100 | 200 | Meters | XLPE 4C 100mm');
+  });
 });
 
 describe('readAsBase64', () => {
