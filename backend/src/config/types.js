@@ -56,7 +56,7 @@
 
 const DOMAIN_TYPES = {
   RFQ_STATUSES: ['Ingested', 'Dispatched', 'In Evaluation', 'Quotes Pending', 'PO Awarded'],
-  SOURCING_MODES: ['mode_1', 'mode_2', 'mode_3'],
+  SOURCING_MODES: ['mode_0', 'mode_1', 'mode_2', 'mode_3'],
   SEVERITY_LEVELS: ['INFO', 'WARN', 'ERROR', 'CRITICAL'],
   AUDIT_CATEGORIES: ['SECURITY', 'DATA_MUTATION', 'SYSTEM', 'AUTHENTICATION', 'PERFORMANCE', 'CRYPTOGRAPHY'],
   CIPHER_ALGORITHMS: ['aes-256-gcm', 'aes-256-cbc'],

@@ -2389,7 +2389,7 @@ describe('lib/store.tsx - channel chasers and bids', () => {
       });
 
       expect(ctx().rfqs[0].status).toBe('PO Generated');
-      expect(ctx().auditLogs[0].action).toContain('PO');
+      expect(ctx().auditLogs[0].action).toContain('Pre-Purchase Order');
     });
   });
 

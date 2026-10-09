@@ -187,8 +187,10 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
   it('allows adding, editing, and deleting line items in the table', () => {
     renderWizard();
 
-    // Click Add Line Item
-    const addBtn = screen.getByRole('button', { name: /Add Line Item/i });
+    // Click Add Line Item — the button now also appears below the last line
+    // item (so the buyer doesn't have to scroll back to the top), so with an
+    // item already present there are two matches; either works the same way.
+    const addBtn = screen.getAllByRole('button', { name: /Add Line Item/i })[0];
     fireEvent.click(addBtn);
 
     const itemInputs = screen.getAllByPlaceholderText(MODAL.itemPlaceholder);
@@ -930,7 +932,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
     // Wait for the bootstrap vendor to actually hydrate into buyerVendors
     // before submitting — otherwise the form dispatches before context state
     // catches up, and assignedVendors comes back empty regardless of the fix.
-    await waitFor(() => expect(screen.getByText(/1 Private Suppliers Matched/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/1 (Hybrid|Private) Suppliers Matched/i)).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
       target: { value: 'Navi Mumbai Plant' },

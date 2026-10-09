@@ -347,11 +347,11 @@ describe('Category Manager Screens Suite', () => {
         fireEvent.click(emailBtn);
       }
 
-      // Deep Dive opens with the specific real RFQ the card belongs to
-      const deepDiveBtns = screen.getAllByRole('button', { name: /Deep Dive/i });
+      // Vendor Follow-Up Details opens with the specific real RFQ the card belongs to
+      const deepDiveBtns = screen.getAllByRole('button', { name: /Vendor Follow-Up Details/i });
       fireEvent.click(deepDiveBtns[0]);
-      expect(screen.getByText(/RFQ AI Follow-Up Telemetry & Deep Dive/i)).toBeInTheDocument();
-      fireEvent.click(screen.getByRole('button', { name: /Close Deep Dive/i }));
+      expect(screen.getByRole('heading', { name: /Vendor Follow-Up Details/i })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Close Vendor Follow-Up Details/i }));
 
       const escalateBtns = screen.getAllByRole('button', { name: /Escalate to Buyer/i });
       fireEvent.click(escalateBtns[0]);

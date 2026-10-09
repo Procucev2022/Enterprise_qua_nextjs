@@ -245,12 +245,87 @@ export function expandCategorySelection(categories: BuyerProfileCategory[] | und
   return { selectedMajor, selectedMinor };
 }
 
+export interface DispatchTemplate {
+  subject: string | null;
+  message: string | null;
+}
+
+export type DispatchTemplateType = 'category_mapped' | 'self_map_required';
+
+export interface DispatchTemplatesResult {
+  success: boolean;
+  status?: number;
+  error?: string;
+  data?: Partial<Record<DispatchTemplateType, DispatchTemplate>>;
+}
+
+export interface DispatchTemplateSaveResult {
+  success: boolean;
+  status?: number;
+  error?: string;
+  data?: DispatchTemplate | null;
+}
+
+/**
+ * The signed-in buyer's custom subject/message for the two vendor-onboarding
+ * emails (Template A — has PO history, Template B — no PO history). A type
+ * missing from the response means the hardcoded default wording is in
+ * effect for it.
+ */
+export async function fetchDispatchTemplates(): Promise<DispatchTemplatesResult> {
+  let res: Response;
+  try {
+    res = await fetch(BUYER_PROFILE_ENDPOINTS.DISPATCH_TEMPLATES, { headers: authHeaders() });
+  } catch {
+    logger.error('Vendor dispatch templates load failed: API unreachable', {}, 'BUYER_PROFILE');
+    return { success: false, error: 'Cannot reach the Procucev API — check your connection and try again.' };
+  }
+
+  const body = await readEnvelope(res);
+  if (!res.ok || !body?.success) {
+    const { error } = describeFailure(res, body);
+    logger.error('Vendor dispatch templates load rejected', { status: res.status, error }, 'BUYER_PROFILE');
+    return { success: false, status: res.status, error };
+  }
+
+  return { success: true, status: res.status, data: (body.data as DispatchTemplatesResult['data']) || {} };
+}
+
+/** Save (or, with both fields blank, clear) one template's custom subject/message. */
+export async function saveDispatchTemplate(
+  templateType: DispatchTemplateType,
+  payload: { subject: string; message: string }
+): Promise<DispatchTemplateSaveResult> {
+  let res: Response;
+  try {
+    res = await fetch(`${BUYER_PROFILE_ENDPOINTS.DISPATCH_TEMPLATES}/${templateType}`, {
+      method: 'PUT',
+      headers: authHeaders(),
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    logger.error('Vendor dispatch template save failed: API unreachable', {}, 'BUYER_PROFILE');
+    return { success: false, error: 'Cannot reach the Procucev API — check your connection and try again.' };
+  }
+
+  const body = await readEnvelope(res);
+  if (!res.ok || !body?.success) {
+    const { error } = describeFailure(res, body);
+    logger.error('Vendor dispatch template save rejected', { status: res.status, error }, 'BUYER_PROFILE');
+    return { success: false, status: res.status, error };
+  }
+
+  return { success: true, status: res.status, data: (body.data as DispatchTemplate | null) ?? null };
+}
+
 const buyerProfileClient = {
   fetchBuyerProfile,
   saveBuyerProfile,
   fetchCategoryTaxonomy,
   flattenCategorySelection,
   expandCategorySelection,
+  fetchDispatchTemplates,
+  saveDispatchTemplate,
 };
 
 export default buyerProfileClient;

@@ -53,9 +53,11 @@ export const UI_STRINGS = {
 
   actions: {
     backToDashboard: 'Back to Command Center',
-    approveAndGeneratePO: '[ APPROVE & GENERATE PO ]',
+    approveAndGeneratePO: '[ APPROVE & GENERATE PRE-PURCHASE ORDER ]',
     exportToExcel: 'Export Comparison Matrix',
-    deepDiveTelemetry: 'Deep Dive Telemetry',
+    deepDiveTelemetry: 'Vendor Follow-Up Details',
+    vendorFollowUpDetails: 'Vendor Follow-Up Details',
+    closeVendorFollowUpDetails: 'Close Vendor Follow-Up Details',
     pauseChasing: 'Pause AI Chasing',
     resumeChasing: 'Resume AI Chasing',
     saveChanges: 'Save Configuration',
@@ -63,7 +65,9 @@ export const UI_STRINGS = {
     submit: 'Submit',
     cancel: 'Cancel',
     confirm: 'Confirm',
-    downloadTemplate: 'Download CSV Template',
+    downloadTemplate: 'Download Excel Template',
+    downloadExcelTemplate: 'Download Excel Template',
+    downloadCsvTemplate: 'Download CSV Template',
     hideDetails: 'Hide Details',
     reviewRfqDetails: 'Review RFQ Details',
     reviewVendorPerformance: 'Review Performance',
@@ -135,6 +139,10 @@ export const UI_STRINGS = {
       buyerProfile: {
         label: 'Buyer Profile',
         description: 'Organisation, tax identity & approvers',
+      },
+      vendorEmailTemplates: {
+        label: 'Vendor Email Templates',
+        description: 'Customize vendor onboarding emails',
       },
       buyerDbSync: {
         label: 'Buyer DB Sync',
@@ -213,7 +221,7 @@ export const UI_STRINGS = {
 
   templates: {
     rfqDispatched: 'RFQ #{rfqNumber} successfully dispatched to {vendorCount} qualified vendors.',
-    poGenerated: 'Purchase Order #{poNumber} created and committed to ERP.',
+    poGenerated: 'Pre-Purchase Order #{poNumber} created and committed to ERP.',
     ratingUpdated: 'Vendor rating for {vendorName} revised to {newScore}/100.',
     welcomeUser: 'Welcome back, {userName} ({userRole})',
     totalSpendSummary: 'Total analyzed spend: ₹{amount} across {categoryCount} categories.',
@@ -299,10 +307,12 @@ export const UI_STRINGS = {
     extractingAction: 'Reading…',
     removeAttachmentAria: 'Remove {fileName}',
 
-    quotaExhaustedTitle: 'Free RFQ Limit Reached (0 of 5 Remaining)',
+    quotaExhaustedTitle: 'Free RFQ Limit Reached for V1, V2 & V3 (0 of 5 Remaining)',
     quotaExhaustedMessage:
-      'You have consumed all 5 free RFQs. Please upgrade your plan to continue creating and dispatching RFQs across Version 1, Version 2, or Version 3.',
+      'You have consumed all 5 free credits for V1, V2, and V3. You can still create multiple free RFQs using V0 (Procucev Network Vendors) at 0 credits, or upgrade your plan.',
     upgradePlanAction: 'Upgrade Plan',
+    useV0Action: 'Switch to V0 (Free)',
+    v0FreeBadge: '⚡ Unlimited Free RFQs with V0',
 
     serverAllocatesNumber: 'The RFQ number is allocated when you save.',
     cancelAction: 'Cancel',
@@ -311,10 +321,12 @@ export const UI_STRINGS = {
   },
 
   rfqExtraction: {
-    quotaExhaustedTitle: 'Free RFQ Quota Exhausted (0 of 5 Remaining)',
+    quotaExhaustedTitle: 'Free RFQ Quota Exhausted for V1, V2 & V3 (0 of 5 Remaining)',
     quotaExhaustedMessage:
-      'You have used all 5 free RFQs shared across V1, V2, and V3. Please upgrade your plan to continue creating and dispatching new RFQs.',
+      'You have consumed all 5 free credits for V1, V2, and V3. You can still create multiple free RFQs using V0 (Procucev Network Vendors) at 0 credits, or upgrade your plan.',
     upgradePlanAction: 'Upgrade Plan',
+    useV0Action: 'Switch to V0 (Free)',
+    v0FreeBadge: '⚡ Unlimited Free RFQs with V0',
 
     // Step 1
     noFileTitle: 'No Document Selected',
@@ -1245,10 +1257,10 @@ export const UI_STRINGS = {
       byGstinLabel: 'By GSTIN',
       byNameLabel: 'By normalised name',
       unattributedLabel: 'Unattributed',
-      matchedTableHeading: 'Suppliers with PO history',
-      unmatchedTableHeading: 'Suppliers with no PO history — self-mapping required',
+      matchedTableHeading: 'Suppliers with pre-purchase order history',
+      unmatchedTableHeading: 'Suppliers with no pre-purchase order history — self-mapping required',
       unmatchedExplain:
-        'These suppliers are in your vendor master but have no purchase orders inside the selected period. They are not categorised automatically; they will be invited to map their own categories.',
+        'These suppliers are in your vendor master but have no pre-purchase orders inside the selected period. They are not categorised automatically; they will be invited to map their own categories.',
       unmatchedPoHeading: 'PO spend for suppliers not in your vendor master',
       unmatchedPoExplain:
         'These vendors appear in your PO dump but not in your vendor master. Usually this means the vendor master is incomplete.',
@@ -1420,7 +1432,7 @@ export const UI_STRINGS = {
 
     toasts: {
       sessionStartedTitle: 'Ingestion started',
-      sessionStartedTemplate: 'Analysing purchase orders from {start} to {end}.',
+      sessionStartedTemplate: 'Analysing pre-purchase orders from {start} to {end}.',
       horizonSavedTitle: 'Period updated',
       vendorMasterStoredTitle: 'Vendor Master stored',
       vendorMasterStoredTemplate: '{stored} vendors stored, {rejected} rows rejected.',

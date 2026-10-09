@@ -558,7 +558,7 @@ describe('ManualRFQModal: sourcing mode', () => {
     fillDelivery();
     clickSave();
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
-    expect(rfqClient.createRFQ.mock.calls[0][0].sourcingMode).toBe(SOURCING_MODES[2].id);
+    expect(rfqClient.createRFQ.mock.calls[0][0].sourcingMode).toBe('mode_3');
   });
 
   it('unlocks all 3 modes for a free_trial buyer', async () => {
@@ -599,7 +599,7 @@ describe('ManualRFQModal: sourcing mode', () => {
     fillDelivery();
     clickSave();
     await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
-    expect(rfqClient.createRFQ.mock.calls[0][0].sourcingMode).toBe(SOURCING_MODES[0].id);
+    expect(rfqClient.createRFQ.mock.calls[0][0].sourcingMode).toBe('mode_1');
   });
 
   it('unlocks every mode for a version_3 buyer', () => {

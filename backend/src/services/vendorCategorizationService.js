@@ -73,7 +73,7 @@ const NEW_CATEGORY_SENTINEL = 'NEW_CATEGORY_SUGGESTION';
 const CATEGORISATION_INSTRUCTIONS = `You are categorising a supplier for an enterprise procurement platform, based primarily on their actual historical purchasing/supply data.
 
 EVIDENCE RULES — these override everything else.
-- Categorise from the PURCHASE ORDER HISTORY below: the line item descriptions, specifications, units, quantities, purchase frequency, PO count and spend.
+- Categorise from the PRE-PURCHASE ORDER HISTORY below: the line item descriptions, specifications, units, quantities, purchase frequency, PO count and spend.
 - DO NOT infer a category solely from the company name, the industry or the business type. A name is a hint, never evidence.
 - Prefer a category supported by MULTIPLE PO line items and a repeated purchasing pattern over one supported by a single line.
 - Weight the categories by spend and PO count: what the supplier is repeatedly and materially bought from for is their primary category.
@@ -193,7 +193,7 @@ SUPPLIER IDENTITY (context only — NOT evidence for the category):
 
 PURCHASING HISTORY (this is the evidence):
 - Time horizon analysed: ${horizonText}
-- Distinct purchase orders: ${vendorProfile.poCount}
+- Distinct pre-purchase orders: ${vendorProfile.poCount}
 - PO line items: ${vendorProfile.poLineCount}
 - Total spend in this period: ${vendorProfile.totalSpend}
 - First PO in period: ${vendorProfile.firstPoDate || '(unknown)'}

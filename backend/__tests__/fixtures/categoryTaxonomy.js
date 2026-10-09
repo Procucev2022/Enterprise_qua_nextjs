@@ -327,7 +327,7 @@ const CATEGORY_TAXONOMY_FIXTURE = [
     ]
   },
   {
-    "majorCategory": "New Category-Product",
+    "majorCategory": "Others – New Product",
     "minorCategories": [
       "Air Purifiers",
       "Automation & Controls",
@@ -374,8 +374,9 @@ const CATEGORY_TAXONOMY_FIXTURE = [
     ]
   },
   {
-    "majorCategory": "New Category-Service",
+    "majorCategory": "Others – New Service",
     "minorCategories": [
+      "Consulting",
       "Appliances Services",
       "Calibration Services",
       "Corrosion Protection",

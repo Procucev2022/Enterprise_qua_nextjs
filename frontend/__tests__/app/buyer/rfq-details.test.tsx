@@ -872,10 +872,36 @@ function makeInquiry(overrides: any = {}): any {
   };
 }
 
-  describe('vendor inquiries & clarifications', () => {
-    it('renders Procucev Vendor badge when vendor is a Procucev Network vendor', () => {
+  describe('vendor inquiries & clarifications and assigned suppliers', () => {
+    it('hides Assigned Suppliers and Vendor Inquiries for V0 RFQs in buyer view', () => {
       renderDetails(
         buildRFQ({
+          sourcingMode: 'mode_0',
+          inquiries: [
+            makeInquiry({
+              id: 'inq-1',
+              vendorId: 'v-net-001',
+              vendorName: 'Global Turbines Ltd',
+              message: 'Can we offer alternate impeller material?',
+            }),
+          ],
+          assignedVendors: [
+            {
+              id: 'v-assigned',
+              name: 'Assigned Network Supplier',
+            } as any,
+          ],
+        })
+      );
+
+      expect(screen.queryByText('Assigned & Invited Suppliers')).not.toBeInTheDocument();
+      expect(screen.queryByText('Vendor Inquiries & Clarifications')).not.toBeInTheDocument();
+    });
+
+    it('filters out Procucev Network vendors from Vendor Inquiries in buyer view', () => {
+      renderDetails(
+        buildRFQ({
+          sourcingMode: 'mode_1',
           inquiries: [
             makeInquiry({
               id: 'inq-1',
@@ -884,19 +910,6 @@ function makeInquiry(overrides: any = {}): any {
               vendorCategory: 'Procucev Network',
               message: 'Can we offer alternate impeller material?',
             }),
-          ],
-        })
-      );
-
-      expect(screen.getByText('Vendor Inquiries & Clarifications')).toBeInTheDocument();
-      const procucevBadges = screen.getAllByText('Procucev Vendor');
-      expect(procucevBadges.length).toBeGreaterThanOrEqual(1);
-    });
-
-    it('does not render Procucev Vendor badge for buyer uploaded vendor', () => {
-      renderDetails(
-        buildRFQ({
-          inquiries: [
             makeInquiry({
               id: 'inq-2',
               vendorId: 'v-hist-002',
@@ -908,32 +921,37 @@ function makeInquiry(overrides: any = {}): any {
         })
       );
 
+      // Procucev/internal vendors are shown in the buyer's chat list by name
+      // only (not fully hidden) — only their contact details are withheld.
       expect(screen.getByText('Vendor Inquiries & Clarifications')).toBeInTheDocument();
-      expect(screen.queryByText('Procucev Vendor')).not.toBeInTheDocument();
+      expect(screen.getAllByText('Local Machine Shop').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Global Turbines Ltd').length).toBeGreaterThanOrEqual(1);
     });
 
-    it('renders Procucev Vendor badge when matched via quotes or assigned vendors', () => {
+    it('filters Procucev vendors out of the Assigned & Invited Suppliers panel specifically (they still surface by name in chat)', () => {
       renderDetails(
         buildRFQ({
-          quotes: [
-            quote({
-              vendorId: 'v-ai-rec',
-              vendorName: 'Smart Pumps Inc',
-              vendorCategory: 'Procucev - AI Rec',
-            }),
-          ],
+          sourcingMode: 'mode_2',
           assignedVendors: [
             {
               id: 'v-assigned',
               name: 'Assigned Network Supplier',
               vendorCategory: 'Procucev Network',
             } as any,
+            {
+              id: 'v-client',
+              name: 'Client Approved Supplier',
+              vendorCategory: 'Client List',
+            } as any,
           ],
         })
       );
 
-      const badges = screen.getAllByText('Procucev Vendor');
-      expect(badges.length).toBeGreaterThanOrEqual(1);
+      const panelHeading = screen.getByText('Assigned & Invited Suppliers');
+      const panel = panelHeading.closest('section');
+      expect(panel).not.toBeNull();
+      expect(within(panel as HTMLElement).getAllByText('Client Approved Supplier').length).toBeGreaterThanOrEqual(1);
+      expect(within(panel as HTMLElement).queryByText('Assigned Network Supplier')).not.toBeInTheDocument();
     });
 
     it('allows searching vendors and filtering by status tabs', () => {

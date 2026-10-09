@@ -646,6 +646,59 @@ describe("QuotationForm Comprehensive Suite", () => {
     ).not.toBeInTheDocument();
   });
 
+  test("captures a separate unit price per line item and submits lineItemQuotes for a multi-item RFQ", async () => {
+    const multiItemRfq = {
+      ...DEFAULT_RFQ,
+      id: "rfq-multi-001",
+      rfqNumber: "RFQ-2026-MULTI01",
+      extractedEntities: [
+        { id: "li-1", itemName: "Centrifugal Pump 15HP", quantity: 2, unit: "Nos", targetDate: "", technicalSpecs: "", confidence: 1, category: "Engineering Spares - Mechanical", minorCategory: "Pumps" },
+        { id: "li-2", itemName: "Mounting Base Plate", quantity: 4, unit: "Nos", targetDate: "", technicalSpecs: "", confidence: 1, category: "Engineering Spares - Mechanical", minorCategory: "Pumps" },
+      ],
+    };
+    (global.fetch as jest.Mock).mockImplementation((url: string, options: any = {}) => {
+      const method = options.method || "GET";
+      if (/\/api\/rfqs(\?|$)/.test(url) && method === "GET") {
+        return Promise.resolve({ ok: true, json: async () => ({ success: true, data: [multiItemRfq] }) });
+      }
+      return defaultMockFetchImpl(url, options);
+    });
+
+    renderWithProvider(
+      <QuotationFormCustomWrapper onBack={jest.fn()} withSession customSubscription="select" />,
+    );
+
+    const submitBtns = await waitFor(() => {
+      const btns = screen.getAllByRole("button", { name: /Submit Quote$/i });
+      expect(btns.length).toBeGreaterThan(0);
+      return btns;
+    });
+    fireEvent.click(submitBtns[0]);
+
+    expect(screen.getByText(/Unit Price \(₹\) per Line Item/i)).toBeInTheDocument();
+
+    const itemPriceInputs = screen.getAllByLabelText(/Unit price for/i);
+    expect(itemPriceInputs).toHaveLength(2);
+    fireEvent.change(itemPriceInputs[0], { target: { value: "1000" } });
+    fireEvent.change(itemPriceInputs[1], { target: { value: "200" } });
+
+    const submitQuotationBtn = screen.getByRole("button", { name: /Submit Quotation/i });
+    await act(async () => {
+      fireEvent.click(submitQuotationBtn);
+    });
+
+    const quoteCall = (global.fetch as jest.Mock).mock.calls.find(([url, opts]) =>
+      /\/api\/rfqs\/[^/]+\/quotes$/.test(url) && opts?.method === "POST",
+    );
+    expect(quoteCall).toBeDefined();
+    const body = JSON.parse(quoteCall![1].body);
+    expect(body.lineItemQuotes).toEqual([
+      { lineItemId: "li-1", itemName: "Centrifugal Pump 15HP", quantity: 2, unitPrice: 1000, totalPrice: 2000 },
+      { lineItemId: "li-2", itemName: "Mounting Base Plate", quantity: 4, unitPrice: 200, totalPrice: 800 },
+    ]);
+    expect(body.totalPrice).toBe(2800); // 2000 + 800
+  });
+
   test("shows an error toast and keeps the modal open when quote submission fails", async () => {
     (global.fetch as jest.Mock).mockImplementation(
       (url: string, options: any = {}) => {

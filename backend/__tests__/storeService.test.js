@@ -710,6 +710,78 @@ describe('Store Service & Business Operations', () => {
       }
     });
 
+    // Step 5 of the buyer setup wizard previews "Template A" (PO-history
+    // match) / "Template B" (no match) per vendor — these pin that the real
+    // send actually honors what was previewed, instead of always sending the
+    // generic onboarding email regardless of categoriesMappedByBuyer.
+    test('processHistoricalPurchaseData sends Template A to a vendor the buyer mapped from PO history', async () => {
+      const findSpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+      const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({ created: true });
+      const categoryMappedSpy = jest
+        .spyOn(mailerService, 'buildVendorCategoryMappingEmail')
+        .mockReturnValue({ to: 'mapped-hist@example.com', subject: 'Template A', html: '<p>A</p>' });
+      const selfMapSpy = jest.spyOn(mailerService, 'buildVendorSelfMappingEmail');
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
+
+      try {
+        await storeService.processHistoricalPurchaseData('1_year', [
+          {
+            companyName: 'Mapped Hist Co',
+            email: 'mapped-hist@example.com',
+            categoriesMappedByBuyer: true,
+            majorCategory: 'Industrial Valves',
+            minorCategories: ['Ball Valves'],
+          },
+        ]);
+        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(categoryMappedSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ majorCategory: 'Industrial Valves', minorCategories: ['Ball Valves'] })
+        );
+        expect(selfMapSpy).not.toHaveBeenCalled();
+      } finally {
+        findSpy.mockRestore();
+        identitySpy.mockRestore();
+        categoryMappedSpy.mockRestore();
+        selfMapSpy.mockRestore();
+        sendSpy.mockRestore();
+      }
+    });
+
+    test('processHistoricalPurchaseData sends Template B to a vendor with no PO history match', async () => {
+      const findSpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+      const identitySpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({ created: true });
+      const categoryMappedSpy = jest.spyOn(mailerService, 'buildVendorCategoryMappingEmail');
+      const selfMapSpy = jest
+        .spyOn(mailerService, 'buildVendorSelfMappingEmail')
+        .mockReturnValue({ to: 'unmapped-hist@example.com', subject: 'Template B', html: '<p>B</p>' });
+      const sendSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true });
+
+      try {
+        await storeService.processHistoricalPurchaseData('1_year', [
+          {
+            companyName: 'Unmapped Hist Co',
+            email: 'unmapped-hist@example.com',
+            categoriesMappedByBuyer: false,
+          },
+        ]);
+        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(selfMapSpy).toHaveBeenCalled();
+        expect(categoryMappedSpy).not.toHaveBeenCalled();
+      } finally {
+        findSpy.mockRestore();
+        identitySpy.mockRestore();
+        categoryMappedSpy.mockRestore();
+        selfMapSpy.mockRestore();
+        sendSpy.mockRestore();
+      }
+    });
+
     test('updateRFQ & addQuoteToRFQ', () => {
       const updated = storeService.updateRFQ(rfqId, { targetSavings: '20%' });
       expect(updated.targetSavings).toBe('20%');
@@ -1033,22 +1105,58 @@ describe('Store Service & Business Operations', () => {
       storeService.createRFQ({ title: 'On-category and rostered', category: 'Bearings' }, buyer);
       expect(storeService.getNotificationsFor('vendor', rostered.id)).toHaveLength(1);
     });
+
+    test('mode_0 (Version 0) RFQ assigns and is visible ONLY to Procucev platform vendors, excluding private buyer-uploaded vendors', () => {
+      const procucevVendor = storeService.addVendor({
+        name: 'Procucev Network Vendor',
+        email: 'procucev-net@ex.com',
+        majorCategory: 'Industrial Fasteners',
+        source: 'procucev_network',
+      });
+
+      const privateVendor = storeService.addVendor({
+        name: 'Private Buyer Vendor',
+        email: 'private-vendor@ex.com',
+        majorCategory: 'Industrial Fasteners',
+        addedByBuyerCompany: 'V0 Test Buyer Org',
+        source: 'buyer_uploaded',
+      });
+
+      const buyer = storeService.addBuyerAccount({
+        organizationName: 'V0 Test Buyer Org',
+        corporateEmail: 'v0-test-buyer@ex.com',
+        subscriptionPlan: 'free_trial',
+      });
+
+      const rfq = storeService.createRFQ({
+        title: 'V0 Fasteners Requisition',
+        category: 'Industrial Fasteners',
+        sourcingMode: 'mode_0',
+      }, buyer);
+
+      // Verify vendorCoversRFQ for mode_0
+      expect(storeService.vendorCoversRFQ(procucevVendor, rfq)).toBe(true);
+      expect(storeService.vendorCoversRFQ(privateVendor, rfq)).toBe(false);
+
+      // Verify assignedVendors contains only Procucev vendors
+      const assignedIds = (rfq.assignedVendors || []).map((v) => v.id);
+      expect(assignedIds).toContain(procucevVendor.id);
+      expect(assignedIds).not.toContain(privateVendor.id);
+    });
   });
 
   describe('inviteVendorsToRFQ (category manager invite flow)', () => {
     let inviteEmailSpy;
 
     beforeEach(() => {
+      storeService.reset();
+      storeService.aiFeed = [];
       inviteEmailSpy = jest
         .spyOn(mailerService, 'sendRfqInviteEmail')
         .mockResolvedValue({ sent: false, reason: 'test environment' });
       // getVendors() re-syncs from Neon whenever a pool is configured; guard
       // against any pool.pool state leaked from another test in this file.
       jest.spyOn(domainQueries, 'getVendorsFromDB').mockResolvedValue([]);
-    });
-
-    afterEach(() => {
-      jest.restoreAllMocks();
     });
 
     afterEach(() => {

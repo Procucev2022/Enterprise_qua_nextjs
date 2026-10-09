@@ -156,8 +156,6 @@ function BuyerRFQDetailsView() {
     return saved;
   };
 
-  // Back to the portfolio afterwards: staying here would leave the buyer looking
-  // at a record that no longer exists.
   const handleDelete = async (identifier: string) => {
     await deleteRFQ(identifier);
     onBack();

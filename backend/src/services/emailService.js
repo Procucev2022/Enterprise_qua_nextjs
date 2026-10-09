@@ -195,7 +195,7 @@ function generateVendorOnboardingEmail(vendor, isExisting = false, tempPassword 
           <a href="${portalUrl}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Sign in to Supplier Portal</a>
         </div>
 
-        <p>Please log in to complete your 10-category reconciliation and submit your Mode 3 360° qualification survey to unlock direct purchase orders.</p>
+        <p>Please log in to complete your 10-category reconciliation and submit your Mode 3 360° qualification survey to unlock direct pre-purchase orders.</p>
       </div>
     </div>
   `;

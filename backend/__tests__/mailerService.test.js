@@ -786,6 +786,31 @@ describe('mailerService', () => {
       expect(emailFallback.html).toContain('Hello,');
     });
 
+    test('buildVendorCategoryMappingEmail uses a buyer-saved custom subject/message when provided', () => {
+      const email = mailerService.buildVendorCategoryMappingEmail({
+        to: 'vendor@test.com',
+        buyerOrganizationName: 'Tata Steel',
+        majorCategory: 'Industrial Valves',
+        customSubject: 'Welcome aboard, {{vendor}}',
+        customMessage: 'We are thrilled to have you as a mapped supplier.',
+      });
+      expect(email.subject).toBe('Welcome aboard, {{vendor}}');
+      expect(email.html).toContain('We are thrilled to have you as a mapped supplier.');
+      expect(email.html).not.toContain('has mapped your supply categories from your pre-purchase order history');
+    });
+
+    test('buildVendorSelfMappingEmail uses a buyer-saved custom subject/message when provided', () => {
+      const email = mailerService.buildVendorSelfMappingEmail({
+        to: 'vendor@test.com',
+        buyerOrganizationName: 'L&T',
+        customSubject: 'Please set up your categories',
+        customMessage: 'We added you to our vendor list — please map your categories.',
+      });
+      expect(email.subject).toBe('Please set up your categories');
+      expect(email.html).toContain('We added you to our vendor list — please map your categories.');
+      expect(email.html).not.toContain('No historical pre-purchase order data was available');
+    });
+
     test('buildVendorOnboardingEmail renders credentials and contact info', () => {
       const email = mailerService.buildVendorOnboardingEmail({
         to: 'onboard@test.com',

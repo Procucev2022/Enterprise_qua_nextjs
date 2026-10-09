@@ -406,6 +406,10 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
   }, [rfq]);
 
   const activeRfq = localRfq || rfq;
+  const isV0 =
+    activeRfq?.sourcingMode === 'mode_0' ||
+    (activeRfq?.sourcingMode as any) === 'v0' ||
+    (activeRfq?.sourcingMode as any) === 'version_0';
 
   const handleCloseRFQ = async () => {
     if (!activeRfq || isClosing) return;
@@ -508,11 +512,13 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       if (extra && isBuyerUploaded(extra)) return false;
       if (vendorId && isBuyerUploaded({ id: vendorId })) return false;
 
-      // 6. If extra explicitly passes isProcucevVendor
-      if (extra && isProcucevVendor(extra)) return true;
+      // 6. If extra explicitly has Procucev sources
+      const src = String(extra?.source || '').toLowerCase().trim();
+      if (src === 'procucev_network' || src === 'category_manager_upload' || src === 'self_onboarded' || src === 'excel') {
+        return true;
+      }
 
-      // Fallback: check if id / name / email qualifies as buyer uploaded
-      return !isBuyerUploaded({ id: vendorId, name: vendorName, email: vendorEmail });
+      return false;
     },
     [activeRfq, buyerVendors]
   );
@@ -593,12 +599,20 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       ];
     }
 
-    // ─── Buyer View: Aggregate all vendor channels ───
+    // ─── Buyer View: If RFQ is V0, strictly hide all vendor inquiry channels for buyer ───
+    if (isV0) return [];
+
+    // ─── Buyer View: Aggregate all vendor channels (V1, V2, V3) ───
     const map = new Map<string, VendorChatChannel>();
 
     // 1. Inquiries
     const inquiries = Array.isArray(activeRfq.inquiries) ? activeRfq.inquiries : [];
     inquiries.forEach((inq) => {
+      const isProc = checkIsProcucevVendor(inq.vendorId, inq.vendorName, inq.vendorEmail, inq);
+      // Procucev/internal vendors are shown in the buyer's chat list by name
+      // only — their email/phone/other contact details are never exposed.
+      // See the `isProc` stripping applied below.
+
       const key = inq.vendorId || inq.vendorEmail || inq.vendorName || inq.id;
       const msgs = Array.isArray(inq.messages) && inq.messages.length > 0
         ? inq.messages
@@ -629,13 +643,12 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           ];
 
       const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : undefined;
-      const isProc = checkIsProcucevVendor(inq.vendorId, inq.vendorName, inq.vendorEmail, inq);
 
       map.set(key, {
         key,
         vendorId: inq.vendorId,
         vendorName: inq.vendorName || 'Vendor',
-        vendorEmail: inq.vendorEmail,
+        vendorEmail: isProc ? undefined : inq.vendorEmail,
         inquiryId: inq.id,
         inquiry: inq,
         messages: msgs,
@@ -656,11 +669,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       const vContact = typeof v === 'string' ? null : v.contactPerson;
       const vPhone = typeof v === 'string' ? null : v.phone;
 
-      const key = vId || vEmail || vName;
-      const existing = Array.from(map.values()).find(
-        (c) => (vEmail && c.vendorEmail === vEmail) || c.vendorName === vName || (vId && c.vendorId === vId)
-      );
-
       const isProc = checkIsProcucevVendor(
         typeof v === 'string' ? v : v.id,
         vName,
@@ -668,21 +676,28 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         typeof v === 'object' ? v : undefined
       );
 
+      // Procucev/internal vendors are shown by name only — never their
+      // email, contact person or phone.
+      const key = vId || vEmail || vName;
+      const existing = Array.from(map.values()).find(
+        (c) => (vEmail && c.vendorEmail === vEmail) || c.vendorName === vName || (vId && c.vendorId === vId)
+      );
+
       if (!existing) {
         map.set(key, {
           key,
           vendorId: typeof v === 'string' ? v : v.id,
           vendorName: vName,
-          vendorEmail: vEmail,
+          vendorEmail: isProc ? undefined : vEmail,
           messages: [],
           status: 'no_messages',
-          contactPerson: vContact,
-          phone: vPhone,
+          contactPerson: isProc ? undefined : vContact,
+          phone: isProc ? undefined : vPhone,
           isProcucev: isProc,
         });
       } else {
-        if (!existing.contactPerson && vContact) existing.contactPerson = vContact;
-        if (!existing.phone && vPhone) existing.phone = vPhone;
+        if (!existing.contactPerson && vContact && !isProc) existing.contactPerson = vContact;
+        if (!existing.phone && vPhone && !isProc) existing.phone = vPhone;
         if (existing.isProcucev === undefined) existing.isProcucev = isProc;
       }
     });
@@ -690,13 +705,13 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     // 3. Quoted Vendors
     const quotes = Array.isArray(activeRfq.quotes) ? activeRfq.quotes : [];
     quotes.forEach((q: any) => {
+      const isProc = checkIsProcucevVendor(q.vendorId, q.vendorName, q.vendorEmail, q);
+      // Procucev/internal vendors are shown by name only.
       const vId = q.vendorId || q.vendorName;
       const key = vId || q.vendorName;
       const existing = Array.from(map.values()).find(
         (c) => c.vendorName === q.vendorName || (q.vendorId && c.vendorId === q.vendorId)
       );
-
-      const isProc = checkIsProcucevVendor(q.vendorId, q.vendorName, q.vendorEmail, q);
 
       if (!existing) {
         map.set(key, {
@@ -712,14 +727,15 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       }
     });
 
-    return Array.from(map.values()).sort((a, b) => {
-      if (a.status === 'open' && b.status !== 'open') return -1;
-      if (b.status === 'open' && a.status !== 'open') return 1;
-      if (a.messages.length > 0 && b.messages.length === 0) return -1;
-      if (b.messages.length > 0 && a.messages.length === 0) return 1;
-      return 0;
-    });
-  }, [activeRfq, isVendor, currentUserSession, checkIsProcucevVendor]);
+    return Array.from(map.values())
+      .sort((a, b) => {
+        if (a.status === 'open' && b.status !== 'open') return -1;
+        if (b.status === 'open' && a.status !== 'open') return 1;
+        if (a.messages.length > 0 && b.messages.length === 0) return -1;
+        if (b.messages.length > 0 && a.messages.length === 0) return 1;
+        return 0;
+      });
+  }, [activeRfq, isVendor, isV0, currentUserSession, checkIsProcucevVendor]);
 
   // Set default selected vendor
   useEffect(() => {
@@ -1576,8 +1592,8 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         </div>
       </Panel>
 
-      {/* Assigned & Invited Suppliers (Buyer & Category Manager only — strictly hidden for Vendors) */}
-      {!isVendor && (() => {
+      {/* Assigned & Invited Suppliers (Buyer & Category Manager only — strictly hidden for Vendors and V0 RFQs) */}
+      {!isVendor && !isV0 && (() => {
         const rawAssigned = (activeRfq?.assignedVendors && activeRfq.assignedVendors.length > 0)
           ? activeRfq.assignedVendors
           : (activeRfq?.followUpData?.vendors && activeRfq.followUpData.vendors.length > 0)
@@ -1607,10 +1623,15 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           };
         });
 
+        // For V1, V2, V3: Strictly filter out Procucev Network vendors so buyer only sees private/invited suppliers
+        const visibleAssigned = normalizedAssigned.filter(
+          (v: any) => !checkIsProcucevVendor(v.id, v.name, v.email, v)
+        );
+
         return (
           <Panel
             title="Assigned & Invited Suppliers"
-            count={normalizedAssigned.length}
+            count={visibleAssigned.length}
             toolbar={
               <button
                 onClick={() => setInviteModalOpen(true)}
@@ -1621,7 +1642,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             }
           >
             <div className="px-4 pb-4">
-              {normalizedAssigned.length === 0 ? (
+              {visibleAssigned.length === 0 ? (
                 <div className="p-4 text-center rounded-xl bg-slate-50 dark:bg-gray-950/40 border border-slate-200 dark:border-gray-800 space-y-1">
                   <Users size={20} className="mx-auto text-slate-400 opacity-60" />
                   <p className="text-xs font-bold text-slate-700 dark:text-gray-300">No Suppliers Assigned Yet</p>
@@ -1631,7 +1652,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-                  {normalizedAssigned.map((v) => (
+                  {visibleAssigned.map((v: any) => (
                     <div
                       key={v.id}
                       className="p-3 rounded-xl border border-slate-200 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/40 space-y-1"
@@ -1774,8 +1795,9 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       </Panel>
 
       {/* Vendor Inquiries & Clarifications Chat Desk */}
-      <Panel
-        title={isVendor ? 'Direct Clarification & Inquiry with Buyer' : 'Vendor Inquiries & Clarifications'}
+      {(!isVendor ? !isV0 : true) && (
+        <Panel
+          title={isVendor ? 'Direct Clarification & Inquiry with Buyer' : 'Vendor Inquiries & Clarifications'}
         count={isVendor ? undefined : vendorChannels.length}
         subtitle={
           isVendor
@@ -2252,6 +2274,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           </div>
         )}
       </Panel>
+      )}
 
       {/* Buyer Reply Modal */}
       {replyModalInquiry && (

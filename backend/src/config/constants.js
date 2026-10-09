@@ -4,6 +4,15 @@
 
 const SOURCING_MODES = [
   {
+    id: 'mode_0',
+    code: 'Version 0',
+    name: 'Version 0: Free Starter Trial Plan (Procucev Network Only)',
+    shortLabel: 'Version 0',
+    description:
+      'Free Starter Trial mode. RFQs are strictly circulated only to verified Procucev network vendors without consuming free credits.',
+    badgeColor: 'border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10',
+  },
+  {
     id: 'mode_1',
     code: 'Version 1',
     name: 'Version 1: Client Roster Sourcing Plan',
@@ -35,12 +44,13 @@ const SOURCING_MODES = [
 const BUYER_SUBSCRIPTION_PLANS = [
   {
     id: 'free_trial',
-    name: 'Free Trial Starter',
+    name: 'Free Trial Starter (V0)',
     price: '$0',
-    billing: '5 Free RFQs included',
-    description: 'Explore all 3 sourcing modes (Mode 1, Mode 2 & Mode 3) with full multi-channel AI chasing.',
+    billing: '5 Free RFQ Credits included for V1/V2/V3 + Unlimited V0',
+    description: 'Create unlimited V0 RFQs sent to Procucev verified vendors (0 credits deducted), plus 5 free RFQ credits for V1, V2, or V3.',
     features: [
-      '5 Free RFQ dispatches across any operational mode',
+      'V0 Free Starter: Unlimited RFQs to Procucev network vendors (0 credits deducted)',
+      '5 Free RFQ credits to trial V1 (Client Roster), V2 (Hybrid), and V3 (AI Autonomous)',
       'Autonomous Voice, WhatsApp & SMS multi-channel follow-ups',
       'Interactive Quote Matrix & 1-click PO generation',
       'SHA-256 cryptographic audit transaction seals',
@@ -480,8 +490,9 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     // the item text is what routes them.
     'fire extinguisher': { major: 'Occuptional Health and Safety', minor: 'Fire Extinguishers' },
     'safety jacket': { major: 'Occuptional Health and Safety', minor: 'Safety jackets' },
-    'safety shoe': { major: 'Occuptional Health and Safety', minor: 'Safety Shoes' },
-    'storage rack': { major: 'New Category-Product', minor: 'Storage Racks' },
+    'storage rack': { major: 'Others – New Product', minor: 'Storage Racks' },
+    consulting: { major: 'Others – New Service', minor: 'Consulting' },
+    calibration: { major: 'Others – New Service', minor: 'Calibration Services' },
     helmet: { major: 'Occuptional Health and Safety', minor: 'Hemlets' },
     harness: { major: 'Occuptional Health and Safety', minor: 'Harness' },
     glove: { major: 'Occuptional Health and Safety', minor: 'Gloves' },
@@ -809,6 +820,13 @@ const CHASER_DELAYS = {
 // Approved Text      : RFQ Alert {#alp#}: You are invited to bid for {#alp#}. Submit quote : {#urg#} - Team Procucev.
 // Variables          : {#alp#}, {#alp#}, {#urg#} → rfqNumber, rfqTitle, bidUrl
 //
+// Buyer Quote Matrix Template:
+// Reference Number   : 11-44JHMUY9DRFC
+// Template Id / SMSGID: 1777179138668879258
+// Header             : PROCUC
+// Approved Text      : RFQ Update: 48-hour bidding window for {#alp#} is completed. Quotation matrix is ready with {#num#} quotes. Review now: {#urg#} - Team Procucev.
+// Variables          : {#alp#}, {#num#}, {#urg#} → rfqLabel, quotesCount, matrixLink
+//
 // OTP Template       : DLT ID 1102294821 (TRANSACTIONAL)
 const SMS_DLT_TEMPLATES = {
   RFQ_CHASER: {
@@ -829,6 +847,17 @@ const SMS_DLT_TEMPLATES = {
     TEMPLATE: 'OTP for registering your access to Get My quoTe (GMT): {#var#}. Valid for 5 mins. Do not share. - Team Procucev.',
     VARIABLES: ['otp'],
   },
+  BUYER_BIDS_UNLOCKED: {
+    NAME:     'Buyer_Quote_Matrix_Ready',
+    REFERENCE_NUMBER: '11-44JHMUY9DRFC',
+    SMSGID:   process.env.SMS_GATEWAY_BUYER_UNLOCKED_SMSGID || '1777179138668879258',
+    CATEGORY: 'SERVICE_IMPLICIT',
+    HEADER:   'PROCUC',
+    TEMPLATE: 'RFQ Update: 48-hour bidding window for {#alp#} is completed. Quotation matrix is ready with {#num#} quotes. Review now: {#urg#} - Team Procucev.',
+    VARIABLES: ['rfqLabel', 'quotesCount', 'matrixLink'],
+    VARIABLE_TYPES: ['alp', 'num', 'urg'],
+    URL_SHORTENING: false,
+  },
 };
 
 /**
@@ -838,6 +867,9 @@ const SMS_DLT_TEMPLATES = {
  * - version_3: mode_3 (Version 3: AI Autonomous Sourcing Plan)
  */
 const BUYER_SUBSCRIPTION_TO_SOURCING_MODE = {
+  version_0: 'mode_0',
+  mode_0: 'mode_0',
+  v0: 'mode_0',
   version_1: 'mode_1',
   version_2: 'mode_2',
   version_3: 'mode_3',
@@ -851,10 +883,10 @@ const BUYER_SUBSCRIPTION_TO_SOURCING_MODE = {
 
 /**
  * Resolves the RFQ version / sourcing mode based upon the subscription of the buyer.
- * Defaults to Version 2 ('mode_2') as specified in EMAIL_GATEWAY_CONFIG.INGESTED_SOURCING_MODE.
+ * Defaults to INGESTED_SOURCING_MODE ('mode_2') for free starter trial / unselected plan.
  *
  * @param {Object|string|null|undefined} buyerAccountOrPlan - Buyer account object or subscription plan string
- * @returns {string} Sourcing mode ('mode_1' | 'mode_2' | 'mode_3')
+ * @returns {string} Sourcing mode ('mode_0' | 'mode_1' | 'mode_2' | 'mode_3')
  */
 function resolveBuyerSourcingMode(buyerAccountOrPlan) {
   const plan =
@@ -1389,18 +1421,18 @@ const VENDOR_INGESTION_CONFIG = {
 
 /** User-facing messages. `{param}` placeholders are filled by formatMessage. */
 const VENDOR_INGESTION_MESSAGES = {
-  NOT_A_BUYER: 'Only a buyer can ingest vendor master and purchase order data.',
+  NOT_A_BUYER: 'Only a buyer can ingest vendor master and pre-purchase order data.',
   SESSION_MISSING_USER: 'Your session does not identify a user. Please sign in again.',
   ORGANIZATION_NOT_LINKED: 'Your account is not linked to an organisation, so vendor data cannot be scoped to it.',
   SESSION_NOT_FOUND: 'That ingestion session does not exist for your organisation.',
   SESSION_REQUIRED: 'Start an ingestion session before uploading a file.',
-  HORIZON_REQUIRED: 'Select a time horizon before uploading the purchase order dump.',
+  HORIZON_REQUIRED: 'Select a time horizon before uploading the pre-purchase order dump.',
   HORIZON_CUSTOM_DATES_REQUIRED: 'A custom time horizon needs both a start date and an end date.',
   HORIZON_START_AFTER_END: 'The time horizon start date must fall on or before its end date.',
   HORIZON_END_IN_FUTURE: 'The time horizon end date cannot be in the future.',
   VENDOR_MASTER_REQUIRED_FIRST: 'Upload and confirm your Vendor Master before uploading the PO dump.',
   VENDOR_MASTER_EMPTY: 'No valid vendor rows were supplied, so nothing was stored.',
-  PO_DUMP_EMPTY: 'No valid purchase order rows were supplied, so nothing was stored.',
+  PO_DUMP_EMPTY: 'No valid pre-purchase order rows were supplied, so nothing was stored.',
   PO_DUMP_REQUIRED_FIRST: 'Upload and confirm your PO dump before running the category match.',
   JOIN_REQUIRED_FIRST: 'Run the vendor and PO match before starting AI categorisation.',
   TOO_MANY_ROWS: 'A single upload request may carry at most {max} rows. Large files are sent in chunks.',
@@ -1408,7 +1440,7 @@ const VENDOR_INGESTION_MESSAGES = {
   PO_LIMIT: 'A PO dump may hold at most {max} line items.',
   MAPPING_NOT_FOUND: 'That vendor is not part of this ingestion session.',
   MAPPING_NO_PO_HISTORY:
-    'This supplier has no purchase order history inside the selected period, so it cannot be categorised automatically. It is flagged for self-mapping.',
+    'This supplier has no pre-purchase order history inside the selected period, so it cannot be categorised automatically. It is flagged for self-mapping.',
   CATEGORY_MASTER_EMPTY:
     'Your category master is empty, so there is nothing for the categoriser to choose from. Add categories to your organisation profile first.',
   MAJOR_CATEGORY_UNKNOWN: '"{category}" is not a major category in your organisation\'s category master.',

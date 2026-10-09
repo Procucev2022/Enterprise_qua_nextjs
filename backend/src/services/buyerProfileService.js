@@ -113,6 +113,73 @@ async function getProfile(sessionUser) {
   return result.profile;
 }
 
+const DISPATCH_TEMPLATE_TYPES = ['category_mapped', 'self_map_required'];
+
+/**
+ * Resolve the signed-in buyer's organisationId, the same way getProfile()
+ * does — reused by the vendor-dispatch-template settings below so they're
+ * scoped to the caller's own organisation the same way the profile itself is.
+ */
+async function resolveOrganizationId(sessionUser) {
+  assertIdentityConfigured();
+  const { userId, email } = resolveBuyerIdentity(sessionUser);
+
+  let result;
+  try {
+    result = await buyerProfileQueries.findProfileByUserId(userId);
+  } catch (err) {
+    logger.error('Buyer organization lookup failed', err, LOG_CATEGORY);
+    throw new BuyerProfileError(BUYER_PROFILE_MESSAGES.PROFILE_LOAD_FAILED, 503);
+  }
+  if (!result.found) {
+    logger.warn(
+      `Buyer organization unavailable: ${result.reason}`,
+      { userId, email, reason: result.reason },
+      LOG_CATEGORY
+    );
+    raiseLookupFailure(result.reason);
+  }
+  return result.profile.organizationId;
+}
+
+/**
+ * The signed-in buyer's custom vendor-onboarding email templates (Template A
+ * / Template B, see mailerService.buildVendorCategoryMappingEmail /
+ * buildVendorSelfMappingEmail). A missing type means the hardcoded default
+ * wording is in effect.
+ */
+async function getDispatchTemplates(sessionUser) {
+  const organizationId = await resolveOrganizationId(sessionUser);
+  try {
+    return await buyerProfileQueries.getDispatchTemplates(organizationId);
+  } catch (err) {
+    logger.error('Vendor dispatch template read failed', err, LOG_CATEGORY);
+    throw new BuyerProfileError(BUYER_PROFILE_MESSAGES.PROFILE_LOAD_FAILED, 503);
+  }
+}
+
+/**
+ * Save (or clear, with both fields blank) the signed-in buyer's custom
+ * subject/message for one template type.
+ */
+async function saveDispatchTemplate(sessionUser, templateType, { subject, message }) {
+  const organizationId = await resolveOrganizationId(sessionUser);
+  if (!DISPATCH_TEMPLATE_TYPES.includes(templateType)) {
+    throw new BuyerProfileError('Unknown vendor dispatch template type.', 400);
+  }
+  try {
+    return await buyerProfileQueries.upsertDispatchTemplate(
+      organizationId,
+      templateType,
+      { subject, message },
+      sessionUser.email || null
+    );
+  } catch (err) {
+    logger.error('Vendor dispatch template save failed', err, LOG_CATEGORY);
+    throw new BuyerProfileError(BUYER_PROFILE_MESSAGES.PROFILE_SAVE_FAILED, 503);
+  }
+}
+
 /**
  * Normalise and check the submitted category selection.
  *
@@ -320,5 +387,7 @@ module.exports = {
   getProfile,
   saveProfile,
   getCategoryTaxonomy,
+  getDispatchTemplates,
+  saveDispatchTemplate,
   PATCHABLE_FIELDS,
 };

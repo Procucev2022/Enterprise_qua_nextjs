@@ -399,18 +399,29 @@ function isGmailApiConfigured() {
 }
 
 let gmailOAuthClient;
+let gmailOAuthClientRefreshToken;
 
 /**
  * Lazily builds an OAuth2 client from the refresh token minted once via
  * scripts/get-gmail-refresh-token.js. googleapis' OAuth2Client caches and
  * auto-refreshes the short-lived access token internally — no manual token
  * refresh logic needed here.
+ *
+ * Rebuilds whenever GMAIL_REFRESH_TOKEN no longer matches what this client
+ * was built with: a Worker isolate stays warm across many invocations (a
+ * cron poll especially), so a plain "build once" singleton would keep using
+ * whichever identity happened to be live the first time this ran on that
+ * isolate, silently ignoring a `wrangler secret put` rotation until the
+ * isolate eventually recycles on its own.
  */
 function getGmailOAuthClient() {
-  if (gmailOAuthClient) return gmailOAuthClient;
+  if (gmailOAuthClient && gmailOAuthClientRefreshToken === process.env.GMAIL_REFRESH_TOKEN) {
+    return gmailOAuthClient;
+  }
   if (!isGmailApiConfigured()) return undefined;
   gmailOAuthClient = new google.auth.OAuth2(process.env.GMAIL_CLIENT_ID, process.env.GMAIL_CLIENT_SECRET);
   gmailOAuthClient.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
+  gmailOAuthClientRefreshToken = process.env.GMAIL_REFRESH_TOKEN;
   return gmailOAuthClient;
 }
 
@@ -483,12 +494,17 @@ function isVendorGmailApiConfigured() {
 }
 
 let vendorGmailOAuthClient;
+let vendorGmailOAuthClientRefreshToken;
 
+/** Same staleness problem and fix as getGmailOAuthClient() above. */
 function getVendorGmailOAuthClient() {
-  if (vendorGmailOAuthClient) return vendorGmailOAuthClient;
+  if (vendorGmailOAuthClient && vendorGmailOAuthClientRefreshToken === process.env.VENDOR_GMAIL_REFRESH_TOKEN) {
+    return vendorGmailOAuthClient;
+  }
   if (!isVendorGmailApiConfigured()) return undefined;
   vendorGmailOAuthClient = new google.auth.OAuth2(process.env.GMAIL_CLIENT_ID, process.env.GMAIL_CLIENT_SECRET);
   vendorGmailOAuthClient.setCredentials({ refresh_token: process.env.VENDOR_GMAIL_REFRESH_TOKEN });
+  vendorGmailOAuthClientRefreshToken = process.env.VENDOR_GMAIL_REFRESH_TOKEN;
   return vendorGmailOAuthClient;
 }
 
@@ -526,12 +542,20 @@ function isQuoteAlertGmailApiConfigured() {
 }
 
 let quoteAlertGmailOAuthClient;
+let quoteAlertGmailOAuthClientRefreshToken;
 
+/** Same staleness problem and fix as getGmailOAuthClient() above. */
 function getQuoteAlertGmailOAuthClient() {
-  if (quoteAlertGmailOAuthClient) return quoteAlertGmailOAuthClient;
+  if (
+    quoteAlertGmailOAuthClient &&
+    quoteAlertGmailOAuthClientRefreshToken === process.env.QUOTE_ALERT_GMAIL_REFRESH_TOKEN
+  ) {
+    return quoteAlertGmailOAuthClient;
+  }
   if (!isQuoteAlertGmailApiConfigured()) return undefined;
   quoteAlertGmailOAuthClient = new google.auth.OAuth2(process.env.GMAIL_CLIENT_ID, process.env.GMAIL_CLIENT_SECRET);
   quoteAlertGmailOAuthClient.setCredentials({ refresh_token: process.env.QUOTE_ALERT_GMAIL_REFRESH_TOKEN });
+  quoteAlertGmailOAuthClientRefreshToken = process.env.QUOTE_ALERT_GMAIL_REFRESH_TOKEN;
   return quoteAlertGmailOAuthClient;
 }
 
@@ -1117,7 +1141,7 @@ function buildRfqFinalComparisonEmail(toOrParams, maybeContext) {
     <div style="text-align: center; margin: 24px 0;">
       <a href="${resolvedUrl}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 14px;">Open Comparison Matrix in Buyer Portal</a>
     </div>
-    <p style="font-size: 12px; color: #64748b; text-align: center;">Sign in to your Procucev Buyer Portal to view detailed line-item quotes, audit logs, and approve Purchase Orders.</p>
+    <p style="font-size: 12px; color: #64748b; text-align: center;">Sign in to your Procucev Buyer Portal to view detailed line-item quotes, audit logs, and approve Pre-Purchase Orders.</p>
   `;
 
   return {
@@ -1359,13 +1383,18 @@ function buildVendorCategoryMappingEmail({
   vendorCode,
   majorCategory,
   minorCategories = [],
+  customSubject,
+  customMessage,
 }) {
   const buyer = buyerOrganizationName || 'A buyer on Procucev';
   const minorHtml = categoryList(minorCategories);
 
+  const defaultMessage = `<p><strong>${buyer}</strong> has added your organisation to their vendor master and mapped your supply categories from your pre-purchase order history with them.</p>`;
+  const messageHtml = (customMessage && customMessage.trim() !== '') ? `<p>${customMessage}</p>` : defaultMessage;
+
   const inner = `
     <p>${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}</p>
-    <p><strong>${buyer}</strong> has added your organisation to their vendor master and mapped your supply categories from your purchase order history with them.</p>
+    ${messageHtml}
     <table style="width: 100%; border-collapse: collapse; margin: 16px 0; background: #f8fafc;">
       ${row('Buyer', buyer)}
       ${row('Your vendor code', vendorCode)}
@@ -1383,10 +1412,14 @@ function buildVendorCategoryMappingEmail({
     <p style="font-size: 13px; color: #64748b; margin: 0;">Sign in with this email address; a one-time verification code will be sent to it.</p>
   `;
 
+  const subject = (customSubject && customSubject.trim() !== '')
+    ? customSubject
+    : `${buyer} has mapped your supply categories${majorCategory ? ` — ${majorCategory}` : ''}`;
+
   return {
     from: fromAddress(),
     to,
-    subject: `${buyer} has mapped your supply categories${majorCategory ? ` — ${majorCategory}` : ''}`,
+    subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Vendor Category Mapping Confirmed', inner),
   };
 }
@@ -1398,13 +1431,18 @@ function buildVendorCategoryMappingEmail({
  * something wrong: the buyer simply had no purchasing history to categorise them
  * from. Nothing about the buyer's spend or other suppliers is disclosed.
  */
-function buildVendorSelfMappingEmail({ to, recipientName, buyerOrganizationName, vendorCode }) {
+function buildVendorSelfMappingEmail({ to, recipientName, buyerOrganizationName, vendorCode, customSubject, customMessage }) {
   const buyer = buyerOrganizationName || 'A buyer on Procucev';
+
+  const defaultMessage = `
+    <p><strong>${buyer}</strong> has added your organisation to their vendor master on Procucev.</p>
+    <p>No historical pre-purchase order data was available for your organisation, so your supply categories could not be mapped automatically. <strong>To become eligible for relevant enquiries, please sign in and select the categories you supply.</strong></p>
+  `;
+  const messageHtml = (customMessage && customMessage.trim() !== '') ? `<p>${customMessage}</p>` : defaultMessage;
 
   const inner = `
     <p>${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}</p>
-    <p><strong>${buyer}</strong> has added your organisation to their vendor master on Procucev.</p>
-    <p>No historical purchase order data was available for your organisation, so your supply categories could not be mapped automatically. <strong>To become eligible for relevant enquiries, please sign in and select the categories you supply.</strong></p>
+    ${messageHtml}
     <table style="width: 100%; border-collapse: collapse; margin: 16px 0; background: #f8fafc;">
       ${row('Buyer', buyer)}
       ${row('Your vendor code', vendorCode)}
@@ -1416,10 +1454,14 @@ function buildVendorSelfMappingEmail({ to, recipientName, buyerOrganizationName,
     <p style="font-size: 13px; color: #64748b; margin: 0;">Sign in with this email address; a one-time verification code will be sent to it. Until your categories are mapped, you will not be matched to enquiries.</p>
   `;
 
+  const subject = (customSubject && customSubject.trim() !== '')
+    ? customSubject
+    : 'Complete Your Category Mapping to Receive Enquiries';
+
   return {
     from: fromAddress(),
     to,
-    subject: 'Complete Your Category Mapping to Receive Enquiries',
+    subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', 'Category Mapping Required', inner),
   };
 }

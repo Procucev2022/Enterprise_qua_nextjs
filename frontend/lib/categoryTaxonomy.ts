@@ -23,10 +23,11 @@
 
 import type { MajorMinorCategory } from './types';
 
-/** Trim, collapse whitespace and casefold, so 'Storage  Racks' matches. */
+/** Trim, collapse whitespace, normalize dashes and casefold, so 'Storage  Racks' and 'Others - New Product' match. */
 function taxonomyKey(value: string): string {
   return String(value || '')
     .trim()
+    .replace(/[–—]/g, '-')
     .replace(/\s+/g, ' ')
     .toLowerCase();
 }
@@ -40,9 +41,60 @@ let minorsByMajorKey = new Map<string, Map<string, string>>();
  *
  * Called by the store once the fetch resolves. Indexes are rebuilt rather than
  * merged: a category removed from the master must stop being offered.
+ * Automatically replaces legacy 'New Category' with 'Others – New Product' and 'Others – New Service'.
  */
 export function setCategoryTaxonomy(next: MajorMinorCategory[]): void {
-  groups = (Array.isArray(next) ? next : []).filter((g) => Boolean(g && g.majorCategory));
+  const rawList = (Array.isArray(next) ? next : []).filter((g) => Boolean(g && g.majorCategory));
+  const transformed: MajorMinorCategory[] = [];
+
+  rawList.forEach((group) => {
+    const rawMajor = String(group.majorCategory || '').trim();
+    const key = taxonomyKey(rawMajor);
+
+    if (key === 'new category' || key === 'new category-product') {
+      transformed.push({
+        majorCategory: 'Others – New Product',
+        minorCategories:
+          group.minorCategories && group.minorCategories.length > 0
+            ? group.minorCategories
+            : DEFAULT_MAJOR_MINORS['others - new product'],
+      });
+      if (key === 'new category') {
+        transformed.push({
+          majorCategory: 'Others – New Service',
+          minorCategories: DEFAULT_MAJOR_MINORS['others - new service'],
+        });
+      }
+    } else if (key === 'new category-service') {
+      transformed.push({
+        majorCategory: 'Others – New Service',
+        minorCategories:
+          group.minorCategories && group.minorCategories.length > 0
+            ? group.minorCategories
+            : DEFAULT_MAJOR_MINORS['others - new service'],
+      });
+    } else if (key === 'others - new product') {
+      transformed.push({
+        majorCategory: 'Others – New Product',
+        minorCategories:
+          group.minorCategories && group.minorCategories.length > 0
+            ? group.minorCategories
+            : DEFAULT_MAJOR_MINORS['others - new product'],
+      });
+    } else if (key === 'others - new service') {
+      transformed.push({
+        majorCategory: 'Others – New Service',
+        minorCategories:
+          group.minorCategories && group.minorCategories.length > 0
+            ? group.minorCategories
+            : DEFAULT_MAJOR_MINORS['others - new service'],
+      });
+    } else {
+      transformed.push(group);
+    }
+  });
+
+  groups = transformed;
   majorsByKey = new Map();
   minorsByMajorKey = new Map();
 
@@ -68,29 +120,137 @@ export function isCategoryTaxonomyLoaded(): boolean {
   return groups.length > 0;
 }
 
-/** Major categories in master display order. */
+/** Major categories in master display order, with guaranteed standard options fallback. */
 export function getMajorCategories(): string[] {
-  return groups.map((group) => group.majorCategory);
+  if (groups.length > 0) {
+    return groups.map((group) => group.majorCategory);
+  }
+  return [
+    'Engineering Spares - Mechanical',
+    'Engineering Spares - Electrical',
+    'Civil Works',
+    'Information Technology (IT) & Software',
+    'Occuptional Health and Safety',
+    'Logistics & Transportation',
+    'Chemicals & Raw Materials',
+    'Others – New Product',
+    'Others – New Service',
+  ];
 }
 
-/** Minor categories under a major, or an empty list when the major is unknown. */
+const DEFAULT_MAJOR_MINORS: Record<string, string[]> = {
+  'engineering spares - mechanical': [
+    'Pumps & Accessories',
+    'Hoses, Valves & Fittings',
+    'Pipes & Pipe Fittings',
+    'Filters',
+    'Tools & Tackles',
+    'Machinery Parts',
+    'Compressors & Accessories',
+    'Customised Parts',
+  ],
+  'engineering spares - electrical': [
+    'Motors',
+    'Cables',
+    'Panels',
+    'Transformers',
+    'Circuit Breakers',
+    'Lighting',
+    'Switchgear',
+    'Customised Parts',
+  ],
+  'civil works': [
+    'PEB Structure',
+    'TMT BARS',
+    'Roofing Sheets',
+    'Paints',
+    'Plumbing',
+    'Fabrication',
+    'Bricks & Blocks',
+  ],
+  'information technology (it) & software': [
+    'Cloud Infrastructure & Storage',
+    'Enterprise Software & Licenses',
+    'IT Hardware & Peripherals',
+    'IT Infrastructure',
+    'Cybersecurity Solutions',
+    'Data & Analytics Platforms',
+  ],
+  'occuptional health and safety': [
+    'Hemlets',
+    'Harness',
+    'Gloves',
+    'Safety Shoes',
+    'Eye Protection',
+    'Fire Safety',
+  ],
+  'logistics & transportation': [
+    'Freight Forwarding',
+    'Road Transportation',
+    'Warehousing & 3PL',
+    'Express Cargo & Courier',
+  ],
+  'chemicals & raw materials': [
+    'Industrial Chemicals',
+    'Solvents & Lubricants',
+    'Specialty Chemicals',
+    'Polymers & Resins',
+  ],
+  'others - new product': [
+    'Storage Racks',
+    'Packaging Material',
+    'General Consumables',
+    'Air Purifiers',
+    'Furniture',
+    'Cleanroom Solutions',
+    'Measuring Equipment',
+    'Renewable Energy',
+    'Water Treatment Plants',
+    'Others',
+  ],
+  'others - new service': [
+    'Consulting',
+    'Maintenance & AMC',
+    'Installation & Fabrication',
+    'Inspection & Testing',
+    'Calibration Services',
+    'Appliances Services',
+    'Drone Surveys',
+    'Warehousing',
+    'Waste Management',
+  ],
+};
+
+/** Minor categories under a major, or standard default list when dynamic taxonomy is loading. */
 export function getMinorCategories(major: string): string[] {
   if (!major) return [];
   const key = taxonomyKey(major);
   const group = groups.find((g) => taxonomyKey(g.majorCategory) === key);
-  return group ? group.minorCategories || [] : [];
+  if (group && group.minorCategories && group.minorCategories.length > 0) {
+    return group.minorCategories;
+  }
+  return DEFAULT_MAJOR_MINORS[key] || [];
+}
+
+/** Get the first/default minor category for a given major category */
+export function getDefaultMinorForMajor(major: string): string {
+  if (!major) return '';
+  const minors = getMinorCategories(major);
+  return minors[0] || '';
 }
 
 /** Whether the master contains this major category. */
 export function hasMajorCategory(major: string): boolean {
-  return Boolean(major && majorsByKey.has(taxonomyKey(major)));
+  return Boolean(major && (majorsByKey.has(taxonomyKey(major)) || DEFAULT_MAJOR_MINORS[taxonomyKey(major)]));
 }
 
 /** Whether the master contains this minor under this major. */
 export function hasMinorCategory(major: string, minor: string): boolean {
   if (!major || !minor) return false;
   const minors = minorsByMajorKey.get(taxonomyKey(major));
-  return Boolean(minors && minors.has(taxonomyKey(minor)));
+  if (minors && minors.has(taxonomyKey(minor))) return true;
+  const defaults = DEFAULT_MAJOR_MINORS[taxonomyKey(major)] || [];
+  return defaults.some((d) => taxonomyKey(d) === taxonomyKey(minor));
 }
 
 /**
@@ -110,6 +270,217 @@ export function findMajorForMinor(minor: string): string {
     }
   });
   return found;
+}
+
+const KNOWN_KEYWORD_RULES: Array<{
+  keywords: string[];
+  major: string;
+  minor: string;
+}> = [
+  {
+    keywords: [
+      'pump', 'pumps', 'impeller', 'hydraulic', 'hydraulics', 'bearing', 'bearings', 'gear', 'gears',
+      'compressor', 'boiler', 'turbine', 'conveyor', 'conveyors', 'cylinder', 'piston', 'shaft', 'spares',
+      'mechanical', 'coupling', 'couplings', 'clutch', 'pulley', 'pulleys', 'spring', 'springs', 'nozzle', 'nozzles'
+    ],
+    major: 'Engineering Spares - Mechanical',
+    minor: 'Pumps & Accessories',
+  },
+  {
+    keywords: ['valve', 'valves', 'hose', 'hoses', 'flange', 'flanges', 'fitting', 'fittings', 'gasket', 'gaskets', 'seal', 'seals', 'o-ring', 'o rings'],
+    major: 'Engineering Spares - Mechanical',
+    minor: 'Hoses, Valves & Fittings',
+  },
+  {
+    keywords: ['pipe', 'pipes', 'piping', 'tubing', 'tube', 'tubes', 'nipple', 'elbow', 'tee', 'reducer'],
+    major: 'Engineering Spares - Mechanical',
+    minor: 'Pipes & Pipe Fittings',
+  },
+  {
+    keywords: ['filter', 'filters', 'cartridge', 'strainer', 'strainers', 'filtration'],
+    major: 'Engineering Spares - Mechanical',
+    minor: 'Filters',
+  },
+  {
+    keywords: ['tool', 'tools', 'tackle', 'tackles', 'wrench', 'spanner', 'drill', 'cutter', 'fastener', 'fasteners', 'bolt', 'bolts', 'nut', 'nuts', 'screw', 'screws'],
+    major: 'Engineering Spares - Mechanical',
+    minor: 'Tools & Tackles',
+  },
+  {
+    keywords: ['motor', 'motors', 'rotor', 'stator', 'servo', 'vfd', 'drive', 'drives'],
+    major: 'Engineering Spares - Electrical',
+    minor: 'Motors',
+  },
+  {
+    keywords: ['cable', 'cables', 'wire', 'wires', 'wiring', 'conduit', 'conduits', 'harness', 'copper wire'],
+    major: 'Engineering Spares - Electrical',
+    minor: 'Cables',
+  },
+  {
+    keywords: ['panel', 'panels', 'switchboard', 'distribution board', 'mcc', 'pcc', 'db box', 'enclosure'],
+    major: 'Engineering Spares - Electrical',
+    minor: 'Panels',
+  },
+  {
+    keywords: ['sensor', 'sensors', 'transducer', 'transmitter', 'detector', 'gauge', 'meter', 'flowmeter', 'thermocouple', 'rtd', 'plc', 'scada'],
+    major: 'Engineering Spares - Electrical',
+    minor: 'Sensors',
+  },
+  {
+    keywords: ['mccb', 'mcb', 'acb', 'breaker', 'breakers', 'switchgear', 'fuse', 'fuses', 'contactor', 'contactors', 'relay', 'relays', 'switch', 'switches'],
+    major: 'Engineering Spares - Electrical',
+    minor: 'Circuit Breakers',
+  },
+  {
+    keywords: ['transformer', 'transformers', 'inverter', 'inverters', 'rectifier', 'ups', 'battery', 'batteries', 'generator', 'generators'],
+    major: 'Engineering Spares - Electrical',
+    minor: 'Transformers',
+  },
+  {
+    keywords: ['rebar', 'rebars', 'tmt', 'steel bar', 'reinforcement', 'tmt bar', 'tmt bars'],
+    major: 'Civil Works',
+    minor: 'TMT BARS',
+  },
+  {
+    keywords: ['peb', 'pre-engineered', 'shed', 'warehouse structure', 'steel structure', 'roofing sheet', 'purlin'],
+    major: 'Civil Works',
+    minor: 'PEB Structure',
+  },
+  {
+    keywords: ['cement', 'concrete', 'mortar', 'grout', 'r質', 'aggregate', 'sand'],
+    major: 'Civil Works',
+    minor: 'Cement',
+  },
+  {
+    keywords: ['brick', 'bricks', 'block', 'blocks', 'aac block', 'aac blocks', 'masonry', 'paver'],
+    major: 'Civil Works',
+    minor: 'Bricks & Blocks',
+  },
+  {
+    keywords: ['steel', 'steels', 'plate', 'plates', 'sheet', 'sheets', 'angle', 'channel', 'beam', 'beams', 'metal', 'alloy'],
+    major: 'Raw Material',
+    minor: 'Steels',
+  },
+  {
+    keywords: ['chemical', 'chemicals', 'acid', 'solvent', 'resin', 'oil', 'grease', 'lubricant', 'lubricants', 'paint', 'coating'],
+    major: 'Raw Material',
+    minor: 'Chemicals',
+  },
+  {
+    keywords: ['laptop', 'laptops', 'desktop', 'computer', 'computers', 'server', 'servers', 'monitor', 'monitors', 'keyboard', 'printer'],
+    major: 'IT',
+    minor: 'Laptop',
+  },
+  {
+    keywords: ['software', 'license', 'licenses', 'saas', 'cloud', 'antivirus', 'database', 'app'],
+    major: 'IT',
+    minor: 'Software',
+  },
+  {
+    keywords: ['freight', 'transport', 'logistics', 'shipping', 'cargo', 'courier', 'road transport', 'trucking'],
+    major: 'Logistics',
+    minor: 'Road transport',
+  },
+  {
+    keywords: ['fire extinguisher', 'extinguisher', 'extinguishers', 'hydrant', 'sprinkler', 'fire fighting'],
+    major: 'Occuptional Health and Safety',
+    minor: 'Fire Extinguishers',
+  },
+  {
+    keywords: ['safety jacket', 'safety jackets', 'high vis', 'vest', 'vests', 'reflective jacket'],
+    major: 'Occuptional Health and Safety',
+    minor: 'Safety jackets',
+  },
+  {
+    keywords: ['safety shoe', 'safety shoes', 'boots', 'steel toe', 'safety boot'],
+    major: 'Occuptional Health and Safety',
+    minor: 'Safety Shoes',
+  },
+  {
+    keywords: ['helmet', 'helmets', 'hard hat', 'hard hats', 'hemlet'],
+    major: 'Occuptional Health and Safety',
+    minor: 'Hemlets',
+  },
+  {
+    keywords: ['safety harness', 'fall arrest', 'safety belt', 'lanyard'],
+    major: 'Occuptional Health and Safety',
+    minor: 'Harness',
+  },
+  {
+    keywords: ['glove', 'gloves', 'hand protection', 'safety gloves', 'nitrile gloves', 'leather gloves', 'mask', 'goggle', 'goggles', 'ppe'],
+    major: 'Occuptional Health and Safety',
+    minor: 'Gloves',
+  },
+  {
+    keywords: ['storage rack', 'racking', 'pallet rack', 'shelving', 'slotted angle', 'mezzanine'],
+    major: 'Others – New Product',
+    minor: 'Storage Racks',
+  },
+  {
+    keywords: ['consulting', 'audit', 'training', 'installation service', 'maintenance service', 'service', 'repair', 'fabrication', 'commissioning', 'inspection', 'manpower', 'calibration'],
+    major: 'Others – New Service',
+    minor: 'Consulting',
+  },
+];
+
+/**
+ * Automatically identify and assign the appropriate major and minor category
+ * based on item name and technical specifications keywords.
+ */
+export function autoCategorizeItem(
+  itemName: string,
+  specs = ''
+): { majorCategory: string; minorCategory: string } {
+  const combined = `${itemName || ''} ${specs || ''}`.trim().toLowerCase();
+  if (!combined) {
+    return { majorCategory: '', minorCategory: '' };
+  }
+
+  // Tokenize the combined text into words
+  const tokens = combined.split(/[\s,./\\;:\-_+()\[\]{}|*&^%$#@!~`]+/).filter((t) => t.length >= 2);
+
+  // 1. Direct match against known procurement keyword patterns
+  for (const rule of KNOWN_KEYWORD_RULES) {
+    if (
+      rule.keywords.some(
+        (kw) =>
+          combined.includes(kw.toLowerCase()) ||
+          tokens.some((token) => token === kw.toLowerCase() || (kw.length >= 4 && token.startsWith(kw.toLowerCase())))
+      )
+    ) {
+      return { majorCategory: rule.major, minorCategory: rule.minor };
+    }
+  }
+
+  // 2. Match against dynamic registered taxonomy
+  for (const group of groups) {
+    const major = group.majorCategory;
+    for (const minor of group.minorCategories || []) {
+      const minorLower = minor.toLowerCase();
+      if (
+        combined.includes(minorLower) ||
+        tokens.some((token) => token.length >= 4 && minorLower.split(/\s+/).includes(token))
+      ) {
+        return { majorCategory: major, minorCategory: minor };
+      }
+    }
+    const majorLower = major.toLowerCase();
+    if (combined.includes(majorLower) || tokens.some((token) => token.length >= 4 && majorLower.split(/\s+/).includes(token))) {
+      const defaultMinor = group.minorCategories?.[0] || '';
+      return { majorCategory: major, minorCategory: defaultMinor };
+    }
+  }
+
+  // 3. Fallback based on service vs product cues
+  if (/service|repair|maintenance|installation|consulting|commissioning|inspection|testing|audit|civil work/i.test(combined)) {
+    return { majorCategory: 'Others – New Service', minorCategory: 'Consulting' };
+  }
+
+  if (/product|material|equipment|supply|supplies|spares|item|hardware/i.test(combined)) {
+    return { majorCategory: 'Others – New Product', minorCategory: 'Others' };
+  }
+
+  return { majorCategory: '', minorCategory: '' };
 }
 
 /** Total minor categories across every major, for the summary counters. */

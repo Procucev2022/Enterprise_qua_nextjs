@@ -12,6 +12,16 @@ import { UI_STRINGS } from './uiStrings';
 
 export const SOURCING_MODES: SourcingModeDetail[] = [
   {
+    id: 'mode_0',
+    code: 'Version 0',
+    name: 'Version 0: Free Starter Trial Plan',
+    shortLabel: 'Version 0',
+    description:
+      'Free Starter Trial mode. RFQs are circulated only to verified Procucev network vendors (0 credits deducted).',
+    featureSummary: 'Procucev Network Vendors Only (Free Starter Plan - 0 credits deducted)',
+    badgeColor: 'border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10',
+  },
+  {
     id: 'mode_1',
     code: 'Version 1',
     name: 'Version 1: Client Roster Sourcing Plan',
@@ -45,11 +55,15 @@ export const SOURCING_MODES: SourcingModeDetail[] = [
 
 /**
  * Mapping between buyer subscription plans and their corresponding RFQ sourcing / version mode.
+ * - version_0 / free_trial: mode_0 (Version 0: Free Starter Trial Plan)
  * - version_1: mode_1 (Version 1: Client Roster Sourcing Plan)
  * - version_2: mode_2 (Version 2: Hybrid Sourcing Plan)
  * - version_3: mode_3 (Version 3: AI Autonomous Sourcing Plan)
  */
 export const BUYER_SUBSCRIPTION_TO_SOURCING_MODE: Record<string, SourcingMode> = {
+  version_0: 'mode_0',
+  mode_0: 'mode_0',
+  v0: 'mode_0',
   version_1: 'mode_1',
   version_2: 'mode_2',
   version_3: 'mode_3',
@@ -63,10 +77,10 @@ export const BUYER_SUBSCRIPTION_TO_SOURCING_MODE: Record<string, SourcingMode> =
 
 /**
  * Resolves the RFQ version / sourcing mode based upon the subscription of the buyer.
- * Defaults to Version 2 ('mode_2').
+ * Defaults to 'mode_2' for free starter trial / general ingestion.
  *
  * @param buyerAccountOrPlan - Buyer account object or subscription plan string
- * @returns Sourcing mode ('mode_1' | 'mode_2' | 'mode_3')
+ * @returns Sourcing mode ('mode_0' | 'mode_1' | 'mode_2' | 'mode_3')
  */
 export function resolveBuyerSourcingMode(
   buyerAccountOrPlan?: { subscriptionPlan?: string } | string | null
@@ -95,34 +109,35 @@ export function resolveBuyerSourcingMode(
  * being the source of truth for access control.
  */
 export const SUBSCRIPTION_MODE_ENTITLEMENTS: Record<string, SourcingMode[]> = {
-  free_trial: ['mode_1', 'mode_2', 'mode_3'],
-  version_1: ['mode_1'],
-  version_2: ['mode_1', 'mode_2'],
-  version_3: ['mode_1', 'mode_2', 'mode_3'],
+  free_trial: ['mode_0', 'mode_1', 'mode_2', 'mode_3'],
+  version_0: ['mode_0'],
+  v0: ['mode_0'],
+  version_1: ['mode_0', 'mode_1'],
+  version_2: ['mode_0', 'mode_1', 'mode_2'],
+  version_3: ['mode_0', 'mode_1', 'mode_2', 'mode_3'],
 };
 
 /**
  * Sourcing modes a buyer's subscription plan actually entitles them to use.
  *
- * A missing/unresolved plan (no activeBuyerAccount loaded yet, or a buyer
- * with no domain buyer_accounts row at all — a real gap seen in practice)
- * defaults to the most restrictive tier, not to "show everything." This used
- * to fail open on the reasoning that "a real buyer account always carries an
- * explicit subscriptionPlan" — but that assumption doesn't hold: an
- * authenticated buyer session can genuinely have no resolvable plan (a
- * missing/not-yet-created buyer_accounts record), and failing open there is
- * exactly the free-upgrade bypass this gate exists to prevent. The backend
- * still re-checks entitlement server-side regardless (POST /api/rfqs 403s
- * for an un-entitled mode), so this stays a UI convenience layer either way —
- * it just now fails closed instead of open.
+ * For free_trial:
+ * - If remaining free RFQ credits > 0: entitled to V0, V1, V2, V3.
+ * - If remaining free RFQ credits <= 0: entitled ONLY to V0 (mode_0).
+ *
+ * For paid plans:
+ * - version_1: mode_0, mode_1
+ * - version_2: mode_0, mode_1, mode_2
+ * - version_3: mode_0, mode_1, mode_2, mode_3
  */
-export function entitledSourcingModes(subscriptionPlan?: string | null): SourcingMode[] {
-  // Neither branch routes through 'free_trial': free_trial itself now grants
-  // all three modes (a later, deliberate change), so falling back to it for
-  // either a missing OR an unrecognised plan string would reopen the exact
-  // free-upgrade bypass this fail-closed default exists to prevent.
+export function entitledSourcingModes(
+  subscriptionPlan?: string | null,
+  remainingFreeRFQs?: number
+): SourcingMode[] {
   if (!subscriptionPlan) return SUBSCRIPTION_MODE_ENTITLEMENTS.version_1;
   const plan = subscriptionPlan.trim().toLowerCase();
+  if (plan === 'free_trial' && remainingFreeRFQs !== undefined && remainingFreeRFQs <= 0) {
+    return ['mode_0'];
+  }
   return SUBSCRIPTION_MODE_ENTITLEMENTS[plan] || SUBSCRIPTION_MODE_ENTITLEMENTS.version_1;
 }
 
@@ -327,6 +342,15 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       icon: 'Building2',
       group: NAV_GROUPS.buyerAccount,
       route: '/buyer/profile',
+    },
+    {
+      id: 'vendor_email_templates',
+      screenTag: 'Screen 1.8b',
+      label: NAV_ITEMS.vendorEmailTemplates.label,
+      description: NAV_ITEMS.vendorEmailTemplates.description,
+      icon: 'Mail',
+      group: NAV_GROUPS.buyerAccount,
+      route: '/buyer/vendor-email-templates',
     },
     // Temporarily hidden: Buyer Billing History
     /*
@@ -566,6 +590,8 @@ export const BUYER_PROFILE_ENDPOINTS = {
   ME: '/api/buyer-profile/me',
   /** Shared major/minor procurement taxonomy the category tree renders. */
   CATEGORIES: '/api/buyer-profile/categories',
+  /** The signed-in buyer's custom vendor-onboarding email templates (Template A/B). */
+  DISPATCH_TEMPLATES: '/api/buyer-profile/dispatch-templates',
 };
 
 /**
