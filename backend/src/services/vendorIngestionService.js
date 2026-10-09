@@ -55,6 +55,7 @@ const {
   VENDOR_CONFIDENCE_BANDS,
   VENDOR_INGESTION_CONFIG,
   VENDOR_INGESTION_MESSAGES,
+  normalizePoDate,
 } = require('../config/constants');
 
 const LOG_CATEGORY = 'VENDOR_INGESTION_SERVICE';
@@ -586,9 +587,14 @@ async function confirmPoDump(sessionUser, sessionId, { rows, fileName, replaceEx
   }
   assertChunkSize(rows);
 
+  const normalizedRows = (Array.isArray(rows) ? rows : []).map((row) => ({
+    ...row,
+    poDate: normalizePoDate(row.poDate || row.date) || row.poDate,
+  }));
+
   // A line that identifies no vendor at all cannot be attributed to anyone, so
   // it is rejected rather than stored as permanently unmatched noise.
-  const { valid, invalid } = partitionRows(rows, VALIDATION_SCHEMAS.poLineItemRow, (row) => {
+  const { valid, invalid } = partitionRows(normalizedRows, VALIDATION_SCHEMAS.poLineItemRow, (row) => {
     const hasCode = String(row.vendorCode || '').trim() !== '';
     const hasName = String(row.vendorName || '').trim() !== '';
     if (!hasCode && !hasName) return 'Either a Vendor Code or a Vendor Name is required to attribute the line.';

@@ -235,6 +235,21 @@ function normalizePoDate(raw) {
   const value = String(raw || '').trim();
   if (value === '') return null;
 
+  // Numeric Excel date serial check (e.g. "45995.00011574074" or 45995)
+  const num = Number(value);
+  if (!isNaN(num) && isFinite(num) && !value.includes('-') && !value.includes('/') && !value.includes(':')) {
+    if (num >= 1 && num <= 100000) {
+      const utcDays = Math.floor(num - 25569);
+      const d = new Date(utcDays * 86400 * 1000);
+      if (!isNaN(d.getTime())) {
+        const y = d.getUTCFullYear();
+        const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(d.getUTCDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+      }
+    }
+  }
+
   const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
 
@@ -415,16 +430,25 @@ async function processPoDumpBatch(sessionId, organizationId, batch, session) {
       continue;
     }
 
+    // Defensive re-normalization: row.poDate should already be ISO by the
+    // time it reaches here (mapRowValues' normalizePoDate), but this batch
+    // function is also called from paths that build rows directly without
+    // going through that step — a raw Excel serial or non-ISO string must
+    // still be normalized before the horizon comparison below, or every
+    // such row silently falls outside the window.
+    const poDate = normalizePoDate(row.poDate || row.date);
+
     // Stamp inHorizon — a row with no parseable PO date can't be confirmed
     // inside the buyer's selected window, so it's counted as outside it
     // rather than silently included.
     const horizonConfigured = Boolean(session && session.horizonStart && session.horizonEnd);
     const inHorizon = !horizonConfigured
       ? true
-      : Boolean(row.poDate) && row.poDate >= session.horizonStart && row.poDate <= session.horizonEnd;
+      : Boolean(poDate) && poDate >= session.horizonStart && poDate <= session.horizonEnd;
 
     valid.push({
       ...row,
+      poDate: poDate || row.poDate || null,
       vendorName: vendorName || `Vendor ${vendorCode}`,
       itemDescription,
       department: category,

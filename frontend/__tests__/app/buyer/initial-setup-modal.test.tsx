@@ -145,6 +145,10 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     fireEvent.click(screen.getByText(/Last 3 Years \(36 Months\)/i));
     expect(mockSetHistoricalPurchaseDataPeriod).toHaveBeenCalledWith('3_years');
 
+    // Download Vendor Master template from Step 1 (Time Horizon)
+    fireEvent.click(screen.getByText(/Download Vendor Master Template/i));
+    expect(mockShowToast).toHaveBeenCalledWith('Template Downloaded', expect.any(String), 'success');
+
     // Continue to STEP 2
     fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
     expect(screen.getByText(/Step 2: Upload File 1/i)).toBeInTheDocument();
@@ -155,10 +159,6 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     // Verify warning if trying to proceed without uploading vendor master
     fireEvent.click(screen.getByText(/Proceed to File 2: PO Dump/i));
     expect(mockShowToast).toHaveBeenCalledWith('Vendor Master Required', expect.any(String), 'warning');
-
-    // Download Excel template
-    fireEvent.click(screen.getByText(/Download Excel Template/i));
-    expect(mockShowToast).toHaveBeenCalledWith('Template Downloaded', expect.any(String), 'success');
 
     // Upload a Vendor Master file
     const wsVendors = XLSX.utils.json_to_sheet([
@@ -545,6 +545,15 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'Unit Price': 100,
           'Total Spend': 100,
         },
+        {
+          'PO Number': 'PO-8884',
+          'PO Date': 45995.00011574074,
+          'Vendor Name': 'Apex Supplies Ltd.',
+          'Item Name': 'Decimal Date Test',
+          Quantity: 1,
+          'Unit Price': 100,
+          'Total Spend': 100,
+        },
       ]),
       'POs'
     );
@@ -884,10 +893,13 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
 
   it('downloads vendor master Excel template and PO dump CSV template', () => {
     render(<InitialSetupModal />);
+    // In Step 1: Time Horizon
+    const vendorTemplateBtn = screen.getByText(/Download Vendor Master Template/i);
+    fireEvent.click(vendorTemplateBtn);
+    expect(vendorTemplateBtn).toBeInTheDocument();
+
     fireEvent.click(screen.getByText(/Continue to File 1: Vendor Master/i));
-    const excelBtn = screen.getByText(/Download Excel Template/i);
-    fireEvent.click(excelBtn);
-    expect(excelBtn).toBeInTheDocument();
+    expect(screen.queryByText(/Download Vendor Master Template/i)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByText('3. PO Dump'));
     const csvBtn = screen.getByText(/Download CSV Template/i);

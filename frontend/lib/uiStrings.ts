@@ -67,6 +67,7 @@ export const UI_STRINGS = {
     confirm: 'Confirm',
     downloadTemplate: 'Download Excel Template',
     downloadExcelTemplate: 'Download Excel Template',
+    downloadVendorMasterTemplate: 'Download Vendor Master Template',
     downloadCsvTemplate: 'Download CSV Template',
     hideDetails: 'Hide Details',
     reviewRfqDetails: 'Review RFQ Details',

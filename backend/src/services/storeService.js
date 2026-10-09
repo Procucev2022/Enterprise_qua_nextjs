@@ -1743,16 +1743,24 @@ class StoreService {
     //   • After 6 hours   → Call reminder (logic kept, telephony deferred)
     //   • After 12 hours  → WhatsApp reminder
     //   • After 24 hours  → Email reminder
-    // Only fires for mode_1 and mode_2 (mode_3 has no auto-assigned vendors
-    // at creation time; inviteVendorsToRFQ schedules chasers when they are
-    // manually added later).
     if (
       Array.isArray(newRFQ.assignedVendors) &&
       newRFQ.assignedVendors.length > 0
     ) {
+      const resolvedVendors = newRFQ.assignedVendors.map((v) => {
+        const full = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
+        return {
+          ...v,
+          phone: full.phone || full.mobile || full.mobileNumber || v.phone,
+          email: full.email || v.email,
+          name: full.name || v.name,
+          contactPerson: full.contactPerson || v.contactPerson,
+        };
+      });
+
       rfqChaserScheduler.scheduleRFQChasers(
         newRFQ,
-        newRFQ.assignedVendors,
+        resolvedVendors,
         (vendor) => this.checkVendorQuotationEligibility(vendor)
       );
     }
@@ -1820,19 +1828,20 @@ class StoreService {
       }
     }
 
-    // 'Quotes Received' isn't a real RFQItem status (the type only allows
-    // 'Parsing' | 'In Evaluation' | 'AI Recommended' | 'PO Generated' |
-    // 'Quotes Pending') — writing it here left every quoted RFQ in a status
-    // no screen recognises, so nothing ever showed the RFQ as under
-    // evaluation once a vendor bid. 'In Evaluation' is the real state a
-    // quote actually puts an RFQ into.
+    const isV0 =
+      rfq.sourcingMode === 'mode_0' ||
+      rfq.sourcingMode === 'v0' ||
+      rfq.sourcingMode === 'version_0';
+
     rfq.quotes = quotes;
     rfq.quotesCount = quotes.length;
+
+    const nextStatus = isV0 ? 'Quotes Received' : (rfq.status === 'PO Generated' ? 'PO Generated' : 'In Evaluation');
 
     const updated = this.updateRFQ(rfq.id, {
       quotes,
       quotesCount: quotes.length,
-      status: rfq.status === 'PO Generated' ? 'PO Generated' : 'In Evaluation',
+      status: nextStatus,
       followUpData,
     });
 
@@ -2139,7 +2148,6 @@ class StoreService {
       s.includes('ingestion') ||
       s.includes('purchase_dump') ||
       id.startsWith('v-hist-') ||
-      id.startsWith('v-navin-') ||
       id.startsWith('vm-') ||
       id.startsWith('v-ingest-') ||
       id.startsWith('v-buyer-')
@@ -2832,6 +2840,11 @@ class StoreService {
    */
   isWithin48HourWindow(rfq) {
     if (!rfq || rfq.status === 'Closed') return false;
+    const isV0 =
+      rfq.sourcingMode === 'mode_0' ||
+      rfq.sourcingMode === 'v0' ||
+      rfq.sourcingMode === 'version_0';
+    if (isV0) return false;
     if (rfq.quotesHidden) return true;
     const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
     let createdAtMs = 0;
@@ -2921,10 +2934,17 @@ class StoreService {
       organizationName: rfq.buyerAccountName || rfq.buyerName || 'Buyer',
     };
 
+    const isV0 =
+      rfq.sourcingMode === 'mode_0' ||
+      rfq.sourcingMode === 'v0' ||
+      rfq.sourcingMode === 'version_0';
+
     const isPortal = this.isPortalRFQ(rfq);
     const in48hWindow = this.isWithin48HourWindow(rfq);
 
-    if (isPortal && in48hWindow) {
+    // For V0: Quotes are sent directly to the buyer's email immediately (48-hour restriction does not apply to V0).
+    // For non-V0 Portal RFQs within 48h: Delay email dispatch.
+    if (isPortal && in48hWindow && !isV0) {
       const delayMs = this.getRemaining48HourMs(rfq);
       logger.info(
         `[48H_BID_RULE] Portal RFQ ${rfq.rfqNumber}: stopped quote email to buyer (${buyerEmail}) for 48 hours. Scheduled dispatch in ${Math.round(delayMs / 1000 / 60)} minutes.`,

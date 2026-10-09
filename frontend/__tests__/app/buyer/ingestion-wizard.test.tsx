@@ -88,6 +88,9 @@ function mockCreatedRFQ(): RFQItem {
     attachments: [],
     createdAt: '2026-09-10T10:00:00Z',
     updatedAt: '2026-09-10T10:00:00Z',
+    assignedVendors: [
+      { id: 'v-1', name: 'Apex Industrial Supplies', email: 'apex@example.com', phone: '9876543210', city: 'Mumbai' },
+    ],
     extractedEntities: [],
     quotes: [],
     chasingActive: false,
@@ -307,6 +310,30 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     expect(await screen.findByText('RFQ Dispatched Successfully!')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Done/i }));
     expect(onComplete).toHaveBeenCalled();
+  });
+
+  it('moves Add Line Item button to bottom right when 5+ line items exist', () => {
+    renderWizard();
+
+    // Initial state: 1 line item, Add Line Item button is in header
+    expect(screen.getByRole('button', { name: /Add Line Item/i })).toBeInTheDocument();
+
+    // Add up to 5 items
+    for (let i = 0; i < 4; i++) {
+      fireEvent.click(screen.getByRole('button', { name: /Add Line Item/i }));
+    }
+
+    // Now 5 items exist
+    const items = screen.getAllByPlaceholderText(MODAL.itemPlaceholder);
+    expect(items.length).toBe(5);
+
+    // Button should still exist (now placed at the bottom right)
+    const addBtn = screen.getByRole('button', { name: /Add Line Item/i });
+    expect(addBtn).toBeInTheDocument();
+
+    // Adding 6th item works from the bottom button
+    fireEvent.click(addBtn);
+    expect(screen.getAllByPlaceholderText(MODAL.itemPlaceholder).length).toBe(6);
   });
 
   it('cancels when clicking Cancel button', () => {

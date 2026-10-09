@@ -101,6 +101,7 @@ function buildOpportunityFromRFQ(rfq: RFQItem): VendorOpportunity {
       id: ent.id || `item-${idx}`,
       description: ent.itemName,
       quantity: ent.quantity,
+      unit: ent.unit || undefined,
       // Price, lead time and payment terms are the vendor's own bid fields and
       // stay empty until they actually quote — seeding them with 14 days and
       // "Net 30" showed a commitment nobody had made.

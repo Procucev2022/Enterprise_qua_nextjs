@@ -2398,3 +2398,20 @@ fix this issuses
 ```text
 raise the pr for this issuses
 ```
+
+---
+
+**Timestamp**: 2026-10-09T11:06:57+05:30
+
+```text
+after the buyer can give the po data the data is taken as wrongly in decimal it take the date format only
+```
+
+---
+
+**Timestamp**: 2026-10-09T11:10:41+05:30
+
+```text
+Remove vendor master template from vendor master and put in Time Horizon only all required columns present in vendor master and template present at time vendor master template name
+```
+
