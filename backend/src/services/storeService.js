@@ -1693,6 +1693,7 @@ class StoreService {
           email: v.email || null,
           contactPerson: v.contactPerson || null,
           phone: v.phone || null,
+          source: v.source || 'procucev_network',
         }));
       if (additions.length > 0) {
         newRFQ.assignedVendors = [...newRFQ.assignedVendors, ...additions];

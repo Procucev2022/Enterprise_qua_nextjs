@@ -1490,6 +1490,28 @@ export const UI_STRINGS = {
     mode_2: 'V2 – Internal + Procucev Vetted Vendors',
     mode_3: 'V3 – Autonomous AI + 360 Qualification',
   },
+
+  rfqConfirmationModal: {
+    title: 'RFQ Dispatched Successfully!',
+    subtitleTemplate: 'RFQ {rfqNumber} has been created and invitations have been dispatched to matched vendors.',
+    rfqNumberLabel: 'RFQ Number',
+    categoryLabel: 'Category',
+    itemsBudgetLabel: 'Items / Budget',
+    modeVendorsLabel: 'Mode & Vendors',
+    createAnotherRfqAction: 'Create Another RFQ',
+    compareInMatrixAction: 'Compare in Matrix',
+    doneAction: 'Done',
+    modeV0: 'Mode V0',
+    modeV1: 'Mode V1',
+    modeV2: 'Mode V2',
+    modeV3: 'Mode V3',
+    vendorSingular: 'Vendor',
+    vendorPlural: 'Vendors',
+    procucevVendorSingular: 'Procucev Vendor',
+    procucevVendorPlural: 'Procucev Vendors',
+    internalSingular: 'Internal',
+    aiBlind: 'AI Blind',
+  },
 };
 
 /**

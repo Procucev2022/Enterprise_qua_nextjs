@@ -108,6 +108,50 @@ function withStoredValue(options: string[], value: string): string[] {
   return [trimmed, ...options];
 }
 
+/** Formats mode label and vendor breakdown string for confirmation modal */
+export function formatConfirmationModeVendors(rfq?: {
+  sourcingMode?: string;
+  assignedVendors?: Array<{ id?: string; source?: string; name?: string }>;
+} | null): string {
+  if (!rfq) return '';
+  const modeKey = String(rfq.sourcingMode || 'mode_2').toLowerCase();
+  const assigned = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
+  const procucevCount = assigned.filter(isProcucevVendor).length;
+  const internalCount = assigned.filter(isBuyerUploaded).length;
+  const totalCount = assigned.length;
+
+  if (modeKey.includes('0')) {
+    const count = procucevCount || totalCount;
+    return `${UI_STRINGS.rfqConfirmationModal.modeV0} · ${count} ${count === 1 ? UI_STRINGS.rfqConfirmationModal.procucevVendorSingular : UI_STRINGS.rfqConfirmationModal.procucevVendorPlural}`;
+  }
+
+  if (modeKey.includes('1')) {
+    return `${UI_STRINGS.rfqConfirmationModal.modeV1} · ${totalCount} ${totalCount === 1 ? UI_STRINGS.rfqConfirmationModal.vendorSingular : UI_STRINGS.rfqConfirmationModal.vendorPlural}`;
+  }
+
+  if (modeKey.includes('2')) {
+    if (internalCount > 0 && procucevCount > 0) {
+      return `${UI_STRINGS.rfqConfirmationModal.modeV2} · ${internalCount} ${UI_STRINGS.rfqConfirmationModal.internalSingular} + ${procucevCount} Procucev`;
+    }
+    if (procucevCount > 0) {
+      return `${UI_STRINGS.rfqConfirmationModal.modeV2} · ${procucevCount} ${procucevCount === 1 ? UI_STRINGS.rfqConfirmationModal.procucevVendorSingular : UI_STRINGS.rfqConfirmationModal.procucevVendorPlural}`;
+    }
+    return `${UI_STRINGS.rfqConfirmationModal.modeV2} · ${totalCount} ${totalCount === 1 ? UI_STRINGS.rfqConfirmationModal.vendorSingular : UI_STRINGS.rfqConfirmationModal.vendorPlural}`;
+  }
+
+  if (modeKey.includes('3')) {
+    if (procucevCount > 0) {
+      return `${UI_STRINGS.rfqConfirmationModal.modeV3} · ${procucevCount} ${procucevCount === 1 ? UI_STRINGS.rfqConfirmationModal.procucevVendorSingular : UI_STRINGS.rfqConfirmationModal.procucevVendorPlural}`;
+    }
+    if (totalCount > 0) {
+      return `${UI_STRINGS.rfqConfirmationModal.modeV3} · ${totalCount} ${totalCount === 1 ? UI_STRINGS.rfqConfirmationModal.vendorSingular : UI_STRINGS.rfqConfirmationModal.vendorPlural}`;
+    }
+    return `${UI_STRINGS.rfqConfirmationModal.modeV3} · ${UI_STRINGS.rfqConfirmationModal.aiBlind}`;
+  }
+
+  return `${totalCount} ${totalCount === 1 ? UI_STRINGS.rfqConfirmationModal.vendorSingular : UI_STRINGS.rfqConfirmationModal.vendorPlural}`;
+}
+
 interface IngestionWizardProps {
   onComplete: () => void;
   onCancel: () => void;
@@ -832,7 +876,7 @@ export default function IngestionWizard({
 
       let mode1AssignedVendors: AssignedVendorEntry[] | undefined = undefined;
 
-      if ((form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2') && Array.isArray(buyerVendors)) {
+      if ((form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2' || form.sourcingMode === 'mode_3') && Array.isArray(buyerVendors)) {
         const pool = form.sourcingMode === 'mode_1'
           ? buyerVendors.filter((v) => isBuyerUploaded(v))
           : buyerVendors;
@@ -2690,7 +2734,7 @@ export default function IngestionWizard({
             </div>
 
             <div className="space-y-1.5">
-              <h3 className="text-xl font-bold text-slate-900 dark:text-white">RFQ Dispatched Successfully!</h3>
+              <h3 className="text-xl font-bold text-slate-900 dark:text-white">{UI_STRINGS.rfqConfirmationModal.title}</h3>
               <p className="text-sm text-slate-500 dark:text-gray-400 max-w-md mx-auto">
                 RFQ <strong className="text-indigo-600 dark:text-indigo-400 font-mono">{confirmationRfq.rfqNumber}</strong> has been created and invitations have been dispatched to matched vendors.
               </p>
@@ -2698,23 +2742,23 @@ export default function IngestionWizard({
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-left">
               <div className="p-3 bg-slate-50 dark:bg-gray-800/60 rounded-xl border border-slate-200/60 dark:border-gray-800">
-                <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">RFQ Number</span>
+                <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">{UI_STRINGS.rfqConfirmationModal.rfqNumberLabel}</span>
                 <span className="text-xs font-bold text-slate-800 dark:text-gray-200 font-mono">{confirmationRfq.rfqNumber}</span>
               </div>
               <div className="p-3 bg-slate-50 dark:bg-gray-800/60 rounded-xl border border-slate-200/60 dark:border-gray-800">
-                <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">Category</span>
+                <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">{UI_STRINGS.rfqConfirmationModal.categoryLabel}</span>
                 <span className="text-xs font-bold text-slate-800 dark:text-gray-200 truncate block">{confirmationRfq.category || confirmationRfq.title}</span>
               </div>
               <div className="p-3 bg-slate-50 dark:bg-gray-800/60 rounded-xl border border-slate-200/60 dark:border-gray-800">
-                <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">Items / Budget</span>
+                <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">{UI_STRINGS.rfqConfirmationModal.itemsBudgetLabel}</span>
                 <span className="text-xs font-bold text-slate-800 dark:text-gray-200">
                   {confirmationRfq.extractedEntities?.length || 1} items {confirmationRfq.budget ? `· ₹${confirmationRfq.budget.toLocaleString()}` : ''}
                 </span>
               </div>
               <div className="p-3 bg-slate-50 dark:bg-gray-800/60 rounded-xl border border-slate-200/60 dark:border-gray-800">
-                <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">Mode & Vendors</span>
-                <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 font-mono">
-                  {confirmationRfq.assignedVendors?.length || (confirmationRfq.sourcingMode === 'mode_3' ? 'AI Blind' : '1+ Supplier')}
+                <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">{UI_STRINGS.rfqConfirmationModal.modeVendorsLabel}</span>
+                <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 font-mono leading-snug block" title={formatConfirmationModeVendors(confirmationRfq)}>
+                  {formatConfirmationModeVendors(confirmationRfq)}
                 </span>
               </div>
             </div>
@@ -2728,7 +2772,7 @@ export default function IngestionWizard({
                 }}
                 className="btn btn-secondary btn-md font-bold cursor-pointer"
               >
-                Create Another RFQ
+                {UI_STRINGS.rfqConfirmationModal.createAnotherRfqAction}
               </button>
               <button
                 type="button"
@@ -2742,7 +2786,7 @@ export default function IngestionWizard({
                 }}
                 className="btn btn-secondary btn-md font-bold inline-flex items-center gap-1.5 cursor-pointer"
               >
-                <span>Compare in Matrix</span>
+                <span>{UI_STRINGS.rfqConfirmationModal.compareInMatrixAction}</span>
                 <ExternalLink size={14} />
               </button>
               <button
@@ -2754,7 +2798,7 @@ export default function IngestionWizard({
                 className="btn btn-primary btn-md font-bold inline-flex items-center gap-1.5 cursor-pointer"
               >
                 <Check size={16} />
-                <span>Done</span>
+                <span>{UI_STRINGS.rfqConfirmationModal.doneAction}</span>
               </button>
             </div>
           </div>

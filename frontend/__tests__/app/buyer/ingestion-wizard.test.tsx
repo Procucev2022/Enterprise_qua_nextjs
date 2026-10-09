@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import IngestionWizard from '@/app/buyer/ingestion-wizard';
+import IngestionWizard, { formatConfirmationModeVendors } from '@/app/buyer/ingestion-wizard';
 import { AppProvider } from '@/lib/store';
 import { extractLineItemsFromDocument, classifyLineItems, uploadRFQAttachment, createRFQ } from '@/lib/rfqClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
@@ -315,6 +315,7 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
 
     await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
     expect(await screen.findByText('RFQ Dispatched Successfully!')).toBeInTheDocument();
+    expect(screen.getByText('Mode V2 · 1 Procucev Vendor')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Done/i }));
     expect(onComplete).toHaveBeenCalled();
   });
@@ -1066,6 +1067,183 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
 
       expect(screen.queryByTestId('ingestion-wizard-quota-exhausted-banner')).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Create & Dispatch RFQ/i })).toBeInTheDocument();
+    });
+  });
+
+  describe('formatConfirmationModeVendors helper', () => {
+    it('returns empty string when rfq is null or undefined', () => {
+      expect(formatConfirmationModeVendors(null)).toBe('');
+      expect(formatConfirmationModeVendors(undefined)).toBe('');
+    });
+
+    it('formats Mode V0 with Procucev vendors (singular and plural)', () => {
+      expect(
+        formatConfirmationModeVendors({
+          sourcingMode: 'mode_0',
+          assignedVendors: [{ id: 'v-1', name: 'Vendor 1' }],
+        })
+      ).toBe('Mode V0 · 1 Procucev Vendor');
+
+      expect(
+        formatConfirmationModeVendors({
+          sourcingMode: 'v0',
+          assignedVendors: [
+            { id: 'v-1', name: 'Vendor 1' },
+            { id: 'v-2', name: 'Vendor 2' },
+          ],
+        })
+      ).toBe('Mode V0 · 2 Procucev Vendors');
+    });
+
+    it('formats Mode V1 with client roster vendors (singular and plural)', () => {
+      expect(
+        formatConfirmationModeVendors({
+          sourcingMode: 'mode_1',
+          assignedVendors: [{ id: 'v-buyer-1', name: 'Buyer Vendor 1', source: 'buyer_uploaded' }],
+        })
+      ).toBe('Mode V1 · 1 Vendor');
+
+      expect(
+        formatConfirmationModeVendors({
+          sourcingMode: 'v1',
+          assignedVendors: Array.from({ length: 10 }, (_, i) => ({
+            id: `v-buyer-${i}`,
+            name: `Buyer Vendor ${i}`,
+            source: 'buyer_uploaded',
+          })),
+        })
+      ).toBe('Mode V1 · 10 Vendors');
+    });
+
+    it('formats Mode V2 with hybrid breakdown and only-procucev', () => {
+      // 2 internal + 5 procucev
+      expect(
+        formatConfirmationModeVendors({
+          sourcingMode: 'mode_2',
+          assignedVendors: [
+            { id: 'v-buyer-1', name: 'Internal 1', source: 'buyer_uploaded' },
+            { id: 'v-buyer-2', name: 'Internal 2', source: 'buyer_uploaded' },
+            { id: 'v-proc-1', name: 'Proc 1' },
+            { id: 'v-proc-2', name: 'Proc 2' },
+            { id: 'v-proc-3', name: 'Proc 3' },
+            { id: 'v-proc-4', name: 'Proc 4' },
+            { id: 'v-proc-5', name: 'Proc 5' },
+          ],
+        })
+      ).toBe('Mode V2 · 2 Internal + 5 Procucev');
+
+      // Only Procucev (1 vendor)
+      expect(
+        formatConfirmationModeVendors({
+          sourcingMode: 'mode_2',
+          assignedVendors: [{ id: 'v-proc-1', name: 'Proc 1' }],
+        })
+      ).toBe('Mode V2 · 1 Procucev Vendor');
+
+      // Only Procucev (20 vendors)
+      expect(
+        formatConfirmationModeVendors({
+          sourcingMode: 'mode_2',
+          assignedVendors: Array.from({ length: 20 }, (_, i) => ({
+            id: `v-proc-${i}`,
+            name: `Proc ${i}`,
+          })),
+        })
+      ).toBe('Mode V2 · 20 Procucev Vendors');
+
+      // Only internal (1 vendor)
+      expect(
+        formatConfirmationModeVendors({
+          sourcingMode: 'mode_2',
+          assignedVendors: [{ id: 'v-buyer-1', name: 'Internal 1', source: 'buyer_uploaded' }],
+        })
+      ).toBe('Mode V2 · 1 Vendor');
+
+      // Only internal (10 vendors)
+      expect(
+        formatConfirmationModeVendors({
+          sourcingMode: 'mode_2',
+          assignedVendors: Array.from({ length: 10 }, (_, i) => ({
+            id: `v-buyer-${i}`,
+            name: `Internal ${i}`,
+            source: 'buyer_uploaded',
+          })),
+        })
+      ).toBe('Mode V2 · 10 Vendors');
+
+      // 0 vendors
+      expect(
+        formatConfirmationModeVendors({
+          sourcingMode: 'mode_2',
+          assignedVendors: [],
+        })
+      ).toBe('Mode V2 · 0 Vendors');
+    });
+
+    it('formats Mode V3 with Procucev vendors and AI Blind fallback', () => {
+      // 20 Procucev vendors
+      expect(
+        formatConfirmationModeVendors({
+          sourcingMode: 'mode_3',
+          assignedVendors: Array.from({ length: 20 }, (_, i) => ({
+            id: `v-proc-${i}`,
+            name: `Proc ${i}`,
+          })),
+        })
+      ).toBe('Mode V3 · 20 Procucev Vendors');
+
+      // 1 Procucev vendor
+      expect(
+        formatConfirmationModeVendors({
+          sourcingMode: 'mode_3',
+          assignedVendors: [{ id: 'v-proc-1', name: 'Proc 1' }],
+        })
+      ).toBe('Mode V3 · 1 Procucev Vendor');
+
+      // Non-procucev only (singular & plural)
+      expect(
+        formatConfirmationModeVendors({
+          sourcingMode: 'mode_3',
+          assignedVendors: [{ id: 'v-buyer-1', name: 'Buyer 1', source: 'buyer_uploaded' }],
+        })
+      ).toBe('Mode V3 · 1 Vendor');
+
+      expect(
+        formatConfirmationModeVendors({
+          sourcingMode: 'mode_3',
+          assignedVendors: [
+            { id: 'v-buyer-1', name: 'Buyer 1', source: 'buyer_uploaded' },
+            { id: 'v-buyer-2', name: 'Buyer 2', source: 'buyer_uploaded' },
+          ],
+        })
+      ).toBe('Mode V3 · 2 Vendors');
+
+      // 0 vendors
+      expect(
+        formatConfirmationModeVendors({
+          sourcingMode: 'mode_3',
+          assignedVendors: [],
+        })
+      ).toBe('Mode V3 · AI Blind');
+    });
+
+    it('falls back gracefully for unknown modes', () => {
+      expect(
+        formatConfirmationModeVendors({
+          sourcingMode: 'custom_mode',
+          assignedVendors: [{ id: 'v-1', name: 'Custom Vendor 1' }],
+        })
+      ).toBe('1 Vendor');
+
+      expect(
+        formatConfirmationModeVendors({
+          sourcingMode: 'custom_mode',
+          assignedVendors: [
+            { id: 'v-1', name: 'Custom Vendor 1' },
+            { id: 'v-2', name: 'Custom Vendor 2' },
+          ],
+        })
+      ).toBe('2 Vendors');
     });
   });
 
