@@ -2448,3 +2448,52 @@ When the Buyer clicks **“Complete Setup & Ingest Vendors”**, the system must
   - Count of Template B emails sent (Unmapped)
   - Any failed or skipped records with reasons
 ```
+
+---
+
+**Timestamp**: 2026-10-09T15:46:45+05:30
+
+```text
+raise the pr
+```
+
+---
+
+**Timestamp**: 2026-10-09T16:01:10+05:30
+
+```text
+Remove the test from the UI after extracted the data only show Successfully extracted number of line items and from "file name only" then remove the test using gemini -3- falsh an all
+```
+
+---
+
+**Timestamp**: 2026-10-09T16:38:54+05:30
+
+```text
+Add number of procucev vendor for version 2 and  version3 here and mode v1 vendor 10 next mode v2 procucev vendor 20  like that
+```
+
+---
+
+**Timestamp**: 2026-10-09T17:27:44+05:30
+
+```text
+Completely remove the Vendor Email Templates feature from the Enterprise QUA portal, including its sidebar menu option, page, UI components, and related fields. Do not modify, delete, or change any existing backend code, APIs, database tables, business logic, or other functionalities. Ensure that only the Vendor Email Templates feature is removed from the UI and that all other modules, navigation options, and existing features continue to work exactly as they do now. Do not make any unrelated code changes, refactoring, or UI modifications. Preserve the existing codebase and functionality without affecting any other part of the application.
+```
+
+---
+
+**Timestamp**: 2026-10-09T18:50:45+05:30
+
+```text
+resolve all the conflict and merge 
+```
+
+---
+
+**Timestamp**: 2026-10-09T19:05:52+05:30
+
+```text
+solve it
+Error: request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": read tcp 192.168.0.102:56573->172.217.112.4:443: wsarecv: An established connection was aborted by the software in your host machine.: request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": read tcp 192.168.0.102:56573->172.217.112.4:443: wsarecv: An established connection was aborted by the software in your host machine.Error: request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": dial tcp: lookup daily-cloudcode-pa.googleapis.com: no such host: request failed: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse": dial tcp: lookup daily-cloudcode-pa.googleapis.com: no such host
+```

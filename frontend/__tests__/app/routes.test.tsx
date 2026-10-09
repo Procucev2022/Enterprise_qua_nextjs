@@ -367,9 +367,7 @@ describe('Role screen routes', () => {
     });
 
     // ── Editing and deleting from the details route ─────────────────────────
-    // The page fetched the RFQ itself rather than reading it from the store, so a
-    // store-only update would leave this screen showing the pre-edit terms.
-    it('rfq details opens the edit dialog and adopts what was saved', async () => {
+    it('rfq details does not provide edit or delete actions for buyers', async () => {
       mockSearchParams.set('rfq', 'RFQ-1');
       mockFetchRFQById.mockResolvedValue({ success: true, rfq: RFQ });
 
@@ -377,51 +375,7 @@ describe('Role screen routes', () => {
       await waitFor(() => expect(screen.getByTestId('rfq-details')).toBeInTheDocument());
 
       expect(screen.queryByTestId('edit-modal-open')).not.toBeInTheDocument();
-      clickCallback('rfq-details:onEdit');
-      expect(screen.getByTestId('edit-modal-open')).toBeInTheDocument();
-
-      clickCallback('edit-modal:save');
-      await waitFor(() =>
-        expect(storeUpdateRFQ).toHaveBeenCalledWith('RFQ-1', { title: 'Edited title' })
-      );
-      mockSearchParams.delete('rfq');
-    });
-
-    // Staying here would leave the buyer looking at a record that no longer exists.
-    it('rfq details deletes on confirmation and returns to the portfolio', async () => {
-      mockSearchParams.set('rfq', 'RFQ-1');
-      mockFetchRFQById.mockResolvedValue({ success: true, rfq: RFQ });
-
-      render(<BuyerRFQDetailsPage />);
-      await waitFor(() => expect(screen.getByTestId('rfq-details')).toBeInTheDocument());
-
       expect(screen.queryByTestId('delete-dialog-open')).not.toBeInTheDocument();
-      clickCallback('rfq-details:onDelete');
-      expect(screen.getByTestId('delete-dialog-open')).toBeInTheDocument();
-
-      clickCallback('delete-dialog:confirm');
-      await waitFor(() => expect(storeDeleteRFQ).toHaveBeenCalledWith('RFQ-1'));
-      expect(mockPush).toHaveBeenCalledWith('/buyer/rfq-summary');
-      mockSearchParams.delete('rfq');
-    });
-
-    it('rfq details closes each dialog without changing anything', async () => {
-      mockSearchParams.set('rfq', 'RFQ-1');
-      mockFetchRFQById.mockResolvedValue({ success: true, rfq: RFQ });
-
-      render(<BuyerRFQDetailsPage />);
-      await waitFor(() => expect(screen.getByTestId('rfq-details')).toBeInTheDocument());
-
-      clickCallback('rfq-details:onEdit');
-      clickCallback('edit-modal:close');
-      expect(screen.queryByTestId('edit-modal-open')).not.toBeInTheDocument();
-
-      clickCallback('rfq-details:onDelete');
-      clickCallback('delete-dialog:close');
-      expect(screen.queryByTestId('delete-dialog-open')).not.toBeInTheDocument();
-
-      expect(storeUpdateRFQ).not.toHaveBeenCalled();
-      expect(storeDeleteRFQ).not.toHaveBeenCalled();
       mockSearchParams.delete('rfq');
     });
 

@@ -9,12 +9,6 @@ jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
 }));
 
-const mockPush = jest.fn();
-jest.mock('next/navigation', () => ({
-  useRouter: () => ({
-    push: mockPush,
-  }),
-}));
 
 // Mock FileReader for synchronous, reliable Excel file parsing
 class MockFileReader {
@@ -1080,51 +1074,6 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(mockProcessHistoricalPurchaseData).toHaveBeenCalled();
     expect(mockSetInitialSetupModalOpen).toHaveBeenCalledWith(false);
     expect(mockShowToast).toHaveBeenCalledWith('Setup Complete', expect.any(String), 'success');
-  });
-
-  it('navigates to email templates editor when Edit Message is clicked on Step 5', async () => {
-    (useApp as jest.Mock).mockReturnValue({
-      initialSetupModalOpen: true,
-      setInitialSetupModalOpen: mockSetInitialSetupModalOpen,
-      historicalPurchaseDataPeriod: '2_years',
-      setHistoricalPurchaseDataPeriod: mockSetHistoricalPurchaseDataPeriod,
-      processHistoricalPurchaseData: mockProcessHistoricalPurchaseData,
-      lastIngestionSummary: null,
-      setInitialSetupCompleted: jest.fn(),
-      activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
-      buyerVendors: mockBuyerVendors,
-      showToast: mockShowToast,
-    });
-
-    const { container } = render(<InitialSetupModal />);
-    fireEvent.click(screen.getByText('2. Vendor Master'));
-    const vFile = createValidVendorMasterFile();
-    const vInput = container.querySelector('input[type="file"]');
-    if (vInput) {
-      await act(async () => {
-        fireEvent.change(vInput, { target: { files: [vFile] } });
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      });
-    }
-
-    fireEvent.click(screen.getByText('3. PO Dump'));
-    const poFile = createValidPoDumpFile();
-    const poInput = container.querySelector('input[type="file"]');
-    if (poInput) {
-      await act(async () => {
-        fireEvent.change(poInput, { target: { files: [poFile] } });
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      });
-    }
-
-    fireEvent.click(screen.getByText('5. Dispatch Emails'));
-
-    const editButtons = screen.getAllByText('Edit Message');
-    expect(editButtons.length).toBeGreaterThanOrEqual(2);
-    fireEvent.click(editButtons[0]);
-    expect(mockPush).toHaveBeenCalledWith('/buyer/vendor-email-templates');
-    fireEvent.click(editButtons[1]);
-    expect(mockPush).toHaveBeenCalledWith('/buyer/vendor-email-templates');
   });
 
   it('supports pagination controls (Show More, Show All, Collapse) in Step 2 and Step 3', () => {
