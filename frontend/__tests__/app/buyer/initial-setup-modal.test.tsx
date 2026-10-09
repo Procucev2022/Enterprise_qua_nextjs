@@ -545,6 +545,15 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
           'Unit Price': 100,
           'Total Spend': 100,
         },
+        {
+          'PO Number': 'PO-8884',
+          'PO Date': 45995.00011574074,
+          'Vendor Name': 'Apex Supplies Ltd.',
+          'Item Name': 'Decimal Date Test',
+          Quantity: 1,
+          'Unit Price': 100,
+          'Total Spend': 100,
+        },
       ]),
       'POs'
     );
