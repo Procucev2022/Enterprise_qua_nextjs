@@ -1483,6 +1483,13 @@ export const UI_STRINGS = {
     suppliersUnit: 'Suppliers',
     emailsSentTemplate: '{sent} of {total} Emails Sent',
   },
+
+  sourcingModeVersions: {
+    mode_0: 'V0 – Procucev Network Vendors',
+    mode_1: 'V1 – Internal Vendors',
+    mode_2: 'V2 – Internal + Procucev Vetted Vendors',
+    mode_3: 'V3 – Autonomous AI + 360 Qualification',
+  },
 };
 
 /**

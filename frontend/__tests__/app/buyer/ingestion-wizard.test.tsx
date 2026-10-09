@@ -227,40 +227,47 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     expect(select.value).toBe('mode_3');
   });
 
-  it('toggles custom sourcing dropdown, selects options, and closes on outside click', () => {
+  it('renders horizontal sourcing mode selection buttons, switches modes, and does not show Hybrid Active', () => {
     renderWizard();
 
-    // Toggle dropdown open
-    const trigger = screen.getByTestId('sourcing-mode-trigger');
-    fireEvent.click(trigger);
-    expect(screen.getByTestId('custom-mode-option-mode_1')).toBeInTheDocument();
+    // Verify all four horizontal buttons are rendered with UI_STRINGS labels
+    const btn0 = screen.getByTestId('sourcing-mode-btn-mode_0');
+    const btn1 = screen.getByTestId('sourcing-mode-btn-mode_1');
+    const btn2 = screen.getByTestId('sourcing-mode-btn-mode_2');
+    const btn3 = screen.getByTestId('sourcing-mode-btn-mode_3');
 
-    // Select Mode 1
-    fireEvent.click(screen.getByTestId('custom-mode-option-mode_1'));
-    expect(screen.queryByTestId('custom-mode-option-mode_1')).not.toBeInTheDocument();
+    expect(btn0).toHaveTextContent(UI_STRINGS.sourcingModeVersions.mode_0);
+    expect(btn1).toHaveTextContent(UI_STRINGS.sourcingModeVersions.mode_1);
+    expect(btn2).toHaveTextContent(UI_STRINGS.sourcingModeVersions.mode_2);
+    expect(btn3).toHaveTextContent(UI_STRINGS.sourcingModeVersions.mode_3);
 
-    // Toggle open again and click inside (should not close)
-    fireEvent.click(trigger);
-    expect(screen.getByTestId('custom-mode-option-mode_2')).toBeInTheDocument();
-    fireEvent.mouseDown(screen.getByTestId('custom-mode-option-mode_2'));
-    
-    // Select Mode 2
-    fireEvent.click(screen.getByTestId('custom-mode-option-mode_2'));
-    expect(screen.queryByTestId('custom-mode-option-mode_2')).not.toBeInTheDocument();
+    // Initial default is Mode 2 (selected)
+    expect(btn2).toHaveAttribute('aria-checked', 'true');
+    expect(btn0).toHaveAttribute('aria-checked', 'false');
+    expect(btn1).toHaveAttribute('aria-checked', 'false');
+    expect(btn3).toHaveAttribute('aria-checked', 'false');
 
-    // Toggle open again
-    fireEvent.click(trigger);
-    expect(screen.getByTestId('custom-mode-option-mode_3')).toBeInTheDocument();
+    // Switch to Mode 0
+    fireEvent.click(btn0);
+    expect(btn0).toHaveAttribute('aria-checked', 'true');
+    expect(btn2).toHaveAttribute('aria-checked', 'false');
 
-    // Click Mode 3
-    fireEvent.click(screen.getByTestId('custom-mode-option-mode_3'));
-    expect(screen.queryByTestId('custom-mode-option-mode_3')).not.toBeInTheDocument();
+    // Switch to Mode 1
+    fireEvent.click(btn1);
+    expect(btn1).toHaveAttribute('aria-checked', 'true');
+    expect(btn0).toHaveAttribute('aria-checked', 'false');
 
-    // Toggle open and click outside
-    fireEvent.click(trigger);
-    expect(screen.getByTestId('custom-mode-option-mode_2')).toBeInTheDocument();
-    fireEvent.mouseDown(document.body);
-    expect(screen.queryByTestId('custom-mode-option-mode_2')).not.toBeInTheDocument();
+    // Switch to Mode 3
+    fireEvent.click(btn3);
+    expect(btn3).toHaveAttribute('aria-checked', 'true');
+    expect(btn1).toHaveAttribute('aria-checked', 'false');
+
+    // Switch back to Mode 2
+    fireEvent.click(btn2);
+    expect(btn2).toHaveAttribute('aria-checked', 'true');
+
+    // Verify "Hybrid Active" is never rendered in the document
+    expect(screen.queryByText(/Hybrid Active/i)).not.toBeInTheDocument();
   });
 
   it('validates required fields on submission and dispatches RFQ on valid input', async () => {

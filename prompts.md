@@ -2449,4 +2449,69 @@ When the Buyer clicks **“Complete Setup & Ingest Vendors”**, the system must
   - Any failed or skipped records with reasons
 ```
 
+---
+
+### Prompt 45
+
+**Timestamp**: 2026-10-09T14:41:46+05:30
+
+```text
+Update Sourcing Mode Selection UI
+
+Modify Step 3: Select Sourcing Mode in the QUA AI 2.0 RFQ creation flow.
+
+1. Replace the Dropdown with Horizontal Selection Buttons
+
+Currently, the sourcing versions are displayed in a large dropdown. Remove the dropdown and replace it with small, compact horizontal selection buttons arranged in a single row.
+
+Display these four options:
+
+V0 – Procucev Network Vendors
+
+V1 – Internal Vendors
+
+V2 – Internal + Procucev Vetted Vendors
+
+V3 – Autonomous AI + 360 Qualification
+
+2. UI and Styling
+
+Display all four options horizontally using compact buttons or selectable tabs.
+
+Keep the buttons small, with consistent height, spacing, and rounded corners.
+
+Clearly highlight the currently selected version using the existing QUA AI 2.0 color scheme.
+
+Show the unselected versions with a subtle background and border.
+
+Ensure the layout is responsive; on smaller screens, allow horizontal scrolling or wrapping.
+
+Remove the existing large dropdown and expanded dropdown list completely.
+
+3. Remove Hybrid Active from Mode 2
+
+Remove the “Hybrid Active” label/badge associated with Mode 2 (V2).
+
+Do not display “Hybrid Active” anywhere in the V2 selection UI.
+
+Keep the existing V2 label: “V2 – Internal + Procucev Vetted Vendors”.
+
+Do not remove or break the underlying V2 sourcing functionality.
+
+4. Preserve Existing Functionality
+
+Selecting V0, V1, V2, or V3 must update the selected sourcing version correctly.
+
+Preserve all existing vendor filtering, category matching, RFQ processing, and sourcing logic for each version.
+
+Ensure that the currently selected version remains selected when the user moves between steps, as per the existing application behavior.
+
+Do not modify the vendor cards, category mismatch indicators, or vendor email actions shown below the sourcing mode section.
+
+Expected Result
+
+The sourcing mode section should display four compact horizontal selection buttons instead of the current large dropdown. The selected version should be visually highlighted, and the “Hybrid Active” badge for V2 must be removed without affecting the existing sourcing logic.
+```
+
+
 
