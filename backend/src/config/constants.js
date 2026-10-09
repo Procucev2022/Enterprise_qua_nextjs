@@ -816,6 +816,7 @@ const CHASER_DELAYS = {
 // Registered templates on sendmsg.in / TRAI DLT portal.
 //
 // Template Name      : RFQ_Notification_Seller_Service
+// Reference Number   : 11-2WNNMUNY6YY1
 // SMSGID             : 1777179076323440961
 // Approved Text      : RFQ Alert {#alp#}: You are invited to bid for {#alp#}. Submit quote : {#urg#} - Team Procucev.
 // Variables          : {#alp#}, {#alp#}, {#urg#} → rfqNumber, rfqTitle, bidUrl
@@ -831,6 +832,7 @@ const CHASER_DELAYS = {
 const SMS_DLT_TEMPLATES = {
   RFQ_CHASER: {
     NAME:     'RFQ_Notification_Seller_Service',
+    REFERENCE_NUMBER: '11-2WNNMUNY6YY1',
     SMSGID:   process.env.SMS_GATEWAY_RFQ_SMSGID || '1777179076323440961',
     CATEGORY: 'SERVICE_IMPLICIT',
     // Exact approved template text — static parts must match character-for-character.

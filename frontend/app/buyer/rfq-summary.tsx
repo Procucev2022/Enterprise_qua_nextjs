@@ -172,8 +172,11 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
       'AI Recommended': 'badge-emerald',
       'In Evaluation': 'badge-blue',
       'PO Generated': 'badge-purple',
+      'Quotes Received': 'badge-blue',
       Parsing: 'badge-amber',
       'Quotes Pending': 'badge-amber',
+      Closed: 'badge-neutral',
+      Expired: 'badge-rose',
     };
     return <span className={`badge ${toneByStatus[status] || 'badge-blue'}`}>{status}</span>;
   };

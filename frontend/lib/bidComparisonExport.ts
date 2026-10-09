@@ -1,5 +1,21 @@
 import * as XLSX from 'xlsx';
-import type { ExtractedEntity, QuoteComparison, RFQItem } from './types';
+import type { ExtractedEntity, LineItemBid, QuoteComparison, RFQItem } from './types';
+
+/** Shared build-workbook-and-download-it tail for every export in this file. */
+function downloadWorkbook(sheetName: string, rows: Record<string, string | number>[], header: string[], fileName: string): void {
+  const worksheet = XLSX.utils.json_to_sheet(rows, { header });
+  const workbook: XLSX.WorkBook = { Sheets: { [sheetName]: worksheet }, SheetNames: [sheetName] };
+  const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([buffer], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
 
 /**
  * Finds a vendor's priced line item matching an RFQ line item — by
@@ -45,16 +61,35 @@ export function downloadBidComparisonExcel(rfq: RFQItem, quotes: QuoteComparison
   });
 
   const header = ['Item', 'Quantity', ...quotes.flatMap((q) => [`${q.vendorName} — Unit Price`, `${q.vendorName} — Total`])];
-  const worksheet = XLSX.utils.json_to_sheet(rows, { header });
-  const workbook: XLSX.WorkBook = { Sheets: { 'Bid Comparison': worksheet }, SheetNames: ['Bid Comparison'] };
-  const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
-  const blob = new Blob([buffer], { type: 'application/octet-stream' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `Bid_Comparison_${rfq.rfqNumber}.xlsx`;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  downloadWorkbook('Bid Comparison', rows, header, `Bid_Comparison_${rfq.rfqNumber}.xlsx`);
+}
+
+/**
+ * Builds and downloads the vendor's own line-item quotation as it currently
+ * stands in the bid form — Item / Qty / UOM / Rate / Amount, same shape as
+ * the on-screen table — so a vendor has a real record of exactly what
+ * they're about to submit (or just submitted).
+ */
+export function downloadVendorQuotationExcel(
+  rfqNumber: string,
+  lineItems: LineItemBid[],
+  rates: Record<string, string>
+): void {
+  const rows = lineItems.map((item) => {
+    const rate = Number(rates[item.id]) || 0;
+    return {
+      Item: item.description,
+      Quantity: item.quantity,
+      UOM: item.unit || '',
+      'Rate (INR)': rate || '',
+      'Amount (INR)': rate > 0 ? rate * item.quantity : '',
+    };
+  });
+
+  downloadWorkbook(
+    'Quotation',
+    rows,
+    ['Item', 'Quantity', 'UOM', 'Rate (INR)', 'Amount (INR)'],
+    `Quotation_${rfqNumber}.xlsx`
+  );
 }
