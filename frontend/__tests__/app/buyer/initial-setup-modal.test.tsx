@@ -1545,4 +1545,39 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
 
     expect(screen.getByText('Five Star Vendor Ltd')).toBeInTheDocument();
   });
+
+  it('does not treat Email ID column as vendor code when vendor code column is absent', async () => {
+    const wsV = XLSX.utils.json_to_sheet([
+      {
+        'Company Name': 'Govardhan Solutions pvt LTD',
+        'Contact Person': 'Govardhan',
+        'Email ID': 'govardhan.kilari@procucev.com',
+        'Phone Number': '99667 66905',
+        GSTIN: '27AAACA1928K1Z4',
+      },
+    ]);
+    const wbV = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wbV, wsV, 'Vendors');
+    const vBuf = XLSX.write(wbV, { type: 'array', bookType: 'xlsx' });
+    const vFile: any = new File([vBuf], 'vendor_data_001.csv', {
+      type: 'text/csv',
+    });
+    vFile.__buffer = vBuf;
+
+    const { container } = render(<InitialSetupModal />);
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [vFile] } });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    expect(screen.getByText('Govardhan Solutions pvt LTD')).toBeInTheDocument();
+    // Auto-assigned vendor code VND-1001 should be rendered, not the email address in vendor code cell
+    expect(screen.getByText('VND-1001')).toBeInTheDocument();
+    expect(screen.getByText('govardhan.kilari@procucev.com')).toBeInTheDocument();
+  });
 });
