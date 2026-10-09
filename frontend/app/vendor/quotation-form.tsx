@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 import { rfqAttachmentUrl, submitRFQInquiry } from '@/lib/rfqClient';
+import { downloadVendorQuotationExcel } from '@/lib/bidComparisonExport';
 import { VendorOpportunity } from '@/lib/types';
 import {
   ArrowLeft,
@@ -1048,32 +1049,76 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 <div className="space-y-3">
                   {(biddingOn.lineItems?.length || 0) > 1 ? (
                     <div>
-                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-                        Unit Price (₹) per Line Item *
-                      </label>
-                      <div className="space-y-2">
-                        {(biddingOn.lineItems || []).map((li) => (
-                          <div key={li.id} className="flex items-center gap-2">
-                            <span className="flex-1 text-[11px] text-slate-600 dark:text-gray-300 truncate" title={li.description}>
-                              {li.description} <span className="text-slate-400">(Qty {li.quantity})</span>
-                            </span>
-                            <div className="relative w-28 shrink-0">
-                              <IndianRupee size={11} className="absolute left-2.5 top-2 text-slate-400" />
-                              <input
-                                type="number"
-                                min={0}
-                                aria-label={`Unit price for ${li.description}`}
-                                value={bidLineItemPrices[li.id] || ''}
-                                onChange={(e) =>
-                                  setBidLineItemPrices((prev) => ({ ...prev, [li.id]: e.target.value }))
-                                }
-                                disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
-                                placeholder="0"
-                                className="w-full pl-7 pr-2 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-[11px] font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
-                              />
-                            </div>
-                          </div>
-                        ))}
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          Line Item Pricing *
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            downloadVendorQuotationExcel(biddingOn.rfqNumber, biddingOn.lineItems || [], bidLineItemPrices)
+                          }
+                          className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"
+                        >
+                          <Download size={11} /> Export as Excel
+                        </button>
+                      </div>
+                      <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-gray-800">
+                        <table className="w-full text-left text-[11px] border-collapse">
+                          <thead>
+                            <tr className="bg-slate-50 dark:bg-gray-950/60 text-slate-500 dark:text-gray-400 border-b border-slate-200 dark:border-gray-800">
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold">Item</th>
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold text-right">Qty</th>
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold">UOM</th>
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold">Rate (₹)</th>
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold text-right">Amount (₹)</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                            {(biddingOn.lineItems || []).map((li) => {
+                              const rate = Number(bidLineItemPrices[li.id]) || 0;
+                              const amount = rate * li.quantity;
+                              return (
+                                <tr key={li.id}>
+                                  <td className="px-2.5 py-1.5 text-slate-700 dark:text-gray-300 max-w-[220px] truncate" title={li.description}>
+                                    {li.description}
+                                  </td>
+                                  <td className="px-2.5 py-1.5 text-right mono text-slate-600 dark:text-gray-300">{li.quantity}</td>
+                                  <td className="px-2.5 py-1.5 text-slate-500 dark:text-gray-400">{li.unit || '—'}</td>
+                                  <td className="px-2.5 py-1.5">
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      aria-label={`Rate for ${li.description}`}
+                                      value={bidLineItemPrices[li.id] || ''}
+                                      onChange={(e) =>
+                                        setBidLineItemPrices((prev) => ({ ...prev, [li.id]: e.target.value }))
+                                      }
+                                      disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                                      placeholder="0"
+                                      className="w-24 px-2 py-1 rounded-lg border border-slate-200 dark:border-gray-800 text-[11px] font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                                    />
+                                  </td>
+                                  <td className="px-2.5 py-1.5 text-right mono font-bold text-slate-900 dark:text-white">
+                                    {amount > 0 ? amount.toLocaleString('en-IN') : '—'}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                          <tfoot>
+                            <tr className="border-t-2 border-slate-200 dark:border-gray-800 bg-slate-50 dark:bg-gray-950/60">
+                              <td colSpan={4} className="px-2.5 py-2 text-right font-bold text-slate-700 dark:text-gray-300">
+                                Total
+                              </td>
+                              <td className="px-2.5 py-2 text-right mono font-black text-slate-900 dark:text-white">
+                                {(biddingOn.lineItems || [])
+                                  .reduce((sum, li) => sum + (Number(bidLineItemPrices[li.id]) || 0) * li.quantity, 0)
+                                  .toLocaleString('en-IN')}
+                              </td>
+                            </tr>
+                          </tfoot>
+                        </table>
                       </div>
                     </div>
                   ) : (

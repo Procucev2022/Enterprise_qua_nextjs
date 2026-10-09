@@ -675,12 +675,28 @@ describe("QuotationForm Comprehensive Suite", () => {
     });
     fireEvent.click(submitBtns[0]);
 
-    expect(screen.getByText(/Unit Price \(₹\) per Line Item/i)).toBeInTheDocument();
+    expect(screen.getByText(/Line Item Pricing/i)).toBeInTheDocument();
 
-    const itemPriceInputs = screen.getAllByLabelText(/Unit price for/i);
+    // UOM shown read-only per row, matching the RFQ's own extracted unit.
+    expect(screen.getAllByText("Nos").length).toBe(2);
+
+    const itemPriceInputs = screen.getAllByLabelText(/Rate for/i);
     expect(itemPriceInputs).toHaveLength(2);
     fireEvent.change(itemPriceInputs[0], { target: { value: "1000" } });
     fireEvent.change(itemPriceInputs[1], { target: { value: "200" } });
+
+    // Amount per row and the running Total recompute live as rates are typed.
+    expect(screen.getByText("2,000")).toBeInTheDocument(); // 1000 * qty 2
+    expect(screen.getByText("800")).toBeInTheDocument(); // 200 * qty 4
+    expect(screen.getByText("2,800")).toBeInTheDocument(); // Total
+
+    // Export as Excel — downloads the line items exactly as currently entered.
+    const createObjectURLSpy = jest.fn(() => "blob:mock-quotation");
+    const revokeObjectURLSpy = jest.fn();
+    global.URL.createObjectURL = createObjectURLSpy;
+    global.URL.revokeObjectURL = revokeObjectURLSpy;
+    fireEvent.click(screen.getByText(/Export as Excel/i));
+    expect(createObjectURLSpy).toHaveBeenCalled();
 
     const submitQuotationBtn = screen.getByRole("button", { name: /Submit Quotation/i });
     await act(async () => {

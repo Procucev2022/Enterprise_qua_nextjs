@@ -44,6 +44,8 @@ export interface LineItemBid {
   id: string;
   description: string;
   quantity: number;
+  /** Unit of measure (e.g. "Nos", "Kg", "Rft") — the RFQ's own extracted unit, shown next to Qty in a bid comparison. */
+  unit?: string;
   unitPrice: number;
   leadTimeDays: number;
   uploadedDocument?: string;
