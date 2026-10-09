@@ -10,6 +10,7 @@ const {
 const pool = require('../db/pool');
 const domainQueries = require('../db/domainQueries');
 const identityQueries = require('../db/identityQueries');
+const buyerProfileQueries = require('../db/buyerProfileQueries');
 const { getWaitUntil } = require('../db/d1Bridge');
 const { createAuditEntry, verifyAuditTrail } = require('./auditService');
 const { evaluateQuotes, calculate360Evaluation, calculateRevisedRating } = require('./evaluationService');
@@ -557,7 +558,7 @@ class StoreService {
       buyerAccountId: resolvedBuyerId,
       rating: vendorData.rating || 4.5,
       score: vendorData.score || 85.0,
-      source: vendorData.source || 'buyer_manual',
+      source: vendorData.source || (resolvedBuyerId || vendorData.addedByBuyerCompany ? 'buyer_manual' : 'procucev_network'),
       status: vendorData.status || 'PREFERRED ENTERPRISE SUPPLIER',
       evaluated: vendorData.evaluated !== undefined ? vendorData.evaluated : false,
       hasRecord: vendorData.hasRecord !== undefined ? vendorData.hasRecord : false,
@@ -722,15 +723,27 @@ class StoreService {
 
     const existingEmails = new Set(this.vendors.map((v) => (v.email || '').toLowerCase()));
     const seenInBatch = new Set();
+    const seenVendorCodesInBatch = new Set();
     const results = [];
     const toInsert = [];
 
     rows.forEach((row, idx) => {
       const email = (row.email || '').toLowerCase();
-      // A row with no email can never collide on the vendors.email UNIQUE
-      // constraint (Postgres never treats two NULLs as equal), so it is
-      // never a duplicate — the checks below only apply to rows that
-      // actually carry an email.
+      const vendorCode = (row.vendorCode || '').trim().toLowerCase();
+
+      if (vendorCode) {
+        if (seenVendorCodesInBatch.has(vendorCode)) {
+          results.push({
+            rowNumber: row.rowNumber,
+            status: 'duplicate',
+            email: row.email,
+            reason: `Duplicate Vendor Code "${row.vendorCode}" within the uploaded file.`,
+          });
+          return;
+        }
+        seenVendorCodesInBatch.add(vendorCode);
+      }
+
       if (email) {
         if (existingEmails.has(email)) {
           results.push({ rowNumber: row.rowNumber, status: 'duplicate', email: row.email, reason: 'A vendor with this email already exists.' });
@@ -744,17 +757,8 @@ class StoreService {
       }
 
       const newVendor = {
-        // Date.now() alone collides constantly at chunk sizes in the
-        // hundreds/thousands — many rows in the same forEach pass land in the
-        // same millisecond, and a 4-char random suffix alone has a real
-        // chance of repeating across a 1000-row batch (birthday paradox: at
-        // n=1000 rows against ~1.68M possible suffixes, roughly a 1-in-4
-        // chance per chunk). A collision hit vendors_pkey and failed the
-        // WHOLE batched INSERT for every row in that chunk, not just the
-        // colliding one. `idx` (this row's position in the batch) is unique
-        // within a single call by construction, so it's included directly
-        // rather than relying on chance.
         id: `v-bulk-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+        vendorCode: row.vendorCode || '',
         name: row.name,
         contactPerson: row.contactPerson || '',
         phone: row.phone,
@@ -1576,6 +1580,58 @@ class StoreService {
       }
     }
 
+    // Enterprise QUA – V0 (Free Starter Trial) Flow:
+    // When buyer raises RFQ from V0 (mode_0), RFQ is sent ONLY to Procucev vendors.
+    // Buyer-uploaded vendors are excluded from V0 RFQs.
+    if (newRFQ.sourcingMode === 'mode_0' || newRFQ.sourcingMode === 'v0') {
+      const MAX_V0_CATEGORY_INVITES = 100;
+      // Filter existing assignedVendors to strictly Procucev vendors
+      newRFQ.assignedVendors = (Array.isArray(newRFQ.assignedVendors) ? newRFQ.assignedVendors : []).filter((v) => {
+        const resolved = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
+        return this.isProcucevVendor(resolved);
+      });
+
+      // Auto-populate category-matched Procucev verified vendors
+      let procucevMatches = this.candidateVendorsForRFQ(newRFQ)
+        .filter((v) => this.isProcucevVendor(v))
+        .sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0));
+
+      if (newRFQ.deliveryPincode) {
+        const targetPincode = String(newRFQ.deliveryPincode).trim();
+        const pinMatches = procucevMatches.filter(
+          (v) => v.pincode && String(v.pincode).trim() === targetPincode
+        );
+        const pinNonMatches = procucevMatches.filter(
+          (v) => !(v.pincode && String(v.pincode).trim() === targetPincode)
+        );
+        procucevMatches = [...pinMatches, ...pinNonMatches].slice(0, MAX_V0_CATEGORY_INVITES);
+      } else {
+        procucevMatches = procucevMatches.slice(0, MAX_V0_CATEGORY_INVITES);
+      }
+
+      const existingKeys = new Set(
+        (newRFQ.assignedVendors || []).map((v) => (v.id || v.email || v.name || '').toLowerCase())
+      );
+      const additions = procucevMatches
+        .filter((v) => !existingKeys.has((v.id || v.email || v.name || '').toLowerCase()))
+        .map((v) => ({
+          id: v.id,
+          name: v.name,
+          email: v.email || null,
+          contactPerson: v.contactPerson || null,
+          phone: v.phone || null,
+          source: v.source || 'procucev_network',
+        }));
+
+      if (additions.length > 0) {
+        newRFQ.assignedVendors = [...newRFQ.assignedVendors, ...additions];
+      }
+      if (newRFQ.followUpData) {
+        newRFQ.followUpData.totalInvited = newRFQ.assignedVendors.length;
+        newRFQ.followUpData.vendors = newRFQ.assignedVendors;
+      }
+    }
+
     // Category-based network-wide vendor invite — Version 2 (mode_2, "Hybrid
     // Sourcing Pool: Private Roster + AI Routing") ONLY. Every vendor whose
     // major/minor category matches this RFQ is merged into assignedVendors,
@@ -1687,16 +1743,24 @@ class StoreService {
     //   • After 6 hours   → Call reminder (logic kept, telephony deferred)
     //   • After 12 hours  → WhatsApp reminder
     //   • After 24 hours  → Email reminder
-    // Only fires for mode_1 and mode_2 (mode_3 has no auto-assigned vendors
-    // at creation time; inviteVendorsToRFQ schedules chasers when they are
-    // manually added later).
     if (
       Array.isArray(newRFQ.assignedVendors) &&
       newRFQ.assignedVendors.length > 0
     ) {
+      const resolvedVendors = newRFQ.assignedVendors.map((v) => {
+        const full = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
+        return {
+          ...v,
+          phone: full.phone || full.mobile || full.mobileNumber || v.phone,
+          email: full.email || v.email,
+          name: full.name || v.name,
+          contactPerson: full.contactPerson || v.contactPerson,
+        };
+      });
+
       rfqChaserScheduler.scheduleRFQChasers(
         newRFQ,
-        newRFQ.assignedVendors,
+        resolvedVendors,
         (vendor) => this.checkVendorQuotationEligibility(vendor)
       );
     }
@@ -1764,19 +1828,20 @@ class StoreService {
       }
     }
 
-    // 'Quotes Received' isn't a real RFQItem status (the type only allows
-    // 'Parsing' | 'In Evaluation' | 'AI Recommended' | 'PO Generated' |
-    // 'Quotes Pending') — writing it here left every quoted RFQ in a status
-    // no screen recognises, so nothing ever showed the RFQ as under
-    // evaluation once a vendor bid. 'In Evaluation' is the real state a
-    // quote actually puts an RFQ into.
+    const isV0 =
+      rfq.sourcingMode === 'mode_0' ||
+      rfq.sourcingMode === 'v0' ||
+      rfq.sourcingMode === 'version_0';
+
     rfq.quotes = quotes;
     rfq.quotesCount = quotes.length;
+
+    const nextStatus = isV0 ? 'Quotes Received' : (rfq.status === 'PO Generated' ? 'PO Generated' : 'In Evaluation');
 
     const updated = this.updateRFQ(rfq.id, {
       quotes,
       quotesCount: quotes.length,
-      status: rfq.status === 'PO Generated' ? 'PO Generated' : 'In Evaluation',
+      status: nextStatus,
       followUpData,
     });
 
@@ -2064,6 +2129,36 @@ class StoreService {
     return changed;
   }
 
+  isBuyerUploaded(vendor) {
+    if (!vendor) return false;
+    if (vendor.addedByBuyerCompany || vendor.buyerAccountId || vendor.buyerId) return true;
+    const s = String(vendor.source || '').toLowerCase().trim();
+    const id = String(vendor.id || '').toLowerCase().trim();
+    return Boolean(
+      s === 'buyer_uploaded' ||
+      s === 'vendor_master_ingestion' ||
+      s === 'historical_purchase_dump' ||
+      s === 'buyer_manual' ||
+      s === 'buyer_excel' ||
+      s === 'excel_upload' ||
+      s === 'po_ingestion' ||
+      s === 'client_uploaded' ||
+      s === 'buyer' ||
+      s.includes('buyer') ||
+      s.includes('ingestion') ||
+      s.includes('purchase_dump') ||
+      id.startsWith('v-hist-') ||
+      id.startsWith('vm-') ||
+      id.startsWith('v-ingest-') ||
+      id.startsWith('v-buyer-')
+    );
+  }
+
+  isProcucevVendor(vendor) {
+    if (!vendor) return false;
+    return !this.isBuyerUploaded(vendor);
+  }
+
   /**
    * Whether a vendor covers an RFQ's category.
    *
@@ -2116,6 +2211,18 @@ class StoreService {
    */
   vendorCoversRFQ(vendor, rfq) {
     if (!vendor || !rfq) return false;
+
+    // Enterprise QUA – V0 Flow: When RFQ is raised from V0 (mode_0), it reaches ONLY Procucev vendors.
+    if (rfq.sourcingMode === 'mode_0' || rfq.sourcingMode === 'v0') {
+      if (!this.isProcucevVendor(vendor)) {
+        return false;
+      }
+      const signals = this._rfqCategorySignals(rfq);
+      if (signals.length > 0 && signals.some((c) => this.vendorCoversCategory(vendor, c))) {
+        return true;
+      }
+      return this._isInvitedVendor(vendor, rfq);
+    }
 
     // Same-buyer-company match alone used to grant a private-roster vendor
     // blanket access to every RFQ that buyer ever creates, regardless of
@@ -2733,6 +2840,11 @@ class StoreService {
    */
   isWithin48HourWindow(rfq) {
     if (!rfq || rfq.status === 'Closed') return false;
+    const isV0 =
+      rfq.sourcingMode === 'mode_0' ||
+      rfq.sourcingMode === 'v0' ||
+      rfq.sourcingMode === 'version_0';
+    if (isV0) return false;
     if (rfq.quotesHidden) return true;
     const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
     let createdAtMs = 0;
@@ -2822,10 +2934,17 @@ class StoreService {
       organizationName: rfq.buyerAccountName || rfq.buyerName || 'Buyer',
     };
 
+    const isV0 =
+      rfq.sourcingMode === 'mode_0' ||
+      rfq.sourcingMode === 'v0' ||
+      rfq.sourcingMode === 'version_0';
+
     const isPortal = this.isPortalRFQ(rfq);
     const in48hWindow = this.isWithin48HourWindow(rfq);
 
-    if (isPortal && in48hWindow) {
+    // For V0: Quotes are sent directly to the buyer's email immediately (48-hour restriction does not apply to V0).
+    // For non-V0 Portal RFQs within 48h: Delay email dispatch.
+    if (isPortal && in48hWindow && !isV0) {
       const delayMs = this.getRemaining48HourMs(rfq);
       logger.info(
         `[48H_BID_RULE] Portal RFQ ${rfq.rfqNumber}: stopped quote email to buyer (${buyerEmail}) for 48 hours. Scheduled dispatch in ${Math.round(delayMs / 1000 / 60)} minutes.`,
@@ -3060,6 +3179,53 @@ class StoreService {
     const attributedAccount = requestingBuyerAccount || this.activeBuyerAccount;
     const buyerId = attributedAccount ? attributedAccount.id : null;
     const buyerEmail = attributedAccount ? attributedAccount.corporateEmail : null;
+    const buyerOrganizationName = attributedAccount ? attributedAccount.organizationName : 'Procucev Enterprise';
+
+    // Step 5 of the buyer setup wizard previews "Template A" (PO-history
+    // match) / "Template B" (no match) per vendor — this is the one place
+    // that actually has to honor that, instead of always sending the
+    // generic onboarding email regardless of what was previewed. Templates
+    // are org-scoped and buyer-editable (vendor_dispatch_templates); a
+    // lookup failure here must not block vendor ingestion, so it falls back
+    // to the hardcoded default wording on any error.
+    let dispatchTemplates = {};
+    if (buyerEmail) {
+      try {
+        const identity = await identityQueries.findUserByEmail(buyerEmail);
+        if (identity && identity.orgId) {
+          dispatchTemplates = await buyerProfileQueries.getDispatchTemplates(identity.orgId);
+        }
+      } catch (err) {
+        logger.error('Failed to load vendor dispatch templates', err, 'STORE_SERVICE');
+      }
+    }
+
+    /** Template A when the vendor has a buyer-mapped category, else Template B. */
+    const buildMappingEmail = (rec, { to, recipientName, vendorCode }) => {
+      const hasMapping = rec.categoriesMappedByBuyer === true || Boolean((rec.majorCategory || '').trim());
+      if (hasMapping) {
+        const override = dispatchTemplates.category_mapped || {};
+        return mailerService.buildVendorCategoryMappingEmail({
+          to,
+          recipientName,
+          buyerOrganizationName,
+          vendorCode,
+          majorCategory: rec.majorCategory,
+          minorCategories: Array.isArray(rec.minorCategories) ? rec.minorCategories : [],
+          customSubject: override.subject,
+          customMessage: override.message,
+        });
+      }
+      const override = dispatchTemplates.self_map_required || {};
+      return mailerService.buildVendorSelfMappingEmail({
+        to,
+        recipientName,
+        buyerOrganizationName,
+        vendorCode,
+        customSubject: override.subject,
+        customMessage: override.message,
+      });
+    };
 
     vendorRecords.forEach((rec, idx) => {
       const name = (rec.companyName || rec.name || '').trim();
@@ -3086,19 +3252,15 @@ class StoreService {
       );
       if (existing) {
         if (existing.email && existing.onboardingEmailStatus !== 'sent') {
-          const tempPassword = existing.tempPassword || this._generateTempPassword();
-          const emailPayload = mailerService.buildVendorOnboardingEmail({
+          const emailPayload = buildMappingEmail(rec, {
             to: existing.email,
             recipientName: existing.contactPerson || existing.name,
-            buyerOrganizationName: attributedAccount ? attributedAccount.organizationName : 'Procucev Enterprise',
             vendorCode: existing.id,
-            tempPassword: tempPassword,
-            contactPhone: existing.phone,
           });
           mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding')
             .then((delivery) => {
               if (delivery.sent) {
-                this.updateVendor(existing.id, { onboardingEmailStatus: 'sent', tempPassword });
+                this.updateVendor(existing.id, { onboardingEmailStatus: 'sent' });
                 logger.info(`Onboarding email sent for existing vendor ${existing.email}`, { vendorId: existing.id }, 'STORE_SERVICE');
               }
             })
@@ -3198,13 +3360,10 @@ class StoreService {
               return;
             }
 
-            const emailPayload = mailerService.buildVendorOnboardingEmail({
+            const emailPayload = buildMappingEmail(rec, {
               to: newVendor.email,
               recipientName: newVendor.contactPerson || newVendor.name,
-              buyerOrganizationName: attributedAccount ? attributedAccount.organizationName : 'Procucev Enterprise',
               vendorCode: newVendor.id,
-              tempPassword: tempPassword,
-              contactPhone: newVendor.phone,
             });
 
             try {
@@ -3572,15 +3731,15 @@ class StoreService {
     const issueDate = new Date().toISOString().substring(0, 10);
     const auditRecord = this.addAuditLog({
       userEmail: approverEmail || (this.activeBuyerAccount ? this.activeBuyerAccount.corporateEmail : SYSTEM_ACTOR_EMAIL),
-      action: `Formally approved & sealed Purchase Order ${poNumber} awarded to ${vendorName} ($${Number(totalAmount).toLocaleString()}). Notes: ${approverNotes}`,
+      action: `Formally approved & sealed Pre-Purchase Order ${poNumber} awarded to ${vendorName} ($${Number(totalAmount).toLocaleString()}). Notes: ${approverNotes}`,
       rfqNumber,
     });
 
     // Notify the buyer of PO generation / award
     this.notifyBuyer(rfq.buyerAccountId || approverEmail, {
       kind: 'po_approved',
-      title: `PO Approved — ${rfq.rfqNumber}`,
-      message: `Purchase order ${poNumber} awarded to ${vendorName} (₹${Number(totalAmount).toLocaleString()}).`,
+      title: `Pre-PO Approved — ${rfq.rfqNumber}`,
+      message: `Pre-Purchase order ${poNumber} awarded to ${vendorName} (₹${Number(totalAmount).toLocaleString()}).`,
       meta: { poNumber, rfqNumber: rfq.rfqNumber, vendorId, vendorName, totalAmount },
     });
 
@@ -3591,8 +3750,8 @@ class StoreService {
         recipientId: vendorId,
         kind: 'po_awarded',
         rfq,
-        title: `Purchase Order Awarded — ${rfq.rfqNumber}`,
-        message: `Congratulations! ${rfq.buyerAccountName || 'The buyer'} has approved and awarded purchase order ${poNumber} to you.`,
+        title: `Pre-Purchase Order Awarded — ${rfq.rfqNumber}`,
+        message: `Congratulations! ${rfq.buyerAccountName || 'The buyer'} has approved and awarded pre-purchase order ${poNumber} to you.`,
         meta: { poNumber, rfqNumber: rfq.rfqNumber, totalAmount },
       });
       this.notifications.unshift(vendorNotification);

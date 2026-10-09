@@ -1,6 +1,6 @@
 export type UserRole = 'buyer' | 'category_manager' | 'vendor' | 'admin';
 
-export type SourcingMode = 'mode_1' | 'mode_2' | 'mode_3';
+export type SourcingMode = 'mode_0' | 'mode_1' | 'mode_2' | 'mode_3';
 
 export type VendorSubscriptionPlan = 'premium' | 'connect' | 'select' | 'premium_network';
 
@@ -44,6 +44,8 @@ export interface LineItemBid {
   id: string;
   description: string;
   quantity: number;
+  /** Unit of measure (e.g. "Nos", "Kg", "Rft") — the RFQ's own extracted unit, shown next to Qty in a bid comparison. */
+  unit?: string;
   unitPrice: number;
   leadTimeDays: number;
   uploadedDocument?: string;
@@ -394,13 +396,7 @@ export interface RFQCreatePayload {
   extractedEntities: ExtractedEntity[];
   attachments: RFQAttachment[];
   inquiries?: RFQInquiry[];
-  assignedVendors?: Array<{
-    id?: string;
-    name: string;
-    email?: string | null;
-    contactPerson?: string | null;
-    phone?: string | null;
-  }>;
+  assignedVendors?: RFQAssignedVendor[];
 }
 
 /**
@@ -471,7 +467,7 @@ export interface RFQItem {
   title: string;
   category: string;
   sourcingMode: SourcingMode;
-  status: 'Parsing' | 'In Evaluation' | 'AI Recommended' | 'PO Generated' | 'Quotes Pending' | 'Closed' | 'Expired';
+  status: 'Parsing' | 'In Evaluation' | 'AI Recommended' | 'PO Generated' | 'Quotes Pending' | 'Quotes Received' | 'Closed' | 'Expired';
   quotesCount: number;
   targetDeliveryDate: string;
   /**
@@ -557,11 +553,12 @@ export interface RFQInquiry {
 
 /** One entry on RFQItem.assignedVendors — a vendor invited to this RFQ. */
 export interface RFQAssignedVendor {
-  id: string;
+  id?: string;
   name: string;
   email?: string | null;
   contactPerson?: string | null;
   phone?: string | null;
+  city?: string | null;
 }
 
 /** A candidate vendor for RFQ invitation — a VendorEntry plus invite state. */
@@ -944,6 +941,7 @@ export interface VendorEntry {
 export interface VendorUploadRow {
   rowNumber: number;
   vendor: {
+    vendorCode?: string;
     name: string;
     email: string;
     phone: string;
@@ -2013,7 +2011,8 @@ export type SidebarIconKey =
   | 'Award'
   | 'ClipboardList'
   | 'Database'
-  | 'Receipt';
+  | 'Receipt'
+  | 'Mail';
 
 export interface SidebarNavItem {
   /** Active screen key consumed by the screen switchboard */

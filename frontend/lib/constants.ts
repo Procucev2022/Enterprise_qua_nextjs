@@ -12,6 +12,16 @@ import { UI_STRINGS } from './uiStrings';
 
 export const SOURCING_MODES: SourcingModeDetail[] = [
   {
+    id: 'mode_0',
+    code: 'Version 0',
+    name: 'Version 0: Free Starter Trial Plan',
+    shortLabel: 'Version 0',
+    description:
+      'Free Starter Trial mode. RFQs are circulated only to verified Procucev network vendors (0 credits deducted).',
+    featureSummary: 'Procucev Network Vendors Only (Free Starter Plan - 0 credits deducted)',
+    badgeColor: 'border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10',
+  },
+  {
     id: 'mode_1',
     code: 'Version 1',
     name: 'Version 1: Client Roster Sourcing Plan',
@@ -45,11 +55,15 @@ export const SOURCING_MODES: SourcingModeDetail[] = [
 
 /**
  * Mapping between buyer subscription plans and their corresponding RFQ sourcing / version mode.
+ * - version_0 / free_trial: mode_0 (Version 0: Free Starter Trial Plan)
  * - version_1: mode_1 (Version 1: Client Roster Sourcing Plan)
  * - version_2: mode_2 (Version 2: Hybrid Sourcing Plan)
  * - version_3: mode_3 (Version 3: AI Autonomous Sourcing Plan)
  */
 export const BUYER_SUBSCRIPTION_TO_SOURCING_MODE: Record<string, SourcingMode> = {
+  version_0: 'mode_0',
+  mode_0: 'mode_0',
+  v0: 'mode_0',
   version_1: 'mode_1',
   version_2: 'mode_2',
   version_3: 'mode_3',
@@ -63,10 +77,10 @@ export const BUYER_SUBSCRIPTION_TO_SOURCING_MODE: Record<string, SourcingMode> =
 
 /**
  * Resolves the RFQ version / sourcing mode based upon the subscription of the buyer.
- * Defaults to Version 2 ('mode_2').
+ * Defaults to 'mode_2' for free starter trial / general ingestion.
  *
  * @param buyerAccountOrPlan - Buyer account object or subscription plan string
- * @returns Sourcing mode ('mode_1' | 'mode_2' | 'mode_3')
+ * @returns Sourcing mode ('mode_0' | 'mode_1' | 'mode_2' | 'mode_3')
  */
 export function resolveBuyerSourcingMode(
   buyerAccountOrPlan?: { subscriptionPlan?: string } | string | null
@@ -95,34 +109,35 @@ export function resolveBuyerSourcingMode(
  * being the source of truth for access control.
  */
 export const SUBSCRIPTION_MODE_ENTITLEMENTS: Record<string, SourcingMode[]> = {
-  free_trial: ['mode_1', 'mode_2', 'mode_3'],
-  version_1: ['mode_1'],
-  version_2: ['mode_1', 'mode_2'],
-  version_3: ['mode_1', 'mode_2', 'mode_3'],
+  free_trial: ['mode_0', 'mode_1', 'mode_2', 'mode_3'],
+  version_0: ['mode_0'],
+  v0: ['mode_0'],
+  version_1: ['mode_0', 'mode_1'],
+  version_2: ['mode_0', 'mode_1', 'mode_2'],
+  version_3: ['mode_0', 'mode_1', 'mode_2', 'mode_3'],
 };
 
 /**
  * Sourcing modes a buyer's subscription plan actually entitles them to use.
  *
- * A missing/unresolved plan (no activeBuyerAccount loaded yet, or a buyer
- * with no domain buyer_accounts row at all — a real gap seen in practice)
- * defaults to the most restrictive tier, not to "show everything." This used
- * to fail open on the reasoning that "a real buyer account always carries an
- * explicit subscriptionPlan" — but that assumption doesn't hold: an
- * authenticated buyer session can genuinely have no resolvable plan (a
- * missing/not-yet-created buyer_accounts record), and failing open there is
- * exactly the free-upgrade bypass this gate exists to prevent. The backend
- * still re-checks entitlement server-side regardless (POST /api/rfqs 403s
- * for an un-entitled mode), so this stays a UI convenience layer either way —
- * it just now fails closed instead of open.
+ * For free_trial:
+ * - If remaining free RFQ credits > 0: entitled to V0, V1, V2, V3.
+ * - If remaining free RFQ credits <= 0: entitled ONLY to V0 (mode_0).
+ *
+ * For paid plans:
+ * - version_1: mode_0, mode_1
+ * - version_2: mode_0, mode_1, mode_2
+ * - version_3: mode_0, mode_1, mode_2, mode_3
  */
-export function entitledSourcingModes(subscriptionPlan?: string | null): SourcingMode[] {
-  // Neither branch routes through 'free_trial': free_trial itself now grants
-  // all three modes (a later, deliberate change), so falling back to it for
-  // either a missing OR an unrecognised plan string would reopen the exact
-  // free-upgrade bypass this fail-closed default exists to prevent.
+export function entitledSourcingModes(
+  subscriptionPlan?: string | null,
+  remainingFreeRFQs?: number
+): SourcingMode[] {
   if (!subscriptionPlan) return SUBSCRIPTION_MODE_ENTITLEMENTS.version_1;
   const plan = subscriptionPlan.trim().toLowerCase();
+  if (plan === 'free_trial' && remainingFreeRFQs !== undefined && remainingFreeRFQs <= 0) {
+    return ['mode_0'];
+  }
   return SUBSCRIPTION_MODE_ENTITLEMENTS[plan] || SUBSCRIPTION_MODE_ENTITLEMENTS.version_1;
 }
 
@@ -327,6 +342,15 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       icon: 'Building2',
       group: NAV_GROUPS.buyerAccount,
       route: '/buyer/profile',
+    },
+    {
+      id: 'vendor_email_templates',
+      screenTag: 'Screen 1.8b',
+      label: NAV_ITEMS.vendorEmailTemplates.label,
+      description: NAV_ITEMS.vendorEmailTemplates.description,
+      icon: 'Mail',
+      group: NAV_GROUPS.buyerAccount,
+      route: '/buyer/vendor-email-templates',
     },
     // Temporarily hidden: Buyer Billing History
     /*
@@ -566,6 +590,8 @@ export const BUYER_PROFILE_ENDPOINTS = {
   ME: '/api/buyer-profile/me',
   /** Shared major/minor procurement taxonomy the category tree renders. */
   CATEGORIES: '/api/buyer-profile/categories',
+  /** The signed-in buyer's custom vendor-onboarding email templates (Template A/B). */
+  DISPATCH_TEMPLATES: '/api/buyer-profile/dispatch-templates',
 };
 
 /**
@@ -720,6 +746,102 @@ export function formatIndianDate(value?: string): string {
     year: 'numeric',
   }).format(new Date(parsed));
 }
+
+/**
+ * Normalizes any date value (Excel numeric serial, Date instance, ISO string, DD-MM-YYYY, etc.)
+ * into a clean standard ISO date string (YYYY-MM-DD).
+ * Prevents Excel date serial numbers (e.g. 45995.00011574074) from appearing as decimal numbers in the UI.
+ */
+export function normalizePoDate(value: unknown): string {
+  if (value === null || value === undefined || value === '' || value === 0 || value === '0') return '';
+
+  if (value instanceof Date) {
+    if (isNaN(value.getTime())) return '';
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, '0');
+    const d = String(value.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  // If numeric (e.g. 45995 or 45995.00011574074 from Excel date serial)
+  if (typeof value === 'number') {
+    if (value >= 1 && value <= 100000) {
+      const utcDays = Math.floor(value - 25569);
+      const d = new Date(utcDays * 86400 * 1000);
+      if (!isNaN(d.getTime())) {
+        const y = d.getUTCFullYear();
+        const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(d.getUTCDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+      }
+    }
+    return '';
+  }
+
+  const str = String(value).trim();
+  if (!str) return '';
+
+  // Numeric string check (e.g. "45995.00011574074" or "45995")
+  const num = Number(str);
+  if (!isNaN(num) && isFinite(num) && !str.includes('-') && !str.includes('/') && !str.includes(':')) {
+    if (num >= 1 && num <= 100000) {
+      const utcDays = Math.floor(num - 25569);
+      const d = new Date(utcDays * 86400 * 1000);
+      if (!isNaN(d.getTime())) {
+        const y = d.getUTCFullYear();
+        const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(d.getUTCDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+      }
+    }
+    return '';
+  }
+
+  // Already ISO format YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    return str;
+  }
+
+  // YYYY/MM/DD or YYYY.MM.DD
+  const ymdMatch = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (ymdMatch) {
+    const y = ymdMatch[1];
+    const m = String(Number(ymdMatch[2])).padStart(2, '0');
+    const d = String(Number(ymdMatch[3])).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  // DD-MM-YYYY or MM-DD-YYYY or DD/MM/YYYY
+  const dmyMatch = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);
+  if (dmyMatch) {
+    const p1 = Number(dmyMatch[1]);
+    const p2 = Number(dmyMatch[2]);
+    const y = dmyMatch[3];
+    let day = p1;
+    let month = p2;
+    if (p1 > 12 && p2 <= 12) {
+      day = p1;
+      month = p2;
+    } else if (p2 > 12 && p1 <= 12) {
+      day = p2;
+      month = p1;
+    }
+    return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+
+  // Generic Date.parse fallback
+  const parsed = Date.parse(str);
+  if (!isNaN(parsed)) {
+    const d = new Date(parsed);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
+  return str;
+}
+
 
 /**
  * Human-readable file size, e.g. 1536 -> "1.5 KB".

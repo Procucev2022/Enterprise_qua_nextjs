@@ -2,8 +2,10 @@ import {
   expandCategorySelection,
   fetchBuyerProfile,
   fetchCategoryTaxonomy,
+  fetchDispatchTemplates,
   flattenCategorySelection,
   saveBuyerProfile,
+  saveDispatchTemplate,
 } from '@/lib/buyerProfileClient';
 import buyerProfileClient from '@/lib/buyerProfileClient';
 import { authClient } from '@/lib/authClient';
@@ -367,13 +369,90 @@ describe('buyerProfileClient', () => {
     });
   });
 
+  describe('fetchDispatchTemplates', () => {
+    test('reads the templates from the dispatch-templates endpoint', async () => {
+      const data = { category_mapped: { subject: 'Hi', message: 'Welcome' } };
+      global.fetch = jest.fn().mockResolvedValue(jsonResponse({ success: true, data }));
+
+      const res = await fetchDispatchTemplates();
+
+      expect(res.success).toBe(true);
+      expect(res.data).toEqual(data);
+      expect((global.fetch as jest.Mock).mock.calls[0][0]).toBe(BUYER_PROFILE_ENDPOINTS.DISPATCH_TEMPLATES);
+    });
+
+    test('defaults to an empty object when the response carries no data', async () => {
+      global.fetch = jest.fn().mockResolvedValue(jsonResponse({ success: true }));
+
+      const res = await fetchDispatchTemplates();
+
+      expect(res.success).toBe(true);
+      expect(res.data).toEqual({});
+    });
+
+    test('reports a failure response', async () => {
+      global.fetch = jest.fn().mockResolvedValue(jsonResponse({ success: false, error: 'boom' }, { ok: false, status: 500 }));
+
+      const res = await fetchDispatchTemplates();
+
+      expect(res.success).toBe(false);
+      expect(res.status).toBe(500);
+    });
+
+    test('reports an unreachable API', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('network down'));
+
+      const res = await fetchDispatchTemplates();
+
+      expect(res.success).toBe(false);
+      expect(res.error).toContain('Cannot reach the Procucev API');
+    });
+  });
+
+  describe('saveDispatchTemplate', () => {
+    test('PUTs to the per-type endpoint with the subject/message payload', async () => {
+      global.fetch = jest
+        .fn()
+        .mockResolvedValue(jsonResponse({ success: true, data: { subject: 'Hi', message: 'Welcome' } }));
+
+      const res = await saveDispatchTemplate('category_mapped', { subject: 'Hi', message: 'Welcome' });
+
+      expect(res.success).toBe(true);
+      expect(res.data).toEqual({ subject: 'Hi', message: 'Welcome' });
+      const [url, init] = (global.fetch as jest.Mock).mock.calls[0];
+      expect(url).toBe(`${BUYER_PROFILE_ENDPOINTS.DISPATCH_TEMPLATES}/category_mapped`);
+      expect(init.method).toBe('PUT');
+      expect(JSON.parse(init.body)).toEqual({ subject: 'Hi', message: 'Welcome' });
+    });
+
+    test('reports a failure response', async () => {
+      global.fetch = jest.fn().mockResolvedValue(jsonResponse({ success: false, error: 'nope' }, { ok: false, status: 400 }));
+
+      const res = await saveDispatchTemplate('self_map_required', { subject: '', message: '' });
+
+      expect(res.success).toBe(false);
+      expect(res.status).toBe(400);
+    });
+
+    test('reports an unreachable API', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('network down'));
+
+      const res = await saveDispatchTemplate('self_map_required', { subject: 'x', message: 'y' });
+
+      expect(res.success).toBe(false);
+      expect(res.error).toContain('Cannot reach the Procucev API');
+    });
+  });
+
   test('the default export exposes the whole client surface', () => {
     expect(Object.keys(buyerProfileClient).sort()).toEqual([
       'expandCategorySelection',
       'fetchBuyerProfile',
       'fetchCategoryTaxonomy',
+      'fetchDispatchTemplates',
       'flattenCategorySelection',
       'saveBuyerProfile',
+      'saveDispatchTemplate',
     ]);
   });
 });

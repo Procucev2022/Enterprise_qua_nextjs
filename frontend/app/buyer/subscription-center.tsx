@@ -198,7 +198,7 @@ export default function SubscriptionCenter() {
             </div>
           </div>
           <p className="text-xs leading-relaxed text-slate-700 dark:text-gray-300">
-            Every new buyer receives <strong>5 Free RFQs in total</strong>. You can create your free RFQs using <strong>any version (Version 1: Client Roster, Version 2: Hybrid Sourcing, or Version 3: Autonomous AI)</strong>. The 5-RFQ allowance is shared across all versions. After the 5 free RFQs are used, please subscribe to continue creating and dispatching RFQs.
+            Every new buyer account receives <strong>5 Free RFQs</strong> for paid modes (<strong>Version 1, Version 2, or Version 3</strong>). RFQs created through <strong>Version 0 (V0: Free Starter)</strong> consume <strong>0 credits</strong> and are always free & unlimited to verified Procucev network suppliers. Once your 5 free credits are exhausted, V0 remains available, while V1/V2/V3 require an active plan subscription.
           </p>
           <div className="w-full bg-amber-200/50 dark:bg-gray-800 rounded-full h-2 overflow-hidden mt-0.5">
             <div

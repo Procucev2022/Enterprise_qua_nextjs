@@ -530,18 +530,35 @@ function mapRowToVendorMaster(row) {
 // silently drift apart and shift every placeholder in the statement.
 const VENDOR_MASTER_STRIDE = 14;
 
+// D1 rejects a statement with too many bound parameters (hit live with
+// largeFileIngestionService's DEFAULT_BATCH_SIZE of 500 rows * 14 columns =
+// 7000 params — "D1_ERROR: too many SQL variables"). Postgres has no such
+// problem at this scale, but sub-chunking here is cheap and keeps this
+// function safe under either backend without the caller needing to know
+// about a D1-specific limit.
+const VENDOR_MASTER_MAX_ROWS_PER_INSERT = 50;
+
 /**
  * Insert one chunk of vendor-master rows.
  *
- * One multi-row INSERT, never one statement per row. `on conflict (session_id,
- * vendor_code) do update` makes re-confirming the same file idempotent: the row
- * is refreshed rather than duplicated, so a retried chunk cannot double the
- * vendor count.
+ * One multi-row INSERT per sub-chunk, never one statement per row. `on
+ * conflict (session_id, vendor_code) do update` makes re-confirming the same
+ * file idempotent: the row is refreshed rather than duplicated, so a retried
+ * chunk cannot double the vendor count.
  *
  * Returns the stored rows so the caller can report exactly what landed.
  */
 async function bulkUpsertVendorMasterRecords(sessionId, organizationId, rows = []) {
   if (!pool.hasStorage() || !sessionId || !organizationId || rows.length === 0) return [];
+
+  if (rows.length > VENDOR_MASTER_MAX_ROWS_PER_INSERT) {
+    const stored = [];
+    for (let i = 0; i < rows.length; i += VENDOR_MASTER_MAX_ROWS_PER_INSERT) {
+      const slice = rows.slice(i, i + VENDOR_MASTER_MAX_ROWS_PER_INSERT);
+      stored.push(...(await bulkUpsertVendorMasterRecords(sessionId, organizationId, slice)));
+    }
+    return stored;
+  }
 
   const values = [];
   const placeholders = rows.map((row, i) => {
@@ -664,6 +681,11 @@ async function deleteVendorMasterRecords(sessionId, organizationId) {
 
 const PO_STRIDE = 21;
 
+// Same D1 bound-parameter ceiling as VENDOR_MASTER_MAX_ROWS_PER_INSERT above
+// — PO_STRIDE is even wider (21 cols), so largeFileIngestionService's 500-row
+// batches would build a 10,500-parameter statement and fail the same way.
+const PO_LINE_ITEMS_MAX_ROWS_PER_INSERT = 40;
+
 /**
  * Insert one chunk of PO line items.
  *
@@ -675,6 +697,15 @@ const PO_STRIDE = 21;
  */
 async function bulkInsertPoLineItems(sessionId, organizationId, rows = []) {
   if (!pool.hasStorage() || !sessionId || !organizationId || rows.length === 0) return 0;
+
+  if (rows.length > PO_LINE_ITEMS_MAX_ROWS_PER_INSERT) {
+    let inserted = 0;
+    for (let i = 0; i < rows.length; i += PO_LINE_ITEMS_MAX_ROWS_PER_INSERT) {
+      const slice = rows.slice(i, i + PO_LINE_ITEMS_MAX_ROWS_PER_INSERT);
+      inserted += await bulkInsertPoLineItems(sessionId, organizationId, slice);
+    }
+    return inserted;
+  }
 
   const values = [];
   const placeholders = rows.map((row, i) => {
@@ -1130,8 +1161,22 @@ const MAPPING_SEED_STRIDE = 13;
  * deliberately preserving `buyer_*`, `reviewed_*` and the AI columns: re-running
  * the match must not discard a decision the buyer already made.
  */
+// Same D1 bound-parameter ceiling as the other bulk inserts in this file —
+// this one isn't pre-chunked by any caller (seeded from the full vendor/PO
+// join in one call), so a large vendor master file hits it just as easily.
+const MAPPING_SEED_MAX_ROWS_PER_INSERT = 50;
+
 async function seedCategoryMappings(sessionId, organizationId, profiles = []) {
   if (!pool.hasStorage() || !sessionId || !organizationId || profiles.length === 0) return [];
+
+  if (profiles.length > MAPPING_SEED_MAX_ROWS_PER_INSERT) {
+    const stored = [];
+    for (let i = 0; i < profiles.length; i += MAPPING_SEED_MAX_ROWS_PER_INSERT) {
+      const slice = profiles.slice(i, i + MAPPING_SEED_MAX_ROWS_PER_INSERT);
+      stored.push(...(await seedCategoryMappings(sessionId, organizationId, slice)));
+    }
+    return stored;
+  }
 
   const values = [];
   const placeholders = profiles.map((profile, i) => {

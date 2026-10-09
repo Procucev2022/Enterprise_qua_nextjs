@@ -16,6 +16,7 @@ import type { VendorUploadImportResponse, VendorUploadRow, VendorUploadRowResult
  */
 
 export const VENDOR_TEMPLATE_HEADERS = [
+  'Vendor Code',
   'Company Name',
   'Person Name',
   'Email Id',
@@ -101,6 +102,7 @@ export function parseVendorUploadFile(file: File): Promise<ParseVendorFileResult
           return;
         }
 
+        const codeCol = findColumn(headerKeys, ['vendorcode', 'vendor code', 'vendor_code', 'code', 'vendor id']);
         const nameCol = findColumn(headerKeys, ['companyname', 'company name', 'vendor name', 'name']);
         const contactCol = findColumn(headerKeys, ['personname', 'person name', 'contactperson', 'contact person']);
         const emailCol = findColumn(headerKeys, ['emailid', 'email id', 'email']);
@@ -125,6 +127,7 @@ export function parseVendorUploadFile(file: File): Promise<ParseVendorFileResult
         }
 
         const seenEmails = new Map<string, number>(); // email -> first rowNumber it appeared on
+        const seenVendorCodes = new Map<string, number>(); // vendorCode -> first rowNumber it appeared on
         const rows: VendorUploadRow[] = [];
         let blankRowCount = 0;
 
@@ -136,6 +139,7 @@ export function parseVendorUploadFile(file: File): Promise<ParseVendorFileResult
             return;
           }
 
+          const vendorCode = codeCol ? cellToString(raw[codeCol]) : '';
           const name = nameCol ? cellToString(raw[nameCol]) : '';
           const contactPerson = contactCol ? cellToString(raw[contactCol]) : '';
           const email = emailCol ? cellToString(raw[emailCol]).toLowerCase() : '';
@@ -161,6 +165,15 @@ export function parseVendorUploadFile(file: File): Promise<ParseVendorFileResult
           if (gstin && !GSTIN_PATTERN.test(gstin)) errors.push('GSTIN format is invalid.');
           if (pincode && !INDIAN_PINCODE_PATTERN.test(pincode)) errors.push('PIN code must be 6 digits and not start with 0.');
 
+          if (vendorCode) {
+            const firstSeenCodeAt = seenVendorCodes.get(vendorCode.toLowerCase());
+            if (firstSeenCodeAt !== undefined) {
+              errors.push(`Duplicate Vendor Code "${vendorCode}" — already used on row ${firstSeenCodeAt}.`);
+            } else {
+              seenVendorCodes.set(vendorCode.toLowerCase(), rowNumber);
+            }
+          }
+
           if (email) {
             const firstSeenAt = seenEmails.get(email);
             if (firstSeenAt !== undefined) {
@@ -172,7 +185,7 @@ export function parseVendorUploadFile(file: File): Promise<ParseVendorFileResult
 
           rows.push({
             rowNumber,
-            vendor: { name, email, phone, contactPerson, gstin, city, state, pincode, majorCategory, products },
+            vendor: { vendorCode, name, email, phone, contactPerson, gstin, city, state, pincode, majorCategory, products },
             isValid: errors.length === 0,
             errors,
             missingEmail,
@@ -193,6 +206,7 @@ export function parseVendorUploadFile(file: File): Promise<ParseVendorFileResult
 /** Builds and downloads a blank Vendor Master template with one example row. */
 export function downloadVendorUploadTemplate(): void {
   const exampleRow = {
+    'Vendor Code': 'VEND-001',
     'Company Name': 'Acme Hydraulics Pvt Ltd',
     'Person Name': 'Ramesh Kumar',
     'Email Id': 'ramesh@acmehydraulics.example',

@@ -1062,4 +1062,11 @@ describe('RFQDeleteDialog', () => {
       expect(screen.getByText(EDIT.deliveryPincodeRequired)).toBeInTheDocument();
     });
   });
+
+  it('triggers handleAutoCategorizeAll on button click and auto-fills categories', () => {
+    renderEdit(buildRFQ({ extractedEntities: [entity({ itemName: 'Centrifugal Pump', majorCategory: '', minorCategory: '' })] }));
+    const autoBtn = screen.getByText(/Auto-Categorize All/i);
+    fireEvent.click(autoBtn);
+    expect(screen.getAllByDisplayValue(/Engineering Spares - Mechanical/i).length).toBeGreaterThan(0);
+  });
 });

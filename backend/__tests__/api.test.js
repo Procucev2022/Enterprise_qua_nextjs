@@ -479,6 +479,64 @@ describe('API Route Endpoints', () => {
         expect(res.body.error).toMatch(/free trial/i);
       });
 
+      test('Enterprise QUA V0 flow: mode_0 does not consume credits, V1/V2/V3 consume 1 credit, and V0 remains available after credits reach 0', async () => {
+        const email = 'v0-flow-buyer@ex.com';
+        await request(app).post('/api/buyer-accounts').set(customAuthHeaderFor(email)).send({
+          organizationName: 'V0 Flow Buyer Org',
+          corporateEmail: email,
+        });
+
+        // 1. Initial balance: 5 credits
+        let acc = await storeService.getBuyerAccountByEmail(email);
+        expect(acc.remainingFreeRFQs).toBe(5);
+
+        // 2. Create RFQ from V0 -> 5 credits remaining (0 deducted)
+        const v0Rfq1 = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({ sourcingMode: 'mode_0' }));
+        expect(v0Rfq1.statusCode).toBe(201);
+        acc = await storeService.getBuyerAccountByEmail(email);
+        expect(acc.remainingFreeRFQs).toBe(5);
+
+        // 3. Create RFQ from V1 -> 4 credits remaining
+        const v1Rfq = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({ sourcingMode: 'mode_1' }));
+        expect(v1Rfq.statusCode).toBe(201);
+        acc = await storeService.getBuyerAccountByEmail(email);
+        expect(acc.remainingFreeRFQs).toBe(4);
+
+        // 4. Create RFQ from V2 -> 3 credits remaining
+        const v2Rfq = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({ sourcingMode: 'mode_2' }));
+        expect(v2Rfq.statusCode).toBe(201);
+        acc = await storeService.getBuyerAccountByEmail(email);
+        expect(acc.remainingFreeRFQs).toBe(3);
+
+        // 5. Create RFQ from V3 -> 2 credits remaining
+        const v3Rfq = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({ sourcingMode: 'mode_3' }));
+        expect(v3Rfq.statusCode).toBe(201);
+        acc = await storeService.getBuyerAccountByEmail(email);
+        expect(acc.remainingFreeRFQs).toBe(2);
+
+        // Consume remaining 2 credits
+        await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({ sourcingMode: 'mode_1' }));
+        await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({ sourcingMode: 'mode_2' }));
+        acc = await storeService.getBuyerAccountByEmail(email);
+        expect(acc.remainingFreeRFQs).toBe(0);
+
+        // V1/V2/V3 are now blocked with 403
+        const blockedV1 = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({ sourcingMode: 'mode_1' }));
+        expect(blockedV1.statusCode).toBe(403);
+
+        const blockedV2 = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({ sourcingMode: 'mode_2' }));
+        expect(blockedV2.statusCode).toBe(403);
+
+        const blockedV3 = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({ sourcingMode: 'mode_3' }));
+        expect(blockedV3.statusCode).toBe(403);
+
+        // V0 remains available even when credits are 0
+        const v0RfqWhenExhausted = await request(app).post('/api/rfqs').set(customAuthHeaderFor(email)).send(rfqPayload({ sourcingMode: 'mode_0' }));
+        expect(v0RfqWhenExhausted.statusCode).toBe(201);
+        acc = await storeService.getBuyerAccountByEmail(email);
+        expect(acc.remainingFreeRFQs).toBe(0);
+      });
+
       test('a free_trial buyer can raise mode_1, mode_2, or mode_3 RFQs sharing the 5 free RFQs', async () => {
         const email = 'entitlement-multi-version@ex.com';
         await request(app).post('/api/buyer-accounts').set(customAuthHeaderFor(email)).send({

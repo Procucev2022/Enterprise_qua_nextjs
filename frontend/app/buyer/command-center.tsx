@@ -146,6 +146,8 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
         return <span className="badge badge-emerald">AI Recommended</span>;
       case 'In Evaluation':
         return <span className="badge badge-blue">In Evaluation</span>;
+      case 'Quotes Received':
+        return <span className="badge badge-blue">Quotes Received</span>;
       case 'PO Generated':
         return <span className="badge badge-purple">PO Generated</span>;
       case 'Parsing':
@@ -200,7 +202,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
               ? 'btn-secondary text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700 bg-emerald-50/50 dark:bg-emerald-950/30'
               : 'btn-secondary text-indigo-700 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700 bg-indigo-50/70 dark:bg-indigo-950/40 animate-pulse'
           }`}
-          title="Upload 1-3 Year Purchase Orders to extract approved vendors, contact details & categorize into 1st/2nd sets"
+          title="Upload 1-3 Year Pre-Purchase Orders to extract approved vendors, contact details & categorize into 1st/2nd sets"
         >
           <FileSpreadsheet size={13} className={initialSetupCompleted ? 'text-emerald-600' : 'text-indigo-600'} />
           <span>{initialSetupCompleted ? '✓ PO History Ingested' : '⚡ 1-3 Yr Purchase Setup'}</span>
@@ -312,7 +314,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
             }
           }}
           className="rounded-xl p-3 bg-white dark:bg-gray-900/80 border border-emerald-200 dark:border-emerald-500/30 relative overflow-hidden hover:border-emerald-400 dark:hover:border-emerald-400 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[92px]"
-          title="Click to open multi-channel deep dive"
+          title="Click to open vendor follow-up details"
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
@@ -320,7 +322,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
               <span className="live-dot" style={{ width: 6, height: 6 }} />
             </div>
             <div className="flex items-center gap-1 text-[10px] text-indigo-600 dark:text-indigo-400 font-bold hover:underline">
-              <span>Deep Dive</span>
+              <span>Vendor Follow-Up Details</span>
               <ChevronRight size={11} />
             </div>
           </div>

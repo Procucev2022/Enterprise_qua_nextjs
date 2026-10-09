@@ -67,13 +67,11 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
     setDeepDiveModalOpen,
     selectedRFQForDeepDive,
     updateRFQ,
-    deleteRFQ,
   } = useApp();
 
   // Held as the RFQ itself rather than an id, so the dialogs can name the record
   // they are about without looking it up again.
   const [rfqBeingEdited, setRfqBeingEdited] = useState<RFQItem | null>(null);
-  const [rfqBeingDeleted, setRfqBeingDeleted] = useState<RFQItem | null>(null);
 
   // GET /api/rfqs is itself scoped to the signed-in buyer's own account now
   // (server-side — see command-center.tsx's matching note), so allRfqs is
@@ -174,8 +172,11 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
       'AI Recommended': 'badge-emerald',
       'In Evaluation': 'badge-blue',
       'PO Generated': 'badge-purple',
+      'Quotes Received': 'badge-blue',
       Parsing: 'badge-amber',
       'Quotes Pending': 'badge-amber',
+      Closed: 'badge-neutral',
+      Expired: 'badge-rose',
     };
     return <span className={`badge ${toneByStatus[status] || 'badge-blue'}`}>{status}</span>;
   };
@@ -536,15 +537,6 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
                         >
                           <Pencil size={13} />
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setRfqBeingDeleted(rfq)}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40"
-                          aria-label={formatString(EDIT.deleteAria, { rfqNumber: rfq.rfqNumber })}
-                          title={EDIT.deleteAction}
-                        >
-                          <Trash2 size={13} />
-                        </button>
                       </div>
                     </td>
                   </tr>
@@ -630,11 +622,6 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
       />
 
       <RFQEditModal rfq={rfqBeingEdited} onClose={() => setRfqBeingEdited(null)} onSave={updateRFQ} />
-      <RFQDeleteDialog
-        rfq={rfqBeingDeleted}
-        onClose={() => setRfqBeingDeleted(null)}
-        onConfirm={deleteRFQ}
-      />
     </div>
   );
 }

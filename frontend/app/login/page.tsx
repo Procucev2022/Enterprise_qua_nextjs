@@ -19,9 +19,7 @@ import PasswordInput from '@/app/components/PasswordInput';
 import type { UserRole, UserSession } from '@/lib/types';
 import {
   Building2,
-  SlidersHorizontal,
   Truck,
-  Cpu,
   Mail,
   Phone,
   Lock,
@@ -42,14 +40,6 @@ import {
 const AUTH = UI_STRINGS.auth;
 const MIN_PASSWORD_LENGTH = 8;
 
-/** Roles a visitor can pick on the sign-in form. */
-const ROLE_OPTIONS: { key: UserRole; label: string; icon: React.ReactNode }[] = [
-  { key: 'buyer', label: 'Buyer', icon: <Building2 size={13} /> },
-  { key: 'category_manager', label: 'Cat Manager', icon: <SlidersHorizontal size={13} /> },
-  { key: 'vendor', label: 'Vendor Partner', icon: <Truck size={13} /> },
-  { key: 'admin', label: 'System Admin', icon: <Cpu size={13} /> },
-];
-
 export default function LoginPage() {
   const router = useRouter();
   const {
@@ -67,7 +57,6 @@ export default function LoginPage() {
   } = useApp();
 
   const [authTab, setAuthTab] = useState<'login' | 'register'>('login');
-  const [selectedRole, setSelectedRole] = useState<UserRole>('buyer');
   const [submitting, setSubmitting] = useState(false);
 
   // Credentials are always verified server-side, so nothing is pre-filled.
@@ -234,8 +223,7 @@ export default function LoginPage() {
       const email = loginEmail.trim().toLowerCase();
       const response = await authClient.requestOtp(
         email,
-        mobile,
-        selectedRole === 'vendor' ? 'vendor' : 'buyer'
+        mobile
       );
       if (!response.success) {
         fail(AUTH.otpRequestFailedTitle, response.error);
@@ -269,8 +257,7 @@ export default function LoginPage() {
     try {
       const response = await authClient.requestOtp(
         email,
-        mobile,
-        selectedRole === 'vendor' ? 'vendor' : 'buyer'
+        mobile
       );
       if (!response.success) {
         fail(AUTH.otpRequestFailedTitle, response.error);
@@ -504,9 +491,7 @@ export default function LoginPage() {
   const primaryBtn =
     'btn btn-primary w-full text-xs font-bold py-2.5 flex items-center justify-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed';
 
-  const usesOtp = selectedRole === 'buyer' || selectedRole === 'vendor';
-  const showOtpToggle = usesOtp;
-  const otpModeActive = usesOtp && buyerAuthMode === 'email_otp';
+  const otpModeActive = buyerAuthMode === 'email_otp';
 
   return (
     <div className="min-h-[85vh] flex items-center justify-center p-4">
@@ -596,7 +581,7 @@ export default function LoginPage() {
               </button>
               <button
                 type="button"
-                onClick={() => { setAuthTab('register'); setSelectedRole('buyer'); setLoginOtpSent(false); }}
+                onClick={() => { setAuthTab('register'); setLoginOtpSent(false); }}
                 className={`text-sm font-black pb-2 transition-all ${authTab === 'register'
                     ? 'text-indigo-600 dark:text-indigo-400 border-b-2 border-indigo-600 dark:border-indigo-400'
                     : 'text-slate-400 dark:text-gray-500 hover:text-slate-600'
@@ -617,32 +602,8 @@ export default function LoginPage() {
                   </p>
                 </div>
 
-                {/* Role selector */}
-                <div className="space-y-1">
-                  <span className={fieldLabel}>Select Role</span>
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    {ROLE_OPTIONS.map((r) => (
-                      <button
-                        key={r.key}
-                        type="button"
-                        onClick={() => { setSelectedRole(r.key); setLoginOtpSent(false); }}
-                        className={`p-2 rounded-xl border font-bold flex items-center gap-1.5 justify-center transition-all ${selectedRole === r.key
-                            ? 'bg-indigo-50 dark:bg-indigo-950/60 border-indigo-500 text-indigo-700 dark:text-indigo-300'
-                            : 'bg-slate-50 dark:bg-gray-950 border-slate-200 dark:border-gray-800 text-slate-600 dark:text-gray-450 hover:bg-slate-100'
-                          }`}
-                      >
-                        {r.icon} {r.label}
-                      </button>
-                    ))}
-                  </div>
-                  <span className="text-[10px] text-slate-400 italic block mt-0.5">
-                    Your workspace is chosen from your account record, not this selection.
-                  </span>
-                </div>
-
-                {/* Auth method switcher (buyer & vendor support OTP) */}
-                {showOtpToggle && (
-                  <div className="flex rounded-xl bg-slate-100 dark:bg-gray-800/80 p-1 text-xs">
+                {/* Auth method switcher */}
+                <div className="flex rounded-xl bg-slate-100 dark:bg-gray-800/80 p-1 text-xs">
                     <button
                       type="button"
                       onClick={() => { setBuyerAuthMode('password'); setLoginOtpSent(false); }}
@@ -664,7 +625,6 @@ export default function LoginPage() {
                       <Mail size={12} /> Email OTP
                     </button>
                   </div>
-                )}
 
                 {!otpModeActive ? (
                   /* PASSWORD SIGN-IN */
@@ -775,7 +735,7 @@ export default function LoginPage() {
                     </div>
 
                     <div className="space-y-1">
-                      <label htmlFor="otp-code" className={fieldLabel}>Enter Email OTP Code</label>
+                      <label htmlFor="otp-code" className={fieldLabel}>Email Verification Code (OTP)</label>
                       <div className="relative">
                         <Key className={iconClass} size={14} />
                         <input
@@ -1067,7 +1027,7 @@ export default function LoginPage() {
                     <div className="space-y-1">
                       <div className="flex justify-between items-center">
                         <label htmlFor="reg-email-otp" className={fieldLabel}>
-                          1. Email OTP (Sent to {regEmail.toLowerCase()})
+                          1. Email Verification Code (OTP) (Sent to {regEmail.toLowerCase()})
                         </label>
                       </div>
                       <div className="relative">

@@ -231,6 +231,84 @@ describe('Buyer Profile API (/api/buyer-profile)', () => {
     });
   });
 
+  // ── Vendor onboarding dispatch templates (Template A / Template B) ─────────
+  describe('GET /api/buyer-profile/dispatch-templates', () => {
+    test('rejects an unauthenticated caller', async () => {
+      const res = await request(app).get('/api/buyer-profile/dispatch-templates');
+      expect(res.statusCode).toBe(401);
+    });
+
+    test('rejects a vendor session with 403', async () => {
+      const res = await request(app).get('/api/buyer-profile/dispatch-templates').set(authHeader('vendor'));
+      expect(res.statusCode).toBe(403);
+    });
+
+    test('returns the signed-in buyer\'s saved templates', async () => {
+      const spy = jest
+        .spyOn(buyerProfileService, 'getDispatchTemplates')
+        .mockResolvedValue({ category_mapped: { subject: 'Hi', message: 'Welcome' } });
+
+      const res = await request(app).get('/api/buyer-profile/dispatch-templates').set(authHeader('buyer'));
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toEqual({ success: true, data: { category_mapped: { subject: 'Hi', message: 'Welcome' } } });
+      expect(spy).toHaveBeenCalledWith(expect.objectContaining({ email: TEST_USERS.buyer.email }));
+    });
+
+    test('surfaces a service failure through the shared error handler', async () => {
+      jest.spyOn(buyerProfileService, 'getDispatchTemplates').mockRejectedValue(new Error('boom'));
+      const res = await request(app).get('/api/buyer-profile/dispatch-templates').set(authHeader('buyer'));
+      expect(res.statusCode).toBe(500);
+    });
+  });
+
+  describe('PUT /api/buyer-profile/dispatch-templates/:templateType', () => {
+    test('rejects an unauthenticated caller', async () => {
+      const res = await request(app)
+        .put('/api/buyer-profile/dispatch-templates/category_mapped')
+        .send({ subject: 'x', message: 'y' });
+      expect(res.statusCode).toBe(401);
+    });
+
+    test('rejects a vendor session with 403', async () => {
+      const spy = jest.spyOn(buyerProfileService, 'saveDispatchTemplate');
+      const res = await request(app)
+        .put('/api/buyer-profile/dispatch-templates/category_mapped')
+        .set(authHeader('vendor'))
+        .send({ subject: 'x', message: 'y' });
+      expect(res.statusCode).toBe(403);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    test('saves the subject/message for the requested template type', async () => {
+      const spy = jest
+        .spyOn(buyerProfileService, 'saveDispatchTemplate')
+        .mockResolvedValue({ subject: 'Hi', message: 'Welcome' });
+
+      const res = await request(app)
+        .put('/api/buyer-profile/dispatch-templates/self_map_required')
+        .set(authHeader('buyer'))
+        .send({ subject: 'Hi', message: 'Welcome' });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toEqual({ success: true, data: { subject: 'Hi', message: 'Welcome' } });
+      expect(spy).toHaveBeenCalledWith(
+        expect.objectContaining({ email: TEST_USERS.buyer.email }),
+        'self_map_required',
+        { subject: 'Hi', message: 'Welcome' }
+      );
+    });
+
+    test('surfaces a service failure through the shared error handler', async () => {
+      jest.spyOn(buyerProfileService, 'saveDispatchTemplate').mockRejectedValue(new Error('boom'));
+      const res = await request(app)
+        .put('/api/buyer-profile/dispatch-templates/category_mapped')
+        .set(authHeader('buyer'))
+        .send({ subject: 'x', message: 'y' });
+      expect(res.statusCode).toBe(500);
+    });
+  });
+
   // ── Controller helpers ────────────────────────────────────────────────────
   describe('controller helpers', () => {
     test('getClientIp prefers req.ip then the forwarded header', () => {

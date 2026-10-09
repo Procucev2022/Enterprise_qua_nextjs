@@ -213,6 +213,81 @@ function extractHeaderIndices(headers, type) {
   return map;
 }
 
+/**
+ * Normalize a PO number to one consistent shape: trimmed, internal whitespace
+ * collapsed, uppercased. Rows commonly spell the same PO as "po 4471",
+ * "PO-4471" and "Po4471 " — without this they'd be treated as three
+ * different purchase orders instead of deduping to one.
+ */
+function normalizePoNumber(raw) {
+  const value = String(raw || '').trim().replace(/\s+/g, ' ');
+  return value === '' ? '' : value.toUpperCase();
+}
+
+/**
+ * Parse a PO date into a standard ISO (YYYY-MM-DD) string, trying the
+ * formats actually seen in buyer PO exports: ISO itself, DD/MM/YYYY (and
+ * DD-MM-YYYY), and whatever Date can parse natively (e.g. "15 Jun 2025").
+ * Returns null rather than guessing when the value doesn't parse — a wrong
+ * silent guess is worse than leaving the date blank for the buyer to fix.
+ */
+function normalizePoDate(raw) {
+  const value = String(raw || '').trim();
+  if (value === '') return null;
+
+  // Numeric Excel date serial check (e.g. "45995.00011574074" or 45995)
+  const num = Number(value);
+  if (!isNaN(num) && isFinite(num) && !value.includes('-') && !value.includes('/') && !value.includes(':')) {
+    if (num >= 1 && num <= 100000) {
+      const utcDays = Math.floor(num - 25569);
+      const d = new Date(utcDays * 86400 * 1000);
+      if (!isNaN(d.getTime())) {
+        const y = d.getUTCFullYear();
+        const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(d.getUTCDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+      }
+    }
+  }
+
+  const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+
+  const dmy = value.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (dmy) {
+    const day = dmy[1].padStart(2, '0');
+    const month = dmy[2].padStart(2, '0');
+    if (Number(month) <= 12) return `${dmy[3]}-${month}-${day}`;
+  }
+
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString().slice(0, 10);
+  }
+
+  return null;
+}
+
+/** Lower-cased, trimmed email — so the same address in two different casings dedupes to one. */
+function normalizeEmail(raw) {
+  const value = String(raw || '').trim().toLowerCase();
+  return value === '' ? '' : value;
+}
+
+/**
+ * A single phone number in one standard shape: digits and a leading `+`
+ * only, so "+91 98000-00000", "919800000000" and "98000 00000" all collapse
+ * to the same value instead of being treated as separate contacts.
+ */
+function normalizePhone(raw) {
+  const value = String(raw || '').trim();
+  if (value === '') return '';
+  const hasPlus = value.trim().startsWith('+');
+  const digits = value.replace(/[^0-9]/g, '');
+  if (digits === '') return '';
+  return hasPlus ? `+${digits}` : digits;
+}
+
 /** Map row values array to object using header indices */
 function mapRowValues(values, headerMap, type, rowIdx) {
   const get = (key) => {
@@ -224,13 +299,18 @@ function mapRowValues(values, headerMap, type, rowIdx) {
   };
 
   if (type === 'VENDOR_MASTER') {
-    const companyName = get('companyName') || `Supplier ${rowIdx + 1}`;
-    const vendorCode = get('vendorCode') || `VND-${1000 + rowIdx + 1}`;
-    const contactPerson = get('contactPerson') || 'Operations Lead';
-    const email = get('email') || `contact@${companyName.toLowerCase().replace(/[^a-z0-9]/g, '') || 'vendor'}.com`;
-    const phone = get('phone') || '+91 98000 00000';
-    const address = get('address') || 'Industrial Zone, India';
-    const gstin = get('gstin') || '27AAACA0000A1Z0';
+    // Genuinely missing fields are left blank/null rather than filled with
+    // invented placeholder data ("Supplier 7", "contact@supplier7.com") —
+    // the buyer should see exactly what their file did and didn't supply,
+    // not a fabricated row that looks real. Only companyName is required to
+    // process the row at all (enforced in processVendorMasterBatch below).
+    const companyName = get('companyName');
+    const vendorCode = get('vendorCode') || null;
+    const contactPerson = get('contactPerson') || null;
+    const email = normalizeEmail(get('email')) || null;
+    const phone = normalizePhone(get('phone')) || null;
+    const address = get('address') || null;
+    const gstin = get('gstin') || null;
     const ratingRaw = get('rating');
     const rating = ratingRaw && !isNaN(Number(ratingRaw)) ? Math.min(100, Math.max(0, Math.round(Number(ratingRaw)))) : null;
 
@@ -246,36 +326,33 @@ function mapRowValues(values, headerMap, type, rowIdx) {
       rating,
     };
   } else {
-    // PO_DUMP
-    const poNumber = get('poNumber') || `PO-2025-${(1000 + rowIdx).toString()}`;
-    const poDate = get('poDate') || '2025-06-15';
-    const vendorName = get('vendorIdentifier') || 'Apex Supplies Ltd.';
-    const itemDescription = get('itemName') || 'Industrial Spares';
+    // PO_DUMP — same principle: a PO row with only Vendor Name/Code, Item
+    // Details and Category present should still process successfully (see
+    // processPoDumpBatch's required-field check below), with every other
+    // field left blank rather than invented.
+    const poNumber = normalizePoNumber(get('poNumber')) || null;
+    const poDate = normalizePoDate(get('poDate'));
+    const vendorName = get('vendorIdentifier') || null;
+    const itemDescription = get('itemName') || null;
     const specification = get('specs') || null;
     const qtyRaw = get('quantity');
     const quantity = qtyRaw && !isNaN(Number(String(qtyRaw).replace(/[^0-9.]/g, ''))) ? Math.max(1, Math.round(Number(String(qtyRaw).replace(/[^0-9.]/g, '')))) : 1;
-    const uom = get('unit') || 'Units';
+    const uom = get('unit') || null;
     const unitPriceRaw = get('unitPrice');
     const spendRaw = get('spend');
 
     const parsedUnitPrice = unitPriceRaw && !isNaN(Number(String(unitPriceRaw).replace(/[^0-9.]/g, ''))) ? Number(String(unitPriceRaw).replace(/[^0-9.]/g, '')) : 0;
     const parsedSpend = spendRaw && !isNaN(Number(String(spendRaw).replace(/[^0-9.]/g, ''))) ? Number(String(spendRaw).replace(/[^0-9.]/g, '')) : 0;
 
-    let spend = parsedSpend;
-    if (spend === 0 && parsedUnitPrice > 0) {
-      spend = parsedUnitPrice * quantity;
-    } else if (spend === 0 && parsedUnitPrice === 0) {
-      spend = 500 * quantity;
-    }
-
-    const department = get('department') || 'General';
+    const spend = parsedSpend > 0 ? parsedSpend : parsedUnitPrice * quantity;
+    const department = get('department') || null;
 
     return {
       sourceRowNumber: rowIdx + 1,
       poNumber,
       poDate,
       vendorName,
-      vendorCode: vendorName.startsWith('VND-') ? vendorName : null,
+      vendorCode: vendorName && vendorName.startsWith('VND-') ? vendorName : null,
       itemDescription,
       specification,
       quantity,
@@ -329,23 +406,52 @@ async function processPoDumpBatch(sessionId, organizationId, batch, session) {
   const valid = [];
   const invalid = [];
 
+  // Minimum required to process a PO row at all: Vendor identity, Item
+  // Details, and Category (the buyer's own wording for this). Everything
+  // else (date, PO number, spend, UOM...) is accepted as-supplied and left
+  // blank when absent — a PO missing only its spend figure should still be
+  // extracted and processed, not rejected outright.
   for (const row of batch) {
     const vendorName = row.vendorName || row.vendorIdentifier || row.vendor_name || row.supplierName || row.companyName || '';
     const vendorCode = row.vendorCode || row.vendor_code || row.supplierCode || '';
+    const itemDescription = row.itemDescription || row.itemName || row.description || '';
+    const category = row.department || row.category || '';
+
     if (!vendorName && !vendorCode) {
       invalid.push({ row, reason: 'Vendor Name or Vendor Code is required' });
       continue;
     }
-    
-    // Stamp inHorizon
-    const inHorizon = session && session.horizonStart && session.horizonEnd
-      ? row.poDate >= session.horizonStart && row.poDate <= session.horizonEnd
-      : true;
+    if (!itemDescription) {
+      invalid.push({ row, reason: 'Item Details are required' });
+      continue;
+    }
+    if (!category) {
+      invalid.push({ row, reason: 'Category is required' });
+      continue;
+    }
+
+    // Defensive re-normalization: row.poDate should already be ISO by the
+    // time it reaches here (mapRowValues' normalizePoDate), but this batch
+    // function is also called from paths that build rows directly without
+    // going through that step — a raw Excel serial or non-ISO string must
+    // still be normalized before the horizon comparison below, or every
+    // such row silently falls outside the window.
+    const poDate = normalizePoDate(row.poDate || row.date);
+
+    // Stamp inHorizon — a row with no parseable PO date can't be confirmed
+    // inside the buyer's selected window, so it's counted as outside it
+    // rather than silently included.
+    const horizonConfigured = Boolean(session && session.horizonStart && session.horizonEnd);
+    const inHorizon = !horizonConfigured
+      ? true
+      : Boolean(poDate) && poDate >= session.horizonStart && poDate <= session.horizonEnd;
 
     valid.push({
       ...row,
-      vendorName: vendorName || (vendorCode ? `Vendor ${vendorCode}` : 'Unknown Vendor'),
-      itemDescription: row.itemDescription || row.itemName || row.description || 'Industrial Item',
+      poDate: poDate || row.poDate || null,
+      vendorName: vendorName || `Vendor ${vendorCode}`,
+      itemDescription,
+      department: category,
       quantity: row.quantity !== undefined ? Number(row.quantity) || 1 : 1,
       spend: row.spend !== undefined ? Number(row.spend) || 0 : (Number(row.totalSpend) || 0),
       inHorizon,

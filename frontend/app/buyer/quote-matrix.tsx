@@ -7,6 +7,7 @@ import { formatCurrency } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import type { RFQItem, QuoteComparison } from '@/lib/types';
 import { PurchaseOrderModal, RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
+import { downloadBidComparisonExcel } from '@/lib/bidComparisonExport';
 import {
   Sparkles,
   CheckCircle2,
@@ -23,6 +24,8 @@ import {
   Search,
   Info,
   Lock,
+  Mail,
+  Download,
 } from 'lucide-react';
 
 interface QuoteMatrixProps {
@@ -174,14 +177,30 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
               className="btn btn-secondary btn-sm text-[11px] px-2.5 flex items-center gap-1.5"
             >
               <Search size={12} />
-              <span>Deep Dive Telemetry ({currentRFQ.followUpData.respondedCount}/{currentRFQ.followUpData.totalInvited} Responded) ↗</span>
+              <span>Vendor Follow-Up Details ({currentRFQ.followUpData.respondedCount}/{currentRFQ.followUpData.totalInvited} Responded) ↗</span>
             </button>
           </div>
         )}
       </div>
 
       {/* Evaluation Matrix Comparison Table */}
-      {currentRole === 'buyer' && currentRFQ?.quotesHidden ? (
+      {currentRole === 'buyer' && (currentRFQ?.sourcingMode === 'mode_0' || (currentRFQ?.sourcingMode as any) === 'v0' || (currentRFQ?.sourcingMode as any) === 'version_0') ? (
+        <div className="p-8 text-center glass-panel rounded-xl space-y-3 border border-indigo-200 dark:border-indigo-800/50 bg-indigo-50/40 dark:bg-indigo-950/20 shadow-sm">
+          <div className="w-12 h-12 mx-auto rounded-xl bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shadow-inner">
+            <Mail size={24} />
+          </div>
+          <div className="space-y-1">
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white">Direct Email Quotes (Version 0 Free Starter)</h3>
+            <p className="text-xs text-slate-600 dark:text-gray-300 max-w-lg mx-auto">
+              Quotations for V0 RFQs are sent directly to your registered corporate email upon submission. Comparative portal matrices and vendor details are not displayed in the portal for V0.
+            </p>
+          </div>
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-white dark:bg-gray-800 text-indigo-800 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700/60 shadow-sm">
+            <Mail size={13} />
+            <span>Check your inbox for vendor quotations on {currentRFQ.rfqNumber}</span>
+          </div>
+        </div>
+      ) : currentRole === 'buyer' && currentRFQ?.quotesHidden ? (
         <div className="p-8 text-center glass-panel rounded-xl space-y-3 border border-amber-300 dark:border-amber-700/50 bg-amber-50/50 dark:bg-amber-950/20 shadow-md">
           <div className="w-12 h-12 mx-auto rounded-xl bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 flex items-center justify-center shadow-inner">
             <Lock size={24} />
@@ -424,7 +443,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                           onClick={() => handleSelectVendor(quote)}
                           className="btn btn-emerald btn-lg w-full font-bold shadow-md"
                         >
-                          <ShieldCheck size={16} /> [ APPROVE & GENERATE PO ]
+                          <ShieldCheck size={16} /> [ APPROVE & GENERATE PRE-PURCHASE ORDER ]
                         </button>
                       ) : (
                         <button
@@ -437,6 +456,81 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                     </td>
                   ))}
                 </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Line-Item-Wise Bid Comparison */}
+      {quotes.length > 0 && !currentRFQ?.quotesHidden && (currentRFQ.extractedEntities || []).length > 0 && (
+        <div className="glass-panel rounded-xl overflow-hidden border border-slate-200 dark:border-gray-800 shadow-xl bg-white dark:bg-gray-900/80">
+          <div className="flex items-center justify-between gap-3 px-3.5 py-3 border-b border-slate-200 dark:border-gray-800">
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+              <Layers size={15} className="text-indigo-600 dark:text-indigo-400" />
+              Line-Item-Wise Bid Comparison
+            </h3>
+            <button
+              onClick={() => downloadBidComparisonExcel(currentRFQ, quotes)}
+              className="btn btn-secondary btn-sm text-[11px] px-2.5 flex items-center gap-1.5"
+            >
+              <Download size={12} /> Download Excel
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="bg-slate-50 dark:bg-gray-900/90 text-slate-700 dark:text-gray-300 border-b border-slate-200 dark:border-gray-800">
+                  <th className="px-3.5 py-2.5 text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400">Item</th>
+                  <th className="px-3.5 py-2.5 text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400">Qty</th>
+                  {quotes.map((quote) => (
+                    <th key={quote.vendorId} className="px-3.5 py-2.5 text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 whitespace-nowrap">
+                      {quote.vendorName}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                {(currentRFQ.extractedEntities || []).map((item) => {
+                  const prices = quotes.map((quote) => {
+                    const items = quote.lineItemQuotes || [];
+                    const matched =
+                      items.find((li) => li.lineItemId === item.id) ||
+                      items.find((li) => (li.itemName || '').trim().toLowerCase() === (item.itemName || '').trim().toLowerCase());
+                    return { quote, matched };
+                  });
+                  const realPrices = prices
+                    .filter((p) => p.matched)
+                    .map((p) => p.matched!.unitPrice)
+                    .filter((p) => p > 0);
+                  const lowestPrice = realPrices.length > 0 ? Math.min(...realPrices) : null;
+
+                  return (
+                    <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-gray-800/40">
+                      <td className="px-3.5 py-2.5 font-medium text-slate-900 dark:text-white">{item.itemName}</td>
+                      <td className="px-3.5 py-2.5 text-slate-500 dark:text-gray-400 mono">{item.quantity}</td>
+                      {prices.map(({ quote, matched }) => (
+                        <td key={quote.vendorId} className="px-3.5 py-2.5 mono">
+                          {matched ? (
+                            <span
+                              className={
+                                lowestPrice !== null && matched.unitPrice === lowestPrice
+                                  ? 'font-bold text-emerald-600 dark:text-emerald-400'
+                                  : 'text-slate-700 dark:text-gray-300'
+                              }
+                            >
+                              {formatCurrency(matched.unitPrice)}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 dark:text-gray-500" title="This vendor did not submit a per-item price breakdown">
+                              {formatCurrency(quote.unitPrice)} <span className="text-[9px]">(not itemized)</span>
+                            </span>
+                          )}
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

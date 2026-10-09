@@ -38,7 +38,7 @@ describe('Batch Chaser & Purchase Order API', () => {
       assignedVendors: outreachVendors,
     }).id;
     poRfqNumber = storeService.createRFQ({
-      title: 'RFQ pending purchase order approval',
+      title: 'RFQ pending pre-purchase order approval',
       category: 'Engineering Spares - Mechanical',
     }).rfqNumber;
   });

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 import { rfqAttachmentUrl, submitRFQInquiry } from '@/lib/rfqClient';
+import { downloadVendorQuotationExcel } from '@/lib/bidComparisonExport';
 import { VendorOpportunity } from '@/lib/types';
 import {
   ArrowLeft,
@@ -151,9 +152,21 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   // This vendor's real submitted quotes, read back from the actual RFQ
   // records (rfq.quotes[]) instead of a hardcoded 2-row placeholder list.
   const submittedQuotes = rfqs
-    .filter((rfq) => (rfq.quotes || []).some((q) => q.vendorId === myVendorId))
+    .filter((rfq) =>
+      (rfq.quotes || []).some(
+        (q: any) =>
+          (myVendorId && q.vendorId === myVendorId) ||
+          (currentUserSession?.email && q.vendorEmail && q.vendorEmail.toLowerCase() === currentUserSession.email.toLowerCase()) ||
+          (myVendorName && q.vendorName && q.vendorName.toLowerCase().trim() === myVendorName.toLowerCase().trim())
+      )
+    )
     .map((rfq) => {
-      const myQuote: any = (rfq.quotes || []).find((q: any) => q.vendorId === myVendorId);
+      const myQuote: any = (rfq.quotes || []).find(
+        (q: any) =>
+          (myVendorId && q.vendorId === myVendorId) ||
+          (currentUserSession?.email && q.vendorEmail && q.vendorEmail.toLowerCase() === currentUserSession.email.toLowerCase()) ||
+          (myVendorName && q.vendorName && q.vendorName.toLowerCase().trim() === myVendorName.toLowerCase().trim())
+      );
       return {
         rfqNumber: rfq.rfqNumber,
         title: rfq.title,
@@ -188,6 +201,11 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   // ─── Real quote/bid submission ─────────────────────────────────────────
   const [biddingOn, setBiddingOn] = useState<VendorOpportunity | null>(null);
   const [bidUnitPrice, setBidUnitPrice] = useState('');
+  // One unit price per RFQ line item, keyed by line item id — only rendered
+  // (and only required) when the RFQ has more than one line item. For the
+  // common single-item case the form stays exactly as it was: just
+  // bidUnitPrice above.
+  const [bidLineItemPrices, setBidLineItemPrices] = useState<Record<string, string>>({});
   const [bidLeadTimeDays, setBidLeadTimeDays] = useState('');
   const [bidWarrantyYears, setBidWarrantyYears] = useState('');
   const [bidPaymentTerms, setBidPaymentTerms] = useState('45 Days Net');
@@ -211,6 +229,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const openBidForm = (opp: VendorOpportunity) => {
     setBiddingOn(opp);
     setBidUnitPrice('');
+    setBidLineItemPrices({});
     setBidLeadTimeDays('');
     setBidWarrantyYears('');
     setBidPaymentTerms('45 Days Net');
@@ -294,13 +313,55 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const handleSubmitQuote = async () => {
     if (!biddingOn) return;
     setSubmitModalError(null);
-    const unitPrice = Number(bidUnitPrice);
-    if (!unitPrice || unitPrice <= 0) {
-      setSubmitModalError('Please enter a valid unit price greater than 0.');
-      showToast('Validation Error', 'Enter a valid unit price.', 'warning');
-      return;
+
+    const rfqLineItems = biddingOn.lineItems || [];
+    const isMultiItem = rfqLineItems.length > 1;
+
+    // Multi-item RFQs price every line item individually; the single-item
+    // case keeps today's one blanket-price field unchanged.
+    let unitPrice: number;
+    let totalPrice: number;
+    let lineItemQuotes: Array<{
+      lineItemId?: string;
+      itemName: string;
+      quantity: number;
+      unitPrice: number;
+      totalPrice: number;
+    }> | undefined;
+
+    if (isMultiItem) {
+      const missing = rfqLineItems.some((li) => {
+        const v = Number(bidLineItemPrices[li.id]);
+        return !v || v <= 0;
+      });
+      if (missing) {
+        setSubmitModalError('Please enter a valid unit price (greater than 0) for every line item.');
+        showToast('Validation Error', 'Enter a unit price for every line item.', 'warning');
+        return;
+      }
+      lineItemQuotes = rfqLineItems.map((li) => {
+        const price = Number(bidLineItemPrices[li.id]);
+        return {
+          lineItemId: li.id,
+          itemName: li.description,
+          quantity: li.quantity,
+          unitPrice: price,
+          totalPrice: price * li.quantity,
+        };
+      });
+      totalPrice = lineItemQuotes.reduce((sum, li) => sum + li.totalPrice, 0);
+      const totalQty = rfqLineItems.reduce((sum, li) => sum + (li.quantity || 0), 0);
+      unitPrice = totalQty > 0 ? totalPrice / totalQty : totalPrice;
+    } else {
+      unitPrice = Number(bidUnitPrice);
+      if (!unitPrice || unitPrice <= 0) {
+        setSubmitModalError('Please enter a valid unit price greater than 0.');
+        showToast('Validation Error', 'Enter a valid unit price.', 'warning');
+        return;
+      }
+      const quantity = rfqLineItems[0]?.quantity || 1;
+      totalPrice = unitPrice * quantity;
     }
-    const quantity = biddingOn.lineItems?.[0]?.quantity || 1;
 
     setIsSubmittingQuote(true);
     try {
@@ -309,7 +370,8 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         headers: authHeaders(),
         body: JSON.stringify({
           unitPrice,
-          totalPrice: unitPrice * quantity,
+          totalPrice,
+          ...(lineItemQuotes ? { lineItemQuotes } : {}),
           leadTimeDays: Number(bidLeadTimeDays) || 0,
           warrantyYears: Number(bidWarrantyYears) || 0,
           paymentTerms: bidPaymentTerms,
@@ -985,21 +1047,97 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 )}
 
                 <div className="space-y-3">
-                  <div>
-                    <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Unit Price (₹) *</label>
-                    <div className="relative">
-                      <IndianRupee size={12} className="absolute left-3 top-2.5 text-slate-400" />
-                      <input
-                        type="number"
-                        min={0}
-                        value={bidUnitPrice}
-                        onChange={(e) => setBidUnitPrice(e.target.value)}
-                        disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
-                        placeholder="e.g. 25000"
-                        className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
-                      />
+                  {(biddingOn.lineItems?.length || 0) > 1 ? (
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          Line Item Pricing *
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            downloadVendorQuotationExcel(biddingOn.rfqNumber, biddingOn.lineItems || [], bidLineItemPrices)
+                          }
+                          className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"
+                        >
+                          <Download size={11} /> Export as Excel
+                        </button>
+                      </div>
+                      <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-gray-800">
+                        <table className="w-full text-left text-[11px] border-collapse">
+                          <thead>
+                            <tr className="bg-slate-50 dark:bg-gray-950/60 text-slate-500 dark:text-gray-400 border-b border-slate-200 dark:border-gray-800">
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold">Item</th>
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold text-right">Qty</th>
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold">UOM</th>
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold">Rate (₹)</th>
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold text-right">Amount (₹)</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                            {(biddingOn.lineItems || []).map((li) => {
+                              const rate = Number(bidLineItemPrices[li.id]) || 0;
+                              const amount = rate * li.quantity;
+                              return (
+                                <tr key={li.id}>
+                                  <td className="px-2.5 py-1.5 text-slate-700 dark:text-gray-300 max-w-[220px] truncate" title={li.description}>
+                                    {li.description}
+                                  </td>
+                                  <td className="px-2.5 py-1.5 text-right mono text-slate-600 dark:text-gray-300">{li.quantity}</td>
+                                  <td className="px-2.5 py-1.5 text-slate-500 dark:text-gray-400">{li.unit || '—'}</td>
+                                  <td className="px-2.5 py-1.5">
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      aria-label={`Rate for ${li.description}`}
+                                      value={bidLineItemPrices[li.id] || ''}
+                                      onChange={(e) =>
+                                        setBidLineItemPrices((prev) => ({ ...prev, [li.id]: e.target.value }))
+                                      }
+                                      disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                                      placeholder="0"
+                                      className="w-24 px-2 py-1 rounded-lg border border-slate-200 dark:border-gray-800 text-[11px] font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                                    />
+                                  </td>
+                                  <td className="px-2.5 py-1.5 text-right mono font-bold text-slate-900 dark:text-white">
+                                    {amount > 0 ? amount.toLocaleString('en-IN') : '—'}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                          <tfoot>
+                            <tr className="border-t-2 border-slate-200 dark:border-gray-800 bg-slate-50 dark:bg-gray-950/60">
+                              <td colSpan={4} className="px-2.5 py-2 text-right font-bold text-slate-700 dark:text-gray-300">
+                                Total
+                              </td>
+                              <td className="px-2.5 py-2 text-right mono font-black text-slate-900 dark:text-white">
+                                {(biddingOn.lineItems || [])
+                                  .reduce((sum, li) => sum + (Number(bidLineItemPrices[li.id]) || 0) * li.quantity, 0)
+                                  .toLocaleString('en-IN')}
+                              </td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Unit Price (₹) *</label>
+                      <div className="relative">
+                        <IndianRupee size={12} className="absolute left-3 top-2.5 text-slate-400" />
+                        <input
+                          type="number"
+                          min={0}
+                          value={bidUnitPrice}
+                          onChange={(e) => setBidUnitPrice(e.target.value)}
+                          disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                          placeholder="e.g. 25000"
+                          className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                        />
+                      </div>
+                    </div>
+                  )}
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Lead Time (Days)</label>

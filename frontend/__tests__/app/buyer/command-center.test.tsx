@@ -335,8 +335,8 @@ describe('app/buyer/command-center.tsx', () => {
       expect(mockOpenRFQDeepDive).toHaveBeenCalled();
     }
 
-    // Click on KPI outreach card to open deep dive
-    fireEvent.click(screen.getByTitle('Click to open multi-channel deep dive'));
+    // Click on KPI outreach card to open vendor follow-up details
+    fireEvent.click(screen.getByTitle('Click to open vendor follow-up details'));
     expect(mockOpenRFQDeepDive).toHaveBeenCalledWith(mockRfqs[0]);
 
     // Click on RFQ link inside AI Feed

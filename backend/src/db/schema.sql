@@ -190,6 +190,27 @@ CREATE TABLE IF NOT EXISTS org_division_category (
 CREATE INDEX IF NOT EXISTS idx_org_division_category_org ON org_division_category (organization_id);
 CREATE INDEX IF NOT EXISTS idx_org_division_category_user ON org_division_category (user_id);
 
+-- One row per organisation per vendor-onboarding email template
+-- ('category_mapped' = Template A / 'self_map_required' = Template B, see
+-- mailerService.buildVendorCategoryMappingEmail / buildVendorSelfMappingEmail).
+-- A buyer edits the subject/message once here; every future vendor-master
+-- upload reuses it. No row for a (organization_id, template_type) pair means
+-- the hardcoded default wording is used, so this is purely additive — nothing
+-- breaks for a buyer who never opens the settings page.
+CREATE TABLE IF NOT EXISTS vendor_dispatch_templates (
+  uuid VARCHAR(64) PRIMARY KEY,
+  organization_id VARCHAR(64) NOT NULL,
+  template_type VARCHAR(32) NOT NULL,
+  subject VARCHAR(512),
+  message TEXT,
+  updated_by VARCHAR(255),
+  created_ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (organization_id, template_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vendor_dispatch_templates_org ON vendor_dispatch_templates (organization_id);
+
 -- ==============================================================================
 -- SESSION STATE
 -- ==============================================================================

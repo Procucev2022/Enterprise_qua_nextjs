@@ -40,7 +40,7 @@ describe('UI Strings Constants & i18n Format Tests', () => {
     const poText = formatString(UI_STRINGS.templates.poGenerated, {
       poNumber: 'PO-2026-0042',
     });
-    expect(poText).toBe('Purchase Order #PO-2026-0042 created and committed to ERP.');
+    expect(poText).toBe('Pre-Purchase Order #PO-2026-0042 created and committed to ERP.');
 
     const ratingText = formatString(UI_STRINGS.templates.ratingUpdated, {
       vendorName: 'Apex Tools',
