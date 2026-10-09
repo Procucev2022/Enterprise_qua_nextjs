@@ -23,6 +23,7 @@ import {
   Eye,
   FileText,
   Trash2,
+  Sparkles,
 } from 'lucide-react';
 
 const SCREEN = UI_STRINGS.screens.rfqSummary;
@@ -204,6 +205,11 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
         icon: <Pencil size={10} />,
         label: RFQ.sourceManualEntry,
         tone: 'bg-teal-50 dark:bg-teal-950/60 text-teal-700 dark:text-teal-300 border-teal-200 dark:border-teal-800',
+      },
+      ai_extraction: {
+        icon: <Sparkles size={10} />,
+        label: RFQ.sourceAiExtraction || 'AI Extraction',
+        tone: 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800',
       },
     };
     const resolved = meta[source || ''] || {

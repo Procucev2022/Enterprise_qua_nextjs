@@ -1447,8 +1447,8 @@ class StoreService {
       createdAt: rfqData.createdAt || new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
       // No hardcoded fallback date. A fixed '2026-09-20' was previously stamped on
       // any RFQ that arrived without one, so an RFQ could show a deadline the
-      // buyer had not set — and one that was already in the past.
-      deadline: rfqData.deadline || rfqData.targetDeliveryDate || null,
+      deadline: rfqData.deadline || rfqData.targetDeliveryDate || rfqData.target_delivery_date || null,
+      targetDeliveryDate: rfqData.targetDeliveryDate || rfqData.target_delivery_date || rfqData.deadline || null,
       // Budget was previously dropped here, so an RFQ saved through the API came
       // back from hydration with no budget at all: the portfolio value totalled
       // zero and the quote matrix crashed reading it. It is validated as a

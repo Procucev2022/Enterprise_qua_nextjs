@@ -531,6 +531,7 @@ export const UI_STRINGS = {
     sourceEmailGateway: 'via Email Upload',
     sourceEmailUpload: 'Emailed Document',
     sourceManualEntry: 'Manual Entry',
+    sourceAiExtraction: 'AI Extraction',
     sourceFileLabel: 'Source Document',
     sourceEmailLabel: 'Source Email',
     createdLabel: 'Raised On',
@@ -636,6 +637,7 @@ export const UI_STRINGS = {
     sourceEmailGateway: 'via Email Upload',
     sourceEmailUpload: 'Email File Upload',
     sourceManualEntry: 'Manual Web Entry',
+    sourceAiExtraction: 'AI Extraction',
     sourceWebPortal: 'Web App Portal',
 
     // Table

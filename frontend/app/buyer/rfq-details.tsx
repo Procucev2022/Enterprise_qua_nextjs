@@ -70,6 +70,7 @@ const SOURCE_LABELS: Record<RFQSource, string> = {
   email_gateway: DETAILS.sourceEmailGateway,
   email_upload: DETAILS.sourceEmailUpload,
   manual_entry: DETAILS.sourceManualEntry,
+  ai_extraction: DETAILS.sourceAiExtraction || 'AI Extraction',
 };
 
 /** Line-item columns the buyer can order the table by. */
@@ -1214,14 +1215,16 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         >
           <Row label={DETAILS.sourceLabel}>
             <span className="inline-flex items-center gap-1.5">
-              {activeRfq.source === 'email_gateway' ? (
+              {activeRfq.source === 'email_gateway' || activeRfq.source === 'email_upload' ? (
                 <Mail size={12} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
               ) : activeRfq.source === 'manual_entry' ? (
                 <Pencil size={12} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
+              ) : activeRfq.source === 'ai_extraction' ? (
+                <Sparkles size={12} className="text-purple-600 dark:text-purple-400 shrink-0" />
               ) : (
                 <Globe size={12} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
               )}
-              {activeRfq.source ? SOURCE_LABELS[activeRfq.source] : DETAILS.unsetValue}
+              {activeRfq.source ? (SOURCE_LABELS[activeRfq.source] || activeRfq.source) : DETAILS.unsetValue}
             </span>
           </Row>
           <Row label={DETAILS.createdLabel}>

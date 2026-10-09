@@ -71,6 +71,7 @@ const SOURCE_LABELS: Record<string, string> = {
   email_gateway: DETAILS.sourceEmailGateway,
   email_upload: DETAILS.sourceEmailUpload,
   manual_entry: DETAILS.sourceManualEntry,
+  ai_extraction: DETAILS.sourceAiExtraction || 'AI Extraction',
 };
 
 /** Row counter for ids on rows the buyer adds, so React keys stay stable. */

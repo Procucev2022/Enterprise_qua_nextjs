@@ -191,6 +191,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
   const [attachError, setAttachError] = useState<string | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractError, setExtractError] = useState<string | null>(null);
+  const [hasExtracted, setHasExtracted] = useState(false);
   const [showAiInfo, setShowAiInfo] = useState(false);
   const attachInputRef = useRef<HTMLInputElement>(null);
   /**
@@ -449,6 +450,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     if (failures.length > 0) setExtractError(failures.join(' | '));
     if (extracted.length === 0) return;
 
+    setHasExtracted(true);
     setForm((prev) => ({
       ...prev,
       title: prev.title || derivedTitle,
@@ -524,7 +526,9 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
       }
     }
 
-    const result = await createRFQ(toRFQCreatePayload(form, mode1AssignedVendors));
+    const result = await createRFQ(
+      toRFQCreatePayload(form, mode1AssignedVendors, hasExtracted ? 'ai_extraction' : 'manual_entry')
+    );
     setIsSaving(false);
 
     if (!result.success) {

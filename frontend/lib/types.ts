@@ -169,7 +169,7 @@ export interface RFQFollowUpBreakdown {
   autoChasingEnabled: boolean;
 }
 
-export type RFQSource = 'email_gateway' | 'web_portal' | 'email_upload' | 'manual_entry';
+export type RFQSource = 'email_gateway' | 'web_portal' | 'email_upload' | 'manual_entry' | 'ai_extraction';
 
 // ==============================================================================
 // MANUAL RFQ ENTRY
