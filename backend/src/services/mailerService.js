@@ -88,9 +88,7 @@ function getTransporter() {
 }
 
 function fromAddress() {
-
   const user = process.env.SMTP_FROM || process.env.SMTP_USER || 'manav.procucev@gmail.com';
-
   if (user.includes('<') && user.includes('>')) {
     return user;
   }
