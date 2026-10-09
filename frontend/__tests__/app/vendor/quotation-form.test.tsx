@@ -230,21 +230,46 @@ describe("QuotationForm Comprehensive Suite", () => {
       <QuotationFormCustomWrapper onBack={onBack} />,
     );
 
-    expect(
-      screen.getByText(/Sourcing Enquiries & Quotation Tracking/i),
-    ).toBeInTheDocument();
+    expect(screen.queryByText(/Sourcing Enquiries & Quotation Tracking/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/Active sourcing enquiries/i)).toBeInTheDocument();
     expect(
       screen.getByText(/RFQs Received \(Active Enquiries\)/i),
     ).toBeInTheDocument();
     expect(screen.getByText(/Quotations Submitted/i)).toBeInTheDocument();
 
     const backBtn = screen.getByRole("button", {
-      name: /Back to Opportunity Feed/i,
+      name: /Back to Dashboard/i,
     });
     fireEvent.click(backBtn);
     expect(onBack).toHaveBeenCalledTimes(1);
 
     unmount();
+  });
+
+  test("Search narrows the enquiry list and updates the result count", async () => {
+    serveVendorRFQs(["RFQ-2026-00421", "RFQ-2026-00501"]);
+    renderWithProvider(
+      <QuotationFormCustomWrapper onBack={jest.fn()} withSession />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/Showing/)).toHaveTextContent("Showing 2 of 2 enquiries"),
+    );
+    fireEvent.change(screen.getByRole("searchbox", { name: /Search enquiries/i }), {
+      target: { value: "00501" },
+    });
+
+    expect(screen.getByText(/Showing/)).toHaveTextContent("Showing 1 of 2 enquiries");
+    expect(screen.getByText("Opportunity RFQ-2026-00501")).toBeInTheDocument();
+    expect(screen.queryByText("Opportunity RFQ-2026-00421")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("combobox", { name: /Filter enquiries by status/i }), {
+      target: { value: "closed" },
+    });
+    expect(screen.getByText("No matching enquiries")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Clear search and filters/i }));
+    expect(screen.getByText(/Showing/)).toHaveTextContent("Showing 2 of 2 enquiries");
   });
 
   test("View Details navigates to the vendor RFQ details route for the clicked row", async () => {
@@ -582,7 +607,7 @@ describe("QuotationForm Comprehensive Suite", () => {
     // Should render normally without throwing despite the failed lookup
     await waitFor(() =>
       expect(
-        screen.getByText(/Sourcing Enquiries & Quotation Tracking/i),
+        screen.getByText(/Active sourcing enquiries/i),
       ).toBeInTheDocument(),
     );
   });
@@ -796,7 +821,7 @@ describe("QuotationForm Comprehensive Suite", () => {
     });
     // No throw — handled gracefully via a warning toast
     expect(
-      screen.getByText(/Sourcing Enquiries & Quotation Tracking/i),
+      screen.getByText(/Active sourcing enquiries/i),
     ).toBeInTheDocument();
   });
 
@@ -876,7 +901,7 @@ describe("QuotationForm Comprehensive Suite", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText(/Sourcing Enquiries & Quotation Tracking/i),
+        screen.getByText(/Active sourcing enquiries/i),
       ).toBeInTheDocument(),
     );
   });
@@ -908,7 +933,7 @@ describe("QuotationForm Comprehensive Suite", () => {
     // surfacing a blocking error over an already-successful download.
     await waitFor(() =>
       expect(
-        screen.getByText(/Sourcing Enquiries & Quotation Tracking/i),
+        screen.getByText(/Active sourcing enquiries/i),
       ).toBeInTheDocument(),
     );
   });
@@ -1047,8 +1072,39 @@ describe("QuotationForm Comprehensive Suite", () => {
                 quotesCount: 1,
                 targetDeliveryDate: "2026-09-25",
                 budget: 220000,
+                deliveryLocation: "Pune Plant",
                 createdAt: "2026-09-01",
                 chasingActive: false,
+                extractedEntities: [
+                  {
+                    id: "item-hvac",
+                    itemName: "Air Handling Unit",
+                    quantity: 2,
+                    unit: "units",
+                  },
+                ],
+                inquiries: [
+                  {
+                    id: "inquiry-mine",
+                    rfqNumber: "RFQ-2026-00501",
+                    vendorId: MOCK_MY_VENDOR.id,
+                    vendorName: MOCK_MY_VENDOR.name,
+                    vendorEmail: MOCK_MY_VENDOR.email,
+                    message: "Please confirm the drawing revision.",
+                    createdAt: "2026-09-02T10:00:00.000Z",
+                    status: "answered",
+                    reply: "Use revision C.",
+                  },
+                  {
+                    id: "inquiry-other-vendor",
+                    rfqNumber: "RFQ-2026-00501",
+                    vendorId: "another-vendor",
+                    vendorName: "Another Vendor",
+                    message: "Other vendor's private question.",
+                    createdAt: "2026-09-02T11:00:00.000Z",
+                    status: "open",
+                  },
+                ],
                 quotes: [
                   {
                     vendorId: MOCK_MY_VENDOR.id,
@@ -1086,7 +1142,13 @@ describe("QuotationForm Comprehensive Suite", () => {
     // "Submit Quote" is replaced by the real PO Generated status for this RFQ
     expect(await screen.findByText("PO Generated")).toBeInTheDocument();
     expect(screen.getByText("Quote Submitted")).toBeInTheDocument();
-    expect(screen.getAllByText("Portal Submission").length).toBe(2);
+    expect(screen.getAllByText(/Portal Submission/).length).toBe(2);
+    expect(screen.getByText("₹10,000")).toBeInTheDocument();
+    expect(screen.getByText("Air Handling Unit · 2 units")).toBeInTheDocument();
+    expect(screen.getByText(/Pune Plant/)).toBeInTheDocument();
+    expect(screen.getByText("1 sent · Buyer replied")).toBeInTheDocument();
+    expect(screen.getByText("Latest reply: Use revision C.")).toBeInTheDocument();
+    expect(screen.queryByText("Other vendor's private question.")).not.toBeInTheDocument();
   });
 
   test("sends a real auth token when one is present, and handles a non-ok vendor lookup response", async () => {

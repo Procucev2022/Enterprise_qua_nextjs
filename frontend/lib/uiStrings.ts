@@ -182,8 +182,8 @@ export const UI_STRINGS = {
         description: 'Every RFQ raised across all buyers',
       },
       opportunityFeed: {
-        label: 'Opportunity Feed',
-        description: 'Matched enquiries open for quoting',
+        label: 'Dashboard',
+        description: 'Your enquiries, quotes, and sourcing activity',
       },
       bidQuotes: {
         label: 'Bid Quotes',

@@ -6,7 +6,6 @@ import { authClient } from '@/lib/authClient';
 import { findMajorForMinor, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import {
-  Truck,
   ShieldCheck,
   CheckCircle2,
   MapPin,
@@ -22,7 +21,6 @@ import {
   Globe,
   Sliders,
   Layers,
-  Sparkles,
   CreditCard,
   AlertCircle,
   Loader2,
@@ -417,22 +415,15 @@ export default function VendorProfilePage() {
 
   return (
     <div className="space-y-6 animate-fade-in pb-4">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white flex items-center gap-2">
-              <Truck className="text-emerald-600 dark:text-emerald-400" /> Vendor Supplier Profile
-            </h1>
-            <span className="badge badge-emerald font-mono uppercase">
-              {vendorSubscription} Tier Supplier
-            </span>
-          </div>
-          <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
+      <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
+        <div className="space-y-1">
+          <span className="badge badge-emerald font-mono uppercase">
+            {vendorSubscription} Tier Supplier
+          </span>
+          <p className="max-w-3xl text-xs leading-relaxed text-slate-500 dark:text-gray-400">
             Manage company registration, PAN/GSTIN compliance, and define your manufacturing / supply categories for direct buyer RFQs.
           </p>
         </div>
-
         <button
           onClick={handleSaveProfile}
           disabled={isLoadingProfile || isSaving}
