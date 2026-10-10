@@ -87,6 +87,31 @@ describe('downloadBidComparisonExcel', () => {
     );
   });
 
+  test('matches vendor item by name when id is not present or does not match', () => {
+    const quote = makeQuote({
+      lineItemQuotes: [
+        { itemName: 'Pump', quantity: 2, unitPrice: 520, totalPrice: 1040 },
+        { itemName: 'Unknown', quantity: 1, unitPrice: 10, totalPrice: 10 },
+      ],
+    });
+    const rfq = makeRfq({
+      extractedEntities: [
+        { id: '', itemName: ' Pump ', quantity: 2, unit: 'Nos', targetDate: '', technicalSpecs: '', confidence: 1, category: 'IT', majorCategory: 'IT', minorCategory: '' },
+        { id: 'li-999', itemName: '', quantity: 1, unit: 'Nos', targetDate: '', technicalSpecs: '', confidence: 1, category: 'IT', majorCategory: 'IT', minorCategory: '' },
+      ],
+    });
+
+    downloadBidComparisonExcel(rfq, [quote]);
+
+    expect(XLSX.utils.json_to_sheet).toHaveBeenCalledWith(
+      [
+        { Item: ' Pump ', Quantity: 2, 'Acme Co — Unit Price': 520, 'Acme Co — Total': 1040 },
+        { Item: '', Quantity: 1, 'Acme Co — Unit Price': '100 (not itemized)', 'Acme Co — Total': '1000 (not itemized)' },
+      ],
+      expect.anything()
+    );
+  });
+
   test('triggers a download with the RFQ number in the filename', () => {
     downloadBidComparisonExcel(makeRfq(), [makeQuote()]);
 
