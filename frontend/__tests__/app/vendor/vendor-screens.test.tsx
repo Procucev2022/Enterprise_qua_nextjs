@@ -159,11 +159,12 @@ describe('Vendor Screens Comprehensive Suite', () => {
       fireEvent.change(categorySelect, { target: { value: 'Valves' } });
       fireEvent.change(categorySelect, { target: { value: 'All' } });
 
-      // Test Bulk Excel Import
-      const bulkBtn = screen.getByRole('button', { name: /Simulate Bulk Excel Import/i });
-      await act(async () => {
-        fireEvent.click(bulkBtn);
-      });
+      // Test Download Excel Template & Upload Input
+      const downloadBtn = screen.getByRole('button', { name: /Download Excel Template/i });
+      fireEvent.click(downloadBtn);
+
+      const uploadInput = screen.getByLabelText(/Upload catalogue Excel workbook/i);
+      expect(uploadInput).toBeInTheDocument();
 
       // Test Summary filter toggle
       const summaryBtn = screen.getByRole('button', { name: /Summary:/i });

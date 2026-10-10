@@ -3527,7 +3527,7 @@ class StoreService {
     };
 
     /** Template A when the vendor has a buyer-mapped category, else Template B. */
-    const buildMappingEmail = (rec, { to, recipientName, vendorCode, tempPassword }) => {
+    const buildMappingEmail = (rec, { to, recipientName, vendorCode, tempPassword, contactPhone }) => {
       const hasMapping = isMappedRecord(rec);
       if (hasMapping) {
         const override = dispatchTemplates.category_mapped || {};
@@ -3543,6 +3543,7 @@ class StoreService {
             customSubject: override.subject,
             customMessage: override.message,
             tempPassword,
+            contactPhone,
           }),
         };
       }
@@ -3557,6 +3558,7 @@ class StoreService {
           customSubject: override.subject,
           customMessage: override.message,
           tempPassword,
+          contactPhone,
         }),
       };
     };
@@ -3759,6 +3761,7 @@ class StoreService {
         recipientName: vendor.contactPerson || vendor.name,
         vendorCode: vendor.id,
         tempPassword,
+        contactPhone: String(rec.phone || vendor.phone || '').trim(),
       });
 
       try {

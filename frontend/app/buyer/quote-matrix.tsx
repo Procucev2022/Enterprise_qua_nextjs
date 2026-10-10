@@ -8,6 +8,7 @@ import { UI_STRINGS } from '@/lib/uiStrings';
 import type { RFQItem, QuoteComparison } from '@/lib/types';
 import { PurchaseOrderModal, RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
 import { downloadBidComparisonExcel } from '@/lib/bidComparisonExport';
+import QuoteAttachmentLink from '@/app/components/QuoteAttachmentLink';
 import {
   Sparkles,
   CheckCircle2,
@@ -420,6 +421,27 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                     >
                       <p className="font-semibold text-slate-900 dark:text-gray-200">{q.paymentTerms}</p>
                       <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-1">{q.remarks}</p>
+                    </td>
+                  ))}
+                </tr>
+
+                {/* Bid Documents */}
+                <tr className="hover:bg-slate-50/80 dark:hover:bg-gray-800/20">
+                  <td className="p-4 font-bold text-slate-800 dark:text-gray-200">Bid Documents</td>
+                  {quotes.map((quote) => (
+                    <td
+                      key={quote.vendorId}
+                      className={`p-4 ${quote.isPreferred ? 'bg-indigo-50/40 dark:bg-indigo-950/20 border-x-2 border-indigo-600 dark:border-indigo-500' : ''}`}
+                    >
+                      <div className="space-y-1">
+                        {(quote.attachments || []).length === 0 ? (
+                          <span className="text-[11px] text-slate-400">No documents attached</span>
+                        ) : (
+                          (quote.attachments || []).map((attachment) => (
+                            <QuoteAttachmentLink key={attachment.id} rfqId={currentRFQ.id} attachment={attachment} />
+                          ))
+                        )}
+                      </div>
                     </td>
                   ))}
                 </tr>

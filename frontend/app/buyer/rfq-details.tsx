@@ -12,6 +12,7 @@ import {
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { rfqAttachmentUrl, updateRFQ, replyToRFQInquiry, submitRFQInquiry } from '@/lib/rfqClient';
+import QuoteAttachmentLink from '@/app/components/QuoteAttachmentLink';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import type { ExtractedEntity, QuoteComparison, RFQAttachment, RFQInquiry, RFQItem, RFQSource } from '@/lib/types';
 import {
@@ -1745,6 +1746,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                     <th className="px-4 py-2.5">{DETAILS.colLeadTime}</th>
                     <th className="px-4 py-2.5">{DETAILS.colCompliance}</th>
                     <th className="px-4 py-2.5 text-center">{DETAILS.colMatchScore}</th>
+                    <th className="px-4 py-2.5">Bid Documents & Terms</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1768,6 +1770,22 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                         <td className="px-4 py-2.5 text-slate-500 dark:text-gray-400">{quote.complianceStatus}</td>
                         <td className="px-4 py-2.5 text-center mono font-bold text-emerald-700 dark:text-emerald-400">
                           {displayScore}%
+                        </td>
+                        <td className="px-4 py-2.5 min-w-56">
+                          <div className="space-y-1.5">
+                            <div className="text-[10px] text-slate-500 dark:text-gray-400">
+                              {quote.paymentTerms || 'Payment terms not specified'}
+                              {quote.submittedAt ? ` · Submitted ${formatIndianDateTime(quote.submittedAt)}` : ''}
+                            </div>
+                            {quote.remarks && <p className="text-[10px] text-slate-600 dark:text-gray-300 break-words">{quote.remarks}</p>}
+                            {(quote.attachments || []).map((attachment) => (
+                              <QuoteAttachmentLink
+                                key={attachment.id}
+                                rfqId={activeRfq?.id || activeRfq?.rfqNumber || ''}
+                                attachment={attachment}
+                              />
+                            ))}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -1803,6 +1821,20 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                       {formatString(DETAILS.leadTimeDays, { days: quote.leadTimeDays })}
                     </CardField>
                     <CardField label={DETAILS.colCompliance}>{quote.complianceStatus}</CardField>
+                    <div className="col-span-2 rounded-lg bg-slate-50 dark:bg-gray-950/50 p-2.5 space-y-1.5">
+                      <p className="text-[10px] text-slate-600 dark:text-gray-300">
+                        {quote.paymentTerms || 'Payment terms not specified'}
+                        {quote.submittedAt ? ` · Submitted ${formatIndianDateTime(quote.submittedAt)}` : ''}
+                      </p>
+                      {quote.remarks && <p className="text-[10px] text-slate-500 dark:text-gray-400">{quote.remarks}</p>}
+                      {(quote.attachments || []).map((attachment) => (
+                        <QuoteAttachmentLink
+                          key={attachment.id}
+                          rfqId={activeRfq?.id || activeRfq?.rfqNumber || ''}
+                          attachment={attachment}
+                        />
+                      ))}
+                    </div>
                   </div>
                 </div>
                 );

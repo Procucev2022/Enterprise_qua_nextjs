@@ -40,6 +40,17 @@ async function authenticate(req, res, next) {
   }
 
   req.user = verification.user;
+  if (
+    verification.user.role === 'vendor' &&
+    verification.user.passwordChangeRequired === true &&
+    !(req.method === 'POST' && req.originalUrl.split('?')[0] === '/api/auth/change-password')
+  ) {
+    return res.status(403).json({
+      success: false,
+      passwordChangeRequired: true,
+      error: 'Change your temporary password before continuing.',
+    });
+  }
   return next();
 }
 

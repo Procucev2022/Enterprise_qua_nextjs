@@ -726,6 +726,15 @@ function row(label, value) {
   return `<tr><td style="padding: 6px 10px; font-weight: bold; width: 40%;">${label}</td><td style="padding: 6px 10px;">${value}</td></tr>`;
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // ── OTP ──────────────────────────────────────────────────────────────────────
 
 function buildOtpEmail(to, code, expiresInSeconds, context = {}) {
@@ -1468,6 +1477,7 @@ function buildVendorCategoryMappingEmail({
   customSubject,
   customMessage,
   tempPassword,
+  contactPhone,
 }) {
   const buyer = buyerOrganizationName || 'A buyer on Procucev';
   const minorHtml = categoryList(minorCategories);
@@ -1482,6 +1492,7 @@ function buildVendorCategoryMappingEmail({
       ${row('Buyer', buyer)}
       ${row('Your vendor code', vendorCode)}
       ${row('Registered Email', to)}
+      ${contactPhone ? row('Contact Number', escapeHtml(contactPhone)) : ''}
       ${tempPassword ? row('Temporary Password', tempPassword) : ''}
       ${row('Primary category', majorCategory)}
     </table>
@@ -1516,7 +1527,7 @@ function buildVendorCategoryMappingEmail({
  * something wrong: the buyer simply had no purchasing history to categorise them
  * from. Nothing about the buyer's spend or other suppliers is disclosed.
  */
-function buildVendorSelfMappingEmail({ to, recipientName, buyerOrganizationName, vendorCode, customSubject, customMessage, tempPassword }) {
+function buildVendorSelfMappingEmail({ to, recipientName, buyerOrganizationName, vendorCode, customSubject, customMessage, tempPassword, contactPhone }) {
   const buyer = buyerOrganizationName || 'A buyer on Procucev';
 
   const defaultMessage = `
@@ -1532,6 +1543,7 @@ function buildVendorSelfMappingEmail({ to, recipientName, buyerOrganizationName,
       ${row('Buyer', buyer)}
       ${row('Your vendor code', vendorCode)}
       ${row('Registered Email', to)}
+      ${contactPhone ? row('Contact Number', escapeHtml(contactPhone)) : ''}
       ${tempPassword ? row('Temporary Password', tempPassword) : ''}
       ${row('Action required', 'Select your supply categories')}
     </table>

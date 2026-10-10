@@ -757,11 +757,13 @@ describe('mailerService', () => {
         vendorCode: 'V-1001',
         majorCategory: 'Industrial Valves',
         minorCategories: ['Ball Valves', 'Gate Valves'],
+        contactPhone: '+91 98765 43210',
       });
       expect(email1.to).toBe('vendor@test.com');
       expect(email1.subject).toContain('Tata Steel has mapped your supply categories');
       expect(email1.html).toContain('Rajesh');
       expect(email1.html).toContain('Ball Valves');
+      expect(email1.html).toContain('+91 98765 43210');
 
       const email2 = mailerService.buildVendorCategoryMappingEmail({
         to: 'vendor2@test.com',
@@ -776,14 +778,25 @@ describe('mailerService', () => {
         recipientName: 'Suresh',
         buyerOrganizationName: 'L&T',
         vendorCode: 'V-2002',
+        contactPhone: '+91 98765 43210',
       });
       expect(email.to).toBe('vendor@test.com');
       expect(email.subject).toBe('Complete Your Category Mapping to Receive Enquiries');
       expect(email.html).toContain('Suresh');
       expect(email.html).toContain('L&T');
+      expect(email.html).toContain('+91 98765 43210');
 
       const emailFallback = mailerService.buildVendorSelfMappingEmail({ to: 'v@test.com' });
       expect(emailFallback.html).toContain('Hello,');
+    });
+
+    test('escapes the vendor phone number rendered in onboarding templates', () => {
+      const email = mailerService.buildVendorSelfMappingEmail({
+        to: 'vendor@test.com',
+        contactPhone: '<script>alert(1)</script>',
+      });
+      expect(email.html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+      expect(email.html).not.toContain('<script>alert(1)</script>');
     });
 
     test('buildVendorCategoryMappingEmail uses a buyer-saved custom subject/message when provided', () => {
@@ -1575,4 +1588,3 @@ describe('mailerService', () => {
     });
   });
 });
-

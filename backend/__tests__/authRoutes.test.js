@@ -291,8 +291,23 @@ describe('Authentication against the account records (/api/auth)', () => {
         role: 'buyer',
         orgId: buyerRecord().orgId,
         orgName: 'Navin Chaudhary Enterprises',
+        mobile: '+919157154504',
+        passwordChangeRequired: false,
       });
       expect(authService.verifySessionToken(result.token).valid).toBe(true);
+    });
+
+    test('marks a provisioned vendor session as requiring a password change', async () => {
+      const vendor = buyerRecord({
+        role: 'vendor',
+        resetPasswordRequired: true,
+      });
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(vendor);
+
+      const result = await authService.authenticateWithPassword(EMAIL, PASSWORD, '::1', MOBILE);
+
+      expect(result.user.passwordChangeRequired).toBe(true);
+      expect(authService.verifySessionToken(result.token).user.passwordChangeRequired).toBe(true);
     });
 
     test('resolves the account by email + registered mobile, not email alone', async () => {
@@ -1158,10 +1173,16 @@ describe('Changing your own password', () => {
       });
 
     test('writes the new password against the primary key and reports success', async () => {
-      await expect(call()).resolves.toEqual({
-        success: true,
-        message: AUTH_MESSAGES.CHANGE_PASSWORD_SUCCESS,
-      });
+      const result = await call();
+      expect(result).toEqual(
+        expect.objectContaining({
+          success: true,
+          message: AUTH_MESSAGES.CHANGE_PASSWORD_SUCCESS,
+          token: expect.any(String),
+          user: expect.objectContaining({ passwordChangeRequired: false }),
+        })
+      );
+      expect(authService.verifySessionToken(result.token).user.passwordChangeRequired).toBe(false);
       expect(identityQueries.updateUserPasswordByUuid).toHaveBeenCalledWith(
         UUID,
         NEXT,
@@ -1250,6 +1271,8 @@ describe('Changing your own password', () => {
       expect(res.json).toHaveBeenCalledWith({
         success: true,
         message: AUTH_MESSAGES.CHANGE_PASSWORD_SUCCESS,
+        token: expect.any(String),
+        user: expect.objectContaining({ passwordChangeRequired: false }),
       });
     });
 
@@ -1314,10 +1337,12 @@ describe('Changing your own password', () => {
         .send({ currentPassword: CURRENT, newPassword: NEXT });
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({
+      expect(res.body).toEqual(expect.objectContaining({
         success: true,
         message: AUTH_MESSAGES.CHANGE_PASSWORD_SUCCESS,
-      });
+        token: expect.any(String),
+        user: expect.objectContaining({ passwordChangeRequired: false }),
+      }));
     });
 
     test('rejects a wrong current password with 400', async () => {
