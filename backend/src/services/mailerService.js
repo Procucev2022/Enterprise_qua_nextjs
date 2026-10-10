@@ -807,20 +807,22 @@ function buildRfqInviteEmail(to, context = {}) {
 
   const inner = `
     <p>${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}</p>
-    <p>${isReminder ? 'This is a reminder to submit your quotation for' : `${rfq.buyerAccountName ? `<strong>${rfq.buyerAccountName}</strong> has` : 'A buyer has'} raised a request for quotation your organisation is matched to.`}</p>
+    <p>Greetings from <strong>Procucev!</strong></p>
+    <p>QUA by <strong>Procucev</strong> is a trusted AI B2B marketplace connecting genuine buyers and quality sellers across India.</p>
+    <p>${isReminder ? 'This is a reminder to submit your quotation for the following verified business enquiry matching your category.' : `We have a new verified business enquiry from ${rfq.buyerAccountName ? `<strong>${rfq.buyerAccountName}</strong>` : 'a corporate buyer'} that matches your category. Please review the details below:`}</p>
     <table style="width: 100%; border-collapse: collapse; margin: 16px 0; background: #f8fafc;">
       ${row('RFQ Number', rfq.rfqNumber)}
       ${row('Requirement', rfq.title)}
       ${row('Category', category)}
       ${row('Target delivery', rfq.targetDeliveryDate || rfq.deadline)}
-      ${row('Delivery location', rfq.deliveryLocation)}
+      ${row('Delivery location / Pincode', rfq.deliveryPincode ? `${rfq.deliveryLocation || ''} (${rfq.deliveryPincode})` : rfq.deliveryLocation)}
       ${budgetFormatted ? row('Budget', budgetFormatted) : ''}
     </table>
     ${
       itemRows
         ? `<table style="width: 100%; border-collapse: collapse; margin-bottom: 16px;">
              <thead><tr style="background: #f1f5f9; text-align: left;">
-               <th style="padding: 8px 10px; border: 1px solid #cbd5e1; font-size: 12px; color: #475569;">Item Description</th>
+               <th style="padding: 8px 10px; border: 1px solid #cbd5e1; font-size: 12px; color: #475569;">Sl No / Description</th>
                <th style="padding: 8px 10px; border: 1px solid #cbd5e1; text-align: center; font-size: 12px; color: #475569;">Quantity</th>
                <th style="padding: 8px 10px; border: 1px solid #cbd5e1; font-size: 12px; color: #475569;">Delivery Location</th>
              </tr></thead>
@@ -855,12 +857,28 @@ function buildRfqInviteEmail(to, context = {}) {
       <p style="margin: 8px 0 0 0; font-size: 11px; color: #64748b;"><em>Our automated AI Email Gateway will parse your reply and immediately reflect your bid in Enterprise QUA Vendor Comparison.</em></p>
       ${items.length > 1 ? '<p style="margin: 8px 0 0 0; font-size: 12px; color: #475569;"><em>For multi-item RFQs, please quote unit price per item in your reply.</em></p>' : ''}
     </div>
+
+    <div style="margin: 16px 0; padding: 12px 16px; background: #fdf4ff; border: 1px solid #f0abfc; border-radius: 8px; font-size: 12px; color: #701a75;">
+      💬 <strong>WhatsApp Real-time Enquiry Alerts:</strong> Just say Hi to <strong>7090170801</strong> to receive new enquiries matching your categories as soon as they come in.
+    </div>
+
+    <p style="font-size: 13px; color: #334155; line-height: 1.5;">
+      Please submit your offer on time to increase your chances of getting the order and connecting directly with the B2B client.<br/>
+      To receive more RFQs, please update your relevant product categories in the QUA portal. Correct categories help you receive more verified business opportunities.
+    </p>
+
     <div style="text-align: center; margin: 24px 0;">
       <a href="${getPublicFrontendUrl()}/vendor/quotation-form?rfq=${encodeURIComponent(rfq.rfqNumber || '')}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 14px; margin-bottom: 10px;">Submit Quotation in 1-Click</a>
       <br />
       <a href="${vendorSignInUrl()}" style="color: #0284c7; text-decoration: underline; font-weight: 600; font-size: 13px;">Open in Vendor Web Portal</a>
     </div>
-    <p style="font-size: 13px; color: #64748b; text-align: center;">Sign in to your Procucev vendor account to review the full enquiry and submit a quotation.</p>
+    <p style="font-size: 12px; color: #64748b; text-align: center;">
+      <em>This is a system generated RFQ invitation. You can also check RFQs regularly on <a href="https://www.procucev.com" style="color: #0284c7;">www.procucev.com</a></em>
+    </p>
+    <p style="font-size: 13px; color: #334155; margin-top: 16px;">
+      <strong>Best Regards,</strong><br/>
+      <strong>Team Procucev</strong>
+    </p>
   `;
 
   return {

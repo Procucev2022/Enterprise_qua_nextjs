@@ -979,6 +979,21 @@ async function addQuote(req, res, next) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
 
+    const isMode0 = targetRfq.sourcingMode === 'mode_0' || targetRfq.sourcingMode === 'v0';
+    const isUnlocked = storeService.isRfqUnlockedForVendor(vendorRecord.id, targetRfq.id);
+    if (isMode0 && !isUnlocked) {
+      logger.warn(
+        `Vendor ${vendorRecord.name} (${vendorRecord.id}) attempted to quote RFQ ${id} without downloading/unlocking it first`,
+        { id, vendorId: vendorRecord.id },
+        'RFQ_CONTROLLER'
+      );
+      return res.status(403).json({
+        success: false,
+        error: 'Please download the RFQ before submitting your bid.',
+        downloadRequired: true,
+      });
+    }
+
     const eligibility = storeService.checkVendorQuotationEligibility(vendorRecord, targetRfq);
     if (!eligibility.eligible) {
       logger.warn(
@@ -1029,6 +1044,54 @@ async function addQuote(req, res, next) {
   }
 }
 
+async function downloadRFQ(req, res, next) {
+  try {
+    const { id } = req.params;
+    const rfq = await storeService.getRFQByIdAsync(id);
+    if (!rfq || !(await canAccessRfq(req, rfq))) {
+      logger.warn(`RFQ not found or access denied for download: ${id}`, { id }, 'RFQ_CONTROLLER');
+      return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+    }
+
+    if (req.user && req.user.role === 'vendor') {
+      const requestingVendor = storeService.getVendorById(req.user.email, 'all');
+      if (!requestingVendor) {
+        return res.status(400).json({ success: false, error: 'Vendor profile not found.' });
+      }
+
+      const used = requestingVendor.rfqDownloadsUsed || 0;
+      storeService.updateVendor(requestingVendor.id, { rfqDownloadsUsed: used + 1 });
+
+      const unlockResult = await storeService.unlockRFQForVendor(requestingVendor.id, rfq.id);
+      if (!unlockResult.success && unlockResult.creditsExhausted) {
+        return res.status(403).json({
+          success: false,
+          error: unlockResult.error || 'You have used all 5 free RFQ download credits. You cannot download another RFQ using your free allowance.',
+          freeCreditsRemaining: unlockResult.freeCreditsRemaining ?? 0,
+          exhausted: true,
+        });
+      }
+
+      const vendor = storeService.getVendorById(requestingVendor.id, 'all');
+      const emailPayload = generateStandardRFQEmail(rfq, vendor);
+      return res.json({
+        success: true,
+        data: emailPayload,
+        unlocked: true,
+        alreadyUnlocked: !!unlockResult.alreadyUnlocked,
+        creditBalance: unlockResult.creditBalance,
+        freeCreditsRemaining: unlockResult.freeCreditsRemaining,
+      });
+    }
+
+    const emailPayload = generateStandardRFQEmail(rfq, null);
+    res.json({ success: true, data: emailPayload });
+  } catch (err) {
+    logger.error(`Error downloading RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
 async function generateEmailPreview(req, res, next) {
   try {
     const { id } = req.params;
@@ -1040,22 +1103,19 @@ async function generateEmailPreview(req, res, next) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
 
-    // This is the real "download RFQ" action both opportunity-feed.tsx and
-    // quotation-form.tsx call. A vendor downloading a marketplace RFQ (one
-    // not raised by the buyer who added them) is normally subject to their
-    // subscription's download quota (Connect/Select only) — temporarily
-    // disabled for every tier per explicit user request while testing the
-    // real-download feature, so free/premium vendors aren't blocked either.
-    // Usage is still tracked so the quota can be re-enabled later without
-    // losing the counters. To restore enforcement, reintroduce the
-    // quota/used check that used to 403 here (see git history on this file).
     if (req.user && req.user.role === 'vendor') {
       const requestingVendor = storeService.getVendorById(req.user.email, 'all');
       if (requestingVendor) {
-        const isDirect = storeService.isVendorMappedToRfqBuyer(requestingVendor, rfq);
-        if (!isDirect) {
-          const used = requestingVendor.rfqDownloadsUsed || 0;
-          storeService.updateVendor(requestingVendor.id, { rfqDownloadsUsed: used + 1 });
+        const used = requestingVendor.rfqDownloadsUsed || 0;
+        storeService.updateVendor(requestingVendor.id, { rfqDownloadsUsed: used + 1 });
+        const unlockResult = await storeService.unlockRFQForVendor(requestingVendor.id, rfq.id);
+        if (!unlockResult.success && unlockResult.creditsExhausted) {
+          return res.status(403).json({
+            success: false,
+            error: unlockResult.error || 'You have used all 5 free RFQ download credits. You cannot download another RFQ using your free allowance.',
+            freeCreditsRemaining: unlockResult.freeCreditsRemaining ?? 0,
+            exhausted: true,
+          });
         }
       }
     }
@@ -1204,6 +1264,7 @@ module.exports = {
   downloadRFQAttachment,
   updateRFQ,
   deleteRFQ,
+  downloadRFQ,
   addQuote,
   generateEmailPreview,
   triggerBatchChaser,

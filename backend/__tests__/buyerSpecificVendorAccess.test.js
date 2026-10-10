@@ -365,9 +365,10 @@ describe('Buyer-Specific Vendor Access & Unlimited Quotation Rules', () => {
     });
 
     test('when invited by another buyer, vendor consumes free credit upon quote submission', async () => {
-      // Invite vendor X to rfqB1
+      // Invite vendor X to rfqB1 and unlock
       rfqB1.assignedVendors = [{ id: vendorX.id, name: vendorX.name, email: vendorX.email }];
       vendorX.freeQuotationCredits = 5;
+      vendorX.unlockedRfqIds = [rfqB1.id];
 
       const res = await request(app)
         .post(`/api/rfqs/${rfqB1.id}/quotes`)
@@ -384,11 +385,12 @@ describe('Buyer-Specific Vendor Access & Unlimited Quotation Rules', () => {
     });
 
     test('when invited by another buyer, vendor with 0 credits and no subscription is blocked with 403', async () => {
-      // Invite vendor X to rfqB1
+      // Invite vendor X to rfqB1 and unlock
       rfqB1.assignedVendors = [{ id: vendorX.id, name: vendorX.name, email: vendorX.email }];
       vendorX.freeQuotationCredits = 0;
       vendorX.subscriptionPlan = 'premium';
       vendorX.isSubscribed = false;
+      vendorX.unlockedRfqIds = [rfqB1.id];
 
       const res = await request(app)
         .post(`/api/rfqs/${rfqB1.id}/quotes`)

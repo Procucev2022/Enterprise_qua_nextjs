@@ -2611,8 +2611,8 @@ Hello team, sending catalog.
     test('getStatus surfaces vendor gateway status', async () => {
       const status = await emailGatewayService.getStatus();
       expect(status.vendorGateway).toBeDefined();
-      expect(status.vendorGateway.gatewayAddress).toBe('srinu20252026@gmail.com');
-      expect(status.vendorGateway.mailboxUser).toBe('srinu20252026@gmail.com');
+      expect(status.vendorGateway.gatewayAddress).toBe(process.env.VENDOR_EMAIL_GATEWAY_ADDRESS || process.env.VENDOR_EMAIL_GATEWAY_USER || 'srinu20252026@gmail.com');
+      expect(status.vendorGateway.mailboxUser).toBe(process.env.VENDOR_EMAIL_GATEWAY_USER || 'srinu20252026@gmail.com');
     });
 
     test('pollVendorOnce handles unreadable message and already-processed message', async () => {

@@ -755,6 +755,49 @@ async function bulkImportVendors(req, res, next) {
   }
 }
 
+async function getVendorRfqCredits(req, res, next) {
+  try {
+    const { id } = req.params;
+    const user = req.user;
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Authentication required.' });
+    }
+
+    let vendor = null;
+    if (id && id !== 'me' && id !== 'current') {
+      vendor = storeService.getVendorById(id, 'all');
+    }
+    if (!vendor && user.email) {
+      vendor = storeService.getVendorById(user.email, 'all');
+    }
+
+    if (!vendor) {
+      // If vendor not created yet, return default initial credits structure
+      return res.json({
+        success: true,
+        data: {
+          vendorId: user.email,
+          freeCreditsAllocated: 5,
+          freeCreditsUsed: 0,
+          freeCreditsRemaining: 5,
+          isSubscribed: false,
+          subscriptionPlan: 'free',
+          unlockedRfqIds: [],
+        },
+      });
+    }
+
+    const creditsInfo = storeService.getVendorRfqCredits(vendor.id);
+    res.json({
+      success: true,
+      data: creditsInfo,
+    });
+  } catch (err) {
+    logger.error('Error getting vendor RFQ credits', err, 'VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
 async function getBulkImportSessionStatus(req, res, next) {
   try {
     if (!assertBulkImportRole(req, res)) return;
@@ -772,6 +815,7 @@ async function getBulkImportSessionStatus(req, res, next) {
 module.exports = {
   getVendors,
   getVendorById,
+  getVendorRfqCredits,
   createVendor,
   updateVendor,
   deleteVendor,
