@@ -7,6 +7,7 @@ import { authClient } from '@/lib/authClient';
 import { rfqAttachmentUrl, submitRFQInquiry } from '@/lib/rfqClient';
 import { downloadVendorQuotationExcel } from '@/lib/bidComparisonExport';
 import type { RFQQuoteAttachment, VendorOpportunity } from '@/lib/types';
+import * as XLSX from 'xlsx';
 import {
   ArrowLeft,
   Mail,
@@ -24,6 +25,7 @@ import {
   IndianRupee,
   Send,
   Download,
+  Upload,
   AlertCircle,
   MessageSquare,
   HelpCircle,
@@ -280,6 +282,48 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const [inquiryMessage, setInquiryMessage] = useState('');
   const [isInquiring, setIsInquiring] = useState(false);
   const [inquirySuccess, setInquirySuccess] = useState(false);
+  const excelInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleUploadPricedExcel = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !biddingOn) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = new Uint8Array(evt.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        const jsonRows: any[] = XLSX.utils.sheet_to_json(worksheet);
+
+        const newPrices: Record<string, string> = { ...bidLineItemPrices };
+        let matchedCount = 0;
+
+        jsonRows.forEach((row) => {
+          const rawItem = String(row['Item'] || row['Item Name'] || row['Description'] || row['Item Description'] || '').trim().toLowerCase();
+          const rawRate = row['Rate (INR)'] ?? row['Rate'] ?? row['Unit Price (INR)'] ?? row['Unit Price'] ?? row['Price'];
+          const rateVal = Number(rawRate);
+
+          if (rawItem && Number.isFinite(rateVal) && rateVal > 0) {
+            const matched = (biddingOn.lineItems || []).find(
+              (li) => (li.description || '').trim().toLowerCase() === rawItem || (li.id && String(row['Item ID'] || '').trim() === li.id)
+            );
+            if (matched) {
+              newPrices[matched.id] = String(rateVal);
+              matchedCount++;
+            }
+          }
+        });
+
+        setBidLineItemPrices(newPrices);
+        showToast('Excel Imported', `Successfully imported pricing for ${matchedCount} item(s).`, 'success');
+      } catch (err: any) {
+        showToast('Import Failed', err?.message || 'Could not parse the uploaded Excel file.', 'warning');
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = '';
+  };
 
   const openBidForm = (opp: VendorOpportunity) => {
     setBiddingOn(opp);
@@ -1264,19 +1308,45 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 <div className="space-y-3">
                   {(biddingOn.lineItems?.length || 0) > 1 ? (
                     <div>
-                      <div className="flex items-center justify-between mb-1">
+                      {(biddingOn.lineItems?.length || 0) > 10 && (
+                        <div className="mb-2 p-2.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/60 text-blue-800 dark:text-blue-300 text-[11px] flex items-center justify-between gap-2 flex-wrap">
+                          <span className="font-semibold flex items-center gap-1.5">
+                            <Info size={14} className="text-blue-600 dark:text-blue-400 shrink-0" />
+                            Complex RFQ ({biddingOn.lineItems.length} items): For faster submission, download the Excel sheet, enter your rates, and upload it back.
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between mb-1.5 flex-wrap gap-2">
                         <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                          Line Item Pricing *
+                          Line Item Pricing ({biddingOn.lineItems.length} items) *
                         </label>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            downloadVendorQuotationExcel(biddingOn.rfqNumber, biddingOn.lineItems || [], bidLineItemPrices)
-                          }
-                          className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"
-                        >
-                          <Download size={11} /> Export as Excel
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="file"
+                            ref={excelInputRef}
+                            onChange={handleUploadPricedExcel}
+                            accept=".xlsx,.xls,.csv"
+                            className="hidden"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => excelInputRef.current?.click()}
+                            className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 px-2 py-1 rounded border border-emerald-200 dark:border-emerald-800 flex items-center gap-1 transition-colors"
+                            title="Upload filled Excel sheet with item rates"
+                          >
+                            <Upload size={11} /> Upload Priced Excel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              downloadVendorQuotationExcel(biddingOn.rfqNumber, biddingOn.lineItems || [], bidLineItemPrices)
+                            }
+                            className="text-[10px] font-bold text-indigo-700 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/50 hover:bg-indigo-100 px-2 py-1 rounded border border-indigo-200 dark:border-indigo-800 flex items-center gap-1 transition-colors"
+                            title="Download pre-filled RFQ Excel sheet"
+                          >
+                            <Download size={11} /> Export as Excel (Download RFQ)
+                          </button>
+                        </div>
                       </div>
                       <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-gray-800">
                         <table className="w-full min-w-[960px] text-left text-[11px] border-collapse">
