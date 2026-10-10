@@ -900,34 +900,6 @@ export default function LoginPage() {
 
                     <div className="grid grid-cols-3 gap-2">
                       <div className="space-y-1">
-                        <label htmlFor="reg-city" className={fieldLabel}>
-                          City <span className="text-red-500">*</span>
-                        </label>
-                        <input
-                          id="reg-city"
-                          type="text"
-                          placeholder="e.g. Pune"
-                          value={regCity}
-                          onChange={(e) => setRegCity(e.target.value)}
-                          className={plainInput}
-                          required
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label htmlFor="reg-state" className={fieldLabel}>
-                          State <span className="text-red-500">*</span>
-                        </label>
-                        <input
-                          id="reg-state"
-                          type="text"
-                          placeholder="e.g. Maharashtra"
-                          value={regState}
-                          onChange={(e) => setRegState(e.target.value)}
-                          className={plainInput}
-                          required
-                        />
-                      </div>
-                      <div className="space-y-1">
                         <div className="flex items-center justify-between">
                           <label htmlFor="reg-pincode" className={fieldLabel}>
                             Pincode <span className="text-red-500">*</span>
@@ -963,6 +935,34 @@ export default function LoginPage() {
                         {regPincodeError && regPincode.trim().length >= 6 && (
                           <p className="text-[10px] text-rose-500 font-medium">{regPincodeError}</p>
                         )}
+                      </div>
+                      <div className="space-y-1">
+                        <label htmlFor="reg-city" className={fieldLabel}>
+                          City <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          id="reg-city"
+                          type="text"
+                          placeholder="e.g. Pune"
+                          value={regCity}
+                          onChange={(e) => setRegCity(e.target.value)}
+                          className={plainInput}
+                          required
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label htmlFor="reg-state" className={fieldLabel}>
+                          State <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          id="reg-state"
+                          type="text"
+                          placeholder="e.g. Maharashtra"
+                          value={regState}
+                          onChange={(e) => setRegState(e.target.value)}
+                          className={plainInput}
+                          required
+                        />
                       </div>
                     </div>
 
