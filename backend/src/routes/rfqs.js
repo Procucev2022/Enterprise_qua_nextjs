@@ -38,7 +38,8 @@ router.post('/:id/quotes', authenticate, rfqController.addQuote);
 router.post('/:id/inquiries', authenticate, rfqController.addInquiry);
 router.post('/:id/inquiries/:inquiryId/reply', authenticate, rfqController.replyInquiry);
 router.post('/:id/batch-chaser', authenticate, rfqController.triggerBatchChaser);
-router.post('/:id/approve-po', authenticate, rfqController.approvePO);
+// Download / unlock an RFQ with free credit deduction check
+router.post('/:id/download', authenticate, rfqController.downloadRFQ);
 // The preview embeds the RFQ's commercial detail, so it cannot be anonymous.
 router.get('/:id/email-preview', authenticate, rfqController.generateEmailPreview);
 // Category-manager vendor-invite flow: the category-matched candidate pool, and

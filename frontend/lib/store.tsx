@@ -48,6 +48,8 @@ import {
   fetchRFQList,
   updateRFQ as updateRFQRequest,
   deleteRFQ as deleteRFQRequest,
+  fetchVendorRfqCredits,
+  downloadAndUnlockRFQ,
 } from './rfqClient';
 import {
   SOURCING_MODES,
@@ -304,6 +306,14 @@ interface AppContextType {
   vendorCatalogue: any[];
   setVendorCatalogue: React.Dispatch<React.SetStateAction<any[]>>;
 
+  // Vendor Free RFQ Download Credits (5 Free Starter Allowance)
+  vendorFreeCreditsRemaining: number;
+  vendorFreeCreditsAllocated: number;
+  vendorFreeCreditsUsed: number;
+  vendorUnlockedRfqIds: string[];
+  refreshVendorCredits: () => Promise<void>;
+  unlockRFQForVendor: (rfqIdOrNumber: string) => Promise<{ success: boolean; error?: string; exhausted?: boolean; alreadyUnlocked?: boolean }>;
+
   // Vendor 360° AI Self-Evaluation & Infra Fee ($5 or $0 with Connect/Select)
   vendorSelfEvaluationCompleted: boolean;
   setVendorSelfEvaluationCompleted: (completed: boolean) => void;
@@ -515,6 +525,48 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [selectedVendorEvaluation, setSelectedVendorEvaluation] = useState<VendorEvaluationRecord | null>(null);
   const [evaluationModalOpen, setEvaluationModalOpen] = useState<boolean>(false);
 
+  // Vendor Free RFQ Download Credits (5 Free Starter Allowance)
+  const [vendorFreeCreditsRemaining, setVendorFreeCreditsRemaining] = useState<number>(5);
+  const [vendorFreeCreditsAllocated, setVendorFreeCreditsAllocated] = useState<number>(5);
+  const [vendorFreeCreditsUsed, setVendorFreeCreditsUsed] = useState<number>(0);
+  const [vendorUnlockedRfqIds, setVendorUnlockedRfqIds] = useState<string[]>([]);
+
+  const refreshVendorCredits = async () => {
+    if (!authClient.getToken()) return;
+    try {
+      const res = await fetchVendorRfqCredits();
+      if (res.success && res.data) {
+        setVendorFreeCreditsRemaining(res.data.freeCreditsRemaining ?? 5);
+        setVendorFreeCreditsAllocated(res.data.freeCreditsAllocated ?? 5);
+        setVendorFreeCreditsUsed(res.data.freeCreditsUsed ?? 0);
+        setVendorUnlockedRfqIds(res.data.unlockedRfqIds || []);
+      }
+    } catch (err) {
+      console.error('Failed to refresh vendor RFQ credits:', err);
+    }
+  };
+
+  const unlockRFQForVendor = async (rfqIdOrNumber: string) => {
+    const res = await downloadAndUnlockRFQ(rfqIdOrNumber);
+    if (res.success) {
+      if (res.freeCreditsRemaining !== undefined) {
+        setVendorFreeCreditsRemaining(res.freeCreditsRemaining);
+        setVendorFreeCreditsUsed(Math.max(0, 5 - res.freeCreditsRemaining));
+      }
+      setVendorUnlockedRfqIds((prev) => {
+        const norm = String(rfqIdOrNumber);
+        return prev.includes(norm) ? prev : [...prev, norm];
+      });
+      return { success: true, alreadyUnlocked: res.alreadyUnlocked };
+    }
+    return {
+      success: false,
+      error: res.error,
+      exhausted: res.exhausted,
+      alreadyUnlocked: false,
+    };
+  };
+
   /**
    * Load this buyer organisation's RFQs from the authenticated API.
    *
@@ -698,6 +750,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     void refreshActiveBuyerAccount();
     void refreshCategoryTaxonomy();
     void refreshAIFeed();
+    void refreshVendorCredits();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on identity,
     // not on the callbacks, which are recreated every render.
   }, [isLoggedIn, currentUserSession?.id, activeBuyerAccount?.id]);
@@ -2413,6 +2466,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         updateVendorSubscription,
         createVendorPaymentLink,
         checkVendorPaymentLinkStatus,
+        vendorFreeCreditsRemaining,
+        vendorFreeCreditsAllocated,
+        vendorFreeCreditsUsed,
+        vendorUnlockedRfqIds,
+        refreshVendorCredits,
+        unlockRFQForVendor,
         vendorRfqDownloadsUsed,
         setVendorRfqDownloadsUsed,
         vendorCatalogue,

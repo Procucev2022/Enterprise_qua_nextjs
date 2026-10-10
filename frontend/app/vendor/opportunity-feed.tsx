@@ -44,6 +44,9 @@ export default function OpportunityFeed({
     currentUserSession,
     refreshFromDB,
     createVendorPaymentLink,
+    vendorFreeCreditsRemaining,
+    vendorUnlockedRfqIds,
+    refreshVendorCredits,
   } = useApp();
   const vendorLabel = currentUserSession?.orgName || currentUserSession?.name || 'Vendor';
 
@@ -194,17 +197,20 @@ export default function OpportunityFeed({
       ...(authClient.getToken() ? { Authorization: `Bearer ${authClient.getToken()}` } : {}),
     };
     try {
-      const res = await fetch(`/api/rfqs/${encodeURIComponent(opp.rfqNumber)}/email-preview`, {
+      const res = await fetch(`/api/rfqs/${encodeURIComponent(opp.rfqNumber)}/download`, {
+        method: 'POST',
         headers: authHeaders,
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
+        if (data.exhausted || res.status === 403) {
+          showToast('Free Credits Exhausted', data.error || 'You have used all 5 free RFQ download credits. You cannot download another RFQ using your free allowance.', 'warning');
+          return;
+        }
         throw new Error(data.error || 'Could not generate the RFQ specification.');
       }
 
-      // The RFQ text info as a real downloaded file, not just a toast
-      // claiming an email was sent — a vendor without inbox access to that
-      // address previously had no way to actually see it.
+      // The RFQ text info as a real downloaded file
       const htmlBody: string = data.data?.htmlBody || '';
       const specUrl = URL.createObjectURL(new Blob([htmlBody], { type: 'text/html' }));
       const specLink = document.createElement('a');
@@ -215,10 +221,7 @@ export default function OpportunityFeed({
       specLink.remove();
       URL.revokeObjectURL(specUrl);
 
-      // Supporting documents the buyer attached, scoped server-side the
-      // same way as the vendor RFQ details page (canAccessRfq /
-      // vendorCoversRFQ), so this only returns attachments this vendor can
-      // already see.
+      // Supporting documents the buyer attached
       try {
         const rfqRes = await fetch(`/api/rfqs/${encodeURIComponent(opp.rfqNumber)}`, { headers: authHeaders });
         const rfqData = await rfqRes.json();
@@ -237,10 +240,10 @@ export default function OpportunityFeed({
           URL.revokeObjectURL(fileUrl);
         }
       } catch {
-        // The specification itself already downloaded; a failure fetching
-        // attachments is surfaced by their absence, not a blocking error.
+        // Ignored
       }
 
+      await refreshVendorCredits();
       if (!isDirect) {
         await refreshFromDB();
       }

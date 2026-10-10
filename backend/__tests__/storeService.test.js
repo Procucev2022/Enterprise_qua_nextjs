@@ -1373,7 +1373,7 @@ describe('Store Service & Business Operations', () => {
       await new Promise((r) => setImmediate(r)); // let the rejected promise settle
     });
 
-    test('excludes category mismatched vendors from invite shortlist and sends update request email', async () => {
+    test('allows Category Manager manual override for mismatched vendor and sends invite without mismatch email', async () => {
       const mismatchEmailSpy = jest.spyOn(mailerService, 'sendVendorCategoryMismatchEmail').mockResolvedValue({ sent: true });
       const matchedVendor = storeService.addVendor({ name: 'Matching Vendor', email: 'match@ex.com', majorCategory: 'Mechanical' });
       const mismatchedVendor = storeService.addVendor({ name: 'Mismatched Vendor', email: 'mismatch@ex.com', majorCategory: 'Civil Works' });
@@ -1381,19 +1381,16 @@ describe('Store Service & Business Operations', () => {
       const rfq = storeService.createRFQ({ title: 'Mechanical RFQ', category: 'Mechanical', sourcingMode: 'mode_3' });
       const result = await storeService.inviteVendorsToRFQ(rfq.id, [matchedVendor.id, mismatchedVendor.id], 'cm@ex.com');
 
-      expect(result.invitedCount).toBe(1);
-      expect(result.excludedCount).toBe(1);
+      expect(result.invitedCount).toBe(2);
+      expect(result.overrideCount).toBe(1);
       expect(result.updatedRFQ.assignedVendors.map((v) => v.id)).toContain(matchedVendor.id);
-      expect(result.updatedRFQ.assignedVendors.map((v) => v.id)).not.toContain(mismatchedVendor.id);
-      expect(mismatchEmailSpy).toHaveBeenCalledWith('mismatch@ex.com', expect.objectContaining({
-        rfqNumber: rfq.rfqNumber,
-        vendorName: 'Mismatched Vendor',
-      }));
+      expect(result.updatedRFQ.assignedVendors.map((v) => v.id)).toContain(mismatchedVendor.id);
+      expect(mismatchEmailSpy).not.toHaveBeenCalled();
     });
   });
 
   describe('validateAndShortlistVendors', () => {
-    test('filters out vendors with category mismatch and dispatches profile update emails', () => {
+    test('filters out vendors with category mismatch without sending mismatch emails and records audit log', () => {
       const mismatchEmailSpy = jest.spyOn(mailerService, 'sendVendorCategoryMismatchEmail').mockResolvedValue({ sent: true });
       const rfq = storeService.createRFQ({ title: 'Electrical Requisition', category: 'Electrical Equipment' });
 
@@ -1405,10 +1402,7 @@ describe('Store Service & Business Operations', () => {
       const res = storeService.validateAndShortlistVendors(rfq, vendorList, 'buyer@company.com');
       expect(res.shortlisted.map((v) => v.id)).toEqual(['v-elec']);
       expect(res.excluded.map((v) => v.id)).toEqual(['v-mech']);
-      expect(mismatchEmailSpy).toHaveBeenCalledWith('mech@ex.com', expect.objectContaining({
-        rfqNumber: rfq.rfqNumber,
-        rfqCategory: 'Electrical Equipment',
-      }));
+      expect(mismatchEmailSpy).not.toHaveBeenCalled();
     });
   });
 

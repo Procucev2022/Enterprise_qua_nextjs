@@ -739,3 +739,82 @@ export async function requestVendorCategoryUpdateEmail(
   }
 }
 
+export interface VendorCreditInfo {
+  vendorId: string;
+  freeCreditsAllocated: number;
+  freeCreditsUsed: number;
+  freeCreditsRemaining: number;
+  isSubscribed: boolean;
+  subscriptionPlan: string;
+  unlockedRfqIds: string[];
+}
+
+/**
+ * Fetch authoritative server-side RFQ download credit balance for the authenticated vendor.
+ */
+export async function fetchVendorRfqCredits(vendorId?: string): Promise<{
+  success: boolean;
+  data?: VendorCreditInfo;
+  error?: string;
+}> {
+  const token = authClient.getToken();
+  try {
+    const url = vendorId && vendorId !== 'me' ? `/api/vendors/${encodeURIComponent(vendorId)}/rfq-credits` : '/api/vendors/rfq-credits';
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+    const body = await res.json();
+    if (!res.ok || !body.success) {
+      return { success: false, error: body.error || 'Failed to fetch vendor RFQ credits.' };
+    }
+    return { success: true, data: body.data };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error fetching RFQ credits.' };
+  }
+}
+
+/**
+ * Atomically download & unlock an RFQ, consuming 1 credit if using free allowance.
+ */
+export async function downloadAndUnlockRFQ(rfqIdOrNumber: string): Promise<{
+  success: boolean;
+  data?: any;
+  unlocked?: boolean;
+  alreadyUnlocked?: boolean;
+  freeCreditsRemaining?: number;
+  exhausted?: boolean;
+  error?: string;
+}> {
+  const token = authClient.getToken();
+  try {
+    const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqIdOrNumber)}/download`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+    const body = await res.json();
+    if (!res.ok || !body.success) {
+      return {
+        success: false,
+        error: body.error || 'Failed to download RFQ.',
+        exhausted: body.exhausted || false,
+        freeCreditsRemaining: body.freeCreditsRemaining,
+      };
+    }
+    return {
+      success: true,
+      data: body.data,
+      unlocked: body.unlocked,
+      alreadyUnlocked: body.alreadyUnlocked,
+      freeCreditsRemaining: body.freeCreditsRemaining,
+    };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error downloading RFQ.' };
+  }
+}
+
