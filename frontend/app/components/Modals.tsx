@@ -1382,13 +1382,30 @@ export function ActivePipelineModal({
     if (sourceFilter === 'manual_entry' && rfq.source !== 'manual_entry') return false;
 
     if (!searchTerm) return true;
-    const term = searchTerm.toLowerCase();
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return true;
+
+    const matchesLineItems = (rfq.extractedEntities || []).some(
+      (item) => ((item.description || '') + ' ' + (item.itemName || '') + ' ' + (item.technicalSpecs || '')).toLowerCase().includes(term)
+    ) || (rfq.lineItems || []).some(
+      (li) => (li.description || '').toLowerCase().includes(term)
+    );
+    const matchesVendors = (rfq.assignedVendors || []).some(
+      (v) => ((v.name || '') + ' ' + (v.contactPerson || '') + ' ' + (v.email || '')).toLowerCase().includes(term)
+    );
+
     return (
-      rfq.rfqNumber.toLowerCase().includes(term) ||
-      rfq.title.toLowerCase().includes(term) ||
-      rfq.category.toLowerCase().includes(term) ||
+      (rfq.rfqNumber || '').toLowerCase().includes(term) ||
+      (rfq.title || '').toLowerCase().includes(term) ||
+      (rfq.category || '').toLowerCase().includes(term) ||
+      (rfq.minorCategory || '').toLowerCase().includes(term) ||
+      (rfq.majorCategory || '').toLowerCase().includes(term) ||
       (rfq.status && rfq.status.toLowerCase().includes(term)) ||
-      (rfq.source && rfq.source.toLowerCase().includes(term))
+      (rfq.source && rfq.source.toLowerCase().includes(term)) ||
+      (rfq.sourcingMode && rfq.sourcingMode.toLowerCase().includes(term)) ||
+      (rfq.targetDeliveryDate && rfq.targetDeliveryDate.toLowerCase().includes(term)) ||
+      matchesLineItems ||
+      matchesVendors
     );
   });
 
