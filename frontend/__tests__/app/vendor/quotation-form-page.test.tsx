@@ -44,9 +44,11 @@ const SAMPLE_RFQ: any = {
 
 function PageWrapper({ seedRFQ }: { seedRFQ?: boolean }) {
   const { adoptCreatedRFQ } = useApp();
+  const seededRef = React.useRef(false);
 
   React.useEffect(() => {
-    if (seedRFQ) {
+    if (seedRFQ && !seededRef.current) {
+      seededRef.current = true;
       adoptCreatedRFQ(SAMPLE_RFQ);
     }
   }, [seedRFQ, adoptCreatedRFQ]);
