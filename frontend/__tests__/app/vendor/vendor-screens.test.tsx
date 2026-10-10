@@ -194,8 +194,8 @@ describe('Vendor Screens Comprehensive Suite', () => {
         />
       );
 
-      expect(screen.getByText(/Vendor Workspace & Opportunity Feed/i)).toBeInTheDocument();
-      expect(screen.getAllByText(/Apex Supplies Ltd\./i)[0]).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: /Vendor Workspace & Opportunity Feed/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(/Apex Supplies Ltd\./i)).not.toBeInTheDocument();
 
       // Test search inputs
       const searchInputs = screen.getAllByPlaceholderText(/Specs, location, keywords\.\.\./i);
@@ -223,10 +223,8 @@ describe('Vendor Screens Comprehensive Suite', () => {
         fireEvent.click(bidBtns[0]);
       }
 
-      // Test self-evaluation banner button
-      const evalBtn = screen.getByRole('button', { name: /Start Self-Evaluation|View AI Rating/i });
-      fireEvent.click(evalBtn);
-      expect(onEval).toHaveBeenCalled();
+      expect(screen.queryByRole('button', { name: /Start Self-Evaluation|View AI Rating/i })).not.toBeInTheDocument();
+      expect(onEval).not.toHaveBeenCalled();
     });
   });
 
@@ -331,7 +329,8 @@ describe('Vendor Screens Comprehensive Suite', () => {
       }
       renderWithProvider(<QuotationFormConnectWrapper onBack={onBack} />);
 
-      expect(screen.getByText(/Sourcing Enquiries & Quotation Tracking/i)).toBeInTheDocument();
+      expect(screen.queryByText(/Sourcing Enquiries & Quotation Tracking/i)).not.toBeInTheDocument();
+      expect(screen.getByText(/Active sourcing enquiries/i)).toBeInTheDocument();
       expect(screen.getAllByText(/RFQs Received/i)[0]).toBeInTheDocument();
 
       // Test Download RFQ button inside table
@@ -360,7 +359,7 @@ describe('Vendor Screens Comprehensive Suite', () => {
         }
       }
 
-      const backBtn = screen.getByRole('button', { name: /Back to Opportunity Feed/i });
+      const backBtn = screen.getByRole('button', { name: /Back to Dashboard/i });
       fireEvent.click(backBtn);
       expect(onBack).toHaveBeenCalled();
     });
@@ -370,7 +369,7 @@ describe('Vendor Screens Comprehensive Suite', () => {
     test('renders profile form, modifies inputs, toggles categories, and saves vendor profile', () => {
       renderWithProvider(<VendorProfilePage />);
 
-      expect(screen.getByText(/Vendor Supplier Profile/i)).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: /Vendor Supplier Profile/i })).not.toBeInTheDocument();
       expect(screen.getByText(/Section 1: Supplier Tax & Business Details/i)).toBeInTheDocument();
 
       // Input changes
@@ -407,7 +406,7 @@ describe('Vendor Screens Comprehensive Suite', () => {
         await Promise.resolve();
       });
 
-      expect(screen.getByText(/Vendor Subscription Plans & Quotas/i)).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: /Vendor Subscription Plans & Quotas/i })).not.toBeInTheDocument();
       expect(screen.getAllByText(/Premium Model/i)[0]).toBeInTheDocument();
       expect(screen.getAllByText(/Connect Model/i)[0]).toBeInTheDocument();
       expect(screen.getAllByText(/Select Model/i)[0]).toBeInTheDocument();

@@ -82,9 +82,9 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   const inEvaluationCount = rfqs.filter((r) => r.status === 'In Evaluation').length;
 
   // Intake Source Counts
-  const emailGatewayRFQs = rfqs.filter(r => r.source === 'email_gateway');
-  const webPortalRFQs = rfqs.filter(r => r.source === 'web_portal' || !r.source);
-  const manualRFQs = rfqs.filter(r => r.source === 'manual_entry');
+  const emailGatewayRFQs = rfqs.filter((r) => r.source === 'email_gateway' || r.source === 'email_upload');
+  const webPortalRFQs = rfqs.filter((r) => r.source === 'web_portal' || r.source === 'ai_extraction' || (!r.source && r.source !== 'manual_entry'));
+  const manualRFQs = rfqs.filter((r) => r.source === 'manual_entry');
 
   // Multi-channel totals calculation
   const totalCalls = rfqs.reduce((acc, r) => acc + (r.followUpData?.callStats.total || 0), 0);
@@ -95,7 +95,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   const totalFollowupsToday = totalCalls + totalWhatsApp + totalSMS;
 
   const getSourceBadge = (source?: string, autoCirculated?: boolean) => {
-    if (source === 'email_gateway') {
+    if (source === 'email_gateway' || source === 'email_upload') {
       return (
         <span className="px-2 py-0.5 rounded-md text-[9px] font-bold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 shrink-0">
           <span>via Email Upload</span>
@@ -118,8 +118,9 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
 
   const filteredRFQs = rfqs.filter((rfq) => {
     if (rfqSourceFilter === 'all') return true;
-    if (rfqSourceFilter === 'web_portal') return rfq.source === 'web_portal' || !rfq.source;
+    if (rfqSourceFilter === 'web_portal') return rfq.source === 'web_portal' || rfq.source === 'ai_extraction' || (!rfq.source && rfq.source !== 'manual_entry');
     if (rfqSourceFilter === 'manual_entry') return rfq.source === 'manual_entry';
+    if (rfqSourceFilter === 'email_gateway') return rfq.source === 'email_gateway' || rfq.source === 'email_upload';
     return rfq.source === rfqSourceFilter;
   });
 

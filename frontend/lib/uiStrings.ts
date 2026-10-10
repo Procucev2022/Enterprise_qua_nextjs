@@ -178,8 +178,8 @@ export const UI_STRINGS = {
         description: 'Every RFQ raised across all buyers',
       },
       opportunityFeed: {
-        label: 'Opportunity Feed',
-        description: 'Matched enquiries open for quoting',
+        label: 'Dashboard',
+        description: 'Your enquiries, quotes, and sourcing activity',
       },
       bidQuotes: {
         label: 'Bid Quotes',
@@ -531,6 +531,7 @@ export const UI_STRINGS = {
     sourceEmailGateway: 'via Email Upload',
     sourceEmailUpload: 'Emailed Document',
     sourceManualEntry: 'Manual Entry',
+    sourceAiExtraction: 'AI Extraction',
     sourceFileLabel: 'Source Document',
     sourceEmailLabel: 'Source Email',
     createdLabel: 'Raised On',
@@ -636,6 +637,7 @@ export const UI_STRINGS = {
     sourceEmailGateway: 'via Email Upload',
     sourceEmailUpload: 'Email File Upload',
     sourceManualEntry: 'Manual Web Entry',
+    sourceAiExtraction: 'AI Extraction',
     sourceWebPortal: 'Web App Portal',
 
     // Table
@@ -685,6 +687,11 @@ export const UI_STRINGS = {
     loadFailed: 'The RFQ list could not be loaded. Try again, and if it persists the API may be unavailable.',
     retryAction: 'Retry',
     countSummary: '{count} RFQs across {buyers} buyers',
+    resultCount: 'Showing {shown} of {total} RFQs',
+    filtersLabel: 'RFQ search and filters',
+    filtersApplied: 'Filters applied',
+    clearFilters: 'Clear filters',
+    clearSearch: 'Clear search',
     searchLabel: 'Search',
     searchPlaceholder: 'RFQ number, title, category or buyer…',
     statusFilterLabel: 'Status',
