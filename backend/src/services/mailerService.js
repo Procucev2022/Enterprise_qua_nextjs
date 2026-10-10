@@ -1467,6 +1467,7 @@ function buildVendorCategoryMappingEmail({
   minorCategories = [],
   customSubject,
   customMessage,
+  tempPassword,
 }) {
   const buyer = buyerOrganizationName || 'A buyer on Procucev';
   const minorHtml = categoryList(minorCategories);
@@ -1480,6 +1481,8 @@ function buildVendorCategoryMappingEmail({
     <table style="width: 100%; border-collapse: collapse; margin: 16px 0; background: #f8fafc;">
       ${row('Buyer', buyer)}
       ${row('Your vendor code', vendorCode)}
+      ${row('Registered Email', to)}
+      ${tempPassword ? row('Temporary Password', tempPassword) : ''}
       ${row('Primary category', majorCategory)}
     </table>
     ${
@@ -1491,7 +1494,7 @@ function buildVendorCategoryMappingEmail({
     <p style="margin: 20px 0;">
       <a href="${vendorSignInUrl()}" style="background: #0284c7; color: #ffffff; padding: 12px 20px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Sign in to Procucev</a>
     </p>
-    <p style="font-size: 13px; color: #64748b; margin: 0;">Sign in with this email address; a one-time verification code will be sent to it.</p>
+    <p style="font-size: 13px; color: #64748b; margin: 0;">Sign in with this email address and your password or verification OTP.</p>
   `;
 
   const subject = (customSubject && customSubject.trim() !== '')
@@ -1513,7 +1516,7 @@ function buildVendorCategoryMappingEmail({
  * something wrong: the buyer simply had no purchasing history to categorise them
  * from. Nothing about the buyer's spend or other suppliers is disclosed.
  */
-function buildVendorSelfMappingEmail({ to, recipientName, buyerOrganizationName, vendorCode, customSubject, customMessage }) {
+function buildVendorSelfMappingEmail({ to, recipientName, buyerOrganizationName, vendorCode, customSubject, customMessage, tempPassword }) {
   const buyer = buyerOrganizationName || 'A buyer on Procucev';
 
   const defaultMessage = `
@@ -1528,12 +1531,14 @@ function buildVendorSelfMappingEmail({ to, recipientName, buyerOrganizationName,
     <table style="width: 100%; border-collapse: collapse; margin: 16px 0; background: #f8fafc;">
       ${row('Buyer', buyer)}
       ${row('Your vendor code', vendorCode)}
+      ${row('Registered Email', to)}
+      ${tempPassword ? row('Temporary Password', tempPassword) : ''}
       ${row('Action required', 'Select your supply categories')}
     </table>
     <p style="margin: 20px 0;">
       <a href="${vendorSignInUrl()}" style="background: #0284c7; color: #ffffff; padding: 12px 20px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Complete your category mapping</a>
     </p>
-    <p style="font-size: 13px; color: #64748b; margin: 0;">Sign in with this email address; a one-time verification code will be sent to it. Until your categories are mapped, you will not be matched to enquiries.</p>
+    <p style="font-size: 13px; color: #64748b; margin: 0;">Sign in with this email address and your password or verification OTP. Until your categories are mapped, you will not be matched to enquiries.</p>
   `;
 
   const subject = (customSubject && customSubject.trim() !== '')

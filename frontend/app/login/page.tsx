@@ -112,7 +112,15 @@ export default function LoginPage() {
             setRegPincodePostOffices([]);
           } else {
             setRegPincodeError(null);
-            setRegPincodePostOffices(res.postOffices || []);
+            const pos = res.postOffices || [];
+            setRegPincodePostOffices(pos);
+            if (pos.length > 0) {
+              const primaryPo = pos[0];
+              const matchedCity = primaryPo.District || primaryPo.Division || primaryPo.Name || '';
+              const matchedState = primaryPo.State || '';
+              if (matchedCity) setRegCity(matchedCity);
+              if (matchedState) setRegState(matchedState);
+            }
           }
         } catch {
           setRegPincodeError(null);
@@ -890,37 +898,9 @@ export default function LoginPage() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-3 gap-2 items-start">
                       <div className="space-y-1">
-                        <label htmlFor="reg-city" className={fieldLabel}>
-                          City <span className="text-red-500">*</span>
-                        </label>
-                        <input
-                          id="reg-city"
-                          type="text"
-                          placeholder="e.g. Pune"
-                          value={regCity}
-                          onChange={(e) => setRegCity(e.target.value)}
-                          className={plainInput}
-                          required
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label htmlFor="reg-state" className={fieldLabel}>
-                          State <span className="text-red-500">*</span>
-                        </label>
-                        <input
-                          id="reg-state"
-                          type="text"
-                          placeholder="e.g. Maharashtra"
-                          value={regState}
-                          onChange={(e) => setRegState(e.target.value)}
-                          className={plainInput}
-                          required
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between min-h-[16px]">
                           <label htmlFor="reg-pincode" className={fieldLabel}>
                             Pincode <span className="text-red-500">*</span>
                           </label>
@@ -946,7 +926,7 @@ export default function LoginPage() {
                           placeholder="e.g. 411001"
                           value={regPincode}
                           onChange={(e) => setRegPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                          className={`${plainInput} font-mono ${
+                          className={`${plainInput} font-mono w-full ${
                             regPincodeError ? 'border-red-400 dark:border-red-700' : ''
                           }`}
                           maxLength={6}
@@ -955,6 +935,38 @@ export default function LoginPage() {
                         {regPincodeError && regPincode.trim().length >= 6 && (
                           <p className="text-[10px] text-rose-500 font-medium">{regPincodeError}</p>
                         )}
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex items-center min-h-[16px]">
+                          <label htmlFor="reg-city" className={fieldLabel}>
+                            City <span className="text-red-500">*</span>
+                          </label>
+                        </div>
+                        <input
+                          id="reg-city"
+                          type="text"
+                          placeholder="e.g. Pune"
+                          value={regCity}
+                          onChange={(e) => setRegCity(e.target.value)}
+                          className={`${plainInput} w-full`}
+                          required
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex items-center min-h-[16px]">
+                          <label htmlFor="reg-state" className={fieldLabel}>
+                            State <span className="text-red-500">*</span>
+                          </label>
+                        </div>
+                        <input
+                          id="reg-state"
+                          type="text"
+                          placeholder="e.g. Maharashtra"
+                          value={regState}
+                          onChange={(e) => setRegState(e.target.value)}
+                          className={`${plainInput} w-full`}
+                          required
+                        />
                       </div>
                     </div>
 

@@ -96,7 +96,15 @@ export default function VendorProfilePage() {
             setPincodePostOffices([]);
           } else {
             setPincodeError(null);
-            setPincodePostOffices(res.postOffices || []);
+            const pos = res.postOffices || [];
+            setPincodePostOffices(pos);
+            if (pos.length > 0) {
+              const primaryPo = pos[0];
+              const matchedCity = primaryPo.District || primaryPo.Division || primaryPo.Name || '';
+              const matchedState = primaryPo.State || '';
+              if (matchedCity) setCity(matchedCity);
+              if (matchedState) setState(matchedState);
+            }
           }
         } catch {
           setPincodeError(null);

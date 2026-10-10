@@ -631,7 +631,7 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
 
     clickExtract();
     await waitFor(() => expect(mockExtract).toHaveBeenCalled());
-    expect(screen.getByText(/Gemini 2.5 AI/i)).toBeInTheDocument();
+    expect(screen.getByText(/Extraction Complete/i)).toBeInTheDocument();
   });
 
   it('falls back to a default message when extraction fails without an error string', async () => {

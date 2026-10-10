@@ -534,4 +534,53 @@ describe('app/buyer/buyer-profile.tsx', () => {
       expect(screen.getByText('Save Organization Profile').closest('button')).not.toBeDisabled()
     );
   });
+
+  // ── Sections & Address Coverage ──────────────────────────────────────────
+  it('exercises street, city, state, pincode, contact inputs and save', async () => {
+    await renderLoaded();
+
+    // 1. Street, city, state, pincode inputs
+    const streetInput = screen.getByDisplayValue('L&T House, Ballard Estate');
+    fireEvent.change(streetInput, { target: { value: 'New Industrial Area, MIDC' } });
+
+    const pincodeInput = screen.getByDisplayValue('400001');
+    fireEvent.change(pincodeInput, { target: { value: '400701' } });
+
+    // 2. Contact inputs
+    const contactNameInput = screen.getByDisplayValue('Navin Chaudhary');
+    fireEvent.change(contactNameInput, { target: { value: 'Navin C' } });
+
+    // 3. Save profile
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save Organization Profile'));
+    });
+
+    expect(saveBuyerProfile).toHaveBeenCalled();
+  });
+
+  it('validates pincode debounce, dummy pincode, and invalid format', async () => {
+    jest.useFakeTimers();
+    await renderLoaded();
+
+    const pincodeInput = screen.getByDisplayValue('400001');
+
+    // 1. Clear pincode
+    fireEvent.change(pincodeInput, { target: { value: '' } });
+
+    // 2. Dummy pincode
+    fireEvent.change(pincodeInput, { target: { value: '111111' } });
+    expect(screen.getByText('Invalid or dummy PIN code')).toBeInTheDocument();
+
+    // 3. 6-digit invalid format (starts with 0)
+    fireEvent.change(pincodeInput, { target: { value: '012345' } });
+    expect(screen.getByText('Invalid or dummy PIN code')).toBeInTheDocument();
+
+    // 4. 6-digit valid pincode with debounce timer
+    fireEvent.change(pincodeInput, { target: { value: '411001' } });
+    await act(async () => {
+      jest.advanceTimersByTime(400);
+    });
+
+    jest.useRealTimers();
+  });
 });
