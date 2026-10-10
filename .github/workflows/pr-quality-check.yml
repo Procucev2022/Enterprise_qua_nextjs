@@ -50,7 +50,7 @@ jobs:
   frontend-gate:
     name: Frontend Build, Lint, Typecheck & Coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 50
 
     steps:
       - name: Checkout Repository
