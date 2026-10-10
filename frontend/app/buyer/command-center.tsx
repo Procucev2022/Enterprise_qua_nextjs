@@ -27,6 +27,7 @@ import {
   Smartphone,
   Mail,
   FileSpreadsheet,
+  X,
 } from 'lucide-react';
 
 interface CommandCenterProps {
@@ -127,9 +128,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
     if (!term) return true;
 
     const matchesLineItems = (rfq.extractedEntities || []).some(
-      (item) => ((item.description || '') + ' ' + (item.itemName || '') + ' ' + (item.technicalSpecs || '')).toLowerCase().includes(term)
-    ) || (rfq.lineItems || []).some(
-      (li) => (li.description || '').toLowerCase().includes(term)
+      (item) => ((item.itemName || '') + ' ' + (item.technicalSpecs || '') + ' ' + (item.category || '')).toLowerCase().includes(term)
     );
     const matchesVendors = (rfq.assignedVendors || []).some(
       (v) => ((v.name || '') + ' ' + (v.contactPerson || '') + ' ' + (v.email || '')).toLowerCase().includes(term)
@@ -139,8 +138,6 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
       (rfq.rfqNumber || '').toLowerCase().includes(term) ||
       (rfq.title || '').toLowerCase().includes(term) ||
       (rfq.category || '').toLowerCase().includes(term) ||
-      (rfq.minorCategory || '').toLowerCase().includes(term) ||
-      (rfq.majorCategory || '').toLowerCase().includes(term) ||
       (rfq.status && rfq.status.toLowerCase().includes(term)) ||
       (rfq.source && rfq.source.toLowerCase().includes(term)) ||
       (rfq.sourcingMode && rfq.sourcingMode.toLowerCase().includes(term)) ||
@@ -387,13 +384,13 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
 
             {/* Search Input Bar */}
             <div className="relative w-full">
-              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
               <input
                 type="text"
                 value={rfqSearchTerm}
                 onChange={(e) => setRfqSearchTerm(e.target.value)}
                 placeholder="Search pipeline by RFQ#, title, item, category, status, vendor..."
-                className="w-full pl-8 pr-7 py-1 text-[11px] rounded-lg border border-slate-200 dark:border-gray-700 bg-slate-50/70 dark:bg-gray-800/70 text-slate-800 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                className="has-leading-icon w-full pr-7 py-1 text-[11px] rounded-lg border border-slate-200 dark:border-gray-700 bg-slate-50/70 dark:bg-gray-800/70 text-slate-800 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
               />
               {rfqSearchTerm && (
                 <button

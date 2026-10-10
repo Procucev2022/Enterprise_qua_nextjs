@@ -1386,9 +1386,7 @@ export function ActivePipelineModal({
     if (!term) return true;
 
     const matchesLineItems = (rfq.extractedEntities || []).some(
-      (item) => ((item.description || '') + ' ' + (item.itemName || '') + ' ' + (item.technicalSpecs || '')).toLowerCase().includes(term)
-    ) || (rfq.lineItems || []).some(
-      (li) => (li.description || '').toLowerCase().includes(term)
+      (item) => ((item.itemName || '') + ' ' + (item.technicalSpecs || '') + ' ' + (item.category || '')).toLowerCase().includes(term)
     );
     const matchesVendors = (rfq.assignedVendors || []).some(
       (v) => ((v.name || '') + ' ' + (v.contactPerson || '') + ' ' + (v.email || '')).toLowerCase().includes(term)
@@ -1398,8 +1396,6 @@ export function ActivePipelineModal({
       (rfq.rfqNumber || '').toLowerCase().includes(term) ||
       (rfq.title || '').toLowerCase().includes(term) ||
       (rfq.category || '').toLowerCase().includes(term) ||
-      (rfq.minorCategory || '').toLowerCase().includes(term) ||
-      (rfq.majorCategory || '').toLowerCase().includes(term) ||
       (rfq.status && rfq.status.toLowerCase().includes(term)) ||
       (rfq.source && rfq.source.toLowerCase().includes(term)) ||
       (rfq.sourcingMode && rfq.sourcingMode.toLowerCase().includes(term)) ||
@@ -1749,6 +1745,7 @@ export function IntakeSourcesModal({
   const manualRFQs = rfqs.filter((r) => r.source === 'manual_entry');
 
   const filteredRfqs = rfqs.filter((rfq) => {
+    if (!rfq) return false;
     const matchesTab =
       selectedSourceTab === 'all'
         ? true
@@ -1758,15 +1755,18 @@ export function IntakeSourcesModal({
         ? rfq.source === 'email_gateway' || rfq.source === 'email_upload'
         : rfq.source === selectedSourceTab;
 
-    const matchesSearch =
-      !searchTerm ||
-      rfq.rfqNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      rfq.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      rfq.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (rfq.sourceEmail && rfq.sourceEmail.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (rfq.sourceFileName && rfq.sourceFileName.toLowerCase().includes(searchTerm.toLowerCase()));
+    if (!matchesTab) return false;
+    if (!searchTerm || !searchTerm.trim()) return true;
+    const term = searchTerm.trim().toLowerCase();
 
-    return matchesTab && matchesSearch;
+    return (
+      String(rfq.rfqNumber || '').toLowerCase().includes(term) ||
+      String(rfq.title || '').toLowerCase().includes(term) ||
+      String(rfq.category || '').toLowerCase().includes(term) ||
+      String(rfq.status || '').toLowerCase().includes(term) ||
+      String(rfq.sourceEmail || '').toLowerCase().includes(term) ||
+      String(rfq.sourceFileName || '').toLowerCase().includes(term)
+    );
   });
 
   if (!isOpen) return null;
@@ -2075,14 +2075,17 @@ export function SupplierQuotesModal({
   const compliantQuotesCount = allQuotesWithRfq.filter((q) => q.quote.complianceStatus === 'Fully Compliant').length;
 
   const filteredQuotes = allQuotesWithRfq.filter(({ quote, rfq }) => {
-    const matchesSearch =
-      !searchTerm ||
-      quote.vendorName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      rfq.rfqNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      rfq.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (quote.complianceStatus && quote.complianceStatus.toLowerCase().includes(searchTerm.toLowerCase()));
-
-    return matchesSearch;
+    if (!quote || !rfq) return false;
+    if (!searchTerm || !searchTerm.trim()) return true;
+    const term = searchTerm.trim().toLowerCase();
+    return (
+      String(quote.vendorName || '').toLowerCase().includes(term) ||
+      String(quote.vendorCategory || '').toLowerCase().includes(term) ||
+      String(rfq.rfqNumber || '').toLowerCase().includes(term) ||
+      String(rfq.title || '').toLowerCase().includes(term) ||
+      String(rfq.category || '').toLowerCase().includes(term) ||
+      String(quote.complianceStatus || '').toLowerCase().includes(term)
+    );
   });
 
   const sortedQuotes = [...filteredQuotes].sort((a, b) => {
