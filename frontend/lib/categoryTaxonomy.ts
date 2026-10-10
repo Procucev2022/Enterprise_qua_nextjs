@@ -623,6 +623,16 @@ const KNOWN_KEYWORD_RULES: Array<{
   },
 ];
 
+function matchesRuleKeyword(combined: string, tokens: string[], kw: string): boolean {
+  const kwLower = kw.toLowerCase().trim();
+  if (!kwLower) return false;
+  if (kwLower.includes(' ')) {
+    const escaped = kwLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(^|\\s)${escaped}(\\s|$)`, 'i').test(combined);
+  }
+  return tokens.some((token) => token === kwLower || (kwLower.length >= 4 && token.startsWith(kwLower)));
+}
+
 /**
  * Automatically identify and assign the appropriate major and minor category
  * based on item name and technical specifications keywords.
@@ -641,13 +651,7 @@ export function autoCategorizeItem(
 
   // 1. Direct match against known procurement keyword patterns
   for (const rule of KNOWN_KEYWORD_RULES) {
-    if (
-      rule.keywords.some(
-        (kw) =>
-          combined.includes(kw.toLowerCase()) ||
-          tokens.some((token) => token === kw.toLowerCase() || (kw.length >= 4 && token.startsWith(kw.toLowerCase())))
-      )
-    ) {
+    if (rule.keywords.some((kw) => matchesRuleKeyword(combined, tokens, kw))) {
       return { majorCategory: rule.major, minorCategory: rule.minor };
     }
   }
@@ -656,16 +660,11 @@ export function autoCategorizeItem(
   for (const group of groups) {
     const major = group.majorCategory;
     for (const minor of group.minorCategories || []) {
-      const minorLower = minor.toLowerCase();
-      if (
-        combined.includes(minorLower) ||
-        tokens.some((token) => token.length >= 4 && minorLower.split(/\s+/).includes(token))
-      ) {
+      if (minor && matchesRuleKeyword(combined, tokens, minor)) {
         return { majorCategory: major, minorCategory: minor };
       }
     }
-    const majorLower = major.toLowerCase();
-    if (combined.includes(majorLower) || tokens.some((token) => token.length >= 4 && majorLower.split(/\s+/).includes(token))) {
+    if (major && matchesRuleKeyword(combined, tokens, major)) {
       const defaultMinor = group.minorCategories?.[0] || '';
       return { majorCategory: major, minorCategory: defaultMinor };
     }
