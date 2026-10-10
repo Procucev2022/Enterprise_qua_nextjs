@@ -1590,7 +1590,7 @@ function buildVendorCategoryMappingEmail({
       ${row('Buyer', buyer)}
       ${row('Your vendor code', vendorCode)}
       ${row('Registered Email', to)}
-      ${contactPhone ? row('Contact Number', escapeHtml(contactPhone)) : ''}
+      ${contactPhone ? row('Mobile Number', escapeHtml(contactPhone)) : ''}
       ${tempPassword ? row('Temporary Password', tempPassword) : ''}
       ${row('Primary category', majorCategory)}
     </table>
@@ -1641,7 +1641,7 @@ function buildVendorSelfMappingEmail({ to, recipientName, buyerOrganizationName,
       ${row('Buyer', buyer)}
       ${row('Your vendor code', vendorCode)}
       ${row('Registered Email', to)}
-      ${contactPhone ? row('Contact Number', escapeHtml(contactPhone)) : ''}
+      ${contactPhone ? row('Mobile Number', escapeHtml(contactPhone)) : ''}
       ${tempPassword ? row('Temporary Password', tempPassword) : ''}
       ${row('Action required', 'Select your supply categories')}
     </table>
@@ -1694,8 +1694,8 @@ function buildVendorOnboardingEmail({ to, recipientName, buyerOrganizationName, 
           </tr>
           ${contactPhone ? `
           <tr>
-            <td style="padding: 12px 0; color: #64748b; font-size: 13px; font-weight: 600;">Contact Number</td>
-            <td style="padding: 12px 0; color: #0f172a; font-size: 14px; font-weight: 600;">${contactPhone}</td>
+            <td style="padding: 12px 0; color: #64748b; font-size: 13px; font-weight: 600;">Mobile Number</td>
+            <td style="padding: 12px 0; color: #0f172a; font-size: 14px; font-weight: 600;">${escapeHtml(contactPhone)}</td>
           </tr>
           ` : ''}
         </table>

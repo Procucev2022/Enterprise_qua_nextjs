@@ -68,7 +68,12 @@ export default function VendorFirstLoginPage() {
   }
 
   return (
-    <main className="min-h-[70vh] px-4 py-10 flex items-center justify-center">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="vendor-first-login-heading"
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/60 px-4 py-8"
+    >
       <form
         onSubmit={submit}
         className="w-full max-w-xl rounded-2xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-6 sm:p-8 shadow-xl space-y-5"
@@ -77,7 +82,7 @@ export default function VendorFirstLoginPage() {
           <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 dark:bg-indigo-950/50 dark:text-indigo-300">
             <ShieldCheck size={24} />
           </span>
-          <h1 className="text-xl font-bold text-slate-900 dark:text-white">Secure your vendor account</h1>
+          <h1 id="vendor-first-login-heading" className="text-xl font-bold text-slate-900 dark:text-white">Secure your vendor account</h1>
           <p className="text-sm text-slate-500 dark:text-gray-400">
             Set a new password before entering your vendor workspace.
           </p>
@@ -122,6 +127,6 @@ export default function VendorFirstLoginPage() {
           {saving ? 'Updating password…' : 'Change password and continue'}
         </button>
       </form>
-    </main>
+    </div>
   );
 }

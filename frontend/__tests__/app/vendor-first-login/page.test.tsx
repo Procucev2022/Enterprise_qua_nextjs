@@ -50,6 +50,15 @@ describe('VendorFirstLoginPage', () => {
     fireEvent.submit(screen.getByRole('button', { name: 'Change password and continue' }).closest('form')!);
   };
 
+  it('opens the required password-change step as a modal dialog', () => {
+    render(<VendorFirstLoginPage />);
+
+    expect(screen.getByRole('dialog', { name: 'Secure your vendor account' })).toHaveAttribute(
+      'aria-modal',
+      'true'
+    );
+  });
+
   it('does not submit or continue when the new password is too short', () => {
     render(<VendorFirstLoginPage />);
     fillPasswords('Temporary@123', 'short');

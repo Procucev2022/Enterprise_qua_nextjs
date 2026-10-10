@@ -835,6 +835,7 @@ describe('mailerService', () => {
       expect(email1.subject).toContain('Tata Steel has mapped your supply categories');
       expect(email1.html).toContain('Rajesh');
       expect(email1.html).toContain('Ball Valves');
+      expect(email1.html).toContain('Mobile Number');
       expect(email1.html).toContain('+91 98765 43210');
 
       const email2 = mailerService.buildVendorCategoryMappingEmail({
@@ -856,6 +857,7 @@ describe('mailerService', () => {
       expect(email.subject).toBe('Complete Your Category Mapping to Receive Enquiries');
       expect(email.html).toContain('Suresh');
       expect(email.html).toContain('L&T');
+      expect(email.html).toContain('Mobile Number');
       expect(email.html).toContain('+91 98765 43210');
 
       const emailFallback = mailerService.buildVendorSelfMappingEmail({ to: 'v@test.com' });
@@ -908,6 +910,7 @@ describe('mailerService', () => {
       expect(email.to).toBe('onboard@test.com');
       expect(email.subject).toContain('Welcome to Procucev');
       expect(email.html).toContain('SecretPassword123');
+      expect(email.html).toContain('Mobile Number');
       expect(email.html).toContain('+919876543210');
 
       const emailFallback = mailerService.buildVendorOnboardingEmail({

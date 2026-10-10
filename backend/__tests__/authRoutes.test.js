@@ -584,6 +584,26 @@ describe('Authentication against the account records (/api/auth)', () => {
       expect(authService.verifySessionToken(result.token).valid).toBe(true);
     });
 
+    test('new vendor registration requires a password change in its first session', async () => {
+      jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({
+        created: true,
+        user: {
+          id: 'new-vendor-uuid',
+          email: EMAIL,
+          name: 'Navin Chaudhary',
+          role: 'vendor',
+          orgId: 'new-vendor-org',
+          orgName: 'Navin Chaudhary Enterprises',
+        },
+      });
+
+      const result = await authService.registerUser({ ...payload, role: 'vendor' }, '::1');
+      const session = authService.verifySessionToken(result.token);
+
+      expect(result.user.passwordChangeRequired).toBe(true);
+      expect(session.user.passwordChangeRequired).toBe(true);
+    });
+
     test('reports a duplicate account rather than signing the caller in', async () => {
       jest
         .spyOn(identityQueries, 'insertBuyerAccount')

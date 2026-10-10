@@ -516,6 +516,7 @@ describe('LoginPage', () => {
         name: 'Rajesh Kumar',
         role: 'vendor' as const,
         vendorId: 'vnd-1',
+        passwordChangeRequired: true,
       };
       (authClient.requestOtp as jest.Mock).mockResolvedValue({
         success: true,
@@ -557,7 +558,8 @@ describe('LoginPage', () => {
           })
         );
       });
-      expect(mockReplace).toHaveBeenCalledWith(ROLE_LANDING_ROUTE.vendor);
+      expect(mockReplace).toHaveBeenCalledWith('/vendor-first-login');
+      expect(mockReplace).not.toHaveBeenCalledWith(ROLE_LANDING_ROUTE.vendor);
     });
 
     it('propagates the registered GSTIN and plant location to the new buyer record', async () => {
@@ -939,5 +941,4 @@ describe('LoginPage', () => {
     });
   });
 });
-
 
