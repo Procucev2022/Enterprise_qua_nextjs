@@ -199,6 +199,23 @@ export function IngestionProgressCard({
   );
 }
 
+// Splits a raw email cell ("a@x.com; b@x.com, A@X.com") into unique addresses.
+// De-duplicates case-insensitively so each email is shown only once.
+const getUniqueEmails = (raw?: string | null): string[] => {
+  if (!raw) return [];
+  const seen = new Set<string>();
+  return raw
+    .split(/[;,\s/|]+/)
+    .map((e) => e.trim())
+    .filter((e) => e.includes('@'))
+    .filter((e) => {
+      const key = e.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+};
+
 export default function InitialSetupModal() {
   const {
     initialSetupModalOpen,
@@ -2556,7 +2573,7 @@ export default function InitialSetupModal() {
                     }`}
                   >
                     <div className="flex items-start justify-between gap-2">
-                      <div>
+                      <div className="min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <h4 className="font-black text-slate-900 dark:text-white text-xs">{v.companyName}</h4>
                           {v.vendorCode && (
@@ -2565,12 +2582,22 @@ export default function InitialSetupModal() {
                             </span>
                           )}
                         </div>
+
                         <div className="flex items-center gap-2 flex-wrap text-[10px] text-slate-500 font-mono mt-0.5 max-w-full">
-                          {v.email && <span className="truncate max-w-[220px]">{v.email}</span>}
-                          {v.email && v.phone && <span className="text-slate-300 dark:text-gray-600">·</span>}
+                          {v.email && (
+                            <span className="truncate max-w-[220px]">
+                              {v.email}
+                            </span>
+                          )}
+                          {v.email && v.phone && (
+                            <span className="text-slate-300 dark:text-gray-600">
+                              ·
+                            </span>
+                          )}
                           {v.phone && <span>{v.phone}</span>}
                         </div>
                       </div>
+
 
                       {v.categoriesMappedByBuyer ? (
                         <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 shrink-0 flex items-center gap-0.5">
@@ -2582,6 +2609,25 @@ export default function InitialSetupModal() {
                         </span>
                       )}
                     </div>
+
+                    {(() => {
+                      const emails = getUniqueEmails(v.email);
+                      const phone = v.phone?.trim();
+                      if (emails.length === 0 && !phone) return null;
+                      return (
+                        <div className="flex flex-nowrap items-center gap-x-2 text-[10px] text-slate-500 font-mono min-w-0 max-w-full">
+                          {emails.length > 0 && (
+                            <span className="min-w-0 truncate" title={emails.join(', ')}>
+                              {emails.join(', ')}
+                            </span>
+                          )}
+                          {emails.length > 0 && phone && (
+                            <span className="shrink-0 text-slate-300 dark:text-gray-600" aria-hidden="true">·</span>
+                          )}
+                          {phone && <span className="shrink-0 whitespace-nowrap">{phone}</span>}
+                        </div>
+                      );
+                    })()}
 
                     {v.categoriesMappedByBuyer ? (
                       <>
