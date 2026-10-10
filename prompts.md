@@ -2590,10 +2590,3 @@ fix that all issuse and merge in that  pr
 
 ---
 
-### Prompt
-
-**Timestamp**: 2026-10-10T18:04:08+05:30
-
-```text
-if vendor login firt time then required this steps and submit quate model width incress also vendor submit quate add attach documents and when submit then show documents buyer,vendor and catogory manager side also rate fields incress width and vendor submited quate make properly visible in rfq details page
-```

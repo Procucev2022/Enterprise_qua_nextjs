@@ -123,7 +123,14 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
 
   /** Distinct statuses actually present, so the filter never offers a dead option. */
   const availableStatuses = useMemo(() => Object.keys(summary.byStatus).sort(), [summary.byStatus]);
-  const availableSources = useMemo(() => Object.keys(summary.bySource).sort(), [summary.bySource]);
+
+  /**
+   * Intake source filter options are defined statically so the buyer always
+   * sees every possible source — including AI RFQ Create — even when no RFQs
+   * created through that channel exist yet. The order is canonical:
+   * AI RFQ Create → Email Gateway → Manual Entry.
+   */
+  const intakeSourceOptions = RFQ.intakeSourceFilterOptions;
 
   const filteredRFQs = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -408,10 +415,14 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
               }}
               className="text-xs font-semibold"
             >
+              {/* All Sources is always first and resets the filter. */}
               <option value={ALL}>{RFQ.allSources}</option>
-              {availableSources.map((source) => (
-                <option key={source} value={source}>
-                  {source}
+              {/* Static options: AI RFQ Create, Email Gateway, Manual Entry.
+                  Always rendered so buyers can filter by source even before
+                  any RFQs of that type exist in the portfolio. */}
+              {intakeSourceOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
                 </option>
               ))}
             </select>
