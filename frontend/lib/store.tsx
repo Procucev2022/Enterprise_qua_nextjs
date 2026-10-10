@@ -2307,13 +2307,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       category: rfqData.category,
       sourcingMode: rfqData.sourcingMode,
       status: 'Quotes Pending',
-      source: rfqData.source || 'web_portal',
+      source: rfqData.source || ((rfqData as any).aiSummary || rfqData.sourceFileName ? 'ai_extraction' : 'manual_entry'),
       sourceFileName: rfqData.sourceFileName,
       // Origin of an emailed requisition. Previously omitted here, so the sender
       // the wizard had already parsed was dropped before it ever reached the API.
       sourceEmail: rfqData.sourceEmail,
       budget: Number(rfqData.budget) || 0,
-      targetDeliveryDate: rfqData.targetDeliveryDate,
+      targetDeliveryDate:
+        rfqData.targetDeliveryDate ||
+        (rfqData as any).target_delivery_date ||
+        (rfqData as any).deadline ||
+        rfqData.extractedEntities?.[0]?.targetDate ||
+        '',
       deliveryLocation: rfqData.deliveryLocation || '',
       deliveryPincode: rfqData.deliveryPincode || '',
       extractedEntities: rfqData.extractedEntities,
