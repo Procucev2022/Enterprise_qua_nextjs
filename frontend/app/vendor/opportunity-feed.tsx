@@ -58,6 +58,8 @@ export default function OpportunityFeed({
   // of what the vendor or the RFQ were actually categorised as.
   const [myMajorCategory, setMyMajorCategory] = React.useState<string>('');
   const [myMinorCategories, setMyMinorCategories] = React.useState<string[]>([]);
+  const [myAddedByBuyerCompany, setMyAddedByBuyerCompany] = React.useState<string>('');
+  const [myBuyerId, setMyBuyerId] = React.useState<string>('');
   React.useEffect(() => {
     let cancelled = false;
     const email = currentUserSession?.email;
@@ -68,6 +70,8 @@ export default function OpportunityFeed({
         if (cancelled || !data?.success || !data.data) return;
         setMyMajorCategory(data.data.majorCategory || '');
         setMyMinorCategories(Array.isArray(data.data.minorCategories) ? data.data.minorCategories : []);
+        setMyAddedByBuyerCompany(data.data.addedByBuyerCompany || '');
+        setMyBuyerId(data.data.buyerId || data.data.buyerAccountId || '');
       })
       .catch(() => {});
     return () => {
@@ -144,7 +148,15 @@ export default function OpportunityFeed({
   // enforcement in GET /api/rfqs/:id/email-preview checks).
   const myVendorRecord = buyerVendors.find((v) => v.email?.toLowerCase() === currentUserSession?.email?.toLowerCase());
   const isOwnBuyerRfq = (opp: VendorOpportunity) => {
-    return !!myVendorRecord?.addedByBuyerCompany && myVendorRecord.addedByBuyerCompany === opp.buyer;
+    if (!opp) return false;
+    if (myAddedByBuyerCompany && opp.buyer === myAddedByBuyerCompany) return true;
+    if (myBuyerId && opp.buyerAccountId === myBuyerId) return true;
+    if (myVendorRecord) {
+      if (myVendorRecord.addedByBuyerCompany && opp.buyer === myVendorRecord.addedByBuyerCompany) return true;
+      if (myVendorRecord.buyerId && opp.buyerAccountId === myVendorRecord.buyerId) return true;
+      if (myVendorRecord.buyerAccountId && opp.buyerAccountId === myVendorRecord.buyerAccountId) return true;
+    }
+    return false;
   };
 
   const handleDownloadRfq = async (opp: VendorOpportunity) => {

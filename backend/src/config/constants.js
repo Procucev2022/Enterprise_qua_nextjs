@@ -510,7 +510,7 @@ const GEMINI_CONFIG = {
   API_KEY: process.env.GEMINI_API_KEY || '',
   BASE_URL: process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/models',
   // Pinned to a specific GA model so extraction quality is reproducible.
-  PRIMARY_MODEL: process.env.GEMINI_PRIMARY_MODEL || 'gemini-3-flash-preview',
+  PRIMARY_MODEL: process.env.GEMINI_PRIMARY_MODEL || 'gemini-3.1-flash-lite',
   // Tried in order when the primary model errors or is unavailable.
   //
   // Ordered fastest-first, which is a deliberate departure from
@@ -529,7 +529,7 @@ const GEMINI_CONFIG = {
   // extraction failed outright instead of degrading.
   FALLBACK_MODELS: (
     process.env.GEMINI_FALLBACK_MODELS ||
-    'gemini-3.1-flash-lite,gemini-flash-latest,gemini-flash-lite-latest,gemini-3.6-flash,gemini-3.7-flash'
+    'gemini-flash-latest,gemini-flash-lite-latest,gemini-3.8-flash,gemini-3.6-flash,gemini-3.7-flash'
   )
     .split(',')
     .map((m) => m.trim())
@@ -537,7 +537,7 @@ const GEMINI_CONFIG = {
   // The primary model measured 12.5s on a small PDF and timed out at 15s on a
   // real one, so it needs more than the Java service's 15s read timeout to have a
   // fair chance before the chain moves on.
-  REQUEST_TIMEOUT_MS: Number(process.env.GEMINI_REQUEST_TIMEOUT_MS || 45000),
+  REQUEST_TIMEOUT_MS: Number(process.env.GEMINI_REQUEST_TIMEOUT_MS || 30000),
   TOTAL_BUDGET_MS: Number(process.env.GEMINI_TOTAL_BUDGET_MS || 60000),
   // Below this much remaining budget a further attempt cannot finish, so the
   // chain stops rather than starting a request it will have to abandon.

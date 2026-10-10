@@ -1,9 +1,11 @@
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 const dotenv = require('dotenv');
 
-// Load environment variables
+// Load environment variables (from working directory and backend directory)
 dotenv.config();
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 const apiRoutes = require('./routes');
 const graphqlRoutes = require('./routes/graphql');
