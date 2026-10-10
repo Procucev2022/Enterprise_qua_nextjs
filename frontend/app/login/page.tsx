@@ -112,7 +112,15 @@ export default function LoginPage() {
             setRegPincodePostOffices([]);
           } else {
             setRegPincodeError(null);
-            setRegPincodePostOffices(res.postOffices || []);
+            const pos = res.postOffices || [];
+            setRegPincodePostOffices(pos);
+            if (pos.length > 0) {
+              const primaryPo = pos[0];
+              const matchedCity = primaryPo.District || primaryPo.Division || primaryPo.Name || '';
+              const matchedState = primaryPo.State || '';
+              if (matchedCity) setRegCity(matchedCity);
+              if (matchedState) setRegState(matchedState);
+            }
           }
         } catch {
           setRegPincodeError(null);

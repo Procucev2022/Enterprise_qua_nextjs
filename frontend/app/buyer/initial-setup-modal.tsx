@@ -4,7 +4,7 @@ import React, { useState, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import { useApp } from '@/lib/store';
 import { formatCurrency, normalizePoDate } from '@/lib/constants';
-import { fetchDispatchTemplates, type DispatchTemplate } from '@/lib/buyerProfileClient';
+import { fetchDispatchTemplates, saveDispatchTemplate, type DispatchTemplate } from '@/lib/buyerProfileClient';
 import {
   VendorMasterUploadRecord,
   PurchaseOrderLineItemRecord,
@@ -239,6 +239,49 @@ export default function InitialSetupModal() {
       cancelled = true;
     };
   }, [step]);
+
+  const [editingTemplateModal, setEditingTemplateModal] = useState<'A' | 'B' | null>(null);
+  const [tempSubject, setTempSubject] = useState('');
+  const [tempMessage, setTempMessage] = useState('');
+  const [isSavingTemplate, setIsSavingTemplate] = useState(false);
+
+  const openTemplateModal = (type: 'A' | 'B') => {
+    if (type === 'A') {
+      setTempSubject(savedTemplateA?.subject || `${activeBuyerAccount?.organizationName || 'Larsen & Toubro'} has mapped your supply categories`);
+      setTempMessage(savedTemplateA?.message || '• 1st Set: Engineering Spares - Mechanical\n• 2nd Set: Pumps, Valves, Hoses, Machinery Parts');
+    } else {
+      setTempSubject(savedTemplateB?.subject || 'Complete Your Category Mapping to Receive Enquiries');
+      setTempMessage(savedTemplateB?.message || "Buyer didn't map any categories for you, so please map yourself in order to receive enquiries.");
+    }
+    setEditingTemplateModal(type);
+  };
+
+  const handleSaveTemplate = async () => {
+    if (!editingTemplateModal) return;
+    setIsSavingTemplate(true);
+    try {
+      const templateKey = editingTemplateModal === 'A' ? 'category_mapped' : 'self_map_required';
+      const res = await saveDispatchTemplate(templateKey, {
+        subject: tempSubject,
+        message: tempMessage,
+      });
+      if (res.success) {
+        if (editingTemplateModal === 'A') {
+          setSavedTemplateA({ subject: tempSubject, message: tempMessage });
+        } else {
+          setSavedTemplateB({ subject: tempSubject, message: tempMessage });
+        }
+        showToast('Template Updated', `Template ${editingTemplateModal} has been saved.`, 'success');
+        setEditingTemplateModal(null);
+      } else {
+        showToast('Save Failed', res.error || 'Could not update template', 'warning');
+      }
+    } catch (err: any) {
+      showToast('Save Error', err.message || 'Could not update template', 'warning');
+    } finally {
+      setIsSavingTemplate(false);
+    }
+  };
 
   React.useEffect(() => {
     if (lastIngestionSummary) {
@@ -956,7 +999,9 @@ export default function InitialSetupModal() {
               spend: totalSpend,
               department,
             };
-          }).filter((p) => Boolean(p.poNumber?.trim() || p.vendorIdentifier?.trim() || p.itemName?.trim() || p.specs?.trim() || p.totalSpend > 0));
+          })
+            .filter((p) => Boolean(p.vendorIdentifier?.trim() || p.vendorName?.trim() || p.itemName?.trim() || p.itemDescription?.trim() || p.department?.trim()))
+            .sort((a, b) => new Date(b.poDate || 0).getTime() - new Date(a.poDate || 0).getTime());
 
           if (parsedPOs.length === 0) {
             const errMsg = 'The uploaded PO dump file contains no recognizable purchase order records. Please verify your file.';
@@ -2520,7 +2565,11 @@ export default function InitialSetupModal() {
                             </span>
                           )}
                         </div>
-                        <span className="font-mono text-[10px] text-slate-500">{v.email} · {v.phone}</span>
+                        <div className="flex items-center gap-2 flex-wrap text-[10px] text-slate-500 font-mono mt-0.5 max-w-full">
+                          {v.email && <span className="truncate max-w-[220px]">{v.email}</span>}
+                          {v.email && v.phone && <span className="text-slate-300 dark:text-gray-600">·</span>}
+                          {v.phone && <span>{v.phone}</span>}
+                        </div>
                       </div>
 
                       {v.categoriesMappedByBuyer ? (
@@ -2607,64 +2656,58 @@ export default function InitialSetupModal() {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              {/* Template A Preview: PO-Mapped Suppliers */}
-              <div className="p-3.5 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/60 space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-bold text-indigo-900 dark:text-indigo-200 text-[11px] flex items-center gap-1">
-                    <CheckCircle2 size={13} className="text-emerald-600" />
-                    Template A: Suppliers With Pre-Purchase Order History ({mappedVendors.length})
-                  </span>
-                  {(savedTemplateA?.subject || savedTemplateA?.message) && (
-                    <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 shrink-0">
-                      Customized
+              {/* Template A Card: PO-Mapped Suppliers */}
+              <div className="p-3.5 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/60 flex flex-col justify-between space-y-3">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold text-indigo-900 dark:text-indigo-200 text-[11px] flex items-center gap-1">
+                      <CheckCircle2 size={13} className="text-emerald-600" />
+                      Template A: Suppliers With Pre-Purchase Order History ({mappedVendors.length})
                     </span>
-                  )}
-                </div>
-                <div className="p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-indigo-100 dark:border-indigo-900 text-[10px] space-y-1 font-mono text-slate-700 dark:text-gray-300">
-                  <p>
-                    <strong>Subject:</strong>{' '}
-                    {savedTemplateA?.subject ||
-                      `${activeBuyerAccount?.organizationName || 'Larsen & Toubro'} has mapped your supply categories`}
+                    {(savedTemplateA?.subject || savedTemplateA?.message) && (
+                      <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 shrink-0">
+                        Customized
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-indigo-900/80 dark:text-indigo-300/90 leading-snug">
+                    Dispatches mapped supply categories, login credentials, and verification link to correlated PO suppliers.
                   </p>
-                  {savedTemplateA?.message ? (
-                    <p className="text-slate-600 dark:text-gray-300">{savedTemplateA.message}</p>
-                  ) : (
-                    <p className="text-emerald-700 dark:text-emerald-400 font-bold">
-                      • 1st Set: Engineering Spares - Mechanical<br />
-                      • 2nd Set: Pumps, Valves, Hoses, Machinery Parts
-                    </p>
-                  )}
-                  <p className="text-slate-400">• Vendor code & categories table + Sign-in link always included</p>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => openTemplateModal('A')}
+                  className="btn btn-secondary btn-xs w-full font-bold text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-700 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 inline-flex items-center justify-center gap-1.5 py-2"
+                >
+                  <Pencil size={11} /> View & Edit Template A
+                </button>
               </div>
 
-              {/* Template B Preview: Unmapped Suppliers */}
-              <div className="p-3.5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-bold text-amber-900 dark:text-amber-200 text-[11px] flex items-center gap-1">
-                    <AlertCircle size={13} className="text-amber-600" />
-                    Template B: Suppliers With NO Pre-Purchase Orders ({unmappedVendors.length})
-                  </span>
-                  {(savedTemplateB?.subject || savedTemplateB?.message) && (
-                    <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300 shrink-0">
-                      Customized
+              {/* Template B Card: Unmapped Suppliers */}
+              <div className="p-3.5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 flex flex-col justify-between space-y-3">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold text-amber-900 dark:text-amber-200 text-[11px] flex items-center gap-1">
+                      <AlertCircle size={13} className="text-amber-600" />
+                      Template B: Suppliers With NO Pre-Purchase Orders ({unmappedVendors.length})
                     </span>
-                  )}
-                </div>
-                <div className="p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-amber-200 dark:border-amber-900 text-[10px] space-y-1 font-mono text-slate-700 dark:text-gray-300">
-                  <p>
-                    <strong>Subject:</strong>{' '}
-                    {savedTemplateB?.subject || 'Complete Your Category Mapping to Receive Enquiries'}
+                    {(savedTemplateB?.subject || savedTemplateB?.message) && (
+                      <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300 shrink-0">
+                        Customized
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-amber-900/80 dark:text-amber-300/90 leading-snug">
+                    Dispatches self-mapping request notice, vendor code, login credentials, and category onboarding link.
                   </p>
-                  {savedTemplateB?.message ? (
-                    <p className="text-slate-600 dark:text-gray-300">{savedTemplateB.message}</p>
-                  ) : (
-                    <p className="text-amber-700 dark:text-amber-400 font-bold">
-                      • &quot;Buyer didn&apos;t map any categories for you, so please map yourself in order to receive enquiries.&quot;
-                    </p>
-                  )}
-                  <p className="text-slate-400">• Vendor code & categories table + Sign-in link always included</p>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => openTemplateModal('B')}
+                  className="btn btn-secondary btn-xs w-full font-bold text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900/40 inline-flex items-center justify-center gap-1.5 py-2"
+                >
+                  <Pencil size={11} /> View & Edit Template B
+                </button>
               </div>
             </div>
 
@@ -2738,7 +2781,94 @@ export default function InitialSetupModal() {
             </div>
           </div>
         )}
+
+        {/* Template Preview and Edit Modal Popup */}
+        {editingTemplateModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in" onClick={() => setEditingTemplateModal(null)}>
+            <div
+              className="w-full max-w-xl p-5 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-gray-800 animate-scale-in space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-slate-100 dark:border-gray-800 pb-3">
+                <div className="flex items-center gap-2">
+                  <span className={`p-2 rounded-xl text-xs font-bold ${editingTemplateModal === 'A' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300' : 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'}`}>
+                    Template {editingTemplateModal}
+                  </span>
+                  <div>
+                    <h4 className="font-black text-sm">
+                      {editingTemplateModal === 'A' ? 'Template A: Suppliers With Pre-PO History' : 'Template B: Suppliers With NO Pre-PO History'}
+                    </h4>
+                    <p className="text-xs text-slate-400">Preview and customize the onboarding email template</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditingTemplateModal(null)}
+                  className="text-slate-400 hover:text-slate-700 dark:hover:text-white p-1 rounded-lg"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="space-y-3 text-xs">
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 dark:text-gray-300 block">Email Subject</label>
+                  <input
+                    type="text"
+                    value={tempSubject}
+                    onChange={(e) => setTempSubject(e.target.value)}
+                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800 text-slate-800 dark:text-white font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    placeholder="Subject line..."
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 dark:text-gray-300 block">Email Message Body / Key Points</label>
+                  <textarea
+                    value={tempMessage}
+                    onChange={(e) => setTempMessage(e.target.value)}
+                    rows={4}
+                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800 text-slate-800 dark:text-white font-medium resize-none leading-relaxed focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    placeholder="Custom email message..."
+                  />
+                </div>
+
+                {/* Formatted Preview Box */}
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700 space-y-2">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Formatted Preview (Live)</span>
+                  <div className="p-2.5 rounded-lg bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 text-[11px] space-y-1.5 font-mono text-slate-700 dark:text-gray-300">
+                    <p><strong>Subject:</strong> {tempSubject || '(Default Subject)'}</p>
+                    <p className="whitespace-pre-wrap">{tempMessage || '(Default Message)'}</p>
+                    <div className="p-2 bg-slate-50 dark:bg-gray-800 rounded text-[10px] space-y-0.5 text-slate-500">
+                      <div>• Buyer: {activeBuyerAccount?.organizationName || 'Larsen & Toubro'}</div>
+                      <div>• Vendor Code & Login Credentials included</div>
+                      <div>• Action Link: {editingTemplateModal === 'A' ? 'Sign in to review category mapping' : 'Complete category self-mapping'}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-gray-800">
+                <button
+                  type="button"
+                  onClick={() => setEditingTemplateModal(null)}
+                  className="btn btn-secondary btn-xs py-2 px-3 text-xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveTemplate}
+                  disabled={isSavingTemplate}
+                  className="btn btn-primary btn-xs py-2 px-4 text-xs font-bold flex items-center gap-1.5"
+                >
+                  {isSavingTemplate ? 'Saving...' : 'Save Template'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
-  }
+}
