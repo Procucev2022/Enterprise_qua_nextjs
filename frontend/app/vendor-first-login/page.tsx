@@ -6,7 +6,7 @@ import { ShieldCheck } from 'lucide-react';
 import PasswordInput from '@/app/components/PasswordInput';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
-import { PASSWORD_MIN_LENGTH } from '@/lib/constants';
+import { PASSWORD_MIN_LENGTH, ROLE_LANDING_ROUTE } from '@/lib/constants';
 
 export default function VendorFirstLoginPage() {
   const router = useRouter();
@@ -20,7 +20,7 @@ export default function VendorFirstLoginPage() {
   useEffect(() => {
     if (!currentUserSession) router.replace('/login');
     else if (currentUserSession.role !== 'vendor' || !currentUserSession.passwordChangeRequired) {
-      router.replace('/vendor/quotation-form');
+      router.replace(ROLE_LANDING_ROUTE.vendor);
     }
   }, [currentUserSession, router]);
 
@@ -51,7 +51,9 @@ export default function VendorFirstLoginPage() {
       setCurrentUserSession(result.user);
       setIsLoggedIn(true);
       showToast('Password Updated', 'Your account is ready to use.', 'success');
-      router.replace('/vendor/quotation-form');
+      router.replace(ROLE_LANDING_ROUTE.vendor);
+    } catch {
+      setError('The password could not be changed. Please try again.');
     } finally {
       setSaving(false);
     }
