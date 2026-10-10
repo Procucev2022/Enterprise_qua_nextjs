@@ -515,7 +515,9 @@ async function buildRFQDraft(payload = {}) {
   const draft = {
     title,
     category: declaredMajor || dominantMajor,
-    targetDeliveryDate: entities.length > 0 ? entities[0].targetDate : defaultTargetDate(),
+    targetDeliveryDate:
+      payload.targetDeliveryDate ||
+      (entities.length > 0 && entities[0].targetDate ? entities[0].targetDate : defaultTargetDate()),
     // Null rather than a placeholder figure: the wizard shows an empty budget
     // field so the buyer supplies the number the document did not state.
     estimatedBudget,

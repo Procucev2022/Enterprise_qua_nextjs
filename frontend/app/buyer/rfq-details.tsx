@@ -1108,7 +1108,14 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
   const mode = SOURCING_MODES.find((m) => m.id === activeRfq.sourcingMode);
   const attachments = activeRfq.attachments || [];
   const quotes = activeRfq.quotes || [];
-  const countdown = deliveryCountdown(daysUntil(activeRfq.targetDeliveryDate));
+  const resolvedTargetDeliveryDate =
+    activeRfq.targetDeliveryDate ||
+    (activeRfq as any).target_delivery_date ||
+    (activeRfq as any).deadline ||
+    (activeRfq as any).deliveryDate ||
+    lineItems.find((i) => i.targetDate)?.targetDate ||
+    '';
+  const countdown = deliveryCountdown(daysUntil(resolvedTargetDeliveryDate));
   const autoClassified = lineItems.filter((i) => i.confidence >= HIGH_CONFIDENCE).length;
   const classifiedPercent = lineItems.length === 0 ? 0 : Math.round((autoClassified / lineItems.length) * 100);
   const totalQuantity = filteredItems.reduce((sum, item) => sum + item.quantity, 0);
@@ -1219,12 +1226,16 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                 <Mail size={12} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
               ) : activeRfq.source === 'manual_entry' ? (
                 <Pencil size={12} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
-              ) : activeRfq.source === 'ai_extraction' ? (
+              ) : activeRfq.source === 'ai_extraction' || (!activeRfq.source && activeRfq.aiSummary) ? (
                 <Sparkles size={12} className="text-purple-600 dark:text-purple-400 shrink-0" />
               ) : (
                 <Globe size={12} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
               )}
-              {activeRfq.source ? (SOURCE_LABELS[activeRfq.source] || activeRfq.source) : DETAILS.unsetValue}
+              {activeRfq.source
+                ? (SOURCE_LABELS[activeRfq.source] || activeRfq.source)
+                : activeRfq.aiSummary
+                  ? (DETAILS.sourceAiExtraction || 'AI Extraction')
+                  : DETAILS.unsetValue}
             </span>
           </Row>
           <Row label={DETAILS.createdLabel}>
@@ -1261,7 +1272,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             <span>
               <span className="inline-flex items-center gap-1.5 mono">
                 <CalendarDays size={12} className="text-slate-400 shrink-0" />
-                {orUnset(formatIndianDate(activeRfq.targetDeliveryDate))}
+                {orUnset(formatIndianDate(resolvedTargetDeliveryDate))}
               </span>
               {countdown && (
                 <span

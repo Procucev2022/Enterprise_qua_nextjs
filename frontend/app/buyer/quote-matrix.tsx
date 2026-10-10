@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useApp } from '@/lib/store';
-import { formatCurrency } from '@/lib/constants';
+import { formatCurrency, formatIndianDate } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import type { RFQItem, QuoteComparison } from '@/lib/types';
 import { PurchaseOrderModal, RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
@@ -139,7 +139,13 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
           <div className="flex items-center gap-4 text-slate-700 dark:text-gray-300 text-xs">
             <div>
               <span className="text-[10px] text-slate-400 dark:text-gray-400 block uppercase">Target Delivery</span>
-              <span className="font-bold text-slate-900 dark:text-white mono">{currentRFQ.targetDeliveryDate}</span>
+              <span className="font-bold text-slate-900 dark:text-white mono">
+                {formatIndianDate(
+                  currentRFQ.targetDeliveryDate ||
+                    (currentRFQ as any).target_delivery_date ||
+                    (currentRFQ as any).deadline
+                ) || currentRFQ.targetDeliveryDate || UI_STRINGS.rfqDetails.unsetValue}
+              </span>
             </div>
             <div>
               <span className="text-[10px] text-slate-400 dark:text-gray-400 block uppercase">Estimated Budget</span>
