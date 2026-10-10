@@ -2565,4 +2565,12 @@ both .eml an dpdf documnets are not working fix this issuse
 ```text
 raise the pr
 ```
+---
 
+### Prompt
+
+**Timestamp**: 2026-10-10T10:00:01+05:30
+
+```text
+in github actions PR ci cd pipelines, frontend unit tests are stuck , can you please check & fix it
+```
