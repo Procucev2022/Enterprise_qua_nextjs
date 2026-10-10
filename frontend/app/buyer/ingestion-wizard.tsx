@@ -880,7 +880,7 @@ export default function IngestionWizard({
           item.majorCategory === ALL_CATEGORIES_OPTION ? { ...item, majorCategory: '' } : item
         ),
       };
-      const rfqSource = extractionSummary ? 'ai_extraction' : 'manual_entry';
+      const rfqSource = 'ai_extraction';
       const payload = toRFQCreatePayload(sanitizedForm, mode1AssignedVendors, rfqSource);
       if (extractionSummary?.fileName) {
         payload.sourceFileName = extractionSummary.fileName;
