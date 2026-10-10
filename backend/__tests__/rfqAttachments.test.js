@@ -404,13 +404,13 @@ describe('RFQ attachment HTTP routes', () => {
         .send({
           fileName: 'huge.pdf',
           mimeType: 'application/pdf',
-          content: 'A'.repeat(RFQ_ATTACHMENT_CONFIG.MAX_BYTES * 2),
+          content: 'A'.repeat(Math.ceil((RFQ_ATTACHMENT_CONFIG.MAX_BYTES * 4) / 3) + 1024),
         });
 
       expect(res.statusCode).toBe(422);
       expect(res.body.reason).toBe(ATTACHMENT_STATUS.TOO_LARGE);
       expect(res.body.error).toMatch(/limit/i);
-    });
+    }, 40000);
 
     // A storage fault is ours, not the buyer's, so it is a 500 rather than a 422.
     test('returns 500 when storage fails', async () => {

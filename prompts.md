@@ -2486,7 +2486,7 @@ Completely remove the Vendor Email Templates feature from the Enterprise QUA por
 **Timestamp**: 2026-10-09T18:50:45+05:30
 
 ```text
-resolve all the conflict and merge 
+resolve all the conflict and merge
 ```
 
 ---
@@ -2565,12 +2565,25 @@ both .eml an dpdf documnets are not working fix this issuse
 ```text
 raise the pr
 ```
+
 ---
 
 ### Prompt
 
-**Timestamp**: 2026-10-10T10:00:01+05:30
+**Timestamp**: 2026-10-10T09:25:49+05:30
 
 ```text
-in github actions PR ci cd pipelines, frontend unit tests are stuck , can you please check & fix it
+i rasie the pr for item extraction it pass all the extraction but it fail to merge in main branch and cloudflare deployment also
+
+fix this issuse
+```
+
+---
+
+### Prompt
+
+**Timestamp**: 2026-10-10T10:14:40+05:30
+
+```text
+fix that all issuse and merge in that  pr
 ```
