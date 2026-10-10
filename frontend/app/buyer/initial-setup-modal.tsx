@@ -2582,20 +2582,6 @@ export default function InitialSetupModal() {
                             </span>
                           )}
                         </div>
-
-                        <div className="flex items-center gap-2 flex-wrap text-[10px] text-slate-500 font-mono mt-0.5 max-w-full">
-                          {v.email && (
-                            <span className="truncate max-w-[220px]">
-                              {v.email}
-                            </span>
-                          )}
-                          {v.email && v.phone && (
-                            <span className="text-slate-300 dark:text-gray-600">
-                              ·
-                            </span>
-                          )}
-                          {v.phone && <span>{v.phone}</span>}
-                        </div>
                       </div>
 
 
