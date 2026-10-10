@@ -638,7 +638,17 @@ export const UI_STRINGS = {
     sourceEmailUpload: 'Email File Upload',
     sourceManualEntry: 'Manual Web Entry',
     sourceAiExtraction: 'AI Extraction',
+    sourceAiRfqCreate: 'AI RFQ Create',
     sourceWebPortal: 'Web App Portal',
+
+    // Static ordered list of intake source filter options shown in the dropdown.
+    // The value matches the RFQSource stored on each RFQ; the label is what the
+    // buyer reads. The order is: AI RFQ Create → Email Gateway → Manual Entry.
+    intakeSourceFilterOptions: [
+      { value: 'ai_extraction', label: 'AI RFQ Create' },
+      { value: 'email_gateway', label: 'Email Gateway' },
+      { value: 'manual_entry', label: 'Manual Entry' },
+    ] as ReadonlyArray<{ value: string; label: string }>,
 
     // Table
     tableCaption: 'RFQ portfolio with sourcing mode, status, quote counts and delivery dates',
