@@ -2589,21 +2589,3 @@ fix that all issuse and merge in that  pr
 ```
 
 ---
-**[2026-10-10T20:46:53+05:30]**
-In the Buyer portal, update the Intake Source dropdown filter to include the missing AI RFQ Create option along with Email Gateway and Manual Entry. Keep the All Sources option as the default or reset option. Ensure that selecting each option displays only RFQs created through the corresponding source, and selecting All Sources displays RFQs from every source. Verify that the filter works correctly with the existing search, status filters, and pagination without affecting other functionality.
-
----
-**[2026-10-10T21:12:30+05:30]**
-Update the Buyer portal's RFQ Details section to display the correct Target Delivery Date and Intake Source. If the buyer provides a target delivery date while creating an RFQ, display the saved date instead of “Not provided.” For AI-created RFQs, display the source as AI Extraction, and for manually created RFQs, display Manual Entry. Ensure the values are fetched correctly from the database and remain consistent across the RFQ details page without affecting existing functionality.
-
----
-**[2026-10-10T21:15:39+05:30]**
-continue
-
----
-**[2026-10-10T21:52:37+05:30]**
-continue
-
----
-**[2026-10-10T21:48:56+05:30]**
-raise pr for this issuse
