@@ -7,7 +7,7 @@ import { formatCurrency } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import type { RFQItem, QuoteComparison } from '@/lib/types';
 import { PurchaseOrderModal, RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
-import { downloadBidComparisonExcel } from '@/lib/bidComparisonExport';
+import { downloadBidComparisonExcel, downloadFullQuotesExcel, downloadSingleVendorQuoteExcel } from '@/lib/bidComparisonExport';
 import QuoteAttachmentLink from '@/app/components/QuoteAttachmentLink';
 import {
   Sparkles,
@@ -492,12 +492,22 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
               <Layers size={15} className="text-indigo-600 dark:text-indigo-400" />
               Line-Item-Wise Bid Comparison
             </h3>
-            <button
-              onClick={() => downloadBidComparisonExcel(currentRFQ, quotes)}
-              className="btn btn-secondary btn-sm text-[11px] px-2.5 flex items-center gap-1.5"
-            >
-              <Download size={12} /> Download Excel
-            </button>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={() => downloadFullQuotesExcel(currentRFQ, quotes)}
+                className="btn btn-primary btn-sm text-[11px] px-2.5 flex items-center gap-1.5"
+                title="Download full multi-tab Excel with quotes overview, line item matrix, and granular items"
+              >
+                <Download size={12} /> Download Full Quotes (Excel)
+              </button>
+              <button
+                onClick={() => downloadBidComparisonExcel(currentRFQ, quotes)}
+                className="btn btn-secondary btn-sm text-[11px] px-2.5 flex items-center gap-1.5"
+                title="Download item-by-vendor comparison matrix"
+              >
+                <Download size={12} /> Download Excel
+              </button>
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs border-collapse">

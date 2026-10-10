@@ -40,10 +40,20 @@ async function authenticate(req, res, next) {
   }
 
   req.user = verification.user;
+
+  const reqPath = (req.originalUrl || req.url || '').split('?')[0];
+  const isAllowedAuthEndpoint =
+    reqPath.endsWith('/api/auth/change-password') ||
+    reqPath.endsWith('/change-password') ||
+    reqPath.endsWith('/api/auth/session') ||
+    reqPath.endsWith('/session') ||
+    reqPath.endsWith('/api/auth/logout') ||
+    reqPath.endsWith('/logout');
+
   if (
     verification.user.role === 'vendor' &&
     verification.user.passwordChangeRequired === true &&
-    !(req.method === 'POST' && req.originalUrl.split('?')[0] === '/api/auth/change-password')
+    !isAllowedAuthEndpoint
   ) {
     return res.status(403).json({
       success: false,
