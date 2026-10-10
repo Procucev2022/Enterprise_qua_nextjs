@@ -203,4 +203,131 @@ describe('V0 RFQ Complete Workflow — Procucev Network Vendors', () => {
       expect(updatedRfq.quotes[0].vendorId).toBe(vendor.id);
     });
   });
+
+  describe('5. HTTP API Endpoints & Controller Validation', () => {
+    const request = require('supertest');
+    const app = require('../src/app');
+    const { authHeader } = require('./testHelpers');
+
+    test('POST /api/rfqs/:id/download unlocks RFQ and deducts credit', async () => {
+      const vendor = storeService.addVendor({
+        name: 'API Downloader Vendor',
+        email: 'vendor@apexsupplies.com',
+        majorCategory: 'Fasteners & Bearings',
+      });
+
+      const rfq = storeService.createRFQ({
+        title: 'Precision Bearings RFQ',
+        category: 'Fasteners & Bearings',
+        sourcingMode: 'mode_0',
+      });
+
+      // 1. Download without authentication returns 401
+      const unauthRes = await request(app).post(`/api/rfqs/${rfq.id}/download`).send({});
+      expect(unauthRes.statusCode).toBe(401);
+
+      // 2. Download with non-existent RFQ returns 404
+      const notFoundRes = await request(app)
+        .post('/api/rfqs/non-existent-rfq-id/download')
+        .set(authHeader('vendor'))
+        .send({});
+      expect(notFoundRes.statusCode).toBe(404);
+
+      // 3. Download valid RFQ returns 200 and specification
+      const downloadRes = await request(app)
+        .post(`/api/rfqs/${rfq.id}/download`)
+        .set(authHeader('vendor'))
+        .send({ vendorId: vendor.id });
+      expect(downloadRes.statusCode).toBe(200);
+      expect(downloadRes.body.success).toBe(true);
+      expect(downloadRes.body.unlocked).toBe(true);
+      expect(downloadRes.body.data.htmlBody).toBeDefined();
+
+      // 4. Re-downloading already unlocked returns 200 with alreadyUnlocked: true
+      const repeatRes = await request(app)
+        .post(`/api/rfqs/${rfq.id}/download`)
+        .set(authHeader('vendor'))
+        .send({ vendorId: vendor.id });
+      expect(repeatRes.statusCode).toBe(200);
+      expect(repeatRes.body.alreadyUnlocked).toBe(true);
+    });
+
+    test('POST /api/rfqs/:id/quotes enforces unlock in mode_0 before accepting quote', async () => {
+      const vendor = storeService.addVendor({
+        name: 'API Quoter Vendor',
+        email: 'vendor@apexsupplies.com',
+        majorCategory: 'Hydraulic Systems',
+      });
+
+      const rfq = storeService.createRFQ({
+        title: 'Hydraulic Cylinders Procurement',
+        category: 'Hydraulic Systems',
+        sourcingMode: 'mode_0',
+      });
+
+      // 1. Quoting before downloading returns 403 Forbidden
+      const lockedQuoteRes = await request(app)
+        .post(`/api/rfqs/${rfq.id}/quotes`)
+        .set(authHeader('vendor'))
+        .send({
+          vendorId: vendor.id,
+          vendorName: vendor.name,
+          unitPrice: 35000,
+        });
+      expect(lockedQuoteRes.statusCode).toBe(403);
+      expect(lockedQuoteRes.body.error).toContain('Please download the RFQ before submitting your bid.');
+
+      // 2. Unlock RFQ
+      await storeService.unlockRFQForVendor(vendor.id, rfq.id);
+
+      // 3. Quoting after downloading returns 200 OK
+      const unlockedQuoteRes = await request(app)
+        .post(`/api/rfqs/${rfq.id}/quotes`)
+        .set(authHeader('vendor'))
+        .send({
+          vendorId: vendor.id,
+          vendorName: vendor.name,
+          unitPrice: 35000,
+        });
+      expect(unlockedQuoteRes.statusCode).toBe(200);
+      expect(unlockedQuoteRes.body.success).toBe(true);
+    });
+
+    test('GET /api/vendors/rfq-credits returns server-authoritative credit balance', async () => {
+      const vendor = storeService.addVendor({
+        name: 'Credits Endpoint Vendor',
+        email: 'vendor@apexsupplies.com',
+      });
+
+      const res = await request(app)
+        .get(`/api/vendors/${vendor.id}/rfq-credits`)
+        .set(authHeader('vendor'));
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.freeCreditsAllocated).toBe(5);
+      expect(res.body.data.freeCreditsRemaining).toBe(5);
+    });
+
+    test('POST /api/rfqs/:id/invite-vendors performs Category Manager assignment & override', async () => {
+      const vendor = storeService.addVendor({
+        name: 'CM Invited Vendor',
+        email: 'cminvited@procucev.com',
+        majorCategory: 'Electronics',
+      });
+
+      const rfq = storeService.createRFQ({
+        title: 'Mechanical Tools RFQ',
+        category: 'Mechanical Tools',
+        sourcingMode: 'mode_0',
+      });
+
+      const inviteRes = await request(app)
+        .post(`/api/rfqs/${rfq.id}/invite-vendors`)
+        .set(authHeader('category_manager'))
+        .send({ vendorIds: [vendor.id] });
+      expect(inviteRes.statusCode).toBe(200);
+      expect(inviteRes.body.success).toBe(true);
+      expect(inviteRes.body.invitedCount).toBe(1);
+    });
+  });
 });

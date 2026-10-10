@@ -104,7 +104,9 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const myVendorRecord = buyerVendors?.find(
     (v) => v.email?.toLowerCase() === currentUserSession?.email?.toLowerCase()
   );
-  const effectiveFreeCredits = vendorFreeCreditsRemaining ?? freeCreditsRemaining ?? myVendorRecord?.freeQuotationCredits ?? 5;
+  const effectiveFreeCredits = (vendorSubscription as string) === 'standard'
+    ? 0
+    : (freeCreditsRemaining ?? myVendorRecord?.freeQuotationCredits ?? vendorFreeCreditsRemaining ?? 5);
   // isOwnBuyerRfq depends on myAddedByBuyerCompany, which only exists once
   // this fetch resolves — the deep-link auto-open effect below waits on this
   // flag so it doesn't judge a real direct-buyer RFQ as locked just because
@@ -493,8 +495,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
 
   const handleDownloadRfq = async (opp: VendorOpportunity) => {
     try {
-      const res = await fetch(`/api/rfqs/${encodeURIComponent(opp.rfqNumber)}/download`, {
-        method: 'POST',
+      const res = await fetch(`/api/rfqs/${encodeURIComponent(opp.rfqNumber)}/email-preview`, {
         headers: authHeaders(),
       });
       const data = await res.json();
@@ -873,25 +874,17 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                         <span className="text-amber-500 font-bold text-[10px]">🔒 Premium Locked</span>
                       ) : (
                         <div className="flex items-center justify-end gap-1.5">
-                          {!isRfqUnlocked(opp.rfqNumber) ? (
-                            <button
-                              onClick={() => {
-                                showToast('Download Required', 'Please download the RFQ before submitting your bid.', 'info');
+                          <button
+                            onClick={() => {
+                              if (!isRfqUnlocked(opp.rfqNumber) && !isOwnBuyerRfq(opp.rfqNumber)) {
                                 handleDownloadRfq(opp);
-                              }}
-                              className="btn btn-secondary btn-xs min-h-9 py-1 px-2.5 inline-flex items-center gap-1 text-[10px] font-bold border border-emerald-500 text-emerald-700 dark:text-emerald-300"
-                              title="Download and unlock RFQ to enable bid submission"
-                            >
-                              <Download size={10} /> Download to Quote
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => openBidForm(opp)}
-                              className="btn btn-emerald btn-xs min-h-9 py-1 px-2.5 inline-flex items-center gap-1 text-[10px] font-bold"
-                            >
-                              <Send size={10} /> Submit Quote
-                            </button>
-                          )}
+                              }
+                              openBidForm(opp);
+                            }}
+                            className="btn btn-emerald btn-xs min-h-9 py-1 px-2.5 inline-flex items-center gap-1 text-[10px] font-bold"
+                          >
+                            <Send size={10} /> Submit Quote
+                          </button>
                         </div>
                       )}
                     </td>
