@@ -128,12 +128,12 @@ describe('V0 RFQ Complete Workflow — Procucev Network Vendors', () => {
       expect(initialCredits.freeCreditsUsed).toBe(0);
 
       // Create 5 test RFQs
-      const rfq1 = storeService.createRFQ({ title: 'RFQ 1', category: 'General Supplies', sourcingMode: 'mode_0' });
-      const rfq2 = storeService.createRFQ({ title: 'RFQ 2', category: 'General Supplies', sourcingMode: 'mode_0' });
-      const rfq3 = storeService.createRFQ({ title: 'RFQ 3', category: 'General Supplies', sourcingMode: 'mode_0' });
-      const rfq4 = storeService.createRFQ({ title: 'RFQ 4', category: 'General Supplies', sourcingMode: 'mode_0' });
-      const rfq5 = storeService.createRFQ({ title: 'RFQ 5', category: 'General Supplies', sourcingMode: 'mode_0' });
-      const rfq6 = storeService.createRFQ({ title: 'RFQ 6', category: 'General Supplies', sourcingMode: 'mode_0' });
+      const rfq1 = storeService.createRFQ({ id: 'rfq-credit-1', title: 'RFQ 1', category: 'General Supplies', sourcingMode: 'mode_0' });
+      const rfq2 = storeService.createRFQ({ id: 'rfq-credit-2', title: 'RFQ 2', category: 'General Supplies', sourcingMode: 'mode_0' });
+      const rfq3 = storeService.createRFQ({ id: 'rfq-credit-3', title: 'RFQ 3', category: 'General Supplies', sourcingMode: 'mode_0' });
+      const rfq4 = storeService.createRFQ({ id: 'rfq-credit-4', title: 'RFQ 4', category: 'General Supplies', sourcingMode: 'mode_0' });
+      const rfq5 = storeService.createRFQ({ id: 'rfq-credit-5', title: 'RFQ 5', category: 'General Supplies', sourcingMode: 'mode_0' });
+      const rfq6 = storeService.createRFQ({ id: 'rfq-credit-6', title: 'RFQ 6', category: 'General Supplies', sourcingMode: 'mode_0' });
 
       // Unlock RFQ 1: balance goes 5 -> 4
       const res1 = await storeService.unlockRFQForVendor(vendor.id, rfq1.id);
