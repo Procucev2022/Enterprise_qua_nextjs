@@ -174,6 +174,19 @@ describe('Buyer RFQ Summary (Screen 1.3)', () => {
         expect(bar).toHaveAttribute('aria-valuenow', '0');
       });
     });
+
+    it('renders all four mode cards in a responsive 4-column desktop grid', () => {
+      renderScreen([buildRFQ()]);
+      const heading = screen.getByText(RFQ.modeDistributionTitle);
+      const grid = heading.parentElement?.querySelector('.grid');
+      expect(grid).toBeInTheDocument();
+      expect(grid).toHaveClass('lg:grid-cols-4');
+      expect(grid).toHaveClass('sm:grid-cols-2');
+      expect(grid).toHaveClass('grid-cols-1');
+      SOURCING_MODES.forEach((mode) => {
+        expect(within(grid as HTMLElement).getByText(mode.code)).toBeInTheDocument();
+      });
+    });
   });
 
   describe('search & filters', () => {

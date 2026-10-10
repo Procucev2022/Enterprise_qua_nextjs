@@ -300,14 +300,14 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
           <Layers size={14} className="text-indigo-600 dark:text-indigo-400" />
           {RFQ.modeDistributionTitle}
         </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-2.5 text-xs">
           {SOURCING_MODES.map((mode) => {
             const count = summary.bySourcingMode[mode.id] || 0;
             const share = summary.totalRFQs === 0 ? 0 : Math.round((count / summary.totalRFQs) * 100);
             return (
               <div
                 key={mode.id}
-                className="p-2 rounded-lg bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 space-y-1"
+                className="p-2 sm:p-2.5 rounded-lg bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 space-y-1 flex flex-col justify-between"
               >
                 <div className="flex items-center justify-between">
                   {modeBadge(mode.id)}

@@ -2607,3 +2607,7 @@ continue
 ---
 **[2026-10-10T21:48:56+05:30]**
 raise pr for this issuse
+
+---
+**[2026-10-10T22:35:01+05:30]**
+Update the Sourcing Distribution section in the Buyer portal to display all four version cards — Version 0, Version 1, Version 2, and Version 3 — in a single horizontal row on desktop screens. Ensure all four cards have equal widths, consistent spacing, and proper alignment. On smaller screens, allow the cards to wrap into multiple rows or adapt responsively without overlapping or breaking the layout. Maintain the existing card functionality, data, and styling while ensuring a clean and consistent UI.
