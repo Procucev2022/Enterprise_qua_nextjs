@@ -15,6 +15,20 @@ if (typeof dns.setDefaultResultOrder === 'function') {
   dns.setDefaultResultOrder('ipv4first');
 }
 
+/**
+ * Reads an environment variable or secret, checking both process.env and
+ * Cloudflare Worker globalThis.__CF_ENV__.
+ */
+function getEnv(key) {
+  if (process.env && process.env[key] !== undefined && process.env[key] !== '') {
+    return process.env[key];
+  }
+  if (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__[key] !== undefined && globalThis.__CF_ENV__[key] !== '') {
+    return globalThis.__CF_ENV__[key];
+  }
+  return undefined;
+}
+
 let transporter;
 let vendorTransporter;
 
@@ -74,7 +88,7 @@ function getTransporter() {
 }
 
 function fromAddress() {
-  const user = process.env.SMTP_FROM || process.env.SMTP_USER || 'RFQ@procucev.com';
+  const user = process.env.SMTP_FROM || process.env.SMTP_USER || 'manav.procucev@gmail.com';
   if (user.includes('<') && user.includes('>')) {
     return user;
   }
@@ -88,10 +102,9 @@ function fromAddress() {
  */
 function getPublicFrontendUrl() {
   const envVal =
-    process.env.PUBLIC_FRONTEND_URL ||
-    process.env.APP_PUBLIC_URL ||
-    process.env.FRONTEND_URL ||
-    (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__ && globalThis.__CF_ENV__.PUBLIC_FRONTEND_URL);
+    getEnv('PUBLIC_FRONTEND_URL') ||
+    getEnv('APP_PUBLIC_URL') ||
+    getEnv('FRONTEND_URL');
   if (envVal && typeof envVal === 'string' && envVal.trim()) {
     return envVal.trim().replace(/\/+$/, '');
   }
@@ -119,24 +132,24 @@ function getLogoUrl() {
 function getVendorTransporter() {
   if (vendorTransporter) return vendorTransporter;
 
-  const user = process.env.VENDOR_SMTP_USER;
-  const rawPass = process.env.VENDOR_SMTP_PASSWORD;
+  const user = getEnv('VENDOR_SMTP_USER');
+  const rawPass = getEnv('VENDOR_SMTP_PASSWORD');
   if (!user || !rawPass) return undefined;
 
   const pass = rawPass.replace(/\s+/g, '');
-  const host = process.env.VENDOR_SMTP_HOST || 'smtp.gmail.com';
+  const host = getEnv('VENDOR_SMTP_HOST') || 'smtp.gmail.com';
   const isGmail =
-    (process.env.VENDOR_SMTP_SERVICE && process.env.VENDOR_SMTP_SERVICE.toLowerCase() === 'gmail') ||
+    (getEnv('VENDOR_SMTP_SERVICE') && getEnv('VENDOR_SMTP_SERVICE').toLowerCase() === 'gmail') ||
     host.toLowerCase().includes('gmail');
 
   let port;
   let secure;
 
-  if (process.env.VENDOR_SMTP_PORT) {
-    port = Number(process.env.VENDOR_SMTP_PORT);
-    secure = process.env.VENDOR_SMTP_SECURE !== undefined ? process.env.VENDOR_SMTP_SECURE === 'true' : port === 465;
-  } else if (process.env.VENDOR_SMTP_SECURE !== undefined) {
-    secure = process.env.VENDOR_SMTP_SECURE === 'true';
+  if (getEnv('VENDOR_SMTP_PORT')) {
+    port = Number(getEnv('VENDOR_SMTP_PORT'));
+    secure = getEnv('VENDOR_SMTP_SECURE') !== undefined ? getEnv('VENDOR_SMTP_SECURE') === 'true' : port === 465;
+  } else if (getEnv('VENDOR_SMTP_SECURE') !== undefined) {
+    secure = getEnv('VENDOR_SMTP_SECURE') === 'true';
     port = secure ? 465 : 587;
   } else if (isGmail) {
     port = 465;
@@ -165,7 +178,7 @@ function getVendorTransporter() {
 }
 
 function vendorFromAddress() {
-  const user = process.env.VENDOR_SMTP_FROM || process.env.VENDOR_SMTP_USER || 'srinu20252026@gmail.com';
+  const user = getEnv('VENDOR_GMAIL_SENDER_EMAIL') || getEnv('VENDOR_SMTP_FROM') || getEnv('VENDOR_SMTP_USER') || 'srinu20252026@gmail.com';
   if (user.includes('<') && user.includes('>')) {
     return user;
   }
@@ -174,9 +187,10 @@ function vendorFromAddress() {
 
 function vendorGatewayAddress() {
   return (
-    process.env.VENDOR_EMAIL_GATEWAY_ADDRESS ||
-    process.env.VENDOR_EMAIL_GATEWAY_USER ||
-    process.env.VENDOR_SMTP_USER ||
+    getEnv('VENDOR_EMAIL_GATEWAY_ADDRESS') ||
+    getEnv('VENDOR_GMAIL_SENDER_EMAIL') ||
+    getEnv('VENDOR_EMAIL_GATEWAY_USER') ||
+    getEnv('VENDOR_SMTP_USER') ||
     'srinu20252026@gmail.com'
   );
 }
@@ -260,6 +274,9 @@ async function deliverVendor(message, label) {
         'MAILER_SERVICE'
       );
       return deliverViaGmailApi(message, label);
+    }
+    if (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__) {
+      return deliverViaMailChannels(message, label);
     }
     throw err;
   }
@@ -379,16 +396,59 @@ async function deliverViaResend(message, label) {
   return { sent: true, messageId: body.id };
 }
 
-/** True when GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN are all set. */
+/**
+ * Sends email via MailChannels HTTPS API (natively supported on Cloudflare Workers without raw sockets).
+ */
+async function deliverViaMailChannels(message, label) {
+  const fromEmail = process.env.SMTP_FROM || process.env.SMTP_USER || 'manav.procucev@gmail.com';
+  const fromName = 'Procucev Enterprise';
+
+  logger.info(`Dispatching ${label} to ${message.to} via MailChannels API`, { subject: message.subject }, 'MAILER_SERVICE');
+  const res = await fetch('https://api.mailchannels.net/tx/v1/send', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      personalizations: [{ to: [{ email: message.to }] }],
+      from: {
+        email: fromEmail,
+        name: fromName,
+      },
+      subject: message.subject,
+      content: [
+        {
+          type: 'text/plain',
+          value: message.text || (message.html ? message.html.replace(/<[^>]+>/g, ' ') : ''),
+        },
+        {
+          type: 'text/html',
+          value: message.html || '',
+        },
+      ],
+    }),
+  });
+
+  if (!res.ok && res.status !== 202) {
+    const errorBody = await res.text().catch(() => '');
+    const err = new Error(`MailChannels responded ${res.status}: ${errorBody}`);
+    err.code = 'MAILCHANNELS_API_ERROR';
+    throw err;
+  }
+
+  logger.info(`${label} sent successfully to ${message.to} via MailChannels`, {}, 'MAILER_SERVICE');
+  return { sent: true, provider: 'mailchannels' };
+}
+
+let gmailApiDisabled = false;
+
+/** True when GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN are all set and active. */
 function isGmailApiConfigured() {
+  if (gmailApiDisabled) return false;
   const hasClientId = Boolean(process.env.GMAIL_CLIENT_ID);
   const hasClientSecret = Boolean(process.env.GMAIL_CLIENT_SECRET);
   const hasRefreshToken = Boolean(process.env.GMAIL_REFRESH_TOKEN);
   if (!hasClientId || !hasClientSecret || !hasRefreshToken) {
-    // Diagnostic only — booleans, never the secret values themselves.
-    // Added while tracking down why the Gmail API branch wasn't firing in
-    // production despite `wrangler secret list` confirming all three are
-    // registered on the Worker.
     logger.warn(
       'Gmail API not configured',
       { hasClientId, hasClientSecret, hasRefreshToken },
@@ -401,27 +461,17 @@ function isGmailApiConfigured() {
 let gmailOAuthClient;
 let gmailOAuthClientRefreshToken;
 
-/**
- * Lazily builds an OAuth2 client from the refresh token minted once via
- * scripts/get-gmail-refresh-token.js. googleapis' OAuth2Client caches and
- * auto-refreshes the short-lived access token internally — no manual token
- * refresh logic needed here.
- *
- * Rebuilds whenever GMAIL_REFRESH_TOKEN no longer matches what this client
- * was built with: a Worker isolate stays warm across many invocations (a
- * cron poll especially), so a plain "build once" singleton would keep using
- * whichever identity happened to be live the first time this ran on that
- * isolate, silently ignoring a `wrangler secret put` rotation until the
- * isolate eventually recycles on its own.
- */
 function getGmailOAuthClient() {
-  if (gmailOAuthClient && gmailOAuthClientRefreshToken === process.env.GMAIL_REFRESH_TOKEN) {
+  const refreshToken = getEnv('GMAIL_REFRESH_TOKEN');
+  if (gmailOAuthClient && gmailOAuthClientRefreshToken === refreshToken) {
     return gmailOAuthClient;
   }
   if (!isGmailApiConfigured()) return undefined;
-  gmailOAuthClient = new google.auth.OAuth2(process.env.GMAIL_CLIENT_ID, process.env.GMAIL_CLIENT_SECRET);
-  gmailOAuthClient.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
-  gmailOAuthClientRefreshToken = process.env.GMAIL_REFRESH_TOKEN;
+  const clientId = getEnv('GMAIL_CLIENT_ID');
+  const clientSecret = getEnv('GMAIL_CLIENT_SECRET');
+  gmailOAuthClient = new google.auth.OAuth2(clientId, clientSecret);
+  gmailOAuthClient.setCredentials({ refresh_token: refreshToken });
+  gmailOAuthClientRefreshToken = refreshToken;
   return gmailOAuthClient;
 }
 
@@ -463,8 +513,9 @@ async function deliverViaGmailApi(message, label) {
   const gmail = google.gmail({ version: 'v1', auth });
 
   logger.info(`Dispatching ${label} to ${message.to} via Gmail API`, { subject: message.subject }, 'MAILER_SERVICE');
+  const sender = getEnv('GMAIL_SENDER_EMAIL');
   const raw = buildRawMimeMessage({
-    from: process.env.GMAIL_SENDER_EMAIL ? `"Procucev Enterprise" <${process.env.GMAIL_SENDER_EMAIL}>` : fromAddress(),
+    from: sender ? `"Procucev Enterprise" <${sender}>` : fromAddress(),
     to: message.to,
     subject: message.subject,
     html: message.html,
@@ -475,47 +526,35 @@ async function deliverViaGmailApi(message, label) {
   return { sent: true, messageId: res.data.id };
 }
 
-/**
- * True when a dedicated vendor-mailbox Gmail identity is configured.
- *
- * Reuses the same OAuth2 "app" (GMAIL_CLIENT_ID/SECRET — one Google Cloud
- * client can authorize any number of Google accounts) with its own refresh
- * token, minted the same way as the buyer one (see
- * scripts/get-gmail-refresh-token.js), signed in as the dedicated vendor
- * mailbox instead of the buyer account. This is the real fix for vendor
- * mail always appearing to come from the buyer's Gmail account: raw SMTP
- * (the original VENDOR_SMTP_* design) can never work on Cloudflare Workers
- * at all (confirmed live — its TLS layer doesn't implement
- * rejectUnauthorized), so a second identity has to go through the Gmail
- * API too, not through SMTP with different credentials.
- */
 function isVendorGmailApiConfigured() {
-  return Boolean(process.env.GMAIL_CLIENT_ID) && Boolean(process.env.GMAIL_CLIENT_SECRET) && Boolean(process.env.VENDOR_GMAIL_REFRESH_TOKEN);
+  return Boolean(getEnv('GMAIL_CLIENT_ID')) && Boolean(getEnv('GMAIL_CLIENT_SECRET')) && Boolean(getEnv('VENDOR_GMAIL_REFRESH_TOKEN'));
 }
 
 let vendorGmailOAuthClient;
 let vendorGmailOAuthClientRefreshToken;
 
-/** Same staleness problem and fix as getGmailOAuthClient() above. */
 function getVendorGmailOAuthClient() {
-  if (vendorGmailOAuthClient && vendorGmailOAuthClientRefreshToken === process.env.VENDOR_GMAIL_REFRESH_TOKEN) {
+  const refreshToken = getEnv('VENDOR_GMAIL_REFRESH_TOKEN');
+  if (vendorGmailOAuthClient && vendorGmailOAuthClientRefreshToken === refreshToken) {
     return vendorGmailOAuthClient;
   }
   if (!isVendorGmailApiConfigured()) return undefined;
-  vendorGmailOAuthClient = new google.auth.OAuth2(process.env.GMAIL_CLIENT_ID, process.env.GMAIL_CLIENT_SECRET);
-  vendorGmailOAuthClient.setCredentials({ refresh_token: process.env.VENDOR_GMAIL_REFRESH_TOKEN });
-  vendorGmailOAuthClientRefreshToken = process.env.VENDOR_GMAIL_REFRESH_TOKEN;
+  const clientId = getEnv('GMAIL_CLIENT_ID');
+  const clientSecret = getEnv('GMAIL_CLIENT_SECRET');
+  vendorGmailOAuthClient = new google.auth.OAuth2(clientId, clientSecret);
+  vendorGmailOAuthClient.setCredentials({ refresh_token: refreshToken });
+  vendorGmailOAuthClientRefreshToken = refreshToken;
   return vendorGmailOAuthClient;
 }
 
-/** Same as deliverViaGmailApi, but signed in as the dedicated vendor mailbox. */
 async function deliverViaVendorGmailApi(message, label) {
   const auth = getVendorGmailOAuthClient();
   const gmail = google.gmail({ version: 'v1', auth });
 
   logger.info(`Dispatching ${label} to ${message.to} via vendor Gmail API`, { subject: message.subject }, 'MAILER_SERVICE');
+  const sender = getEnv('VENDOR_GMAIL_SENDER_EMAIL');
   const raw = buildRawMimeMessage({
-    from: process.env.VENDOR_GMAIL_SENDER_EMAIL ? `"Procucev Enterprise" <${process.env.VENDOR_GMAIL_SENDER_EMAIL}>` : vendorFromAddress(),
+    from: sender ? `"Procucev Enterprise" <${sender}>` : vendorFromAddress(),
     to: message.to,
     subject: message.subject,
     html: message.html,
@@ -597,6 +636,9 @@ async function deliver(message, label) {
       return await deliverViaGmailApi(message, label);
     } catch (err) {
       lastError = err;
+      if (err?.message?.includes('invalid_grant') || err?.response?.data?.error === 'invalid_grant') {
+        gmailApiDisabled = true;
+      }
       logger.warn(
         `deliverViaGmailApi failed for ${label} — falling back to secondary transport`,
         { errorMessage: err?.message, to: message.to },
@@ -623,14 +665,28 @@ async function deliver(message, label) {
     if (lastError) {
       throw lastError;
     }
+    if (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__) {
+      try {
+        return await deliverViaMailChannels(message, label);
+      } catch (mcErr) {
+        logger.warn(`MailChannels send failed for ${label}`, { errorMessage: mcErr?.message }, 'MAILER_SERVICE');
+      }
+    }
     logger.warn(`SMTP not configured (SMTP_USER/SMTP_PASSWORD unset) — ${label} not sent`, { to: message.to }, 'MAILER_SERVICE');
     return { sent: false, reason: 'SMTP not configured' };
   }
 
-  logger.info(`Dispatching ${label} to ${message.to}`, { subject: message.subject }, 'MAILER_SERVICE');
-  const info = await activeTransporter.sendMail(message);
-  logger.info(`${label} sent successfully to ${message.to}`, { messageId: info.messageId }, 'MAILER_SERVICE');
-  return { sent: true, messageId: info.messageId };
+  try {
+    logger.info(`Dispatching ${label} to ${message.to}`, { subject: message.subject }, 'MAILER_SERVICE');
+    const info = await activeTransporter.sendMail(message);
+    logger.info(`${label} sent successfully to ${message.to}`, { messageId: info.messageId }, 'MAILER_SERVICE');
+    return { sent: true, messageId: info.messageId };
+  } catch (smtpErr) {
+    if (typeof globalThis !== 'undefined' && globalThis.__CF_ENV__) {
+      return await deliverViaMailChannels(message, label);
+    }
+    throw smtpErr;
+  }
 }
 
 /** Shared frame so every Procucev email reads consistently. No invented data. */
@@ -672,15 +728,19 @@ function row(label, value) {
 
 // ── OTP ──────────────────────────────────────────────────────────────────────
 
-function buildOtpEmail(to, code, expiresInSeconds) {
+function buildOtpEmail(to, code, expiresInSeconds, context = {}) {
   const minutes = Math.max(1, Math.round((expiresInSeconds || 600) / 60));
+  const isReg = typeof context === 'object' && context?.isRegistration;
+  const headline = isReg ? 'Account Registration Verification' : 'Secure Sign-In Verification';
+  const subject = isReg ? 'Your Procucev Enterprise Account Verification Code' : 'Your Procucev Enterprise verification code';
   return {
     from: fromAddress(),
     to,
-    subject: 'Your Procucev Enterprise verification code',
+    subject,
+    text: `Your Procucev Enterprise verification code is: ${code}\n\nThis code expires in ${minutes} minute${minutes === 1 ? '' : 's'}.\nIf you did not request this, you can safely ignore this email.`,
     html: wrapEmail(
       'PROCUCEV ENTERPRISE',
-      'Secure Sign-In Verification',
+      headline,
       `<p>Your one-time verification code is:</p>
        <p style="font-size: 32px; font-weight: bold; letter-spacing: 8px; text-align: center; margin: 20px 0; color: #0284c7;">${code}</p>
        <p style="font-size: 13px; color: #64748b; margin: 0;">This code expires in ${minutes} minute${minutes === 1 ? '' : 's'}. If you did not request this, you can safely ignore this email.</p>`
@@ -688,8 +748,8 @@ function buildOtpEmail(to, code, expiresInSeconds) {
   };
 }
 
-async function sendOtpEmail(to, code, expiresInSeconds) {
-  return deliver(buildOtpEmail(to, code, expiresInSeconds), 'OTP email');
+async function sendOtpEmail(to, code, expiresInSeconds, context = {}) {
+  return deliver(buildOtpEmail(to, code, expiresInSeconds, context), 'OTP email');
 }
 
 // ── New RFQ → matched vendors (buyer raised an enquiry in their category) ─────

@@ -540,7 +540,7 @@ async function requestOtp(email, mobile, roleHint, ipAddress, isRegistration = f
   // Node/Render, where the process just keeps running regardless.
   {
     const otpEmailSend = mailerService
-      .sendOtpEmail(normalizedEmail, emailCode, OTP_EXPIRY_MS / 1000)
+      .sendOtpEmail(normalizedEmail, emailCode, OTP_EXPIRY_MS / 1000, { isRegistration: Boolean(isRegistration) })
       .catch((e) => logger.error('OTP email dispatch error', e, 'AUTH_SERVICE'));
     const otpSmsSend = smsService
       .sendOtpSms(submittedMobile, mobileCode, OTP_EXPIRY_MS / 1000)

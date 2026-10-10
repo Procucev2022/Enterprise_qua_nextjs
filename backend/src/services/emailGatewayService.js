@@ -705,8 +705,9 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
   const incomingCc = Array.isArray(message.cc) ? message.cc : (message.cc ? [message.cc] : []);
   const ccList = Array.from(new Set([buyerEmail, ...incomingCc, VENDOR_QUOTE_SUPPORT_CC].filter(Boolean)));
 
-  // Validate vendor quotation eligibility: 5 free quotation credits, then active subscription required
-  const eligibility = storeService.checkVendorQuotationEligibility(vendorRecord);
+  // Validate vendor quotation eligibility: buyer-mapped vendors get unlimited quotations on their buyer's RFQs;
+  // otherwise 5 free quotation credits, then active subscription required
+  const eligibility = storeService.checkVendorQuotationEligibility(vendorRecord, targetRfq);
   if (!eligibility.eligible) {
     logger.warn(
       `Vendor quote reply from ${vendorRecord.name} for RFQ ${targetRfq.rfqNumber} rejected: 5 free quotation credits exhausted (subscriptionPlan: ${eligibility.subscriptionPlan})`,

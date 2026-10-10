@@ -3,7 +3,6 @@
 import React, { useMemo, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
-import { RFQDeleteDialog, RFQEditModal } from '@/app/buyer/RFQEditModal';
 import { SOURCING_MODES, formatCurrency, formatIndianDate } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type { RFQItem, RFQPortfolioSummary, RFQSource, SourcingMode } from '@/lib/types';
@@ -24,6 +23,7 @@ import {
   Eye,
   FileText,
   Trash2,
+  Sparkles,
 } from 'lucide-react';
 
 const SCREEN = UI_STRINGS.screens.rfqSummary;
@@ -66,12 +66,7 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
     deepDiveModalOpen,
     setDeepDiveModalOpen,
     selectedRFQForDeepDive,
-    updateRFQ,
   } = useApp();
-
-  // Held as the RFQ itself rather than an id, so the dialogs can name the record
-  // they are about without looking it up again.
-  const [rfqBeingEdited, setRfqBeingEdited] = useState<RFQItem | null>(null);
 
   // GET /api/rfqs is itself scoped to the signed-in buyer's own account now
   // (server-side — see command-center.tsx's matching note), so allRfqs is
@@ -210,6 +205,11 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
         icon: <Pencil size={10} />,
         label: RFQ.sourceManualEntry,
         tone: 'bg-teal-50 dark:bg-teal-950/60 text-teal-700 dark:text-teal-300 border-teal-200 dark:border-teal-800',
+      },
+      ai_extraction: {
+        icon: <Sparkles size={10} />,
+        label: RFQ.sourceAiExtraction || 'AI Extraction',
+        tone: 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800',
       },
     };
     const resolved = meta[source || ''] || {
@@ -528,15 +528,6 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
                         >
                           <Eye size={13} />
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setRfqBeingEdited(rfq)}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-700 dark:hover:text-indigo-300 hover:bg-slate-100 dark:hover:bg-gray-800"
-                          aria-label={formatString(EDIT.editAria, { rfqNumber: rfq.rfqNumber })}
-                          title={EDIT.editAction}
-                        >
-                          <Pencil size={13} />
-                        </button>
                       </div>
                     </td>
                   </tr>
@@ -620,8 +611,6 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
         onClose={() => setDeepDiveModalOpen(false)}
         rfq={selectedRFQForDeepDive}
       />
-
-      <RFQEditModal rfq={rfqBeingEdited} onClose={() => setRfqBeingEdited(null)} onSave={updateRFQ} />
     </div>
   );
 }

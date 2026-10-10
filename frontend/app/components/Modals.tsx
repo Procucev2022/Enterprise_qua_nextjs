@@ -1382,7 +1382,7 @@ export function ActivePipelineModal({
   if (!isOpen) return null;
 
   const getSourceBadge = (source?: string) => {
-    if (source === 'email_gateway') {
+    if (source === 'email_gateway' || source === 'email_upload') {
       return (
         <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 shrink-0">
           <span>via Email Upload</span>
@@ -1627,8 +1627,8 @@ export function IntakeSourcesModal({
   const [searchTerm, setSearchTerm] = useState('');
 
   const totalActiveRFQs = rfqs.length;
-  const emailGatewayRFQs = rfqs.filter((r) => r.source === 'email_gateway');
-  const webPortalRFQs = rfqs.filter((r) => r.source === 'web_portal' || !r.source);
+  const emailGatewayRFQs = rfqs.filter((r) => r.source === 'email_gateway' || r.source === 'email_upload');
+  const webPortalRFQs = rfqs.filter((r) => r.source === 'web_portal' || r.source === 'ai_extraction' || (!r.source && r.source !== 'manual_entry'));
   const manualRFQs = rfqs.filter((r) => r.source === 'manual_entry');
 
   const filteredRfqs = rfqs.filter((rfq) => {
@@ -1636,7 +1636,9 @@ export function IntakeSourcesModal({
       selectedSourceTab === 'all'
         ? true
         : selectedSourceTab === 'web_portal'
-        ? rfq.source === 'web_portal' || !rfq.source
+        ? rfq.source === 'web_portal' || rfq.source === 'ai_extraction' || (!rfq.source && rfq.source !== 'manual_entry')
+        : selectedSourceTab === 'email_gateway'
+        ? rfq.source === 'email_gateway' || rfq.source === 'email_upload'
         : rfq.source === selectedSourceTab;
 
     const matchesSearch =
@@ -1830,9 +1832,9 @@ export function IntakeSourcesModal({
                 <div className="space-y-2 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-black mono text-indigo-600 dark:text-indigo-400">{rfq.rfqNumber}</span>
-                    {rfq.source === 'email_gateway' && (
+                    {(rfq.source === 'email_gateway' || rfq.source === 'email_upload') && (
                       <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800 flex items-center gap-1.5">
-                        Origin: {rfq.sourceEmail || 'Autonomous Corporate via Email Upload'}
+                        Origin: {rfq.sourceEmail || rfq.sourceFileName || 'Autonomous Corporate via Email Upload'}
                       </span>
                     )}
                     {rfq.source === 'manual_entry' && (
@@ -1840,7 +1842,7 @@ export function IntakeSourcesModal({
                         Direct Keyed Requisition
                       </span>
                     )}
-                    {(rfq.source === 'web_portal' || !rfq.source) && (
+                    {(rfq.source === 'web_portal' || rfq.source === 'ai_extraction' || (!rfq.source && rfq.source !== 'manual_entry')) && (
                       <span className="px-2.5 py-1 rounded-md text-[10px] font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800 flex items-center gap-1.5">
                         Document: {rfq.sourceFileName || 'Uploaded BOQ Document'}
                       </span>
