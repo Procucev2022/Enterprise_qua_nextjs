@@ -2125,12 +2125,9 @@ class StoreService {
     const isV3 = newRFQ.sourcingMode === 'mode_3' || newRFQ.sourcingMode === 'v3' || newRFQ.sourcingMode === 'version_3';
 
     if (isV0) {
-      const procucevAssigned = (newRFQ.assignedVendors || []).filter((v) => {
-        const resolved = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
-        return this.isProcucevVendor(resolved);
-      });
-      procucevVendorCount = procucevAssigned.length > 0
-        ? procucevAssigned.length
+      // V0: Every invited vendor is a Procucev network vendor — report total assigned.
+      procucevVendorCount = (newRFQ.assignedVendors || []).length > 0
+        ? (newRFQ.assignedVendors || []).length
         : this.candidateVendorsForRFQ(newRFQ).filter((v) => this.isProcucevVendor(v)).length;
     } else if (isV2) {
       // V2 Hybrid: report the count of Procucev verified vendors that can assign / are assigned to this RFQ

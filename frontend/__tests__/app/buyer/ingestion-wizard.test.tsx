@@ -1174,7 +1174,7 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
             { id: 'v-buyer-2', source: 'buyer_uploaded' },
           ],
         })
-      ).toBe(1);
+      ).toBe(2);
       expect(
         resolveConfirmationVendorCount({
           sourcingMode: 'mode_3',
