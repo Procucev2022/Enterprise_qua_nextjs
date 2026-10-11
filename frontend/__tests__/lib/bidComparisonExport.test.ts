@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { downloadBidComparisonExcel, downloadVendorQuotationExcel, downloadFullQuotesExcel, downloadSingleVendorQuoteExcel } from '@/lib/bidComparisonExport';
+import { downloadBidComparisonExcel, downloadVendorQuotationExcel, downloadFullQuotesExcel, downloadSingleVendorQuoteExcel, downloadMultiSheetWorkbook } from '@/lib/bidComparisonExport';
 import type { RFQItem, QuoteComparison, LineItemBid } from '@/lib/types';
 
 jest.mock('xlsx', () => ({
@@ -36,6 +36,44 @@ function makeQuote(overrides: Partial<QuoteComparison> = {}): QuoteComparison {
     ...overrides,
   } as QuoteComparison;
 }
+
+describe('downloadMultiSheetWorkbook', () => {
+  let createObjectURLSpy: jest.SpyInstance;
+  let revokeObjectURLSpy: jest.SpyInstance;
+  let clickSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    createObjectURLSpy = jest.spyOn(URL, 'createObjectURL').mockReturnValue('blob:multi-sheet');
+    revokeObjectURLSpy = jest.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    clickSpy = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    createObjectURLSpy.mockRestore();
+    revokeObjectURLSpy.mockRestore();
+    clickSpy.mockRestore();
+  });
+
+  test('uses optional headers and truncates sheet names to Excel limits before downloading', () => {
+    const longName = 'A worksheet name that exceeds thirty-one characters';
+    downloadMultiSheetWorkbook([
+      { name: longName, rows: [{ Item: 'Pump' }], header: ['Item', 'Quantity'] },
+      { name: 'Overview', rows: [{ Vendor: 'Acme' }] },
+    ], 'Quotes.xlsx');
+
+    expect(XLSX.utils.json_to_sheet).toHaveBeenNthCalledWith(1, [{ Item: 'Pump' }], { header: ['Item', 'Quantity'] });
+    expect(XLSX.utils.json_to_sheet).toHaveBeenNthCalledWith(2, [{ Vendor: 'Acme' }]);
+    expect(XLSX.write).toHaveBeenCalledWith(
+      expect.objectContaining({
+        SheetNames: [longName.slice(0, 31), 'Overview'],
+      }),
+      { bookType: 'xlsx', type: 'array' },
+    );
+    expect(clickSpy).toHaveBeenCalled();
+    expect(revokeObjectURLSpy).toHaveBeenCalledWith('blob:multi-sheet');
+  });
+});
 
 describe('downloadBidComparisonExcel', () => {
   let createObjectURLSpy: jest.SpyInstance;
@@ -267,4 +305,3 @@ describe('downloadSingleVendorQuoteExcel', () => {
     expect(clickSpy).toHaveBeenCalled();
   });
 });
-
