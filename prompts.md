@@ -2788,3 +2788,7 @@ continue
 
 raise the pr
 
+### 2026-10-11T20:44:54+05:30
+
+again not showing the number of procucev vendors can assign this rfq in v2
+
