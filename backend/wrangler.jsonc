@@ -5,6 +5,22 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true,
+      "persist": true
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "persist": true
+    },
+    "issue_detection": {
+      "enabled": true
+    }
+  },
   "main": "src/worker.mjs",
   "alias": {
     "iconv-lite": "./src/workerShims/iconvLiteShim.js",
@@ -118,7 +134,7 @@
         "SMS_GATEWAY_SENDER": "PROCUC",
         "SMS_GATEWAY_SMSGID": "1102294821",
         "SMS_GATEWAY_RFQ_SMSGID": "1777179076323440961",
-        "PUBLIC_FRONTEND_URL": "https://procucev-enterprise-frontend.procucev-enterprise.workers.dev"
+        "PUBLIC_FRONTEND_URL": "https://procucev-enterprise-frontend.srinivas-mukku.workers.dev"
       },
       "d1_databases": [
         {
@@ -153,7 +169,7 @@
         "SMS_GATEWAY_SENDER": "PROCUC",
         "SMS_GATEWAY_SMSGID": "1102294821",
         "SMS_GATEWAY_RFQ_SMSGID": "1777179076323440961",
-        "PUBLIC_FRONTEND_URL": "https://procucev-enterprise-frontend.procucev-enterprise.workers.dev"
+        "PUBLIC_FRONTEND_URL": "https://procucev-enterprise-frontend.srinivas-mukku.workers.dev"
       },
       "d1_databases": [
         {
